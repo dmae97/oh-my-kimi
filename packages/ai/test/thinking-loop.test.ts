@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, type MockContent, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
+import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, TextContent } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
 	isGeminiThinkingLoopModel,
+	isLoopGuardedModel,
 	THINKING_LOOP_ERROR_MARKER,
 	ThinkingLoopDetector,
 	withGeminiThinkingLoopGuard,
@@ -278,5 +279,85 @@ describe("withGeminiThinkingLoopGuard (Vertex transport)", () => {
 		expect(result.content.length).toBe(0);
 		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
 		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
+	});
+});
+describe("isLoopGuardedModel", () => {
+	test("guards Gemini and DeepSeek models by default, respects overrides", () => {
+		const gemini = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" }).model;
+		const deepseek = createMockModel({ provider: "deepseek", id: "deepseek-reasoner" }).model;
+		const other = createMockModel({ provider: "openai", id: "gpt-4o" }).model;
+
+		expect(isLoopGuardedModel(gemini)).toBe(true);
+		expect(isLoopGuardedModel(deepseek)).toBe(true);
+		expect(isLoopGuardedModel(other)).toBe(false);
+
+		// enabled: false disables even for target models
+		expect(isLoopGuardedModel(gemini, { loopGuard: { enabled: false } })).toBe(false);
+		expect(isLoopGuardedModel(deepseek, { loopGuard: { enabled: false } })).toBe(false);
+
+		// force enabled for other models — but disabled overall unless it is Gemini/DeepSeek
+		expect(isLoopGuardedModel(other, { loopGuard: { enabled: true } })).toBe(false);
+	});
+});
+
+describe("loop guard assistant prose/text loops", () => {
+	test("trips on assistant text/prose loop when checkAssistantContent is enabled", async () => {
+		const model = {
+			api: "openai-completions",
+			provider: "deepseek",
+			id: "deepseek-reasoner",
+		} as unknown as Model<Api>;
+		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
+		const options = { loopGuard: { checkAssistantContent: true } };
+
+		const guarded = withGeminiThinkingLoopGuard(model, options, () => {
+			const inner = new AssistantMessageEventStream();
+			const events: AssistantMessageEvent[] = [
+				{ type: "start", partial },
+				{ type: "text_start", contentIndex: 0, partial },
+				{ type: "text_delta", contentIndex: 0, delta: "First healthy text sentence. ", partial },
+				{ type: "text_delta", contentIndex: 0, delta: nearDuplicateLoop(12), partial },
+				{ type: "done", reason: "stop", message: partial },
+			];
+			for (const event of events) inner.push(event);
+			inner.end({ ...partial, stopReason: "stop" });
+			return inner;
+		});
+
+		const result = await guarded.result();
+		expect(result.stopReason).toBe("error");
+		// Content must hold the text streamed BEFORE the loop detector tripped.
+		expect(result.content.length).toBe(1);
+		expect(result.content[0].type).toBe("text");
+		expect((result.content[0] as TextContent).text).toContain("First healthy text");
+		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		// Since some text was forwarded, it is replay-unsafe, so isRetryableError should return false.
+		expect(isRetryableError(new Error(result.errorMessage))).toBe(false);
+	});
+
+	test("does not trip on assistant text loop when checkAssistantContent is false", async () => {
+		const model = {
+			api: "openai-completions",
+			provider: "deepseek",
+			id: "deepseek-reasoner",
+		} as unknown as Model<Api>;
+		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
+		const options = { loopGuard: { checkAssistantContent: false } };
+
+		const guarded = withGeminiThinkingLoopGuard(model, options, () => {
+			const inner = new AssistantMessageEventStream();
+			const events: AssistantMessageEvent[] = [
+				{ type: "start", partial },
+				{ type: "text_start", contentIndex: 0, partial },
+				{ type: "text_delta", contentIndex: 0, delta: nearDuplicateLoop(12), partial },
+				{ type: "done", reason: "stop", message: partial },
+			];
+			for (const event of events) inner.push(event);
+			inner.end({ ...partial, stopReason: "stop" });
+			return inner;
+		});
+
+		const result = await guarded.result();
+		expect(result.stopReason).toBe("stop");
 	});
 });

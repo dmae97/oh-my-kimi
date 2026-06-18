@@ -2836,12 +2836,33 @@ describe("openai-codex streaming", () => {
 
 		const model = createCodexTestModel("https://chatgpt.com/backend-api");
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
 			sessionId: "ws-whitespace-recovery-session",
 			providerSessionState,
-		}).result();
+		});
+
+		const observedEvents: string[] = [];
+		const readPromise = (async () => {
+			for await (const event of stream) {
+				observedEvents.push(event.type);
+			}
+		})();
+
+		const result = await stream.result();
+		await readPromise;
+
+		expect(observedEvents.filter(type => !type.endsWith("_delta"))).toEqual([
+			"start",
+			"thinking_start",
+			"thinking_end",
+			"toolcall_start",
+			"start",
+			"toolcall_start",
+			"toolcall_end",
+			"done",
+		]);
 
 		expect(connectionCount).toBe(2);
 		expect(closeCount).toBeGreaterThan(0);

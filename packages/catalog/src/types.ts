@@ -259,6 +259,16 @@ export interface OpenAICompat {
 	/** Whether the provider supports the `strict` field in tool definitions. Default: auto-detected per provider/baseUrl (conservative for unknown providers). */
 	supportsStrictMode?: boolean;
 	/**
+	 * Tool-schema dialect the endpoint validates `tools.function.parameters`
+	 * against. `"moonshot-mfjs"` triggers Moonshot Flavored JSON Schema
+	 * normalization (collapse `const`→`enum`, infer `type` on bare enums, strip
+	 * unsupported validators/`prefixItems`) because Moonshot/Kimi native hosts
+	 * reject standard JSON Schema constructs with HTTP 400. Default:
+	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com). Set
+	 * `"none"` to opt a custom Moonshot-compatible host out.
+	 */
+	toolSchemaFlavor?: "moonshot-mfjs" | "none";
+	/**
 	 * Stream-watchdog idle-timeout floor in ms for slow reasoning hosts.
 	 * Default: auto-detected (GLM coding-plan hosts, direct DeepSeek reasoning).
 	 */
@@ -489,6 +499,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "vercelGatewayRouting"
 			| "extraBody"
 			| "toolStrictMode"
+			| "toolSchemaFlavor"
 			| "streamIdleTimeoutMs"
 			| "cacheControlFormat"
 			| "thinkingKeep"
@@ -504,6 +515,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 		thinkingKeep?: OpenAICompat["thinkingKeep"];
 		streamIdleTimeoutMs?: number;
 		toolStrictMode: ResolvedToolStrictMode;
+		toolSchemaFlavor?: OpenAICompat["toolSchemaFlavor"];
 		/** The model sits behind Vercel AI Gateway. */
 		isVercelGatewayHost: boolean;
 		dropThinkingWhenReasoningEffort: boolean;

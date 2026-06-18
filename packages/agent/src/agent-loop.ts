@@ -1260,9 +1260,19 @@ async function streamAssistantResponse(
 					switch (event.type) {
 						case "start":
 							partialMessage = event.partial;
-							context.messages.push(partialMessage);
-							addedPartial = true;
-							stream.push({ type: "message_start", message: snapshotAssistantMessage(partialMessage) });
+							if (addedPartial) {
+								context.messages[context.messages.length - 1] = partialMessage;
+								completedToolCallIds.clear();
+								stream.push({
+									type: "message_update",
+									assistantMessageEvent: snapshotAssistantMessageEvent(event),
+									message: snapshotAssistantMessage(partialMessage),
+								});
+							} else {
+								context.messages.push(partialMessage);
+								addedPartial = true;
+								stream.push({ type: "message_start", message: snapshotAssistantMessage(partialMessage) });
+							}
 							break;
 
 						case "text_start":

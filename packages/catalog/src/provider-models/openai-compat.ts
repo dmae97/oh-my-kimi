@@ -5,7 +5,7 @@ import {
 } from "../discovery/openai-compatible";
 import { Effort } from "../effort";
 import { toFireworksPublicModelId } from "../fireworks-model-id";
-import { isGlmVisionModelId, isReasoningGlmModelId } from "../identity/family";
+import { isGlmVisionModelId, isGrokReasoningEffortCapable, isReasoningGlmModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
@@ -282,22 +282,6 @@ async function fetchOllamaNativeModels(
 const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
-/**
- * Ollama's OpenAI-compatible `reasoning.effort` only accepts
- * `high|medium|low|max|none`; passing OMP's `minimal`/`xhigh` levels verbatim
- * makes the server reject the turn with HTTP 400 `invalid reasoning value`.
- * Map the two unsupported levels onto the closest accepted ones (`low`/`max`).
- */
-const OLLAMA_REASONING_EFFORT_MAP = { minimal: "low", xhigh: "max" } as const;
-
-/** Stamp the Ollama reasoning-effort map onto a reasoning-capable model. */
-function applyOllamaReasoningCompat(model: ModelSpec<"openai-responses">): void {
-	if (!model.reasoning) return;
-	model.compat = {
-		...model.compat,
-		reasoningEffortMap: { ...OLLAMA_REASONING_EFFORT_MAP, ...model.compat?.reasoningEffortMap },
-	};
-}
 
 interface OllamaResolvedMetadata {
 	contextWindow: number;
@@ -845,11 +829,10 @@ interface XAICuratedModel {
 	reasoning?: boolean;
 	/**
 	 * Whether xAI accepts the `reasoning.effort` wire param for this model.
-	 * Default true. When false: picker hides the effort dial (via
-	 * getSupportedEfforts in model-thinking.ts) AND wire-side already omits
-	 * the param via GROK_EFFORT_CAPABLE_PREFIXES in pi-ai's stream.ts.
-	 * Must agree with that allowlist; two truths kept in sync by curated-catalog
-	 * author convention until a follow-up Op: compress unifies them.
+	 * Default true. When false: the picker hides the effort dial (via
+	 * getSupportedEfforts in model-thinking.ts) AND the wire omits the param —
+	 * both derive from `isGrokReasoningEffortCapable` (identity/family.ts), the
+	 * single allowlist shared by this curated layer and the compat builder.
 	 */
 	supportsReasoningEffort?: boolean;
 	/**
@@ -907,21 +890,12 @@ export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
 // strings; the chat picker MUST exclude these prefixes or selecting them 400s.
 const XAI_NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
 
-const GROK_EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3"] as const;
-
-function grokSupportsReasoningEffort(modelId: string): boolean {
-	const name = modelId.trim().toLowerCase();
-	if (!name) return false;
-	const bare = name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
-	return GROK_EFFORT_CAPABLE_PREFIXES.some(prefix => bare.startsWith(prefix));
-}
-
 function withXaiOAuthCompatDefaults(model: ModelSpec<"openai-responses">): ModelSpec<"openai-responses"> {
 	const compat = {
 		...(model.compat ?? {}),
 		includeEncryptedReasoning: model.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: model.compat?.filterReasoningHistory ?? true,
-		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !grokSupportsReasoningEffort(model.id),
+		omitReasoningEffort: model.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(model.id),
 	};
 	return { ...model, compat };
 }
@@ -960,7 +934,7 @@ function mergeCuratedIntoModel(
 		reasoningEffortMap: { ...XAI_REASONING_EFFORT_MAP, ...(base.compat?.reasoningEffortMap ?? {}) },
 		includeEncryptedReasoning: base.compat?.includeEncryptedReasoning ?? false,
 		filterReasoningHistory: base.compat?.filterReasoningHistory ?? true,
-		omitReasoningEffort: base.compat?.omitReasoningEffort ?? !grokSupportsReasoningEffort(base.id),
+		omitReasoningEffort: base.compat?.omitReasoningEffort ?? !isGrokReasoningEffortCapable(base.id),
 		...(effort === undefined ? {} : { supportsReasoningEffort: effort }),
 	};
 	return {
@@ -1832,14 +1806,12 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						if (metadata.input) {
 							model.input = metadata.input;
 						}
-						applyOllamaReasoningCompat(model);
 					}),
 				);
 				return openAiCompatible;
 			}
 			const nativeFallback = await fetchOllamaNativeModels(baseUrl, resolveMetadata, config?.fetch);
 			if (nativeFallback && nativeFallback.length > 0) {
-				for (const model of nativeFallback) applyOllamaReasoningCompat(model);
 				return nativeFallback;
 			}
 			return openAiCompatible;
@@ -1859,14 +1831,19 @@ export interface OpenRouterModelManagerConfig {
 
 export function openrouterModelManagerOptions(
 	config?: OpenRouterModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
+): ModelManagerOptions<"openrouter"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "https://openrouter.ai/api/v1";
+	const references = createBundledReferenceMap<"openrouter">("openrouter");
 	return {
 		providerId: "openrouter",
+		// Older builds cached OpenRouter discovery rows as `api: "openai-completions"`.
+		// Namespace the refreshed pseudo-API cache separately so those rows cannot
+		// override bundled `api: "openrouter"` models during online-if-uncached startup.
+		cacheProviderId: "openrouter:pseudo-api",
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels({
-				api: "openai-completions",
+				api: "openrouter",
 				provider: "openrouter",
 				baseUrl,
 				apiKey,
@@ -1876,9 +1853,11 @@ export function openrouterModelManagerOptions(
 				},
 				mapModel: (
 					entry: OpenAICompatibleModelRecord,
-					defaults: ModelSpec<"openai-completions">,
-					_context: OpenAICompatibleModelMapperContext<"openai-completions">,
-				): ModelSpec<"openai-completions"> => {
+					defaults: ModelSpec<"openrouter">,
+					_context: OpenAICompatibleModelMapperContext<"openrouter">,
+				): ModelSpec<"openrouter"> => {
+					const reference = references.get(defaults.id);
+					const baseModel = mapWithBundledReference(entry, defaults, reference);
 					const pricing = entry.pricing as Record<string, unknown> | undefined;
 					const params = Array.isArray(entry.supported_parameters) ? (entry.supported_parameters as string[]) : [];
 					const modality = String((entry.architecture as Record<string, unknown> | undefined)?.modality ?? "");
@@ -1887,7 +1866,7 @@ export function openrouterModelManagerOptions(
 					const supportsToolChoice = params.includes("tool_choice");
 
 					return {
-						...defaults,
+						...baseModel,
 						reasoning: params.includes("reasoning"),
 						input: modality.includes("image") ? ["text", "image"] : ["text"],
 						cost: {
@@ -1897,13 +1876,13 @@ export function openrouterModelManagerOptions(
 							cacheWrite: parseFloat(String(pricing?.input_cache_write ?? "0")) * 1_000_000,
 						},
 						contextWindow:
-							typeof entry.context_length === "number" ? entry.context_length : defaults.contextWindow,
+							typeof entry.context_length === "number" ? entry.context_length : baseModel.contextWindow,
 						maxTokens:
 							typeof topProvider?.max_completion_tokens === "number"
 								? topProvider.max_completion_tokens
-								: defaults.maxTokens,
+								: baseModel.maxTokens,
 						...(!supportsToolChoice && {
-							compat: { supportsToolChoice: false },
+							compat: { ...(baseModel.compat ?? {}), supportsToolChoice: false },
 						}),
 					};
 				},

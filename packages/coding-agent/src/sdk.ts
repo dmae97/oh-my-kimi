@@ -2493,6 +2493,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 					antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
+					loopGuard: {
+						enabled: settings.get("model.loopGuard.enabled"),
+						checkAssistantContent: settings.get("model.loopGuard.checkAssistantContent"),
+						...streamOptions?.loopGuard,
+					},
 				});
 			},
 			cursorExecHandlers,

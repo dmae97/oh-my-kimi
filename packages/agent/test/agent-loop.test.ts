@@ -1336,6 +1336,102 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	expect(mock.calls[1]?.context.tools?.map(tool => tool.name)).toEqual(["alpha", "beta"]);
 });
 
+it("recovers from provider whitespace loop recovery without duplicating assistant messages", async () => {
+	const context: AgentContext = {
+		systemPrompt: ["You are helpful."],
+		messages: [],
+		tools: [],
+	};
+
+	const customStreamFn = (model: any, _context: any, _options: any) => {
+		const stream = new AssistantMessageEventStream();
+		const run = async () => {
+			try {
+				const mockAssistantMsg = (): AssistantMessage => ({
+					role: "assistant",
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				});
+
+				// First Attempt
+				const output1 = mockAssistantMsg();
+				stream.push({ type: "start", partial: output1 });
+
+				output1.content.push({ type: "thinking", thinking: "stale thoughts" });
+				stream.push({ type: "thinking_start", contentIndex: 0, partial: output1 });
+				stream.push({ type: "thinking_delta", contentIndex: 0, delta: "stale thoughts", partial: output1 });
+				stream.push({ type: "thinking_end", contentIndex: 0, content: "stale thoughts", partial: output1 });
+
+				output1.content.push({ type: "toolCall", id: "fc_1", name: "todo", arguments: {} });
+				stream.push({ type: "toolcall_start", contentIndex: 1, partial: output1 });
+
+				// Wait a tick to simulate async stream delivery
+				await Promise.resolve();
+
+				// Recovery event: push a start with reset content!
+				const output2 = mockAssistantMsg();
+				stream.push({ type: "start", partial: output2 });
+
+				// Second Attempt
+				output2.content.push({ type: "text", text: "Hello!" });
+				stream.push({ type: "text_start", contentIndex: 0, partial: output2 });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello!", partial: output2 });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Hello!", partial: output2 });
+
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: output2,
+				});
+			} catch (err) {
+				stream.fail(err);
+			}
+		};
+		void run();
+		return stream;
+	};
+
+	const mock = createMockModel();
+	const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+	const events: AgentEvent[] = [];
+	const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, customStreamFn as any);
+
+	for await (const event of stream) {
+		events.push(event);
+	}
+
+	const messages = await stream.result();
+
+	// The final messages list should only contain one assistant message!
+	const assistantMessages = messages.filter(m => m.role === "assistant");
+	expect(assistantMessages).toHaveLength(1);
+	expect(assistantMessages[0].content).toHaveLength(1);
+	expect(assistantMessages[0].content[0].type).toBe("text");
+
+	// Event sequence checks
+	const messageStarts = events.filter(e => e.type === "message_start");
+	// Should only have 1 message_start for the user message and 1 for the assistant message
+	expect(messageStarts).toHaveLength(2);
+	expect(messageStarts[0].message.role).toBe("user");
+	expect(messageStarts[1].message.role).toBe("assistant");
+
+	// Should have message_updates
+	const updates = events.filter(e => e.type === "message_update");
+	expect(updates.length).toBeGreaterThan(0);
+});
+
 describe("agentLoop useless-flag propagation", () => {
 	async function runProbe(toolReturn: unknown): Promise<ToolResultMessage> {
 		const toolSchema = type({});

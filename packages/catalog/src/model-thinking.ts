@@ -225,7 +225,7 @@ export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: 
  * True when the model reasons natively but rejects the wire `reasoning.effort`
  * param. Scoped to openai-responses* because that's the only API surface where
  * `compat.supportsReasoningEffort: false` means "omit the field entirely"
- * (xAI Grok off the GROK_EFFORT_CAPABLE_PREFIXES allowlist: grok-build,
+ * (xAI Grok off the `isGrokReasoningEffortCapable` allowlist: grok-build,
  * grok-4.20-0309-reasoning). openai-completions keeps its thinking config even
  * without effort support — binary thinking formats (zai/qwen) drive reasoning
  * through other request fields.

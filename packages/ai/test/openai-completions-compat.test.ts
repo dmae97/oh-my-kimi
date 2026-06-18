@@ -2007,3 +2007,100 @@ describe("openrouterVariant request integration", () => {
 		expect((payload as { model?: string }).model).toBe(model.id);
 	});
 });
+
+describe("Moonshot Flavored JSON Schema tool normalization", () => {
+	const mfjsProbeTools: Tool[] = [
+		{
+			name: "github",
+			description: "gh",
+			parameters: {
+				type: "object",
+				properties: {
+					op: {
+						anyOf: [
+							{ const: "pr_checkout", description: "github operation" },
+							{ const: "pr_create", description: "github operation" },
+						],
+						description: "github operation",
+					},
+				},
+				required: ["op"],
+				additionalProperties: false,
+			},
+		},
+		{
+			name: "find",
+			description: "find",
+			parameters: {
+				type: "object",
+				properties: {
+					paths: { type: "array", description: "globs", minItems: 1, items: { type: "string" } },
+				},
+				required: ["paths"],
+				additionalProperties: false,
+			},
+		},
+	];
+
+	function toolParameters(payload: unknown, toolName: string): Record<string, unknown> {
+		const tools = toObject(payload)?.tools;
+		if (!Array.isArray(tools)) throw new Error("payload tools missing");
+		for (const entry of tools) {
+			const fn = getNestedObject(entry, "function");
+			if (fn?.name === toolName) {
+				const params = toObject(fn.parameters);
+				if (!params) throw new Error(`tool ${toolName} has no parameters`);
+				return params;
+			}
+		}
+		throw new Error(`tool ${toolName} not in payload`);
+	}
+
+	function probeProperty(payload: unknown, toolName: string, prop: string): Record<string, unknown> {
+		const properties = toObject(toolParameters(payload, toolName).properties);
+		const node = toObject(properties?.[prop]);
+		if (!node) throw new Error(`property ${prop} missing on ${toolName}`);
+		return node;
+	}
+
+	function moonshotKimiModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			id: "kimi-k2.5",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	function genericNonStrictModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "vllm",
+			baseUrl: "http://localhost:8000/v1",
+			id: "local-model",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	it("rewrites tool schemas to MFJS on native Moonshot hosts", async () => {
+		const model = moonshotKimiModel();
+		expect(model.compat.toolSchemaFlavor).toBe("moonshot-mfjs");
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const op = probeProperty(payload, "github", "op");
+		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
+		const paths = probeProperty(payload, "find", "paths");
+		expect(paths.minItems).toBeUndefined();
+		expect(paths.type).toBe("array");
+	});
+
+	it("leaves raw JSON Schema untouched on non-Moonshot hosts (flag-gated)", async () => {
+		const model = genericNonStrictModel();
+		expect(model.compat.toolSchemaFlavor).toBeUndefined();
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const op = probeProperty(payload, "github", "op");
+		expect(Array.isArray(op.anyOf)).toBe(true);
+		const paths = probeProperty(payload, "find", "paths");
+		expect(paths.minItems).toBe(1);
+	});
+});

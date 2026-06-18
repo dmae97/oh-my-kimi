@@ -39,7 +39,7 @@ import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-p
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
 import {
 	type HealedToolCall,
 	StreamMarkupHealing,
@@ -588,7 +588,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			);
 			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
 			let disableStrictTools = isStrictToolsDisabledForScope(providerSessionState, strictToolsScope);
-			let strictFallbackErrorMessage: string | undefined;
 			const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
 			const completionsUrl = query
 				? `${trimmedBaseUrl}/chat/completions?${new URLSearchParams(query)}`
@@ -656,8 +655,6 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					!disableStrictTools &&
 					isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse)
 				) {
-					strictFallbackErrorMessage = await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse);
-					output.errorMessage = strictFallbackErrorMessage;
 					disableStrictToolsForScope(providerSessionState, strictToolsScope);
 					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
@@ -1207,7 +1204,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 
-			output.errorMessage = strictFallbackErrorMessage;
+			output.errorMessage = undefined;
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -1769,8 +1766,7 @@ export function convertMessages(
 			// DeepSeek-compatible reasoning models require reasoning_content on all
 			// assistant turns. Providers that allow placeholders only need it on
 			// tool-call turns.
-			const needsReasoningOnAllTurns =
-				compat.requiresReasoningContentForToolCalls && !compat.allowsSyntheticReasoningContentForToolCalls;
+			const needsReasoningOnAllTurns = compat.requiresReasoningContentForAllAssistantTurns;
 			const needsReasoningField = needsReasoningOnAllTurns || toolCalls.length > 0;
 			let hasReasoningField =
 				assistantMsg.reasoning_content !== undefined ||
@@ -1991,12 +1987,18 @@ function convertTools(
 	return {
 		tools: adaptedTools.map(({ tool, baseParameters, parameters, strict }) => {
 			const includeStrict = toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && strict);
+			const wireParameters = includeStrict ? parameters : baseParameters;
 			return {
 				type: "function",
 				function: {
 					name: tool.name,
 					description: tool.description || "",
-					parameters: includeStrict ? parameters : baseParameters,
+					// Moonshot/Kimi native hosts validate against the stricter MFJS subset
+					// (const→enum, typed enums, no validators) and 400 otherwise.
+					parameters:
+						compat.toolSchemaFlavor === "moonshot-mfjs"
+							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
+							: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
 					...(includeStrict && { strict: true }),
 				},

@@ -1192,6 +1192,7 @@ async function processCodexResponseStream(
 			if (!recovered) {
 				throw error;
 			}
+			stream.push({ type: "start", partial: output });
 		}
 	}
 }
@@ -1663,9 +1664,10 @@ function dropTrailingDegenerateToolCall(output: AssistantMessage, runtime: Codex
  * scratch — bounded by {@link CODEX_WHITESPACE_LOOP_RETRY_LIMIT}. Sampling
  * nondeterminism usually breaks the loop on a fresh attempt; once the budget is
  * exhausted the original error is surfaced (now without the junk tool call
- * polluting the message). Replay is refused once a toolcall_end was already
- * delivered to the consumer (`canSafelyReplayWebsocketOverSse`) — it would
- * re-emit the same tool calls.
+ * polluting the message). Replay is refused once any visible content was already
+ * delivered to the consumer — a finished tool call (`canSafelyReplayWebsocketOverSse`),
+ * or any streamed text/commentary block still in `output.content` after the degenerate
+ * tool call is dropped — because replaying re-emits already-streamed deltas.
  */
 async function tryRecoverCodexWhitespaceToolCallLoop(
 	context: CodexStreamProcessingContext,
@@ -1681,6 +1683,7 @@ async function tryRecoverCodexWhitespaceToolCallLoop(
 	if (
 		runtime.whitespaceLoopRetries >= CODEX_WHITESPACE_LOOP_RETRY_LIMIT ||
 		!runtime.canSafelyReplayWebsocketOverSse ||
+		context.output.content.some(block => block.type !== "thinking") ||
 		context.options?.signal?.aborted
 	) {
 		return false;
@@ -3412,7 +3415,7 @@ export function createCodexProviderStreamError(rawEvent: Record<string, unknown>
 		return new CodexProviderStreamError("Codex response failed", false);
 	}
 	const nestedError = event.error ?? event.response?.error;
-	const code = event.code ?? nestedError?.code ?? nestedError?.type ?? "";
+	const code = nestedError?.code ?? nestedError?.type ?? event.code ?? "";
 	const message = event.message ?? "";
 	const formattedMessage =
 		event.type === "error"

@@ -8,7 +8,7 @@ describe("isRetryableCodexFailureEvent", () => {
 		expect(isRetryableCodexFailureEvent({ code: "model_error" })).toBe(true);
 	});
 
-	it("prefers nested error.code over the top-level code (distinct precedence from the factory)", () => {
+	it("prefers nested error.code over the top-level code (matching the factory)", () => {
 		// The error.code chain wins, so a non-retryable nested code with no retryable message
 		// is NOT retryable even though the top-level code is retryable.
 		expect(isRetryableCodexFailureEvent({ code: "server_error", error: { code: "bad_request" } })).toBe(false);
@@ -38,9 +38,9 @@ describe("isRetryableCodexFailureEvent", () => {
 });
 
 describe("createCodexProviderStreamError", () => {
-	it("prefers top-level rawEvent.code over nested error code", () => {
+	it("prefers nested error.code over the top-level code (aligned with isRetryable)", () => {
 		expect(createCodexProviderStreamError({ code: "outer_code", error: { code: "inner_code" } }).code).toBe(
-			"outer_code",
+			"inner_code",
 		);
 	});
 

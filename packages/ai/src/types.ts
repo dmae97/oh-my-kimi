@@ -237,6 +237,13 @@ export interface StreamOptions {
 	 */
 	metadata?: Record<string, unknown>;
 	/**
+	 * Config options for the thinking/response loop guard.
+	 */
+	loopGuard?: {
+		enabled?: boolean;
+		checkAssistantContent?: boolean;
+	};
+	/**
 	 * Advisory token budget for a full agentic loop. Anthropic encodes this as
 	 * `output_config.task_budget` with the `task-budgets-2026-03-13` beta header.
 	 */

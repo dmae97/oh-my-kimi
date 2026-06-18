@@ -322,7 +322,7 @@ function buildParams(
 			parameters: sanitizeSchemaForOpenAIResponses(toolWireSchema(tool)),
 			strict: false,
 		}));
-		if (options?.toolChoice) {
+		if (options?.toolChoice && context.tools.length > 0) {
 			const toolChoice = mapToOpenAIResponsesToolChoice(options.toolChoice);
 			if (
 				toolChoice &&

@@ -344,6 +344,49 @@ function isEmptyObject(val: unknown): val is Record<string, never> {
 	return Object.keys(val).length === 0;
 }
 
+/**
+ * The single JSON Schema scalar `type` that describes every member of a
+ * homogeneous primitive enum, or `undefined` when the members are mixed,
+ * non-scalar (`null`/object/array), or the list is empty.
+ */
+function homogeneousEnumScalarType(values: readonly unknown[]): string | undefined {
+	if (values.length === 0) return undefined;
+	let inferred: string | undefined;
+	for (const value of values) {
+		let scalar: string | undefined;
+		switch (typeof value) {
+			case "string":
+				scalar = "string";
+				break;
+			case "boolean":
+				scalar = "boolean";
+				break;
+			case "number":
+				scalar = "number";
+				break;
+			default:
+				return undefined; // null / object / array — not a single scalar type
+		}
+		if (inferred === undefined) inferred = scalar;
+		else if (inferred !== scalar) return undefined; // mixed primitives
+	}
+	return inferred;
+}
+
+/**
+ * ArkType emits string-literal unions (and raw JSON-Schema tools can declare
+ * enums) as a bare `{ enum: [...] }` with no `type`. That is valid JSON Schema
+ * and accepted by OpenAI/Anthropic, but Gemini/Vertex — including the
+ * OpenAI-compatible gateways fronting it — reject a function-declaration enum
+ * that omits `type` ("schema didn't specify the schema type field"). Complete
+ * the node by inferring the scalar `type` when every member shares one.
+ */
+function inferBareEnumScalarType(obj: Record<string, unknown>): void {
+	if ("type" in obj || !Array.isArray(obj.enum)) return;
+	const inferred = homogeneousEnumScalarType(obj.enum);
+	if (inferred !== undefined) obj.type = inferred;
+}
+
 function walk(node: unknown, zodCleanup: boolean): void {
 	if (Array.isArray(node)) {
 		for (const child of node) walk(child, zodCleanup);
@@ -352,6 +395,7 @@ function walk(node: unknown, zodCleanup: boolean): void {
 	if (!node || typeof node !== "object") return;
 	const obj = node as Record<string, unknown>;
 	rewriteNullableScalarAnyOf(obj);
+	inferBareEnumScalarType(obj);
 
 	if (zodCleanup) {
 		// Drop noise injected for `z.number().int()`.

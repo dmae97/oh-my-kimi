@@ -38,7 +38,7 @@ import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const PERPLEXITY_CHAT_BASE_URL = "https://api.perplexity.ai";
 const PERPLEXITY_RESPONSES_BASE_URL = "https://api.perplexity.ai/v1";
-const OPENROUTER_BASE_URL = "https://openrouter.io/api/v1";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_OAUTH_ASK_URL = "https://www.perplexity.ai/rest/sse/perplexity_ask";
 
 const DEFAULT_MAX_TOKENS = 8192;
@@ -905,6 +905,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 	}
 
 	const authMethods = await getAvailableAuthMethods(params.authStorage, params.sessionId, params.signal);
+	let lastError: unknown;
 
 	for (const auth of authMethods) {
 		if (auth.type === "api_key") {
@@ -914,7 +915,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 				return applySourceLimit(result, params.num_results);
 			} catch (error) {
 				if (params.signal?.aborted) throw error;
-				// Try next method
+				lastError = error;
 			}
 		} else {
 			// Use OAuth/cookies/anonymous path
@@ -939,12 +940,14 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 					},
 					params.num_results,
 				);
-			} catch {
-				// Try next method
+			} catch (error) {
+				if (params.signal?.aborted) throw error;
+				lastError = error;
 			}
 		}
 	}
 
+	if (lastError) throw lastError;
 	throw new SearchProviderError("perplexity", "No authentication method available.", 401);
 }
 

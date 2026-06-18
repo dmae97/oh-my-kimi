@@ -56,6 +56,19 @@ export function isMimoModelIdOrName(value: string): boolean {
 	return value.toLowerCase().includes("mimo");
 }
 
+const GROK_EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3"] as const;
+
+/**
+ * Grok SKUs that expose the wire `reasoning.effort` dial. Other Grok reasoners
+ * (e.g. `grok-build`, `grok-4.20-0309-reasoning`) think natively but reject the
+ * param, so callers must omit reasoning effort for them.
+ */
+export function isGrokReasoningEffortCapable(modelId: string): boolean {
+	const bare = bareModelId(modelId).trim().toLowerCase();
+	if (!bare) return false;
+	return GROK_EFFORT_CAPABLE_PREFIXES.some(prefix => bare.startsWith(prefix));
+}
+
 /**
  * MiniMax M2-generation family (M2, M2.1, M2.5, M2.7, including `-highspeed`/
  * `-lightning`/`-her`/`-turbo` variants, dotless aliases like `minimax-m21`,

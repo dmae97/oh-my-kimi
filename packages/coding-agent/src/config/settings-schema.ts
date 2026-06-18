@@ -897,6 +897,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"model.loopGuard.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Loop Guard",
+			description: "Enable automatic stream loop detection for Gemini and DeepSeek models",
+		},
+	},
+
+	"model.loopGuard.checkAssistantContent": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Loop Guard Scan Prose",
+			description: "Apply loop guard to assistant prose messages in addition to thinking logs",
+		},
+	},
+
 	repeatToolDescriptions: {
 		type: "boolean",
 		default: false,

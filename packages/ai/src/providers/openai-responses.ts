@@ -38,7 +38,11 @@ import {
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
-import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
+import {
+	isForcedToolChoice,
+	mapToOpenAIResponsesToolChoice,
+	type OpenAIResponsesToolChoice,
+} from "../utils/tool-choice";
 import { compactGrammarDefinition } from "./grammar";
 import type {
 	Tool as OpenAITool,
@@ -329,11 +333,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 		const startTime = Date.now();
 		let firstTokenTime: number | undefined;
 
-		const output: AssistantMessage = createInitialResponsesAssistantMessage(
-			"openai-responses",
-			model.provider,
-			model.id,
-		);
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		let chainState: OpenAIResponsesChainState | undefined;
 		let sentPreviousResponseId: string | undefined;
@@ -484,9 +484,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					if (canRetryWithoutStrictTools) {
 						strictRetryAvailable = false;
 						forceDisableStrictTools = true;
-						const strictFallbackError = compiledGrammarTooLarge
-							? await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse)
-							: undefined;
 						disableStrictToolsForScope(providerSessionState, strictToolsScope);
 						const fallbackBuilt = buildParams(
 							model,
@@ -516,7 +513,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 						activeParams = fallbackParams;
 						activeTrailingScaffoldingItems = fallbackBuilt.trailingScaffoldingItems;
 						activeStrictToolsApplied = fallbackBuilt.strictToolsApplied;
-						if (strictFallbackError) output.errorMessage = strictFallbackError;
 						continue;
 					}
 					if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
@@ -589,6 +585,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				onCompleted: () => {
 					sawTerminalResponseEvent = true;
 				},
+				requestServiceTier: options?.serviceTier,
 			});
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
@@ -833,6 +830,10 @@ export function mapOpenAIResponsesToolChoiceForTools(
 	tools: Tool[],
 	model: Model<"openai-responses">,
 ): OpenAIResponsesToolChoice {
+	if (!model.compat.supportsToolChoice) return undefined;
+	if (isForcedToolChoice(choice) && !model.compat.supportsForcedToolChoice) {
+		return "auto";
+	}
 	const mapped = mapToOpenAIResponsesToolChoice(choice);
 	if (!mapped || typeof mapped === "string" || mapped.type !== "function") {
 		return mapped;

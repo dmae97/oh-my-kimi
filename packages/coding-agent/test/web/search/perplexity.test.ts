@@ -3,7 +3,7 @@ import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
 import { PerplexityProvider, searchPerplexity } from "@oh-my-pi/pi-coding-agent/web/search/providers/perplexity";
 
 const API_URL = "https://api.perplexity.ai/chat/completions";
-const OPENROUTER_API_URL = "https://openrouter.io/api/v1/chat/completions";
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const RESPONSES_URL = "https://api.perplexity.ai/v1/responses";
 
 // API-key path only: getOAuthAccess returns undefined so findPerplexityAuth
@@ -161,6 +161,23 @@ describe("Perplexity API-key request shape", () => {
 		expect(bodies[1]?.model).toBe("perplexity/sonar-pro");
 		expect(response.authMode).toBe("api_key");
 		expect(response.answer).toBe("answer");
+	});
+	it("rejects with the classified upstream error instead of a generic 401 when the only method fails", async () => {
+		delete process.env.OPENROUTER_API_KEY;
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === API_URL) {
+				return new Response(JSON.stringify({ error: { message: "credits exhausted" } }), {
+					status: 402,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response("not mocked", { status: 500 });
+		};
+
+		await expect(
+			searchPerplexity({ query: "quic vs tcp", authStorage: apiKeyAuthStorage, fetch: fetchMock }),
+		).rejects.toThrow(/credits exhausted/);
 	});
 	it("streams the Responses API and captures Perplexity search result events", async () => {
 		process.env.PI_PERPLEXITY_RESPONSES = "1";
