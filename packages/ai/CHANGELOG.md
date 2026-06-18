@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.7] - 2026-06-18
+
 ### Changed
 
 - Switched Google OAuth callback hostname from `localhost` to `127.0.0.1` to prevent IPv6 loopback fallback delays and proxy routing interception.
