@@ -180,6 +180,7 @@ export class InputController {
 			this.ctx.ui.addInputListener(data => {
 				if (!matchesKey(data, "c")) return undefined;
 				if (!this.ctx.canCopyBtw()) return undefined;
+				if (this.ctx.ui.getFocused() !== this.ctx.editor) return undefined;
 				if (this.ctx.editor.getText().trim()) return undefined;
 				void this.ctx.handleBtwCopyKey();
 				return { consume: true };

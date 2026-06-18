@@ -68,6 +68,7 @@ async function createContext() {
 	const resetDisplay = vi.fn();
 	const showModelSelector = vi.fn();
 	const requestRender = vi.fn();
+	let focused: unknown;
 	const addInputListener = vi.fn((listener: InputListener) => {
 		void listener;
 	});
@@ -108,6 +109,7 @@ async function createContext() {
 		setCustomKeyHandler,
 		clearCustomKeyHandlers,
 	};
+	focused = editor;
 	const ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
 		ui: {
@@ -115,6 +117,7 @@ async function createContext() {
 			resetDisplay,
 			addInputListener,
 			addStartListener,
+			getFocused: vi.fn(() => focused),
 			terminal: { write: terminalWrite },
 		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
@@ -186,6 +189,9 @@ async function createContext() {
 		ctx,
 		editor,
 		customHandlers,
+		setFocused(target: unknown) {
+			focused = target;
+		},
 		spies: {
 			setActionKeys,
 			showModelSelector,
@@ -380,6 +386,19 @@ describe("InputController keybinding setup", () => {
 
 	it("lets c fall through when /btw is not copyable", async () => {
 		const { InputController, ctx, spies } = await createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const result = dispatchInput(registeredInputListeners(spies.addInputListener), "c");
+
+		expect(result).toBeUndefined();
+		expect(spies.handleBtwCopyKey).not.toHaveBeenCalled();
+	});
+
+	it("lets c fall through while another input is focused", async () => {
+		const { InputController, ctx, setFocused, spies } = await createContext();
+		(ctx.canCopyBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		setFocused({ pasteText: vi.fn() });
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
