@@ -2309,7 +2309,11 @@ export class TUI extends Container {
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 			let overlayLines = component.render(width);
 			if (overlayLines.length > maxHeight) {
-				overlayLines = overlayLines.slice(0, maxHeight);
+				const anchor = options?.anchor ?? "center";
+				overlayLines =
+					anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right"
+						? overlayLines.slice(overlayLines.length - maxHeight)
+						: overlayLines.slice(0, maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 			for (let i = 0; i < overlayLines.length; i++) {
