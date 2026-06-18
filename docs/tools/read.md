@@ -123,7 +123,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - Syntax: `archive.ext`, `archive.ext:path/inside`, `archive.ext:path/inside:50-60`.
 - `openArchive()` branches by format:
   - tar/tgz reads the whole archive into memory (capped at `MAX_TAR_ARCHIVE_BYTES = 256 MiB`) and indexes it with `new Bun.Archive(bytes)`
-  - zip is indexed via ranged central-directory reads (`readZipEntries()`); entries are inflated on demand with raw DEFLATE (`node:zlib`), with declared member sizes capped at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB`
+  - zip is indexed via ranged central-directory reads (`readZipEntries()`); members are inflated on demand with raw DEFLATE (`node:zlib`), and the read tool caps individual extraction at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB` in `ArchiveReader.readFile()`
 - Archive paths normalize `/`, drop `.` segments, and reject `..`.
 - Directory reads list immediate children; files show `name` plus ` (size)` when size > 0.
 - Directory listing default limit is `500` entries in `#readArchiveDirectory()`.

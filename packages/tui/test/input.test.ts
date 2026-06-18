@@ -168,6 +168,21 @@ describe("Input component", () => {
 		expect(input.getValue()).toBe(`a${" ".repeat(getIndentation())}bc`);
 	});
 
+	it("decodes tmux re-encoded control bytes in bracketed paste without leaking tails or storing raw C0", () => {
+		// Regression: kitty+tmux (extended-keys-format=xterm) re-encodes the newline
+		// (Ctrl+J) inside a paste as ESC[27;5;106~. For a single-line input the newline
+		// is stripped, but the escape tail "[27;5;106~" must never leak in as text.
+		const input = setupAtEnd("");
+		input.handleInput("\x1b[200~ab\x1b[27;5;106~cd\x1b[201~");
+		expect(input.getValue()).toBe("abcd");
+
+		// A non-newline re-encoded control (Ctrl+A → 0x01) must be stripped, not stored
+		// as a raw control byte in the single-line value.
+		const input2 = setupAtEnd("");
+		input2.handleInput("\x1b[200~x\x1b[27;5;97~y\x1b[201~");
+		expect(input2.getValue()).toBe("xy");
+	});
+
 	it("never renders a line wider than the terminal width (wide chars)", () => {
 		const input = new Input();
 		input.focused = true;

@@ -1829,6 +1829,22 @@ describe("Editor component", () => {
 			expect(editor.getText()).toBe("abc\ndef");
 		});
 
+		it("decodes tmux xterm-format re-encoded control bytes in bracketed paste (kitty+tmux)", () => {
+			const editor = new Editor(defaultEditorTheme);
+			// tmux extended-keys-format=xterm (the default under kitty) re-encodes the
+			// newline (Ctrl+J) inside the paste as ESC[27;5;106~. It must land as a real
+			// newline, not leak the literal escape tail "[27;5;106~" into the buffer.
+			editor.handleInput("\x1b[200~line1\x1b[27;5;106~line2\x1b[201~");
+			expect(editor.getText()).toBe("line1\nline2");
+		});
+
+		it("decodes tmux csi-u-format re-encoded control bytes in bracketed paste", () => {
+			const editor = new Editor(defaultEditorTheme);
+			// tmux extended-keys-format=csi-u re-encodes the newline (Ctrl+J) as ESC[106;5u.
+			editor.handleInput("\x1b[200~line1\x1b[106;5uline2\x1b[201~");
+			expect(editor.getText()).toBe("line1\nline2");
+		});
+
 		it("undoes the last paste when a transient #undo trigger is executed", () => {
 			const editor = new Editor(defaultEditorTheme);
 
