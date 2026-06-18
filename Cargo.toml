@@ -319,6 +319,7 @@ tree-sitter-dockerfile = { version = "0.2.0", package = "tree-sitter-dockerfile-
 tree-sitter-elixir = "0.3"
 tree-sitter-elisp = "1.6.1"
 tree-sitter-erlang = "0.16.0"
+tree-sitter-fortran = "0.6.0"
 tree-sitter-go = "0.25"
 tree-sitter-graphql = "0.1.0"
 tree-sitter-haskell = "0.23"
