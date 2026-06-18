@@ -240,13 +240,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const hadArgs = !!command.args;
-			// Capture state BEFORE the call: when plan mode is already active,
-			// handlePlanModeCommand may exit it (on confirmed exit) or leave it on (on cancel
-			// or warning). In every "already active" case the typed args are NOT consumed,
-			// so preserve them in history regardless of the user's confirm/cancel choice.
-			const wasPlanModeEnabled = runtime.ctx.planModeEnabled;
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
-			if (hadArgs && wasPlanModeEnabled) {
+			if (hadArgs) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
 			runtime.ctx.editor.setText("");
@@ -275,10 +270,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const hadArgs = !!command.args;
-			// Capture state BEFORE the call (see /plan above for rationale).
-			const wasGoalModeEnabled = runtime.ctx.goalModeEnabled;
 			await runtime.ctx.handleGoalModeCommand(command.args || undefined);
-			if (hadArgs && wasGoalModeEnabled) {
+			if (hadArgs) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
 			runtime.ctx.editor.setText("");

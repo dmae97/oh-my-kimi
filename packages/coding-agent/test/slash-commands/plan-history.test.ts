@@ -47,8 +47,9 @@ function createGoalHarness(opts: { goalModeEnabled: boolean; dropOnCall: boolean
 		get goalModeEnabled() {
 			return state.goalModeEnabled;
 		},
-		handleGoalModeCommand: mock(async (_rest?: string) => {
+		handleGoalModeCommand: mock(async (rest?: string) => {
 			if (state.goalModeEnabled && opts.dropOnCall) state.goalModeEnabled = false;
+			else if (!state.goalModeEnabled && rest) state.goalModeEnabled = true;
 		}),
 	} as unknown as InteractiveModeContext;
 
@@ -86,14 +87,14 @@ describe("/plan history preservation when already active", () => {
 		expect(h.setText).toHaveBeenCalledWith("");
 	});
 
-	it("does not add to history when entering plan mode for the first time", async () => {
-		// Plan mode was off; the typed args are consumed as the initial prompt.
+	it("preserves typed text in history when entering plan mode for the first time", async () => {
 		const h = createPlanHarness({ planModeEnabled: false, confirmExit: false });
 
 		await executeBuiltinSlashCommand("/plan hello world", h.runtime);
 
 		expect(h.state.planModeEnabled).toBe(true);
-		expect(h.addToHistory).not.toHaveBeenCalled();
+		expect(h.addToHistory).toHaveBeenCalledWith("/plan hello world");
+		expect(h.setText).toHaveBeenCalledWith("");
 	});
 });
 
@@ -113,6 +114,15 @@ describe("/goal history preservation when already active", () => {
 
 	it("preserves typed text in history when goal mode stays active", async () => {
 		const h = createGoalHarness({ goalModeEnabled: true, dropOnCall: false });
+
+		await executeBuiltinSlashCommand("/goal new objective", h.runtime);
+
+		expect(h.state.goalModeEnabled).toBe(true);
+		expect(h.addToHistory).toHaveBeenCalledWith("/goal new objective");
+	});
+
+	it("preserves typed text in history when entering goal mode for the first time", async () => {
+		const h = createGoalHarness({ goalModeEnabled: false, dropOnCall: false });
 
 		await executeBuiltinSlashCommand("/goal new objective", h.runtime);
 

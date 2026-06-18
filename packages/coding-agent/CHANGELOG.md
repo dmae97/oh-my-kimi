@@ -57,6 +57,10 @@
 
 - Fixed auto context-full maintenance to stop retrying the same summarization timeout before falling back to the next compaction model ([#2913](https://github.com/can1357/oh-my-pi/issues/2913)).
 
+### Fixed
+
+- Fixed `/plan <prompt>` and `/goal <objective>` to preserve the typed slash-command line in TUI input history when entering those modes from off ([#2887](https://github.com/can1357/oh-my-pi/issues/2887)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
