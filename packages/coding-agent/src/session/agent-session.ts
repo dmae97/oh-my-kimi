@@ -2499,6 +2499,12 @@ export class AgentSession {
 					});
 					this.#retryAttempt = 0;
 				}
+				if (assistantMsg.provider === "opencode-go") {
+					this.#modelRegistry.authStorage.recordUsageCost(assistantMsg.provider, assistantMsg.usage.cost.total, {
+						sessionId: this.#activeProviderSessionId(),
+						recordedAt: assistantMsg.timestamp,
+					});
+				}
 			}
 			if (event.message.role === "toolResult") {
 				const { toolName, details, isError, content } = event.message as {
