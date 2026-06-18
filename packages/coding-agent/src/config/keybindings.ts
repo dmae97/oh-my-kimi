@@ -31,6 +31,7 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
+	"app.retry": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
 	"app.clipboard.pasteTextRaw": true;
@@ -130,6 +131,10 @@ export const KEYBINDINGS = {
 		// first so the default binding works there without remapping (#1903).
 		defaultKeys: ["ctrl+q", "ctrl+enter"],
 		description: "Send follow-up message",
+	},
+	"app.retry": {
+		defaultKeys: "alt+r",
+		description: "Retry last failed assistant turn",
 	},
 	"app.message.dequeue": {
 		defaultKeys: "alt+up",
@@ -238,6 +243,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	toggleThinking: "app.thinking.toggle",
 	externalEditor: "app.editor.external",
 	followUp: "app.message.followUp",
+	retry: "app.retry",
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
 	pasteTextRaw: "app.clipboard.pasteTextRaw",

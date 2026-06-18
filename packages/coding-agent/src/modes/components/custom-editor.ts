@@ -22,6 +22,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.editor.external"
 	| "app.history.search"
 	| "app.message.dequeue"
+	| "app.retry"
 	| "app.clipboard.pasteImage"
 	| "app.clipboard.pasteTextRaw"
 	| "app.clipboard.copyPrompt"
@@ -43,6 +44,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.editor.external": ["ctrl+g"],
 	"app.history.search": ["ctrl+r"],
 	"app.message.dequeue": ["alt+up"],
+	"app.retry": ["alt+r"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
 	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
@@ -268,6 +270,8 @@ export class CustomEditor extends Editor {
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
 	onDequeue?: () => void;
+	/** Called when the configured retry shortcut is pressed. */
+	onRetry?: () => void;
 	/** Called when Caps Lock is pressed. */
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
@@ -585,6 +589,20 @@ export class CustomEditor extends Editor {
 			// Intercept configured copy-prompt shortcut
 			if (this.#matchesAction(canonical, "app.clipboard.copyPrompt") && this.onCopyPrompt) {
 				this.onCopyPrompt();
+				return;
+			}
+
+			// Intercept configured retry shortcut. Later user/custom handlers keep
+			// precedence so adding the default Alt+R binding does not steal existing
+			// shortcuts such as app.plan.toggle or extension commands; copy-prompt is
+			// checked above for the same reason.
+			if (this.#matchesAction(canonical, "app.retry") && this.onRetry) {
+				const customHandler = this.#customMatchKeys.get(canonical);
+				if (customHandler) {
+					customHandler();
+					return;
+				}
+				this.onRetry();
 				return;
 			}
 

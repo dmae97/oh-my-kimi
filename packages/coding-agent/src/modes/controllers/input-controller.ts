@@ -304,6 +304,8 @@ export class InputController {
 		this.ctx.editor.onExpandTools = () => this.toggleToolOutputExpansion();
 		this.ctx.editor.setActionKeys("app.message.dequeue", this.ctx.keybindings.getKeys("app.message.dequeue"));
 		this.ctx.editor.onDequeue = () => this.handleDequeue();
+		this.ctx.editor.setActionKeys("app.retry", this.ctx.keybindings.getKeys("app.retry"));
+		this.ctx.editor.onRetry = () => void this.handleRetry();
 		this.ctx.editor.clearCustomKeyHandlers();
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
@@ -923,6 +925,22 @@ export class InputController {
 			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		return true;
+	}
+
+	async handleRetry(): Promise<void> {
+		if (this.ctx.collabGuest) {
+			this.ctx.showStatus("/retry is host-only during a collab session");
+			return;
+		}
+		const didRetry = await this.ctx.viewSession.retry();
+		if (didRetry) {
+			this.ctx.editor.setText("");
+			this.ctx.pendingImages = [];
+			this.ctx.pendingImageLinks = [];
+			this.ctx.editor.imageLinks = undefined;
+		} else {
+			this.ctx.showStatus("Nothing to retry");
+		}
 	}
 
 	/** Send editor text as a follow-up message (queued behind current stream). */

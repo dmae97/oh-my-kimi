@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it, type Mock, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
@@ -20,7 +21,7 @@ type FakeEditor = {
 	onExpandTools?: () => void;
 	onToggleThinking?: () => void;
 	onExternalEditor?: () => void;
-	onDequeue?: () => void;
+	onRetry?: () => void;
 	onChange?: (text: string) => void;
 	onSubmit?: (text: string) => Promise<void>;
 	setText(text: string): void;
@@ -30,6 +31,7 @@ type FakeEditor = {
 	setCustomKeyHandler(key: string, handler: () => void): void;
 	clearCustomKeyHandlers(): void;
 	pasteText(text: string): void;
+	imageLinks?: (string | undefined)[];
 };
 
 async function createContext() {
@@ -38,6 +40,7 @@ async function createContext() {
 		"app.display.reset": ["ctrl+l"],
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["alt+m"],
+		"app.retry": ["alt+r"],
 	};
 	const customHandlers = new Map<string, () => void>();
 	const setActionKeys = vi.fn();
@@ -54,7 +57,20 @@ async function createContext() {
 	const addStartListener = vi.fn();
 	const terminalWrite = vi.fn();
 	const prompt = vi.fn(async () => {});
+	const retry = vi.fn(async () => true);
 	const abort = vi.fn(async () => {});
+	const session = {
+		isStreaming: false,
+		isCompacting: false,
+		isGeneratingHandoff: false,
+		isBashRunning: false,
+		isEvalRunning: false,
+		extensionRunner: undefined,
+		prompt,
+		queuedMessageCount: 0,
+		abort,
+		retry,
+	};
 	const updatePendingMessagesDisplay = vi.fn();
 	const editor: FakeEditor = {
 		setText(text: string) {
@@ -85,17 +101,8 @@ async function createContext() {
 		retryLoader: undefined,
 		autoCompactionEscapeHandler: undefined,
 		retryEscapeHandler: undefined,
-		session: {
-			isStreaming: false,
-			isCompacting: false,
-			isGeneratingHandoff: false,
-			isBashRunning: false,
-			isEvalRunning: false,
-			extensionRunner: undefined,
-			prompt,
-			queuedMessageCount: 0,
-			abort,
-		} as unknown as InteractiveModeContext["session"],
+		session: session as unknown as InteractiveModeContext["session"],
+		viewSession: session as unknown as InteractiveModeContext["viewSession"],
 		keybindings: {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];
@@ -146,6 +153,7 @@ async function createContext() {
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw: vi.fn(() => false),
 		showError: vi.fn(),
+		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -159,6 +167,7 @@ async function createContext() {
 			prompt,
 			updatePendingMessagesDisplay,
 			requestRender,
+			retry,
 			abort,
 			resetDisplay,
 		},
@@ -187,6 +196,89 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("registers retry as an editor action and retries the failed turn", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.retry", ["alt+r"]);
+		expect(editor.onRetry).toBeDefined();
+
+		editor.setText("draft that should clear after retry");
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(spies.retry).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("retries the focused view session instead of the main session", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const focusedRetry = vi.fn(async () => true);
+		(ctx as unknown as { focusedAgentId: string; viewSession: { retry: typeof focusedRetry } }).focusedAgentId =
+			"worker";
+		(ctx as unknown as { viewSession: { retry: typeof focusedRetry } }).viewSession = { retry: focusedRetry };
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(focusedRetry).toHaveBeenCalledTimes(1);
+		expect(spies.retry).not.toHaveBeenCalled();
+	});
+
+	it("keeps retry host-only for collab guests", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const showStatus = ctx.showStatus as unknown as Mock<(message: string) => void>;
+		(ctx as unknown as { collabGuest: { readOnly: boolean } }).collabGuest = { readOnly: true };
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.setText("guest draft");
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(spies.retry).not.toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith("/retry is host-only during a collab session");
+		expect(editor.getText()).toBe("guest draft");
+	});
+
+	it("keeps the draft when there is nothing to retry", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		spies.retry.mockResolvedValueOnce(false);
+		const showStatus = ctx.showStatus as unknown as Mock<(message: string) => void>;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.setText("draft that should survive");
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(showStatus).toHaveBeenCalledWith("Nothing to retry");
+		expect(editor.getText()).toBe("draft that should survive");
+	});
+
+	it("clears retry draft attachments only after retry starts", async () => {
+		const { InputController, ctx, editor } = await createContext();
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "abc" };
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		ctx.pendingImages = [image];
+		ctx.pendingImageLinks = ["local://draft.png"];
+		editor.imageLinks = ctx.pendingImageLinks;
+		editor.setText("draft with image");
+		editor.onRetry?.();
+		await Promise.resolve();
+
+		expect(ctx.pendingImages).toEqual([]);
+		expect(ctx.pendingImageLinks).toEqual([]);
+		expect(editor.imageLinks).toBeUndefined();
+		expect(editor.getText()).toBe("");
 	});
 
 	it("empty Enter aborts the active stream when queued messages are pending", async () => {
