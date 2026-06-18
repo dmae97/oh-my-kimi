@@ -49,6 +49,10 @@
 
 - Fixed ACP approval-mode documentation to describe config inheritance, `omp acp --yolo`/`--auto-approve` runtime overrides, client permission precedence, and headless prompt behavior ([#2900](https://github.com/can1357/oh-my-pi/issues/2900)).
 
+### Fixed
+
+- Fixed `/guided-goal` to fall back to the current session model when neither the `plan` nor `slow` role resolves, instead of aborting during setup ([#2855](https://github.com/can1357/oh-my-pi/issues/2855)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
