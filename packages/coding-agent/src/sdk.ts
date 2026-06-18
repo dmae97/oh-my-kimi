@@ -2585,6 +2585,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (watchdogFiles && watchdogFiles.length > 0) {
 			advisorWatchdogPrompt = watchdogFiles.join("\n\n");
 		}
+		// Owned only when this session created the manager; subagents receive a
+		// parent's manager via `options.mcpManager` and MUST NOT disconnect it.
+		const ownedMcpManager = options.mcpManager ? undefined : mcpManager;
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			agent,
@@ -2630,6 +2633,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						return out;
 					}
 				: undefined,
+			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
 			mcpDiscoveryEnabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
