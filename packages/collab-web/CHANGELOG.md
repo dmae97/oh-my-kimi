@@ -15,6 +15,10 @@
 
 - Removed rendering support for the `render_mermaid` tool from the web tool registry
 
+### Added
+
+- Added support for collab browser wrapper links whose web UI host differs from the relay host, so the connect screen joins the relay encoded in the URL fragment.
+
 ## [15.13.3] - 2026-06-15
 
 ### Fixed

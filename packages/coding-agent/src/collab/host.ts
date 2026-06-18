@@ -133,7 +133,7 @@ export class CollabHost {
 		return this.#link;
 	}
 
-	/** Browser deep link (`https://<relay>/#<link>`) — the relay serves the web client at `/`. */
+	/** Browser deep link for the configured collab web UI. */
 	get webLink(): string {
 		return this.#webLink;
 	}
@@ -156,15 +156,15 @@ export class CollabHost {
 		return list;
 	}
 
-	async start(relayUrl: string): Promise<void> {
+	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
 		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
 		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
