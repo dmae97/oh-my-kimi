@@ -38,8 +38,10 @@ export const SIMPLE_CLASSIFICATIONS: ReadonlySet<string> = new Set([
 const STATE_ORDINAL: Record<string, number> = {
   new: 0,
   reproducing: 1,
+  needs_info: 1,
   fixing: 2,
   opened: 3,
+  reviewing: 3,
   merged: 4,
   closed: 4,
   abandoned: 4,
@@ -78,10 +80,10 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
     const latest = issue.latest_event;
 
     // A matching live running_events entry is authoritative over the issue's
-    // own latest_event, which may be a newer failed/done row that the live run
-    // has not yet superseded. Render the live run so the card stays running,
-    // cancel-capable (deliveryId from the live delivery), and free of the
-    // stale failure. Non-live rows keep latest_event authority below.
+    // own latest_event. That summary row can be a newer queued retry/comment,
+    // or a failed/done row the live run has not superseded yet. Render the live
+    // run so the card stays running, cancel-capable (deliveryId from the live
+    // delivery), and free of stale latest-event state.
     if (live) {
       items.push({
         key,

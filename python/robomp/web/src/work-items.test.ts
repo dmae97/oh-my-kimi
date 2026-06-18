@@ -470,8 +470,15 @@ describe("buildWorkItems", () => {
     expect(stageOrdinal("nonsense")).toBe(0);
     expect(stageOrdinal("new")).toBe(0);
     expect(stageOrdinal("reproducing")).toBe(1);
+    // needs_info is set by mark_unable_to_reproduce during reproduction and
+    // cleared back to reproducing by repro_record in host_tools; it stays in
+    // the reproduction phase (ordinal 1), not advanced past fixing.
+    expect(stageOrdinal("needs_info")).toBe(1);
     expect(stageOrdinal("fixing")).toBe(2);
+    // reviewing is PR review work (tasks.py sets it on PR-opened issues); it
+    // lives on the PR step, same stage as opened (ordinal 3).
     expect(stageOrdinal("opened")).toBe(3);
+    expect(stageOrdinal("reviewing")).toBe(3);
     expect(stageOrdinal("merged")).toBe(4);
   });
 
@@ -568,6 +575,43 @@ describe("buildWorkItems", () => {
     });
     expect(items[0].live?.delivery_id).toBe("live-older-2");
     expect(items[0].latestEvent?.state).toBe("running");
+  });
+
+  test("live running event outranks a newer queued latest_event for the same issue", () => {
+    const items = buildWorkItems(
+      status({
+        issues: [
+          issue({
+            key: "owner/repo#22",
+            number: 22,
+            latest_event: latestEvent({
+              delivery_id: "queued-newer",
+              state: "queued",
+              received_at: "2026-06-17T00:09:00Z",
+            }),
+          }),
+        ],
+        running_events: [
+          runningEvent({
+            delivery_id: "live-older-3",
+            issue_key: "owner/repo#22",
+            received_at: "2026-06-17T00:01:00Z",
+            started_at: "2026-06-17T00:02:00Z",
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "owner/repo#22",
+      bucket: "running",
+      deliveryId: "live-older-3",
+      inflightOnly: false,
+      error: null,
+    });
+    expect(items[0].live?.delivery_id).toBe("live-older-3");
+    expect(items[0].latestEvent?.state).toBe("running");
+    expect(items[0].latestEvent?.delivery_id).toBe("live-older-3");
   });
 
 });

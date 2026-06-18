@@ -1,8 +1,13 @@
-"""Contract test for the robomp server API response, producing status-contract.json."""
+"""Contract test for the robomp server API response vs status-contract.json.
+
+Regenerate the committed fixture with:
+    ROBOMP_UPDATE_STATUS_CONTRACT=1 pytest tests/test_status_contract.py
+"""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +19,11 @@ from robomp.db import get_database
 from robomp.server import create_app
 
 
-# Runtime/timestamp fields vary every run; normalize them so an ordinary pytest
-# run regenerates a byte-identical committed fixture instead of dirtying it.
+# Runtime/timestamp fields vary every run; normalize them so the live payload
+# can be compared against (or regenerated into) a byte-stable committed fixture.
 _VOLATILE_TS_KEYS = {"received_at", "started_at", "last_tool_ts", "updated_at"}
 _FIXED_TS = "2024-01-01T00:00:00+00:00"
+_UPDATE_ENV = "ROBOMP_UPDATE_STATUS_CONTRACT"
 
 
 def _normalize_for_fixture(value: Any) -> Any:
@@ -191,12 +197,16 @@ def test_status_contract(settings: Settings) -> None:
         # check runtime:
         assert data["runtime"]["repo_allowlist"] == ["octo/widget"]
 
-        # Write fixture:
+        # Compare the normalized payload against the committed fixture. Normal
+        # pytest runs assert equality; regenerate only when ROBOMP_UPDATE_STATUS_CONTRACT=1.
         fixture_path = Path(__file__).parent.parent / "web/test/fixtures/status-contract.json"
-        fixture_path.parent.mkdir(parents=True, exist_ok=True)
-        fixture_path.write_text(
-            json.dumps(_normalize_for_fixture(data), indent=2), encoding="utf-8"
-        )
+        actual = _normalize_for_fixture(data)
+        if os.environ.get(_UPDATE_ENV) == "1":
+            fixture_path.parent.mkdir(parents=True, exist_ok=True)
+            fixture_path.write_text(json.dumps(actual, indent=2), encoding="utf-8")
+        else:
+            expected = json.loads(fixture_path.read_text(encoding="utf-8"))
+            assert actual == expected
 
 
 def _enable_replay(monkeypatch: pytest.MonkeyPatch) -> str:
