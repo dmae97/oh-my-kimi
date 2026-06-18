@@ -196,6 +196,50 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
+const AMAZON_BEDROCK_PROVIDER = "amazon-bedrock";
+const BEDROCK_INFERENCE_PROFILE_ARN =
+	/^arn:aws(?:-[a-z]+)*:bedrock:[a-z0-9-]+:[0-9]*:(?:application-inference-profile|inference-profile)\/[a-z0-9][a-z0-9._:-]*$/i;
+
+function hasBedrockInferenceProfileThinkingSuffix(modelId: string): boolean {
+	const { base, level } = splitThinkingSuffix(modelId);
+	return level !== undefined && BEDROCK_INFERENCE_PROFILE_ARN.test(base.trim());
+}
+
+function resolveBedrockInferenceProfileModelId(
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	const requestedId = modelId.trim();
+	if (hasBedrockInferenceProfileThinkingSuffix(requestedId) || !BEDROCK_INFERENCE_PROFILE_ARN.test(requestedId)) {
+		return undefined;
+	}
+
+	const template = availableModels.find(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
+	if (!template) return undefined;
+
+	return buildModel({
+		id: requestedId,
+		name: "Bedrock inference profile",
+		api: "bedrock-converse-stream",
+		provider: AMAZON_BEDROCK_PROVIDER,
+		baseUrl: template.baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	});
+}
+
+function resolveBedrockInferenceProfileReference(
+	provider: string,
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	if (provider.toLowerCase() !== AMAZON_BEDROCK_PROVIDER) return undefined;
+	return resolveBedrockInferenceProfileModelId(modelId, availableModels);
+}
+
 const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
 /**
@@ -287,6 +331,11 @@ export function resolveProviderModelReference(
 		if (aliased) {
 			return aliased;
 		}
+	}
+
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileReference(provider, modelId, availableModels);
+	if (bedrockInferenceProfile) {
+		return bedrockInferenceProfile;
 	}
 
 	if (normalizedProvider !== "openrouter") {
@@ -470,6 +519,7 @@ function findExactCanonicalModelMatch(
  * The single model-matching engine. Tries, in order:
  * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
  *    fallbacks included),
+
  * 2. exact canonical id (coalesces provider variants),
  * 3. exact bare id (preference-ranked),
  * 4. retired effort-tier variant alias (collapsed catalog entries),
@@ -500,6 +550,11 @@ function matchModel(
 	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
+	}
+
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileModelId(modelPattern, availableModels);
+	if (bedrockInferenceProfile) {
+		return bedrockInferenceProfile;
 	}
 
 	// Retired effort-tier variant ids (bare, no provider prefix) resolve to

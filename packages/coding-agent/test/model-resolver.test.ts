@@ -883,6 +883,51 @@ describe("resolveCliModel", () => {
 		expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
 	});
 
+	test("accepts Bedrock inference profile ARNs and preserves thinking suffixes", () => {
+		const defaultBedrockModel = buildModel({
+			id: "us.anthropic.claude-opus-4-8",
+			name: "Claude Opus 4.8 (US)",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		});
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+
+		const baseResult = resolveCliModel({
+			cliProvider: "amazon-bedrock",
+			cliModel: profileArn,
+			modelRegistry: {
+				getAll: () => [defaultBedrockModel],
+			},
+		});
+		const offResult = resolveCliModel({
+			cliProvider: "amazon-bedrock",
+			cliModel: `${profileArn}:off`,
+			modelRegistry: {
+				getAll: () => [defaultBedrockModel],
+			},
+		});
+
+		expect(baseResult.error).toBeUndefined();
+		expect(baseResult.model?.provider).toBe("amazon-bedrock");
+		expect(baseResult.model?.api).toBe("bedrock-converse-stream");
+		expect(baseResult.model?.id).toBe(profileArn);
+		expect(baseResult.model?.name).toBe("Bedrock inference profile");
+		expect(baseResult.model?.reasoning).toBe(false);
+		expect(baseResult.model?.thinking).toBeUndefined();
+		expect(baseResult.model?.contextWindow).toBeNull();
+		expect(baseResult.model?.maxTokens).toBeNull();
+		expect(baseResult.thinkingLevel).toBeUndefined();
+		expect(offResult.error).toBeUndefined();
+		expect(offResult.model?.id).toBe(profileArn);
+		expect(offResult.thinkingLevel).toBe("off");
+	});
+
 	test("returns a clear error when there are no models", () => {
 		const registry = {
 			getAll: () => [],
