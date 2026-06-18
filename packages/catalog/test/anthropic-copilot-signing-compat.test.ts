@@ -1,6 +1,4 @@
 import { describe, expect, it } from "bun:test";
-// Relative import: exercise THIS worktree's compat builder, not the symlinked
-// node_modules copy (which resolves to the primary checkout).
 import { buildAnthropicCompat } from "../src/compat/anthropic";
 import type { ModelSpec } from "../src/types";
 
