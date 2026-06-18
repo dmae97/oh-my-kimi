@@ -2184,6 +2184,77 @@ export function kimiCodeModelManagerOptions(
 // 12.5. LM Studio
 // ---------------------------------------------------------------------------
 
+/** Native LM Studio metadata keyed by model id from `/api/v0/models`. */
+export interface LmStudioNativeModelMetadata {
+	input: ("text" | "image")[];
+	contextWindow?: number;
+}
+
+function toLmStudioNativeBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.trim();
+	const normalized = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+	return normalized.endsWith("/v1") ? normalized.slice(0, -3) : normalized;
+}
+
+function getLmStudioCapabilityNames(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return value.flatMap(item => (typeof item === "string" ? [item.toLowerCase()] : []));
+}
+
+function getLmStudioNativeInput(entry: Record<string, unknown>): ("text" | "image")[] {
+	const modelType = typeof entry.type === "string" ? entry.type.toLowerCase() : "";
+	const capabilities = getLmStudioCapabilityNames(entry.capabilities);
+	const supportsImage = modelType === "vlm" || capabilities.includes("vision") || capabilities.includes("image");
+	return supportsImage ? ["text", "image"] : ["text"];
+}
+
+function getLmStudioNativeContextWindow(entry: Record<string, unknown>): number | undefined {
+	return (
+		toPositiveNumber(entry.max_context_length, null) ??
+		toPositiveNumber(entry.context_length, null) ??
+		toPositiveNumber(entry.max_model_len, null) ??
+		undefined
+	);
+}
+
+/** Fetches LM Studio native model metadata used to mark VLM models as image-capable. */
+export async function fetchLmStudioNativeModelMetadata(
+	baseUrl: string,
+	fetchImpl: FetchImpl = fetch,
+	headers?: Record<string, string>,
+): Promise<Map<string, LmStudioNativeModelMetadata> | null> {
+	const nativeBaseUrl = toLmStudioNativeBaseUrl(baseUrl);
+	try {
+		const response = await fetchImpl(`${nativeBaseUrl}/api/v0/models`, {
+			method: "GET",
+			headers: { Accept: "application/json", ...(headers ?? {}) },
+		});
+		if (!response.ok) {
+			return null;
+		}
+		const payload = await response.json();
+		if (!isRecord(payload) || !Array.isArray(payload.data)) {
+			return null;
+		}
+		const metadata = new Map<string, LmStudioNativeModelMetadata>();
+		for (const entry of payload.data) {
+			if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) {
+				continue;
+			}
+			const contextWindow = getLmStudioNativeContextWindow(entry);
+			metadata.set(entry.id, {
+				input: getLmStudioNativeInput(entry),
+				...(contextWindow === undefined ? {} : { contextWindow }),
+			});
+		}
+		return metadata;
+	} catch {
+		return null;
+	}
+}
+
 export interface LmStudioModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -2198,18 +2269,33 @@ export function lmStudioModelManagerOptions(
 	const references = createBundledReferenceMap<"openai-completions">("lm-studio" as any);
 	return {
 		providerId: "lm-studio",
-		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
+		fetchDynamicModels: async () => {
+			const nativeMetadata = await fetchLmStudioNativeModelMetadata(
+				baseUrl,
+				config?.fetch,
+				apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+			);
+			return fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "lm-studio",
 				baseUrl,
 				apiKey,
 				mapModel: (entry, defaults) => {
 					const reference = references.get(defaults.id);
-					return mapWithBundledReference(entry, defaults, reference);
+					const mapped = mapWithBundledReference(entry, defaults, reference);
+					const metadata = nativeMetadata?.get(mapped.id);
+					if (!metadata) {
+						return mapped;
+					}
+					return {
+						...mapped,
+						input: metadata.input,
+						contextWindow: metadata.contextWindow ?? mapped.contextWindow,
+					};
 				},
 				fetch: config?.fetch,
-			}),
+			});
+		},
 	};
 }
 

@@ -50,6 +50,7 @@
 - Fixed `/plan <prompt>` and `/goal <objective>` to preserve the typed slash-command line in TUI input history when entering those modes from off ([#2887](https://github.com/can1357/oh-my-pi/issues/2887)).
 - Fixed `/model` in the TUI to open the active-session model switcher instead of the role-assignment picker ([#2846](https://github.com/can1357/oh-my-pi/issues/2846)).
 - Fixed Perplexity web search collapsing every upstream failure to a generic `401 No authentication method available` once all auth methods failed: the fallback loop now rethrows the last classified provider error (`402`/credits-exhausted, `429`, `5xx`), so quota and rate-limit failures are no longer mis-reported as authorization errors. The generic 401 is now only a defensive fallback for the no-method-ran case.
+- Fixed LM Studio runtime discovery to use native `/api/v0/models` metadata so `inspect_image` can select VLM models. ([#2945](https://github.com/can1357/oh-my-pi/issues/2945))
 
 ### Security
 
