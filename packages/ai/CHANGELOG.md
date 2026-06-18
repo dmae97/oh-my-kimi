@@ -22,6 +22,11 @@
 - Fixed OpenCode Go usage reporting to synthesize `/usage` limits from OMP-observed request costs for the 5h, weekly, and monthly provider caps. ([#2942](https://github.com/can1357/oh-my-pi/issues/2942))
 - Fixed MiniMax Anthropic-compatible requests to serialize adaptive thinking without an invalid Anthropic `output_config.effort` tier ([#2928](https://github.com/can1357/oh-my-pi/issues/2928)).
 
+### Fixed
+
+- Fixed OAuth login replacing all other active accounts for the same provider, allowing multiple OAuth accounts to coexist concurrently.
+- Fixed legacy `api_key` credentials not being replaced/disabled atomically upon upgrading to OAuth login.
+
 ## [16.0.6] - 2026-06-18
 
 ### Added
