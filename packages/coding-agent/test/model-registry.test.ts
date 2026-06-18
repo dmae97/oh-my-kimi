@@ -494,6 +494,32 @@ describe("ModelRegistry", () => {
 		});
 	});
 
+	describe("Bedrock inference profile ARN fallback", () => {
+		let registry: ModelRegistry;
+		beforeAll(() => {
+			registry = readonlyRegistry({
+				providers: {
+					"amazon-bedrock": providerConfig(
+						"https://bedrock-runtime.us-east-1.amazonaws.com",
+						[{ id: "us.anthropic.claude-opus-4-8", reasoning: true }],
+						"bedrock-converse-stream",
+					),
+				},
+			});
+		});
+
+		test("find restores synthetic inference profile ARN models", () => {
+			const profileArn = "arn:aws:bedrock:us-east-2:123456789012:application-inference-profile/company-opus-48";
+			const model = registry.find("amazon-bedrock", profileArn);
+
+			expect(model?.provider).toBe("amazon-bedrock");
+			expect(model?.id).toBe(profileArn);
+			expect(model?.api).toBe("bedrock-converse-stream");
+			expect(model?.reasoning).toBe(false);
+			expect(model?.thinking).toBeUndefined();
+		});
+	});
+
 	describe("baseUrl override (no custom models)", () => {
 		// Identical fixtures collapse to one registry; distinct override shapes get
 		// their own. All read-only — built in beforeAll, queried from bodies.
