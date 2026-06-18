@@ -1003,7 +1003,7 @@ function convertContentBlocks(
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max" | "adaptive";
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 export interface AnthropicOptions extends StreamOptions {
@@ -1026,11 +1026,13 @@ export interface AnthropicOptions extends StreamOptions {
 	requestModelId?: string;
 	/**
 	 * Effort level for adaptive thinking.
-	 * Controls how much thinking Claude allocates:
+	 * Controls how much Claude allocates, or uses "adaptive" for MiniMax's
+	 * binary adaptive-thinking tag:
 	 * - "max": Always thinks with no constraints
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
+	 * - "adaptive": Sends `thinking.type: "adaptive"` without `output_config.effort`
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
@@ -1650,13 +1652,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				// `output_config.effort` ships on thinking-on requests AND on the
 				// thinking-off adaptive pin (adaptive-only models get effort:"low" so
 				// the toggle cannot 400); the beta must accompany the field in both.
+				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
+				// so the sentinel "adaptive" value intentionally sends no output_config.
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
 					!model.compat.disableAdaptiveThinking;
 				if (
 					model.reasoning &&
-					(options?.thinkingEnabled || sendsAdaptiveEffortPin) &&
+					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
 					extraBetas.push(effortBeta);
@@ -2872,7 +2876,7 @@ function buildParams(
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
-				if (effort) outputConfigEffort = effort;
+				if (effort && effort !== "adaptive") outputConfigEffort = effort;
 			} else {
 				thinking = {
 					type: "enabled",

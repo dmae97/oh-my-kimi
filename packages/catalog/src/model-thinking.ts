@@ -25,6 +25,7 @@ import {
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
 	isMinimaxM2FamilyModelId,
+	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
 	supportsAdaptiveThinkingDisplay,
 } from "./identity/family";
@@ -111,6 +112,12 @@ export const ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER: Readonly<Partial<Record<Effor
 export const ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER: Readonly<Partial<Record<Effort, string>>> = {
 	[Effort.Minimal]: "low",
 	[Effort.XHigh]: "max",
+};
+
+const MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP: Readonly<EffortMap> = {
+	[Effort.Low]: "adaptive",
+	[Effort.Medium]: "adaptive",
+	[Effort.High]: "adaptive",
 };
 
 // ---------------------------------------------------------------------------
@@ -295,6 +302,13 @@ function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpe
 	return spec.api === "ollama-chat" && spec.provider === "ollama-cloud" && isGlm52ReasoningEffortModelId(spec.id);
 }
 
+function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return (
+		spec.api === "anthropic-messages" &&
+		(isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id))
+	);
+}
+
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
 	if (compat === undefined || !("reasoningEffortMap" in compat)) {
 		return undefined;
@@ -309,6 +323,9 @@ function inferDetectedEffortMap<TApi extends Api>(
 	mode: ThinkingConfig["mode"],
 ): EffortMap | undefined {
 	if (mode === "anthropic-adaptive") {
+		if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
+			return MINIMAX_ANTHROPIC_ADAPTIVE_EFFORT_MAP;
+		}
 		return anthropicModelHasRealXHighEffort(spec, parsedModel)
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
@@ -446,6 +463,9 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 }
 
 function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: CompatOf<TApi>): readonly Effort[] {
+	if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
+		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
+	}
 	if (spec.api === "anthropic-messages") {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
@@ -488,6 +508,9 @@ function inferThinkingControlMode<TApi extends Api>(
 				: "budget";
 
 		case "anthropic-messages":
+			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
+				return "anthropic-adaptive";
+			}
 			if (parsedModel.family === "anthropic") {
 				if (semverGte(parsedModel.version, "4.6")) {
 					return "anthropic-adaptive";
@@ -626,9 +649,15 @@ export function mapEffortToGoogleThinkingLevel(effort: Effort): "MINIMAL" | "LOW
 export function mapEffortToAnthropicAdaptiveEffort<TApi extends Api>(
 	model: ApiModel<TApi>,
 	effort: Effort,
-): "low" | "medium" | "high" | "xhigh" | "max" {
+): "low" | "medium" | "high" | "xhigh" | "max" | "adaptive" {
 	const supported = requireSupportedEffort(model, effort);
-	return (model.thinking?.effortMap?.[supported] ?? supported) as "low" | "medium" | "high" | "xhigh" | "max";
+	return (model.thinking?.effortMap?.[supported] ?? supported) as
+		| "low"
+		| "medium"
+		| "high"
+		| "xhigh"
+		| "max"
+		| "adaptive";
 }
 
 /**
