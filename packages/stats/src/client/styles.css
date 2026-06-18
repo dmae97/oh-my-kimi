@@ -729,6 +729,13 @@
   display: none;
 }
 
+/* Match .stats-table-container so mobile-card tables also contain horizontal
+   overflow instead of spilling the page body on narrow desktops (768-1023px). */
+.stats-table-desktop-only {
+  width: 100%;
+  overflow-x: auto;
+}
+
 @media (max-width: 767px) {
   .stats-table-desktop-only {
     display: none;

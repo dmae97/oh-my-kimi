@@ -16,6 +16,7 @@
 ### Fixed
 
 - The 1h time-range chart rendered an empty/single-point line; it now buckets at 5-minute granularity for a real trend.
+- Wide data tables (Requests, Errors, Overview, Projects) overflowed the page horizontally at narrow-desktop widths (768-1023px): the `.stats-table-desktop-only` wrapper used for mobile-card tables lacked the `overflow-x: auto` containment that `.stats-table-container` already has. They now scroll within their own bounds instead of spilling the page body.
 
 ## [15.13.3] - 2026-06-15
 
