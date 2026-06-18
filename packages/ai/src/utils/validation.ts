@@ -764,10 +764,11 @@ function normalizeOptionalNullsForSchema(
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
 		const isNullish = currentValue === null || currentValue === "null";
+		const isEmptyString = currentValue === "";
 
-		// Strip null and the string "null" from optional fields.
-		// The LLM sometimes outputs string "null" to mean "no value".
-		if (isNullish && !required.has(key)) {
+		// Strip null, string "null", and empty strings from optional fields.
+		// LLMs sometimes output these placeholders to mean "no value".
+		if ((isNullish || isEmptyString) && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
@@ -1281,7 +1282,8 @@ function truncateArgsForError(value: unknown): unknown {
 /**
  * Validates tool call arguments against the tool's schema (Zod or plain JSON
  * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
- * containers, null-for-optional, null-for-default) before declaring failure.
+ * containers, null/empty-string-for-optional, null-for-default) before
+ * declaring failure.
  *
  * @throws Error with a formatted message when validation cannot be reconciled.
  */
@@ -1290,9 +1292,9 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 
-	// Always normalize first — strip null and string "null" from optional
-	// fields and substitute defaults. Handles LLM outputting string "null"
-	// to mean "no value" even when validation would otherwise pass.
+	// Always normalize first — strip null, string "null", and empty strings
+	// from optional fields and substitute defaults. Handles LLM outputting
+	// placeholders for "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
 	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);

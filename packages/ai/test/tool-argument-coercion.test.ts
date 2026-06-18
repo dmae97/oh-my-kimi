@@ -898,6 +898,32 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ requiredText: "ok" });
 	});
 
+	it("strips empty strings from optional properties before schema validation", () => {
+		const tool: Tool = {
+			name: "mcp-like",
+			description: "",
+			parameters: {
+				type: "object",
+				properties: {
+					namespace: { type: "string" },
+					fieldSelector: { type: "string", pattern: "^.+$" },
+					limit: { type: "number" },
+				},
+				required: ["namespace"],
+				additionalProperties: false,
+			},
+		};
+
+		const result = validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-empty-optionals",
+			name: "mcp-like",
+			arguments: { namespace: "kube-system", fieldSelector: "", limit: "" },
+		});
+
+		expect(result).toEqual({ namespace: "kube-system" });
+	});
+
 	it("drops null optional properties nested in array objects", () => {
 		const tool: Tool = {
 			name: "t12",
@@ -924,7 +950,7 @@ describe("Tool argument coercion", () => {
 		expect(result).toEqual({ edits: [{ target: "a", end: "e" }] });
 	});
 
-	it("drops null optional properties in anyOf object branches", () => {
+	it("drops null and empty-string optional properties in anyOf object branches", () => {
 		const opSchema = z.union([
 			z.object({
 				op: z.literal("add_task"),
@@ -972,7 +998,6 @@ describe("Tool argument coercion", () => {
 					op: "update",
 					id: "task-1",
 					status: "completed",
-					notes: "",
 				},
 			],
 		});
