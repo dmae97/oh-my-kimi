@@ -879,6 +879,31 @@ describe("openai-completions compatibility", () => {
 		expect(assistantObject?.reasoning_text).toBe("inspect tool output");
 		expect(assistantObject?.reasoning_content).toBeUndefined();
 	});
+
+	it("maps MiMo unsupported reasoning efforts to opencode-go accepted wire values", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			id: "mimo-v2.5-pro",
+			name: "MiMo V2.5 Pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+
+		const minimalPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "minimal" }),
+		);
+		const xhighPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" }),
+		);
+
+		expect(minimalPayload ? Reflect.get(minimalPayload, "reasoning_effort") : undefined).toBe("low");
+		expect(xhighPayload ? Reflect.get(xhighPayload, "reasoning_effort") : undefined).toBe("high");
+	});
 });
 
 describe("kimi model detection via detectCompat", () => {

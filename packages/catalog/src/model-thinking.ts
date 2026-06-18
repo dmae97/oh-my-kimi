@@ -24,6 +24,7 @@ import {
 	findThinkingVariantToken,
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
+	isMimoModelIdOrName,
 	isMinimaxM2FamilyModelId,
 	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
@@ -88,6 +89,10 @@ const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 };
 const OLLAMA_CLOUD_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.XHigh]: "max",
+};
+const MIMO_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
+	[Effort.Minimal]: "low",
+	[Effort.XHigh]: "high",
 };
 
 /**
@@ -164,7 +169,7 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	thinking: ThinkingConfig,
 ): ThinkingConfig {
 	const parsed = parseKnownModel(spec.id);
-	const normalizedEfforts = getModelDefinedEfforts(spec) ?? thinking.efforts;
+	const normalizedEfforts = getModelDefinedEfforts(spec, compat) ?? thinking.efforts;
 	const effortsChanged = !sameEffortList(normalizedEfforts, thinking.efforts);
 	const effortMap =
 		thinking.effortMap === undefined
@@ -251,7 +256,7 @@ function inferEffortMap<TApi extends Api>(
 	mode: ThinkingConfig["mode"],
 	efforts: readonly Effort[],
 ): EffortMap | undefined {
-	const detected = inferDetectedEffortMap(spec, parsedModel, mode);
+	const detected = inferDetectedEffortMap(spec, compat, parsedModel, mode);
 	const configured = readCompatEffortMap(compat);
 	const merged =
 		detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
@@ -281,14 +286,20 @@ function isOpenAICompatReasoningApi(api: Api): boolean {
 	return api === "openai-completions" || api === "openrouter";
 }
 
-function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
+function getModelDefinedEfforts<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): readonly Effort[] | undefined {
 	if (isOpenAICompatReasoningApi(spec.api) && isZaiGlm52ReasoningEffortModel(spec)) {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
 		return GLM_52_HIGH_MAX_REASONING_EFFORTS;
 	}
-	return isOpenAICompatReasoningApi(spec.api) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
+	return isOpenAICompatReasoningApi(spec.api) &&
+		(isMinimaxM2FamilyModelId(spec.id) ||
+			isOpenAIGptOssModelId(spec.id) ||
+			isOpenAICompatMimoReasoningEffortModel(spec, compat))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
 }
@@ -306,6 +317,19 @@ function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: Mode
 	return spec.api === "anthropic-messages" && (isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id));
 }
 
+function isOpenAICompatMimoReasoningEffortModel<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): boolean {
+	if (!isOpenAICompatReasoningApi(spec.api)) return false;
+	if (!isMimoModelIdOrName(spec.id) && !isMimoModelIdOrName(spec.name ?? "")) return false;
+	const resolved = compat as ResolvedOpenAICompat | undefined;
+	return (
+		(resolved?.thinkingFormat === "openai" || resolved?.thinkingFormat === "openrouter") &&
+		resolved.supportsReasoningEffort
+	);
+}
+
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
 	if (compat === undefined || !("reasoningEffortMap" in compat)) {
 		return undefined;
@@ -316,6 +340,7 @@ function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
 
 function inferDetectedEffortMap<TApi extends Api>(
 	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
 	parsedModel: ParsedModel,
 	mode: ThinkingConfig["mode"],
 ): EffortMap | undefined {
@@ -341,6 +366,9 @@ function inferDetectedEffortMap<TApi extends Api>(
 	}
 	if (isDeepseekReasoningModel(spec)) {
 		return DEEPSEEK_REASONING_EFFORT_MAP;
+	}
+	if (isOpenAICompatMimoReasoningEffortModel(spec, compat)) {
+		return MIMO_REASONING_EFFORT_MAP;
 	}
 	if (modelMatchesHost(spec, "openrouter")) {
 		const openRouterAnthropicMap = getOpenRouterAnthropicReasoningEffortMap(spec.id);
@@ -383,7 +411,7 @@ function inferSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
-	const modelDefinedEfforts = getModelDefinedEfforts(spec);
+	const modelDefinedEfforts = getModelDefinedEfforts(spec, compat);
 	if (modelDefinedEfforts !== undefined) {
 		return modelDefinedEfforts;
 	}
@@ -460,6 +488,8 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 }
 
 function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: CompatOf<TApi>): readonly Effort[] {
+	const modelDefinedEfforts = getModelDefinedEfforts(spec, compat);
+	if (modelDefinedEfforts !== undefined) return modelDefinedEfforts;
 	if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
 		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
 	}

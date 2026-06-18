@@ -7208,11 +7208,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -7238,11 +7236,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -7267,11 +7263,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		}
@@ -20130,11 +20124,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -30441,11 +30433,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -30471,11 +30461,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -30519,11 +30507,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -30568,11 +30554,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -30597,11 +30581,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -48742,11 +48724,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
 				"effortRouting": {
 					"off": "xiaomi/mimo-v2-flash",
@@ -48806,11 +48786,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
 				"effortRouting": {
 					"off": "xiaomi/mimo-v2-flash-original",
@@ -48871,11 +48849,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -48900,11 +48876,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -48930,11 +48904,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -48959,11 +48931,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -56390,11 +56360,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
@@ -56422,11 +56390,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			},
 			"compat": {
@@ -56458,11 +56424,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -56490,11 +56454,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -58123,11 +58085,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -58153,11 +58113,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -58182,11 +58140,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -58212,11 +58168,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -66877,7 +66831,6 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -66906,7 +66859,6 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -66934,7 +66886,6 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -66963,7 +66914,6 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -66991,7 +66941,6 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
 					"high"
@@ -72294,11 +72243,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84201,11 +84148,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84230,11 +84175,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84260,11 +84203,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84289,11 +84230,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84319,11 +84258,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
@@ -84348,11 +84285,9 @@
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				]
 			}
 		},
