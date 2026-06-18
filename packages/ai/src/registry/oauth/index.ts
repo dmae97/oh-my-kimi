@@ -19,6 +19,7 @@ const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
 	id: provider.id,
 	name: provider.name,
 	available: provider.available ?? true,
+	storeCredentialsAs: provider.storeCredentialsAs,
 }));
 
 const customOAuthProviders = new Map<string, OAuthProviderInterface>();
@@ -163,6 +164,7 @@ export function getOAuthProviders(): OAuthProviderInfo[] {
 		id: provider.id,
 		name: provider.name,
 		available: true,
+		storeCredentialsAs: provider.storeCredentialsAs,
 	}));
 	return [...builtInOAuthProviders, ...customProviders];
 }

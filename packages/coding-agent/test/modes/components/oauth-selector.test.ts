@@ -137,6 +137,31 @@ describe("OAuthSelectorComponent", () => {
 			expect(rendered).not.toContain(victim.name);
 		});
 
+		it("hides alias logins whose storeCredentialsAs target is disabled", async () => {
+			const alias = getOAuthProviders().find(provider => provider.storeCredentialsAs === "openai-codex");
+			expect(alias).toBeDefined();
+			if (!alias) return;
+			expect(alias.id).not.toBe("openai-codex");
+
+			resetSettingsForTest();
+			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["openai-codex"] } });
+
+			const component = new OAuthSelectorComponent(
+				"login",
+				authStorage,
+				() => {},
+				() => {},
+			);
+			for (const char of alias.id) {
+				component.handleInput(char);
+			}
+			const rendered = component
+				.render(80)
+				.map(line => Bun.stripANSI(line))
+				.join("\n");
+			expect(rendered).not.toContain(alias.name);
+		});
+
 		it("keeps disabled providers as logout targets", async () => {
 			resetSettingsForTest();
 			await Settings.init({ inMemory: true, overrides: { disabledProviders: ["opencode-go"] } });

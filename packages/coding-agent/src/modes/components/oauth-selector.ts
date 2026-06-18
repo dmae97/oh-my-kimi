@@ -123,7 +123,15 @@ export class OAuthSelectorComponent extends Container {
 			this.#allProviders = providers.filter(provider => this.#hasSelectableAuth(provider.id));
 		} else {
 			const disabled = getDisabledProviderIds();
-			this.#allProviders = providers.filter(provider => !disabled.has(provider.id));
+			// Hide a login entry when either its own id or the provider id it
+			// stores credentials under is disabled, so alias logins (e.g.
+			// `openai-codex-device` ⇒ `openai-codex`) disappear alongside the
+			// model provider they authenticate.
+			this.#allProviders = providers.filter(
+				provider =>
+					!disabled.has(provider.id) &&
+					!(provider.storeCredentialsAs && disabled.has(provider.storeCredentialsAs)),
+			);
 		}
 		this.#filteredProviders = this.#allProviders;
 	}
