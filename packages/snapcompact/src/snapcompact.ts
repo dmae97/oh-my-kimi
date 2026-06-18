@@ -679,14 +679,32 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 	const dimToolResults = options?.dimToolResults !== false;
 	const parts: string[] = [];
 
-	// Tool results flagged contextually useless (and their paired calls) carry
-	// no information worth archiving — skip the whole pair.
+	// Tool results flagged contextually useless (and their paired calls) carry no
+	// information worth archiving — skip the whole pair. Surviving results are
+	// indexed by tool-call id so each merges into its originating `# Tool call`.
 	const uselessCallIds = new Set<string>();
+	const resultTextByCallId = new Map<string, string>();
 	for (const msg of messages) {
-		if (msg.role === "toolResult" && msg.useless === true && msg.isError !== true) {
+		if (msg.role !== "toolResult") continue;
+		if (msg.useless === true && msg.isError !== true) {
 			uselessCallIds.add(msg.toolCallId);
+			continue;
 		}
+		const text = msg.content
+			.filter((block): block is { type: "text"; text: string } => block.type === "text")
+			.map(block => block.text)
+			.join("");
+		if (text) resultTextByCallId.set(msg.toolCallId, text);
 	}
+
+	// Wrap a raw tool-result body in an `<out>` block, dimming only the body so
+	// the frame coloring keeps structure (headings, calls) loud.
+	const renderResultBlock = (rawText: string): string => {
+		const body = truncateForSummary(stripDimMarkers(rawText), toolResultMaxChars, headRatio);
+		return `<out>\n${dimToolResults ? `${DIM_ON}${body}${DIM_OFF}` : body}\n</out>`;
+	};
+
+	const mergedCallIds = new Set<string>();
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
@@ -697,22 +715,39 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 							.filter((content): content is { type: "text"; text: string } => content.type === "text")
 							.map(content => content.text)
 							.join("");
-			if (content) parts.push(`[User]: ${stripDimMarkers(content)}`);
+			if (content) parts.push(`# User ¶\n${stripDimMarkers(content)}`);
 		} else if (msg.role === "assistant") {
-			const textParts: string[] = [];
-			const thinkingParts: string[] = [];
-			const toolCalls: string[] = [];
+			// Stream blocks in content order: buffer thinking/text, then flush a
+			// `# Assistant` block (thinking as italics above the text) right before
+			// each tool call, so text or thinking after a call stays after it.
+			let pendingThinking: string[] = [];
+			let pendingText: string[] = [];
+			const flushAssistant = () => {
+				const sections: string[] = [];
+				if (pendingThinking.length > 0) sections.push(`_${pendingThinking.join("\n")}_`);
+				if (pendingText.length > 0) sections.push(pendingText.join("\n"));
+				if (sections.length > 0) parts.push(`# Assistant ¶\n${sections.join("\n\n")}`);
+				pendingThinking = [];
+				pendingText = [];
+			};
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
-					textParts.push(stripDimMarkers(block.text));
+					pendingText.push(stripDimMarkers(block.text));
 				} else if (block.type === "thinking") {
-					thinkingParts.push(stripDimMarkers(block.thinking));
+					pendingThinking.push(stripDimMarkers(block.thinking));
 				} else if (block.type === "toolCall") {
 					if (uselessCallIds.has(block.id)) continue;
+					flushAssistant();
 					const args = block.arguments as Record<string, unknown>;
+					// Prefer the harness-derived intent, else the raw `_i` arg; render it as
+					// a one-line `//comment` and drop `_i` from the args below.
+					const rawIntent =
+						typeof block.intent === "string" ? block.intent : typeof args._i === "string" ? args._i : "";
+					const intent = stripDimMarkers(rawIntent).replace(/\s+/g, " ").trim();
 					const argsStr = truncateForSummary(
 						Object.entries(args)
+							.filter(([key]) => key !== "_i")
 							.map(
 								([key, value]) =>
 									`${key}=${truncateForSummary(JSON.stringify(value) ?? "undefined", toolArgMaxChars, headRatio)}`,
@@ -721,30 +756,24 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 						toolCallMaxChars,
 						headRatio,
 					);
-					toolCalls.push(`${block.name}(${argsStr})`);
+					const lines = ["# Tool call ¶"];
+					if (intent) lines.push(`//${intent}`);
+					lines.push(`${block.name}(${argsStr})`);
+					const resultText = resultTextByCallId.get(block.id);
+					if (resultText !== undefined) {
+						mergedCallIds.add(block.id);
+						lines.push(renderResultBlock(resultText));
+					}
+					parts.push(lines.join("\n"));
 				}
 			}
-
-			if (thinkingParts.length > 0) {
-				parts.push(`[Think]: ${thinkingParts.join("\n")}`);
-			}
-			if (textParts.length > 0) {
-				parts.push(`[Assistant]: ${textParts.join("\n")}`);
-			}
-			if (toolCalls.length > 0) {
-				parts.push(`[Tool Call]: ${toolCalls.join("; ")}`);
-			}
+			flushAssistant();
 		} else if (msg.role === "toolResult") {
-			if (uselessCallIds.has(msg.toolCallId)) continue;
-			const content = msg.content
-				.filter((block): block is { type: "text"; text: string } => block.type === "text")
-				.map(block => block.text)
-				.join("");
-			if (content) {
-				// Args above are JSON-escaped, so only raw result text can carry toggles.
-				const body = truncateForSummary(stripDimMarkers(content), toolResultMaxChars, headRatio);
-				parts.push(dimToolResults ? `[Tool Result]: ${DIM_ON}${body}${DIM_OFF}` : `[Tool Result]: ${body}`);
-			}
+			// Paired results already merged into their `# Tool call` block above;
+			// only orphans (call archived outside this window) render standalone.
+			if (uselessCallIds.has(msg.toolCallId) || mergedCallIds.has(msg.toolCallId)) continue;
+			const resultText = resultTextByCallId.get(msg.toolCallId);
+			if (resultText !== undefined) parts.push(`# Tool call ¶\n${renderResultBlock(resultText)}`);
 		}
 	}
 

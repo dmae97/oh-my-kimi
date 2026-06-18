@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Changed
 
 - Optimized app startup time by lazily loading site-specific scraper modules
@@ -21,6 +20,8 @@
 
 ### Fixed
 
+- Fixed settings overlay crash when scrolling past the last row in list views
+- Improved tool result formatting by correctly wrapping `<out>` blocks in dim-ink toggles
 - Fixed auto-retry after transient model-stream socket closes to replay text/thinking-only partial assistant output, including turns where incomplete tool-call arguments were dropped; completed tool calls still block retry to avoid duplicating tool execution.
 - Fixed `omp update` reporting `EPERM: operation not permitted, unlink '<binary>.bak'` on Windows when self-replacing a standalone binary, even though the new binary had already been installed. The backed-up old executable is still the running process image and cannot be unlinked until the process exits, so the post-verify backup cleanup is now best-effort, backups use a unique per-attempt name, and stale backups are swept on the next update ([#845](https://github.com/can1357/oh-my-pi/issues/845)).
 - Fixed plan-mode `Refine plan` so the internal approval abort is hidden and the editor is ready for a follow-up prompt instead of showing `Operation aborted` ([#2971](https://github.com/can1357/oh-my-pi/issues/2971)).

@@ -1,6 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `<out>` block wrapping for tool results to improve document structure
+- Rendered thinking process as italicized blocks above assistant text
+- Displayed tool call intents as `//` comments in tool call headers
+- Changed conversation role markers to standard Markdown headings
+
+### Changed
+
+- Merged tool results into their corresponding tool call blocks
+- Preserved prose formatting around tool calls to maintain conversation flow
+- Hidden `_i` argument from tool call output when an intent is provided
+- Optimized assistant turn output to group thinking and text blocks efficiently
+
+### Fixed
+
+- Fixed improper splitting of assistant messages around useless tool calls
 
 ## [16.0.1] - 2026-06-15
 

@@ -459,10 +459,10 @@ describe("serializeConversation", () => {
 		const text = `HEAD-${"x".repeat(5000)}-TAIL`;
 		const out = snapcompact.serializeConversation([createToolResultMessage(text)]);
 		// Default cap 2000 at 0.6 head ratio: 1200 head + 800 tail survive.
-		expect(out).toContain("[Tool Result]: ");
+		expect(out).toContain("<out>");
 		expect(out).toContain("HEAD-");
 		expect(out).toContain("[... 3010 chars elided ...]");
-		expect(out.endsWith(`-TAIL${snapcompact.DIM_OFF}`)).toBe(true);
+		expect(out.endsWith(`-TAIL${snapcompact.DIM_OFF}\n</out>`)).toBe(true);
 	});
 
 	it("honors configured budgets; Infinity disables a cap", () => {
@@ -501,19 +501,107 @@ describe("serializeConversation", () => {
 		expect(out.length).toBeLessThan(2200);
 	});
 
-	it("wraps tool results in dim toggles by default and strips stray toggles from content", () => {
+	it("renders roles as markdown headings", () => {
+		const out = snapcompact.serializeConversation([
+			createUserMessage("do the thing"),
+			createAssistantMessage([{ type: "text", text: "done" }]),
+		]);
+		expect(out).toBe("# User ¶\ndo the thing\n\n# Assistant ¶\ndone");
+	});
+
+	it("merges a tool call with its paired result into one block, _i as a // comment", () => {
+		const out = snapcompact.serializeConversation(
+			[
+				createAssistantMessage([
+					{ type: "toolCall", id: "c1", name: "bash", arguments: { _i: "Running tests", command: "bun test" } },
+				]),
+				{ ...createToolResultMessage("3 pass"), toolCallId: "c1" } as Message,
+			],
+			{ dimToolResults: false },
+		);
+		expect(out).toBe('# Tool call ¶\n//Running tests\nbash(command="bun test")\n<out>\n3 pass\n</out>');
+	});
+
+	it("prefers the harness-derived intent over the raw _i arg and squashes newlines", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{
+					type: "toolCall",
+					id: "c1",
+					name: "bash",
+					arguments: { _i: "raw arg", command: "ls" },
+					intent: "Derived\nintent  line",
+				},
+			]),
+		]);
+		expect(out).toContain("//Derived intent line");
+		expect(out).not.toContain("raw arg");
+		expect(out).not.toContain("_i=");
+	});
+
+	it("folds thinking into the assistant block as italics above the text", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{ type: "thinking", thinking: "weigh options" },
+				{ type: "text", text: "the answer" },
+			]),
+		]);
+		expect(out).toBe("# Assistant ¶\n_weigh options_\n\nthe answer");
+	});
+
+	it("gives a thinking-only turn its own assistant heading before the tool calls", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{ type: "thinking", thinking: "plan first" },
+				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+			]),
+		]);
+		expect(out).toBe('# Assistant ¶\n_plan first_\n\n# Tool call ¶\nread(path="a.ts")');
+	});
+
+	it("renders an orphan tool result (call outside the window) standalone", () => {
+		const out = snapcompact.serializeConversation([createToolResultMessage("ok")], { dimToolResults: false });
+		expect(out).toBe("# Tool call ¶\n<out>\nok\n</out>");
+	});
+
+	it("preserves content order: text before and after a tool call stay split around it", () => {
+		const out = snapcompact.serializeConversation(
+			[
+				createAssistantMessage([
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+					{ type: "text", text: "after" },
+				]),
+				{ ...createToolResultMessage("file body"), toolCallId: "c1" } as Message,
+			],
+			{ dimToolResults: false },
+		);
+		expect(out).toBe(
+			'# Assistant ¶\nbefore\n\n# Tool call ¶\nread(path="a.ts")\n<out>\nfile body\n</out>\n\n# Assistant ¶\nafter',
+		);
+	});
+
+	it("does not split assistant prose around a useless tool call", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{ type: "text", text: "before" },
+				{ type: "toolCall", id: "c-drop", name: "search", arguments: { pattern: "zzz" } },
+				{ type: "text", text: "after" },
+			]),
+			{ ...createToolResultMessage("No matches found"), toolCallId: "c-drop", useless: true } as Message,
+		]);
+		// The useless call vanishes and its surrounding prose stays in one block.
+		expect(out).toBe("# Assistant ¶\nbefore\nafter");
+	});
+
+	it("wraps tool-result bodies in dim toggles by default and strips stray toggles from content", () => {
 		const out = snapcompact.serializeConversation([
 			createUserMessage(`hello ${snapcompact.DIM_ON}world`),
 			createToolResultMessage("ok"),
 		]);
-		expect(out).toContain(`[Tool Result]: ${snapcompact.DIM_ON}ok${snapcompact.DIM_OFF}`);
+		expect(out).toContain(`<out>\n${snapcompact.DIM_ON}ok${snapcompact.DIM_OFF}\n</out>`);
 		// A stray toggle in user content cannot forge a dim span.
-		expect(out).toContain("[User]: hello world");
-	});
-
-	it("omits dim toggles when dimToolResults is false", () => {
-		const out = snapcompact.serializeConversation([createToolResultMessage("ok")], { dimToolResults: false });
-		expect(out).toBe("[Tool Result]: ok");
+		expect(out).toContain("# User ¶\nhello world");
 	});
 
 	it("skips tool call/result pairs flagged useless", () => {
