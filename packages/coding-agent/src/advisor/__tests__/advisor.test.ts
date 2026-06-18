@@ -106,6 +106,32 @@ describe("advisor", () => {
 			yq.enqueue("normal", { note: "b" });
 			expect(scheduled).toBe(1);
 		});
+
+		it("clear(kind) drops only that kind's queued entries", () => {
+			const yq = new YieldQueue({
+				isStreaming: () => false,
+				injectIdle: async () => {},
+				scheduleIdleFlush: () => {},
+			});
+			yq.register<{ note: string }>("advisor", {
+				build: entries => (entries.length === 0 ? null : ({ role: "custom", content: "x" } as AgentMessage)),
+				skipIdleFlush: true,
+			});
+			yq.register<{ note: string }>("normal", {
+				build: entries => (entries.length === 0 ? null : ({ role: "custom", content: "y" } as AgentMessage)),
+			});
+
+			yq.enqueue("advisor", { note: "stale advice" });
+			yq.enqueue("normal", { note: "keep me" });
+			expect(yq.has("advisor")).toBe(true);
+			expect(yq.has("normal")).toBe(true);
+
+			// Conversation-boundary cleanup must drop advisor deliveries without
+			// touching other kinds (IRC asides, async-job/diagnostic deliveries).
+			yq.clear("advisor");
+			expect(yq.has("advisor")).toBe(false);
+			expect(yq.has("normal")).toBe(true);
+		});
 	});
 
 	describe("AdviseTool", () => {
@@ -658,6 +684,63 @@ describe("advisor", () => {
 
 			expect(promptInputs).toHaveLength(3);
 			expect(runtime.backlog).toBe(0);
+		});
+
+		it("drops the in-flight batch when a reset aborts the advisor prompt", async () => {
+			const promptInputs: string[] = [];
+			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
+			let rejectInFlight: ((err: unknown) => void) | undefined;
+			let promptCalls = 0;
+			const agent: AdvisorAgent = {
+				prompt: input => {
+					promptInputs.push(input);
+					promptCalls++;
+					if (promptCalls === 1) {
+						const { promise, reject } = Promise.withResolvers<void>();
+						rejectInFlight = reject;
+						startFirstPrompt();
+						return promise;
+					}
+					return Promise.resolve();
+				},
+				// AdvisorRuntime.reset() calls agent.reset() then agent.abort(); the real
+				// Agent.abort rejects the awaited prompt, so model that rejection here.
+				abort: () => rejectInFlight?.(new Error("advisor reset")),
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "old-conversation", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await firstPromptStarted;
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain("old-conversation");
+
+			// Conversation boundary (/new): transcript replaced and the runtime reset
+			// while the advisor prompt is still in flight. The abort that rejects the
+			// prompt is the reset itself — it must NOT be treated as a transient
+			// failure that requeues and re-sends the stale pre-reset batch.
+			messages.length = 0;
+			messages.push({ role: "user", content: "new-conversation", timestamp: 2 } as AgentMessage);
+			runtime.reset();
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(promptInputs).toHaveLength(1);
+			expect(runtime.backlog).toBe(0);
+
+			// The runtime still works afterward: the next turn replays the new
+			// transcript only, never the dropped pre-reset content.
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[1]).toContain("new-conversation");
+			expect(promptInputs[1]).not.toContain("old-conversation");
 		});
 	});
 

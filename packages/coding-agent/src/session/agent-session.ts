@@ -1676,6 +1676,33 @@ export class AgentSession {
 		this.#advisorInterruptImmuneTurnStart = this.#advisorPrimaryTurnsCompleted + 1;
 	}
 
+	/**
+	 * Re-prime the advisor across a conversation boundary: `/new`, `/branch`,
+	 * `/btw`, `/tree`, and session switch/resume. Beyond {@link AdvisorRuntime.reset}
+	 * (which only re-primes the advisor's transcript view and is also fired by
+	 * within-conversation rewrites like compaction/shake/rewind), this clears the
+	 * session-level interrupt latches so the prior conversation's cooldown cannot
+	 * leak into the new one: the post-interrupt immune-turn window
+	 * (`#advisorPrimaryTurnsCompleted`, `#advisorInterruptImmuneTurnStart`) and the
+	 * user-interrupt auto-resume suppression flag. It also drops advisor deliveries
+	 * still queued against the prior conversation — pending asides in the yield
+	 * queue (advisor entries use `skipIdleFlush`, so they linger until the next
+	 * `drainLazy` rather than self-flushing), interrupting cards parked in the
+	 * agent steer/follow-up queues, and preserved cards deferred to the next turn —
+	 * so none of them inject into the new conversation.
+	 */
+	#resetAdvisorSessionState(): void {
+		this.#advisorRuntime?.reset();
+		this.#advisorPrimaryTurnsCompleted = 0;
+		this.#advisorInterruptImmuneTurnStart = undefined;
+		this.#advisorAutoResumeSuppressed = false;
+		this.yieldQueue.clear("advisor");
+		this.#extractQueuedAdvisorCards();
+		if (this.#pendingNextTurnMessages.some(isAdvisorCard)) {
+			this.#pendingNextTurnMessages = this.#pendingNextTurnMessages.filter(m => !isAdvisorCard(m));
+		}
+	}
+
 	#buildAdvisorRuntime(seedToCurrent = false): boolean {
 		if (this.#isDisposed) return false;
 		if (this.#advisorRuntime) return true;
@@ -6548,7 +6575,7 @@ export class AgentSession {
 		this.#todoReminderAwaitingProgress = false;
 		this.#planReferenceSent = false;
 		this.#planReferencePath = "local://PLAN.md";
-		this.#advisorRuntime?.reset();
+		this.#resetAdvisorSessionState();
 		this.#reconnectToAgent();
 
 		// Emit session_switch event with reason "new" to hooks
@@ -10993,6 +11020,7 @@ export class AgentSession {
 			}
 
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#resetAdvisorSessionState();
 			this.#syncTodoPhasesFromBranch();
 			if (switchingToDifferentSession) {
 				this.#closeAllProviderSessions("session switch");
@@ -11198,7 +11226,7 @@ export class AgentSession {
 
 		if (!skipConversationRestore) {
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#advisorRuntime?.reset();
+			this.#resetAdvisorSessionState();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 		}
 
@@ -11287,7 +11315,7 @@ export class AgentSession {
 		}
 
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAdvisorSessionState();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		return { cancelled: false, sessionFile: this.sessionFile };
@@ -11453,7 +11481,7 @@ export class AgentSession {
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
 		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAdvisorSessionState();
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
