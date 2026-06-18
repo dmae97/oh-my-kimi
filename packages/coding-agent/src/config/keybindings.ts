@@ -10,7 +10,7 @@ import {
 	KeybindingsManager as TuiKeybindingsManager,
 } from "@oh-my-pi/pi-tui";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { JSONC, YAML } from "bun";
 
 /**
  * Application-level keybindings (coding agent specific).
@@ -381,7 +381,7 @@ function loadRawConfig(filePath: string): unknown {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
 		if (filePath.endsWith(".json")) {
-			return JSON.parse(content);
+			return JSONC.parse(content);
 		}
 		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
 			return YAML.parse(content);
