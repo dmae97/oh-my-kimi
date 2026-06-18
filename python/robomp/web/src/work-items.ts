@@ -76,11 +76,36 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
     const live = runningByKey.get(key) ?? null;
     const inflightOnly = !live && inflightSet.has(key);
     const latest = issue.latest_event;
+
+    // A matching live running_events entry is authoritative over the issue's
+    // own latest_event, which may be a newer failed/done row that the live run
+    // has not yet superseded. Render the live run so the card stays running,
+    // cancel-capable (deliveryId from the live delivery), and free of the
+    // stale failure. Non-live rows keep latest_event authority below.
+    if (live) {
+      items.push({
+        key,
+        ref: { repo: issue.repo, number: issue.number },
+        deliveryId: live.delivery_id,
+        issueState: issue.state,
+        classification: issue.classification,
+        branch: issue.branch,
+        prNumber: issue.pr_number,
+        latestEvent: latestEventFromRunning(live),
+        live,
+        inflightOnly: false,
+        bucket: "running",
+        error: null,
+        sortTs: parseTs(live.started_at ?? live.received_at ?? issue.updated_at),
+      });
+      continue;
+    }
+
     const latestState = latest?.state;
     const bucket: WorkBucket =
       latestState === "failed"
         ? "failed"
-        : live || inflightOnly || latestState === "running"
+        : inflightOnly || latestState === "running"
           ? "running"
           : latestState === "queued"
             ? "queued"
@@ -95,11 +120,11 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
       branch: issue.branch,
       prNumber: issue.pr_number,
       latestEvent: latest,
-      live,
+      live: null,
       inflightOnly,
       bucket,
       error: latestState === "failed" ? (latest?.last_error ?? null) : null,
-      sortTs: parseTs(live?.started_at ?? latest?.received_at ?? issue.updated_at),
+      sortTs: parseTs(latest?.received_at ?? issue.updated_at),
     });
   }
 
@@ -173,6 +198,20 @@ function latestEventFromRecent(event: RecentEvent): LatestEvent {
     attempts: event.attempts,
     received_at: event.received_at,
     last_error: event.last_error,
+  };
+}
+
+// Synthesizes an ActivityPill-compatible latest event from a live running_events
+// entry. State is pinned to "running" so a stale failed/done issue.latest_event
+// cannot leak a terminal pill onto a card the live run still owns.
+function latestEventFromRunning(event: RunningEvent): LatestEvent {
+  return {
+    delivery_id: event.delivery_id,
+    event_type: event.event_type,
+    state: "running",
+    attempts: event.attempts,
+    received_at: event.received_at,
+    last_error: null,
   };
 }
 

@@ -497,4 +497,77 @@ describe("buildWorkItems", () => {
     expect(items.map(i => i.deliveryId)).toEqual(["run-valid-ts", "run-invalid-ts"]);
   });
 
+  test("live running event outranks a newer failed latest_event for the same issue", () => {
+    const items = buildWorkItems(
+      status({
+        issues: [
+          issue({
+            key: "owner/repo#20",
+            number: 20,
+            latest_event: latestEvent({
+              delivery_id: "failed-newer",
+              state: "failed",
+              received_at: "2026-06-17T00:09:00Z",
+              last_error: "stale failure",
+            }),
+          }),
+        ],
+        running_events: [
+          runningEvent({
+            delivery_id: "live-older",
+            issue_key: "owner/repo#20",
+            received_at: "2026-06-17T00:01:00Z",
+            started_at: "2026-06-17T00:02:00Z",
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "owner/repo#20",
+      bucket: "running",
+      deliveryId: "live-older",
+      inflightOnly: false,
+      error: null,
+    });
+    // Cancel button targets the live delivery, not the stale failed row.
+    expect(items[0].live?.delivery_id).toBe("live-older");
+    // ActivityPill renders running, never the superseded failed state.
+    expect(items[0].latestEvent?.state).toBe("running");
+  });
+
+  test("live running event outranks a newer done latest_event for the same issue", () => {
+    const items = buildWorkItems(
+      status({
+        issues: [
+          issue({
+            key: "owner/repo#21",
+            number: 21,
+            latest_event: latestEvent({
+              delivery_id: "done-newer",
+              state: "done",
+              received_at: "2026-06-17T00:09:00Z",
+            }),
+          }),
+        ],
+        running_events: [
+          runningEvent({
+            delivery_id: "live-older-2",
+            issue_key: "owner/repo#21",
+            received_at: "2026-06-17T00:01:00Z",
+            started_at: "2026-06-17T00:02:00Z",
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "owner/repo#21",
+      bucket: "running",
+      deliveryId: "live-older-2",
+    });
+    expect(items[0].live?.delivery_id).toBe("live-older-2");
+    expect(items[0].latestEvent?.state).toBe("running");
+  });
+
 });
