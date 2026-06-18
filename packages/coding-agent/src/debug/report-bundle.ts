@@ -7,6 +7,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { WorkProfile } from "@oh-my-pi/pi-natives";
 import { APP_NAME, getLogPath, getLogsDir, getReportsDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { writeArchive } from "../utils/zip";
 import type { CpuProfile, HeapSnapshot } from "./profiler";
 import { collectSystemInfo, sanitizeEnv } from "./system-info";
 
@@ -165,7 +166,7 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 	}
 
 	// Write archive
-	await Bun.Archive.write(outputPath, data, { compress: "gzip" });
+	await writeArchive(outputPath, "tar.gz", Object.entries(data));
 
 	return { path: outputPath, files };
 }

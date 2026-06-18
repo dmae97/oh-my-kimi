@@ -7,7 +7,7 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/read.md`
 - Key collaborators:
   - `packages/coding-agent/src/tools/path-utils.ts` — split `path` from trailing selectors; normalize local paths.
-  - `packages/coding-agent/src/tools/archive-reader.ts` — detect `archive.ext:inner/path`, index archives, list/read entries.
+  - `packages/coding-agent/src/utils/zip.ts` — the unified ZIP/tar wrapper: detect `archive.ext:inner/path`, index archives, list/read entries.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite targets, parse selectors, render tables.
   - `packages/coding-agent/src/tools/fetch.ts` — URL parsing, fetch/render pipeline, URL cache/artifacts.
   - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.

@@ -6,7 +6,7 @@
 - Entry: `packages/coding-agent/src/tools/write.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/write.md`
 - Key collaborators:
-  - `packages/coding-agent/src/tools/archive-reader.ts` — parse `archive.ext:entry` selectors.
+  - `packages/coding-agent/src/utils/zip.ts` — the unified ZIP/tar wrapper: parse `archive.ext:entry` selectors and rewrite the archive whole.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite paths and perform row insert/update/delete.
   - `packages/coding-agent/src/tools/conflict-detect.ts` — parse `conflict://` URIs and splice recorded merge-conflict regions.
   - `packages/coding-agent/src/lsp/index.ts` — format-on-write and diagnostics writethrough.
@@ -56,7 +56,7 @@ Single-shot result.
 1. `WriteTool.execute()` in `packages/coding-agent/src/tools/write.ts` strips pasted `[PATH#HASH]` headers and `LINE:` hashline prefixes from `content` when the session is in hashline display mode.
 2. If `path` is an internal URL whose handler exposes `write`, the tool delegates directly to `handler.write(...)` and returns.
 3. `conflict://...` paths are handled next by the merge-conflict resolver. Scope reads such as `conflict://<id>/ours` are rejected as read-only; writable conflict URIs must omit the scope.
-4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/tools/archive-reader.ts`, checks candidate archive files on disk (longest match first), and falls back to the shortest candidate archive path even when the archive file does not exist yet.
+4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/utils/zip.ts`, checks candidate archive files on disk (longest match first), and falls back to the shortest candidate archive path even when the archive file does not exist yet.
 5. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
    - The parent directory of the archive file is created with `fs.mkdir(..., { recursive: true })`.
    - `.zip` archives are read with `fflate.unzipSync()`, the target entry is replaced in an in-memory map, and the archive is rewritten with `fflate.zipSync()` + `Bun.write()`.

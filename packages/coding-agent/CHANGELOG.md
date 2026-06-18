@@ -1,9 +1,11 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Changed
 
+- Refactored internal archive handling into a unified `src/utils/zip.ts` module
+- Centralized all `fflate` (ZIP) and `Bun.Archive` (tar/tar.gz) operations into `zip.ts`
+- Optimized archive reading by using lazy, ranged central-directory access for ZIP files
 - Updated internal image processing to no longer include metadata text for fetched images
 - Optimized `omp://` documentation indexing by compressing doc bodies into a lazily-inflated blob
 - Changed Mermaid fenced-block ASCII rendering to use the first-party vendored renderer in `@oh-my-pi/pi-utils` (`src/vendor/mermaid-ascii`), dropping the `beautiful-mermaid` npm package, its transitive `elkjs` (~3.13MB), and the `beautiful-mermaid` `bun patch`; CJK/emoji width handling and the layout-direction override are preserved.

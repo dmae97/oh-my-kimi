@@ -28,13 +28,8 @@ import {
 	uriHyperlink,
 } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
+import { type ArchiveReader, type ExtractedArchiveFile, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import type { ToolSession } from ".";
-import {
-	type ArchiveReader,
-	type ExtractedArchiveFile,
-	openArchive,
-	parseArchivePathCandidates,
-} from "./archive-reader";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";

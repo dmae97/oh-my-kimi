@@ -48,8 +48,8 @@ import {
 	webpExclusionForModel,
 } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
+import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
-import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
 	type ConflictEntry,
 	type ConflictScope,

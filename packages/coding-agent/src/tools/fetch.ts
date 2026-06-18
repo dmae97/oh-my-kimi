@@ -20,12 +20,12 @@ import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block
 import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
+import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "../utils/zip";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
 import { specialHandlers } from "../web/scrapers";
 import type { RenderResult } from "../web/scrapers/types";
 import { finalizeOutput, loadPage, looksLikeHtml, MAX_BYTES, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
-import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "./archive-reader";
 import { applyListLimit } from "./list-limit";
 import { formatStyledArtifactReference, type OutputMeta } from "./output-meta";
 import { type LineRange, parseLineRanges } from "./path-utils";
