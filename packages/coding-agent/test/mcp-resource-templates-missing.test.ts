@@ -16,8 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { listResourceTemplates } from "../src/mcp/client";
 import { MCPManager } from "../src/mcp/manager";
-import type { MCPServerConnection, MCPTransport } from "../src/mcp/types";
-import type { MCPStdioServerConfig } from "../src/mcp/types";
+import type { MCPServerConnection, MCPStdioServerConfig, MCPTransport } from "../src/mcp/types";
 import { RESOURCE_URIS } from "./fixtures/resources-no-templates-mcp";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "resources-no-templates-mcp.ts");

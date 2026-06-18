@@ -290,11 +290,15 @@ describe("ollama-cloud provider support", () => {
 			maxTokens: 131_072,
 		});
 
-		await stream(model, { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] }, {
-			apiKey: "cloud-test-key",
-			fetch: fetchMock,
-			reasoning: Effort.XHigh,
-		}).result();
+		await stream(
+			model,
+			{ messages: [{ role: "user", content: "hello", timestamp: Date.now() }] },
+			{
+				apiKey: "cloud-test-key",
+				fetch: fetchMock,
+				reasoning: Effort.XHigh,
+			},
+		).result();
 
 		expect(requestBody?.think).toBe("max");
 	});

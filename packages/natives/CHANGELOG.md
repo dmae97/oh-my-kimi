@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Removed
 
 - Removed the `cache` option from `GrepOptions`

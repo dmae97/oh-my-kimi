@@ -115,7 +115,9 @@ function mapReasoning(
 		return false;
 	}
 	const mappedReasoning =
-		model.provider === "ollama-cloud" && reasoning ? (model.thinking?.effortMap?.[reasoning] ?? reasoning) : reasoning;
+		model.provider === "ollama-cloud" && reasoning
+			? (model.thinking?.effortMap?.[reasoning] ?? reasoning)
+			: reasoning;
 	switch (mappedReasoning) {
 		case "minimal":
 		case "low":
