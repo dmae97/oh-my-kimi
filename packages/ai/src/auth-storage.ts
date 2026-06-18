@@ -1354,11 +1354,14 @@ export class AuthStorage {
 		this.#sessionLastCredential.set(provider, sessionMap);
 
 		try {
-			const cacheKey = `session:sticky:${provider}:${sessionId}`;
-			const cacheValue = JSON.stringify({ type, index });
-			// Expires in 30 days
-			const expiresAtSec = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
-			this.#store.setCache(cacheKey, cacheValue, expiresAtSec);
+			const credentialId = this.#getStoredCredentials(provider)[index]?.id;
+			if (credentialId !== undefined) {
+				const cacheKey = `session:sticky:${provider}:${sessionId}`;
+				const cacheValue = JSON.stringify({ type, index, credentialId });
+				// Expires in 30 days
+				const expiresAtSec = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+				this.#store.setCache(cacheKey, cacheValue, expiresAtSec);
+			}
 		} catch (err) {
 			logger.debug("Failed to write session sticky credential to persistent store cache", { err });
 		}
@@ -1378,13 +1381,29 @@ export class AuthStorage {
 			const cacheKey = `session:sticky:${provider}:${sessionId}`;
 			const raw = this.#store.getCache(cacheKey);
 			if (raw) {
-				const val = JSON.parse(raw) as { type: AuthCredential["type"]; index: number };
+				const val = JSON.parse(raw) as { type: AuthCredential["type"]; index: number; credentialId?: number };
+				
+				if (val.credentialId !== undefined) {
+					const stored = this.#getStoredCredentials(provider);
+					const actualIndex = stored.findIndex(entry => entry.id === val.credentialId);
+					if (actualIndex === -1 || stored[actualIndex]?.credential.type !== val.type) {
+						this.#store.setCache(cacheKey, "", 0);
+						return undefined;
+					}
+					val.index = actualIndex;
+				} else {
+					// Fallback: drop unsafe index-only cache rows to prevent wrong-account routing
+					this.#store.setCache(cacheKey, "", 0);
+					return undefined;
+				}
+
 				if (!sessionMap) {
 					sessionMap = new Map();
 					this.#sessionLastCredential.set(provider, sessionMap);
 				}
-				sessionMap.set(sessionId, val);
-				return val;
+				const sessionVal = { type: val.type, index: val.index };
+				sessionMap.set(sessionId, sessionVal);
+				return sessionVal;
 			}
 		} catch (err) {
 			logger.debug("Failed to read session sticky credential from persistent store cache", { err });
