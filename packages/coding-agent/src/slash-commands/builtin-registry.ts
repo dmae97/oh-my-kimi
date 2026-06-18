@@ -334,7 +334,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showModelSelector({ temporaryOnly: true });
+			runtime.ctx.showModelSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

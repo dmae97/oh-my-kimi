@@ -18,13 +18,13 @@ function createRuntime() {
 }
 
 describe("/model slash command", () => {
-	it("opens the temporary model selector for the active session", async () => {
+	it("opens the model setup picker for role and thinking assignment", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/model", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.showModelSelector).toHaveBeenCalledWith({ temporaryOnly: true });
+		expect(harness.showModelSelector.mock.calls).toEqual([[]]);
 		expect(harness.setText).toHaveBeenCalledWith("");
 	});
 });
