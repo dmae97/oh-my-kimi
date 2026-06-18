@@ -764,11 +764,13 @@ function normalizeOptionalNullsForSchema(
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
 		const isNullish = currentValue === null || currentValue === "null";
-		const isEmptyString = currentValue === "";
+		const isInvalidEmptyString =
+			currentValue === "" && !required.has(key) && !branchMatchesSchema(propertySchema, currentValue);
 
-		// Strip null, string "null", and empty strings from optional fields.
+		// Strip null/string "null" from optional fields, and strip empty
+		// strings only when the property schema would reject the explicit value.
 		// LLMs sometimes output these placeholders to mean "no value".
-		if ((isNullish || isEmptyString) && !required.has(key)) {
+		if ((isNullish || isInvalidEmptyString) && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
@@ -1282,7 +1284,7 @@ function truncateArgsForError(value: unknown): unknown {
 /**
  * Validates tool call arguments against the tool's schema (Zod or plain JSON
  * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
- * containers, null/empty-string-for-optional, null-for-default) before
+ * containers, null/invalid-empty-string-for-optional, null-for-default) before
  * declaring failure.
  *
  * @throws Error with a formatted message when validation cannot be reconciled.
@@ -1292,8 +1294,9 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 
-	// Always normalize first — strip null, string "null", and empty strings
-	// from optional fields and substitute defaults. Handles LLM outputting
+	// Always normalize first — strip null/string "null" from optional fields,
+	// strip optional empty strings only when their property schema rejects the
+	// explicit value, and substitute defaults. Handles LLM outputting
 	// placeholders for "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
