@@ -196,12 +196,14 @@ describe("normalizeAnthropicToolSchema — SDK whitelist", () => {
  * `anthropic-sdk-python/tests/lib/_parse/test_transform.py`. We adapt assertions
  * to the function name `normalizeAnthropicToolSchema` and keep the same shapes.
  *
- * Two deliberate divergences from the SDK (NOT bugs):
+ * Three deliberate divergences from the SDK (NOT bugs):
  *  - `default` is preserved on every node (SDK demotes it into description).
  *    Anthropic's API accepts `default`; preserving keeps Zod/OpenAPI fidelity.
  *  - `$ref` does NOT short-circuit sibling keys (SDK drops everything else).
  *    We keep `$defs`/`description` next to a `$ref` because callers feed us
  *    deref-friendly schemas where siblings carry real semantics.
+ *  - top-level `anyOf` / `allOf` and all `oneOf` occurrences are demoted into
+ *    `description`; live Messages rejects root combinators and does not document `oneOf`.
  * Tests below that overlap with SDK cases asserting those behaviors are
  * adjusted to our contract; the divergence is called out inline.
  */
@@ -213,12 +215,19 @@ describe("normalizeAnthropicToolSchema — parity with anthropic-sdk-python tran
 	});
 
 	// Mirrors: anthropic-sdk-python/tests/lib/_parse/test_transform.py::test_anyof_schema
-	it("recurses into anyOf variants and spills per-variant constraints", () => {
+	it("recurses into nested anyOf variants and spills per-variant constraints", () => {
 		const out = normalizeAnthropicToolSchema({
-			anyOf: [{ type: "string" }, { type: "integer", minimum: 1 }],
+			type: "object",
+			properties: {
+				value: { anyOf: [{ type: "string" }, { type: "integer", minimum: 1 }] },
+			},
 		});
 		expect(out).toEqual({
-			anyOf: [{ type: "string" }, { type: "integer", description: "{minimum: 1}" }],
+			type: "object",
+			properties: {
+				value: { anyOf: [{ type: "string" }, { type: "integer", description: "{minimum: 1}" }] },
+			},
+			additionalProperties: false,
 		});
 	});
 
@@ -228,23 +237,61 @@ describe("normalizeAnthropicToolSchema — parity with anthropic-sdk-python tran
 		expect(out).toEqual({ type: "string", enum: ["foo", "bar"] });
 	});
 
-	// Mirrors: anthropic-sdk-python/tests/lib/_parse/test_transform.py::test_allof
-	it("recurses into allOf variants and defaults additionalProperties on each object branch", () => {
+	it("spills top-level anyOf variants into description for the Messages API root-combinator boundary", () => {
 		const out = normalizeAnthropicToolSchema({
+			type: "object",
+			properties: { id: { type: "string" } },
+			anyOf: [{ required: ["id"] }, { required: ["name"] }],
+		});
+		expect(out).toEqual({
+			type: "object",
+			properties: { id: { type: "string" } },
+			additionalProperties: false,
+			description: '{anyOf: [{"required":["id"]},{"required":["name"]}]}',
+		});
+	});
+
+	// Divergence: SDK preserves allOf at the schema root, but the live Anthropic Messages
+	// validator rejects root combinators in tool input_schema. Spill it so the model
+	// still sees the constraints.
+	it("spills top-level allOf variants into description instead of sending an unsupported root keyword", () => {
+		const out = normalizeAnthropicToolSchema({
+			type: "object",
+			properties: { id: { type: "string" } },
 			allOf: [
 				{ type: "object", properties: { name: { type: "string" } } },
 				{ type: "object", properties: { age: { type: "integer", minimum: 0 } } },
 			],
 		});
 		expect(out).toEqual({
-			allOf: [
-				{ type: "object", properties: { name: { type: "string" } }, additionalProperties: false },
-				{
-					type: "object",
-					properties: { age: { type: "integer", description: "{minimum: 0}" } },
-					additionalProperties: false,
-				},
-			],
+			type: "object",
+			properties: { id: { type: "string" } },
+			additionalProperties: false,
+			description:
+				'{allOf: [{"type":"object","properties":{"name":{"type":"string"}}},{"type":"object","properties":{"age":{"type":"integer","minimum":0}}}]}',
+		});
+	});
+
+	it("spills oneOf variants at root and nested positions for the same Messages API compatibility boundary", () => {
+		const root = normalizeAnthropicToolSchema({
+			oneOf: [{ type: "string" }, { type: "integer", minimum: 1 }],
+		});
+		expect(root).toEqual({
+			description: '{oneOf: [{"type":"string"},{"type":"integer","minimum":1}]}',
+		});
+
+		const nested = normalizeAnthropicToolSchema({
+			type: "object",
+			properties: {
+				value: { oneOf: [{ type: "string" }, { type: "integer", minimum: 1 }] },
+			},
+		});
+		expect(nested).toEqual({
+			type: "object",
+			properties: {
+				value: { description: '{oneOf: [{"type":"string"},{"type":"integer","minimum":1}]}' },
+			},
+			additionalProperties: false,
 		});
 	});
 
