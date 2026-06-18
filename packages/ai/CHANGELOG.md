@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.8] - 2026-06-18
+
 ### Fixed
 
 - Improved reliability of auth-broker snapshot loading by implementing a robust manual schema check

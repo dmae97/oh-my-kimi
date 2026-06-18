@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.8] - 2026-06-18
+
 ### Added
 
 - Added `<out>` block wrapping for tool results to improve document structure

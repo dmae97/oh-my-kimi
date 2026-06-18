@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.8] - 2026-06-18
+
 ### Changed
 
 - Refactored model family ID predicates and capability checkers to use a shared, uniform process-lifetime `memo` utility to eliminate caching boilerplate.

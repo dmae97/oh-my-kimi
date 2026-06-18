@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.8] - 2026-06-18
+
 ### Changed
 
 - Optimized app startup time by lazily loading site-specific scraper modules
