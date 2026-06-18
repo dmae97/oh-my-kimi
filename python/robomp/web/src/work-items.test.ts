@@ -614,4 +614,103 @@ describe("buildWorkItems", () => {
     expect(items[0].latestEvent?.delivery_id).toBe("live-older-3");
   });
 
+  test("suppresses an orphan failed recent event superseded by a newer done recent event for the same absent issue", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          recentEvent({
+            delivery_id: "done-newer-orphan",
+            issue_key: "owner/repo#30",
+            state: "done",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: null,
+          }),
+          recentEvent({
+            delivery_id: "failed-older-orphan",
+            issue_key: "owner/repo#30",
+            received_at: "2026-06-17T00:04:00Z",
+            last_error: "superseded orphan failure",
+          }),
+        ],
+      }),
+    );
+    expect(items.some((item) => item.deliveryId === "failed-older-orphan")).toBe(false);
+    expect(items).toEqual([]);
+  });
+
+  test("suppresses an orphan failed recent event when a newer queued event appears later in the list", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          recentEvent({
+            delivery_id: "failed-older-out-of-order",
+            issue_key: "owner/repo#32",
+            received_at: "2026-06-17T00:04:00Z",
+            last_error: "older failure",
+          }),
+          recentEvent({
+            delivery_id: "queued-newer-out-of-order",
+            issue_key: "owner/repo#32",
+            state: "queued",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: null,
+          }),
+        ],
+      }),
+    );
+    expect(items).toEqual([]);
+  });
+
+  test("suppresses a same-timestamp orphan failure when a non-failed recent event exists", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          recentEvent({
+            delivery_id: "failed-same-time",
+            issue_key: "owner/repo#33",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: "ambiguous failure",
+          }),
+          recentEvent({
+            delivery_id: "done-same-time",
+            issue_key: "owner/repo#33",
+            state: "done",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: null,
+          }),
+        ],
+      }),
+    );
+    expect(items).toEqual([]);
+  });
+
+  test("renders an orphan failed recent event that is the newest for an absent issue", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          recentEvent({
+            delivery_id: "failed-newest-orphan",
+            issue_key: "owner/repo#31",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: "current orphan failure",
+          }),
+          recentEvent({
+            delivery_id: "done-older-orphan",
+            issue_key: "owner/repo#31",
+            state: "done",
+            received_at: "2026-06-17T00:04:00Z",
+            last_error: null,
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "owner/repo#31",
+      deliveryId: "failed-newest-orphan",
+      bucket: "failed",
+      error: "current orphan failure",
+    });
+  });
+
 });

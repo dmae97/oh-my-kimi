@@ -142,11 +142,31 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
     items.push(orphanLiveItem(key, null, true));
   }
 
+  const newestRecentByKey = new Map<string, RecentEvent>();
+  for (const event of status.recent_events) {
+    if (!event.issue_key) continue;
+    const current = newestRecentByKey.get(event.issue_key);
+    const eventTs = parseTs(event.received_at);
+    const currentTs = current ? parseTs(current.received_at) : 0;
+    const nonFailedBreaksTie =
+      current != null && eventTs === currentTs && current.state === "failed" && event.state !== "failed";
+    if (!current || eventTs > currentTs || nonFailedBreaksTie) {
+      newestRecentByKey.set(event.issue_key, event);
+    }
+  }
+
   for (const event of status.recent_events) {
     if (event.state !== "failed" || !event.delivery_id || seen.has(event.delivery_id)) continue;
     if (event.issue_key) {
       const latest = issueByKey.get(event.issue_key)?.latest_event;
       if (latest && (latest.delivery_id !== event.delivery_id || latest.state !== "failed")) {
+        continue;
+      }
+      // For issues outside the capped `status.issues` window, fall back to the
+      // newest recent event for this issue_key. If a newer (or non-failed)
+      // delivery exists for the same issue, this older failed orphan is stale.
+      const newestRecent = newestRecentByKey.get(event.issue_key);
+      if (newestRecent && (newestRecent.delivery_id !== event.delivery_id || newestRecent.state !== "failed")) {
         continue;
       }
       if (seen.has(event.issue_key)) continue;
