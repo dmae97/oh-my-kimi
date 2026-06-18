@@ -22,8 +22,7 @@ import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { ensureTool } from "../utils/tools-manager";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "../utils/zip";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
-import { specialHandlers } from "../web/scrapers";
-import type { RenderResult } from "../web/scrapers/types";
+import type { RenderResult, SpecialHandler } from "../web/scrapers/types";
 import { finalizeOutput, loadPage, looksLikeHtml, MAX_BYTES, MAX_OUTPUT_CHARS } from "../web/scrapers/types";
 import { convertWithMarkit, fetchBinary } from "../web/scrapers/utils";
 import { applyListLimit } from "./list-limit";
@@ -1019,6 +1018,18 @@ async function tryRenderBinaryPayload(
 // Unified Special Handler Dispatch
 // =============================================================================
 
+let specialHandlersPromise: Promise<SpecialHandler[]> | undefined;
+
+/**
+ * Lazily load the site-specific scraper handlers. The scrapers barrel eagerly
+ * imports ~80 site modules, none of which are needed until the first fetch that
+ * requires a special handler, so we keep them out of the cold-startup graph.
+ */
+function loadSpecialHandlers(): Promise<SpecialHandler[]> {
+	specialHandlersPromise ??= import("../web/scrapers").then((m) => m.specialHandlers);
+	return specialHandlersPromise;
+}
+
 /**
  * Try all special handlers
  */
@@ -1028,6 +1039,7 @@ async function handleSpecialUrls(
 	signal: AbortSignal | undefined,
 	storage: AgentStorage | null,
 ): Promise<FetchRenderResult | null> {
+	const specialHandlers = await loadSpecialHandlers();
 	for (const handler of specialHandlers) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();

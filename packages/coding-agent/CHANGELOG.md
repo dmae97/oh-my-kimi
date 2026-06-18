@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Optimized app startup time by lazily loading site-specific scraper modules
 - Refactored internal archive handling into a unified `src/utils/zip.ts` module
 - Centralized all `fflate` (ZIP) and `Bun.Archive` (tar/tar.gz) operations into `zip.ts`
 - Optimized archive reading by using lazy, ranged central-directory access for ZIP files

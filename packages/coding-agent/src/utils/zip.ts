@@ -1,22 +1,21 @@
-// The single archive boundary for the codebase: ZIP (via `fflate`) and tar /
-// tar.gz (via `Bun.Archive`), built on the raw DEFLATE helpers the ZIP reader
-// needs. This is the ONLY module that imports `fflate` or touches
-// `Bun.Archive`; the markit document converters, the read/search/write tools,
-// the URL fetcher, the debug report bundler, and the tool-binary installer all
-// go through here so there is exactly one archive implementation to reason
-// about. Do not import `fflate` (or call `Bun.Archive`) anywhere else.
+// The single archive boundary for the codebase: ZIP (framed here, over the raw
+// DEFLATE codec in `node:zlib`) and tar / tar.gz (via `Bun.Archive`). This is
+// the ONLY module that frames ZIP containers or touches `Bun.Archive`; the
+// markit document converters, the read/search/write tools, the URL fetcher, the
+// debug report bundler, and the tool-binary installer all go through here so
+// there is exactly one archive implementation to reason about. Do not parse or
+// build ZIP/tar, or call `Bun.Archive`, anywhere else.
 import * as path from "node:path";
+import * as zlib from "node:zlib";
 import { formatBytes } from "@oh-my-pi/pi-utils";
-import type { Unzipped } from "fflate";
-import { inflateSync, unzipSync, zipSync } from "fflate";
 import { ToolError } from "../tools/tool-errors";
 
-export type { Unzipped } from "fflate";
-export { unzipSync as unzip, zipSync as zip } from "fflate";
+/** A ZIP archive decoded to a `path → bytes` map of its file members. */
+export type Unzipped = Record<string, Uint8Array>;
 
 const ENCODER = new TextEncoder();
-// fflate's `strFromU8` is just `new TextDecoder().decode()` for UTF-8, so the
-// converters and ZIP filename reader use the platform decoders directly.
+// `node:zlib` is only the DEFLATE codec; ZIP container framing is ours (see
+// `unzip` / `zip` below). Entry names use the platform text decoders.
 const UTF8_DECODER = new TextDecoder();
 // ZIP central-directory names without the UTF-8 flag carry no reliable encoding;
 // decode them as their legacy code page (windows-1252) as a stable best effort.
@@ -29,11 +28,19 @@ export function unzipText(entries: Unzipped, entryPath: string): string | undefi
 }
 
 /**
- * Inflate a raw DEFLATE stream (a single deflate-compressed ZIP member). Pass a
- * preallocated `into` buffer when the uncompressed size is known up front.
+ * Decode an in-memory ZIP archive into a `path → bytes` map of its file members
+ * (directory entries and `..`-escaping names are dropped). Shares the
+ * central-directory record parser with the lazy, file-backed reader.
  */
-function inflateRaw(bytes: Uint8Array, into?: Uint8Array): Uint8Array {
-	return into ? inflateSync(bytes, { out: into }) : inflateSync(bytes);
+export function unzip(bytes: Uint8Array): Unzipped {
+	const info = readCentralDirectoryInfoSync(bytes);
+	const centralDirectory = readMemoryRange(bytes, info.offset, info.offset + info.size);
+	const out: Unzipped = {};
+	for (const entry of parseZipCentralDirectory(memoryByteSource(bytes), centralDirectory, info.entries)) {
+		if (entry.isDirectory || entry.storage?.type !== "zip") continue;
+		out[entry.path] = extractZipMember(bytes, entry.storage, entry.size);
+	}
+	return out;
 }
 
 /**
@@ -48,6 +55,11 @@ const MAX_TAR_ARCHIVE_BYTES = 256 * 1024 * 1024;
  * multi-GB sizes that would be allocated up front before any data inflates.
  */
 const MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024;
+
+/** Inflate one raw DEFLATE stream, bounded to its declared uncompressed size. */
+function inflateRaw(bytes: Uint8Array, declaredSize: number): Uint8Array {
+	return zlib.inflateRawSync(bytes, { maxOutputLength: Math.max(declaredSize, 1) });
+}
 
 export type ArchiveFormat = "zip" | "tar" | "tar.gz";
 
@@ -93,6 +105,15 @@ function assertValidRange(start: number, end: number): void {
 	}
 }
 
+/** Read an exact in-memory range, throwing (not clamping) when it runs past the buffer. */
+function readMemoryRange(buffer: Uint8Array, start: number, end: number): Uint8Array {
+	assertValidRange(start, end);
+	if (end > buffer.byteLength) {
+		throw new ToolError("Invalid ZIP archive: truncated data");
+	}
+	return buffer.subarray(start, end);
+}
+
 function fileByteSource(filePath: string): ByteSource {
 	const file = Bun.file(filePath);
 	const size = file.size;
@@ -116,11 +137,7 @@ function memoryByteSource(buffer: Uint8Array): ByteSource {
 	return {
 		size: buffer.byteLength,
 		async read(start, end) {
-			assertValidRange(start, end);
-			if (end > buffer.byteLength) {
-				throw new ToolError("Invalid ZIP archive: truncated data");
-			}
-			return buffer.subarray(start, end);
+			return readMemoryRange(buffer, start, end);
 		},
 	};
 }
@@ -540,6 +557,21 @@ function parseZipCentralDirectory(
 	return entries;
 }
 
+/** Decode a single ZIP member's already-read payload, bounded to its declared size. */
+function decodeZipMember(compressed: Uint8Array, compression: number, declaredSize: number): Uint8Array {
+	if (compression === ZIP_STORED_COMPRESSION) {
+		return compressed;
+	}
+	if (compression !== ZIP_DEFLATE_COMPRESSION) {
+		throw new ToolError(`Unsupported ZIP compression method: ${compression}`);
+	}
+	try {
+		return inflateRaw(compressed, declaredSize);
+	} catch (error) {
+		throw new ToolError(error instanceof Error ? error.message : String(error));
+	}
+}
+
 async function readZipFileBytes(storage: ZipStorage, uncompressedSize: number): Promise<Uint8Array> {
 	if ((storage.flags & ZIP_ENCRYPTED_FLAG) !== 0) {
 		throw new ToolError("Encrypted ZIP entries are not supported");
@@ -554,19 +586,7 @@ async function readZipFileBytes(storage: ZipStorage, uncompressedSize: number): 
 	const extraLength = readUInt16LE(localHeader, 28);
 	const dataStart = storage.localHeaderOffset + 30 + fileNameLength + extraLength;
 	const compressedBytes = await storage.source.read(dataStart, dataStart + storage.compressedSize);
-
-	if (storage.compression === ZIP_STORED_COMPRESSION) {
-		return compressedBytes;
-	}
-	if (storage.compression !== ZIP_DEFLATE_COMPRESSION) {
-		throw new ToolError(`Unsupported ZIP compression method: ${storage.compression}`);
-	}
-
-	try {
-		return inflateRaw(compressedBytes, new Uint8Array(uncompressedSize));
-	} catch (error) {
-		throw new ToolError(error instanceof Error ? error.message : String(error));
-	}
+	return decodeZipMember(compressedBytes, storage.compression, uncompressedSize);
 }
 
 async function readTarEntries(bytes: Uint8Array): Promise<ArchiveIndexEntry[]> {
@@ -822,7 +842,7 @@ async function memberToBytes(content: ArchiveMemberContent): Promise<Uint8Array>
 
 /**
  * Fully materialize every file member into a `path → content` map: ZIP members
- * are inflated via fflate, tar members are returned as lazy `File`s. Use this
+ * are inflated in memory, tar members are returned as lazy `File`s. Use this
  * when you need every entry (rewrite, extract); for browsing or single-member
  * reads prefer `openArchive`, which is lazy for ZIP.
  */
@@ -830,9 +850,9 @@ export async function readArchiveEntries(source: ArchiveSource): Promise<Map<str
 	const { bytes, format } = await resolveArchiveBytes(source);
 	const entries = new Map<string, ArchiveMemberContent>();
 	if (format === "zip") {
-		const unzipped = unzipSync(bytes);
+		const unzipped = unzip(bytes);
 		for (const name in unzipped) {
-			entries.set(name.replace(/\\/g, "/"), unzipped[name]!);
+			entries.set(name, unzipped[name]!);
 		}
 		return entries;
 	}
@@ -845,7 +865,7 @@ export async function readArchiveEntries(source: ArchiveSource): Promise<Map<str
 
 /**
  * Serialize `entries` into an archive of `format` and write it to `destPath`.
- * ZIP is built with fflate, tar / tar.gz with `Bun.Archive` (gzip for tar.gz).
+ * ZIP is framed in memory, tar / tar.gz via `Bun.Archive` (gzip for tar.gz).
  * String members are encoded as UTF-8.
  */
 export async function writeArchive(
@@ -858,7 +878,7 @@ export async function writeArchive(
 		for (const [name, content] of entries) {
 			record[name.replace(/\\/g, "/")] = await memberToBytes(content);
 		}
-		await Bun.write(destPath, zipSync(record));
+		await Bun.write(destPath, zip(record));
 		return;
 	}
 
@@ -888,4 +908,175 @@ export async function extractArchive(source: ArchiveSource, destDir: string): Pr
 		count++;
 	}
 	return count;
+}
+
+function writeUInt16LE(buf: Uint8Array, offset: number, value: number): void {
+	buf[offset] = value & 0xff;
+	buf[offset + 1] = (value >>> 8) & 0xff;
+}
+
+function writeUInt32LE(buf: Uint8Array, offset: number, value: number): void {
+	buf[offset] = value & 0xff;
+	buf[offset + 1] = (value >>> 8) & 0xff;
+	buf[offset + 2] = (value >>> 16) & 0xff;
+	buf[offset + 3] = (value >>> 24) & 0xff;
+}
+
+/**
+ * Frame a `path → bytes` map into a ZIP archive in memory. Each member is raw
+ * DEFLATE unless that would not shrink it, in which case it is stored. ZIP64 is
+ * not emitted; archives beyond the 32-bit limits throw rather than corrupt.
+ */
+export function zip(entries: Unzipped): Uint8Array {
+	const localParts: Uint8Array[] = [];
+	const centralParts: Uint8Array[] = [];
+	let offset = 0;
+	let count = 0;
+
+	for (const name in entries) {
+		if (count >= ZIP_UINT16_MAX || offset >= ZIP_UINT32_MAX) {
+			throw new ToolError("ZIP archive is too large to write (ZIP64 is not supported)");
+		}
+		const data = entries[name]!;
+		const nameBytes = ENCODER.encode(name);
+		const crc = zlib.crc32(data) >>> 0;
+		const uncompressedSize = data.byteLength;
+		const deflated = zlib.deflateRawSync(data);
+		const stored = deflated.byteLength >= uncompressedSize;
+		const method = stored ? ZIP_STORED_COMPRESSION : ZIP_DEFLATE_COMPRESSION;
+		const payload = stored ? data : deflated;
+
+		const header = new Uint8Array(30 + nameBytes.byteLength);
+		writeUInt32LE(header, 0, ZIP_LOCAL_FILE_HEADER_SIGNATURE);
+		writeUInt16LE(header, 4, 20);
+		writeUInt16LE(header, 6, ZIP_UTF8_FLAG);
+		writeUInt16LE(header, 8, method);
+		// Fixed 1980-01-01 timestamp keeps the output deterministic.
+		writeUInt16LE(header, 12, 0x21);
+		writeUInt32LE(header, 14, crc);
+		writeUInt32LE(header, 18, payload.byteLength);
+		writeUInt32LE(header, 22, uncompressedSize);
+		writeUInt16LE(header, 26, nameBytes.byteLength);
+		header.set(nameBytes, 30);
+		localParts.push(header, payload);
+
+		const record = new Uint8Array(46 + nameBytes.byteLength);
+		writeUInt32LE(record, 0, ZIP_CENTRAL_DIRECTORY_HEADER_SIGNATURE);
+		writeUInt16LE(record, 4, 20);
+		writeUInt16LE(record, 6, 20);
+		writeUInt16LE(record, 8, ZIP_UTF8_FLAG);
+		writeUInt16LE(record, 10, method);
+		writeUInt16LE(record, 14, 0x21);
+		writeUInt32LE(record, 16, crc);
+		writeUInt32LE(record, 20, payload.byteLength);
+		writeUInt32LE(record, 24, uncompressedSize);
+		writeUInt16LE(record, 28, nameBytes.byteLength);
+		writeUInt32LE(record, 42, offset);
+		record.set(nameBytes, 46);
+		centralParts.push(record);
+
+		offset += header.byteLength + payload.byteLength;
+		count++;
+	}
+
+	const centralSize = centralParts.reduce((sum, part) => sum + part.byteLength, 0);
+	const eocd = new Uint8Array(ZIP_EOCD_MIN_LENGTH);
+	writeUInt32LE(eocd, 0, ZIP_EOCD_SIGNATURE);
+	writeUInt16LE(eocd, 8, count);
+	writeUInt16LE(eocd, 10, count);
+	writeUInt32LE(eocd, 12, centralSize);
+	writeUInt32LE(eocd, 16, offset);
+
+	const out = new Uint8Array(offset + centralSize + ZIP_EOCD_MIN_LENGTH);
+	let pos = 0;
+	for (const part of localParts) {
+		out.set(part, pos);
+		pos += part.byteLength;
+	}
+	for (const part of centralParts) {
+		out.set(part, pos);
+		pos += part.byteLength;
+	}
+	out.set(eocd, pos);
+	return out;
+}
+
+function readZip64CentralDirectoryInfoSync(
+	bytes: Uint8Array,
+	eocdOffset: number,
+): ZipCentralDirectoryInfo | undefined {
+	const locatorOffset = eocdOffset - ZIP64_EOCD_LOCATOR_LENGTH;
+	if (locatorOffset < 0) return undefined;
+
+	const locator = readMemoryRange(bytes, locatorOffset, locatorOffset + ZIP64_EOCD_LOCATOR_LENGTH);
+	if (readUInt32LE(locator, 0) !== ZIP64_EOCD_LOCATOR_SIGNATURE) return undefined;
+	if (readUInt32LE(locator, 4) !== 0 || readUInt32LE(locator, 16) > 1) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	const zip64EocdOffset = readUInt64LEAsNumber(locator, 8);
+	const record = readMemoryRange(bytes, zip64EocdOffset, zip64EocdOffset + 56);
+	if (readUInt32LE(record, 0) !== ZIP64_EOCD_SIGNATURE) {
+		throw new ToolError("Invalid ZIP archive: missing ZIP64 end of central directory");
+	}
+	if (readUInt32LE(record, 16) !== 0 || readUInt32LE(record, 20) !== 0) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	return {
+		entries: readUInt64LEAsNumber(record, 32),
+		size: readUInt64LEAsNumber(record, 40),
+		offset: readUInt64LEAsNumber(record, 48),
+	};
+}
+
+function readCentralDirectoryInfoSync(bytes: Uint8Array): ZipCentralDirectoryInfo {
+	const fileSize = bytes.byteLength;
+	if (fileSize < ZIP_EOCD_MIN_LENGTH) {
+		throw new ToolError("Invalid ZIP archive: missing end of central directory");
+	}
+
+	const tailLength = Math.min(fileSize, ZIP_EOCD_MIN_LENGTH + ZIP_EOCD_MAX_COMMENT_LENGTH);
+	const tailStart = fileSize - tailLength;
+	const tail = readMemoryRange(bytes, tailStart, fileSize);
+	const eocdIndex = findEndOfCentralDirectory(tail);
+
+	if (readUInt16LE(tail, eocdIndex + 4) !== 0 || readUInt16LE(tail, eocdIndex + 6) !== 0) {
+		throw new ToolError("Multi-disk ZIP archives are not supported");
+	}
+
+	let entries = readUInt16LE(tail, eocdIndex + 10);
+	let size = readUInt32LE(tail, eocdIndex + 12);
+	let offset = readUInt32LE(tail, eocdIndex + 16);
+	const needsZip64 = entries === ZIP_UINT16_MAX || size === ZIP_UINT32_MAX || offset === ZIP_UINT32_MAX;
+	const zip64Info = readZip64CentralDirectoryInfoSync(bytes, tailStart + eocdIndex);
+	if (zip64Info) {
+		({ entries, size, offset } = zip64Info);
+	} else if (needsZip64) {
+		throw new ToolError("Invalid ZIP archive: missing ZIP64 central directory metadata");
+	}
+
+	if (offset + size > fileSize) {
+		throw new ToolError("Invalid ZIP archive: central directory exceeds file size");
+	}
+
+	return { entries, offset, size };
+}
+
+function extractZipMember(bytes: Uint8Array, storage: ZipStorage, uncompressedSize: number): Uint8Array {
+	if ((storage.flags & ZIP_ENCRYPTED_FLAG) !== 0) {
+		throw new ToolError("Encrypted ZIP entries are not supported");
+	}
+
+	const headerStart = storage.localHeaderOffset;
+	const localHeader = readMemoryRange(bytes, headerStart, headerStart + 30);
+	if (readUInt32LE(localHeader, 0) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+		throw new ToolError("Invalid ZIP archive: malformed local file header");
+	}
+
+	const fileNameLength = readUInt16LE(localHeader, 26);
+	const extraLength = readUInt16LE(localHeader, 28);
+	const dataStart = headerStart + 30 + fileNameLength + extraLength;
+	const compressed = readMemoryRange(bytes, dataStart, dataStart + storage.compressedSize);
+	return decodeZipMember(compressed, storage.compression, uncompressedSize);
 }
