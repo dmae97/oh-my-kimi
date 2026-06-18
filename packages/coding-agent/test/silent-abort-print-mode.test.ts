@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { runPrintMode } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 
@@ -73,8 +74,6 @@ describe("Print-mode silent-abort regression", () => {
 	});
 
 	it("does not write silent-abort marker to stderr or exit non-zero", async () => {
-		const { runPrintMode } = await import("@oh-my-pi/pi-coding-agent/modes/print-mode");
-
 		const silentAbortMsg = makeAssistantMessage({
 			stopReason: "aborted",
 			errorMessage: SILENT_ABORT_MARKER,
@@ -92,8 +91,6 @@ describe("Print-mode silent-abort regression", () => {
 	});
 
 	it("writes real error messages to stderr and exits non-zero", async () => {
-		const { runPrintMode } = await import("@oh-my-pi/pi-coding-agent/modes/print-mode");
-
 		const errorMsg = makeAssistantMessage({
 			stopReason: "error",
 			errorMessage: "Rate limit exceeded",
@@ -111,8 +108,6 @@ describe("Print-mode silent-abort regression", () => {
 	});
 
 	it("prints thinking blocks only when printThoughts is enabled", async () => {
-		const { runPrintMode } = await import("@oh-my-pi/pi-coding-agent/modes/print-mode");
-
 		const message = makeAssistantMessage({
 			content: [
 				{ type: "thinking", thinking: "inspect hidden branch" },
