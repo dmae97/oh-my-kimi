@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { generateFileMentionMessages } from "@oh-my-pi/pi-coding-agent/utils/file-mentions";
+import { extractFileMentions, generateFileMentionMessages } from "@oh-my-pi/pi-coding-agent/utils/file-mentions";
 
 const tempDirs: string[] = [];
 
@@ -85,7 +85,6 @@ describe("generateFileMentionMessages path resolution", () => {
 		await fs.mkdir(path.join(cwd, "My Folder"), { recursive: true });
 		await Bun.write(path.join(cwd, "My Folder", "my file.png"), "image content");
 
-		const { extractFileMentions } = await import("@oh-my-pi/pi-coding-agent/utils/file-mentions");
 		const mentions = extractFileMentions("Please see @\"My Folder/my file.png\" and @'My Folder/my file.png'");
 		expect(mentions).toEqual(["My Folder/my file.png"]);
 

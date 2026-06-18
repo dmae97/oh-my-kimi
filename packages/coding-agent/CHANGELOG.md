@@ -54,6 +54,9 @@
 ### Security
 
 - Secured PDF image reads by validating requested image members against the extracted member list before opening files and refusing traversal-style names
+### Fixed
+
+ - Support quoted file paths with spaces (such as default macOS screenshots) in file mentions and `@`-prefixed CLI arguments ([#2909](https://github.com/can1357/oh-my-pi/pull/2909)).
 
 ## [16.0.5] - 2026-06-17
 
