@@ -154,11 +154,7 @@ describe("in-band tool dialects", () => {
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 		);
-		expectRawBlock(
-			"pi",
-			"§write path=out.ts«\nhello\n»",
-			"§write path=out.ts«\nhello\n»",
-		);
+		expectRawBlock("pi", "§write path=out.ts«\nhello\n»", "§write path=out.ts«\nhello\n»");
 	});
 
 	it("projects raw tool blocks onto parsed ToolCall content", () => {
