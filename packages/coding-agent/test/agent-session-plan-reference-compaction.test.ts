@@ -21,6 +21,7 @@ import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { TextContent } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { TempDir } from "@oh-my-pi/pi-utils";
 // NOTE: coding-agent modules are imported via relative ../src paths (not the
 // @oh-my-pi/pi-coding-agent alias) because in this worktree node_modules is a
 // symlink to the primary checkout, so the package alias would resolve to the
@@ -33,7 +34,6 @@ import { AgentSession } from "../src/session/agent-session";
 import { AuthStorage } from "../src/session/auth-storage";
 import { convertToLlm } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
 
 const CONTINUE_MARKER = "Resume work on the user's most recent intent";
 
@@ -231,9 +231,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		// Auto-compaction fires, replacing history (dropping the delivered reference),
 		// then schedules the auto-continuation turn.
 		emitHighUsageTurn(session);
-		const continuation = await waitForCall(call =>
-			call.messageTexts.some(text => text.includes(CONTINUE_MARKER)),
-		);
+		const continuation = await waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
 
 		// The post-compaction continuation MUST carry the plan reference again.
 		expect(continuation.messageTexts.some(text => text.includes(planMarker))).toBe(true);
@@ -249,9 +247,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 
 		await session.prompt("do some ordinary work");
 		emitHighUsageTurn(session);
-		const continuation = await waitForCall(call =>
-			call.messageTexts.some(text => text.includes(CONTINUE_MARKER)),
-		);
+		const continuation = await waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
 
 		expect(continuation.messageTexts.some(text => text.includes("## Existing Plan"))).toBe(false);
 	});

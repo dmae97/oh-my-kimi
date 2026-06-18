@@ -1382,7 +1382,7 @@ export class AuthStorage {
 			const raw = this.#store.getCache(cacheKey);
 			if (raw) {
 				const val = JSON.parse(raw) as { type: AuthCredential["type"]; index: number; credentialId?: number };
-				
+
 				if (val.credentialId !== undefined) {
 					const stored = this.#getStoredCredentials(provider);
 					const actualIndex = stored.findIndex(entry => entry.id === val.credentialId);
