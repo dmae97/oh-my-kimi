@@ -112,7 +112,6 @@ impl_lang_expando!(Css, language_css, '_');
 impl_lang_expando!(Dockerfile, language_dockerfile, 'µ');
 impl_lang_expando!(Elixir, language_elixir, 'µ');
 impl_lang_expando!(Erlang, language_erlang, 'µ');
-impl_lang_expando!(Fortran, language_fortran, 'µ');
 impl_lang_expando!(Go, language_go, 'µ');
 impl_lang!(Graphql, language_graphql);
 impl_lang_expando!(Haskell, language_haskell, 'µ');
@@ -168,6 +167,7 @@ impl_lang!(Xml, language_xml);
 impl_lang!(Regex, language_regex);
 impl_lang!(Dart, language_dart);
 impl_lang!(EmacsLisp, language_elisp);
+impl_lang!(Fortran, language_fortran);
 
 // ── Html (custom implementation with injection support) ──────────────────
 
