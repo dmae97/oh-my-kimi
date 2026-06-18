@@ -34,7 +34,6 @@ import {
 	type CompactionSummaryMessage,
 	countTokens,
 	resolveTelemetry,
-	STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL,
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
@@ -9714,21 +9713,20 @@ export class AgentSession {
 		if (this.#isClassifierRefusal(message)) return true;
 		if (this.#isProviderErrorFinishReasonBeforeToolUse(message)) return true;
 		if (this.#isMalformedFunctionCallError(message)) return true;
-		if (this.#streamInterruptedAfterObservableOutput(message)) return false;
+		if (this.#hasReplayUnsafeToolOutput(message)) return false;
 		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
 		return this.#isTransientErrorMessage(err) || isUsageLimitError(err);
 	}
-	#streamInterruptedAfterObservableOutput(message: AssistantMessage): boolean {
-		if (message.stopDetails?.type === STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL) return true;
-		for (const block of message.content) {
-			if (block.type === "toolCall") return true;
-			if (block.type === "text" && block.text.length > 0) return true;
-			if (block.type === "thinking" && block.thinking.length > 0) return true;
-			if (block.type === "redactedThinking" && block.data.length > 0) return true;
-		}
-		return false;
+	/**
+	 * Retried turns remove the failed assistant message from active context.
+	 * Text/thinking-only partials are safe to discard and replay. Retained
+	 * tool calls are not: a completed tool call may already have emitted its
+	 * tool result after this assistant message, so replaying can duplicate work.
+	 */
+	#hasReplayUnsafeToolOutput(message: AssistantMessage): boolean {
+		return message.content.some(block => block.type === "toolCall");
 	}
 
 	#isStaleOpenAIResponsesReplayError(message: AssistantMessage): boolean {
