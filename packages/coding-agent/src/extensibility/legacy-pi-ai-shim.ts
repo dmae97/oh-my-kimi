@@ -11,14 +11,26 @@
  * bare package root. Subpath imports (`@oh-my-pi/pi-ai/oauth`, etc.)
  * continue to resolve directly against the bundled pi-ai package.
  *
- * The `Type` runtime is borrowed from the Zod-backed TypeBox shim that
- * already serves bare `@sinclair/typebox` imports for the same extension
- * class, keeping the legacy-compat surface internally consistent.
+ * The `Type` runtime and legacy `StringEnum()` helper are borrowed from the
+ * Zod-backed TypeBox shim that already serves TypeBox imports for the same
+ * extension class, keeping the legacy-compat surface internally consistent.
  *
  * Type-level `Static` and `TSchema` continue to come from pi-ai's own
  * `types.ts` via the `export *` below — pi-ai still exports both as types,
- * only the runtime `Type` builder was removed.
+ * only the runtime `Type` builder and `StringEnum()` helper were removed.
  */
+import { type TSchema, Type } from "./typebox";
+
+export interface StringEnumOptions<T extends string> {
+	description?: string;
+	default?: T;
+	examples?: T[];
+	[key: string]: unknown;
+}
+
+export function StringEnum<T extends string>(values: readonly T[], options?: StringEnumOptions<T>): TSchema {
+	return Type.Enum(values, options);
+}
 
 export * from "@oh-my-pi/pi-ai";
-export { Type } from "./typebox";
+export { Type };

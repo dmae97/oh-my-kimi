@@ -88,6 +88,21 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 		expect(loaded.zodObj.safeParse({ name: "ok" }).success).toBe(true);
 		expect(loaded.zodObj.safeParse({}).success).toBe(false);
 	});
+	it("preserves legacy StringEnum root imports as TypeBox-compatible schemas", async () => {
+		const entry = await writeFixtureExtension(
+			[
+				'import { StringEnum } from "@earendil-works/pi-ai";',
+				'export const schema = StringEnum(["upstream", "downstream"] as const, { default: "upstream" });',
+			].join("\n"),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			schema: { safeParse: (input: unknown) => { success: boolean } };
+		};
+
+		expect(loaded.schema.safeParse("downstream").success).toBe(true);
+		expect(loaded.schema.safeParse("sideways").success).toBe(false);
+	});
 
 	it("does not redirect subpath imports such as @oh-my-pi/pi-ai/utils/schema", async () => {
 		const entry = await writeFixtureExtension(
@@ -122,6 +137,54 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 
 		const loaded = (await loadLegacyPiModule(entry)) as { loadedVersion: string };
 		expect(loaded.loadedVersion).toMatch(/^\d+\.\d+\.\d+/);
+	});
+
+	it("preserves legacy defineTool root imports for tool factory helpers", async () => {
+		const entry = await writeFixtureExtension(
+			[
+				'import { createCodingTools, defineTool, Type } from "@earendil-works/pi-coding-agent";',
+				"const definition = {",
+				'\tname: "legacy_define_tool",',
+				'\tlabel: "Legacy Define Tool",',
+				'\tdescription: "legacy helper probe",',
+				"\tparameters: Type.Object({}),",
+				'\texecute: async () => ({ content: [{ type: "text", text: "ok" }] }),',
+				"};",
+				"export const tool = defineTool(definition);",
+				"export const sameReference = tool === definition;",
+				"export const codingTools = createCodingTools(process.cwd());",
+			].join("\n"),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			tool: { name: string; parameters: { safeParse: (input: unknown) => { success: boolean } } };
+			sameReference: boolean;
+			codingTools: unknown[];
+		};
+
+		expect(loaded.sameReference).toBe(true);
+		expect(loaded.tool.name).toBe("legacy_define_tool");
+		expect(Array.isArray(loaded.codingTools)).toBe(true);
+	});
+
+	it("preserves legacy frontmatter helper root imports", async () => {
+		const entry = await writeFixtureExtension(
+			[
+				'import { parseFrontmatter, stripFrontmatter } from "@earendil-works/pi-coding-agent";',
+				"const content = ['---', 'name: demo', '---', '# Body'].join('\\n');",
+				"export const parsed = parseFrontmatter(content);",
+				"export const stripped = stripFrontmatter(content);",
+			].join("\n"),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			parsed: { frontmatter: { name?: string }; body: string };
+			stripped: string;
+		};
+
+		expect(loaded.parsed.frontmatter.name).toBe("demo");
+		expect(loaded.parsed.body).toBe("# Body");
+		expect(loaded.stripped).toBe("# Body");
 	});
 
 	it("falls back to legacy-scoped subpath peers for direct plugin imports", async () => {

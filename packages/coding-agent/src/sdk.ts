@@ -526,6 +526,11 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
+	/**
+	 * Legacy alias for `settings`. Older Pi extensions pass SettingsManager.create(...)
+	 * through this field; accept it so their SDK calls keep the configured settings.
+	 */
+	settingsManager?: Settings | Promise<Settings>;
 
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
@@ -1131,7 +1136,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			startupCredentialDisabledEvents.push(event);
 		}
 	});
-	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
+	const settings = await (options.settings ??
+		options.settingsManager ??
+		logger.time("settings", Settings.init, { cwd, agentDir }));
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
