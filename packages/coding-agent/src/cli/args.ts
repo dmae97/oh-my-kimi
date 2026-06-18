@@ -56,6 +56,7 @@ export interface Args {
 	noExtensions?: boolean;
 	pluginDirs?: string[];
 	print?: boolean;
+	printThoughts?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -200,6 +201,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.advisor = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
+		} else if (arg === "--print-thoughts") {
+			result.printThoughts = true;
 		} else if (arg === "--no-extensions") {
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {

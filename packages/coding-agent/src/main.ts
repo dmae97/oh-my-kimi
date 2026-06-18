@@ -1373,6 +1373,7 @@ export async function runRootCommand(
 				messages: initialArgs.messages,
 				initialMessage,
 				initialImages,
+				printThoughts: initialArgs.printThoughts,
 			});
 			if ($env.PI_TIMING) {
 				logger.printTimings();

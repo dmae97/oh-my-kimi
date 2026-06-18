@@ -48,15 +48,19 @@ function createMockSession(messages: AssistantMessage[]): AgentSession {
 describe("Print-mode silent-abort regression", () => {
 	let exitSpy: ReturnType<typeof vi.spyOn>;
 	let stderrOutput: string[];
+	let stdoutOutput: string[];
 
 	beforeEach(() => {
 		stderrOutput = [];
+		stdoutOutput = [];
 		vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
 			stderrOutput.push(String(chunk));
 			return true;
 		});
 		exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 		vi.spyOn(process.stdout, "write").mockImplementation((...args: unknown[]) => {
+			const chunk = args[0];
+			if (typeof chunk === "string") stdoutOutput.push(chunk);
 			// Invoke callback if present (runPrintMode flushes stdout before returning)
 			const last = args[args.length - 1];
 			if (typeof last === "function") last();
@@ -104,5 +108,23 @@ describe("Print-mode silent-abort regression", () => {
 		expect(stderrText).toContain("Rate limit exceeded");
 		// process.exit(1) SHOULD have been called
 		expect(exitSpy).toHaveBeenCalledWith(1);
+	});
+
+	it("prints thinking blocks only when printThoughts is enabled", async () => {
+		const { runPrintMode } = await import("@oh-my-pi/pi-coding-agent/modes/print-mode");
+
+		const message = makeAssistantMessage({
+			content: [
+				{ type: "thinking", thinking: "inspect hidden branch" },
+				{ type: "text", text: "final answer" },
+			],
+		});
+
+		await runPrintMode(createMockSession([message]), { mode: "text" });
+		expect(stdoutOutput.join("")).toBe("final answer\n");
+
+		stdoutOutput = [];
+		await runPrintMode(createMockSession([message]), { mode: "text", printThoughts: true });
+		expect(stdoutOutput.join("")).toBe("inspect hidden branch\nfinal answer\n");
 	});
 });

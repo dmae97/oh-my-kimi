@@ -136,6 +136,9 @@ export default class Index extends Command {
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
 		}),
+		"print-thoughts": Flags.boolean({
+			description: "Include thinking blocks in print mode text output",
+		}),
 		"max-time": Flags.string({
 			description: "Stop the session after this many seconds",
 		}),
