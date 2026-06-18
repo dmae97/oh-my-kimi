@@ -272,6 +272,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#ui = ui;
 		this.#cwd = cwd;
 		this.#args = args;
+		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
 		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
@@ -292,8 +293,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// Tool blocks are visually distinct cards (background-tinted or framed),
 		// so keep their horizontal padding even when the user enables tight layout.
 		this.setIgnoreTight(true);
-
-		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		this.#updateDisplay();
 		this.#editDiffInFlight = this.#runPreviewDiff();

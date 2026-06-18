@@ -591,7 +591,6 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 	): Component {
 		const renderContext = options.renderContext;
-
 		const editArgs = args as EditRenderArgs;
 		const hashlineInputSummary = getHashlineInputRenderSummary(editArgs, renderContext?.editMode);
 		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial, renderContext?.editMode);
