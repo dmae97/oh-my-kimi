@@ -1336,6 +1336,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"startup.showSplash": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Show Startup Splash",
+			description:
+				"Show the full animated setup splash on normal interactive startup without rerunning setup. Quiet Startup still suppresses it.",
+		},
+	},
+
 	"startup.setupWizard": {
 		type: "boolean",
 		default: true,
