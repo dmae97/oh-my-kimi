@@ -7375,7 +7375,7 @@ export class AgentSession {
 			throw new Error("Compaction already in progress");
 		}
 		this.#disconnectFromAgent();
-		await this.abort();
+		await this.abort({ goalReason: "internal" });
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
 
@@ -10960,7 +10960,7 @@ export class AgentSession {
 		}
 
 		this.#disconnectFromAgent();
-		await this.abort();
+		await this.abort({ goalReason: "internal" });
 
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
