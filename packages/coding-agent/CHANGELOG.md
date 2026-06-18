@@ -235,6 +235,10 @@
 - Fixed task subagents to install their configured ordered model candidates as child-session retry fallback chains, so retryable provider failures can advance to the next subagent model instead of failing the worker ([#2750](https://github.com/can1357/oh-my-pi/issues/2750)).
 - Fixed empty reasonless aborted assistant turns to auto-retry without switching model fallback, so transient provider-side aborts after tool results do not end headless sessions ([#2685](https://github.com/can1357/oh-my-pi/issues/2685)).
 
+### Fixed
+
+- Accepted `max` as an alias for the top thinking level (`xhigh`) in selectors and `--thinking`, so DeepSeek V4 Pro can be selected with its provider-facing maximum effort ([#2727](https://github.com/can1357/oh-my-pi/issues/2727)).
+
 ## [16.0.1] - 2026-06-15
 
 ### Breaking Changes

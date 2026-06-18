@@ -72,7 +72,7 @@ import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
-import { AUTO_THINKING } from "./thinking";
+import { AUTO_THINKING, parseConfiguredThinkingLevel } from "./thinking";
 import type { LspStartupServerInfo } from "./tools";
 import {
 	getChangelogPath,
@@ -857,7 +857,7 @@ async function buildSessionOptions(
 	if (scopedModels.length > 0) {
 		// `auto` is a session-level concept only; per-scoped-model (Ctrl+P) thinking
 		// overrides stay concrete, so coerce the auto default to "unset" here.
-		const defaultThinkingLevelSetting = activeSettings.get("defaultThinkingLevel");
+		const defaultThinkingLevelSetting = parseConfiguredThinkingLevel(activeSettings.get("defaultThinkingLevel"));
 		const defaultThinkingLevel =
 			defaultThinkingLevelSetting === AUTO_THINKING ? undefined : defaultThinkingLevelSetting;
 		options.scopedModels = scopedModels.map(scopedModel => ({

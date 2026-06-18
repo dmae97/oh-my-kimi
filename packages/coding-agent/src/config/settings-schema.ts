@@ -872,7 +872,7 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: [...THINKING_EFFORTS, AUTO_THINKING],
+		values: [...THINKING_EFFORTS, AUTO_THINKING, "max"],
 		default: "high",
 		ui: {
 			tab: "model",
