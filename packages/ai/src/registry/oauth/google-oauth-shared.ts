@@ -39,7 +39,11 @@ export class GoogleOAuthFlow extends OAuthCallbackFlow {
 	private readonly config: GoogleOAuthFlowConfig;
 
 	constructor(ctrl: OAuthController, config: GoogleOAuthFlowConfig) {
-		super(ctrl, config.callbackPort, config.callbackPath);
+		super(ctrl, {
+			preferredPort: config.callbackPort,
+			callbackPath: config.callbackPath,
+			callbackHostname: "127.0.0.1",
+		});
 		this.config = config;
 	}
 
