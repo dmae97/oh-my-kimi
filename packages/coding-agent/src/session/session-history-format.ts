@@ -45,6 +45,7 @@ const PRIMARY_ARG_KEYS = [
 	"query",
 	"prompt",
 	"assignment",
+	"note",
 	"message",
 	"op",
 	"name",

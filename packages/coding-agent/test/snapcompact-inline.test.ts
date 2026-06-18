@@ -528,7 +528,7 @@ describe("estimateInlineSavings", () => {
 	});
 
 	it("matches what the transform actually swaps on the same context", () => {
-		const options = { renderSystemPrompt: "all" as const, renderToolResults: true, shape: TEST_SHAPE };
+		const options: SnapcompactInlineOptions = { renderSystemPrompt: "all", renderToolResults: true, shape: TEST_SHAPE };
 		const context = makeContext();
 		const model = makeModel();
 
