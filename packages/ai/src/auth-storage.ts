@@ -4953,21 +4953,30 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * Hard-deletes disabled rows for a provider when an active row with the same identity exists.
-	 * This prevents unbounded accumulation of soft-deleted credentials while preserving
-	 * disabled rows that have no active replacement (safety net for recovery).
+	 * Hard-deletes disabled rows for a provider when an active replacement exists.
+	 * OAuth credentials match by identity key; API keys match by provider and type.
+	 * Disabled rows without an active same-type replacement remain recoverable.
 	 */
 	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
 		try {
+			let hasActiveApiKey = false;
 			const activeIdentityKeys = new Set<string>();
 			for (const row of activeRows) {
+				if (row.credential.type === "api_key") {
+					hasActiveApiKey = true;
+					continue;
+				}
 				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
 				if (identityKey) activeIdentityKeys.add(identityKey);
 			}
-			if (activeIdentityKeys.size === 0) return;
+			if (!hasActiveApiKey && activeIdentityKeys.size === 0) return;
 
 			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as AuthRow[];
 			for (const row of disabledRows) {
+				if (hasActiveApiKey && row.credential_type === "api_key") {
+					this.#hardDeleteStmt.run(row.id);
+					continue;
+				}
 				const identityKey = resolveRowCredentialIdentityKey(provider, row);
 				if (identityKey && activeIdentityKeys.has(identityKey)) {
 					this.#hardDeleteStmt.run(row.id);

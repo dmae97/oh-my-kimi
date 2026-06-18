@@ -21,6 +21,21 @@ function countCredentialRows(dbPath: string, provider: string): number {
 	}
 }
 
+function countCredentialRowsByDisabledState(dbPath: string, provider: string, disabled: boolean): number {
+	const disabledClause = disabled ? "IS NOT NULL" : "IS NULL";
+	const db = new Database(dbPath, { readonly: true });
+	try {
+		const row = db
+			.prepare(
+				`SELECT COUNT(*) AS count FROM auth_credentials WHERE provider = ? AND disabled_cause ${disabledClause}`,
+			)
+			.get(provider) as { count?: number } | undefined;
+		return row?.count ?? 0;
+	} finally {
+		db.close();
+	}
+}
+
 describe("AuthStorage api-key login replacement", () => {
 	let tempDir = "";
 	let dbPath = "";
@@ -76,6 +91,18 @@ describe("AuthStorage api-key login replacement", () => {
 		expect(stored.credential.key).toBe("same-kagi-key");
 		expect(store.getApiKey("kagi")).toBe("same-kagi-key");
 		expect(await authStorage.getApiKey("kagi", "session-kagi-relogin")).toBe("same-kagi-key");
+	});
+
+	it("hard-deletes superseded api-key rows when a different key replaces them", () => {
+		if (!store || !dbPath) throw new Error("test setup failed");
+
+		store.saveApiKey("kagi", "old-key-123");
+		store.saveApiKey("kagi", "new-key-456");
+
+		expect(countCredentialRows(dbPath, "kagi")).toBe(1);
+		expect(countCredentialRowsByDisabledState(dbPath, "kagi", false)).toBe(1);
+		expect(countCredentialRowsByDisabledState(dbPath, "kagi", true)).toBe(0);
+		expect(store.getApiKey("kagi")).toBe("new-key-456");
 	});
 
 	it("reuses the stored api-key row when ollama-cloud re-login returns the same key", async () => {
