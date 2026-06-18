@@ -226,7 +226,10 @@ function getOpenRouterRouteSuffix(modelId: string): { baseId: string; suffix: st
 	}
 
 	const suffix = modelId.slice(colonIdx + 1).trim();
-	if (!suffix || parseThinkingLevel(suffix)) {
+	// `max` is a thinking-level alias (xhigh), never an OpenRouter route suffix, so
+	// `openrouter/<id>:max` falls through to the max-aware selector split instead of
+	// being cloned into a literal `<id>:max` model id with the reasoning level lost.
+	if (!suffix || parseThinkingSuffix(suffix, MAX_THINKING_SUFFIX_OPTIONS)) {
 		return undefined;
 	}
 

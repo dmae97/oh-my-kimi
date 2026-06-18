@@ -531,6 +531,16 @@ describe("parseModelPattern", () => {
 			expect(result.explicitThinkingLevel).toBe(true);
 			expect(result.warning).toBeUndefined();
 		});
+
+		test("openrouter/<id>:max applies xhigh through the exact-selector path, not an OpenRouter route", () => {
+			// `max` is a thinking alias, never an OpenRouter route suffix: the request must
+			// resolve the base model and carry xhigh, not clone a literal `z-ai/glm-4.7:max`.
+			const result = parseModelPattern("openrouter/z-ai/glm-4.7:max", allModels);
+			expect(result.model?.provider).toBe("openrouter");
+			expect(result.model?.id).toBe("z-ai/glm-4.7");
+			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.explicitThinkingLevel).toBe(true);
+		});
 	});
 
 	describe("invalid thinking levels with OpenRouter models", () => {
