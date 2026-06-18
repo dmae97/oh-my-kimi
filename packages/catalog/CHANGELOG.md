@@ -1,10 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Refactored model family ID predicates and capability checkers to use a shared, uniform process-lifetime `memo` utility to eliminate caching boilerplate.
-
 
 ### Fixed
 

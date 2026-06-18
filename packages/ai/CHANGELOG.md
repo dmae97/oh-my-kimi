@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
 - Improved reliability of auth-broker snapshot loading by implementing a robust manual schema check
