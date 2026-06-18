@@ -382,7 +382,7 @@ export async function discoverOpenAIModelsList(
 	const attempt = async (h: Record<string, string>) => {
 		const nativeMetadataPromise =
 			providerConfig.discovery.type === "lm-studio"
-				? fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, h)
+				? fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers: h })
 				: Promise.resolve(null);
 		const [res, nativeMetadata] = await Promise.all([
 			ctx.fetch(modelsUrl, {

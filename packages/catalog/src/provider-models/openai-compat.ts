@@ -2190,6 +2190,14 @@ export interface LmStudioNativeModelMetadata {
 	contextWindow?: number;
 }
 
+/** Options for LM Studio's optional native metadata probe. */
+export interface LmStudioNativeModelMetadataOptions {
+	headers?: Record<string, string>;
+	signal?: AbortSignal;
+}
+
+const LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS = 250;
+
 function toLmStudioNativeBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim();
 	const normalized = trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
@@ -2223,13 +2231,14 @@ function getLmStudioNativeContextWindow(entry: Record<string, unknown>): number 
 export async function fetchLmStudioNativeModelMetadata(
 	baseUrl: string,
 	fetchImpl: FetchImpl = fetch,
-	headers?: Record<string, string>,
+	options?: LmStudioNativeModelMetadataOptions,
 ): Promise<Map<string, LmStudioNativeModelMetadata> | null> {
 	const nativeBaseUrl = toLmStudioNativeBaseUrl(baseUrl);
 	try {
 		const response = await fetchImpl(`${nativeBaseUrl}/api/v0/models`, {
 			method: "GET",
-			headers: { Accept: "application/json", ...(headers ?? {}) },
+			headers: { Accept: "application/json", ...(options?.headers ?? {}) },
+			signal: options?.signal ?? AbortSignal.timeout(LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS),
 		});
 		if (!response.ok) {
 			return null;
@@ -2270,30 +2279,37 @@ export function lmStudioModelManagerOptions(
 	return {
 		providerId: "lm-studio",
 		fetchDynamicModels: async () => {
-			const nativeMetadata = await fetchLmStudioNativeModelMetadata(
-				baseUrl,
-				config?.fetch,
-				apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-			);
-			return fetchOpenAICompatibleModels({
+			const nativeMetadataPromise = fetchLmStudioNativeModelMetadata(baseUrl, config?.fetch, {
+				headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+			});
+			const models = await fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "lm-studio",
 				baseUrl,
 				apiKey,
 				mapModel: (entry, defaults) => {
 					const reference = references.get(defaults.id);
-					const mapped = mapWithBundledReference(entry, defaults, reference);
-					const metadata = nativeMetadata?.get(mapped.id);
-					if (!metadata) {
-						return mapped;
-					}
-					return {
-						...mapped,
-						input: metadata.input,
-						contextWindow: metadata.contextWindow ?? mapped.contextWindow,
-					};
+					return mapWithBundledReference(entry, defaults, reference);
 				},
 				fetch: config?.fetch,
+			});
+			if (!models) {
+				return models;
+			}
+			const nativeMetadata = await nativeMetadataPromise;
+			if (!nativeMetadata) {
+				return models;
+			}
+			return models.map(model => {
+				const metadata = nativeMetadata.get(model.id);
+				if (!metadata) {
+					return model;
+				}
+				return {
+					...model,
+					input: metadata.input,
+					contextWindow: metadata.contextWindow ?? model.contextWindow,
+				};
 			});
 		},
 	};

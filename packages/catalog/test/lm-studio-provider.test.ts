@@ -47,4 +47,42 @@ describe("lm studio local provider discovery", () => {
 		expect(vision?.contextWindow).toBe(262144);
 		expect(text?.input).toEqual(["text"]);
 	});
+
+	test("falls back to the OpenAI-compatible catalog when native metadata hangs", async () => {
+		let nativeAborted = false;
+		let openAiCatalogStartedBeforeAbort = false;
+		const fetchMock: FetchImpl = vi.fn(async (input, init) => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:11434/api/v0/models") {
+				const pending = Promise.withResolvers<Response>();
+				const abort = () => {
+					nativeAborted = true;
+					pending.reject(new DOMException("Aborted", "AbortError"));
+				};
+				if (init?.signal?.aborted) {
+					abort();
+				} else {
+					init?.signal?.addEventListener("abort", abort, { once: true });
+				}
+				return pending.promise;
+			}
+			if (url === "http://127.0.0.1:11434/v1/models") {
+				openAiCatalogStartedBeforeAbort = !nativeAborted;
+				return new Response(JSON.stringify({ data: [{ id: "omlx-model", object: "model" }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const models = await lmStudioModelManagerOptions({
+			baseUrl: "http://127.0.0.1:11434/v1",
+			fetch: fetchMock,
+		}).fetchDynamicModels?.();
+
+		expect(openAiCatalogStartedBeforeAbort).toBe(true);
+		expect(nativeAborted).toBe(true);
+		expect(models?.find(model => model.id === "omlx-model")?.input).toEqual(["text"]);
+	});
 });
