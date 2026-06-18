@@ -568,9 +568,7 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		EmacsLisp => &["el"],
 		Elixir => &["ex", "exs"],
 		Erlang => &["erl", "hrl"],
-		Fortran => {
-			&["f", "F", "for", "f77", "F77", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08"]
-		},
+		Fortran => &["f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08"],
 		Go => &["go"],
 		Graphql => &["graphql", "gql"],
 		Haskell => &["hs"],
@@ -719,9 +717,6 @@ static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
 "erl"            => SupportLang::Erlang,
 "hrl"            => SupportLang::Erlang,
 "fortran"        => SupportLang::Fortran,
-"f"              => SupportLang::Fortran,
-"for"            => SupportLang::Fortran,
-"f77"            => SupportLang::Fortran,
 "f90"            => SupportLang::Fortran,
 "f95"            => SupportLang::Fortran,
 "f03"            => SupportLang::Fortran,
