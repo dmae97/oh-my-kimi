@@ -130,6 +130,16 @@ describe("MiniMax Anthropic adaptive thinking", () => {
 		expect(payload.output_config?.effort).toBeUndefined();
 	});
 
+	it("maps direct MiniMax effort options to the adaptive tag only", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
+			effort: "low",
+			thinkingEnabled: true,
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
+
 	it("serializes MiniMax M3 thinking-off requests without the Claude effort pin", async () => {
 		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
 			thinkingEnabled: false,

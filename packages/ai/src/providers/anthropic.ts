@@ -2804,7 +2804,7 @@ function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
 ): AnthropicEffort | undefined {
-	if (options.effort) return options.effort;
+	if (options.effort) return usesAdaptiveThinkingTagOnly(model) ? "adaptive" : options.effort;
 	const requestedEffort = options.reasoning;
 	if (!requestedEffort) return undefined;
 	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
