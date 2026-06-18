@@ -89,3 +89,20 @@ describe("parseArgs end-of-options (--)", () => {
 		expect(result.messages).toEqual(["hello", "--no-tools"]);
 	});
 });
+
+describe("parseArgs @file parsing with quotes", () => {
+	it("parses unquoted @file arguments normally", () => {
+		const result = parseArgs(["@foo.png"]);
+		expect(result.fileArgs).toEqual(["foo.png"]);
+	});
+
+	it('parses double-quoted @"file" arguments', () => {
+		const result = parseArgs(['@"foo bar.png"']);
+		expect(result.fileArgs).toEqual(["foo bar.png"]);
+	});
+
+	it("parses single-quoted @'file' arguments", () => {
+		const result = parseArgs(["@'foo bar.png'"]);
+		expect(result.fileArgs).toEqual(["foo bar.png"]);
+	});
+});

@@ -24,7 +24,7 @@ import { resolveReadPath } from "../tools/path-utils";
 import { formatDimensionNote, resizeImage } from "./image-resize";
 
 /** Regex to match @filepath patterns in text */
-const FILE_MENTION_REGEX = /@([^\s@]+)/g;
+const FILE_MENTION_REGEX = /@(?:"([^"]+)"|'([^']+)'|([^\s@]+))/g;
 const LEADING_PUNCTUATION_REGEX = /^[`"'([{<]+/;
 const TRAILING_PUNCTUATION_REGEX = /[)\]}>.,;:!?"'`]+$/;
 const MENTION_BOUNDARY_REGEX = /[\s([{<"'`]/;
@@ -168,7 +168,10 @@ export function extractFileMentions(text: string): string[] {
 		const index = match.index ?? 0;
 		if (!isMentionBoundary(text, index)) continue;
 
-		const cleaned = sanitizeMentionPath(match[1]);
+		const rawPath = match[1] ?? match[2] ?? match[3];
+		if (!rawPath) continue;
+
+		const cleaned = match[1] !== undefined || match[2] !== undefined ? rawPath.trim() : sanitizeMentionPath(rawPath);
 		if (!cleaned) continue;
 
 		mentions.push(cleaned);
