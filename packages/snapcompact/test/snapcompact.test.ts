@@ -67,6 +67,21 @@ function makePreparation(
 	};
 }
 
+describe("computeFileLists", () => {
+	it("drops scheme:// URLs from legacy fileOps before rendering <files>", () => {
+		const fileOps = snapcompact.createFileOps();
+		fileOps.read.add("src/read-only.ts");
+		fileOps.read.add("artifact://7");
+		fileOps.edited.add("src/edited.ts");
+		fileOps.edited.add("conflict://1");
+		fileOps.written.add("local://ctx.md");
+		expect(snapcompact.computeFileLists(fileOps)).toEqual({
+			readFiles: ["src/read-only.ts"],
+			modifiedFiles: ["src/edited.ts"],
+		});
+	});
+});
+
 interface DecodedPng {
 	width: number;
 	height: number;

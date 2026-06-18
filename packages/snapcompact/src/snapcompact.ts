@@ -551,10 +551,17 @@ export function createFileOps(): FileOperations {
 		edited: new Set(),
 	};
 }
+const URL_SCHEME_RE = /[a-z][a-z0-9+.-]*:\/\//i;
+
+const HEADING_MARKER = " ¶";
+
+export function isUrlSchemePath(path: string): boolean {
+	return URL_SCHEME_RE.test(path);
+}
 
 export function computeFileLists(fileOps: FileOperations): CompactionDetails {
-	const modified = new Set([...fileOps.edited, ...fileOps.written]);
-	const readFiles = [...fileOps.read].filter(file => !modified.has(file)).sort();
+	const modified = new Set([...fileOps.edited, ...fileOps.written].filter(file => !isUrlSchemePath(file)));
+	const readFiles = [...fileOps.read].filter(file => !isUrlSchemePath(file) && !modified.has(file)).sort();
 	const modifiedFiles = [...modified].sort();
 	return { readFiles, modifiedFiles };
 }
@@ -715,7 +722,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 							.filter((content): content is { type: "text"; text: string } => content.type === "text")
 							.map(content => content.text)
 							.join("");
-			if (content) parts.push(`# User ¶\n${stripDimMarkers(content)}`);
+			if (content) parts.push(`# User${HEADING_MARKER}\n${stripDimMarkers(content)}`);
 		} else if (msg.role === "assistant") {
 			// Stream blocks in content order: buffer thinking/text, then flush a
 			// `# Assistant` block (thinking as italics above the text) right before
@@ -726,7 +733,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 				const sections: string[] = [];
 				if (pendingThinking.length > 0) sections.push(`_${pendingThinking.join("\n")}_`);
 				if (pendingText.length > 0) sections.push(pendingText.join("\n"));
-				if (sections.length > 0) parts.push(`# Assistant ¶\n${sections.join("\n\n")}`);
+				if (sections.length > 0) parts.push(`# Assistant${HEADING_MARKER}\n${sections.join("\n\n")}`);
 				pendingThinking = [];
 				pendingText = [];
 			};
@@ -756,7 +763,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 						toolCallMaxChars,
 						headRatio,
 					);
-					const lines = ["# Tool call ¶"];
+					const lines = [`# Tool call${HEADING_MARKER}`];
 					if (intent) lines.push(`//${intent}`);
 					lines.push(`${block.name}(${argsStr})`);
 					const resultText = resultTextByCallId.get(block.id);
@@ -773,7 +780,7 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 			// only orphans (call archived outside this window) render standalone.
 			if (uselessCallIds.has(msg.toolCallId) || mergedCallIds.has(msg.toolCallId)) continue;
 			const resultText = resultTextByCallId.get(msg.toolCallId);
-			if (resultText !== undefined) parts.push(`# Tool call ¶\n${renderResultBlock(resultText)}`);
+			if (resultText !== undefined) parts.push(`# Tool call${HEADING_MARKER}\n${renderResultBlock(resultText)}`);
 		}
 	}
 
