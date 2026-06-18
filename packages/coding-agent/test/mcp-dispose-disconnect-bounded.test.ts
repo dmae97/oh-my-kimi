@@ -69,9 +69,9 @@ describe("owned-manager dispose disconnect is bounded (PR #2839)", () => {
 			// on the 30s request timeout.
 			const disconnect = manager.disconnectAll();
 			const start = performance.now();
-			await expect(
-				withTimeout(disconnect, 250, "owned MCP disconnect timed out during dispose"),
-			).rejects.toThrow(/timed out/i);
+			await expect(withTimeout(disconnect, 250, "owned MCP disconnect timed out during dispose")).rejects.toThrow(
+				/timed out/i,
+			);
 			expect(performance.now() - start).toBeLessThan(3_000);
 
 			// Release the gate so the detached disconnect finishes cleanly.
