@@ -56,6 +56,10 @@ import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
+import { AuthBrokerClient } from "@oh-my-pi/pi-ai/auth-broker/client";
+import { RemoteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-broker/remote-store";
+import { readAuthBrokerSnapshotCache, writeAuthBrokerSnapshotCache } from "@oh-my-pi/pi-ai/auth-broker/snapshot-cache";
+import { DEFAULT_SNAPSHOT_CACHE_TTL_MS, type SnapshotResponse } from "@oh-my-pi/pi-ai/auth-broker/types";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { initializeWithSettings } from "./discovery";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
@@ -116,15 +120,7 @@ import {
 } from "./secrets";
 import { AgentSession } from "./session/agent-session";
 import { resolveAuthBrokerConfig } from "./session/auth-broker-config";
-import {
-	AuthBrokerClient,
-	AuthStorage,
-	DEFAULT_SNAPSHOT_CACHE_TTL_MS,
-	RemoteAuthCredentialStore,
-	readAuthBrokerSnapshotCache,
-	type SnapshotResponse,
-	writeAuthBrokerSnapshotCache,
-} from "./session/auth-storage";
+import { AuthStorage } from "./session/auth-storage";
 import {
 	type CustomMessage,
 	convertToLlm,
