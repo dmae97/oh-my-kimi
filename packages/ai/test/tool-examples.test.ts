@@ -50,9 +50,7 @@ describe("renderToolExamples", () => {
 		};
 
 		const rendered = renderToolExamples(tool, "pi");
-		expect(rendered).toContain("<call:find>");
-		expect(rendered).toContain("<paths>");
-		expect(rendered).toContain("src/**/*.ts");
+		expect(rendered).toContain('§find paths=["src/**/*.ts"]');
 	});
 
 	it("renders call example in hermes format", () => {

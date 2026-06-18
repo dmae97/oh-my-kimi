@@ -108,15 +108,9 @@ function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	}
 }
 
-function showCollabLink(
-	ctx: InteractiveModeContext,
-	host: CollabHost,
-	heading: string,
-	view = false,
-	options?: { forceQr?: boolean },
-): void {
+function showCollabLink(ctx: InteractiveModeContext, host: CollabHost, heading: string, view = false): void {
 	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
-	if (options?.forceQr) showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
+	showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
 }
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -598,13 +592,11 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "collab",
 		description: "Share this session live via a relay",
-		inlineHint: "[start|view|stop|status|qrcode|qrcode-view] [relayUrl]",
+		inlineHint: "[start|view|stop|status] [relayUrl]",
 		subcommands: [
 			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
 			{ name: "status", description: "Show link + participants" },
 			{ name: "stop", description: "Stop sharing" },
-			{ name: "qrcode", description: "Print a QR code for a full-control browser link" },
-			{ name: "qrcode-view", description: "Print a QR code for a read-only browser link" },
 		],
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
@@ -642,23 +634,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showError("Already in a collab session as a guest (/leave first)");
 				return;
 			}
-			const knownStartVerb =
-				verb === "start" || verb === "view" || verb === "qrcode" || verb === "qrcode-view" || verb === "qr-view";
-			const view = verb === "view" || verb === "qrcode-view" || verb === "qr-view";
-			const forceQr = verb === "qrcode" || verb === "qrcode-view" || verb === "qr-view";
+			const knownStartVerb = verb === "start" || verb === "view";
+			const view = verb === "view";
 			if (ctx.collabHost) {
 				showCollabLink(
 					ctx,
 					ctx.collabHost,
-					forceQr
-						? view
-							? "Read-only collab QR code"
-							: "Collab QR code"
-						: view
-							? "Read-only collab link"
-							: "Collab session active",
+					view ? "Read-only collab session active" : "Collab session active",
 					view,
-					{ forceQr },
 				);
 				return;
 			}
@@ -681,7 +664,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			ctx.collabHost = host;
-			showCollabLink(ctx, host, "Collab session started!", view, { forceQr });
+			showCollabLink(ctx, host, "Collab session started!", view);
 		},
 	},
 	{

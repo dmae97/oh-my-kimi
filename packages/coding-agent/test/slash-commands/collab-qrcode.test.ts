@@ -78,12 +78,12 @@ function mockStartedHostLinks() {
 	});
 }
 
-describe("/collab qrcode slash command", () => {
+describe("/collab slash command QR code rendering", () => {
 	it("starts hosting and prints a one-shot full-control QR", async () => {
 		const startSpy = mockStartedHostLinks();
 		const harness = createRuntimeHarness();
 
-		const handled = await executeBuiltinSlashCommand("/collab qrcode", harness.runtime);
+		const handled = await executeBuiltinSlashCommand("/collab", harness.runtime);
 
 		expect(handled).toBe(true);
 		expect(harness.setText).toHaveBeenCalledWith("");
@@ -103,7 +103,7 @@ describe("/collab qrcode slash command", () => {
 		const startSpy = mockStartedHostLinks();
 		const harness = createRuntimeHarness();
 
-		const handled = await executeBuiltinSlashCommand("/collab qrcode-view", harness.runtime);
+		const handled = await executeBuiltinSlashCommand("/collab view", harness.runtime);
 
 		expect(handled).toBe(true);
 		expect(startSpy).toHaveBeenCalledWith("wss://relay.example.com", "");
@@ -121,7 +121,7 @@ describe("/collab qrcode slash command", () => {
 	it("prints the active full-control browser QR when hosting", async () => {
 		const harness = createRuntimeHarness({ collabHost: fakeHost() });
 
-		const handled = await executeBuiltinSlashCommand("/collab qrcode", harness.runtime);
+		const handled = await executeBuiltinSlashCommand("/collab", harness.runtime);
 
 		expect(handled).toBe(true);
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
@@ -138,7 +138,7 @@ describe("/collab qrcode slash command", () => {
 		const webViewLink = "https://my.omp.sh/#read-only";
 		const harness = createRuntimeHarness({ collabHost: fakeHost({ webLink, webViewLink }) });
 
-		const handled = await executeBuiltinSlashCommand("/collab qrcode-view", harness.runtime);
+		const handled = await executeBuiltinSlashCommand("/collab view", harness.runtime);
 
 		expect(handled).toBe(true);
 		const statusText = harness.showStatus.mock.calls[0]?.[0] as string;
@@ -150,18 +150,5 @@ describe("/collab qrcode slash command", () => {
 		const component = presented[1] as CollabQrCodeComponent;
 		expect(component.url).toBe(webViewLink);
 		expect(component.render(10).join("\n")).toContain("QR code hidden");
-	});
-
-	it("accepts qr-view as an alias for qrcode-view", async () => {
-		const webLink = "https://my.omp.sh/#full-control";
-		const webViewLink = "https://my.omp.sh/#read-only";
-		const harness = createRuntimeHarness({ collabHost: fakeHost({ webLink, webViewLink }) });
-
-		const handled = await executeBuiltinSlashCommand("/collab qr-view", harness.runtime);
-
-		expect(handled).toBe(true);
-		const presented = harness.present.mock.calls[0]?.[0] as readonly unknown[];
-		expect(presented[1]).toBeInstanceOf(CollabQrCodeComponent);
-		expect((presented[1] as CollabQrCodeComponent).url).toBe(webViewLink);
 	});
 });

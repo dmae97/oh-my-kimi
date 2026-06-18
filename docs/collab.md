@@ -20,7 +20,7 @@ Collab session started!
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
-Run `/collab qrcode` to start or re-print hosting with a QR code for the full-control browser link; use `/collab qrcode-view` for a read-only QR code (`/collab qr-view` is a short alias).
+Running `/collab` or `/collab view` starts or displays the active hosting session, rendering both the terminal/browser join links and their corresponding QR codes.
 
 ```
 /join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
@@ -32,11 +32,9 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 | Command | Effect |
 |---|---|
-| `/collab` | Start sharing (or re-print the link when already hosting) |
+| `/collab` | Start sharing full-control (or re-print the link/QR when already hosting) |
 | `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
-| `/collab view` | Print a read-only (view-only) link (starts sharing first if needed) |
-| `/collab qrcode` | Print a QR code for a full-control browser link (starts sharing first if needed) |
-| `/collab qrcode-view` | Print a QR code for a read-only browser link (starts sharing first if needed); `/collab qr-view` is an alias |
+| `/collab view` | Start sharing read-only (or re-print the link/QR when already hosting) |
 | `/collab status` | Show link + participants |
 | `/collab stop` | Stop sharing |
 | `/join <link>` | Join a shared session as a guest |

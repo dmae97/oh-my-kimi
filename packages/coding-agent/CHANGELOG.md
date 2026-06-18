@@ -5,7 +5,7 @@
 ### Added
 
 - Updated the `pi` option of the `tools.format` setting to use the new compact sigil-delimited owned tool-calling dialect (`§`/`«…»`/`¤`/`‡‡`) that uses ~46% fewer tokens than the legacy format on typical calls.
-- Added `/collab qrcode` and `/collab qrcode-view` one-shot terminal QR output for browser join links and a `collab.webUrl` setting for separately hosted collab web clients.
+- Integrated terminal QR codes directly into `/collab` and `/collab view` to display both deep links and scannable codes, and added a `collab.webUrl` setting for separately hosted collab web clients.
 
 ### Changed
 
