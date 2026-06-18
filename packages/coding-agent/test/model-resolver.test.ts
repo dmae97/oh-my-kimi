@@ -11,6 +11,7 @@ import {
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAgentModelPatterns,
+	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelFromString,
 	resolveModelOverride,
@@ -215,6 +216,21 @@ const codexCanonicalRegistry: CanonicalModelRegistry = {
 	},
 	getCanonicalId: (model: Model<Api>) => (model.id === "gpt-5.5" ? "gpt-5.5" : undefined),
 };
+
+function createBedrockDefaultModel(): Model<"bedrock-converse-stream"> {
+	return buildModel({
+		id: "us.anthropic.claude-opus-4-8",
+		name: "Claude Opus 4.8 (US)",
+		api: "bedrock-converse-stream",
+		provider: "amazon-bedrock",
+		baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+	});
+}
 
 function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
 	return buildModel({
@@ -884,18 +900,7 @@ describe("resolveCliModel", () => {
 	});
 
 	test("accepts Bedrock inference profile ARNs and preserves thinking suffixes", () => {
-		const defaultBedrockModel = buildModel({
-			id: "us.anthropic.claude-opus-4-8",
-			name: "Claude Opus 4.8 (US)",
-			api: "bedrock-converse-stream",
-			provider: "amazon-bedrock",
-			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-			contextWindow: 1000000,
-			maxTokens: 128000,
-		});
+		const defaultBedrockModel = createBedrockDefaultModel();
 		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
 
 		const baseResult = resolveCliModel({
@@ -1311,6 +1316,36 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result).toHaveLength(2);
 	});
 
+	test("keeps synthetic Bedrock inference profile matches", () => {
+		const bedrockModels = [createBedrockDefaultModel()];
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+
+		const result = filterAvailableModelsByEnabledPatterns(bedrockModels, [`amazon-bedrock/${profileArn}`], registry);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("amazon-bedrock");
+		expect(result[0].id).toBe(profileArn);
+		expect(result[0].reasoning).toBe(false);
+	});
+
+	test("resolveAllowedModels keeps synthetic Bedrock inference profile matches", async () => {
+		const bedrockModels = [createBedrockDefaultModel()];
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+		const settings = Settings.isolated({ enabledModels: [profileArn] });
+
+		const result = await resolveAllowedModels(
+			{
+				getAvailable: () => bedrockModels,
+				getCanonicalVariants: registry.getCanonicalVariants,
+			},
+			settings,
+		);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("amazon-bedrock");
+		expect(result[0].id).toBe(profileArn);
+		expect(result[0].reasoning).toBe(false);
+	});
 	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", () => {
 		const result = filterAvailableModelsByEnabledPatterns(openaiGpt55Models, ["openai/gpt-5.5"], registry);
 		expect(result).toHaveLength(1);
