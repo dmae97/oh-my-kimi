@@ -2185,7 +2185,7 @@ export class AuthStorage {
 	recordUsageCost(
 		provider: Provider,
 		costUsd: number,
-		options?: { sessionId?: string; recordedAt?: number },
+		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
 	): boolean {
 		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
 		const record = this.#store.recordUsageCosts;
@@ -2200,6 +2200,13 @@ export class AuthStorage {
 		};
 		try {
 			record.call(this.#store, [entry]);
+			const cacheKey = this.#buildUsageReportCacheKey({
+				provider,
+				credential,
+				baseUrl: options?.baseUrl,
+			});
+			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
 			return true;
 		} catch (error) {
 			this.#usageLogger?.debug("usage cost record failed", {

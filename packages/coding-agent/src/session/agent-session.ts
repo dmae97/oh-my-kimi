@@ -2503,6 +2503,7 @@ export class AgentSession {
 					this.#modelRegistry.authStorage.recordUsageCost(assistantMsg.provider, assistantMsg.usage.cost.total, {
 						sessionId: this.#activeProviderSessionId(),
 						recordedAt: assistantMsg.timestamp,
+						baseUrl: this.#modelRegistry.getProviderBaseUrl?.(assistantMsg.provider),
 					});
 				}
 			}
