@@ -1,8 +1,16 @@
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
-import { Input, matchesKey, type SgrMouseEvent, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	type Focusable,
+	Input,
+	matchesKey,
+	type SgrMouseEvent,
+	wrapTextWithAnsi,
+} from "@oh-my-pi/pi-tui";
 import { getAgentDbPath } from "@oh-my-pi/pi-utils";
+import { copyToClipboard } from "../../../utils/clipboard";
 import { OAuthSelectorComponent } from "../../components/oauth-selector";
 import { theme } from "../../theme/theme";
 import type { SetupSceneHost, SetupTab } from "./types";
@@ -11,10 +19,52 @@ function loginUrlLink(url: string): string {
 	return `\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`;
 }
 
+function loginCopyHint(): string {
+	return theme.fg("dim", "(clipboard copy attempted; Alt+C retries)");
+}
+
+class CopyablePromptInput implements Component, Focusable {
+	#input: Input;
+	#onCopy: () => void;
+
+	constructor(input: Input, onCopy: () => void) {
+		this.#input = input;
+		this.#onCopy = onCopy;
+	}
+
+	get focused(): boolean {
+		return this.#input.focused;
+	}
+
+	set focused(value: boolean) {
+		this.#input.focused = value;
+	}
+
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		this.#input.setUseTerminalCursor(useTerminalCursor);
+	}
+
+	render(width: number): readonly string[] {
+		return this.#input.render(width);
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "alt+c")) {
+			this.#onCopy();
+			return;
+		}
+		this.#input.handleInput(data);
+	}
+
+	invalidate(): void {
+		this.#input.invalidate();
+	}
+}
+
 interface PromptState {
 	message: string;
 	placeholder?: string;
-	input: Input;
+	input: CopyablePromptInput;
 }
 
 /**
@@ -62,6 +112,10 @@ export class SignInTab implements SetupTab {
 
 	handleInput(data: string): void {
 		if (this.#loggingInProvider) {
+			if (this.#authUrl && (matchesKey(data, "alt+c") || (data === "c" && !this.#prompt))) {
+				void this.#copyAuthUrl();
+				return;
+			}
 			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 				this.#loginAbort?.abort();
 			}
@@ -88,7 +142,10 @@ export class SignInTab implements SetupTab {
 
 		const urlLines = this.#authUrl ? wrapTextWithAnsi(theme.fg("dim", this.#authUrl), width) : [];
 		if (this.#authUrl) {
-			lines.push(theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)}`), ...urlLines.slice(0, 2));
+			lines.push(
+				theme.fg("accent", `Browser login: ${loginUrlLink(this.#authUrl)} ${loginCopyHint()}`),
+				...urlLines.slice(0, 2),
+			);
 		}
 		if (this.#prompt) {
 			lines.push(theme.fg("warning", this.#prompt.message));
@@ -140,6 +197,7 @@ export class SignInTab implements SetupTab {
 					if (useManualInput) {
 						this.#statusLines.push(theme.fg("dim", "Paste the returned code or redirect URL when prompted."));
 					}
+					void this.#copyAuthUrl();
 					this.host.ctx.openInBrowser(info.url);
 					this.host.requestRender();
 				},
@@ -184,12 +242,26 @@ export class SignInTab implements SetupTab {
 		}
 	}
 
+	async #copyAuthUrl(): Promise<void> {
+		const url = this.#authUrl;
+		if (!url) return;
+		try {
+			await copyToClipboard(url);
+		} catch {
+			// Clipboard integration is best-effort; the full URL remains rendered below.
+		}
+		this.host.requestRender();
+	}
+
 	#showPrompt(prompt: { message: string; placeholder?: string }): Promise<string> {
 		this.#resolvePrompt("");
 		const input = new Input();
+		const focusInput = new CopyablePromptInput(input, () => {
+			void this.#copyAuthUrl();
+		});
 		const pending = Promise.withResolvers<string>();
 		this.#promptResolve = pending.resolve;
-		this.#prompt = { message: prompt.message, placeholder: prompt.placeholder, input };
+		this.#prompt = { message: prompt.message, placeholder: prompt.placeholder, input: focusInput };
 		input.onSubmit = value => {
 			this.#resolvePrompt(value);
 		};
@@ -197,7 +269,7 @@ export class SignInTab implements SetupTab {
 			this.#loginAbort?.abort();
 			this.#resolvePrompt("");
 		};
-		this.host.setFocus(input);
+		this.host.setFocus(focusInput);
 		this.host.requestRender();
 		return pending.promise;
 	}

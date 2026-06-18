@@ -41,6 +41,10 @@
 
 - Secured PDF image reads by validating requested image members against the extracted member list before opening files and refusing traversal-style names
 
+### Fixed
+
+- Fixed provider setup sign-in URLs to attempt clipboard/OSC 52 copy and expose an Alt+C retry shortcut, so authentication is not blocked when TUI selection is unavailable ([#2908](https://github.com/can1357/oh-my-pi/issues/2908)).
+
 ## [16.0.5] - 2026-06-17
 
 ### Added
