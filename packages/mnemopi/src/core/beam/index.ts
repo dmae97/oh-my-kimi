@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { ftsWeight, importanceWeight, maxEpisodeChars, vectorWeight } from "../../config";
+import { ftsWeight, importanceWeight, maxEpisodeChars, proactiveLinkingEnabled, vectorWeight } from "../../config";
 import { closeQuietly, openDatabase } from "../../db";
 import { AnnotationStore } from "../annotations";
 import { EpisodicGraph } from "../episodic-graph";
@@ -69,11 +69,22 @@ const DEFAULT_CONFIG: BeamConfig = {
 	useCloud: false,
 	localLlmEnabled: false,
 	maxEpisodeChars: 100_000,
+	proactiveLinking: false,
 };
+
+function envProactiveLinkingOverride(): boolean | undefined {
+	const value = process.env.MNEMOPI_PROACTIVE_LINKING;
+	return value === undefined ? undefined : value === "1";
+}
 
 function normalizeConfig(options: BeamMemoryOptions): BeamConfig {
 	const configured = options.config ?? {};
 	const useCloud = options.useCloud ?? configured.useCloud ?? DEFAULT_CONFIG.useCloud;
+	const proactiveLinking =
+		envProactiveLinkingOverride() ??
+		options.proactiveLinking ??
+		configured.proactiveLinking ??
+		proactiveLinkingEnabled();
 	return {
 		workingMemoryLimit: configured.workingMemoryLimit ?? DEFAULT_CONFIG.workingMemoryLimit,
 		workingMemoryTtlHours: configured.workingMemoryTtlHours ?? DEFAULT_CONFIG.workingMemoryTtlHours,
@@ -84,6 +95,7 @@ function normalizeConfig(options: BeamMemoryOptions): BeamConfig {
 		useCloud,
 		localLlmEnabled: configured.localLlmEnabled ?? DEFAULT_CONFIG.localLlmEnabled,
 		maxEpisodeChars: configured.maxEpisodeChars ?? maxEpisodeChars(),
+		proactiveLinking,
 	};
 }
 function autoMigrateAnnotations(db: Database, dbPath: string | undefined): void {

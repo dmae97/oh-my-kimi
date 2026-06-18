@@ -3,6 +3,7 @@ import "./setup";
 import { configureRecallFeatures } from "@oh-my-pi/pi-mnemopi/config";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
 import type { EpisodicGraph, RelatedMemory } from "@oh-my-pi/pi-mnemopi/core/episodic-graph";
+import { Mnemopi } from "@oh-my-pi/pi-mnemopi/core/memory";
 
 const previousProactive = process.env.MNEMOPI_PROACTIVE_LINKING;
 
@@ -58,6 +59,128 @@ describe("proactive memory linking", () => {
 			expect(edges.some(edge => edge.memoryId === first && edge.edgeType === "related_to")).toBe(true);
 		} finally {
 			beam.close();
+		}
+	});
+
+	it("keeps host configuration scoped to each BeamMemory instance", () => {
+		delete process.env.MNEMOPI_PROACTIVE_LINKING;
+		const enabled = new BeamMemory({
+			sessionId: "proactive-instance-on",
+			dbPath: ":memory:",
+			proactiveLinking: true,
+		});
+		configureRecallFeatures({ proactiveLinking: false });
+		const disabled = new BeamMemory({
+			sessionId: "proactive-instance-off",
+			dbPath: ":memory:",
+			proactiveLinking: false,
+		});
+		try {
+			const enabledFirst = enabled.remember("Alice set up the CI/CD pipeline for backend deployment", {
+				importance: 0.8,
+			});
+			const enabledSecond = enabled.remember("Alice configured the deployment pipeline for continuous integration", {
+				importance: 0.8,
+			});
+			const disabledFirst = disabled.remember("Alice set up the CI/CD pipeline for backend deployment", {
+				importance: 0.8,
+			});
+			const disabledSecond = disabled.remember(
+				"Alice configured the deployment pipeline for continuous integration",
+				{
+					importance: 0.8,
+				},
+			);
+
+			expect(linkedIds(graphOf(enabled).findRelatedMemories(enabledSecond, 1)).has(enabledFirst)).toBe(true);
+			expect(linkedIds(graphOf(disabled).findRelatedMemories(disabledSecond, 1)).has(disabledFirst)).toBe(false);
+		} finally {
+			enabled.close();
+			disabled.close();
+		}
+	});
+
+	it("keeps host configuration scoped to each Mnemopi instance", () => {
+		delete process.env.MNEMOPI_PROACTIVE_LINKING;
+		const enabled = new Mnemopi({
+			sessionId: "proactive-mnemopi-on",
+			dbPath: ":memory:",
+			proactiveLinking: true,
+		});
+		configureRecallFeatures({ proactiveLinking: false });
+		const disabled = new Mnemopi({
+			sessionId: "proactive-mnemopi-off",
+			dbPath: ":memory:",
+			proactiveLinking: false,
+		});
+		try {
+			const enabledFirst = enabled.remember("Database indexing improves query performance significantly", {
+				importance: 0.8,
+			});
+			const enabledSecond = enabled.remember("Database indexing optimizes query performance and efficiency", {
+				importance: 0.8,
+			});
+			const disabledFirst = disabled.remember("Database indexing improves query performance significantly", {
+				importance: 0.8,
+			});
+			const disabledSecond = disabled.remember("Database indexing optimizes query performance and efficiency", {
+				importance: 0.8,
+			});
+
+			expect(linkedIds(graphOf(enabled.beam).findRelatedMemories(enabledSecond, 1)).has(enabledFirst)).toBe(true);
+			expect(linkedIds(graphOf(disabled.beam).findRelatedMemories(disabledSecond, 1)).has(disabledFirst)).toBe(
+				false,
+			);
+		} finally {
+			enabled.close();
+			disabled.close();
+		}
+	});
+
+	it("lets the environment variable override instance configuration", () => {
+		process.env.MNEMOPI_PROACTIVE_LINKING = "0";
+		const disabledByEnv = new BeamMemory({
+			sessionId: "proactive-env-off",
+			dbPath: ":memory:",
+			proactiveLinking: true,
+		});
+		try {
+			const disabledFirst = disabledByEnv.remember("Alice set up the CI/CD pipeline for backend deployment", {
+				importance: 0.8,
+			});
+			const disabledSecond = disabledByEnv.remember(
+				"Alice configured the deployment pipeline for continuous integration",
+				{
+					importance: 0.8,
+				},
+			);
+			process.env.MNEMOPI_PROACTIVE_LINKING = "1";
+			const enabledByEnv = new BeamMemory({
+				sessionId: "proactive-env-on",
+				dbPath: ":memory:",
+				proactiveLinking: false,
+			});
+			try {
+				const enabledFirst = enabledByEnv.remember("Alice set up the CI/CD pipeline for backend deployment", {
+					importance: 0.8,
+				});
+				const enabledSecond = enabledByEnv.remember(
+					"Alice configured the deployment pipeline for continuous integration",
+					{
+						importance: 0.8,
+					},
+				);
+
+				expect(linkedIds(graphOf(enabledByEnv).findRelatedMemories(enabledSecond, 1)).has(enabledFirst)).toBe(true);
+			} finally {
+				enabledByEnv.close();
+			}
+
+			expect(linkedIds(graphOf(disabledByEnv).findRelatedMemories(disabledSecond, 1)).has(disabledFirst)).toBe(
+				false,
+			);
+		} finally {
+			disabledByEnv.close();
 		}
 	});
 
