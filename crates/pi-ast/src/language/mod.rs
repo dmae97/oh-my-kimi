@@ -340,10 +340,10 @@ impl SupportLang {
 		use SupportLang::*;
 		&[
 			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, EmacsLisp,
-			Elixir, Erlang, Fortran, Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
-			Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python,
-			R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
-			TypeScript, Verilog, Vue, Xml, Yaml, Zig,
+			Elixir, Erlang, Fortran, Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json,
+			Just, Julia, Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell,
+			Proto, Python, R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml,
+			Tlaplus, Tsx, TypeScript, Verilog, Vue, Xml, Yaml, Zig,
 		]
 	}
 
@@ -568,7 +568,9 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		EmacsLisp => &["el"],
 		Elixir => &["ex", "exs"],
 		Erlang => &["erl", "hrl"],
-		Fortran => &["f", "F", "for", "f77", "F77", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08"],
+		Fortran => {
+			&["f", "F", "for", "f77", "F77", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08"]
+		},
 		Go => &["go"],
 		Graphql => &["graphql", "gql"],
 		Haskell => &["hs"],
