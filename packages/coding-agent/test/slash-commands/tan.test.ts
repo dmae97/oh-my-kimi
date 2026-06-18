@@ -5,12 +5,14 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 function createRuntime() {
 	const handleTanCommand = vi.fn(async () => {});
 	const setText = vi.fn();
+	const addToHistory = vi.fn();
 	return {
 		handleTanCommand,
 		setText,
+		addToHistory,
 		runtime: {
 			ctx: {
-				editor: { setText } as unknown as InteractiveModeContext["editor"],
+				editor: { setText, addToHistory } as unknown as InteractiveModeContext["editor"],
 				handleTanCommand,
 			} as unknown as InteractiveModeContext,
 		},
@@ -24,6 +26,7 @@ describe("/tan slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/tan add a changelog note", harness.runtime);
 
 		expect(handled).toBe(true);
+		expect(harness.addToHistory).toHaveBeenCalledWith("/tan add a changelog note");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleTanCommand).toHaveBeenCalledWith("add a changelog note");
 	});
@@ -37,6 +40,18 @@ describe("/tan slash command", () => {
 		);
 
 		expect(handled).toBe(true);
+		expect(harness.addToHistory).toHaveBeenCalledWith("/tan    investigate why prompt cache reuse matters here");
 		expect(harness.handleTanCommand).toHaveBeenCalledWith("investigate why prompt cache reuse matters here");
+	});
+
+	it("does not add a blank /tan invocation to history", async () => {
+		const harness = createRuntime();
+
+		const handled = await executeBuiltinSlashCommand("/tan   ", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.addToHistory).not.toHaveBeenCalled();
+		expect(harness.setText).toHaveBeenCalledWith("");
+		expect(harness.handleTanCommand).toHaveBeenCalledWith("");
 	});
 });
