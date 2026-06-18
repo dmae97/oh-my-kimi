@@ -41,7 +41,7 @@ function installMuPdfWasmLogger(): void {
 installMuPdfWasmLogger();
 
 let markit: () => Markit | Promise<Markit> = async () => {
-	// Lazy: keep the document engine (mammoth/fflate/mupdf) off the startup
+	// Lazy: keep the document engine (mammoth/mupdf) off the startup
 	// import graph — it loads only when a document is first converted.
 	const promise = import("../markit").then(({ Markit }) => {
 		const instance = new Markit();

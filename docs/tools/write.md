@@ -59,7 +59,7 @@ Single-shot result.
 4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/utils/zip.ts`, checks candidate archive files on disk (longest match first), and falls back to the shortest candidate archive path even when the archive file does not exist yet.
 5. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
    - The parent directory of the archive file is created with `fs.mkdir(..., { recursive: true })`.
-   - `.zip` archives are read with `fflate.unzipSync()`, the target entry is replaced in an in-memory map, and the archive is rewritten with `fflate.zipSync()` + `Bun.write()`.
+   - `.zip` archives are read with `unzip()`, the target entry is replaced in an in-memory map, and the archive is reframed with `zip()` + `Bun.write()` (both from `packages/coding-agent/src/utils/zip.ts`, over `node:zlib`).
    - `.tar`, `.tar.gz`, and `.tgz` archives are read with `Bun.Archive`, existing entries are copied into an object map, the target entry is replaced, and `Bun.Archive.write()` rewrites the archive.
    - `invalidateFsScanAfterWrite()` runs on the archive file path.
 6. If the path is not treated as an archive, `execute()` calls `#resolveSqliteWritePath()`. That uses `parseSqlitePathCandidates()` and `isSqliteFile()` from `packages/coding-agent/src/tools/sqlite-reader.ts`. Existing non-SQLite files suppress the SQLite path interpretation.
@@ -147,7 +147,7 @@ content: ""
   - May chmod a shebang file executable after a successful plain-file write.
 - Subprocesses / native bindings
   - Uses Bun SQLite bindings via `bun:sqlite`.
-  - Uses Bun archive APIs and lazily imports `fflate` for ZIP reads/writes.
+  - Uses `Bun.Archive` for tar; ZIP read/write is framed in `packages/coding-agent/src/utils/zip.ts` over the `node:zlib` DEFLATE codec.
   - May talk to configured LSP servers through `packages/coding-agent/src/lsp/index.ts`.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Invalidates shared filesystem scan cache entries through `invalidateFsScanAfterWrite()`.

@@ -1026,7 +1026,7 @@ let specialHandlersPromise: Promise<SpecialHandler[]> | undefined;
  * requires a special handler, so we keep them out of the cold-startup graph.
  */
 function loadSpecialHandlers(): Promise<SpecialHandler[]> {
-	specialHandlersPromise ??= import("../web/scrapers").then((m) => m.specialHandlers);
+	specialHandlersPromise ??= import("../web/scrapers").then(m => m.specialHandlers);
 	return specialHandlersPromise;
 }
 

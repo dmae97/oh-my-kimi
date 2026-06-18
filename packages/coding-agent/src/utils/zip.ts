@@ -1001,10 +1001,7 @@ export function zip(entries: Unzipped): Uint8Array {
 	return out;
 }
 
-function readZip64CentralDirectoryInfoSync(
-	bytes: Uint8Array,
-	eocdOffset: number,
-): ZipCentralDirectoryInfo | undefined {
+function readZip64CentralDirectoryInfoSync(bytes: Uint8Array, eocdOffset: number): ZipCentralDirectoryInfo | undefined {
 	const locatorOffset = eocdOffset - ZIP64_EOCD_LOCATOR_LENGTH;
 	if (locatorOffset < 0) return undefined;
 

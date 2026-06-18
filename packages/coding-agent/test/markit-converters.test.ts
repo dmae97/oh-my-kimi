@@ -4,8 +4,8 @@
  * shared zip util (src/utils/zip) — no external fixtures — and converted through
  * the public wrapper (src/utils/markit), locking: docx text, xlsx tables, pptx
  * slides, epub metadata+spine, shared HTML-table normalization, image
- * extraction, the nested/relative zip path resolution (the JSZip→fflate
- * regression surface), and the unsupported-format error contract.
+ * extraction, the nested/relative zip path resolution regression surface, and
+ * the unsupported-format error contract.
  */
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";

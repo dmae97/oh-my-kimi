@@ -123,7 +123,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - Syntax: `archive.ext`, `archive.ext:path/inside`, `archive.ext:path/inside:50-60`.
 - `openArchive()` branches by format:
   - tar/tgz reads the whole archive into memory (capped at `MAX_TAR_ARCHIVE_BYTES = 256 MiB`) and indexes it with `new Bun.Archive(bytes)`
-  - zip is indexed via ranged central-directory reads (`readZipEntries()`); entries are inflated on demand with `fflate.inflateSync()`, with declared member sizes capped at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB`
+  - zip is indexed via ranged central-directory reads (`readZipEntries()`); entries are inflated on demand with raw DEFLATE (`node:zlib`), with declared member sizes capped at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB`
 - Archive paths normalize `/`, drop `.` segments, and reject `..`.
 - Directory reads list immediate children; files show `name` plus ` (size)` when size > 0.
 - Directory listing default limit is `500` entries in `#readArchiveDirectory()`.
@@ -242,7 +242,7 @@ Notes: ...
   - URL mode performs HTTP fetches, binary refetches, and alternate-endpoint probes.
 - Subprocesses / native bindings
   - Uses Bun SQLite for `.db`/`.sqlite*`.
-  - Uses `Bun.Archive` for tar/tgz and `fflate` for zip.
+  - Uses `Bun.Archive` for tar/tgz; ZIP is framed in `packages/coding-agent/src/utils/zip.ts` over the `node:zlib` DEFLATE codec.
   - URL HTML rendering can delegate into site handlers and HTML-to-text backends from `packages/coding-agent/src/tools/fetch.ts`.
 - Session state
   - Records whole-file snapshots of local text reads into `session.fileSnapshotStore` for later stale-anchor recovery.
