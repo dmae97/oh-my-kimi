@@ -2309,7 +2309,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Branchless mark+clear when !compactBeforeExecute: mark is gated; clear
 		// is unconditional and idempotent.
 		if (options.compactBeforeExecute) {
-			this.session.markPlanCompactAbortPending();
+			this.session.markPlanInternalAbortPending();
 		}
 		let compactOutcome: CompactionOutcome | undefined;
 		try {
@@ -2355,7 +2355,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// (i.e., the !compactBeforeExecute branch), and a no-op when the flag
 			// was already consumed by AgentSession.#handleAgentEvent's aborted
 			// message_end stamping. Guarantees the flag is dead at every exit.
-			this.session.clearPlanCompactAbortPending();
+			this.session.clearPlanInternalAbortPending();
 		}
 
 		// Tool restoration runs on every path — the plan mode tools must be
@@ -2421,9 +2421,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		// in-flight turn first — abort() bumps the prompt generation and cancels pending
 		// continuations, so nothing re-streams in the synchronous gap before prompt().
 		if (this.session.isStreaming) {
-			await this.session.abort();
+			await this.#abortPlanApprovalTurnSilently();
 		}
 		await this.session.prompt(planModePrompt, { synthetic: true });
+	}
+	async #abortPlanApprovalTurnSilently(): Promise<void> {
+		this.session.markPlanInternalAbortPending();
+		try {
+			await this.session.abort();
+		} finally {
+			this.session.clearPlanInternalAbortPending();
+		}
 	}
 
 	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
@@ -2807,7 +2815,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// plan) while the popup is showing. The event listener fires asynchronously
 		// (agent's #emit is fire-and-forget), so without this the model sees
 		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
-		await this.session.abort();
+		// This abort is an internal UI transition, not operator cancellation.
+		await this.#abortPlanApprovalTurnSilently();
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
@@ -2912,11 +2921,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (choice === "Refine plan") {
-			// Section annotations entered in the overlay become a refinement prompt
-			// re-submitted to the model. With no annotations, fall back to today's
-			// behavior: close the overlay and let the operator type their own.
-			if (feedback.trim() && this.onInputCallback) {
-				this.onInputCallback(this.startPendingSubmission({ text: feedback }));
+			const refinement = feedback.trim();
+			try {
+				if (refinement) {
+					if (this.onInputCallback) {
+						this.onInputCallback(this.startPendingSubmission({ text: feedback }));
+					} else {
+						await this.session.prompt(feedback);
+					}
+				} else {
+					this.showStatus("Refine plan: enter a follow-up prompt.");
+				}
+			} catch (error) {
+				this.showError(`Failed to refine plan: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
