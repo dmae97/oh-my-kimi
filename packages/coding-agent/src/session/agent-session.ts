@@ -116,6 +116,7 @@ import {
 	prompt,
 	relativePathWithinRoot,
 	Snowflake,
+	withTimeout,
 } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import {
@@ -4058,9 +4059,21 @@ export class AgentSession {
 		// of dispose. Only owning (top-level) sessions provide this callback;
 		// subagents reuse a parent's manager and must not tear it down. Idempotent
 		// with the deferred-discovery disconnect in `createAgentSession`.
+		//
+		// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
+		// termination DELETE blocks up to the MCP request timeout (30s default,
+		// unbounded when OMP_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
+		// unbounded would stall /exit and print-mode shutdown on a broken remote
+		// endpoint. Race it against a short deadline — stdio close (the subprocess
+		// reap this targets) completes well within the bound; a slow transport
+		// close is left to finish detached. Mirrors the bounded async-job teardown.
 		if (this.#disconnectOwnedMcpManager) {
 			try {
-				await this.#disconnectOwnedMcpManager();
+				await withTimeout(
+					this.#disconnectOwnedMcpManager(),
+					3_000,
+					"Timed out disconnecting owned MCP manager during dispose",
+				);
 			} catch (error) {
 				logger.warn("Failed to disconnect owned MCP manager during dispose", { error: String(error) });
 			}
