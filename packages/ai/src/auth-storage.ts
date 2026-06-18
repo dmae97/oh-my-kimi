@@ -1541,6 +1541,17 @@ export class AuthStorage {
 		return rows;
 	}
 
+	async #upsertOAuthCredential(provider: string, credential: OAuthCredential): Promise<void> {
+		const stored = this.#store.upsertAuthCredentialRemote
+			? await this.#store.upsertAuthCredentialRemote(provider, credential)
+			: this.#store.upsertAuthCredentialForProvider(provider, credential);
+		this.#setStoredCredentials(
+			provider,
+			stored.map(entry => ({ id: entry.id, credential: entry.credential })),
+		);
+		this.#resetProviderAssignments(provider);
+	}
+
 	/**
 	 * Remove credential for a provider.
 	 */
@@ -1778,10 +1789,10 @@ export class AuthStorage {
 			return;
 		}
 		const newCredential: OAuthCredential = { type: "oauth", ...result };
-		// Use set() instead of #upsertOAuthCredential to replace ALL existing credentials
-		// (including legacy api_key rows from older versions) with the new OAuth credential.
-		// This ensures getApiKey() doesn't match an old api_key row before the new OAuth row.
-		await this.set(def.storeCredentialsAs ?? provider, newCredential);
+		// Use #upsertOAuthCredential to upsert the new credential.
+		// Any legacy api_key rows from older versions will be cleaned up so they do not
+		// shadow the new OAuth row, while preserving other active OAuth credentials.
+		await this.#upsertOAuthCredential(def.storeCredentialsAs ?? provider, newCredential);
 	}
 
 	/**
@@ -4812,6 +4823,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				credential: deserializeCredential(row),
 				identityKey: resolveRowCredentialIdentityKey(providerName, row),
 			}));
+
+			if (item.type === "oauth") {
+				for (const row of existing) {
+					if (row.credential && row.credential.type === "api_key") {
+						this.#deleteStmt.run("replaced by oauth login", row.id);
+					}
+				}
+			}
 
 			let targetId: number | null = null;
 			for (const row of existing) {
