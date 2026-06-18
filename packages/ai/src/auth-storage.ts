@@ -1352,6 +1352,19 @@ export class AuthStorage {
 		const sessionMap = this.#sessionLastCredential.get(provider) ?? new Map();
 		sessionMap.set(sessionId, { type, index });
 		this.#sessionLastCredential.set(provider, sessionMap);
+
+		try {
+			const credentialId = this.#getStoredCredentials(provider)[index]?.id;
+			if (credentialId !== undefined) {
+				const cacheKey = `session:sticky:${provider}:${sessionId}`;
+				const cacheValue = JSON.stringify({ type, index, credentialId });
+				// Expires in 30 days
+				const expiresAtSec = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+				this.#store.setCache(cacheKey, cacheValue, expiresAtSec);
+			}
+		} catch (err) {
+			logger.debug("Failed to write session sticky credential to persistent store cache", { err });
+		}
 	}
 
 	/** Retrieves the last credential used by a session. */
@@ -1360,17 +1373,59 @@ export class AuthStorage {
 		sessionId: string | undefined,
 	): { type: AuthCredential["type"]; index: number } | undefined {
 		if (!sessionId) return undefined;
-		return this.#sessionLastCredential.get(provider)?.get(sessionId);
+		let sessionMap = this.#sessionLastCredential.get(provider);
+		if (sessionMap?.has(sessionId)) {
+			return sessionMap.get(sessionId);
+		}
+		try {
+			const cacheKey = `session:sticky:${provider}:${sessionId}`;
+			const raw = this.#store.getCache(cacheKey);
+			if (raw) {
+				const val = JSON.parse(raw) as { type: AuthCredential["type"]; index: number; credentialId?: number };
+				
+				if (val.credentialId !== undefined) {
+					const stored = this.#getStoredCredentials(provider);
+					const actualIndex = stored.findIndex(entry => entry.id === val.credentialId);
+					if (actualIndex === -1 || stored[actualIndex]?.credential.type !== val.type) {
+						this.#store.setCache(cacheKey, "", 0);
+						return undefined;
+					}
+					val.index = actualIndex;
+				} else {
+					// Fallback: drop unsafe index-only cache rows to prevent wrong-account routing
+					this.#store.setCache(cacheKey, "", 0);
+					return undefined;
+				}
+
+				if (!sessionMap) {
+					sessionMap = new Map();
+					this.#sessionLastCredential.set(provider, sessionMap);
+				}
+				const sessionVal = { type: val.type, index: val.index };
+				sessionMap.set(sessionId, sessionVal);
+				return sessionVal;
+			}
+		} catch (err) {
+			logger.debug("Failed to read session sticky credential from persistent store cache", { err });
+		}
+		return undefined;
 	}
 
 	/** Clears the last credential used by a session for a provider. */
 	#clearSessionCredential(provider: string, sessionId: string | undefined): void {
 		if (!sessionId) return;
 		const sessionMap = this.#sessionLastCredential.get(provider);
-		if (!sessionMap) return;
-		sessionMap.delete(sessionId);
-		if (sessionMap.size === 0) {
-			this.#sessionLastCredential.delete(provider);
+		if (sessionMap) {
+			sessionMap.delete(sessionId);
+			if (sessionMap.size === 0) {
+				this.#sessionLastCredential.delete(provider);
+			}
+		}
+		try {
+			const cacheKey = `session:sticky:${provider}:${sessionId}`;
+			this.#store.setCache(cacheKey, "", 0);
+		} catch (err) {
+			logger.debug("Failed to clear session sticky credential from persistent store cache", { err });
 		}
 	}
 

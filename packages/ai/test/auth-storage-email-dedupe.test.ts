@@ -742,3 +742,66 @@ describe("AuthStorage OAuth login upgrade and multi-account coexistence", () => 
 		}
 	});
 });
+
+describe("AuthStorage persistent session stickiness", () => {
+	let tempDir = "";
+	let dbPath = "";
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-auth-test-"));
+		dbPath = path.join(tempDir, "auth.db");
+	});
+
+	afterEach(async () => {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("persists session-sticky credentials across AuthStorage restarts", async () => {
+		// 1. Initialize AuthStorage and log in two accounts
+		let authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(dbPath)));
+
+		try {
+			const credential1: OAuthCredential = {
+				type: "oauth",
+				refresh: "refresh-token-1",
+				access: "access-token-1",
+				expires: Date.now() + 3600_000,
+				projectId: "project-1",
+				email: "user-1@example.com",
+			};
+			const credential2: OAuthCredential = {
+				type: "oauth",
+				refresh: "refresh-token-2",
+				access: "access-token-2",
+				expires: Date.now() + 3600_000,
+				projectId: "project-2",
+				email: "user-2@example.com",
+			};
+			await authStorage.set("unit-session-stickiness", [credential1, credential2]);
+
+			// 2. Resolve initial key for session-1
+			const key1 = await authStorage.getApiKey("unit-session-stickiness", "session-1");
+			expect(key1).toBe("access-token-2");
+
+			// 3. Rotate session-1's sticky credential to the sibling
+			await authStorage.rotateSessionCredential("unit-session-stickiness", "session-1");
+			const key2 = await authStorage.getApiKey("unit-session-stickiness", "session-1");
+			expect(key2).toBe("access-token-1");
+
+			// 4. Close AuthStorage to simulate process restart
+			authStorage.close();
+
+			// 5. Re-instantiate AuthStorage using the same DB
+			authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(dbPath)));
+			await authStorage.reload();
+
+			// 6. Retrieve the sticky key again for session-1 (should still be access-token-1)
+			const key3 = await authStorage.getApiKey("unit-session-stickiness", "session-1");
+			expect(key3).toBe("access-token-1");
+
+			authStorage.close();
+		} finally {
+			// No-op
+		}
+	});
+});

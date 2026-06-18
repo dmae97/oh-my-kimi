@@ -27,6 +27,7 @@
 - Fixed OAuth login replacing all other active accounts for the same provider, allowing multiple OAuth accounts to coexist concurrently.
 - Fixed legacy `api_key` credentials not being replaced/disabled atomically upon upgrading to OAuth login.
 
+- Fixed a logic issue where AuthStorage lost session-to-credential stickiness upon CLI restarts, causing cold-starts for server-side prompt cache (KV cache) and wasting tokens.
 ## [16.0.6] - 2026-06-18
 
 ### Added
