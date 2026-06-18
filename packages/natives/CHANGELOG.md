@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Removed
+
+- Removed the `cache` option from `GrepOptions`
 
 ## [16.0.4] - 2026-06-17
 

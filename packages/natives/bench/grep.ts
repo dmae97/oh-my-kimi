@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { grep, GrepOutputMode } from "../native/index.js";
 
 const ITERATIONS = Number(Bun.env.GREP_BENCH_ITERATIONS ?? "50");
-const CONCURRENCY = 8;
+const CONCURRENCY = 2;
 
 const packages = path.resolve(import.meta.dir, "../..");
 
@@ -13,53 +13,38 @@ interface BenchCase {
 	pattern: string;
 	glob?: string;
 	mode?: GrepOutputMode;
-	cache?: boolean;
 	iterations?: number;
 	concurrency?: number;
 }
 
 const cases: BenchCase[] = [
-	{ name: "Medium content uncached (50 files)", path: path.resolve(packages, "tui/src"), pattern: "export", glob: "*.ts" },
+	{ name: "Medium content (50 files)", path: path.resolve(packages, "tui/src"), pattern: "export", glob: "*.ts" },
 	{
-		name: "Medium filesWithMatches uncached (50 files)",
+		name: "Medium filesWithMatches (50 files)",
 		path: path.resolve(packages, "tui/src"),
 		pattern: "export",
 		glob: "*.ts",
 		mode: GrepOutputMode.FilesWithMatches,
 	},
 	{
-		name: "Medium content cached (50 files)",
-		path: path.resolve(packages, "tui/src"),
-		pattern: "export",
-		glob: "*.ts",
-		cache: true,
-	},
-	{
-		name: "Large content uncached (200+ files)",
+		name: "Large content (200+ files)",
 		path: path.resolve(packages, "coding-agent/src"),
 		pattern: "import",
 		glob: "*.ts",
 	},
 	{
-		name: "Large filesWithMatches uncached (200+ files)",
+		name: "Large filesWithMatches (200+ files)",
 		path: path.resolve(packages, "coding-agent/src"),
 		pattern: "import",
 		glob: "*.ts",
 		mode: GrepOutputMode.FilesWithMatches,
 	},
 	{
-		name: "Large count uncached (200+ files)",
+		name: "Large count (200+ files)",
 		path: path.resolve(packages, "coding-agent/src"),
 		pattern: "import",
 		glob: "*.ts",
 		mode: GrepOutputMode.Count,
-	},
-	{
-		name: "Large content cached (200+ files)",
-		path: path.resolve(packages, "coding-agent/src"),
-		pattern: "import",
-		glob: "*.ts",
-		cache: true,
 	},
 ];
 
@@ -67,7 +52,7 @@ const cargoRegistry = path.join(Bun.env.HOME ?? "", ".cargo/registry/src");
 try {
 	if ((await fs.stat(cargoRegistry)).isDirectory()) {
 		cases.push({
-			name: "Cargo registry content uncached",
+			name: "Cargo registry content",
 			path: cargoRegistry,
 			pattern: "pub mod modal|pub mod dialog|pub mod drawer",
 			iterations: 1,
@@ -80,13 +65,13 @@ try {
 
 // Warm per-root state before timing so the benchmark measures steady-state search.
 for (const c of cases) {
-	await grep({ pattern: c.pattern, path: c.path, glob: c.glob, mode: c.mode, cache: c.cache, gitignore: false });
+	await grep({ pattern: c.pattern, path: c.path, glob: c.glob, mode: c.mode, gitignore: false });
 }
 
 console.log(`Benchmark: ${ITERATIONS} default iterations per case\n`);
 
 for (const c of cases) {
-	const grepArgs = { pattern: c.pattern, path: c.path, glob: c.glob, mode: c.mode, cache: c.cache, gitignore: false };
+	const grepArgs = { pattern: c.pattern, path: c.path, glob: c.glob, mode: c.mode, gitignore: false };
 	const caseIterations = c.iterations ?? ITERATIONS;
 	const concurrency = c.concurrency ?? CONCURRENCY;
 	const rgDefaultArgs = ["--hidden", "--no-ignore", "--no-ignore-vcs"];
