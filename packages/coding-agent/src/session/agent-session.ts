@@ -9225,7 +9225,9 @@ export class AgentSession {
 				let compactResult: CompactionResult | undefined;
 				let lastError: unknown;
 
-				for (const candidate of candidates) {
+				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
+					const candidate = candidates[candidateIndex];
+					const hasMoreCandidates = candidateIndex < candidates.length - 1;
 					const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
 					if (!apiKey) continue;
 
@@ -9264,6 +9266,20 @@ export class AgentSession {
 								lastError = this.#buildCompactionAuthError();
 								break;
 							}
+							if (this.#isCompactionSummarizationTimeoutMessage(message)) {
+								logger.warn(
+									hasMoreCandidates
+										? "Auto-compaction summarization timed out, trying next model"
+										: "Auto-compaction summarization timed out, not retrying same model",
+									{
+										error: message,
+										model: `${candidate.provider}/${candidate.id}`,
+									},
+								);
+								lastError = error;
+								break;
+							}
+
 							const retryAfterMs = this.#parseRetryAfterMsFromError(message);
 							const shouldRetry =
 								retrySettings.enabled &&
@@ -9281,19 +9297,15 @@ export class AgentSession {
 
 							// If retry delay is too long (>30s), try next candidate instead of waiting
 							const maxAcceptableDelayMs = 30_000;
-							if (delayMs > maxAcceptableDelayMs) {
-								const hasMoreCandidates = candidates.indexOf(candidate) < candidates.length - 1;
-								if (hasMoreCandidates) {
-									logger.warn("Auto-compaction retry delay too long, trying next model", {
-										delayMs,
-										retryAfterMs,
-										error: message,
-										model: `${candidate.provider}/${candidate.id}`,
-									});
-									lastError = error;
-									break; // Exit retry loop, continue to next candidate
-								}
-								// No more candidates - we have to wait
+							if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
+								logger.warn("Auto-compaction retry delay too long, trying next model", {
+									delayMs,
+									retryAfterMs,
+									error: message,
+									model: `${candidate.provider}/${candidate.id}`,
+								});
+								lastError = error;
+								break; // Exit retry loop, continue to next candidate
 							}
 
 							attempt++;
@@ -9707,6 +9719,10 @@ export class AgentSession {
 	#isTransientEnvelopeErrorMessage(errorMessage: string): boolean {
 		// Match Anthropic stream-envelope failures that indicate a broken stream before any content starts.
 		return /anthropic stream envelope error:/i.test(errorMessage) && /before message_start/i.test(errorMessage);
+	}
+
+	#isCompactionSummarizationTimeoutMessage(errorMessage: string): boolean {
+		return /\b(?:operation\s+)?timed?\s*out\b|\btimeout\b|\bstream stall\b/i.test(errorMessage);
 	}
 
 	#isTransientTransportErrorMessage(errorMessage: string): boolean {

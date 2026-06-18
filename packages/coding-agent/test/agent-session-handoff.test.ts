@@ -239,6 +239,47 @@ describe("AgentSession handoff", () => {
 		expect(events).toContainEqual({ type: "auto_compaction_start", reason: "threshold", action: "context-full" });
 		expect(events.some(event => event.type === "auto_compaction_end" && event.aborted === false)).toBe(true);
 	});
+
+	it("falls back after one auto-compaction timeout instead of retrying the same model", async () => {
+		session.settings.set("compaction.thresholdTokens", 50);
+		session.settings.set("compaction.keepRecentTokens", 1);
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("retry.baseDelayMs", 1);
+
+		let firstCandidateKey: string | undefined;
+		let fallbackCandidateKey: string | undefined;
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async (preparation, candidate) => {
+			const candidateKey = `${candidate.provider}/${candidate.id}`;
+			firstCandidateKey ??= candidateKey;
+			if (candidateKey === firstCandidateKey) {
+				throw new Error("Summarization failed: The operation timed out.");
+			}
+			fallbackCandidateKey = candidateKey;
+			return {
+				summary: "fallback compacted",
+				shortSummary: undefined,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			};
+		});
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(async () => {
+			expect(sessionManager.getEntries().some(entry => entry.type === "compaction")).toBe(true);
+		});
+
+		await session.prompt("pending prompt ".repeat(120));
+		await waitFor(
+			() =>
+				fallbackCandidateKey !== undefined &&
+				events.some(event => event.type === "auto_compaction_end" && event.aborted === false),
+		);
+
+		expect(
+			compactSpy.mock.calls.filter(call => `${call[1].provider}/${call[1].id}` === firstCandidateKey),
+		).toHaveLength(1);
+		expect(fallbackCandidateKey).toBeDefined();
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+	});
 	it("keeps pre-prompt context-full checks aligned with provider-anchored usage", async () => {
 		await session.dispose();
 		authStorage.setRuntimeApiKey("openai", "test-key");
