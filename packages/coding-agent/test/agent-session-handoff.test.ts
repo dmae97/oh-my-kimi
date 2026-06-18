@@ -153,6 +153,101 @@ describe("AgentSession handoff", () => {
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
 	});
 
+	it("preserves queued steering and follow-up messages across the handoff reset", async () => {
+		// Defect 2: handoff() calls agent.reset(), which clears the core steering/follow-up
+		// queues. Steers/follow-ups already queued (the mis-routed first compaction message,
+		// or RPC/SDK steer()/followUp() issued during the handoff) must survive into the new
+		// session instead of being silently dropped.
+		vi.spyOn(compactionModule, "generateHandoff").mockResolvedValue("## Goal\nContinue");
+
+		const textOf = (message: AgentMessage): string => {
+			if (!("content" in message)) return "";
+			const content = message.content;
+			if (typeof content === "string") return content;
+			const textBlock = content.find(block => block.type === "text");
+			return textBlock?.type === "text" ? textBlock.text : "";
+		};
+
+		const userMsg: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "keep-steer" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+		// A hidden, user-attributed companion (e.g. an ultrathink notice). It is
+		// display:false, so isUserQueuedMessage(...) is false for it: preservation must
+		// keep it adjacent to its prompt rather than filter it out or reorder it.
+		const companionMsg: AgentMessage = {
+			role: "custom",
+			customType: "ultrathink-notice",
+			content: [{ type: "text", text: "companion" }],
+			attribution: "user",
+			display: false,
+			timestamp: Date.now(),
+		};
+		const followUpMsg: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "keep-followup" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		};
+		session.agent.steer(userMsg);
+		session.agent.steer(companionMsg);
+		session.agent.followUp(followUpMsg);
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+
+		await session.handoff();
+
+		expect(session.agent.peekSteeringQueue().map(textOf)).toEqual(["keep-steer", "companion"]);
+		expect(session.agent.peekFollowUpQueue().map(textOf)).toEqual(["keep-followup"]);
+	});
+
+	it("preserves steering and follow-up messages enqueued while the handoff is in flight", async () => {
+		// Defect 2 in-flight window: the queue snapshot must be captured immediately before
+		// agent.reset() (after generateHandoff resolves), NOT at handoff entry. A steer or
+		// follow-up issued WHILE the handoff document is still generating must survive the
+		// reset — proving capture happens late rather than at the start of handoff().
+		const { promise: handoffDoc, resolve: releaseHandoff } = Promise.withResolvers<string>();
+		let generateHandoffCalled = false;
+		vi.spyOn(compactionModule, "generateHandoff").mockImplementation(async () => {
+			generateHandoffCalled = true;
+			return handoffDoc;
+		});
+
+		const textOf = (message: AgentMessage): string => {
+			if (!("content" in message)) return "";
+			const content = message.content;
+			if (typeof content === "string") return content;
+			const textBlock = content.find(block => block.type === "text");
+			return textBlock?.type === "text" ? textBlock.text : "";
+		};
+
+		const handoffPromise = session.handoff();
+		// Block until we are genuinely mid-handoff (document generation in flight).
+		await waitFor(() => generateHandoffCalled);
+
+		// Enqueue AFTER generation started but BEFORE it resolves — the window where the old
+		// session is still live and agent.reset() has not yet fired.
+		session.agent.steer({
+			role: "user",
+			content: [{ type: "text", text: "inflight-steer" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+		session.agent.followUp({
+			role: "user",
+			content: [{ type: "text", text: "inflight-followup" }],
+			attribution: "user",
+			timestamp: Date.now(),
+		});
+
+		releaseHandoff("## Goal\nContinue");
+		await handoffPromise;
+
+		expect(session.agent.peekSteeringQueue().map(textOf)).toEqual(["inflight-steer"]);
+		expect(session.agent.peekFollowUpQueue().map(textOf)).toEqual(["inflight-followup"]);
+	});
+
 	it("obfuscates custom instructions before generating a handoff", async () => {
 		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
 		const generateHandoffSpy = vi
