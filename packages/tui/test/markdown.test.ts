@@ -1594,6 +1594,18 @@ describe("Markdown.render reference stability", () => {
 		expect(lines).toContain("Second result.");
 		expect(lines).not.toContain("First result.Second result.");
 	});
+
+	it("drops HTML formatting whitespace between pretty-printed list tags", () => {
+		const md = new Markdown("<ul>\n  <li>First</li>\n  <li>Second</li>\n</ul>", 0, 0, defaultMarkdownTheme);
+		const lines = md.render(80).map(line => stripVTControlCharacters(line).trimEnd());
+
+		// Source indentation must not leak in front of the bullets, and the
+		// formatting newlines between items must not become blank rows.
+		expect(lines).toContain("• First");
+		expect(lines).toContain("• Second");
+		expect(lines.some(line => line.startsWith(" ") && line.includes("•"))).toBe(false);
+		expect(lines.filter(line => line === "").length).toBe(0);
+	});
 });
 
 describe("Math rendering", () => {

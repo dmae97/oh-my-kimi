@@ -96,8 +96,15 @@ function normalizeHtmlForTerminal(raw: string, state: HtmlNormalizationState = c
 		const tag = match[0];
 		const index = match.index ?? 0;
 		const textBeforeTag = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex, index));
-		output += textBeforeTag;
-		markCurrentHtmlItemContent(state, textBeforeTag);
+		// HTML formatting whitespace between block/list tags (e.g. the newlines and
+		// indentation in pretty-printed `<ul>\n  <li>…`) is not rendered content;
+		// appending it literally would leak source indentation before bullets and
+		// blank rows between items. Every tag handled here is block-level, so a
+		// whitespace-only slice is always insignificant formatting and is dropped.
+		if (textBeforeTag.trim() !== "") {
+			output += textBeforeTag;
+			markCurrentHtmlItemContent(state, textBeforeTag);
+		}
 		lastIndex = index + tag.length;
 
 		const name = htmlTagName(tag);
