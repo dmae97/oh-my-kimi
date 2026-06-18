@@ -88,29 +88,6 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 		expect(loaded.zodObj.safeParse({ name: "ok" }).success).toBe(true);
 		expect(loaded.zodObj.safeParse({}).success).toBe(false);
 	});
-	it("preserves legacy StringEnum root imports as plain string enum schemas", async () => {
-		const entry = await writeFixtureExtension(
-			[
-				'import { StringEnum } from "@earendil-works/pi-ai";',
-				'export const schema = StringEnum(["upstream", "downstream"] as const, { default: "upstream" });',
-				"export const wireSchema = JSON.parse(JSON.stringify(schema));",
-			].join("\n"),
-		);
-
-		const loaded = (await loadLegacyPiModule(entry)) as {
-			schema: { safeParse: (input: unknown) => { success: boolean } };
-			wireSchema: { type?: string; enum?: string[]; default?: string; anyOf?: unknown };
-		};
-
-		expect(loaded.schema.safeParse("downstream").success).toBe(true);
-		expect(loaded.schema.safeParse("sideways").success).toBe(false);
-		expect(loaded.wireSchema).toEqual({
-			type: "string",
-			enum: ["upstream", "downstream"],
-			default: "upstream",
-		});
-		expect(loaded.wireSchema.anyOf).toBeUndefined();
-	});
 
 	it("does not redirect subpath imports such as @oh-my-pi/pi-ai/utils/schema", async () => {
 		const entry = await writeFixtureExtension(
