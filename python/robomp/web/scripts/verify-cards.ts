@@ -224,7 +224,7 @@ const populatedStatus: StatusResponse = {
       number: 10,
       branch: null,
       pr_number: null,
-      state: "done",
+      state: "merged",
       classification: "bug",
       updated_at: "2026-06-18T00:02:00Z",
       latest_event: {
@@ -233,6 +233,24 @@ const populatedStatus: StatusResponse = {
         state: "done",
         attempts: 1,
         received_at: "2026-06-18T00:02:00Z",
+        last_error: null
+      }
+    },
+    {
+      key: "octo/widget#11",
+      repo: "octo/widget",
+      number: 11,
+      branch: null,
+      pr_number: null,
+      state: "reproducing",
+      classification: "bug",
+      updated_at: "2026-06-18T00:00:00Z",
+      latest_event: {
+        delivery_id: "latest-run-del-11",
+        event_type: "issue_comment",
+        state: "running",
+        attempts: 1,
+        received_at: "2026-06-18T00:00:00Z",
         last_error: null
       }
     }
@@ -246,7 +264,8 @@ const populatedStatus: StatusResponse = {
       state: "failed",
       attempts: 1,
       received_at: "2026-06-18T00:00:00Z",
-      last_error: "old error"
+      last_error: "old error",
+      issue_state: "merged"
     },
     {
       delivery_id: "fail-del-6",
@@ -256,7 +275,8 @@ const populatedStatus: StatusResponse = {
       state: "failed",
       attempts: 1,
       received_at: "2026-06-18T00:00:00Z",
-      last_error: "orphan failed error"
+      last_error: "orphan failed error",
+      issue_state: null
     }
   ]
 };
@@ -285,6 +305,9 @@ async function main(): Promise<void> {
   let statusMock: StatusResponse = baseStatus;
   let statusDelayMs = 0;
   let customIndexHtml: string | null = null;
+  // When set, /api/trigger answers POSTs with an error status + detail body so
+  // the retry-failure surface (e.g. the Activity status line) can be asserted.
+  let triggerErrorDetail: string | null = null;
 
   // Intercept trigger / cancel requests for asserting later. Bodies are
   // narrowed to a record (or null) so property checks below stay type-safe
@@ -322,7 +345,7 @@ async function main(): Promise<void> {
       req.respond({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ issues: [], errors: [] }),
+        body: JSON.stringify({ issues: [], errors: [], repos: ["octo/widget"], cache: { hit: false, fetched_at: 0 } }),
       });
     } else if (url.pathname === "/api/trigger" && req.method() === "POST") {
       const parsedBody: Record<string, unknown> | null = req.postData() ? (JSON.parse(req.postData()!) as Record<string, unknown>) : null;
@@ -334,15 +357,23 @@ async function main(): Promise<void> {
         headers: req.headers() as Record<string, string>,
         body: parsedBody,
       });
-      req.respond({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({
-          delivery: (typeof deliveryId === "string" && deliveryId) ? deliveryId : "manual-trigger",
-          state: "queued",
-          mode: (typeof mode === "string" && mode) ? mode : "triage",
-        }),
-      });
+      if (triggerErrorDetail !== null) {
+        req.respond({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: triggerErrorDetail }),
+        });
+      } else {
+        req.respond({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            delivery: (typeof deliveryId === "string" && deliveryId) ? deliveryId : "manual-trigger",
+            state: "queued",
+            mode: (typeof mode === "string" && mode) ? mode : "triage",
+          }),
+        });
+      }
     } else if (url.pathname === "/api/cancel" && req.method() === "POST") {
       const parsedBody: Record<string, unknown> | null = req.postData() ? (JSON.parse(req.postData()!) as Record<string, unknown>) : null;
       const deliveryId = parsedBody?.delivery_id;
@@ -426,24 +457,28 @@ async function main(): Promise<void> {
       const errorText = el.querySelector(".rmp-card-error")?.textContent?.trim() ?? "";
       const actions = Array.from(el.querySelectorAll(".rmp-card-actions button")).map(b => b.textContent?.trim());
       const metaText = el.querySelector(".rmp-card-meta")?.textContent?.trim() ?? "";
+      const text = el.textContent ?? "";
       const stepper = el.querySelector(".rmp-step") !== null;
       const currentStep = el.querySelector(".rmp-step-node[data-state='current']") !== null;
       const liveStep = el.querySelector(".rmp-step-node[data-live='true']") !== null;
       const failedStep = el.querySelector(".rmp-step-node[data-state='failed']") !== null;
-      return { key, bucket, errorText, actions, metaText, stepper, currentStep, liveStep, failedStep };
+      return { key, bucket, errorText, actions, metaText, text, stepper, currentStep, liveStep, failedStep };
     });
   });
 
   console.log("All resolved cards:", JSON.stringify(cards));
   const fullFailedCard = cards.find(c => c.key === "bugocto/widget#1");
   const runningCard = cards.find(c => c.key === "bugocto/widget#2");
-  const inflightOnlyCard = cards.find(c => c.key === "octo/wid");
+  const inflightOnlyCard = cards.find(c => c.key === "issueocto/widget#7");
   const compactOrphanRunning = cards.find(c => c.key === "run-del-");
   const compactOrphanFailed = cards.find(c => c.key === "fail-del");
   const failedWithoutErr = cards.find(c => c.key === "bugocto/widget#8");
   const runningWithInvalidTs = cards.find(c => c.key === "bugocto/widget#9");
   const queuedCard = cards.find(c => c.key === "bugocto/widget#3");
   const activeCard = cards.find(c => c.key === "bugocto/widget#4");
+  // Latest-event-only running: issue.latest_event is running but no matching
+  // running_events row and not inflight (live === null, inflightOnly === false).
+  const latestEventOnlyRunning = cards.find(c => c.key === "bugocto/widget#11");
 
   // Check failed full card
   results.push({
@@ -462,7 +497,7 @@ async function main(): Promise<void> {
   // Check inflight-only card
   results.push({
     name: "inflight-only-card",
-    ok: !!inflightOnlyCard && inflightOnlyCard.bucket === "running" && inflightOnlyCard.metaText.includes("held by pool") && inflightOnlyCard.actions.length === 0,
+    ok: !!inflightOnlyCard && inflightOnlyCard.bucket === "running" && inflightOnlyCard.metaText.includes("held by pool") && inflightOnlyCard.actions.length === 0 && inflightOnlyCard.stepper && inflightOnlyCard.liveStep,
     detail: `Inflight-only card check: ${JSON.stringify(inflightOnlyCard)}`,
   });
 
@@ -508,6 +543,19 @@ async function main(): Promise<void> {
     detail: `Active full card check: ${JSON.stringify(activeCard)}`,
   });
 
+  // Latest-event-only running card — renders as running (latest_event state),
+  // but with NO live row it must not expose cancel (nothing to kill) and must
+  // not mark a lifecycle step live (no real subprocess heartbeat).
+  results.push({
+    name: "latest-event-only-running-no-cancel-no-live-step",
+    ok: !!latestEventOnlyRunning &&
+      latestEventOnlyRunning.bucket === "running" &&
+      !latestEventOnlyRunning.actions.includes("cancel") &&
+      latestEventOnlyRunning.stepper &&
+      !latestEventOnlyRunning.liveStep,
+    detail: `Latest-event-only running card check: ${JSON.stringify(latestEventOnlyRunning)}`,
+  });
+
   // Failed cards must sort ahead of every other bucket: the first rendered
   // card is a failed card (DOM order mirrors buildWorkItems sort order).
   results.push({
@@ -530,12 +578,21 @@ async function main(): Promise<void> {
     detail: `Failed card stepper failedStep=${fullFailedCard?.failedStep}`,
   });
 
-  // Check superseded exclusion
-  const hasSuperseded = await page.evaluate(() => document.body.textContent?.includes("superseded-del") ?? false);
+  // Check superseded + terminal exclusion against the rendered lifecycle-card
+  // model above, not document.body. Activity stays mounted while hidden and may
+  // legitimately contain historical terminal events.
+  const terminalLeakKeys = cards
+    .filter(
+      (card) =>
+        card.text.includes("superseded-del") ||
+        card.text.includes("done-del") ||
+        card.text.includes("octo/widget#10"),
+    )
+    .map((card) => card.key);
   results.push({
-    name: "superseded-exclusion-visual",
-    ok: !hasSuperseded,
-    detail: `Superseded text found: ${hasSuperseded}`,
+    name: "superseded-terminal-exclusion-visual",
+    ok: terminalLeakKeys.length === 0,
+    detail: `Terminal/superseded card keys: ${terminalLeakKeys.join(", ") || "none"}`,
   });
   const debugTextContrast = await page.evaluate(() => {
     const getLuminance = (str: string): number => {
@@ -1050,6 +1107,60 @@ async function main(): Promise<void> {
     ok: enterReqs.length === 1 && enterReqs[0].headers["x-robomp-replay-token"] === REPLAY_TOKEN,
     detail: `Matching enter requests: ${enterReqs.length}, token: "${enterReqs[0]?.headers["x-robomp-replay-token"] ?? ""}"`,
   });
+
+  // G. Activity-view retry failure — switching to Activity and retrying a
+  //    failed event must surface the trigger error WHERE the button was
+  //    clicked (the Trigger bar lives only on Operations/Triage). Force
+  //    /api/trigger to error, click the Activity events-table retry button,
+  //    and assert .rmp-activity-status shows the error with role="alert" and
+  //    that exactly one trigger request fired carrying the replay token.
+  triggeredRequests.length = 0;
+  const ACTIVITY_ERROR_DETAIL = "forced retry failure";
+  triggerErrorDetail = ACTIVITY_ERROR_DETAIL;
+  // Switch to the Activity view via the nav rail.
+  await page.evaluate(() => {
+    const navBtn = Array.from(document.querySelectorAll(".rmp-nav-item")).find(
+      (b) => b.querySelector(".rmp-nav-item-label")?.textContent?.trim() === "Activity",
+    ) as HTMLElement | null;
+    navBtn?.click();
+  });
+  await Bun.sleep(100); // let the view flip to display:flex
+  // Click the first retry button in the Activity events table (Events is the
+  // only `table.t` consumer, so this is unambiguous).
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll("table.t button")).find(
+      (b) => b.textContent?.trim() === "retry",
+    ) as HTMLElement | null;
+    btn?.click();
+  });
+  await Bun.sleep(100); // wait for the failed trigger round-trip + state update
+  const activityStatus = await page.evaluate(() => {
+    const el = document.querySelector(".rmp-activity-status");
+    if (!el) return null;
+    return {
+      text: el.textContent?.trim() ?? "",
+      role: el.getAttribute("role") ?? "",
+      // offsetParent is null when an ancestor is display:none — proves the
+      // status is actually visible inside the active Activity view.
+      visible: (el as HTMLElement).offsetParent !== null,
+    };
+  });
+  const activityRetryReqs = triggeredRequests.filter(
+    (r) => r.url.endsWith("/api/trigger") && r.body?.mode === "retry",
+  );
+  triggerErrorDetail = null; // reset so later passes see the normal 202
+  results.push({
+    name: "activity-retry-error-visible",
+    ok:
+      !!activityStatus &&
+      activityStatus.visible &&
+      activityStatus.role === "alert" &&
+      activityStatus.text.includes(ACTIVITY_ERROR_DETAIL) &&
+      activityRetryReqs.length === 1 &&
+      activityRetryReqs[0].headers["x-robomp-replay-token"] === REPLAY_TOKEN,
+    detail: `Activity status: ${JSON.stringify(activityStatus)}. Retry requests: ${activityRetryReqs.length}, token: "${activityRetryReqs[0]?.headers["x-robomp-replay-token"] ?? ""}"`,
+  });
+  await page.screenshot({ path: path.join(outDir, "shots/activity-retry-error.png") });
 
   customIndexHtml = null; // restore real-index interception
 

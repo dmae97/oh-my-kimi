@@ -70,13 +70,14 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
   const items: WorkItem[] = [];
 
   for (const issue of status.issues) {
-    if (TERMINAL_ISSUE_STATES.has(issue.state)) continue;
-
     const key = issue.key;
-    seen.add(key);
-
     const live = runningByKey.get(key) ?? null;
     const inflightOnly = !live && inflightSet.has(key);
+    if (TERMINAL_ISSUE_STATES.has(issue.state) && !live && !inflightOnly) {
+      seen.add(key);
+      continue;
+    }
+    seen.add(key);
     const latest = issue.latest_event;
 
     // A matching live running_events entry is authoritative over the issue's
@@ -144,7 +145,7 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
 
   const newestRecentByKey = new Map<string, RecentEvent>();
   for (const event of status.recent_events) {
-    if (!event.issue_key) continue;
+    if (!event.issue_key || event.state === "skipped") continue;
     const current = newestRecentByKey.get(event.issue_key);
     const eventTs = parseTs(event.received_at);
     const currentTs = current ? parseTs(current.received_at) : 0;
@@ -157,6 +158,13 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
 
   for (const event of status.recent_events) {
     if (event.state !== "failed" || !event.delivery_id || seen.has(event.delivery_id)) continue;
+    // Suppress failures for issues that have since gone terminal
+    // (merged/closed/abandoned). For issues outside the capped `status.issues`
+    // window there is no row to consult, so the event's own issue_state — the
+    // current DB state attached by /api/status — is the only authority. This
+    // skip only drops the terminal event itself; it never marks the issue_key
+    // as seen, so a retryable failure for any other issue is untouched.
+    if (event.issue_state && TERMINAL_ISSUE_STATES.has(event.issue_state)) continue;
     if (event.issue_key) {
       const latest = issueByKey.get(event.issue_key)?.latest_event;
       if (latest && (latest.delivery_id !== event.delivery_id || latest.state !== "failed")) {
@@ -177,7 +185,7 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
       key: event.issue_key ?? event.delivery_id,
       ref: splitRef(event.issue_key),
       deliveryId: event.delivery_id,
-      issueState: null,
+      issueState: event.issue_state,
       classification: null,
       branch: null,
       prNumber: null,
@@ -194,10 +202,15 @@ export function buildWorkItems(status: StatusResponse): WorkItem[] {
   return items;
 }
 
+// Orphan live/inflight rows have no matching issue row, but their key is still
+// the canonical issue key when the row came from an `issue_key` (running event)
+// or an issue-shaped inflight entry. Recover the ref via splitRef so the card
+// can still link to the issue; splitRef returns null when the `#N` suffix is
+// missing or non-numeric (e.g. a bare delivery-id key), keeping ref: null.
 function orphanLiveItem(key: string, event: RunningEvent | null, inflightOnly: boolean): WorkItem {
   return {
     key,
-    ref: null,
+    ref: key.includes("#") ? splitRef(key) : null,
     deliveryId: event?.delivery_id ?? key,
     issueState: null,
     classification: null,

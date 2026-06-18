@@ -150,7 +150,8 @@
       "state": "queued",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": null
+      "last_error": null,
+      "issue_state": "new"
     },
     {
       "delivery_id": "terminal-done",
@@ -160,7 +161,8 @@
       "state": "done",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": null
+      "last_error": null,
+      "issue_state": "merged"
     },
     {
       "delivery_id": "orphan-failed-x",
@@ -170,7 +172,8 @@
       "state": "failed",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": "orphan failed error"
+      "last_error": "orphan failed error",
+      "issue_state": null
     },
     {
       "delivery_id": "new-done",
@@ -180,7 +183,8 @@
       "state": "done",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": null
+      "last_error": null,
+      "issue_state": "fixing"
     },
     {
       "delivery_id": "superseded-failed",
@@ -190,7 +194,8 @@
       "state": "failed",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": "old error"
+      "last_error": "old error",
+      "issue_state": "fixing"
     },
     {
       "delivery_id": "failed-x",
@@ -200,7 +205,8 @@
       "state": "failed",
       "attempts": 0,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": "repro diverged"
+      "last_error": "repro diverged",
+      "issue_state": "fixing"
     },
     {
       "delivery_id": "run-x",
@@ -210,7 +216,8 @@
       "state": "running",
       "attempts": 1,
       "received_at": "2024-01-01T00:00:00+00:00",
-      "last_error": null
+      "last_error": null,
+      "issue_state": "reproducing"
     }
   ]
 }

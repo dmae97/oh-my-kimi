@@ -39,7 +39,7 @@ export function IssueCard(props: IssueCardProps): JSX.Element {
           state={item().issueState}
           classification={item().classification}
           failed={item().bucket === "failed"}
-          live={item().bucket === "running"}
+          live={item().live !== null || item().inflightOnly}
         />
       </Show>
       <MetaRow item={item()} />
@@ -52,7 +52,7 @@ export function IssueCard(props: IssueCardProps): JSX.Element {
         when={
           CONFIG.replayEnabled &&
           (item().bucket === "failed" ||
-            (item().bucket === "running" && !item().inflightOnly))
+            (item().bucket === "running" && item().live !== null))
         }
       >
         <div class="rmp-card-actions">
@@ -64,7 +64,7 @@ export function IssueCard(props: IssueCardProps): JSX.Element {
               retry
             </button>
           </Show>
-          <Show when={item().bucket === "running" && item().deliveryId}>
+          <Show when={item().bucket === "running" && item().live !== null && item().deliveryId}>
             <button class="tiny danger" onClick={() => void cancel(item().deliveryId)}>
               cancel
             </button>

@@ -67,6 +67,7 @@ export interface RecentEvent {
   attempts: number;
   received_at: string;
   last_error: string | null;
+  issue_state: IssueState | null;
 }
 
 export interface StatusResponse {

@@ -96,6 +96,7 @@ function recentEvent(overrides: Partial<RecentEvent> = {}): RecentEvent {
     attempts: 1,
     received_at: "2026-06-17T00:00:00Z",
     last_error: "boom",
+    issue_state: null,
     ...overrides,
   };
 }
@@ -148,6 +149,65 @@ describe("buildWorkItems", () => {
       }),
     );
 
+    expect(items).toEqual([]);
+  });
+
+  test("keeps live terminal issues visible until the running delivery disappears", () => {
+    const items = buildWorkItems(
+      status({
+        issues: [
+          issue({
+            key: "owner/repo#223",
+            number: 223,
+            state: "merged",
+            latest_event: latestEvent({ delivery_id: "done-223", state: "done" }),
+          }),
+        ],
+        running_events: [
+          runningEvent({
+            delivery_id: "live-terminal-223",
+            issue_key: "owner/repo#223",
+          }),
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "owner/repo#223",
+      deliveryId: "live-terminal-223",
+      issueState: "merged",
+      bucket: "running",
+      inflightOnly: false,
+    });
+    expect(items[0].live?.delivery_id).toBe("live-terminal-223");
+  });
+
+  test("terminal issues stay excluded from orphan recent-event fallback", () => {
+    const items = buildWorkItems(
+      status({
+        issues: [
+          issue({
+            key: "owner/repo#222",
+            number: 222,
+            state: "abandoned",
+            latest_event: latestEvent({
+              delivery_id: "failed-terminal",
+              state: "failed",
+              last_error: "terminal failure",
+            }),
+          }),
+        ],
+        recent_events: [
+          recentEvent({
+            delivery_id: "failed-terminal",
+            issue_key: "owner/repo#222",
+            received_at: "2026-06-17T00:07:00Z",
+            last_error: "terminal failure",
+          }),
+        ],
+      }),
+    );
     expect(items).toEqual([]);
   });
 
@@ -314,41 +374,71 @@ describe("buildWorkItems", () => {
     });
   });
 
-  test("2. orphan running delivery, issue_key present but no issue row", () => {
+  test("2. orphan running issue key absent from issues yields ref and keeps delivery/action data", () => {
     const items = buildWorkItems(
       status({
         running_events: [
           runningEvent({
             issue_key: "octo/widget#999",
             delivery_id: "run-x",
+            last_tool: "edit",
+            last_tool_ts: "2026-06-17T00:02:00Z",
           }),
         ],
       }),
     );
     expect(items).toHaveLength(1);
+    // The issue row is absent, but the issue-shaped key recovers the ref so the
+    // orphan card can still link to octo/widget#999.
     expect(items[0]).toMatchObject({
-      ref: null,
+      ref: { repo: "octo/widget", number: 999 },
       bucket: "running",
       deliveryId: "run-x",
       inflightOnly: false,
     });
-    expect(items[0].live).not.toBeNull();
+    // Delivery id and live action data survive the orphan path.
+    expect(items[0].live?.delivery_id).toBe("run-x");
+    expect(items[0].live?.last_tool).toBe("edit");
+    expect(items[0].live?.model).toBe("test-model");
   });
 
-  test("3. orphan inflight key, no issue & no running event", () => {
+  test("3. orphan inflight-only issue key absent from issues yields ref with no real delivery", () => {
     const items = buildWorkItems(
       status({
         inflight: ["octo/widget#888"],
       }),
     );
     expect(items).toHaveLength(1);
+    // Issue-shaped inflight key recovers the ref even with no issue row.
     expect(items[0]).toMatchObject({
-      ref: null,
+      ref: { repo: "octo/widget", number: 888 },
       bucket: "running",
       inflightOnly: true,
       live: null,
-      deliveryId: "octo/widget#888",
     });
+    // No running event, so there is no real delivery id; it falls back to the key.
+    expect(items[0].deliveryId).toBe("octo/widget#888");
+  });
+
+  test("3b. non-issue orphan delivery/key keeps ref null", () => {
+    const items = buildWorkItems(
+      status({
+        running_events: [
+          runningEvent({
+            issue_key: null,
+            delivery_id: "run-bare-uuid",
+          }),
+        ],
+        inflight: ["inflight-bare-uuid"],
+      }),
+    );
+    expect(items).toHaveLength(2);
+    // Neither key is issue-shaped (no `#`), so both stay ref: null.
+    const running = items.find((i) => i.deliveryId === "run-bare-uuid");
+    const inflight = items.find((i) => i.key === "inflight-bare-uuid");
+    expect(running?.ref).toBeNull();
+    expect(inflight?.ref).toBeNull();
+    expect(inflight?.inflightOnly).toBe(true);
   });
 
   test("4. failed issue with last_error:null", () => {
@@ -684,6 +774,34 @@ describe("buildWorkItems", () => {
     expect(items).toEqual([]);
   });
 
+  test("does not let a newer skipped event suppress a retryable orphan failure", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          recentEvent({
+            delivery_id: "failed-before-skipped",
+            issue_key: "owner/repo#34",
+            received_at: "2026-06-17T00:04:00Z",
+            last_error: "real failure",
+          }),
+          recentEvent({
+            delivery_id: "skipped-newer-noise",
+            issue_key: "owner/repo#34",
+            state: "skipped",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: null,
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      deliveryId: "failed-before-skipped",
+      bucket: "failed",
+      error: "real failure",
+    });
+  });
+
   test("renders an orphan failed recent event that is the newest for an absent issue", () => {
     const items = buildWorkItems(
       status({
@@ -710,6 +828,42 @@ describe("buildWorkItems", () => {
       deliveryId: "failed-newest-orphan",
       bucket: "failed",
       error: "current orphan failure",
+    });
+  });
+
+  test("suppresses a failed recent event for an absent issue whose issue_state is terminal", () => {
+    const items = buildWorkItems(
+      status({
+        recent_events: [
+          // octo/widget#900 is outside the capped status.issues window, so the
+          // only authority for its lifecycle is the issue_state /api/status
+          // attached. It is "merged", so this stale failure must not surface.
+          recentEvent({
+            delivery_id: "failed-terminal-orphan",
+            issue_key: "octo/widget#900",
+            issue_state: "merged",
+            received_at: "2026-06-17T00:06:00Z",
+            last_error: "stale terminal failure",
+          }),
+          // A retryable failure for a different, non-terminal absent issue must
+          // still render: the terminal skip only drops its own event.
+          recentEvent({
+            delivery_id: "failed-retryable-orphan",
+            issue_key: "octo/widget#901",
+            issue_state: "fixing",
+            received_at: "2026-06-17T00:05:00Z",
+            last_error: "live failure",
+          }),
+        ],
+      }),
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: "octo/widget#901",
+      deliveryId: "failed-retryable-orphan",
+      bucket: "failed",
+      issueState: "fixing",
+      error: "live failure",
     });
   });
 

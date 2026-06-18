@@ -273,6 +273,17 @@ def test_cancel_errors_and_gating(env, monkeypatch: pytest.MonkeyPatch) -> None:
         )
         assert resp.status_code == 404
 
+        # 409 queued/non-running delivery: do not poison WorkerPool._cancelled.
+        resp = client.post(
+            "/api/cancel",
+            json={"delivery_id": "run-cancel-2"},
+            headers={"X-Robomp-Replay-Token": token},
+        )
+        assert resp.status_code == 409
+        queued = db.get_event("run-cancel-2")
+        assert queued is not None
+        assert queued.state == "queued"
+
         # 401 with a bad token (header present but wrong value)
         resp = client.post(
             "/api/cancel",

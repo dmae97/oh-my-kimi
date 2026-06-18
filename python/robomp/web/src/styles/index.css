@@ -981,6 +981,14 @@ code,
   margin-left: auto;
 }
 
+/* Activity view — shared trigger status surfaced under the events table so a
+   retry fired from this view shows success/error where the button was clicked. */
+.rmp-activity-status {
+  font-size: 12px;
+  color: var(--color-ink-300);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Mobile drawer */
 .rmp-mobile-drawer-overlay {
   position: fixed;
