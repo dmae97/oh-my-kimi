@@ -320,7 +320,7 @@ describe("InteractiveMode plan review rendering", () => {
 		}
 	});
 
-	it("Refine with no annotations does not re-prompt the model", async () => {
+	it("Refine with no annotations silently aborts approval and returns to the editor", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -330,7 +330,20 @@ describe("InteractiveMode plan review rendering", () => {
 
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
-		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Refine plan");
+		let streaming = false;
+		Object.defineProperty(session, "isStreaming", {
+			configurable: true,
+			get: () => streaming,
+		});
+		const abortSpy = vi.spyOn(session, "abort").mockImplementation(async () => {
+			streaming = false;
+		});
+		vi.spyOn(mode, "showPlanReview").mockImplementation(async () => {
+			streaming = true;
+			return "Refine plan";
+		});
+		const statusSpy = vi.spyOn(mode, "showStatus");
+		const errorSpy = vi.spyOn(mode, "showError");
 		const startSpy = vi.spyOn(mode, "startPendingSubmission");
 		const onInput = vi.fn();
 		mode.onInputCallback = onInput;
@@ -341,8 +354,12 @@ describe("InteractiveMode plan review rendering", () => {
 			title: "PLAN",
 		});
 
+		expect(abortSpy).toHaveBeenCalledTimes(1);
+		expect(statusSpy).toHaveBeenCalledWith("Refine plan: enter a follow-up prompt.");
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to refine plan"));
 		expect(startSpy).not.toHaveBeenCalled();
 		expect(onInput).not.toHaveBeenCalled();
+		expect(session.isPlanInternalAbortPending).toBe(false);
 	});
 
 	it("approves with in-overlay edits and mirrors them to the plan file", async () => {
@@ -1139,8 +1156,7 @@ describe("InteractiveMode plan review rendering", () => {
 	// ==========================================================================
 	// Phase 6 — B layer: #approvePlan flag lifecycle via try/finally.
 	//
-	// Drives `handlePlanApproval` with each CompactionOutcome variant and
-	// asserts `session.isPlanCompactAbortPending === false` after `#approvePlan`
+	// asserts `session.isPlanInternalAbortPending === false` after `#approvePlan`
 	// resolves/rejects. The flag is the only state that can leak into later
 	// unrelated aborts; the `try/finally` in `#approvePlan` is what protects it.
 	// ==========================================================================
@@ -1189,7 +1205,7 @@ describe("InteractiveMode plan review rendering", () => {
 		"failed",
 	] as const)("B1-B3: Approve and compact context + %s outcome → flag cleared by finally", async outcome => {
 		await approveWithCompact(outcome);
-		expect(session.isPlanCompactAbortPending).toBe(false);
+		expect(session.isPlanInternalAbortPending).toBe(false);
 	});
 
 	it("B4: Approve and compact context + handleCompactCommand throws → showError surfaces the failure AND flag cleared by finally before the outer catch", async () => {
@@ -1202,11 +1218,11 @@ describe("InteractiveMode plan review rendering", () => {
 		//      silenced).
 		const showErrorSpy = vi.spyOn(mode, "showError");
 		await approveWithCompact("throw", new Error("synthetic compaction failure"));
-		expect(session.isPlanCompactAbortPending).toBe(false);
+		expect(session.isPlanInternalAbortPending).toBe(false);
 		expect(showErrorSpy).toHaveBeenCalledWith(expect.stringContaining("synthetic compaction failure"));
 	});
 
-	it("B5: Approve and execute (no compact) → markPlanCompactAbortPending never called; flag stays false", async () => {
+	it("B5: Approve and execute (no compact) → internal abort flag is cleared", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
@@ -1216,7 +1232,7 @@ describe("InteractiveMode plan review rendering", () => {
 		mode.planModeEnabled = true;
 		mode.planModePlanFilePath = planFilePath;
 		vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and execute");
-		const markSpy = vi.spyOn(session, "markPlanCompactAbortPending");
+		const markSpy = vi.spyOn(session, "markPlanInternalAbortPending");
 		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 
 		await mode.handlePlanApproval({
@@ -1225,8 +1241,8 @@ describe("InteractiveMode plan review rendering", () => {
 			title: "PLAN",
 		});
 
-		expect(markSpy).not.toHaveBeenCalled();
-		expect(session.isPlanCompactAbortPending).toBe(false);
+		expect(markSpy).toHaveBeenCalledTimes(1);
+		expect(session.isPlanInternalAbortPending).toBe(false);
 	});
 
 	it("re-enters plan mode on the approved titled artifact after approval", async () => {
