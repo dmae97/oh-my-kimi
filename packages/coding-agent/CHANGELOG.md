@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Changed `/btw`, `/tan`, `/omfg`, `/memory`, `/rename`, and `/move` to save the typed command text to TUI prompt history so they can be recalled with the up arrow.
+
 
 ## [16.0.5] - 2026-06-17
 
