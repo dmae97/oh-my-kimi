@@ -112,6 +112,7 @@ impl_lang_expando!(Css, language_css, '_');
 impl_lang_expando!(Dockerfile, language_dockerfile, 'µ');
 impl_lang_expando!(Elixir, language_elixir, 'µ');
 impl_lang_expando!(Erlang, language_erlang, 'µ');
+impl_lang_expando!(Fortran, language_fortran, 'µ');
 impl_lang_expando!(Go, language_go, 'µ');
 impl_lang!(Graphql, language_graphql);
 impl_lang_expando!(Haskell, language_haskell, 'µ');
@@ -282,6 +283,7 @@ pub enum SupportLang {
 	EmacsLisp,
 	Elixir,
 	Erlang,
+	Fortran,
 	Go,
 	Graphql,
 	Haskell,
@@ -338,7 +340,7 @@ impl SupportLang {
 		use SupportLang::*;
 		&[
 			Astro, Bash, C, Cmake, Cpp, CSharp, Dart, Clojure, Css, Diff, Dockerfile, EmacsLisp,
-			Elixir, Erlang, Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
+			Elixir, Erlang, Fortran, Go, Graphql, Haskell, Hcl, Html, Ini, Java, JavaScript, Json, Just, Julia,
 			Kotlin, Lua, Make, Markdown, Nix, ObjC, Ocaml, Odin, Perl, Php, Powershell, Proto, Python,
 			R, Regex, Ruby, Rust, Scala, Solidity, Sql, Starlark, Svelte, Swift, Toml, Tlaplus, Tsx,
 			TypeScript, Verilog, Vue, Xml, Yaml, Zig,
@@ -363,6 +365,7 @@ impl SupportLang {
 			Self::EmacsLisp => "emacs-lisp",
 			Self::Elixir => "elixir",
 			Self::Erlang => "erlang",
+			Self::Fortran => "fortran",
 			Self::Go => "go",
 			Self::Graphql => "graphql",
 			Self::Haskell => "haskell",
@@ -449,6 +452,7 @@ macro_rules! execute_lang_method {
 			S::EmacsLisp => EmacsLisp.$method($($pname,)*),
 			S::Elixir => Elixir.$method($($pname,)*),
 			S::Erlang => Erlang.$method($($pname,)*),
+			S::Fortran => Fortran.$method($($pname,)*),
 			S::Go => Go.$method($($pname,)*),
 			S::Graphql => Graphql.$method($($pname,)*),
 			S::Haskell => Haskell.$method($($pname,)*),
@@ -564,6 +568,7 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		EmacsLisp => &["el"],
 		Elixir => &["ex", "exs"],
 		Erlang => &["erl", "hrl"],
+		Fortran => &["f", "F", "for", "f77", "F77", "f90", "F90", "f95", "F95", "f03", "F03", "f08", "F08"],
 		Go => &["go"],
 		Graphql => &["graphql", "gql"],
 		Haskell => &["hs"],
@@ -711,6 +716,14 @@ static LANG_ALIASES: phf::Map<&'static str, SupportLang> = phf_map! {
 "erlang"         => SupportLang::Erlang,
 "erl"            => SupportLang::Erlang,
 "hrl"            => SupportLang::Erlang,
+"fortran"        => SupportLang::Fortran,
+"f"              => SupportLang::Fortran,
+"for"            => SupportLang::Fortran,
+"f77"            => SupportLang::Fortran,
+"f90"            => SupportLang::Fortran,
+"f95"            => SupportLang::Fortran,
+"f03"            => SupportLang::Fortran,
+"f08"            => SupportLang::Fortran,
 "go"             => SupportLang::Go,
 "golang"         => SupportLang::Go,
 "graphql"        => SupportLang::Graphql,
