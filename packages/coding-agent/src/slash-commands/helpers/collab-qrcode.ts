@@ -1,29 +1,28 @@
 import { type Component, visibleWidth } from "@oh-my-pi/pi-tui";
-import * as QRCode from "qrcode";
-import { theme } from "../../modes/theme/theme";
+import { fgOrPlain } from "../../modes/theme/theme";
+import { QrCode, renderQrHalfBlocks } from "../../utils/qrcode";
 
-export async function renderCollabQrCode(url: string): Promise<string> {
-	return QRCode.toString(url, { type: "terminal", small: true, errorCorrectionLevel: "M" });
-}
-
+/**
+ * One-shot transcript block that prints a collab browser-join URL as a
+ * scannable QR code. The symbol is encoded once at construction (byte mode,
+ * EC level M) and rendered as ANSI half-blocks; on terminals too narrow for
+ * the symbol it degrades to a one-line hint pointing at the printed URL.
+ */
 export class CollabQrCodeComponent implements Component {
-	readonly url: string;
 	readonly #lines: readonly string[];
 	readonly #minWidth: number;
 
-	constructor(url: string, qrText: string) {
-		this.url = url;
-		const lines = qrText.split(/\r?\n/);
-		while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-		this.#lines = lines;
-		this.#minWidth = 1 + lines.reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
+	constructor(readonly url: string) {
+		const rows = renderQrHalfBlocks(QrCode.encodeText(url, "M"));
+		this.#lines = rows.map(row => ` ${row}`);
+		this.#minWidth = rows.reduce((max, row) => Math.max(max, visibleWidth(row)), 0) + 1;
 	}
 
 	render(width: number): readonly string[] {
 		if (width < this.#minWidth) {
 			const warning = `QR code hidden: terminal width ${width}; need ${this.#minWidth}. Use the browser URL above.`;
-			return [` ${typeof theme === "undefined" ? warning : theme.fg("warning", warning)}`];
+			return [` ${fgOrPlain("warning", warning)}`];
 		}
-		return this.#lines.map(line => ` ${line}`);
+		return this.#lines;
 	}
 }

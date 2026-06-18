@@ -66,7 +66,6 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"@puppeteer/browsers": "catalog:",
-		"@types/qrcode": "catalog:",
 		"@types/turndown": "catalog:",
 		"@xterm/headless": "catalog:",
 		"arktype": "catalog:",
@@ -79,7 +78,6 @@
 		"mammoth": "catalog:",
 		"mupdf": "catalog:",
 		"puppeteer-core": "catalog:",
-		"qrcode": "catalog:",
 		"turndown": "catalog:",
 		"turndown-plugin-gfm": "catalog:",
 		"zod": "catalog:"

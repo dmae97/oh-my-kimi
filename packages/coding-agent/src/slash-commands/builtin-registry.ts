@@ -30,7 +30,7 @@ import type { AgentSession, FreshSessionResult } from "../session/agent-session"
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
-import { CollabQrCodeComponent, renderCollabQrCode } from "./helpers/collab-qrcode";
+import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
@@ -100,24 +100,23 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 	].join("\n");
 }
 
-async function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): Promise<void> {
+function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 	try {
-		const qrText = await renderCollabQrCode(webLink);
-		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink, qrText)]);
+		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
 	} catch (err) {
 		ctx.showError(`Failed to render collab QR code: ${errorMessage(err)}`);
 	}
 }
 
-async function showCollabLink(
+function showCollabLink(
 	ctx: InteractiveModeContext,
 	host: CollabHost,
 	heading: string,
 	view = false,
 	options?: { forceQr?: boolean },
-): Promise<void> {
+): void {
 	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
-	if (options?.forceQr) await showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
+	if (options?.forceQr) showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
 }
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -648,7 +647,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const view = verb === "view" || verb === "qrcode-view" || verb === "qr-view";
 			const forceQr = verb === "qrcode" || verb === "qrcode-view" || verb === "qr-view";
 			if (ctx.collabHost) {
-				await showCollabLink(
+				showCollabLink(
 					ctx,
 					ctx.collabHost,
 					forceQr
@@ -682,7 +681,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			ctx.collabHost = host;
-			await showCollabLink(ctx, host, "Collab session started!", view, { forceQr });
+			showCollabLink(ctx, host, "Collab session started!", view, { forceQr });
 		},
 	},
 	{
