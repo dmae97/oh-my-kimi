@@ -303,10 +303,7 @@ function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpe
 }
 
 function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
-	return (
-		spec.api === "anthropic-messages" &&
-		(isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id))
-	);
+	return spec.api === "anthropic-messages" && (isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id));
 }
 
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
