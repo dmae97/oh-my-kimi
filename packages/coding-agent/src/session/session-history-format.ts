@@ -75,8 +75,16 @@ function lineCount(text: string): number {
 }
 
 /** Pick the most informative scalar argument of a tool call. */
-function primaryArg(args: Record<string, unknown> | undefined): string {
+function primaryArg(name: string, args: Record<string, unknown> | undefined): string {
 	if (!args || typeof args !== "object") return "";
+	// Advisor note is the most informative summary; preserve severity too.
+	if (name === "advise") {
+		const note = typeof args.note === "string" ? args.note : "";
+		const severity = typeof args.severity === "string" ? args.severity : "";
+		if (note && severity) return oneLine(`${severity}: ${note}`);
+		if (note) return oneLine(note);
+		if (severity) return oneLine(severity);
+	}
 	for (const key of PRIMARY_ARG_KEYS) {
 		const value = args[key];
 		if (typeof value === "string" && value.length > 0) return oneLine(value);
@@ -109,7 +117,7 @@ function toolCallLine(
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 ): string {
-	const head = `→ ${name}(${primaryArg(args)})`;
+	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
 		base = `${head} ⇒ pending`;

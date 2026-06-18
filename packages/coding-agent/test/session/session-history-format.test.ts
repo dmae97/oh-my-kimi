@@ -163,7 +163,7 @@ describe("formatSessionHistoryMarkdown", () => {
 		expect(outputWithoutIntent).not.toContain("// reading config file");
 		expect(outputWithoutIntent).toContain("→ read(src/config.ts) ⇒ ok · 1 line");
 	});
-	it("summarizes advise tool calls by their note, not severity or result", () => {
+	it("summarizes advise tool calls by their note and severity", () => {
 		const messages = [
 			{
 				role: "assistant",
@@ -172,6 +172,8 @@ describe("formatSessionHistoryMarkdown", () => {
 						type: "toolCall",
 						id: "tc-advise-1",
 						name: "advise",
+						// Severity is intentionally placed before note so the test proves
+						// PRIMARY_ARG_KEYS / the special-case picks the note, not insertion order.
 						arguments: { severity: "concern", note: "Avoid shadowing the outer variable." },
 					},
 				],
@@ -188,8 +190,7 @@ describe("formatSessionHistoryMarkdown", () => {
 		];
 
 		const output = formatSessionHistoryMarkdown(messages);
-		expect(output).toContain("→ advise(Avoid shadowing the outer variable.) ⇒ ok · 1 line");
-		expect(output).not.toContain("→ advise(concern)");
+		expect(output).toContain("→ advise(concern: Avoid shadowing the outer variable.) ⇒ ok · 1 line");
 		expect(output).not.toContain("Recorded.");
 	});
 });
