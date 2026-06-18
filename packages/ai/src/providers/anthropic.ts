@@ -1003,7 +1003,8 @@ function convertContentBlocks(
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicOutputEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicEffort = AnthropicOutputEffort | "adaptive";
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 export interface AnthropicOptions extends StreamOptions {
@@ -1026,11 +1027,13 @@ export interface AnthropicOptions extends StreamOptions {
 	requestModelId?: string;
 	/**
 	 * Effort level for adaptive thinking.
-	 * Controls how much thinking Claude allocates:
+	 * Controls how much Claude allocates, or uses "adaptive" for MiniMax's
+	 * binary adaptive-thinking tag:
 	 * - "max": Always thinks with no constraints
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
+	 * - "adaptive": Sends `thinking.type: "adaptive"` without `output_config.effort`
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
@@ -1650,13 +1653,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				// `output_config.effort` ships on thinking-on requests AND on the
 				// thinking-off adaptive pin (adaptive-only models get effort:"low" so
 				// the toggle cannot 400); the beta must accompany the field in both.
+				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
+				// so the sentinel "adaptive" value intentionally sends no output_config.
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
-					!model.compat.disableAdaptiveThinking;
+					!model.compat.disableAdaptiveThinking &&
+					!usesAdaptiveThinkingTagOnly(model);
 				if (
 					model.reasoning &&
-					(options?.thinkingEnabled || sendsAdaptiveEffortPin) &&
+					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
 					extraBetas.push(effortBeta);
@@ -2783,11 +2789,22 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 	}
 }
 
+function usesAdaptiveThinkingTagOnly(model: Model<"anthropic-messages">): boolean {
+	const thinking = model.thinking;
+	if (thinking?.mode !== "anthropic-adaptive") return false;
+	const effortMap = thinking.effortMap;
+	if (!effortMap) return false;
+	for (const effort of thinking.efforts) {
+		if (effortMap[effort] !== "adaptive") return false;
+	}
+	return thinking.efforts.length > 0;
+}
+
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
 ): AnthropicEffort | undefined {
-	if (options.effort) return options.effort;
+	if (options.effort) return usesAdaptiveThinkingTagOnly(model) ? "adaptive" : options.effort;
 	const requestedEffort = options.reasoning;
 	if (!requestedEffort) return undefined;
 	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
@@ -2854,7 +2871,7 @@ function buildParams(
 
 	// Pre-compute thinking + output_config effort.
 	let thinking: MessageCreateParamsStreaming["thinking"] | undefined;
-	let outputConfigEffort: AnthropicEffort | undefined;
+	let outputConfigEffort: AnthropicOutputEffort | undefined;
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
@@ -2872,18 +2889,22 @@ function buildParams(
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
-				if (effort) outputConfigEffort = effort;
+				if (effort && effort !== "adaptive") outputConfigEffort = effort;
 			} else {
 				thinking = {
 					type: "enabled",
 					budget_tokens: options.thinkingBudgetTokens || 1024,
 					display: options.thinkingDisplay ?? "summarized",
 				};
-				if (mode === "anthropic-budget-effort" && effort) outputConfigEffort = effort;
+				if (mode === "anthropic-budget-effort" && effort && effort !== "adaptive") outputConfigEffort = effort;
 			}
 		} else if (options?.thinkingEnabled === false) {
 			const compat = model.compat;
-			if (model.thinking?.mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
+			if (
+				model.thinking?.mode === "anthropic-adaptive" &&
+				!compat.disableAdaptiveThinking &&
+				!usesAdaptiveThinkingTagOnly(model)
+			) {
 				// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 				// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 				// Omit the thinking field (the API defaults to adaptive) and pin the
