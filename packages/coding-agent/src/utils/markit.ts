@@ -1,5 +1,5 @@
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
-import type { Markit, StreamInfo } from "markit-ai";
+import type { Markit, StreamInfo } from "../markit";
 import { ToolAbortError } from "../tools/tool-errors";
 
 export interface MarkitConversionResult {
@@ -23,26 +23,27 @@ interface MuPdfWasmModuleConfig {
 	printErr?: (...values: unknown[]) => void;
 }
 
-declare global {
-	var $libmupdf_wasm_Module: MuPdfWasmModuleConfig | undefined;
-}
-
 function logMuPdfWasmOutput(stream: "stdout" | "stderr", values: unknown[]): void {
 	const message = values.length === 1 && typeof values[0] === "string" ? values[0] : values.map(String).join(" ");
 	logger.debug("mupdf wasm output", { stream, message });
 }
 
+// `$libmupdf_wasm_Module` is declared globally (as `any`) by the mupdf package.
+// Install print hooks before the WASM module initializes so its stdout/stderr
+// route to the file logger instead of corrupting the TUI.
 function installMuPdfWasmLogger(): void {
-	const moduleConfig = globalThis.$libmupdf_wasm_Module ?? {};
-	moduleConfig.print = (...values) => logMuPdfWasmOutput("stdout", values);
-	moduleConfig.printErr = (...values) => logMuPdfWasmOutput("stderr", values);
+	const moduleConfig: MuPdfWasmModuleConfig = globalThis.$libmupdf_wasm_Module ?? {};
+	moduleConfig.print = (...values: unknown[]) => logMuPdfWasmOutput("stdout", values);
+	moduleConfig.printErr = (...values: unknown[]) => logMuPdfWasmOutput("stderr", values);
 	globalThis.$libmupdf_wasm_Module = moduleConfig;
 }
 
 installMuPdfWasmLogger();
 
 let markit: () => Markit | Promise<Markit> = async () => {
-	const promise = import("markit-ai").then(({ Markit }) => {
+	// Lazy: keep the document engine (mammoth/fflate/mupdf) off the startup
+	// import graph — it loads only when a document is first converted.
+	const promise = import("../markit").then(({ Markit }) => {
 		const instance = new Markit();
 		markit = () => instance;
 		return instance;

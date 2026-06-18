@@ -55,7 +55,6 @@ out.html
 pi-*.html
 
 # Generated files
-packages/coding-agent/src/internal-urls/docs-index.generated.ts
 packages/coding-agent/src/export/html/tool-views.generated.js
 packages/natives/npm/
 /runs/

@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { inflateSync, strFromU8 } from "fflate";
+import { bytesToText, inflateRaw } from "../utils/zip";
 
 import { formatBytes } from "./render-utils";
 import { ToolError } from "./tool-errors";
@@ -417,7 +417,7 @@ function parseZipCentralDirectory(
 			throw new ToolError("Invalid ZIP archive: truncated central directory entry");
 		}
 
-		const rawPath = strFromU8(centralDirectory.subarray(nameStart, extraStart), (flags & ZIP_UTF8_FLAG) === 0);
+		const rawPath = bytesToText(centralDirectory.subarray(nameStart, extraStart), (flags & ZIP_UTF8_FLAG) === 0);
 		const normalizedPath = normalizeArchiveEntryPath(rawPath);
 		if (normalizedPath) {
 			const values = readZip64EntryValues(
@@ -490,7 +490,7 @@ async function readZipFileBytes(storage: ZipStorage, uncompressedSize: number): 
 	}
 
 	try {
-		return inflateSync(compressedBytes, { out: new Uint8Array(uncompressedSize) });
+		return inflateRaw(compressedBytes, new Uint8Array(uncompressedSize));
 	} catch (error) {
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	}

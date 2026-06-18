@@ -51,34 +51,9 @@ const CONVERTIBLE_MIMES = new Set([
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 	"application/rtf",
 	"application/epub+zip",
-	"image/png",
-	"image/jpeg",
-	"image/gif",
-	"image/webp",
-	"audio/mpeg",
-	"audio/wav",
-	"audio/ogg",
 ]);
 
-const CONVERTIBLE_EXTENSIONS = new Set([
-	".pdf",
-	".doc",
-	".docx",
-	".ppt",
-	".pptx",
-	".xls",
-	".xlsx",
-	".rtf",
-	".epub",
-	".png",
-	".jpg",
-	".jpeg",
-	".gif",
-	".webp",
-	".mp3",
-	".wav",
-	".ogg",
-]);
+const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
 const NOTEBOOK_MIMES = new Set(["application/x-ipynb+json"]);
 const NOTEBOOK_EXTENSIONS = new Set([".ipynb"]);
@@ -1144,45 +1119,25 @@ async function renderUrl(
 			notes.push(
 				`Image MIME type ${imageMimeType} is unsupported for inline model serialization; returning text metadata only`,
 			);
-			const shouldTryConvertibleFallback = isConvertible(mime, extHint);
-			if (shouldTryConvertibleFallback) {
-				notes.push("Attempting binary conversion fallback for unsupported image MIME type");
-			} else {
-				notes.push("Falling back to textual rendering from initial response");
-			}
-			skipConvertibleBinaryRetry = !shouldTryConvertibleFallback;
+			notes.push("Falling back to textual rendering from initial response");
+			skipConvertibleBinaryRetry = true;
 		} else {
 			const binary = await fetchBinary(finalUrl, timeout, signal);
 			if (binary.ok) {
 				notes.push("Fetched image binary");
-				const conversionExtension = getExtensionHint(finalUrl, binary.contentDisposition) || extHint;
-				let convertedText: string | null = null;
-				const converted = await convertWithMarkit(binary.buffer, conversionExtension, timeout, signal);
-				if (converted.ok) {
-					if (converted.content.trim().length > 50) {
-						notes.push("Converted with markit");
-						convertedText = converted.content;
-					} else {
-						notes.push("markit conversion produced no usable output");
-					}
-				} else if (converted.error) {
-					notes.push(`markit conversion failed: ${converted.error}`);
-				} else {
-					notes.push("markit conversion failed");
-				}
 
 				if (binary.buffer.byteLength > MAX_INLINE_IMAGE_SOURCE_BYTES) {
 					notes.push(
 						`Image exceeds inline source limit (${binary.buffer.byteLength} bytes > ${MAX_INLINE_IMAGE_SOURCE_BYTES} bytes)`,
 					);
 					const output = finalizeOutput(
-						convertedText ?? `Fetched image content (${imageMimeType}), but it is too large to inline render.`,
+						`Fetched image content (${imageMimeType}), but it is too large to inline render.`,
 					);
 					return {
 						url,
 						finalUrl,
 						contentType: imageMimeType,
-						method: convertedText ? "markit" : "image-too-large",
+						method: "image-too-large",
 						content: output.content,
 						fetchedAt,
 						truncated: output.truncated,
@@ -1199,15 +1154,13 @@ async function renderUrl(
 				if (!isDecodedImage) {
 					notes.push(`Fetched payload could not be decoded as ${imageMimeType}; returning text metadata only`);
 					const output = finalizeOutput(
-						convertedText ??
-							rawContent ??
-							`Fetched payload was labeled ${imageMimeType}, but bytes were not a valid image.`,
+						rawContent ?? `Fetched payload was labeled ${imageMimeType}, but bytes were not a valid image.`,
 					);
 					return {
 						url,
 						finalUrl,
 						contentType: imageMimeType,
-						method: convertedText ? "markit" : "image-invalid",
+						method: "image-invalid",
 						content: output.content,
 						fetchedAt,
 						truncated: output.truncated,
@@ -1219,13 +1172,13 @@ async function renderUrl(
 						`Image exceeds inline output limit after resize (${resized.buffer.length} bytes > ${MAX_INLINE_IMAGE_OUTPUT_BYTES} bytes)`,
 					);
 					const output = finalizeOutput(
-						convertedText ?? `Fetched image content (${imageMimeType}), but it is too large to inline render.`,
+						`Fetched image content (${imageMimeType}), but it is too large to inline render.`,
 					);
 					return {
 						url,
 						finalUrl,
 						contentType: imageMimeType,
-						method: convertedText ? "markit" : "image-too-large",
+						method: "image-too-large",
 						content: output.content,
 						fetchedAt,
 						truncated: output.truncated,
@@ -1234,7 +1187,7 @@ async function renderUrl(
 				}
 
 				const dimensionNote = formatDimensionNote(resized);
-				let imageSummary = convertedText ?? `Fetched image content (${resized.mimeType}).`;
+				let imageSummary = `Fetched image content (${resized.mimeType}).`;
 				if (dimensionNote) {
 					imageSummary += `\n${dimensionNote}`;
 				}
