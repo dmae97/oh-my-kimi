@@ -341,6 +341,8 @@ export interface InteractiveModeContext {
 	handleBtwEscape(): boolean;
 	handleBtwBranchKey(): Promise<boolean>;
 	canBranchBtw(): boolean;
+	canCopyBtw(): boolean;
+	handleBtwCopyKey(): Promise<boolean>;
 	handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void>;
 	handleOmfgCommand(complaint: string): Promise<void>;
 	hasActiveOmfg(): boolean;
