@@ -151,15 +151,24 @@ describe("collapseEffortVariants", () => {
 		});
 	});
 
-	it("keeps the thinking backing id for a -thinking-only claude family", () => {
+	it("preserves off routing for a -thinking-only claude family", () => {
 		const out = collapseEffortVariants([memberSpec("claude-opus-4-6-thinking")], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+		const opus = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
 
 		expect(out[0]?.id).toBe("claude-opus-4-6");
 		expect(out[0]?.requestModelId).toBe("claude-opus-4-6-thinking");
-		// The off route targeted the absent bare id — dropped; off falls back
-		// to requestModelId, preserving today's served default.
-		expect(out[0]?.thinking?.effortRouting?.off).toBeUndefined();
-		expect(out[0]?.thinking?.effortRouting?.[Effort.High]).toBe("claude-opus-4-6-thinking");
+		expect(resolveWireModelId(opus, undefined)).toBe("claude-opus-4-6");
+		expect(resolveWireModelId(opus, Effort.High)).toBe("claude-opus-4-6-thinking");
+	});
+
+	it("preserves thinking routing for a bare-only claude family", () => {
+		const out = collapseEffortVariants([memberSpec("claude-sonnet-4-6")], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+		const sonnet = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
+
+		expect(out[0]?.id).toBe("claude-sonnet-4-6");
+		expect(out[0]?.requestModelId).toBeUndefined();
+		expect(resolveWireModelId(sonnet, undefined)).toBe("claude-sonnet-4-6");
+		expect(resolveWireModelId(sonnet, Effort.High)).toBe("claude-sonnet-4-6-thinking");
 	});
 
 	it("renames single-member families through requestModelId with no routing", () => {

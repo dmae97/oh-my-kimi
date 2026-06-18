@@ -72,6 +72,11 @@ export interface EffortVariantFamily {
 	 * efforts fall back to `requestModelId ?? id`.
 	 */
 	routing: Readonly<Partial<Record<Effort | "off", string>>>;
+	/**
+	 * Preserve curated route targets even when discovery only returned one member.
+	 * Use only for provider contracts where the hidden twin remains requestable.
+	 */
+	preserveAbsentRoutes?: boolean;
 	/** Explicit capability surface for the collapsed spec — no inference. */
 	thinking: Readonly<Omit<ThinkingConfig, "effortRouting" | "suppressWhenOff">>;
 	/** Thinking-off requests must explicitly suppress thinking on the wire. */
@@ -100,6 +105,7 @@ function thinkingPair(baseId: string, name: string): EffortVariantFamily {
 		// Thinking-off routes to the non-thinking backing id, where omitting
 		// thinkingConfig is already correct — no suppressWhenOff.
 		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		preserveAbsentRoutes: true,
 	};
 }
 
@@ -519,7 +525,7 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 		let hasEffortRoute = false;
 		for (const effortKey in family.routing) {
 			const target = family.routing[effortKey as Effort | "off"];
-			if (target !== undefined && presentSet.has(target) && !retired?.has(target)) {
+			if (target !== undefined && (presentSet.has(target) || family.preserveAbsentRoutes) && !retired?.has(target)) {
 				routing[effortKey as Effort | "off"] = target;
 				hasRouting = true;
 				if (effortKey !== "off") hasEffortRoute = true;

@@ -17781,6 +17781,7 @@
 					"high"
 				],
 				"effortRouting": {
+					"off": "claude-opus-4-6",
 					"minimal": "claude-opus-4-6-thinking",
 					"low": "claude-opus-4-6-thinking",
 					"medium": "claude-opus-4-6-thinking",
@@ -17853,7 +17854,11 @@
 					"high"
 				],
 				"effortRouting": {
-					"off": "claude-sonnet-4-6"
+					"off": "claude-sonnet-4-6",
+					"minimal": "claude-sonnet-4-6-thinking",
+					"low": "claude-sonnet-4-6-thinking",
+					"medium": "claude-sonnet-4-6-thinking",
+					"high": "claude-sonnet-4-6-thinking"
 				}
 			}
 		},
