@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.10] - 2026-06-18
+
 ### Added
 
 - Updated the `pi` option of the `tools.format` setting to use the new compact sigil-delimited owned tool-calling dialect (`§`/`«…»`/`¤`/`‡‡`) that uses ~46% fewer tokens than the legacy format on typical calls.

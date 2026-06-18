@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.10] - 2026-06-18
+
 ### Changed
 
 - Updated description of moderated content categories to use more inclusive terminology
