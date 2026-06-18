@@ -55,6 +55,7 @@
 - Fixed Codex stream-error `.code` resolution to use the same nested-first precedence (`error.code` → `error.type` → top-level `code`) as `isRetryableCodexFailureEvent` and the formatted message. Previously the error factory resolved top-level-first, so a failure event carrying both a top-level and a differing nested error code surfaced a `.code` that could disagree with its own `retryable` flag and message text.
 - Fixed MCP tool argument validation to drop optional empty-string parameters before schema validation, matching the existing optional null handling and avoiding pattern/type failures for omitted model-filled fields. ([#2981](https://github.com/can1357/oh-my-pi/issues/2981))
 - Fixed API-key credential replacement to hard-delete superseded disabled `api_key` rows so `auth_credentials` does not grow indefinitely after key rotation. ([#2941](https://github.com/can1357/oh-my-pi/issues/2941))
+- Fixed Cursor provider streaming to close text blocks before tool calls so post-tool text opens a new content block and TUI transcript cards render inline instead of grouped near the bottom. ([#2924](https://github.com/can1357/oh-my-pi/issues/2924))
 
 ## [16.0.5] - 2026-06-17
 
