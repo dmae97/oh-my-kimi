@@ -21,6 +21,8 @@ import type { Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
+	UsageCostHistoryEntry,
+	UsageCostHistoryQuery,
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -44,6 +46,7 @@ import {
 	consumeCodexResetCredit,
 	listCodexResetCredits,
 } from "./usage/openai-codex-reset";
+import { opencodeGoUsageProvider } from "./usage/opencode-go";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -300,6 +303,10 @@ export interface AuthCredentialStore {
 	 * skipped — the broker host records into its own database instead.
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
+	/** Append observed request costs for providers without upstream usage APIs. */
+	recordUsageCosts?(entries: UsageCostHistoryEntry[]): void;
+	/** Read observed request costs, oldest first. */
+	listUsageCosts?(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[];
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**
@@ -491,6 +498,7 @@ const DEFAULT_USAGE_PROVIDERS: UsageProvider[] = [
 	googleGeminiCliUsageProvider,
 	claudeUsageProvider,
 	zaiUsageProvider,
+	opencodeGoUsageProvider,
 	githubCopilotUsageProvider,
 ];
 
@@ -1986,7 +1994,11 @@ export class AuthStorage {
 			typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
 				? AbortSignal.timeout(timeoutMs)
 				: undefined;
-		let params: UsageRequestDescriptor & { signal?: AbortSignal } = { ...request, signal: timeoutSignal };
+		let params: UsageFetchParams = {
+			...request,
+			accountKey: this.#buildUsageCacheIdentity(request.credential),
+			signal: timeoutSignal,
+		};
 
 		if (
 			request.credential.type === "oauth" &&
@@ -2009,8 +2021,10 @@ export class AuthStorage {
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
 					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
 					params = {
-						...params,
+						...request,
 						credential: refreshedCredential,
+						accountKey: this.#buildUsageCacheIdentity(refreshedCredential),
+						signal: timeoutSignal,
 					};
 				} catch (error) {
 					const errorMsg = String(error);
@@ -2068,6 +2082,7 @@ export class AuthStorage {
 			return await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
+				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
 		} catch (error) {
 			logger.debug("AuthStorage usage fetch failed", {
@@ -2164,6 +2179,64 @@ export class AuthStorage {
 	 */
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		return this.#store.listUsageHistory?.(query) ?? [];
+	}
+
+	/** Record one observed provider request cost for later local usage aggregation. */
+	recordUsageCost(
+		provider: Provider,
+		costUsd: number,
+		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
+	): boolean {
+		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
+		const record = this.#store.recordUsageCosts;
+		if (!record) return false;
+		const credential = this.#resolveObservedUsageCredential(provider, options?.sessionId);
+		if (!credential) return false;
+		const entry: UsageCostHistoryEntry = {
+			recordedAt: options?.recordedAt ?? Date.now(),
+			provider,
+			accountKey: this.#buildUsageCacheIdentity(credential),
+			costUsd,
+		};
+		try {
+			record.call(this.#store, [entry]);
+			const cacheKey = this.#buildUsageReportCacheKey({
+				provider,
+				credential,
+				baseUrl: options?.baseUrl,
+			});
+			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
+			return true;
+		} catch (error) {
+			this.#usageLogger?.debug("usage cost record failed", {
+				provider,
+				error: String(error),
+			});
+			return false;
+		}
+	}
+
+	#resolveObservedUsageCredential(provider: Provider, sessionId?: string): UsageCredential | undefined {
+		const entries = this.#getStoredCredentials(provider);
+		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		if (sessionCredential) {
+			const credential = entries[sessionCredential.index]?.credential;
+			if (credential) {
+				return credential.type === "api_key"
+					? { type: "api_key", apiKey: credential.key }
+					: this.#buildUsageCredential(credential);
+			}
+		}
+		if (entries.length === 1) {
+			const credential = entries[0]!.credential;
+			return credential.type === "api_key"
+				? { type: "api_key", apiKey: credential.key }
+				: this.#buildUsageCredential(credential);
+		}
+		const envKey = getEnvApiKey(provider);
+		if (envKey) return { type: "api_key", apiKey: envKey };
+		return undefined;
 	}
 
 	ingestUsageHeaders(
@@ -2574,7 +2647,11 @@ export class AuthStorage {
 		const timeoutMs = options?.timeoutMs ?? this.#usageRequestTimeoutMs;
 		const completionProbe = options?.completionProbe;
 		const completionTimeoutMs = options?.completionTimeoutMs ?? timeoutMs;
-		const ctx: UsageFetchContext = { fetch: this.#usageFetch, logger: this.#usageLogger };
+		const ctx: UsageFetchContext = {
+			fetch: this.#usageFetch,
+			logger: this.#usageLogger,
+			listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
+		};
 
 		const results: CredentialHealthResult[] = [];
 		for (const row of stored) {
@@ -2600,7 +2677,11 @@ export class AuthStorage {
 
 			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const probeSignal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-			let params: UsageFetchParams & { signal: AbortSignal } = { ...initialRequest, signal: probeSignal };
+			let params: UsageFetchParams & { signal: AbortSignal } = {
+				...initialRequest,
+				accountKey: this.#buildUsageCacheIdentity(initialRequest.credential),
+				signal: probeSignal,
+			};
 			let refreshError: string | undefined;
 
 			// Refresh expired OAuth before probing — without this an expired access
@@ -2630,7 +2711,11 @@ export class AuthStorage {
 							initialRequest.credential,
 							refreshedCredential,
 						);
-						params = { ...params, credential: refreshedCredential };
+						params = {
+							...params,
+							credential: refreshedCredential,
+							accountKey: this.#buildUsageCacheIdentity(refreshedCredential),
+						};
 					} catch (error) {
 						refreshError = `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 					}
@@ -2651,6 +2736,8 @@ export class AuthStorage {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
 			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
 				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (providerImpl.validatesCredentials === false) {
+				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
 					const report = await providerImpl.fetchUsage(params, ctx);
@@ -4409,6 +4496,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
 	#insertUsageHistoryStmt: Statement;
+	#insertUsageCostStmt: Statement;
+	#listUsageCostsStmt: Statement;
 	#lastUsageHistoryStmt: Statement;
 	#listUsageHistoryStmt: Statement;
 	#updateUsageHistoryStmt: Statement;
@@ -4462,6 +4551,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
+		);
+		this.#insertUsageCostStmt = this.#db.prepare(
+			"INSERT INTO usage_cost_history (recorded_at, provider, account_key, cost_usd) VALUES (?, ?, ?, ?)",
+		);
+		this.#listUsageCostsStmt = this.#db.prepare(
+			"SELECT recorded_at, provider, account_key, cost_usd FROM usage_cost_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) AND (? IS NULL OR account_key = ?) ORDER BY recorded_at ASC",
 		);
 	}
 
@@ -4543,6 +4638,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				resets_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
+			CREATE TABLE IF NOT EXISTS usage_cost_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				recorded_at INTEGER NOT NULL,
+				provider TEXT NOT NULL,
+				account_key TEXT NOT NULL,
+				cost_usd REAL NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_usage_cost_history_lookup ON usage_cost_history(provider, account_key, recorded_at);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
 		`);
 
@@ -5019,6 +5122,42 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				usedFraction: row.used_fraction ?? undefined,
 				status: (row.status ?? undefined) as UsageHistoryEntry["status"],
 				resetsAt: row.resets_at ?? undefined,
+			}));
+		} catch {
+			return [];
+		}
+	}
+	recordUsageCosts(entries: UsageCostHistoryEntry[]): void {
+		try {
+			for (const entry of entries) {
+				this.#insertUsageCostStmt.run(entry.recordedAt, entry.provider, entry.accountKey, entry.costUsd);
+			}
+		} catch {
+			// Cost history is best-effort; never break request persistence.
+		}
+	}
+
+	listUsageCosts(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[] {
+		try {
+			const provider = query?.provider ?? null;
+			const accountKey = query?.accountKey ?? null;
+			const rows = this.#listUsageCostsStmt.all(
+				query?.sinceMs ?? 0,
+				provider,
+				provider,
+				accountKey,
+				accountKey,
+			) as Array<{
+				recorded_at: number;
+				provider: string;
+				account_key: string;
+				cost_usd: number;
+			}>;
+			return rows.map(row => ({
+				recordedAt: row.recorded_at,
+				provider: row.provider as Provider,
+				accountKey: row.account_key,
+				costUsd: row.cost_usd,
 			}));
 		} catch {
 			return [];
