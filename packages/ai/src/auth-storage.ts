@@ -2729,6 +2729,8 @@ export class AuthStorage {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
 			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
 				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (providerImpl.validatesCredentials === false) {
+				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
 					const report = await providerImpl.fetchUsage(params, ctx);

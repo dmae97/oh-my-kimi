@@ -15,10 +15,12 @@
  *   5. Providers with no registered `UsageProvider` report `ok: null` with
  *      "no usage probe configured" — the credential's status is unknown,
  *      not failed.
- *   6. When a `completionProbe` is supplied, it receives the post-refresh
+ *   6. Local-only usage providers opt out of health validation and leave
+ *      `ok: null` unless a separate completion probe is supplied.
+ *   7. When a `completionProbe` is supplied, it receives the post-refresh
  *      bearer for every row, runs independently of the usage probe (i.e. it
- *      still runs for providers without a `UsageProvider`), but is skipped
- *      when OAuth refresh fails.
+ *      still runs for providers without a validating `UsageProvider`), but is
+ *      skipped when OAuth refresh fails.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import {
@@ -32,6 +34,7 @@ import {
 } from "@oh-my-pi/pi-ai/auth-storage";
 import type { UsageProvider } from "@oh-my-pi/pi-ai/usage";
 import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
+import { opencodeGoUsageProvider } from "@oh-my-pi/pi-ai/usage/opencode-go";
 
 function oauthRow(id: number, email: string, opts?: { expired?: boolean }): StoredAuthCredential {
 	const credential: AuthCredential = {
@@ -390,6 +393,33 @@ describe("AuthStorage.checkCredentials", () => {
 			// probe surfaces the real failure.
 			expect(result.ok).toBeNull();
 			expect(result.reason).toMatch(/no usage probe configured/);
+			expect(result.completion).toEqual({ ok: false, reason: "401 invalid_api_key" });
+		} finally {
+			storage.close();
+		}
+	});
+
+	it("does not mark local-only usage providers healthy without upstream validation", async () => {
+		const apiKeyRow: StoredAuthCredential = {
+			id: 12,
+			provider: "opencode-go",
+			credential: { type: "api_key", key: "sk-opencode-go" },
+			disabledCause: null,
+		};
+		const store = makeStore([apiKeyRow]);
+		const storage = new AuthStorage(store, {
+			usageProviderResolver: provider => (provider === "opencode-go" ? opencodeGoUsageProvider : undefined),
+		});
+		await storage.reload();
+
+		const probe = vi.fn<CompletionProbe>().mockResolvedValue({ ok: false, reason: "401 invalid_api_key" });
+
+		try {
+			const [result] = await storage.checkCredentials({ completionProbe: probe });
+			expect(result.ok).toBeNull();
+			expect(result.reason).toMatch(/does not validate credentials/);
+			expect(result.report).toBeUndefined();
+			expect(probe).toHaveBeenCalledTimes(1);
 			expect(result.completion).toEqual({ ok: false, reason: "401 invalid_api_key" });
 		} finally {
 			storage.close();

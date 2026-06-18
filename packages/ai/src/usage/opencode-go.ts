@@ -69,6 +69,7 @@ function buildWindowLimit(
 export const opencodeGoUsageProvider: UsageProvider = {
 	id: OPENCODE_GO_PROVIDER,
 	supports: params => params.provider === OPENCODE_GO_PROVIDER && params.credential.type === "api_key",
+	validatesCredentials: false,
 	async fetchUsage(params, ctx) {
 		if (params.provider !== OPENCODE_GO_PROVIDER || params.credential.type !== "api_key") return null;
 		const nowMs = Date.now();
