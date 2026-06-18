@@ -192,6 +192,52 @@ describe("AgentSession shake", () => {
 			expect(end[0]).toMatchObject({ type: "auto_compaction_end", action: "shake" });
 		});
 
+		it("has isCompacting true when the shake auto_compaction_start event fires", async () => {
+			// Defect 1 parity for the shake strategy: the controller backing isCompacting
+			// must be installed before auto_compaction_start is emitted, so a message
+			// typed as the loader appears is queued safely rather than mis-routed.
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdPercent", 1);
+			session.settings.set("contextPromotion.enabled", false);
+
+			let capturedIsCompacting: boolean | undefined;
+			const { promise: shakeStarted, resolve: onShakeStarted } = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "auto_compaction_start" && event.action === "shake") {
+					capturedIsCompacting = session.isCompacting;
+					onShakeStarted();
+				}
+			});
+
+			vi.spyOn(session, "shake").mockResolvedValue({
+				mode: "elide",
+				toolResultsDropped: 1,
+				blocksDropped: 0,
+				tokensFreed: 10_000,
+			});
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "trigger" }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 10_000,
+					output: 1_000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 11_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+			await shakeStarted;
+
+			expect(capturedIsCompacting).toBe(true);
+		});
+
 		it("falls back to context-full when shake cannot drop context below the threshold (regression #2119)", async () => {
 			session.settings.set("compaction.strategy", "shake");
 			session.settings.set("compaction.thresholdPercent", 1);

@@ -7729,7 +7729,17 @@ export class AgentSession {
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
+			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
+			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
+			// pre-loader TUI steer) so they survive into the post-handoff session instead of
+			// being silently dropped. Capture is synchronous immediately before reset and
+			// restore is synchronous immediately after — no await gap — so a steer arriving
+			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
+			// rather than being clobbered.
+			const preservedSteering = this.agent.peekSteeringQueue().slice();
+			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
 			this.agent.reset();
+			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
 			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
@@ -9087,7 +9097,6 @@ export class AgentSession {
 				);
 			}
 		}
-		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 		// Abort any older auto-compaction before installing this run's controller.
 		this.#autoCompactionAbortController?.abort();
 		const autoCompactionAbortController = new AbortController();
@@ -9095,11 +9104,16 @@ export class AgentSession {
 		const autoCompactionSignal = autoCompactionAbortController.signal;
 
 		try {
+			// Emit start AFTER the controller is installed so isCompacting is already true
+			// for any listener — and for input routed during this emit's event-loop yield:
+			// a message typed as the compaction loader appears must land in the compaction
+			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
+			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 			if (compactionSettings.strategy === "handoff" && reason !== "overflow") {
 				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
 				const handoffResult = await this.handoff(handoffFocus, {
 					autoTriggered: true,
-					signal: this.#autoCompactionAbortController.signal,
+					signal: autoCompactionSignal,
 				});
 				if (!handoffResult) {
 					const aborted = autoCompactionSignal.aborted;
@@ -9531,12 +9545,12 @@ export class AgentSession {
 		triggerContextTokens?: number,
 	): Promise<CompactionCheckResult | "fallback"> {
 		const action = "shake";
-		await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 		this.#autoCompactionAbortController?.abort();
 		const controller = new AbortController();
 		this.#autoCompactionAbortController = controller;
 		const signal = controller.signal;
 		try {
+			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 			const result = await this.shake("elide", { config: DEFAULT_SHAKE_CONFIG, signal });
 			if (signal.aborted) {
 				await this.#emitSessionEvent({
