@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { Container, Editor, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, Editor, Ellipsis, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -81,7 +81,12 @@ function contentWidth(): number {
 
 /** Sanitize a line for TUI display: replace tabs, then truncate to viewport width. */
 function sanitizeLine(text: string, maxWidth?: number): string {
-	return truncateToWidth(replaceTabs(text), maxWidth ?? contentWidth());
+	const singleLine = replaceTabs(text).replace(/[\r\n]+/g, " ");
+	return truncateToWidth(singleLine, maxWidth ?? contentWidth());
+}
+
+function clampHubLine(line: string, width: number): string {
+	return truncateToWidth(line.replace(/[\r\n]+/g, " "), Math.max(1, width - 2), Ellipsis.Omit);
 }
 
 const STATUS_ORDER: Record<AgentStatus, number> = { running: 0, idle: 1, parked: 2, aborted: 3 };
@@ -298,7 +303,8 @@ export class AgentHubOverlayComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		return this.#view === "table" ? this.#renderTable(width) : this.#renderChat(width);
+		const lines = this.#view === "table" ? this.#renderTable(width) : this.#renderChat(width);
+		return lines.map(line => clampHubLine(line, width));
 	}
 
 	handleInput(keyData: string): void {
@@ -490,7 +496,8 @@ export class AgentHubOverlayComponent extends Container {
 			parts.push(theme.fg("warning", `⧉ ${unread}`));
 		}
 		parts.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
-		return truncateToWidth(` ${cursor} ${parts.join(theme.sep.dot)}`, Math.max(10, width - 1));
+		const rawLine = ` ${cursor} ${parts.join(theme.sep.dot)}`;
+		return truncateToWidth(rawLine.replace(/[\r\n]+/g, " "), Math.max(1, width - 1));
 	}
 
 	#handleTableInput(keyData: string): void {
