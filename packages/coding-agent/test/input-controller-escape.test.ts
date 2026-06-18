@@ -307,7 +307,7 @@ describe("InputController escape behavior", () => {
 
 		expect(spies.handleBtwCommand).toHaveBeenCalledWith("why is it doing that?");
 		expect(spies.prompt).not.toHaveBeenCalled();
-		expect(editor.addToHistory).not.toHaveBeenCalled();
+		expect(editor.addToHistory).toHaveBeenCalledWith("/btw why is it doing that?");
 		expect(editor.getText()).toBe("");
 	});
 
