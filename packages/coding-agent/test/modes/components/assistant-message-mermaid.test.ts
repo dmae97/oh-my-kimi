@@ -67,7 +67,8 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 	});
 
 	it("aligns box borders for CJK labels in display columns", () => {
-		// Defends the beautiful-mermaid patchedDependencies entry: Hangul is 2
+		// Defends the first-party vendored Mermaid ASCII renderer's CJK/East-Asian
+		// display-width handling (packages/utils/src/vendor/mermaid-ascii): Hangul is 2
 		// terminal columns wide, so every row of a single-node diagram must
 		// measure the same display width or the right border drifts.
 		const rendered = renderAssistantMessage("```mermaid\nflowchart TD\n  A[수집 스케줄러]\n```");

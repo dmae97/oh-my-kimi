@@ -360,7 +360,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 			const legacyDbPath = path.join(tempDir, "legacy-v1-anthropic-agent.db");
 			const legacyDb = new Database(legacyDbPath);
-			legacyDb.exec(`
+			legacyDb.run(`
 				CREATE TABLE auth_schema_version (
 					id INTEGER PRIMARY KEY CHECK (id = 1),
 					version INTEGER NOT NULL
@@ -442,7 +442,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const futureDbPath = path.join(tempDir, "future-schema-agent.db");
 		const futureDb = new Database(futureDbPath);
-		futureDb.exec(`
+		futureDb.run(`
 			CREATE TABLE auth_schema_version (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
@@ -505,7 +505,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const legacyDbPath = path.join(tempDir, "legacy-v3-agent.db");
 		const legacyDb = new Database(legacyDbPath);
-		legacyDb.exec(`
+		legacyDb.run(`
 			CREATE TABLE auth_schema_version (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
@@ -561,7 +561,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const legacyDbPath = path.join(tempDir, "legacy-v1-agent.db");
 		const legacyDb = new Database(legacyDbPath);
-		legacyDb.exec(`
+		legacyDb.run(`
 			CREATE TABLE auth_schema_version (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
@@ -612,7 +612,7 @@ describe("AuthStorage openai-codex email dedupe", () => {
 
 		const legacyDbPath = path.join(tempDir, "legacy-agent.db");
 		const legacyDb = new Database(legacyDbPath);
-		legacyDb.exec(`
+		legacyDb.run(`
 			CREATE TABLE auth_credentials (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				provider TEXT NOT NULL,
