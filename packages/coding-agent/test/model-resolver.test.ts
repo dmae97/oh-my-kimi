@@ -883,6 +883,36 @@ describe("resolveCliModel", () => {
 		expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
 	});
 
+	test("accepts Bedrock inference profile ARNs as explicit provider model ids", () => {
+		const defaultBedrockModel = buildModel({
+			id: "us.anthropic.claude-opus-4-8",
+			name: "Claude Opus 4.8 (US)",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		});
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+
+		const result = resolveCliModel({
+			cliProvider: "amazon-bedrock",
+			cliModel: profileArn,
+			modelRegistry: {
+				getAll: () => [defaultBedrockModel],
+			},
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("amazon-bedrock");
+		expect(result.model?.api).toBe("bedrock-converse-stream");
+		expect(result.model?.id).toBe(profileArn);
+		expect(result.model?.name).toBe("Bedrock inference profile");
+	});
+
 	test("returns a clear error when there are no models", () => {
 		const registry = {
 			getAll: () => [],

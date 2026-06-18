@@ -196,6 +196,33 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 	};
 }
 
+const AMAZON_BEDROCK_PROVIDER = "amazon-bedrock";
+const BEDROCK_INFERENCE_PROFILE_ARN =
+	/^arn:aws(?:-[a-z]+)*:bedrock:[a-z0-9-]+:[0-9]*:(?:application-inference-profile|inference-profile)\/[a-z0-9][a-z0-9._:-]*$/i;
+
+function resolveBedrockInferenceProfileReference(
+	provider: string,
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	if (provider.toLowerCase() !== AMAZON_BEDROCK_PROVIDER) return undefined;
+
+	const requestedId = modelId.trim();
+	if (!BEDROCK_INFERENCE_PROFILE_ARN.test(requestedId)) return undefined;
+
+	const providerModels = availableModels.filter(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
+	const defaultModelId = DEFAULT_MODEL_PER_PROVIDER[AMAZON_BEDROCK_PROVIDER];
+	const template =
+		providerModels.find(model => model.id === defaultModelId) ?? pickDefaultAvailableModel(providerModels);
+	if (!template) return undefined;
+
+	return {
+		...template,
+		id: requestedId,
+		name: "Bedrock inference profile",
+	};
+}
+
 const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
 /**
@@ -287,6 +314,11 @@ export function resolveProviderModelReference(
 		if (aliased) {
 			return aliased;
 		}
+	}
+
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileReference(provider, modelId, availableModels);
+	if (bedrockInferenceProfile) {
+		return bedrockInferenceProfile;
 	}
 
 	if (normalizedProvider !== "openrouter") {
