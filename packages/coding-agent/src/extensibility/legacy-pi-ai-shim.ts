@@ -19,6 +19,7 @@
  * `types.ts` via the `export *` below — pi-ai still exports both as types,
  * only the runtime `Type` builder and `StringEnum()` helper were removed.
  */
+import { z } from "zod/v4";
 import { type TSchema, Type } from "./typebox";
 
 export interface StringEnumOptions<T extends string> {
@@ -28,8 +29,35 @@ export interface StringEnumOptions<T extends string> {
 	[key: string]: unknown;
 }
 
+function stringEnumWireSchema<T extends string>(values: readonly T[], options: StringEnumOptions<T> | undefined) {
+	const schema: Record<string, unknown> = {
+		type: "string",
+		enum: [...values],
+	};
+	if (!options) return schema;
+	for (const key in options) {
+		if (options[key] !== undefined) {
+			schema[key] = options[key];
+		}
+	}
+	return schema;
+}
+
 export function StringEnum<T extends string>(values: readonly T[], options?: StringEnumOptions<T>): TSchema {
-	return Type.Enum(values, options);
+	let schema: TSchema =
+		values.length === 0
+			? z.never()
+			: z.enum(values).describe(options?.description ?? "Legacy string enum compatibility schema");
+	if (options && "default" in options) {
+		schema = schema.default(options.default);
+	}
+	Object.defineProperty(schema, "toJSON", {
+		value: () => stringEnumWireSchema(values, options),
+		enumerable: false,
+		writable: true,
+		configurable: true,
+	});
+	return schema;
 }
 
 export * from "@oh-my-pi/pi-ai";

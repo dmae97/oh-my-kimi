@@ -88,20 +88,28 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 		expect(loaded.zodObj.safeParse({ name: "ok" }).success).toBe(true);
 		expect(loaded.zodObj.safeParse({}).success).toBe(false);
 	});
-	it("preserves legacy StringEnum root imports as TypeBox-compatible schemas", async () => {
+	it("preserves legacy StringEnum root imports as plain string enum schemas", async () => {
 		const entry = await writeFixtureExtension(
 			[
 				'import { StringEnum } from "@earendil-works/pi-ai";',
 				'export const schema = StringEnum(["upstream", "downstream"] as const, { default: "upstream" });',
+				"export const wireSchema = JSON.parse(JSON.stringify(schema));",
 			].join("\n"),
 		);
 
 		const loaded = (await loadLegacyPiModule(entry)) as {
 			schema: { safeParse: (input: unknown) => { success: boolean } };
+			wireSchema: { type?: string; enum?: string[]; default?: string; anyOf?: unknown };
 		};
 
 		expect(loaded.schema.safeParse("downstream").success).toBe(true);
 		expect(loaded.schema.safeParse("sideways").success).toBe(false);
+		expect(loaded.wireSchema).toEqual({
+			type: "string",
+			enum: ["upstream", "downstream"],
+			default: "upstream",
+		});
+		expect(loaded.wireSchema.anyOf).toBeUndefined();
 	});
 
 	it("does not redirect subpath imports such as @oh-my-pi/pi-ai/utils/schema", async () => {
@@ -152,19 +160,19 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 				"};",
 				"export const tool = defineTool(definition);",
 				"export const sameReference = tool === definition;",
-				"export const codingTools = createCodingTools(process.cwd());",
+				"export const codingToolNames = createCodingTools(process.cwd()).map(tool => tool.name);",
 			].join("\n"),
 		);
 
 		const loaded = (await loadLegacyPiModule(entry)) as {
 			tool: { name: string; parameters: { safeParse: (input: unknown) => { success: boolean } } };
 			sameReference: boolean;
-			codingTools: unknown[];
+			codingToolNames: string[];
 		};
 
 		expect(loaded.sameReference).toBe(true);
 		expect(loaded.tool.name).toBe("legacy_define_tool");
-		expect(Array.isArray(loaded.codingTools)).toBe(true);
+		expect(loaded.codingToolNames).toEqual(["read", "bash", "edit", "write"]);
 	});
 
 	it("preserves legacy frontmatter helper root imports", async () => {

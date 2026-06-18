@@ -18,6 +18,41 @@ import { Settings } from "../config/settings";
 import type { ToolDefinition } from "./extensions/types";
 import { Type } from "./typebox";
 
+const TOOL_DEFINITION_MARKER = "__isToolDefinition";
+const LEGACY_BUILTIN_TOOL_MARKER = "__ompLegacyBuiltinTool";
+const LEGACY_CODING_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
+
+type LegacyCodingToolName = (typeof LEGACY_CODING_TOOL_NAMES)[number];
+type LegacyBuiltinToolDefinition = ToolDefinition & { [LEGACY_BUILTIN_TOOL_MARKER]: true };
+
+function markToolDefinition<TParams extends TSchema, TDetails>(
+	tool: ToolDefinition<TParams, TDetails>,
+): ToolDefinition<TParams, TDetails> {
+	Object.defineProperty(tool, TOOL_DEFINITION_MARKER, {
+		value: true,
+		enumerable: false,
+		writable: false,
+		configurable: true,
+	});
+	return tool;
+}
+
+function legacyBuiltinTool(name: LegacyCodingToolName): ToolDefinition {
+	const tool: LegacyBuiltinToolDefinition = {
+		name,
+		label: name,
+		description: `Built-in ${name} tool placeholder resolved by createAgentSession.`,
+		parameters: Type.Object({}),
+		execute: async () => {
+			throw new Error(
+				`Legacy createCodingTools() returned ${name}; pass it through createAgentSession({ customTools }) so the SDK can bind the built-in implementation.`,
+			);
+		},
+		[LEGACY_BUILTIN_TOOL_MARKER]: true,
+	};
+	return markToolDefinition(tool);
+}
+
 export interface ParsedFrontmatter<T extends Record<string, unknown> = Record<string, unknown>> {
 	frontmatter: T;
 	body: string;
@@ -37,11 +72,11 @@ export function stripFrontmatter(content: string): string {
 export function defineTool<TParams extends TSchema = TSchema, TDetails = unknown>(
 	tool: ToolDefinition<TParams, TDetails>,
 ): ToolDefinition<TParams, TDetails> {
-	return tool;
+	return markToolDefinition(tool);
 }
 
 export function createCodingTools(_cwd: string): ToolDefinition[] {
-	return [];
+	return LEGACY_CODING_TOOL_NAMES.map(legacyBuiltinTool);
 }
 
 export const SettingsManager = {
