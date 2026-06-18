@@ -12,9 +12,11 @@
  * the same module identity as a direct `@oh-my-pi/pi-coding-agent` import.
  */
 
+import type { AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter as parseOmpFrontmatter } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
+import { BUILTIN_TOOLS, type Tool, type ToolSession } from "../tools";
 import type { ToolDefinition } from "./extensions/types";
 import { Type } from "./typebox";
 
@@ -36,21 +38,54 @@ function markToolDefinition<TParams extends TSchema, TDetails>(
 	});
 	return tool;
 }
+function legacyToolSession(cwd: string): ToolSession {
+	return {
+		cwd,
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => null,
+		settings: Settings.isolated(),
+	};
+}
 
-function legacyBuiltinTool(name: LegacyCodingToolName): ToolDefinition {
-	const tool: LegacyBuiltinToolDefinition = {
-		name,
-		label: name,
-		description: `Built-in ${name} tool placeholder resolved by createAgentSession.`,
-		parameters: Type.Object({}),
-		execute: async () => {
-			throw new Error(
-				`Legacy createCodingTools() returned ${name}; pass it through createAgentSession({ customTools }) so the SDK can bind the built-in implementation.`,
-			);
-		},
+function createBuiltinTool(cwd: string, name: LegacyCodingToolName): Tool {
+	const tool = BUILTIN_TOOLS[name](legacyToolSession(cwd));
+	if (tool instanceof Promise) {
+		throw new Error(`Built-in ${name} tool factory unexpectedly returned a promise.`);
+	}
+	if (!tool) {
+		throw new Error(`Built-in ${name} tool is unavailable.`);
+	}
+	return tool;
+}
+
+async function executeBuiltinTool(
+	cwd: string,
+	name: LegacyCodingToolName,
+	toolCallId: string,
+	params: unknown,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback | undefined,
+) {
+	const tool = createBuiltinTool(cwd, name);
+	return tool.execute(toolCallId, params, signal, onUpdate);
+}
+
+function legacyBuiltinTool(cwd: string, name: LegacyCodingToolName): ToolDefinition {
+	const tool = createBuiltinTool(cwd, name);
+	const definition: LegacyBuiltinToolDefinition = {
+		name: tool.name,
+		label: tool.label,
+		description: tool.description,
+		parameters: tool.parameters,
+		hidden: tool.hidden,
+		deferrable: tool.deferrable,
+		approval: tool.approval,
+		execute: (toolCallId, params, signal, onUpdate) =>
+			executeBuiltinTool(cwd, name, toolCallId, params, signal, onUpdate),
 		[LEGACY_BUILTIN_TOOL_MARKER]: true,
 	};
-	return markToolDefinition(tool);
+	return markToolDefinition(definition);
 }
 
 export interface ParsedFrontmatter<T extends Record<string, unknown> = Record<string, unknown>> {
@@ -75,8 +110,8 @@ export function defineTool<TParams extends TSchema = TSchema, TDetails = unknown
 	return markToolDefinition(tool);
 }
 
-export function createCodingTools(_cwd: string): ToolDefinition[] {
-	return LEGACY_CODING_TOOL_NAMES.map(legacyBuiltinTool);
+export function createCodingTools(cwd: string): ToolDefinition[] {
+	return LEGACY_CODING_TOOL_NAMES.map(name => legacyBuiltinTool(cwd, name));
 }
 
 export const SettingsManager = {
