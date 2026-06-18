@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Fortran support to the AST tooling, including file/alias resolution.
+
 ## [16.0.6] - 2026-06-18
 
 ### Removed
