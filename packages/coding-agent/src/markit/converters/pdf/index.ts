@@ -72,7 +72,7 @@ export class PdfConverter implements Converter {
 					const filename = `${img.id}.png`;
 					const filepath = path.join(imageDir, filename);
 					try {
-						const png = renderImageRegion(pdfBytes, img);
+						const png = await renderImageRegion(pdfBytes, img);
 						await Bun.write(filepath, png);
 						imageBlocks.push({ topY: img.topY, markdown: `![${img.id}](${filepath})` });
 					} catch {
