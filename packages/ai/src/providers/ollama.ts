@@ -103,21 +103,29 @@ function normalizeBaseUrl(baseUrl?: string): string {
 	return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
 }
 
+type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max" | undefined;
+
 function mapReasoning(
+	model: Model<"ollama-chat">,
 	reasoning: OllamaChatOptions["reasoning"],
 	disableReasoning: boolean | undefined,
-	modelReasoning: boolean,
-): boolean | "low" | "medium" | "high" | undefined {
+): OllamaThinkValue {
+	const modelReasoning = model.reasoning;
 	if (disableReasoning && modelReasoning) {
 		return false;
 	}
-	switch (reasoning) {
+	const mappedReasoning =
+		model.provider === "ollama-cloud" && reasoning ? (model.thinking?.effortMap?.[reasoning] ?? reasoning) : reasoning;
+	switch (mappedReasoning) {
 		case "minimal":
 		case "low":
 			return "low";
 		case "medium":
 			return "medium";
 		case "high":
+			return "high";
+		case "max":
+			return "max";
 		case "xhigh":
 			return "high";
 		default:
@@ -277,7 +285,7 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 }
 
 function createChatBody(model: Model<"ollama-chat">, context: Context, options: OllamaChatOptions | undefined) {
-	const think = mapReasoning(options?.reasoning, options?.disableReasoning, model.reasoning);
+	const think = mapReasoning(model, options?.reasoning, options?.disableReasoning);
 	const toolChoice = mapToolChoice(options?.toolChoice);
 	const selectedTools = selectToolsForToolChoice(context.tools, options?.toolChoice);
 	const tools = convertTools(selectedTools);
