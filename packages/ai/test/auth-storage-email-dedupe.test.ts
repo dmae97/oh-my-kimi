@@ -678,13 +678,21 @@ describe("AuthStorage OAuth login upgrade and multi-account coexistence", () => 
 			expect(await authStorage.getApiKey("unit-login-upgrade")).toBe("sk-legacy-key");
 
 			// 2. Register custom oauth provider
-			let loginReturns: any = null;
+			let loginReturns: (Omit<OAuthCredential, "type"> & { type?: string }) | null = null;
 			registerOAuthProvider({
 				id: "unit-login-upgrade",
 				name: "Unit Login Upgrade",
 				sourceId: "auth-storage-login-upgrade-test",
-				login: async () => loginReturns,
-				refreshToken: async () => loginReturns,
+				login: async () => {
+					if (!loginReturns) throw new Error("no credentials");
+					const { type, ...rest } = loginReturns;
+					return rest;
+				},
+				refreshToken: async () => {
+					if (!loginReturns) throw new Error("no credentials");
+					const { type, ...rest } = loginReturns;
+					return rest;
+				},
 			});
 
 			// 3. Login first OAuth account
