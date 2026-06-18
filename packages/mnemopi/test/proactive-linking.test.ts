@@ -184,6 +184,28 @@ describe("proactive memory linking", () => {
 		}
 	});
 
+	it("does not snapshot a construction-time environment override into instance defaults", () => {
+		process.env.MNEMOPI_PROACTIVE_LINKING = "1";
+		const beam = new BeamMemory({
+			sessionId: "proactive-env-snapshot",
+			dbPath: ":memory:",
+			proactiveLinking: false,
+		});
+		delete process.env.MNEMOPI_PROACTIVE_LINKING;
+		try {
+			const first = beam.remember("Alice set up the CI/CD pipeline for backend deployment", {
+				importance: 0.8,
+			});
+			const second = beam.remember("Alice configured the deployment pipeline for continuous integration", {
+				importance: 0.8,
+			});
+
+			expect(linkedIds(graphOf(beam).findRelatedMemories(second, 1)).has(first)).toBe(false);
+		} finally {
+			beam.close();
+		}
+	});
+
 	it("does not create recall-similarity edges for unrelated content", () => {
 		process.env.MNEMOPI_PROACTIVE_LINKING = "1";
 		const beam = new BeamMemory({ sessionId: "proactive-unrelated", dbPath: ":memory:" });

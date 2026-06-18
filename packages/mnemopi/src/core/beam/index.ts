@@ -72,19 +72,10 @@ const DEFAULT_CONFIG: BeamConfig = {
 	proactiveLinking: false,
 };
 
-function envProactiveLinkingOverride(): boolean | undefined {
-	const value = process.env.MNEMOPI_PROACTIVE_LINKING;
-	return value === undefined ? undefined : value === "1";
-}
-
 function normalizeConfig(options: BeamMemoryOptions): BeamConfig {
 	const configured = options.config ?? {};
 	const useCloud = options.useCloud ?? configured.useCloud ?? DEFAULT_CONFIG.useCloud;
-	const proactiveLinking =
-		envProactiveLinkingOverride() ??
-		options.proactiveLinking ??
-		configured.proactiveLinking ??
-		proactiveLinkingEnabled();
+	const proactiveLinking = options.proactiveLinking ?? configured.proactiveLinking ?? proactiveLinkingEnabled({});
 	return {
 		workingMemoryLimit: configured.workingMemoryLimit ?? DEFAULT_CONFIG.workingMemoryLimit,
 		workingMemoryTtlHours: configured.workingMemoryTtlHours ?? DEFAULT_CONFIG.workingMemoryTtlHours,
