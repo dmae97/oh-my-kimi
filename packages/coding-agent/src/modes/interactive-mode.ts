@@ -797,7 +797,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.initHooksAndCustomTools();
 
 		// Restore mode from session (e.g. plan mode on resume)
-		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession());
+		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
 		await this.#reconcileModeFromSession();
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
@@ -1783,11 +1783,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Reconcile mode state from session entries on resume/switch. */
-	async #reconcileModeFromSession(): Promise<void> {
+	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
 		await this.#clearTransientModeState();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
+			this.session.goalRuntime.clearAccounting();
 			this.sessionManager.appendModeChange("none");
 			return;
 		}
@@ -1802,7 +1803,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				mode: "active",
 				goal,
 			});
-			const restored = await this.session.goalRuntime.onThreadResumed();
+			const restored = await this.session.goalRuntime.onThreadResumed({
+				preserveActiveGoal: options?.preserveActiveGoal,
+			});
 			this.goalModeEnabled = restored?.enabled === true;
 			this.goalModePaused = restored?.enabled !== true && restored?.goal.status === "paused";
 			// sdk.ts excludes "goal" from the initial active tool set unconditionally.
@@ -1815,6 +1818,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 			return;
 		}
+		this.session.goalRuntime.clearAccounting();
 		if (!this.session.settings.get("plan.enabled")) {
 			// Clear stale plan/plan_paused mode so re-enabling the setting
 			// later doesn't unexpectedly restore an old plan session.

@@ -18,6 +18,7 @@
 - Centralized ZIP handling behind a single `src/utils/zip.ts` (`fflate`): the new document converters, the `write` tool's in-place archive editing, and the `read` tool's ranged archive reader now share one ZIP implementation instead of mixing `jszip` and `fflate`.
 
 ### Fixed
+- Fixed active `/goal` mode being paused by internal compaction and session-switch lifecycle aborts, and made those switches persist wall-clock goal usage without charging time spent in another session to a preserved goal.
 
 - Fixed settings overlay crash when scrolling past the last row in list views
 - Improved tool result formatting by correctly wrapping `<out>` blocks in dim-ink toggles
