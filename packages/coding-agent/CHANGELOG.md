@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.6] - 2026-06-18
+
 ### Added
 
 - Added explicit ArkType schema descriptions to parameters across all agent tools to improve model tool-calling instructions and parameter guidance

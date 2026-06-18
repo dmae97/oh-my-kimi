@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.6] - 2026-06-18
+
 ### Added
 
 - Added a dedicated `openrouter` API type and `ResolvedOpenRouterCompat` configuration to support unified chat-completions and Responses-API compatibility for OpenRouter models

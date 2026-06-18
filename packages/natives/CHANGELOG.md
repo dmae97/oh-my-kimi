@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.6] - 2026-06-18
+
 ### Removed
 
 - Removed the `cache` option from `GrepOptions`

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.6] - 2026-06-18
+
 ### Added
 
 - Added support for ArkType schemas as tool parameters alongside existing Zod schemas
