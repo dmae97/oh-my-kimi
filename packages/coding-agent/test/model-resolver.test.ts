@@ -918,6 +918,10 @@ describe("resolveCliModel", () => {
 		expect(baseResult.model?.api).toBe("bedrock-converse-stream");
 		expect(baseResult.model?.id).toBe(profileArn);
 		expect(baseResult.model?.name).toBe("Bedrock inference profile");
+		expect(baseResult.model?.reasoning).toBe(false);
+		expect(baseResult.model?.thinking).toBeUndefined();
+		expect(baseResult.model?.contextWindow).toBeNull();
+		expect(baseResult.model?.maxTokens).toBeNull();
 		expect(baseResult.thinkingLevel).toBeUndefined();
 		expect(offResult.error).toBeUndefined();
 		expect(offResult.model?.id).toBe(profileArn);

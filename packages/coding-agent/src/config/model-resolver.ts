@@ -214,17 +214,21 @@ function resolveBedrockInferenceProfileModelId(
 		return undefined;
 	}
 
-	const providerModels = availableModels.filter(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
-	const defaultModelId = DEFAULT_MODEL_PER_PROVIDER[AMAZON_BEDROCK_PROVIDER];
-	const template =
-		providerModels.find(model => model.id === defaultModelId) ?? pickDefaultAvailableModel(providerModels);
+	const template = availableModels.find(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
 	if (!template) return undefined;
 
-	return {
-		...template,
+	return buildModel({
 		id: requestedId,
 		name: "Bedrock inference profile",
-	};
+		api: "bedrock-converse-stream",
+		provider: AMAZON_BEDROCK_PROVIDER,
+		baseUrl: template.baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	});
 }
 
 function resolveBedrockInferenceProfileReference(
