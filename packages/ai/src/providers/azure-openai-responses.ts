@@ -297,6 +297,7 @@ function buildParams(
 		model,
 		context,
 		strictResponsesPairing: true,
+		supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
 		systemRole,
 		includeThinkingSignatures: true,
 		developerStringContent: true,
