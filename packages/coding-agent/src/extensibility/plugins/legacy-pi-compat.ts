@@ -64,14 +64,14 @@ const packageRootCache = new Map<string, string | null>();
 const packageImportsCache = new Map<string, Record<string, unknown> | null>();
 const PACKAGE_IMPORT_EXCLUDED = Symbol("packageImportExcluded");
 
-// Extensions that imported `@sinclair/typebox` directly used to resolve against a
-// real `@sinclair/typebox` install. The runtime dep was replaced with the Zod-backed
-// shim under `extensibility/typebox.ts`; plugins still importing the public name
-// are redirected to that shim so existing extensions keep working without code
-// changes. Submodules like `@sinclair/typebox/compiler` are intentionally not
-// remapped — those expose TypeBox-only APIs the shim does not provide and plugins
-// relying on them must vendor `@sinclair/typebox` directly.
-const TYPEBOX_SPECIFIER_FILTER = /^@sinclair\/typebox$/;
+// Extensions that imported TypeBox directly used to resolve against a real
+// `@sinclair/typebox` or `typebox` install. The runtime dep was replaced with
+// the Zod-backed shim under `extensibility/typebox.ts`; plugins still importing
+// either public name are redirected to that shim so existing extensions keep
+// working without code changes. Submodules like `@sinclair/typebox/compiler`
+// are intentionally not remapped — those expose TypeBox-only APIs the shim does
+// not provide and plugins relying on them must vendor TypeBox directly.
+const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
 
 // Compat shim and bundled-package paths used in compiled-binary mode. The shim
 // paths must point at files that ship inside the bunfs root; in dev /
@@ -295,14 +295,14 @@ function rewriteLegacyPiImports(source: string): string {
 	);
 }
 
-// Match the bare `@sinclair/typebox` import specifier (static + dynamic).
-// Subpath imports like `@sinclair/typebox/compiler` are intentionally excluded —
-// they expose TypeBox-only APIs the Zod-backed shim does not provide.
-const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(@sinclair\/typebox)(["'])/g;
+// Match the bare TypeBox import specifiers (static + dynamic). Subpath imports
+// like `@sinclair/typebox/compiler` are intentionally excluded — they expose
+// TypeBox-only APIs the Zod-backed shim does not provide.
+const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(@sinclair\/typebox|typebox)(["'])/g;
 
 /**
  * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
- * `@(scope)/pi-*`, bare `@sinclair/typebox`, and package `imports` aliases like
+ * `@(scope)/pi-*`, bare TypeBox packages, and package `imports` aliases like
  * `#src/*` — to absolute `file://` URLs. Every other specifier (relative
  * siblings and third-party dependencies) is left untouched so Bun resolves it
  * natively from the extension's real on-disk location.

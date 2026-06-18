@@ -95,6 +95,10 @@
 - Fixed WSL2 TUI stutter by adding a `git.enabled` setting and skipping footer/status-line git probes when disabled or when no git-backed status segment is visible ([#2847](https://github.com/can1357/oh-my-pi/issues/2847)).
 - Fixed JSON-mode startup notices (export/resume/session-picker messages) writing to stdout before the JSON event stream; they now route to stderr so stdout remains newline-delimited JSON.
 
+### Fixed
+
+- Fixed legacy plugin validation for extensions that import `defineTool`, `StringEnum`, frontmatter helpers, `SettingsManager`, `createCodingTools`, or the bare `typebox` package through the hosted Pi compatibility shims ([#2858](https://github.com/can1357/oh-my-pi/issues/2858)).
+
 ## [16.0.4] - 2026-06-17
 
 ### Fixed

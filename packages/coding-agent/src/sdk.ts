@@ -528,6 +528,11 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings instance. Default: Settings.init({ cwd, agentDir }) */
 	settings?: Settings;
+	/**
+	 * Legacy alias for `settings`. Older Pi extensions pass SettingsManager.create(...)
+	 * through this field; accept it so their SDK calls keep the configured settings.
+	 */
+	settingsManager?: Settings | Promise<Settings>;
 
 	/** Whether UI is available (enables interactive tools like ask). Default: false */
 	hasUI?: boolean;
@@ -874,6 +879,10 @@ function isCustomTool(tool: CustomTool | ToolDefinition): tool is CustomTool {
 	return !(tool as any).__isToolDefinition;
 }
 
+function isLegacyBuiltinToolDefinition(tool: CustomTool | ToolDefinition): boolean {
+	return !isCustomTool(tool) && "__ompLegacyBuiltinTool" in tool && tool.__ompLegacyBuiltinTool === true;
+}
+
 const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 
 /** Matches the truncation applied to per-server instructions inside `rebuildSystemPrompt`. */
@@ -1138,7 +1147,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			startupCredentialDisabledEvents.push(event);
 		}
 	});
-	const settings = options.settings ?? (await logger.time("settings", Settings.init, { cwd, agentDir }));
+	const settings = await (options.settings ??
+		options.settingsManager ??
+		logger.time("settings", Settings.init, { cwd, agentDir }));
 	logger.time("initializeWithSettings", initializeWithSettings, settings);
 	if (!options.modelRegistry) {
 		modelRegistry.refreshInBackground();
@@ -2008,12 +2019,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const toolContextStore = new ToolContextStore(getSessionContext);
 
 		const registeredTools = extensionRunner.getAllRegisteredTools();
+		const sdkCustomTools = options.customTools?.filter(tool => !isLegacyBuiltinToolDefinition(tool)) ?? [];
 		const allCustomTools = [
 			...registeredTools,
-			...(options.customTools?.map(tool => {
+			...sdkCustomTools.map(tool => {
 				const definition = isCustomTool(tool) ? customToolToDefinition(tool) : tool;
 				return { definition, extensionPath: "<sdk>" };
-			}) ?? []),
+			}),
 		];
 		// `wrapToolWithMetaNotice` runs the centralized large-output → artifact spill.
 		// Built-in tools get it in `createTools`; extension, SDK-custom, image-gen,
@@ -2291,7 +2303,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		// Custom tools and extension-registered tools are always included regardless of toolNames filter
 		const alwaysInclude: string[] = [
-			...(options.customTools?.map(t => (isCustomTool(t) ? t.name : t.name)) ?? []),
+			...sdkCustomTools.map(t => (isCustomTool(t) ? t.name : t.name)),
 			...registeredTools.filter(t => !t.definition.defaultInactive).map(t => t.definition.name),
 		];
 		for (const name of alwaysInclude) {
