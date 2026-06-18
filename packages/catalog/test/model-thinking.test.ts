@@ -107,6 +107,18 @@ describe("model thinking derivation", () => {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 		});
+		const staleMimo = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "nanogpt",
+			baseUrl: "https://nano-gpt.com/api/v1",
+			compat: { reasoningEffortMap: {} },
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "low", xhigh: "high" },
+			},
+		});
 		const nativeXiaomi = createModel({
 			id: "mimo-v2.5-pro",
 			api: "openai-completions",
@@ -120,6 +132,10 @@ describe("model thinking derivation", () => {
 		};
 		expect(mimo.thinking).toEqual(expectedThinking);
 		expect(openRouterMimo.thinking).toEqual(expectedThinking);
+		expect(staleMimo.thinking).toEqual(expectedThinking);
+		expect(mimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(openRouterMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(staleMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
 		expect(requireSupportedEffort(mimo, Effort.High)).toBe(Effort.High);
 		expect(() => requireSupportedEffort(mimo, Effort.XHigh)).toThrow(/Supported efforts: low, medium, high/);
 		expect(clampThinkingLevelForModel(mimo, Effort.Minimal)).toBe(Effort.Low);

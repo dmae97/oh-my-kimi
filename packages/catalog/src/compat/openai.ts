@@ -135,6 +135,11 @@ const MIMO_REASONING_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]>
 	xhigh: "high",
 };
 
+function mergeMimoReasoningEffortMap(compat: ResolvedOpenAISharedCompat, enabled: boolean): void {
+	if (!enabled) return;
+	compat.reasoningEffortMap = { ...MIMO_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
+}
+
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	if (
 		provider === "openai" ||
@@ -407,6 +412,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		compat.omitReasoningEffort = true;
 	}
 	mergeOllamaReasoningEffortMap(compat, provider, spec.reasoning);
+	mergeMimoReasoningEffortMap(compat, isMimoReasoningEffortModel);
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);
@@ -420,6 +426,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			variant.omitReasoningEffort = true;
 		}
 		mergeOllamaReasoningEffortMap(variant, provider, spec.reasoning);
+		mergeMimoReasoningEffortMap(variant, isMimoReasoningEffortModel);
 		compat.whenThinking = variant;
 	}
 
