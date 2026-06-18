@@ -1039,6 +1039,13 @@ export async function runRootCommand(
 		});
 	}
 
+	// --print-thoughts (single-shot print mode) must surface reasoning, so un-hide
+	// thinking before the session is built — otherwise a passive hideThinkingBlock
+	// setting makes the provider omit summaries and the flag prints nothing. An
+	// explicit --hide-thinking below still wins.
+	if (parsedArgs.printThoughts && !isProtocolMode && !isInteractive) {
+		settingsInstance.override("hideThinkingBlock", false);
+	}
 	// Apply --hide-thinking CLI flag (ephemeral, not persisted)
 	if (parsedArgs.hideThinking) {
 		settingsInstance.override("hideThinkingBlock", true);
@@ -1373,6 +1380,7 @@ export async function runRootCommand(
 				messages: initialArgs.messages,
 				initialMessage,
 				initialImages,
+				printThoughts: initialArgs.printThoughts,
 			});
 			if ($env.PI_TIMING) {
 				logger.printTimings();

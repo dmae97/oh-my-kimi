@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [16.0.9] - 2026-06-18
+
+### Fixed
+
+- Fixed OAuth login replacing all other active accounts for the same provider, allowing multiple OAuth accounts to coexist concurrently.
+- Fixed legacy `api_key` credentials not being replaced/disabled atomically upon upgrading to OAuth login.
+- Fixed a logic issue where AuthStorage lost session-to-credential stickiness upon CLI restarts, causing cold-starts for server-side prompt cache (KV cache) and wasting tokens.
+- Fixed GitHub Copilot Responses requests rejecting image inputs that carry the `detail: "original"` hint with an HTTP 400 by degrading the hint to `"auto"` for hosts that do not support it; other hosts still preserve native-resolution frames (snapcompact). ([#2822](https://github.com/can1357/oh-my-pi/issues/2822))
+
 ## [16.0.8] - 2026-06-18
 
 ### Fixed

@@ -7375,7 +7375,7 @@ export class AgentSession {
 			throw new Error("Compaction already in progress");
 		}
 		this.#disconnectFromAgent();
-		await this.abort();
+		await this.abort({ goalReason: "internal" });
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
 
@@ -7543,6 +7543,10 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Compaction discarded the conversation history that carried the approved
+			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
+			// the plan from disk and re-injects it on the next turn (issue #1246).
+			this.#planReferenceSent = false;
 			this.#advisorRuntime?.reset();
 			this.#syncTodoPhasesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
@@ -9409,6 +9413,10 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Compaction discarded the conversation history that carried the approved
+			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
+			// the plan from disk and re-injects it on the next turn (issue #1246).
+			this.#planReferenceSent = false;
 			this.#advisorRuntime?.reset();
 			this.#syncTodoPhasesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
@@ -10960,7 +10968,7 @@ export class AgentSession {
 		}
 
 		this.#disconnectFromAgent();
-		await this.abort();
+		await this.abort({ goalReason: "internal" });
 
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();

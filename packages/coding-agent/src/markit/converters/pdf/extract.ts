@@ -9,8 +9,23 @@
  *
  * Coordinate system: PDF native (origin = bottom-left, Y increases upward).
  */
-import * as mupdf from "mupdf";
+import type * as mupdf from "mupdf";
 import type { ImageRegion, PageContent, Segment, TextBox } from "./types";
+
+// mupdf instantiates its WASM module via a top-level await. A static
+// `import * as mupdf` would pull that await into this module's init, which makes
+// the whole bundled markit chunk's `__esm` init async — and bun's compiled
+// bundler fails to await that init transitively through the `../markit` barrel,
+// exposing the converter classes before their module-level consts initialize
+// (e.g. `EXTENSIONS` reads as undefined). Importing mupdf lazily keeps the chunk
+// init synchronous and also keeps the ~10MB wasm off non-PDF conversions.
+let mupdfModule: typeof mupdf | undefined;
+async function loadMupdf(): Promise<typeof mupdf> {
+	if (!mupdfModule) {
+		mupdfModule = await import("mupdf");
+	}
+	return mupdfModule;
+}
 
 /** mupdf structured-text JSON bounding box (top-left origin). */
 interface StextBBox {
@@ -479,8 +494,9 @@ function extractImageRegions(stext: StructuredTextJSON, pageNumber: number, page
  * Render an image region from a PDF page as a PNG buffer.
  * Uses mupdf's DrawDevice to render just the cropped area at 2x resolution.
  */
-export function renderImageRegion(input: Uint8Array, region: ImageRegion): Uint8Array {
-	const doc = mupdf.Document.openDocument(input, "application/pdf");
+export async function renderImageRegion(input: Uint8Array, region: ImageRegion): Promise<Uint8Array> {
+	const m = await loadMupdf();
+	const doc = m.Document.openDocument(input, "application/pdf");
 	const page = doc.loadPage(region.pageNumber - 1);
 	const pad = 10;
 	const bx = region.bbox.x - pad;
@@ -490,12 +506,12 @@ export function renderImageRegion(input: Uint8Array, region: ImageRegion): Uint8
 	const scale = 2;
 	const pw = Math.round(bw * scale);
 	const ph = Math.round(bh * scale);
-	const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, pw, ph], false);
+	const pix = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, pw, ph], false);
 	pix.clear(255);
 	const matrix: mupdf.Matrix = [scale, 0, 0, scale, -bx * scale, -by * scale];
 	const dl = page.toDisplayList();
-	const dev = new mupdf.DrawDevice(matrix, pix);
-	dl.run(dev, mupdf.Matrix.identity);
+	const dev = new m.DrawDevice(matrix, pix);
+	dl.run(dev, m.Matrix.identity);
 	dev.close();
 	return pix.asPNG();
 }
@@ -504,7 +520,8 @@ export function renderImageRegion(input: Uint8Array, region: ImageRegion): Uint8
  * Extract text boxes and vector segments from all pages of a PDF buffer.
  */
 export async function extractPages(input: Uint8Array): Promise<PageContent[]> {
-	const doc = mupdf.Document.openDocument(input, "application/pdf");
+	const m = await loadMupdf();
+	const doc = m.Document.openDocument(input, "application/pdf");
 	const pages: PageContent[] = [];
 	for (let i = 0; i < doc.countPages(); i++) {
 		const pageNumber = i + 1;
