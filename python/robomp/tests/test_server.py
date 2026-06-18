@@ -485,6 +485,17 @@ def test_trigger_triage_replaces_inactive_manual_delivery(env, monkeypatch: pyte
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         db.record_event(
+            delivery_id="running-octo__widget-7",
+            event_type="issue_comment",
+            repo="octo/widget",
+            issue_key=issue_key("octo/widget", 7),
+            payload={"action": "created"},
+        )
+        claimed = db.claim_next_event()
+        assert claimed is not None
+        assert claimed.delivery_id == "running-octo__widget-7"
+
+        db.record_event(
             delivery_id=delivery,
             event_type="issues",
             repo="octo/widget",
@@ -633,6 +644,17 @@ def test_trigger_retry_by_delivery_id_requeues(env, monkeypatch: pytest.MonkeyPa
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         db.record_event(
+            delivery_id="running-widget-4",
+            event_type="issue_comment",
+            repo="octo/widget",
+            issue_key=issue_key("octo/widget", 4),
+            payload={"action": "created"},
+        )
+        claimed = db.claim_next_event()
+        assert claimed is not None
+        assert claimed.delivery_id == "running-widget-4"
+
+        db.record_event(
             delivery_id="d-old",
             event_type="issues",
             repo="octo/widget",
@@ -658,6 +680,17 @@ def test_trigger_retry_by_issue_finds_latest_non_skipped_event(env, monkeypatch:
     with TestClient(app) as client:
         db = get_database(cfg.sqlite_path)
         key = issue_key("octo/widget", 9)
+        db.record_event(
+            delivery_id="running-widget-9",
+            event_type="issue_comment",
+            repo="octo/widget",
+            issue_key=key,
+            payload={"action": "created"},
+        )
+        claimed = db.claim_next_event()
+        assert claimed is not None
+        assert claimed.delivery_id == "running-widget-9"
+
         db.record_event(
             delivery_id="d-old-1",
             event_type="issues",
