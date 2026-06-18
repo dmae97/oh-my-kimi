@@ -527,7 +527,7 @@
 	width: 16px;
 	height: 16px;
 	flex: none;
-	background: linear-gradient(135deg, #ed4abf 0%, #9b4dff 50%, #5ad8e6 100%);
+	background: var(--brand-mark-gradient);
 	border-radius: 4px;
 }
 
@@ -612,7 +612,7 @@
 		width: 280px;
 		max-width: 85vw;
 		border-left: 1px solid var(--border-strong);
-		box-shadow: -4px 0 16px oklch(0 0 0 / 30%);
+		box-shadow: var(--rail-mobile-shadow);
 	}
 	.sh-rail-backdrop {
 		display: block;

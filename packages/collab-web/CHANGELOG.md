@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Restyled the collab shell with the stats dashboard theme tokens and added the persisted system/light/dark theme toggle.
+
 ## [16.0.5] - 2026-06-17
 
 ### Fixed
