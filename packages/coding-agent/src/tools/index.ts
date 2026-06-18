@@ -1,6 +1,6 @@
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { FetchImpl, Model, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { FetchImpl, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
@@ -111,6 +111,13 @@ export type ContextFileEntry = {
 	path: string;
 	content: string;
 	depth?: number;
+};
+
+/** Image attachment handle exposed to tools for user-facing labels such as `Image #1`. */
+export type ImageAttachmentEntry = {
+	label: string;
+	uri: string;
+	image: ImageContent;
 };
 
 export type {
@@ -353,6 +360,8 @@ export interface ToolSession {
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
+	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
+	getImageAttachments?: () => ImageAttachmentEntry[];
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

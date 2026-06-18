@@ -4979,6 +4979,24 @@ export class AgentSession {
 		return this.agent.state.messages;
 	}
 
+	/** Latest image attachments addressable by tools as `Image #N` or `attachment://N`. */
+	getImageAttachments(): { label: string; uri: string; image: ImageContent }[] {
+		for (let i = this.agent.state.messages.length - 1; i >= 0; i--) {
+			const message = this.agent.state.messages[i];
+			if (!message || (message.role !== "user" && message.role !== "developer") || !Array.isArray(message.content)) {
+				continue;
+			}
+			const images = message.content.filter((part): part is ImageContent => part.type === "image");
+			if (images.length === 0) continue;
+			return images.map((image, index) => ({
+				label: `Image #${index + 1}`,
+				uri: `attachment://${index + 1}`,
+				image,
+			}));
+		}
+		return [];
+	}
+
 	buildDisplaySessionContext(): SessionContext {
 		return deobfuscateSessionContext(this.sessionManager.buildSessionContext(), this.#obfuscator);
 	}
