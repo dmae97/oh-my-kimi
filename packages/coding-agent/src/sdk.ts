@@ -533,6 +533,16 @@ export interface CreateAgentSessionOptions {
 	 */
 	telemetry?: AgentTelemetryConfig;
 
+	/**
+	 * Fired once, when the agent loop hands its first request to the provider
+	 * transport (i.e. the `streamFn` wrapper is first invoked). Used to measure
+	 * subagent launch latency — the boundary between "session built" and "model
+	 * call dispatched". This is the loop's dispatch point, slightly before the
+	 * actual provider HTTP call (per-request prep, identical across all
+	 * requests, follows it), which is the right granularity for launch timing.
+	 */
+	onFirstChatDispatch?: () => void;
+
 	/** Whether to auto-approve all tool calls (--auto-approve CLI flag). Default: false */
 	autoApprove?: boolean;
 }
@@ -2398,6 +2408,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				? undefined
 				: serviceTierSetting;
 
+		// One-shot launch-latency marker: fired the first time the loop dispatches
+		// a chat request to the provider transport. See onFirstChatDispatch.
+		let notifyFirstChatDispatch = options.onFirstChatDispatch;
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2431,6 +2444,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
 			streamFn: (streamModel, context, streamOptions) => {
+				if (notifyFirstChatDispatch) {
+					const cb = notifyFirstChatDispatch;
+					notifyFirstChatDispatch = undefined;
+					try {
+						cb();
+					} catch (err) {
+						logger.warn("onFirstChatDispatch hook threw", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					}
+				}
 				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
 				const openrouterVariant =
 					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
