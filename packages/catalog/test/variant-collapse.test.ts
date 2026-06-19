@@ -151,6 +151,24 @@ describe("collapseEffortVariants", () => {
 		});
 	});
 
+	it("keeps claude -thinking routing when discovery only returns the bare id", () => {
+		const out = collapseEffortVariants(
+			[memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 })],
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+
+		expect(out).toHaveLength(1);
+		expect(out[0]?.id).toBe("claude-sonnet-4-6");
+		expect(out[0]?.requestModelId).toBe("claude-sonnet-4-6");
+		expect(out[0]?.thinking?.effortRouting).toEqual({
+			off: "claude-sonnet-4-6",
+			minimal: "claude-sonnet-4-6-thinking",
+			low: "claude-sonnet-4-6-thinking",
+			medium: "claude-sonnet-4-6-thinking",
+			high: "claude-sonnet-4-6-thinking",
+		});
+	});
+
 	it("keeps the thinking backing id for a -thinking-only claude family", () => {
 		const out = collapseEffortVariants([memberSpec("claude-opus-4-6-thinking")], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
 

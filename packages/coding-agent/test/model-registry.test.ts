@@ -1936,8 +1936,8 @@ describe("ModelRegistry", () => {
 					seedCache: dbPath => {
 						const cachedModels: Model[] = [
 							buildModel({
-								id: "gemini-3.5-flash-low",
-								name: "Gemini 3.5 Flash Low",
+								id: "gemini-custom-scout",
+								name: "Gemini Custom Scout",
 								api: "google-gemini-cli",
 								provider: "google-antigravity",
 								baseUrl: "https://cloudcode-pa.googleapis.com",
@@ -2051,7 +2051,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("loads cached special provider discovery models on startup", () => {
-			expect(specialCache.find("google-antigravity", "gemini-3.5-flash-low")?.maxTokens).toBe(8_192);
+			expect(specialCache.find("google-antigravity", "gemini-custom-scout")?.maxTokens).toBe(8_192);
 			expect(specialCache.find("google-gemini-cli", "gemini-3.5-flash")?.maxTokens).toBe(16_384);
 			expect(specialCache.find("openai-codex", "gpt-5.4-codex-pro")?.maxTokens).toBe(128_000);
 		});

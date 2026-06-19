@@ -329,6 +329,63 @@ describe("TranscriptContainer", () => {
 		// blockStart 2 + (7 rows - TAIL_VOLATILITY_ROWS holdback of 4) = 5.
 		expect(container.getNativeScrollbackCommitSafeEnd()).toBe(5);
 	});
+
+	it("withholds the durable snapshot commit for a streaming mermaid reply, then promotes it on finalize", () => {
+		// A fenced mermaid diagram re-lays-out its whole body every frame as the
+		// reply streams. If its scrolled-off rows were committed to immutable
+		// native scrollback (the durable-snapshot path) the later re-layout would
+		// strand a stale diagram fragment in history that only Ctrl+L clears, so
+		// the live mermaid reply must advertise no durable snapshot end.
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["earlier turn"], true));
+		const assistant = new AssistantMessageComponent();
+		assistant.updateContent(
+			makeAssistantMessage({ content: [{ type: "text", text: "```mermaid\nflowchart TD\n  A-->B\n```" }] }),
+		);
+		container.addChild(assistant);
+
+		for (let frame = 0; frame < 4; frame++) container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeUndefined();
+
+		// Finalized: the final layout is permanent and commits like any block.
+		assistant.markTranscriptBlockFinalized();
+		container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeGreaterThan(0);
+	});
+
+	it("withholds the durable snapshot commit for a streaming GFM table, then promotes it on finalize", () => {
+		// A streaming table re-aligns its columns as rows arrive; its scrolled-off
+		// rows must not commit an intermediate alignment to immutable scrollback.
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["earlier turn"], true));
+		const assistant = new AssistantMessageComponent();
+		assistant.updateContent(
+			makeAssistantMessage({ content: [{ type: "text", text: "| Name | Score |\n| --- | --- |\n| a | 1 |" }] }),
+		);
+		container.addChild(assistant);
+
+		for (let frame = 0; frame < 4; frame++) container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeUndefined();
+
+		assistant.markTranscriptBlockFinalized();
+		container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeGreaterThan(0);
+	});
+
+	it("still commits the durable snapshot of a streaming reply without a mermaid fence", () => {
+		// Guard the narrow scope: an ordinary streaming reply stays commit-stable,
+		// so its settled rows still reach native scrollback while it streams.
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["earlier turn"], true));
+		const assistant = new AssistantMessageComponent();
+		assistant.updateContent(
+			makeAssistantMessage({ content: [{ type: "text", text: "A normal streamed answer with **bold** text." }] }),
+		);
+		container.addChild(assistant);
+
+		for (let frame = 0; frame < 4; frame++) container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeGreaterThan(0);
+	});
 	it("does not re-render finalized rows already committed to native scrollback", () => {
 		const container = new TranscriptContainer();
 		const committed = new CountingFinalizedBlock(["committed"]);

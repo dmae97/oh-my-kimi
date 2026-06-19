@@ -132,23 +132,6 @@ describe("task.batch schema gating", () => {
 			expect(getSchemaProperties(tool).schema).toBeUndefined();
 		}
 	});
-
-	it("documents the batch parameters only when enabled", async () => {
-		mockDiscovery();
-
-		const off = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
-		expect(off.description).toContain("Spawns ONE subagent per call to work in the background");
-		expect(off.description).not.toContain("`context`: shared background");
-
-		const offSync = await TaskTool.create(
-			createSession({ settings: { "async.enabled": false, "task.batch": false } }),
-		);
-		expect(offSync.description).toContain("Runs ONE subagent synchronously per call");
-
-		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
-		expect(on.description).toContain("`tasks`: tasks to spawn");
-		expect(on.description).toContain("`context`: shared background");
-	});
 });
 
 describe("task.batch validation", () => {

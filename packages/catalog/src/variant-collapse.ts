@@ -76,6 +76,13 @@ export interface EffortVariantFamily {
 	thinking: Readonly<Omit<ThinkingConfig, "effortRouting" | "suppressWhenOff">>;
 	/** Thinking-off requests must explicitly suppress thinking on the wire. */
 	suppressWhenOff?: boolean;
+	/**
+	 * Preserve non-off effort routes even when discovery omits the backing member.
+	 * Used for Cloud Code Assist `X`/`X-thinking` pairs where upstream accepts
+	 * the `-thinking` wire id but the model-list endpoint may advertise only the
+	 * bare id.
+	 */
+	preserveAbsentEffortRoutes?: boolean;
 	/** Retired/recycled selector ids that alias to this family without being members. */
 	extraAliases?: readonly string[];
 }
@@ -100,6 +107,7 @@ function thinkingPair(baseId: string, name: string): EffortVariantFamily {
 		// Thinking-off routes to the non-thinking backing id, where omitting
 		// thinkingConfig is already correct — no suppressWhenOff.
 		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		preserveAbsentEffortRoutes: true,
 	};
 }
 
@@ -517,12 +525,18 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 		const routing: Partial<Record<Effort | "off", string>> = {};
 		let hasRouting = false;
 		let hasEffortRoute = false;
+		let usedAbsentEffortRoute = false;
 		for (const effortKey in family.routing) {
 			const target = family.routing[effortKey as Effort | "off"];
-			if (target !== undefined && presentSet.has(target) && !retired?.has(target)) {
-				routing[effortKey as Effort | "off"] = target;
+			const effort = effortKey as Effort | "off";
+			const targetPresent = target !== undefined && presentSet.has(target);
+			const preserveAbsentEffort =
+				target !== undefined && effort !== "off" && family.preserveAbsentEffortRoutes === true;
+			if (target !== undefined && (targetPresent || preserveAbsentEffort) && !retired?.has(target)) {
+				routing[effort] = target;
 				hasRouting = true;
 				if (effortKey !== "off") hasEffortRoute = true;
+				if (!targetPresent && effort !== "off") usedAbsentEffortRoute = true;
 			}
 		}
 
@@ -551,7 +565,11 @@ export function collapseEffortVariants<TSpec extends VariantSpecLike>(
 		// falls back. Retired members never become the default.
 		const defaultWireId = rawPresent.find(id => !retired?.has(id)) ?? rawPresent[0];
 		if (defaultWireId === family.id) {
-			delete collapsed.requestModelId;
+			if (usedAbsentEffortRoute) {
+				collapsed.requestModelId = defaultWireId as string;
+			} else {
+				delete collapsed.requestModelId;
+			}
 		} else {
 			collapsed.requestModelId = defaultWireId as string;
 		}

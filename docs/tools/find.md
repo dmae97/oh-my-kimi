@@ -22,7 +22,6 @@
 | `hidden` | `boolean` | No | Whether hidden files are included. Defaults to `true` (`hidden ?? true`). |
 | `gitignore` | `boolean` | No | Whether `.gitignore` is respected during local native globbing. Defaults to `true`; set `false` to include gitignored files. |
 | `limit` | `number` | No | Max returned paths. Defaults to `200`; finite positive inputs are floored then clamped to `1..200`. |
-| `timeout` | `number` | No | Timeout in seconds. Defaults to `5`; clamped to `0.5..60`. On timeout, returns partial matches collected so far with a timeout notice and `truncated: true`. |
 
 ## Outputs
 The tool returns a single text block plus structured `details`.
@@ -51,7 +50,7 @@ The tool returns a single text block plus structured `details`.
    - glob in the first segment => search from `.` and, unless the pattern already starts with `**/`, prefix it with `**/`.
    - glob later in the path => split at the first glob-bearing segment.
 6. `resolveToCwd()` converts the base path to an absolute path under the session cwd. A resolved `/` is rejected with `Searching from root directory '/' is not allowed`.
-7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. `timeout` is converted to milliseconds and clamped to `500..60_000` before building an `AbortSignal.timeout(...)`.
+7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. An internal timeout of `5` seconds (`5000` ms) is built via `AbortSignal.timeout(...)`.
 8. Execution then branches:
    - **Custom operations branch**: if `FindToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
    - **Built-in local branch**: the tool stats each target's `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, `recursive: false` (recursion comes from the `**/` prefix `parseFindPattern()` adds), and the combined abort signal; multi-target calls run their globs concurrently.
@@ -79,12 +78,12 @@ The tool returns a single text block plus structured `details`.
   - Emits structured progress updates when `onUpdate` is provided.
   - Adds truncation / limit metadata to the tool result.
 - Background work / cancellation
-  - Local globbing is cancellable through the caller abort signal plus the configured internal timeout.
+  - Local globbing is cancellable through the caller abort signal plus the internal timeout.
 
 ## Limits & Caps
 - Default result limit: `200` (`DEFAULT_LIMIT` in `packages/coding-agent/src/tools/find.ts`).
 - Maximum result limit: `200` (`MAX_LIMIT`); larger inputs are clamped.
-- Local glob timeout: default `5000` ms, clamped to `500..60_000` ms.
+- Local glob timeout: fixed at `5000` ms.
 - Output byte cap: `50 * 1024` bytes (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`).
 - Default generic line cap in `truncateHead()` is `3000`, but `find` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so byte size — not line count — is the practical output truncation cap.
 - Streaming update throttle: `200` ms between `onUpdate` emissions.
@@ -97,7 +96,7 @@ The tool returns a single text block plus structured `details`.
   - `Searching from root directory '/' is not allowed`
   - `Limit must be a positive number`
   - `Path is not a directory: ...`
-  - timeout result text is `find timed out after <seconds>s; returning <N> partial matches — increase timeout or narrow pattern` and is returned as a successful, truncated partial result rather than an error.
+  - timeout result text is `find timed out after <seconds>s; returning <N> partial matches — narrow the pattern instead of retrying blindly` and is returned as a successful, truncated partial result rather than an error.
 - If the caller aborts, the local branch converts `AbortError` into `ToolAbortError`.
 - Non-`ENOENT` stat failures and other unexpected errors are rethrown.
 - Empty matches are not errors; they return the no-files text result.

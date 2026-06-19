@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
+import { applyResolvedSystemPromptInputs, submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { discoverTitleSystemPromptFile } from "@oh-my-pi/pi-coding-agent/system-prompt";
 
 const cleanupDirs: string[] = [];
@@ -32,6 +33,18 @@ describe("discoverTitleSystemPromptFile", () => {
 		await fs.writeFile(promptPath, "custom title prompt");
 
 		expect(discoverTitleSystemPromptFile(projectDir)).toBe(promptPath);
+	});
+});
+
+describe("applyResolvedSystemPromptInputs", () => {
+	it("routes SYSTEM.md content through template-aware session options", () => {
+		const options: CreateAgentSessionOptions = {};
+
+		applyResolvedSystemPromptInputs(options, "project system prompt", "append prompt");
+
+		expect(options.customSystemPrompt).toBe("project system prompt");
+		expect(options.appendSystemPrompt).toBe("append prompt");
+		expect(options.systemPrompt).toBeUndefined();
 	});
 });
 

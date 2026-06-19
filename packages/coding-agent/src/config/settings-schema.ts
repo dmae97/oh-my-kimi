@@ -924,7 +924,7 @@ export const SETTINGS_SCHEMA = {
 
 	inlineToolDescriptors: {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "model",
 			group: "Prompt",

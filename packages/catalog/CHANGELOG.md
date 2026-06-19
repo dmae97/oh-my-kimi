@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
+### Added
+
+- Added support for Gemini 2.5 Flash-Lite, 3.1 Flash-Lite, and 3.5 Flash models
+- Added support for Moonshot V1 model family
+
+### Changed
+
+- Updated context window and token limits for various Claude, Gemini, and GPT-OSS models
+- Refined thinking mode behaviors and routing for supported LLM families
+
+### Fixed
+
+- Fixed GLM-5.2 `reasoning_effort` so the top thinking tier reaches each host's genuine maximum instead of 400ing, mapping the internal `xhigh` tier per host dialect (verified against live endpoints): Z.ai/Zhipu collapse onto the model's `none`/`high`/`max` scale (`xhigh → max`); Fireworks, resellers, and Ollama Cloud keep their distinct lower tiers and remap only the top `xhigh → max` (merged over host quirks such as Fireworks' `minimal → none`); and OpenRouter — whose API rejects `max` and treats `xhigh` as its own max tier — now exposes the `xhigh` tier and forwards it verbatim. Dialect detection keys off resolved `compat.thinkingFormat`, so custom OpenRouter/Z.ai-format providers are covered too.
+- Maintained thinking effort routing when discovery only returns the base model ID
+- Improved credential retrieval logic for Antigravity and Codex providers via auth discovery
+
 ## [16.0.9] - 2026-06-18
 
 ### Fixed

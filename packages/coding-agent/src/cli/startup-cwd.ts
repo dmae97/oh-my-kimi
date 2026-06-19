@@ -1,7 +1,6 @@
-import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProjectDir, normalizePathForComparison, setProjectDir } from "@oh-my-pi/pi-utils";
+import { directoryExists, getProjectDir, normalizePathForComparison, setProjectDir } from "@oh-my-pi/pi-utils";
 import type { Args } from "./args";
 
 async function maybeAutoChdir(parsed: Args): Promise<void> {
@@ -22,19 +21,10 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 		return;
 	}
 
-	const isDirectory = async (p: string) => {
-		try {
-			const s = await fs.stat(p);
-			return s.isDirectory();
-		} catch {
-			return false;
-		}
-	};
-
 	const candidates = [path.join(home, "tmp"), "/tmp", "/var/tmp"];
 	for (const candidate of candidates) {
 		try {
-			if (!(await isDirectory(candidate))) {
+			if (!(await directoryExists(candidate))) {
 				continue;
 			}
 			setProjectDir(candidate);
@@ -46,7 +36,7 @@ async function maybeAutoChdir(parsed: Args): Promise<void> {
 
 	try {
 		const fallback = os.tmpdir();
-		if (fallback && normalizePath(fallback) !== cwd && (await isDirectory(fallback))) {
+		if (fallback && normalizePath(fallback) !== cwd && (await directoryExists(fallback))) {
 			setProjectDir(fallback);
 		}
 	} catch {

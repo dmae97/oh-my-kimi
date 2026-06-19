@@ -44,13 +44,7 @@ const findSchema = type({
 		.describe("globs including search paths"),
 	"hidden?": type("boolean").describe("include hidden files"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
-	"limit?": type("number").describe("max results (clamped to 1-200)"),
-	"timeout?": type("number").describe("timeout in seconds (0.5–60)"),
-}).narrow((o, ctx) => {
-	if (o.timeout !== undefined && (o.timeout < 0.5 || o.timeout > 60)) {
-		return ctx.mustBe("a timeout between 0.5 and 60 seconds");
-	}
-	return true;
+	"limit?": type("number").describe("max results"),
 });
 
 export type FindToolInput = typeof findSchema.infer;
@@ -58,8 +52,6 @@ export type FindToolInput = typeof findSchema.infer;
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
-const MIN_GLOB_TIMEOUT_MS = 500;
-const MAX_GLOB_TIMEOUT_MS = 60_000;
 
 export interface FindToolDetails {
 	truncation?: TruncationResult;
@@ -132,10 +124,6 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			caption: "Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
 			call: { paths: ["**/tests"] },
 		},
-		{
-			caption: "Long-running search on a slow volume",
-			call: { paths: ["/Volumes/Storage/**/*.py"], timeout: 30 },
-		},
 	];
 	readonly strict = true;
 
@@ -156,7 +144,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<FindToolDetails>> {
-		const { paths, limit, hidden, gitignore, timeout } = params;
+		const { paths, limit, hidden, gitignore } = params;
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
@@ -237,8 +225,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const effectiveLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(requestedLimit)));
 			const includeHidden = hidden ?? true;
 			const useGitignore = gitignore ?? true;
-			const requestedTimeoutMs = timeout != null ? Math.round(timeout * 1000) : DEFAULT_GLOB_TIMEOUT_MS;
-			const timeoutMs = Math.min(MAX_GLOB_TIMEOUT_MS, Math.max(MIN_GLOB_TIMEOUT_MS, requestedTimeoutMs));
+			const timeoutMs = DEFAULT_GLOB_TIMEOUT_MS;
 			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 			const formatMatchPath = (matchPath: string, base: string, fileType?: natives.FileType): string => {
@@ -448,7 +435,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				partial.sort((a, b) => b.m - a.m);
 				const sortedPaths = partial.map(entry => entry.p);
 				const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — increase timeout or narrow pattern`;
+				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — narrow the pattern instead of retrying blindly`;
 				return buildResult(sortedPaths, { notice, forceTruncated: true });
 			}
 
