@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added improved JSON repair capabilities for Anthropic tool arguments
+
+### Fixed
+
+- Improved error feedback and transparency for malformed Anthropic tool call arguments
 
 ## [16.1.2] - 2026-06-19
 

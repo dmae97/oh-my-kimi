@@ -50,7 +50,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
-import { parseStreamingJsonThrottled } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
@@ -1752,14 +1752,25 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					const finalJson =
 						block.partialJson.length > 0 ? block.partialJson : JSON.stringify(block.arguments ?? {});
 					try {
-						block.arguments = JSON.parse(finalJson) as ToolCall["arguments"];
+						block.arguments = parseJsonWithRepair(finalJson) as ToolCall["arguments"];
 					} catch (parseError) {
 						// Non-fatal: keep the best-effort arguments recovered by the throttled streaming
 						// parser instead of failing the turn on malformed/truncated tool-argument JSON.
 						reportAnthropicEnvelopeAnomaly(
 							`tool_use ${block.id} arguments are not valid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
 						);
-						block.arguments = (block.arguments ?? {}) as ToolCall["arguments"];
+						const recoveredKeys = Object.keys(block.arguments ?? {});
+						if (recoveredKeys.length === 0) {
+							const maxLen = 512;
+							const truncatedJson =
+								finalJson.length <= maxLen
+									? finalJson
+									: `${finalJson.slice(0, maxLen)}… [truncated ${finalJson.length - maxLen} chars]`;
+							block.arguments = {
+								__parseError: parseError instanceof Error ? parseError.message : String(parseError),
+								__rawJson: truncatedJson,
+							};
+						}
 					}
 					delete (block as { partialJson?: string }).partialJson;
 					delete (block as { lastParseLen?: number }).lastParseLen;

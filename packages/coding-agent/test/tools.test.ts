@@ -1741,6 +1741,34 @@ function b() {
 			expect(secondOutput).toContain("# file-4.txt");
 		});
 
+		it("respects the case parameter (case-sensitive by default, case-insensitive if false)", async () => {
+			const caseFile = path.join(testDir, "case.txt");
+			fs.writeFileSync(caseFile, "Hello World\nhello world\n");
+
+			// 1. By default, search is case-sensitive (only matches the lowercase pattern "hello")
+			const defaultResult = await searchTool.execute("test-case-default", {
+				pattern: "hello",
+				paths: [caseFile],
+			});
+			expect(defaultResult.details?.matchCount).toBe(1);
+
+			// 2. With case: true, search is case-sensitive (only matches "hello")
+			const sensitiveResult = await searchTool.execute("test-case-sensitive", {
+				pattern: "hello",
+				paths: [caseFile],
+				case: true,
+			});
+			expect(sensitiveResult.details?.matchCount).toBe(1);
+
+			// 3. With case: false, search is case-insensitive (matches both "Hello World" and "hello world")
+			const insensitiveResult = await searchTool.execute("test-case-insensitive", {
+				pattern: "hello",
+				paths: [caseFile],
+				case: false,
+			});
+			expect(insensitiveResult.details?.matchCount).toBe(2);
+		});
+
 		it("should group multi-file matches", async () => {
 			for (let i = 1; i <= 3; i++) {
 				fs.writeFileSync(path.join(testDir, `file-${i}.txt`), `needle in file ${i}\nextra needle ${i}`);

@@ -1,0 +1,137 @@
+import { describe, expect, it } from "bun:test";
+import type {
+	Api,
+	ApiKeyResolver,
+	AssistantMessage,
+	AssistantMessageEvent,
+	AssistantMessageEventStream,
+	Model,
+} from "@oh-my-pi/pi-ai";
+import { type BenchModelRegistry, runBenchCommand } from "@oh-my-pi/pi-coding-agent/cli/bench-cli";
+
+function fakeModel(provider: string, id: string): Model<Api> {
+	return {
+		provider,
+		id,
+		name: id,
+		api: "openai-completions",
+		maxTokens: 4096,
+		contextWindow: 128_000,
+	} as unknown as Model<Api>;
+}
+
+function fakeStream(): AssistantMessageEventStream {
+	const message = {
+		role: "assistant",
+		content: [],
+		stopReason: "stop",
+		usage: { input: 5, output: 20 },
+		duration: 120,
+		ttft: 30,
+	} as unknown as AssistantMessage;
+	const events = [
+		{ type: "text_delta", delta: "hi" },
+		{ type: "done", message },
+	] as unknown as AssistantMessageEvent[];
+	const iterator = (async function* () {
+		for (const event of events) yield event;
+	})();
+	return Object.assign(iterator, { result: async () => message }) as unknown as AssistantMessageEventStream;
+}
+
+interface FakeRegistryOptions {
+	models: Model<Api>[];
+	authedProviders: string[];
+	canonicalId?: (model: Model<Api>) => string | undefined;
+	canonicalVariants?: Record<string, Model<Api>[]>;
+}
+
+function fakeRegistry(opts: FakeRegistryOptions): BenchModelRegistry {
+	const authed = new Set(opts.authedProviders);
+	return {
+		getAll: () => opts.models,
+		hasConfiguredAuth: model => authed.has(model.provider),
+		getApiKey: async model => (authed.has(model.provider) ? "sk-test" : undefined),
+		resolver: () => (() => Promise.resolve("sk-test")) as unknown as ApiKeyResolver,
+		getCanonicalId: opts.canonicalId,
+		getCanonicalVariants: opts.canonicalVariants
+			? canonicalId =>
+					(opts.canonicalVariants?.[canonicalId] ?? []).map(model => ({
+						canonicalId,
+						selector: `${model.provider}/${model.id}`,
+						model,
+						source: "bundled" as const,
+					}))
+			: undefined,
+	};
+}
+
+async function runBench(selector: string, registry: BenchModelRegistry) {
+	const stderr: string[] = [];
+	const summary = await runBenchCommand(
+		{ models: [selector], flags: { runs: 1, maxTokens: 64, json: false } },
+		{
+			createRuntime: async () => ({ modelRegistry: registry, settings: undefined, close: () => {} }),
+			randomSessionId: () => "sess-1",
+			writeStdout: () => {},
+			writeStderr: text => stderr.push(text),
+			setExitCode: () => {},
+			streamSimple: () => fakeStream(),
+			now: () => 0,
+			stdoutIsTTY: false,
+		},
+	);
+	return { summary, stderr: stderr.join("") };
+}
+
+describe("bench credential-aware provider selection", () => {
+	it("redirects an ambiguous shared-id selector to an authenticated provider", async () => {
+		// Catalog order makes the unauthenticated `groq` win the default resolution.
+		const registry = fakeRegistry({
+			models: [fakeModel("groq", "openai/gpt-oss-20b"), fakeModel("openrouter", "openai/gpt-oss-20b")],
+			authedProviders: ["openrouter"],
+		});
+
+		const { summary, stderr } = await runBench("openai/gpt-oss-20b", registry);
+
+		expect(summary.models[0].model).toBe("openrouter/openai/gpt-oss-20b");
+		expect(summary.failures).toBe(0);
+		expect(stderr).toContain('no credentials for "groq"');
+		expect(stderr).toContain("openrouter/openai/gpt-oss-20b");
+	});
+
+	it("redirects across providers whose local ids differ, via canonical variants", async () => {
+		// Bare `gpt-oss-20b` resolves to fireworks (unauthed) by flat-id match; the
+		// only authenticated equivalent is openrouter under a *different* local id,
+		// so the swap must travel through the canonical variant index.
+		const fireworks = fakeModel("fireworks", "gpt-oss-20b");
+		const openrouter = fakeModel("openrouter", "openai/gpt-oss-20b");
+		const registry = fakeRegistry({
+			models: [fireworks, openrouter],
+			authedProviders: ["openrouter"],
+			canonicalId: model => (model === fireworks || model === openrouter ? "gpt-oss-20b" : undefined),
+			canonicalVariants: { "gpt-oss-20b": [fireworks, openrouter] },
+		});
+
+		const { summary, stderr } = await runBench("gpt-oss-20b", registry);
+
+		expect(summary.models[0].model).toBe("openrouter/openai/gpt-oss-20b");
+		expect(summary.failures).toBe(0);
+		expect(stderr).toContain('no credentials for "fireworks"');
+	});
+
+	it("honors an explicitly pinned provider even without credentials", async () => {
+		const registry = fakeRegistry({
+			models: [fakeModel("groq", "openai/gpt-oss-20b"), fakeModel("openrouter", "openai/gpt-oss-20b")],
+			authedProviders: ["openrouter"],
+		});
+
+		const { summary, stderr } = await runBench("groq/openai/gpt-oss-20b", registry);
+
+		// Pinned selector is authoritative: no redirect, surfaces the no-credentials failure.
+		expect(summary.models[0].model).toBe("groq/openai/gpt-oss-20b");
+		expect(summary.failures).toBe(1);
+		expect(summary.models[0].results[0]).toMatchObject({ ok: false });
+		expect(stderr).not.toContain("benchmarking");
+	});
+});

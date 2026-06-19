@@ -102,7 +102,7 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 		rest[key] = value;
 		restCount++;
 	}
-	if (restCount === 0) return "";
+	if (restCount === 0) return "{}";
 	try {
 		return oneLine(JSON.stringify(rest));
 	} catch {

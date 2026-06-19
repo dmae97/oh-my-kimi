@@ -70,7 +70,7 @@ const searchSchema = type({
 		.describe(
 			'file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges. Omitted or empty -> searches the workspace root (".")',
 		),
-	"i?": type("boolean").describe("case-insensitive search"),
+	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
 	"skip?": type("number")
 		.or("null")
@@ -680,7 +680,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<SearchToolDetails>> {
-		const { pattern, paths: rawPaths, i, gitignore, skip } = params;
+		const { pattern, paths: rawPaths, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -763,7 +763,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const normalizedContextBefore = this.session.settings.get("search.contextBefore");
 				const normalizedContextAfter = this.session.settings.get("search.contextAfter");
-				const ignoreCase = i ?? false;
+				const ignoreCase = !(caseSensitive ?? true);
 				const useGitignore = gitignore ?? true;
 				const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 				const effectiveMultiline = patternHasNewline;
@@ -1272,7 +1272,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 interface SearchRenderArgs {
 	pattern: string;
 	paths?: string | string[];
-	i?: boolean;
+	case?: boolean;
 	gitignore?: boolean;
 	skip?: number;
 }
@@ -1443,7 +1443,7 @@ export const searchToolRenderer = {
 		const paths = toPathList(args.paths);
 		const meta: string[] = [];
 		if (paths.length) meta.push(`in ${paths.join(", ")}`);
-		if (args.i) meta.push("case:insensitive");
+		if (args.case === false) meta.push("case:insensitive");
 		if (args.gitignore === false) meta.push("gitignore:false");
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
 
