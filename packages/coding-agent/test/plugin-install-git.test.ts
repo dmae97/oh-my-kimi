@@ -160,6 +160,117 @@ describe("PluginManager.install with git sources", () => {
 		expect(result.version).toBe("1.0.0");
 	});
 
+	test("re-installing a github plugin runs `bun update` to refresh the stale lockfile pin (#3063)", async () => {
+		// Seed plugins/package.json + node_modules with a previously-installed
+		// github plugin. `findGitPackageName` matches the new install spec to
+		// this existing dep (by repository identity), which is the signal the
+		// manager uses to trigger the lockfile-refresh follow-up.
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify(
+				{
+					name: "omp-plugins",
+					private: true,
+					dependencies: { "stale-plugin": "github:foo/bar" },
+				},
+				null,
+				2,
+			),
+		);
+		const seedDir = path.join(pluginsNodeModules, "stale-plugin");
+		await fs.mkdir(seedDir, { recursive: true });
+		await Bun.write(
+			path.join(seedDir, "package.json"),
+			JSON.stringify({ name: "stale-plugin", version: "0.1.0" }, null, 2),
+		);
+
+		const spawnedCommands: string[][] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			spawnedCommands.push([...cmd]);
+			if (cmd[1] === "install") {
+				// `bun install <same spec>` is a no-op on the lockfile pin —
+				// the manager must NOT rely on this call to refresh the commit.
+				// Leave package.json and node_modules untouched so the test
+				// fails loudly if the manager skips the follow-up `bun update`.
+				return {
+					pid: 1,
+					stdout: emptyStream(),
+					stderr: emptyStream(),
+					exited: Promise.resolve(0),
+				} as Subprocess;
+			}
+			// The follow-up call: simulate bun resolving the upstream HEAD to a
+			// newer commit and bumping the on-disk version. The manager should
+			// read the new version from package.json after this step returns.
+			expect(cmd).toEqual(["bun", "update", "stale-plugin"]);
+			const prepare = (async () => {
+				await Bun.write(
+					path.join(seedDir, "package.json"),
+					JSON.stringify({ name: "stale-plugin", version: "0.1.6" }, null, 2),
+				);
+			})();
+			return {
+				pid: 2,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		const result = await mgr.install("github:foo/bar");
+
+		expect(result.version).toBe("0.1.6");
+		expect(spawnedCommands).toEqual([
+			["bun", "install", "github:foo/bar"],
+			["bun", "update", "stale-plugin"],
+		]);
+	});
+
+	test("first-time github install does NOT run `bun update` (no existing pin to refresh)", async () => {
+		await Bun.write(
+			pluginsPkgJson,
+			JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
+		);
+
+		const spawnedCommands: string[][] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+			spawnedCommands.push([...cmd]);
+			expect(cmd[1]).toBe("install");
+			const prepare = (async () => {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify(
+						{
+							name: "omp-plugins",
+							private: true,
+							dependencies: { "fresh-plugin": "github:foo/bar" },
+						},
+						null,
+						2,
+					),
+				);
+				const installedDir = path.join(pluginsNodeModules, "fresh-plugin");
+				await fs.mkdir(installedDir, { recursive: true });
+				await Bun.write(
+					path.join(installedDir, "package.json"),
+					JSON.stringify({ name: "fresh-plugin", version: "0.1.6" }, null, 2),
+				);
+			})();
+			return {
+				pid: 1,
+				stdout: emptyStream(),
+				stderr: emptyStream(),
+				exited: prepare.then(() => 0),
+			} as Subprocess;
+		}) as typeof Bun.spawn);
+
+		const mgr = new PluginManager(tmpRoot);
+		await mgr.install("github:foo/bar");
+
+		expect(spawnedCommands).toEqual([["bun", "install", "github:foo/bar"]]);
+	});
+
 	test("rejects git specs containing shell metacharacters", async () => {
 		const mgr = new PluginManager(tmpRoot);
 		await expect(mgr.install("github:foo/bar; rm -rf /")).rejects.toThrow(/Invalid characters in plugin source/);
