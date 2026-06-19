@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAdapterConfigs, resolveAdapter, selectLaunchAdapter } from "../../src/dap/config";
-import { clearClaudePluginRootsCache, injectPluginDirRoots } from "../../src/discovery/helpers";
+import { injectPluginDirRoots } from "../../src/discovery/helpers";
 
 const tempDirs: string[] = [];
 const ORIGINAL_OMP_PLUGIN_DIR = process.env.OMP_PLUGIN_DIR;
@@ -28,7 +28,6 @@ afterEach(async () => {
 		process.env.OMP_MARKETPLACE_DIR = ORIGINAL_OMP_MARKETPLACE_DIR;
 	}
 	await injectPluginDirRoots(os.homedir(), []);
-	clearClaudePluginRootsCache();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -122,11 +121,9 @@ describe("DAP adapter configuration", () => {
 		expect(selected?.launchDefaults).toEqual({ request: "launch", projectRoot: "." });
 	});
 
-	it("loads plugin DAP adapters from OMP marketplace catalogs", async () => {
-		const cwd = await makeTempDir("omp-dap-config-marketplace-");
-		const marketplaceRoot = path.join(cwd, "marketplaces", "test-market");
-		const pluginRoot = path.join(marketplaceRoot, "plugins", "acme-debug");
-		await fs.mkdir(path.join(marketplaceRoot, ".omp-plugin"), { recursive: true });
+	it("loads plugin DAP adapters from plugin config files", async () => {
+		const cwd = await makeTempDir("omp-dap-config-plugin-");
+		const pluginRoot = path.join(cwd, "plugins", "acme-debug");
 		await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
 		await fs.writeFile(path.join(cwd, "app.rb"), "puts 'hi'\n");
 		await fs.writeFile(
@@ -134,19 +131,14 @@ describe("DAP adapter configuration", () => {
 			JSON.stringify({ name: "acme-debug" }),
 		);
 		await fs.writeFile(
-			path.join(marketplaceRoot, ".omp-plugin", "marketplace.json"),
+			path.join(pluginRoot, ".dap.json"),
 			JSON.stringify({
-				plugins: [
-					{
-						name: "acme-debug",
-						dapAdapters: {
-							"acme-ruby": {
-								command: "ruby-debug-adapter",
-								fileTypes: [".rb"],
-							},
-						},
+				adapters: {
+					"acme-ruby": {
+						command: "ruby-debug-adapter",
+						fileTypes: [".rb"],
 					},
-				],
+				},
 			}),
 		);
 		process.env.OMP_PLUGIN_DIR = path.join(cwd, "plugins");

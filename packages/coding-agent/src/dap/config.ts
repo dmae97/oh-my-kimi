@@ -1,10 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isRecord, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirPaths } from "../config";
-import { type ClaudePluginRoot, getPreloadedPluginRoots } from "../discovery/helpers";
+import { getPreloadedPluginRoots } from "../discovery/helpers";
 import { hasRootMarkers, resolveCommand } from "../lsp/config";
 import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { DapAdapterConfig, DapResolvedAdapter } from "./types";
@@ -121,44 +121,6 @@ function fileConfigSource(filePath: string): ConfigSource {
 	};
 }
 
-function readMarketplaceDapConfig(root: ClaudePluginRoot): NormalizedConfig | null {
-	const catalogPaths = [
-		path.resolve(root.path, "..", "..", ".omp-plugin", "marketplace.json"),
-		path.resolve(root.path, "..", "..", "marketplace.json"),
-		path.resolve(root.path, "..", "..", ".claude-plugin", "marketplace.json"),
-	];
-
-	for (const catalogPath of catalogPaths) {
-		try {
-			const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8")) as unknown;
-			if (!isRecord(catalog) || !Array.isArray(catalog.plugins)) continue;
-
-			for (const plugin of catalog.plugins) {
-				if (!isRecord(plugin) || plugin.name !== root.plugin) continue;
-
-				const dapAdapters = plugin.dapAdapters;
-				if (typeof dapAdapters === "string") {
-					const configPath = path.resolve(root.path, dapAdapters);
-					if (!pathIsWithin(root.path, configPath)) return null;
-					return readConfigFile(configPath);
-				}
-				if (isRecord(dapAdapters)) {
-					return normalizeConfig({ adapters: dapAdapters });
-				}
-				return null;
-			}
-		} catch {}
-	}
-
-	return null;
-}
-
-function marketplaceConfigSource(root: ClaudePluginRoot): ConfigSource {
-	return {
-		read: () => readMarketplaceDapConfig(root),
-	};
-}
-
 function getConfigSources(cwd: string): ConfigSource[] {
 	const filenames = ["dap.json", ".dap.json", "dap.yaml", ".dap.yaml", "dap.yml", ".dap.yml"];
 	const sources: ConfigSource[] = [];
@@ -186,7 +148,6 @@ function getConfigSources(cwd: string): ConfigSource[] {
 		for (const filename of filenames) {
 			sources.push(fileConfigSource(path.join(root.path, filename)));
 		}
-		sources.push(marketplaceConfigSource(root));
 	}
 
 	for (const filename of filenames) {

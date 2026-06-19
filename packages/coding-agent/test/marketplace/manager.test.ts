@@ -229,6 +229,51 @@ describe("MarketplaceManager", () => {
 		});
 	});
 
+	it("installPlugin embeds config-only marketplace DAP metadata", async () => {
+		const marketplaceDir = path.join(ctx.tmpDir, "config-only-dap-marketplace");
+		const pluginDir = path.join(marketplaceDir, "plugins", "ruby-dap");
+		await fs.promises.mkdir(pluginDir, { recursive: true });
+		await Bun.write(path.join(pluginDir, "README.md"), "config-only Ruby DAP plugin\n");
+		await fs.promises.mkdir(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+		await Bun.write(
+			path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "config-only-dap-marketplace",
+					owner: { name: "Test Author" },
+					plugins: [
+						{
+							name: "ruby-dap",
+							source: "./plugins/ruby-dap",
+							version: "1.0.0",
+							dapAdapters: {
+								"ruby-debug": {
+									command: "ruby-debug-adapter",
+									fileTypes: [".rb"],
+								},
+							},
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		await ctx.manager.addMarketplace(marketplaceDir);
+		const instEntry = await ctx.manager.installPlugin("ruby-dap", "config-only-dap-marketplace");
+
+		const dapConfig = await Bun.file(path.join(instEntry.installPath, ".dap.json")).json();
+		expect(dapConfig).toEqual({
+			adapters: {
+				"ruby-debug": {
+					command: "ruby-debug-adapter",
+					fileTypes: [".rb"],
+				},
+			},
+		});
+	});
+
 	it("installPlugin with scope:project → persisted in project registry, isolated from user", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		const instEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", {
