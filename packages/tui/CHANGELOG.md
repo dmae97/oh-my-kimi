@@ -1,6 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
+### Breaking Changes
+
+- Removed `getIndentation` and `getIndentationNoescape` exported utilities
+- Tab-related operations no longer respect per-file or globally configured indentation settings
+
+### Changed
+
+- Standardized tab expansion to use a fixed display width instead of configurable settings
+- Removed support for custom tab width configuration in text rendering and input handling
+
 ### Fixed
 
 - Corrected logic in string truncation to prevent improper truncation of short strings

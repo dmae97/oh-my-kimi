@@ -809,11 +809,6 @@ export const SETTINGS_SCHEMA = {
 			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
 		},
 	},
-	// Display rendering
-	"display.tabWidth": {
-		type: "number",
-		default: 3,
-	},
 
 	"display.shimmer": {
 		type: "enum",

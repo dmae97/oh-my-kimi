@@ -22,7 +22,6 @@ import {
 	isEnoent,
 	logger,
 	procmgr,
-	setDefaultTabWidth,
 } from "@oh-my-pi/pi-utils";
 import { JSONC, YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
@@ -1101,11 +1100,6 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			setColorBlindMode(value).catch(err => {
 				logger.warn("Settings: colorBlindMode hook failed", { enabled: value, error: String(err) });
 			});
-		}
-	},
-	"display.tabWidth": value => {
-		if (typeof value === "number") {
-			setDefaultTabWidth(value);
 		}
 	},
 	"provider.appendOnlyContext": value => {

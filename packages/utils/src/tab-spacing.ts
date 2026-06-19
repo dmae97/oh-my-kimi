@@ -20,11 +20,8 @@ const NAME_MAX_BYTES = 255;
 
 const EDITORCONFIG_NAME = ".editorconfig";
 
-let defaultTabWidth = DEFAULT_TAB_WIDTH;
-
 const editorConfigCache = new Map<string, ParsedEditorConfig | null>();
 const editorConfigChainCache = new Map<string, ChainEntry[]>();
-const indentationCache = new Map<string, number>();
 
 interface EditorConfigSection {
 	pattern: string;
@@ -266,31 +263,6 @@ function resolveEditorConfigMatch(absoluteFile: string): EditorConfigMatch | und
 	return match;
 }
 
-function resolveEditorConfigTabWidth(match: EditorConfigMatch | undefined, fallback: number): number | undefined {
-	if (match === undefined) return undefined;
-
-	if (match.indentSize?.kind === "spaces") {
-		return match.indentSize.n;
-	}
-
-	if (match.indentSize?.kind === "tab") {
-		if (match.tabWidth !== undefined) {
-			return match.tabWidth;
-		}
-		return fallback;
-	}
-
-	if (match.tabWidth !== undefined) {
-		return match.tabWidth;
-	}
-
-	if (match.indentStyle === IndentStyle.Tab) {
-		return fallback;
-	}
-
-	return undefined;
-}
-
 function hasOverlongPathComponent(filePath: string): boolean {
 	for (const part of filePath.split(/[\\/]/)) {
 		if (part.length > 0 && Buffer.byteLength(part) > NAME_MAX_BYTES) {
@@ -300,53 +272,12 @@ function hasOverlongPathComponent(filePath: string): boolean {
 	return false;
 }
 
-export function getDefaultTabWidth(): number {
-	return defaultTabWidth;
-}
-
-export function setDefaultTabWidth(width: number): void {
-	defaultTabWidth = clampTabWidth(width);
-}
-
-/**
- * Visible tab width in columns for `file` (from `.editorconfig` + default), or the default when `file` is omitted.
- */
-export function getIndentation(file?: string | null, projectDir?: string | null): number {
-	const fallback = defaultTabWidth;
-	if (file === undefined || file === null || file === "") {
-		return fallback;
-	}
-
-	const cwd = projectDir ?? process.cwd();
-	const absoluteFile = resolveFilePath(cwd, file);
-
-	// Renderers can hand us arbitrary strings (e.g. a malformed edit tool
-	// call whose `file_path` is gibberish). Reject paths whose normalized
-	// absolute form still has any component longer than `NAME_MAX_BYTES` —
-	// the editorconfig chain would only trip `ENAMETOOLONG` from
-	// `readFileSync` and escape.
-	if (hasOverlongPathComponent(absoluteFile)) {
-		return fallback;
-	}
-	const absKey = absoluteFile;
-	const cached = indentationCache.get(absKey);
-	if (cached !== undefined) {
-		return cached;
-	}
-
-	const editorMatch = resolveEditorConfigMatch(absoluteFile);
-	const resolved = resolveEditorConfigTabWidth(editorMatch, fallback) ?? fallback;
-	const clamped = clampTabWidth(resolved);
-	indentationCache.set(absKey, clamped);
-	return clamped;
-}
-
 /**
  * `.editorconfig`-derived formatting options for an LSP `textDocument/formatting` request.
  *
  * Both fields are absent when the resolved `.editorconfig` chain does not pin them, so callers
  * can layer their own fallbacks (content sniffing, project defaults) underneath. Returned values
- * are clamped to {@link MIN_TAB_WIDTH}..{@link MAX_TAB_WIDTH} for parity with {@link getIndentation}.
+ * are clamped to {@link MIN_TAB_WIDTH}..{@link MAX_TAB_WIDTH}.
  */
 export interface EditorConfigFormatting {
 	/** Effective indent width in columns, from `indent_size` or `tab_width`. */
@@ -359,8 +290,8 @@ export interface EditorConfigFormatting {
  * Resolve `.editorconfig` formatting hints for `file` without falling back to any default.
  *
  * Used by the LSP format-on-write path so a missing `.editorconfig` declaration falls through
- * to caller-provided defaults instead of clobbering the file with the renderer's display
- * `defaultTabWidth` (issue #2329).
+ * to caller-provided defaults instead of clobbering the file with the renderer's
+ * display tab width (issue #2329).
  */
 export function getEditorConfigFormatting(file?: string | null, projectDir?: string | null): EditorConfigFormatting {
 	if (file === undefined || file === null || file === "") {
@@ -370,7 +301,7 @@ export function getEditorConfigFormatting(file?: string | null, projectDir?: str
 	const cwd = projectDir ?? process.cwd();
 	const absoluteFile = resolveFilePath(cwd, file);
 
-	// Same NAME_MAX guard as `getIndentation`: editorconfig discovery is
+	// NAME_MAX guard: editorconfig discovery is
 	// best-effort and must never escape as `ENAMETOOLONG` from a renderer's
 	// stray gibberish path.
 	if (hasOverlongPathComponent(absoluteFile)) {

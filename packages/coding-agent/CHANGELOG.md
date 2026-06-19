@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `__advisor.jsonl` transcript persistence for advisor model usage attribution and visibility in the Agent Hub
@@ -21,6 +20,10 @@
 - Advisor transcripts are read-only and cannot be messaged, revived, or killed via the Agent Hub or IRC
 - Refined `/compact` argument parsing to reject focus instructions for modes that do not support them (e.g., `snapcompact`)
 - Protocol hosts (RPC/`rpc-ui`/ACP) now host-default the full advisor settings group — `advisor.syncBacklog` and `advisor.immuneTurns` in addition to `advisor.enabled`/`advisor.subagents` — so a host that opts the advisor in gets the default tuning instead of inheriting the user's local advisor preferences.
+
+### Removed
+
+- Removed `display.tabWidth` setting and configurable tab width support
 
 ### Fixed
 

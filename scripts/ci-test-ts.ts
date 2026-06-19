@@ -136,7 +136,6 @@ const codingAgentSingletonContentMarkers = [
 	"Settings.instance",
 	"resetSettingsForTest",
 	"setAgentDir(",
-	"setDefaultTabWidth(",
 	"vi.useFakeTimers(",
 	"vi.useRealTimers(",
 	"vi.stubEnv(",
