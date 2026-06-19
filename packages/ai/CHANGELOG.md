@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added bounded auto-retry for empty assistant completions specifically to the OpenAI Responses provider
