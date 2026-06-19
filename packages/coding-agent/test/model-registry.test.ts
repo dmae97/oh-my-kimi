@@ -1922,6 +1922,18 @@ describe("ModelRegistry", () => {
 									contextWindow: 1_000_000,
 									maxTokens: 384_000,
 								}),
+								buildModel({
+									id: "future-cloud-only:999b",
+									name: "Future Cloud Only 999B",
+									api: "ollama-chat",
+									provider: "ollama-cloud",
+									baseUrl: "https://ollama.com",
+									reasoning: true,
+									input: ["text"],
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+									contextWindow: 128_000,
+									maxTokens: 64_000,
+								}),
 							],
 							true,
 							"",
@@ -2047,7 +2059,13 @@ describe("ModelRegistry", () => {
 		});
 
 		test("loads cached standard provider discovery models on startup", () => {
-			expect(standardCache.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
+			const model = standardCache.find("ollama-cloud", "deepseek-v4-pro");
+			expect(model?.maxTokens).toBe(384_000);
+			expect(model?.omitMaxOutputTokens).toBe(true);
+			const cacheOnlyModel = standardCache.find("ollama-cloud", "future-cloud-only:999b");
+			expect(cacheOnlyModel).toBeDefined();
+			expect(cacheOnlyModel?.maxTokens).toBe(64_000);
+			expect(cacheOnlyModel?.omitMaxOutputTokens).toBe(true);
 		});
 
 		test("loads cached special provider discovery models on startup", () => {

@@ -48,6 +48,40 @@ test("ollama-cloud discovery does not inherit unsafe cross-provider maxTokens", 
 	expect(model?.maxTokens).toBe(8192);
 });
 
+test("ollama-cloud discovery always omits max output tokens", async () => {
+	const fetchMock: FetchImpl = vi.fn(async (input, _init) => {
+		const url = String(input);
+		if (url === "https://ollama.com/api/tags") {
+			return new Response(JSON.stringify({ models: [{ name: "deepseek-v4-flash" }] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+		if (url === "https://ollama.com/api/show") {
+			return new Response(
+				JSON.stringify({
+					capabilities: ["completion", "thinking"],
+					model_info: { "deepseek4.context_length": 1048576 },
+				}),
+				{
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+		}
+		throw new Error(`Unexpected URL: ${url}`);
+	});
+
+	const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key", fetch: fetchMock });
+	const models = await options.fetchDynamicModels?.();
+	const model = models?.find(candidate => candidate.id === "deepseek-v4-flash");
+
+	expect(model?.provider).toBe("ollama-cloud");
+	expect(model?.contextWindow).toBe(1048576);
+	expect(model?.maxTokens).toBe(1048576);
+	expect(model?.omitMaxOutputTokens).toBe(true);
+});
+
 test("ollama-chat omits num_predict when model opts out of max output tokens", async () => {
 	let requestBody: Record<string, unknown> | undefined;
 	const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
