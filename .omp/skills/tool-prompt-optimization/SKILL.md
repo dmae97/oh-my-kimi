@@ -20,8 +20,21 @@ bun .omp/skills/tool-prompt-optimization/scripts/probe.ts \
 
 - `--schema` and `--template` are the only required inputs (file path or inline value).
 - No `--model` → 3-model panel (`fireworks/kimi-k2.7-code`, `anthropic/claude-opus-4-8`, `openai/gpt-5.5`) × `--samples` (default 3). Needs `FIREWORKS_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
-- `--model p/id,p/id` overrides the panel; `--samples N`, `--temp`, `--max-tokens`, `--json` tune it.
+- `--model p/id,p/id` overrides the panel; `--samples N`, `--max-tokens`, `--json` tune it.
 - Programmatic: `import { probe } from "./scripts/probe.ts"` → `{ prompt, results: [{ model, samples: [{ text, stopReason, usage, error }] }] }`.
+
+### Builtin shortcut (preferred for this repo's tools)
+
+Skip building the two inputs by hand — `scripts/probe-builtin.ts` instantiates the live tool, pulls the EXACT wire schema (`toolWireSchema`) and rendered prompt (`tool.description`), and derives the outline for you:
+
+```bash
+bun .omp/skills/tool-prompt-optimization/scripts/probe-builtin.ts --tool <name> [--no-summary] [--show]
+```
+
+- `--show` prints the resolved schema + derived outline + real prompt and exits (no API calls) — use it to eyeball inputs before spending tokens.
+- `--no-summary` runs the ablation (blank the summary line) directly.
+- `--samples` / `--model` / `--max-tokens` / `--json` forward to the panel; output ends with the REAL prompt so you can diff in place.
+- It bypasses the settings allowlist via the factory map, so gated tools (`irc`, `github`, …) resolve. If a tool refuses to construct (an availability gate like a missing `gh` CLI), fall back to the manual inputs below.
 
 ## Build the two inputs
 
