@@ -319,7 +319,7 @@ mod tests {
 		// First failures stay verbatim with their actionable URLs.
 		assert!(out.text.contains("X\tcheck0\t1s\thttps://ci.test/0"));
 		// The output is capped, not 501 lines of raw rows.
-		assert!(out.text.contains("lines omitted"));
+		assert!(out.text.contains("ln elided…]"));
 		assert!(out.text.lines().count() < 60);
 		assert!(!out.text.contains("https://ci.test/499"));
 	}

@@ -93,9 +93,9 @@ pub fn head_tail_lines(input: &str, head: usize, tail: usize) -> String {
 		out.push_str(line);
 		out.push('\n');
 	}
-	out.push_str("… ");
+	out.push_str("[…");
 	out.push_str(&omitted.to_string());
-	out.push_str(" lines omitted …\n");
+	out.push_str("ln elided…]\n");
 	for line in lines.iter().skip(lines.len() - tail) {
 		out.push_str(line);
 		out.push('\n');
@@ -292,9 +292,9 @@ pub fn head_lines_only(input: &str, head: usize) -> String {
 		out.push_str(line);
 		out.push('\n');
 	}
-	out.push_str("… ");
+	out.push_str("[…");
 	out.push_str(&omitted.to_string());
-	out.push_str(" lines omitted …\n");
+	out.push_str("ln elided…]\n");
 	out
 }
 
@@ -307,9 +307,9 @@ pub fn tail_lines_only(input: &str, tail: usize) -> String {
 	}
 	let omitted = lines.len() - tail;
 	let mut out = String::new();
-	out.push_str("… ");
+	out.push_str("[…");
 	out.push_str(&omitted.to_string());
-	out.push_str(" lines omitted …\n");
+	out.push_str("ln elided…]\n");
 	for line in lines.iter().skip(omitted) {
 		out.push_str(line);
 		out.push('\n');
@@ -330,9 +330,9 @@ pub fn max_lines(input: &str, max: usize) -> String {
 		out.push_str(line);
 		out.push('\n');
 	}
-	out.push_str("… ");
+	out.push_str("[…");
 	out.push_str(&dropped.to_string());
-	out.push_str(" lines truncated …\n");
+	out.push_str("ln elided…]\n");
 	out
 }
 
@@ -380,7 +380,7 @@ mod tests {
 	#[test]
 	fn head_tail_marks_omitted_lines() {
 		let out = head_tail_lines("1\n2\n3\n4\n5\n", 2, 1);
-		assert_eq!(out, "1\n2\n… 2 lines omitted …\n5\n");
+		assert_eq!(out, "1\n2\n[…2ln elided…]\n5\n");
 	}
 
 	#[test]
@@ -397,7 +397,7 @@ mod tests {
 			.collect::<Vec<_>>()
 			.join("\n");
 		let out = head_tail_cap(&input, CapClass::List);
-		assert!(out.contains("lines omitted"));
+		assert!(out.contains("ln elided…]"));
 		assert!(out.lines().count() <= CapClass::List.lines() + 1);
 	}
 

@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Fixed
 
+- Corrected logic in string truncation to prevent improper truncation of short strings
 - Fixed a one-frame transcript flash during a non-multiplexer resize drag: while the drag borrowed the alternate screen and painted only the viewport, any ordinary (non-forced) render from a still-animating block — a tool spinner tick, a streamed token, a cursor blink — fell through to the deferred geometry-rebuild full paint, which left the alternate screen to repaint the whole transcript on the normal screen for a single frame before the next SIGWINCH re-entered the viewport fast path, so a live tool block flashed in and vanished. Ordinary renders mid-drag now stay on the viewport fast path; only forced renders (tool finalization, reset, image reconciliation) still preempt it.
 
 ## [16.0.10] - 2026-06-18

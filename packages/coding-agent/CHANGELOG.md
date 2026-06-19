@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `__advisor.jsonl` transcript persistence for advisor model usage attribution and visibility in the Agent Hub
@@ -12,6 +13,8 @@
 
 ### Changed
 
+- Standardized file elision markers to a compact `[…Nln elided…]` format
+- Updated transcript viewer to clear cached content if the session file is deleted while opened
 - Refactored agent hub to use a fullscreen overlay for agent transcripts instead of inline chat
 - Improved transcript rendering stability by using a non-incremental builder for viewer replays
 - Advisor transcripts are now excluded from agent-facing surfaces like `irc`, `history://`, and peer rosters
@@ -21,6 +24,7 @@
 
 ### Fixed
 
+- Fixed memory-leaking stale transcripts in the agent viewer when underlying files are deleted
 - Fixed the Agent Hub transcript viewer rendering the transcript body one column right of the "Agent Hub" title (and the title appearing to shift when scrolled to the top): the fullscreen viewer added its own outer gutter on top of the transcript rows, which already carry a 1-column left pad, so the header and body no longer shared a gutter. The viewer now renders the scroll body at full width without the extra gutter, and the file-mention row carries the same 1-column pad as every other row.
 - Fixed the bash tool failing with `pi-natives:command: syntax error at end of input` on a valid `&&`/`;` chain whose later pipeline stage is a compound command, e.g. `echo x && git log | while read h; do …; done | head`. The minimizer's segmented-chain runner rebuilds each chain segment from the brush AST via `pipeline.to_string()` and re-executes that string, but `simple_segment` only validated the *first* pipeline stage — so a compound later stage (`while`/`for`/`if`/subshell) was re-serialized without its terminator and re-run as broken shell. Every stage is now required to be a Display-safe simple command, and — as a general guard against the recurring class of brush `Display` round-trip divergences (previously: quoted here-doc close tags, multi-byte char/byte offsets) — each reconstructed segment is now re-parsed and must match the original pipeline shape before the chain runner executes it; any divergence runs the command whole, unsegmented, instead of corrupting it.
 - Fixed `Ctrl+T` (toggle thinking blocks) and the `/settings` "Hide Thinking Blocks" toggle only collapsing/expanding thinking in the live region: blocks that had scrolled into committed native scrollback on ED3-risk terminals kept their pre-toggle snapshot, so scrolling up showed the old thinking state. Both paths now `resetDisplay()` after flipping each block's flag, forcing a full clear + replay of the whole transcript (matching the tool-output expansion toggle) so every block above the fold re-renders at its new height.

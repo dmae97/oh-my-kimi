@@ -489,7 +489,7 @@ describe("serializeConversation", () => {
 		// Default cap 2000 at 0.6 head ratio: 1200 head + 800 tail survive.
 		expect(out).toContain("<out>");
 		expect(out).toContain("HEAD-");
-		expect(out).toContain("[… 3010ch elided …]");
+		expect(out).toContain("[…3010ch elided…]");
 		expect(out.endsWith(`-TAIL${snapcompact.DIM_OFF}\n</out>`)).toBe(true);
 	});
 
@@ -499,7 +499,7 @@ describe("serializeConversation", () => {
 			toolResultMaxChars: 10,
 			truncateHeadRatio: 0.5,
 		});
-		expect(tight).toContain("[… 90ch elided …]");
+		expect(tight).toContain("[…90ch elided…]");
 		const off = snapcompact.serializeConversation([createToolResultMessage(text)], {
 			toolResultMaxChars: Number.POSITIVE_INFINITY,
 		});
@@ -514,7 +514,7 @@ describe("serializeConversation", () => {
 		]);
 		// JSON-encoded content is 3002 chars; per-value cap 500 elides 2502.
 		expect(out).toContain('write(path="a.ts", content=');
-		expect(out).toContain("[… 2502ch elided …]");
+		expect(out).toContain("[…2502ch elided…]");
 	});
 
 	it("caps the whole serialized argument list per call", () => {

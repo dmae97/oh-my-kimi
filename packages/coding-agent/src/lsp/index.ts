@@ -2035,7 +2035,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const lines = limitedSymbols.map(s => formatSymbolInformation(s, this.session.cwd));
 			const truncationLine =
 				dedupedSymbols.length > WORKSPACE_SYMBOL_LIMIT
-					? `\n... ${dedupedSymbols.length - WORKSPACE_SYMBOL_LIMIT} additional symbol(s) omitted`
+					? `\n[…${dedupedSymbols.length - WORKSPACE_SYMBOL_LIMIT} symbols elided…]`
 					: "";
 			return {
 				content: [

@@ -140,4 +140,32 @@ describe("AgentTranscriptViewer", () => {
 			expect(atBottom).not.toContain("PROMPTMARKER");
 		});
 	});
+
+	it("clears stale content when the transcript file is deleted while open", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		fs.writeFileSync(file, buildJsonl());
+		const viewer = makeViewer(file);
+		const body = () =>
+			viewer
+				.render(80)
+				.map(l => Bun.stripANSI(l))
+				.join("\n");
+		try {
+			viewer.render(80);
+			viewer.handleInput("g");
+			expect(body()).toContain("PROMPTMARKER");
+
+			fs.rmSync(file);
+			// Poll until the viewer's own poll timer re-stats and clears (deadline-bounded).
+			const deadline = Date.now() + 5000;
+			while (body().includes("PROMPTMARKER") && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
+			expect(body()).not.toContain("PROMPTMARKER");
+		} finally {
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

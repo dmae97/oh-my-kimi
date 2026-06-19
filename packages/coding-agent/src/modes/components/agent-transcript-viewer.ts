@@ -161,19 +161,28 @@ export class AgentTranscriptViewer implements Component {
 		let signature: string;
 		try {
 			const stat = fs.statSync(sessionFile);
-			signature = `${stat.size}:${stat.mtimeMs}`;
+			// Include the path: a different file with the same size/mtime must not alias.
+			signature = `${sessionFile}:${stat.size}:${stat.mtimeMs}`;
 		} catch {
+			// File deleted/rotated while open (e.g. the owning session was dropped):
+			// clear stale content once instead of freezing on it forever.
+			if (this.#lastSignature !== "missing") {
+				this.#lastSignature = "missing";
+				this.#model = undefined;
+				this.#rebuild([]);
+			}
 			return;
 		}
 		if (signature === this.#lastSignature) return;
-		this.#lastSignature = signature;
 		let text: string;
 		try {
 			text = fs.readFileSync(sessionFile, "utf-8");
 		} catch (err) {
+			// Leave #lastSignature unchanged so a transient read error retries next poll.
 			logger.debug("transcript viewer: read failed", { err: String(err) });
 			return;
 		}
+		this.#lastSignature = signature;
 		this.#model = undefined;
 		this.#rebuild(this.#extractMessages(parseSessionEntries(text)));
 	}

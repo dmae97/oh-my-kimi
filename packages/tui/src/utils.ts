@@ -90,7 +90,7 @@ export function truncateToWidth(
 	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
 	// Fast path: every UTF-16 unit is at most 3 cells wide, so a string whose
 	// `length * 3` already fits within `safeWidth` cannot need truncation.
-	if (!pad && text.length * 3<= safeWidth) {
+	if (!pad && text.length * 3 <= safeWidth) {
 		return text;
 	}
 	let resolvedEllipsis: Ellipsis | null | undefined | string = ellipsisKind;

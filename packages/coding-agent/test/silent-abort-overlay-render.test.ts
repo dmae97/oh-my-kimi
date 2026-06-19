@@ -54,7 +54,7 @@ function makeViewer(sessionFile: string, observed: ObservableSession[]): AgentTr
 		registry: agents,
 		observers: makeSubagentRegistry(observed),
 		ui,
-		cwd: tmpDir,
+		cwd: path.dirname(sessionFile),
 		expandKeys: ["ctrl+o"],
 		hubKeys: ["ctrl+s"],
 		requestRender: () => {},
@@ -117,7 +117,7 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const hub = makeHub(sessionFile, [
+		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -128,10 +128,8 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		// Render with a reasonable width — the hub chat view reads the session
-		// file and calls #buildTranscriptLines internally.
-		const rendered = hub.render(120);
-		hub.dispose();
+		const rendered = viewer.render(120);
+		viewer.dispose();
 		const renderedText = rendered.join("\n");
 
 		// The sentinel MUST NOT appear verbatim in any rendered line
@@ -176,7 +174,7 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const hub = makeHub(sessionFile, [
+		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -187,8 +185,8 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const rendered = hub.render(120);
-		hub.dispose();
+		const rendered = viewer.render(120);
+		viewer.dispose();
 		const renderedText = rendered.join("\n");
 
 		// AssistantMessageComponent renders the error as "Error: <message>"

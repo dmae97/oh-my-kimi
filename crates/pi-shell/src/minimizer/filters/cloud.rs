@@ -474,7 +474,7 @@ fn compact_aws_generic(root: &Value) -> Option<String> {
 		let mut out =
 			compact_named_rows(&columns.iter().map(String::as_str).collect::<Vec<_>>(), &values);
 		if rows.len() > MAX_AWS_ROWS {
-			let _ = writeln!(out, "... +{} more {name}", rows.len() - MAX_AWS_ROWS);
+			let _ = writeln!(out, "[…{} {name} elided…]", rows.len() - MAX_AWS_ROWS);
 		}
 		return Some(out);
 	}
@@ -559,7 +559,7 @@ fn compact_named_rows(headers: &[&str], rows: &[Vec<String>]) -> String {
 		out.push('\n');
 	}
 	if rows.len() > MAX_AWS_ROWS {
-		let _ = writeln!(out, "... +{} more rows", rows.len() - MAX_AWS_ROWS);
+		let _ = writeln!(out, "[…{} rows elided…]", rows.len() - MAX_AWS_ROWS);
 	}
 	out
 }
@@ -761,9 +761,7 @@ fn compact_aws_dynamodb_items(items: &[&serde_json::Map<String, Value>]) -> Stri
 		out.push('\n');
 	}
 	if items.len() > 40 {
-		out.push_str("… ");
-		out.push_str(&(items.len() - 40).to_string());
-		out.push_str(" item(s) omitted …\n");
+		let _ = writeln!(out, "[…{} items elided…]", items.len() - 40);
 	}
 	let _ = writeln!(out, "{} item(s)", items.len());
 	out
@@ -1010,7 +1008,7 @@ fn compact_line(line: &str, max_chars: usize) -> String {
 	let edge = max_chars / 2;
 	let start: String = chars.iter().take(edge).collect();
 	let end: String = chars.iter().skip(chars.len() - edge).collect();
-	format!("{start} … {} chars omitted … {end}", chars.len() - edge * 2)
+	format!("{start}[…{}ch elided…]{end}", chars.len() - edge * 2)
 }
 
 fn looks_like_table(input: &str) -> bool {
@@ -1073,7 +1071,7 @@ fn compact_delimited_table(input: &str, max_rows: usize) -> String {
 		}
 	}
 	if data_rows > max_rows {
-		out.push(format!("… {} more rows", data_rows - max_rows));
+		out.push(format!("[…{} rows elided…]", data_rows - max_rows));
 	}
 	join_lines(out)
 }
@@ -1114,7 +1112,7 @@ fn compact_psql_table(input: &str) -> String {
 	}
 
 	if data_rows > MAX_PSQL_ROWS {
-		out.push(format!("... +{} more rows", data_rows - MAX_PSQL_ROWS));
+		out.push(format!("[…{} rows elided…]", data_rows - MAX_PSQL_ROWS));
 	}
 	out.extend(row_count_lines);
 	join_lines(out)
@@ -1152,7 +1150,7 @@ fn compact_psql_expanded(input: &str) -> String {
 	}
 	flush_record(&mut out, &mut current, records);
 	if records > MAX_PSQL_ROWS {
-		out.push(format!("... +{} more records", records - MAX_PSQL_ROWS));
+		out.push(format!("[…{} records elided…]", records - MAX_PSQL_ROWS));
 	}
 	out.extend(row_count_lines);
 	join_lines(out)

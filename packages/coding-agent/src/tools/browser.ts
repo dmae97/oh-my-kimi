@@ -332,7 +332,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		// text inline; the full text stays recoverable via the artifact footer
 		// when allocation succeeds.
 		const cappedText = await enforceInlineByteCap(textOnly, {
-			label: "browser output",
 			saveArtifact: full => saveBrowserOutputArtifact(this.session, full),
 		});
 		details.result = cappedText;

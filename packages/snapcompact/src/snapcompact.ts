@@ -592,7 +592,7 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[], read
 	const all = [...mode.keys()].sort();
 	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
 	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
-		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+		files += `\n[…${all.length - FILE_OPERATION_SUMMARY_LIMIT} files elided…]`;
 	}
 	return prompt.render(fileOperationsTemplate, { files });
 }
@@ -657,7 +657,7 @@ function truncateForSummary(text: string, maxChars: number, headRatio: number): 
 	const tailChars = maxChars - headChars;
 	const elided = text.length - maxChars;
 	const tail = tailChars > 0 ? text.slice(-tailChars) : "";
-	return `${text.slice(0, headChars)} [… ${elided}ch elided …] ${tail}`;
+	return `${text.slice(0, headChars)} […${elided}ch elided…] ${tail}`;
 }
 
 const DIM_MARKERS = /[\u000e\u000f]/g;

@@ -33,7 +33,7 @@ Append `:<sel>` to `path`; bare path = default mode.
 - File with explicit selector → lines prefixed with numbers: `41|def alpha():`.
 {{/if}}
 {{/if}}
-- Parseable code without selector → **structural summary**: declarations kept, bodies collapsed to `..` (merged brace pair) or `…` (standalone). The footer shows the recovery selector: `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]`. Re-issue ONLY the ranges you need via the multi-range selector. `..`/`…` carry no content — NEVER guess what's inside; NEVER re-read the whole file or `:raw` when ranges suffice.
+- Parseable code without selector → **structural summary**: declarations kept, body elided with `…`. The footer shows the recovery selector. Re-issue ONLY the ranges you need via the multi-range selector.
 
 # Documents & Notebooks
 

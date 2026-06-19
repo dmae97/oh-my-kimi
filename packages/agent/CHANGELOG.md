@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Updated the display format for truncated file operation summaries
 
 ## [16.0.8] - 2026-06-18
 

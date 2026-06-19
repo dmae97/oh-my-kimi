@@ -275,7 +275,7 @@ function formatMergedBraceLine(
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): { model: string; display: string } {
-	const merged = `${headText.trimEnd()} .. ${tailText.trim()}`;
+	const merged = `${headText.trimEnd()} … ${tailText.trim()}`;
 	if (shouldAddHashLines) {
 		return { model: `${startLine}-${endLine}:${merged}`, display: merged };
 	}
@@ -315,7 +315,7 @@ const FOOTER_RANGE_SAMPLES = 2;
 
 /**
  * Footer appended to summarized reads telling the model how to recover the
- * elided body. Without this hint, agents either ignore the `...`/`{ .. }`
+ * elided body. Without this hint, agents either ignore the `…`/`{ … }`
  * markers or burn a turn guessing the right selector (see issue #1046). The
  * footer demonstrates the multi-range selector syntax with concrete sample
  * ranges drawn from the actual elision so the model re-reads only what it
@@ -327,7 +327,6 @@ function formatSummaryElisionFooter(
 	elidedLines: number,
 ): string {
 	if (elidedRanges.length === 0) return "";
-	const lineWord = elidedLines === 1 ? "line" : "lines";
 	const sampleCount = Math.min(elidedRanges.length, FOOTER_RANGE_SAMPLES);
 	const selector = elidedRanges
 		.slice(0, sampleCount)
@@ -335,7 +334,7 @@ function formatSummaryElisionFooter(
 		.join(",");
 	const example = `${readPath}:${selector}`;
 	const tail = elidedRanges.length > sampleCount ? `, e.g. ${example}` : ` with ${example}`;
-	return `[${elidedLines} ${lineWord} elided; re-read needed ranges${tail}]`;
+	return `[…${elidedLines}ln elided; re-read needed ranges${tail}]`;
 }
 const READ_CHUNK_SIZE = 8 * 1024;
 
@@ -1904,8 +1903,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let elidedLines = 0;
 		for (const unit of units) {
 			if (unit.kind === "elided") {
-				modelParts.push("...");
-				displayParts.push("...");
+				modelParts.push("…");
+				displayParts.push("…");
 				elidedRanges.push({ start: unit.startLine, end: unit.endLine });
 				elidedLines += unit.endLine - unit.startLine + 1;
 				continue;
