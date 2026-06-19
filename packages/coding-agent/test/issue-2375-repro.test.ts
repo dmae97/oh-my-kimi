@@ -13,7 +13,10 @@
  * text paste; the user must see an SSH-aware diagnostic so they know to
  * paste image bytes directly instead.
  */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as os from "node:os";
+import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -162,7 +165,7 @@ describe("InputController.handleImagePathPaste (issue #2375)", () => {
 			readText: async () => "",
 		});
 		// This test file itself: resolvable, readable, but not an image.
-		const nonImage = import.meta.path.replace(/\.ts$/, ".png");
+		const nonImage = path.join(os.tmpdir(), `issue-2375-not-png-${Math.random().toString(36).slice(2)}.png`);
 		await Bun.write(nonImage, "not really a png");
 		try {
 			await controller.handleImagePathPaste(nonImage);
