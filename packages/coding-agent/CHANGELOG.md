@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed LSP servers that dynamically register capabilities, including Expert, hanging semantic requests after `client/registerCapability` was rejected ([#3029](https://github.com/can1357/oh-my-pi/issues/3029)).
+
 ## [16.1.0] - 2026-06-19
 
 ### Added
