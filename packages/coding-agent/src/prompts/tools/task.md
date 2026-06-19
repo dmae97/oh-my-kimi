@@ -1,15 +1,15 @@
 {{#if asyncEnabled}}{{#if batchEnabled}}Spawns subagents in the background — one per `tasks[]` item; single spawn = one-item batch.{{else}}Spawns ONE subagent per call in the background.{{/if}}
 
 - Non-blocking: returns agent id{{#if batchEnabled}}s{{/if}} + job id{{#if batchEnabled}}s{{/if}} immediately; each result auto-delivered on yield.
-- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch subagents into one call's `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
+- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch into one `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
 - Blocked on a result? `job poll`; else keep working. `job cancel` kills a task, **cannot carry a message** — only for stalled/abandoned work.
 {{else}}{{#if batchEnabled}}Runs subagents synchronously — one per `tasks[]` item; single spawn = one-item batch.{{else}}Runs ONE subagent synchronously per call.{{/if}}
 
 - Blocking: returns only after the agent{{#if batchEnabled}}s{{/if}} finish; results arrive inline.
-- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch subagents into one call's `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
+- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch into one `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
 {{/if}}
 {{#if ircEnabled}}
-- Coordinate via `irc` using agent ids; agents reach you and siblings live.
+- Coordinate via `irc` by agent id; agents reach you + siblings live.
 {{/if}}
 
 <parameters>
@@ -36,33 +36,33 @@
 </parameters>
 
 <rules>
-- **Maximize fan-out.** Widest {{#if batchEnabled}}`tasks[]` batch{{else}}set of parallel `task` calls{{/if}} the work decomposes into. NEVER serialize work that could run concurrently.
-- **Subagents do not verify, lint, or format.** Each assignment MUST tell the subagent to skip all gates, formatters, project-wide build/test/lint. You run them once at the end across changed files.
+- **Maximize fan-out.** Widest {{#if batchEnabled}}`tasks[]` batch{{else}}set of parallel `task` calls{{/if}} the work decomposes into. NEVER serialize parallelizable work.
+- **Subagents do not verify, lint, or format.** Each assignment MUST tell the subagent: skip all gates, formatters, project-wide build/test/lint. You run them once at the end across changed files.
 - No globs, no "update all", no package-wide scope. Fan out.
-- **Tailor every spawn with a `role`.** Naming the specialist (e.g. "Parser edge-case tester", "SSE backpressure specialist") sharpens the agent vs a generic `task`/`quick_task` worker; decompose into named specialists, never clones. Role-less spawn is the exception.
-- NEVER serialize over possible file overlap. Agents resolve collisions among themselves in real time.
+- **Tailor every spawn with a `role`.** A named specialist (e.g. "Parser edge-case tester", "SSE backpressure specialist") beats a generic `task`/`quick_task` worker; decompose into specialists, never clones. Role-less spawn is the exception.
+- NEVER serialize over possible file overlap. Agents self-resolve collisions in real time.
 - Subagents have no conversation history. Every fact, file path, direction MUST be explicit in {{#if batchEnabled}}`context` or the item's `assignment`{{else}}the `assignment`{{/if}}.
 {{#if batchEnabled}}
-- **Shared background** in `context` once — never duplicated across assignments. Large payloads via `local://<path>` URIs, not inline.
+- **Shared background** in `context` once, never per assignment. Large payloads via `local://<path>` URIs, not inline.
 {{else}}
 - **Shared background**: write ONCE to a `local://` file (e.g. `local://ctx.md`), reference it in each assignment. Large payloads via `local://<path>` URIs, not inline.
 {{/if}}
-- Prefer agents that investigate **and** edit in one pass; spin a read-only discovery step only when affected files are unknown.
-- **Read-only agents** (e.g. `explore`): no edit/write/command tools. NEVER assign them file changes or commands. Use to investigate + report; delegate edits to a writing agent (`task`, `oracle`, `designer`) or do them yourself.
-- **No reasoning offload**: NEVER offload reasoning, analysis, design, or decision-making to `quick_task` or `explore` — minimal-effort / small models for mechanical lookups + data collection only. Keep judgment + synthesis in your own context; delegate hard thinking to `task`, `plan`, or `oracle`.
+- Prefer agents that investigate **and** edit in one pass; spin a read-only discovery step only when affected files unknown.
+- **Read-only agents** (e.g. `explore`): no edit/write/command tools. NEVER assign them file changes or commands. Use to investigate + report; delegate edits to a writing agent (`task`/`oracle`/`designer`) or do them yourself.
+- **No reasoning offload**: NEVER route reasoning, analysis, design, or decisions to `quick_task`/`explore` — minimal-effort / small models for mechanical lookups + data collection only. Keep judgment + synthesis in your own context; delegate hard thinking to `task`/`plan`/`oracle`.
 </rules>
 
 <parallelization>
 {{#if ircEnabled}}
-Test: can B run without A's output? No → sequence A → B — **unless** B can ask A over `irc`. Live coordination beats a serial waterfall when the contract is small + DM-able.
+Test: can B run without A's output? No → sequence A → B — **unless** B can ask A over `irc`. Live coordination beats a waterfall when the contract is small + DM-able.
 Still sequence when a task produces a large evolving contract (generated types, schema migration, core module API) consumed wholesale — IRC round-trips don't replace a finished artifact.
-Parallel when tasks touch disjoint files, are independent refactors/tests, or need only occasional peer-to-peer clarification.
+Parallel when tasks touch disjoint files, are independent refactors/tests, or need only occasional peer clarification.
 {{else}}
 Test: can B run without A's output? No → sequence A → B.
 Sequential when one task produces a contract (types, API, schema, core module) the other consumes.
 Parallel when tasks touch disjoint files or are independent refactors/tests.
 {{/if}}
-{{#if ircEnabled}}Sequenced follow-ups SHOULD message the agent that produced the prerequisite — it holds the context.{{/if}}
+{{#if ircEnabled}}Sequenced follow-ups SHOULD message the prerequisite's producer — it holds the context.{{/if}}
 </parallelization>
 
 {{#if batchEnabled}}

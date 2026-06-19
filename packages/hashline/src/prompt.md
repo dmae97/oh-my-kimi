@@ -1,7 +1,7 @@
 Your patch language names lines to replace, delete, or insert at, then lists the new content. Rule of thumb: a header ending in `:` is followed by `+` body rows; `DEL` has no body.
 
 <headers>
-Every file section starts with `[PATH#TAG]`. `TAG` is the 4-hex snapshot tag from your latest `read`/`search`, REQUIRED on every section — there is no hashless form. Create new files with the `write` tool; hashline only edits files that already exist.
+Every file section starts with `[PATH#TAG]`. `TAG` = 4-hex snapshot tag from your latest `read`/`search`, REQUIRED on every section — no hashless form. Create new files with `write`; hashline only edits existing files.
 </headers>
 
 <ops>
@@ -17,19 +17,19 @@ Single line: `SWAP N.=N:` / `DEL N`. The range is the ORIGINAL lines you touch; 
 </ops>
 
 <body-rows>
-Body rows appear only under a `:` header. Every body row is `+TEXT` — add a new literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. There is NO other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. To insert a literal line starting with `-` or `+`, prefix it: `+-x`, `++x`.
+Body rows appear only under a `:` header. Every body row is `+TEXT` — add a literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. No other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. To insert a literal line starting with `-` or `+`, prefix it: `+-x`, `++x`.
 </body-rows>
 
 <rules>
-- Line numbers and the `[PATH#TAG]` header come from your latest `read`/`search` (`LINE:TEXT` rows).
-- Numbers refer to the ORIGINAL file; they do not shift as hunks apply.
+- Line numbers + `[PATH#TAG]` header come from your latest `read`/`search` (`LINE:TEXT` rows).
+- Numbers refer to the ORIGINAL file; never shift as hunks apply.
 - They die with the call: every applied edit mints a fresh `#TAG` and renumbers — anchor the next edit on the edit response or a fresh `read`.
-- Touch only lines your latest `read`/`search` literally displayed as `LINE:TEXT`; the tag certifies the snapshot, not your memory of it. A hunk anchored on a line you never displayed is REJECTED — re-`read` first. Seeing a line ≠ it holds the code you mean; confirm the numbers map to the construct you intend, especially far from your read window.
+- Touch only lines your latest `read`/`search` literally displayed as `LINE:TEXT`; the tag certifies the snapshot, not your memory. A hunk anchored on a line you never displayed is REJECTED — re-`read` first. Seeing a line ≠ it holds the code you mean; confirm numbers map to the construct you intend, especially far from your read window.
 - Elided regions are UNSEEN: `…`/`..` markers and a collapsed `N-M:` summary row (only boundary lines N and M shown) hide their interior. NEVER place or span a hunk inside one — `read` the range first.
 - Never start or end a range mid-expression or mid-block.
 - Indent body rows exactly for the depth they should live at.
 - On a stale-tag rejection or any surprising result: STOP and re-`read` before further edits.
-- One hunk per range; the body is the final content, never an old/new pair.
+- One hunk per range; body = final content, never an old/new pair.
 - Ranges cover ONLY lines whose content changes. Never widen over unchanged lines — a stale wide range shreds everything it spans.
 - Whole construct → `SWAP.BLK N` (tree-sitter resolves the end); lines inside it → `SWAP N.=M`.
 - `SWAP.BLK N` resolves EXACTLY the node at N. Leading decorators/attributes/doc-comments are separate nodes: point N at the FIRST decorator to sweep both; standalone line-comments are never swept — use `SWAP N.=M`.

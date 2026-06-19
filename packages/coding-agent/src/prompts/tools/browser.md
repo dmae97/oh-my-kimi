@@ -1,21 +1,21 @@
 Drives real Chromium tab; full puppeteer access via JS.
 
 <instruction>
-- Static content (articles, docs, issues/PRs, JSON, PDFs, feeds)? `read` the URL. Browser only for JS execution, auth, or interactive actions.
+- Static content (articles, docs, issues/PRs, JSON, PDFs, feeds)? `read` the URL. Browser only for JS execution, auth, interactive actions.
 - Three actions:
-  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else hang the page till you wire `page.on('dialog', …)`).
+  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else page hangs till you wire `page.on('dialog', …)`).
   - `close` — release tab by `name`, or all with `all: true`. `kill: true` also kills spawned-app process trees.
-  - `run` — execute JS in existing tab. `code` = body of an async function with `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Return value JSON-stringified into result; `display(value)` accumulates text/images.
+  - `run` — execute JS in existing tab. `code` = async function body; `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Return value JSON-stringified into result; `display(value)` accumulates text/images.
 - Tabs survive `run` calls and in-process subagents — open once, reuse.
-- Browser kinds (`app` field on `open`):
+- Browser kinds (`app` on `open`):
   - default (no `app`) → headless Chromium with stealth patches.
   - `app.path` → spawn absolute binary (Electron/CDP). No stealth patches — NEVER tamper with a real desktop app.
   - `app.cdp_url` → connect to existing CDP endpoint (e.g. `http://127.0.0.1:9222`).
-  - `app.target` (with `path`/`cdp_url`) — substring on url+title picks a BrowserWindow.
+  - `app.target` (with `path`/`cdp_url`) — substring on url+title picks BrowserWindow.
 - `tab` helpers; drop to raw puppeteer `page` for anything uncovered:
   - `tab.goto(url, { waitUntil? })` — navigate.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot: `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Ids stable until next observe/goto.
-  - `tab.id(n)` — element id from last observe → `ElementHandle` (`.click()`, `.type()`, …).
+  - `tab.id(n)` — id from last observe → `ElementHandle` (`.click()`, `.type()`, …).
   - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)`.
   - `tab.waitFor(selector)` — wait until attached; returns `ElementHandle`.
   - `tab.drag(from, to)` — endpoints: selector (center-to-center) or `{ x, y }` viewport point (canvases, sliders).
@@ -32,9 +32,9 @@ Drives real Chromium tab; full puppeteer access via JS.
 
 <critical>
 - MUST `open` before `run` — `run` never creates a tab.
-- Default to `tab.observe()` for page state — structured data, actionable element ids. Screenshot ONLY when visual appearance matters.
+- Default to `tab.observe()` for page state — structured data, actionable ids. Screenshot ONLY when appearance matters.
 - Navigation invalidates element ids — re-observe before use.
-- `code` runs with full Node access. Treat as your code, not sandboxed code.
+- `code` runs with full Node access. Treat as your code, not sandboxed.
 </critical>
 
 <output>
