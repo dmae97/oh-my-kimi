@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Deferred status-line usage refreshes off the render path and timeboxed the startup fetch so slow Anthropic quota lookups no longer block interactive startup. ([#3057](https://github.com/can1357/oh-my-pi/issues/3057))
+
 ## [16.1.3] - 2026-06-19
 
 ### Changed
