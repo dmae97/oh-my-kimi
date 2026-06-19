@@ -38,6 +38,7 @@ export interface FormatSessionDumpTextOptions {
 	model?: Model | null;
 	thinkingLevel?: ThinkingLevel | string | null;
 	tools?: readonly SessionDumpToolInfo[];
+	inlineToolDescriptors?: boolean;
 }
 
 interface InventoryTool {
@@ -78,7 +79,8 @@ function renderDumpHeader(options: FormatSessionDumpTextOptions, inventoryTools:
 	lines.push(`Thinking Level: ${options.thinkingLevel ?? ""}`);
 	lines.push("\n");
 
-	if (inventoryTools.length > 0) {
+	const hasSystemPromptToolInventory = options.inlineToolDescriptors === true;
+	if (inventoryTools.length > 0 && !hasSystemPromptToolInventory) {
 		lines.push("## Available Tools\n");
 		lines.push(renderToolInventory(inventoryTools, model?.id ?? ""));
 		lines.push("\n");

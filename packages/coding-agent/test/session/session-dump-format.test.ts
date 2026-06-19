@@ -94,6 +94,40 @@ describe("formatSessionDumpText tool parameters", () => {
 		expect(out).toContain("<examples>");
 		expect(out).toContain('<invoke name="find">');
 	});
+
+	it("omits the Available Tools section if inlineToolDescriptors is true", () => {
+		const out = formatSessionDumpText({
+			messages: [],
+			inlineToolDescriptors: true,
+			tools: [
+				{
+					name: "web_search",
+					description: "Searches the web.",
+					parameters: { type: "object" },
+				},
+			],
+		});
+
+		expect(out).not.toContain("## Available Tools");
+	});
+
+
+	it("does not falsely omit the Available Tools section even if systemPrompt contains tool headings", () => {
+		const out = formatSessionDumpText({
+			messages: [],
+			systemPrompt: ["# Inventory\nThis is a rule discussing # Tool: web_search.\nNever call it directly."],
+			inlineToolDescriptors: false,
+			tools: [
+				{
+					name: "web_search",
+					description: "Searches the web.",
+					parameters: { type: "object" },
+				},
+			],
+		});
+
+		expect(out).toContain("## Available Tools");
+	});
 });
 
 describe("formatSessionDumpText markdown-headings transcript", () => {

@@ -925,15 +925,15 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	repeatToolDescriptions: {
+	inlineToolDescriptors: {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "model",
 			group: "Prompt",
-			label: "Repeat Tool Descriptions",
+			label: "Inline Tool Descriptors",
 			description:
-				"Render full tool descriptions in the system prompt and strip them from the provider tool schemas (top-level and nested) so they are sent once instead of duplicated on the wire",
+				"Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once",
 		},
 	},
 
