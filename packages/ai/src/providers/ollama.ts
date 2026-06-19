@@ -5,15 +5,14 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
-	DeveloperMessage,
+	ImageContent,
 	Message,
 	Model,
 	StreamFunction,
 	StreamOptions,
+	TextContent,
 	Tool,
 	ToolChoice,
-	ToolResultMessage,
-	UserMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
@@ -32,6 +31,7 @@ import {
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { transformMessages } from "./transform-messages";
+import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
 /** Non-2xx response from the Ollama `/api/chat` endpoint. */
 export class OllamaApiError extends ProviderHttpError {
@@ -174,40 +174,35 @@ function selectToolsForToolChoice(tools: Tool[] | undefined, toolChoice: ToolCho
 	return [];
 }
 
-function toPlainContent(content: string | Array<{ type: "text" | "image"; text?: string; data?: string }>): {
+function toPlainContent(
+	content: string | ReadonlyArray<TextContent | ImageContent>,
+	supportsImages: boolean,
+): {
 	content: string;
 	images?: string[];
 } {
 	if (typeof content === "string") {
 		return { content };
 	}
-	const textParts: string[] = [];
-	const images: string[] = [];
-	for (const block of content) {
-		if (block.type === "text" && typeof block.text === "string") {
-			textParts.push(block.text);
-		}
-		if (block.type === "image" && typeof block.data === "string") {
-			images.push(block.data);
-		}
-	}
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const text = textBlocks.map(block => block.text).join("\n");
 	return {
-		content: textParts.join("\n"),
-		...(images.length > 0 ? { images } : {}),
+		content: joinTextWithImagePlaceholder(text, omittedImages),
+		...(imageBlocks.length > 0 ? { images: imageBlocks.map(block => block.data) } : {}),
 	};
 }
 
-function convertMessage(message: Message): OllamaMessage {
+function convertMessage(message: Message, supportsImages: boolean): OllamaMessage {
 	if (message.role === "user") {
-		const converted = toPlainContent(message.content as UserMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "user", ...converted };
 	}
 	if (message.role === "developer") {
-		const converted = toPlainContent(message.content as DeveloperMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "system", ...converted };
 	}
 	if (message.role === "toolResult") {
-		const converted = toPlainContent(message.content as ToolResultMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return {
 			role: "tool",
 			tool_name: message.toolName,
@@ -259,8 +254,9 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 	}
 	messages.push(...context.messages);
 	const isCloud = model.provider === "ollama-cloud";
+	const supportsImages = model.input.includes("image");
 	return transformMessages(messages, model).map(msg => {
-		const converted = convertMessage(msg);
+		const converted = convertMessage(msg, supportsImages);
 		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
 		// field — it's valid in model responses but not accepted as a history input. Strip it
 		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
