@@ -505,9 +505,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		return result.value;
 	}
 
-	const systemPromptCustomizationPromise = logger.time("loadSystemPromptFiles", loadSystemPromptFiles, {
-		cwd: resolvedCwd,
-	});
+	// Caller-supplied `customPrompt` / `resolvedCustomPrompt` owns block 0; the
+	// secondary capability-path `SYSTEM.md` walk-up MUST NOT silently augment it,
+	// because that would defeat CLI precedence over project/user `SYSTEM.md`.
+	const callerControlsCustomPrompt =
+		(typeof providedResolvedCustomPrompt === "string" && providedResolvedCustomPrompt.length > 0) ||
+		(typeof customPrompt === "string" && customPrompt.length > 0);
+	const systemPromptCustomizationPromise: Promise<string | null> = callerControlsCustomPrompt
+		? Promise.resolve(null)
+		: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
 	const contextFilesPromise = providedContextFiles
 		? Promise.resolve(providedContextFiles)
 		: logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });

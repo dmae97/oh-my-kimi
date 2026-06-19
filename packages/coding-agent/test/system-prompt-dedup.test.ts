@@ -106,6 +106,33 @@ describe("SYSTEM.md prompt assembly", () => {
 		expect(promptText).not.toContain("File content that must not replace the prompt.");
 	});
 
+	it("suppresses discovered SYSTEM.md when the caller supplies a custom prompt", async () => {
+		const projectDir = path.join(tempDir, "project");
+		fs.mkdirSync(path.join(projectDir, ".omp"), { recursive: true });
+		fs.writeFileSync(path.join(projectDir, ".omp", "SYSTEM.md"), "Discovered project SYSTEM prompt");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			resolvedCustomPrompt: "CLI custom prompt",
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		expect(promptText).toContain("CLI custom prompt");
+		expect(promptText).not.toContain("Discovered project SYSTEM prompt");
+	});
+
 	it("prefers project SYSTEM.md over user SYSTEM.md", async () => {
 		const projectDir = path.join(tempDir, "project");
 		fs.mkdirSync(path.join(projectDir, ".omp"), { recursive: true });
