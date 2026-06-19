@@ -1570,6 +1570,9 @@ export class ModelRegistry {
 	}
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
 		return models.map(model => {
+			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
+				model = applyModelOverride(model, { omitMaxOutputTokens: true });
+			}
 			if (model.id !== "gpt-5.4" || model.provider === "github-copilot") {
 				return model;
 			}
