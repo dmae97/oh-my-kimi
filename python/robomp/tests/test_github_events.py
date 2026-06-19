@@ -857,3 +857,197 @@ def test_route_non_directive_comment_carries_no_pragmas() -> None:
     )
     assert decision.directive is False
     assert decision.directive_pragmas == ()
+
+
+# ---------- vouched-label deferred PR review ----------
+
+
+def test_route_vouched_label_defers_pr_open() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "opened",
+            "pull_request": {"number": 9, "draft": False, "user": {"login": "alice", "type": "User"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "deferred to vouch label"
+
+
+def test_route_vouched_label_reviews_on_label() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "vouched"},
+            "pull_request": {
+                "number": 9,
+                "draft": False,
+                "user": {"login": "alice", "type": "User"},
+                "author_association": "CONTRIBUTOR",
+            },
+            "repository": {"full_name": "octo/widget"},
+            "sender": {"login": "github-actions[bot]"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert decision.should_queue
+    assert decision.task == "review_pr"
+    assert decision.issue_key == "octo/widget#9"
+    assert decision.submitter == "alice"
+
+
+def test_route_vouched_label_ignores_other_labels() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "bug"},
+            "pull_request": {"number": 9, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+
+
+def test_route_vouched_label_ready_for_review_defers_even_with_label() -> None:
+    # Persisted labels are NOT trusted; the workflow re-applies the label (a
+    # fresh `labeled` event) after re-validating, so ready_for_review defers.
+    decision = route(
+        "pull_request",
+        {
+            "action": "ready_for_review",
+            "pull_request": {
+                "number": 9,
+                "draft": False,
+                "user": {"login": "alice", "type": "User"},
+                "labels": [{"name": "vouched"}],
+            },
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "deferred to vouch label"
+
+
+def test_route_vouched_label_labeled_skips_draft() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "vouched"},
+            "pull_request": {"number": 9, "draft": True, "user": {"login": "alice", "type": "User"}},
+            "repository": {"full_name": "octo/widget"},
+            "sender": {"login": "github-actions[bot]"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "draft PR"
+
+
+def test_route_default_trigger_ignores_labeled() -> None:
+    # Backward-compat: the default "open" trigger does not route `labeled`.
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "vouched"},
+            "pull_request": {"number": 9, "user": {"login": "alice"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert not decision.should_queue
+
+
+def test_route_vouched_label_reopened_defers_even_with_label() -> None:
+    # A since-denounced author must not slip through on reopen via a stale
+    # label; reopened always defers to a fresh gate check + re-label.
+    decision = route(
+        "pull_request",
+        {
+            "action": "reopened",
+            "pull_request": {
+                "number": 9,
+                "draft": False,
+                "user": {"login": "alice", "type": "User"},
+                "labels": [{"name": "vouched"}],
+            },
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "deferred to vouch label"
+
+
+def test_route_vouched_label_reopened_without_label_defers() -> None:
+    decision = route(
+        "pull_request",
+        {
+            "action": "reopened",
+            "pull_request": {"number": 9, "draft": False, "user": {"login": "alice", "type": "User"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "deferred to vouch label"
+
+
+def test_route_vouched_label_rejects_manual_labeler() -> None:
+    # A triage/maintainer hand-adding the label must NOT trigger review.
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "vouched"},
+            "pull_request": {"number": 9, "draft": False, "user": {"login": "alice", "type": "User"}},
+            "repository": {"full_name": "octo/widget"},
+            "sender": {"login": "evilmaintainer"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert "trusted labeler" in decision.reason
+
+
+def test_route_vouched_label_skips_closed_pr() -> None:
+    # `labeled` can fire on a closed PR; never review one.
+    decision = route(
+        "pull_request",
+        {
+            "action": "labeled",
+            "label": {"name": "vouched"},
+            "pull_request": {"number": 9, "state": "closed", "user": {"login": "alice", "type": "User"}},
+            "repository": {"full_name": "octo/widget"},
+            "sender": {"login": "github-actions[bot]"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+        pr_review_trigger="vouched_label",
+    )
+    assert not decision.should_queue
+    assert decision.reason == "PR not open"

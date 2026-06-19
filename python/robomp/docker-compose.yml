@@ -44,6 +44,16 @@ services:
       ROBOMP_MAINTAINER_LOGINS: ${ROBOMP_MAINTAINER_LOGINS:-}
       ROBOMP_REVIEWER_BOTS: ${ROBOMP_REVIEWER_BOTS:-}
 
+      # --- PR review / vouch gate ---
+      # When PRs are gated by the vouch GitHub Action, set the trigger to
+      # `vouched_label` so robomp reviews ONLY PRs that survive the gate
+      # (the workflow labels survivors `ROBOMP_VOUCH_REVIEW_LABEL`), instead
+      # of racing the gate on PR open. `vouched_label` keeps review ENABLED.
+      ROBOMP_PR_REVIEW_ENABLED: ${ROBOMP_PR_REVIEW_ENABLED:-true}
+      ROBOMP_PR_REVIEW_TRIGGER: ${ROBOMP_PR_REVIEW_TRIGGER:-open}
+      ROBOMP_VOUCH_REVIEW_LABEL: ${ROBOMP_VOUCH_REVIEW_LABEL:-vouched}
+      ROBOMP_VOUCH_REVIEW_LABELER: ${ROBOMP_VOUCH_REVIEW_LABELER:-github-actions[bot]}
+
       # --- model selection ---
       ROBOMP_MODEL: ${ROBOMP_MODEL:-anthropic/claude-sonnet-4-6}
       ROBOMP_PROVIDER: ${ROBOMP_PROVIDER:-}

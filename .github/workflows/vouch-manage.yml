@@ -1,0 +1,53 @@
+name: Vouch (manage)
+
+# Let maintainers vouch/denounce/unvouch by commenting on a Discussion:
+#   !vouch                 vouch the discussion author
+#   !vouch @user [reason]  vouch a specific user
+#   !denounce [@user] [reason]
+#   !unvouch [@user]
+# Only collaborators with admin/maintain/write are honored (triage EXCLUDED;
+# upstream's default `roles` includes triage, which we override below).
+# The action commits the VOUCHED.td change back to the default branch.
+
+on:
+  discussion_comment:
+    types: [created]
+
+# Serialize writes to VOUCHED.td so concurrent vouches don't clobber.
+concurrency:
+  group: vouch-manage
+  cancel-in-progress: false
+
+# The job carries its own identity via the App token below, so the
+# workflow itself needs no permissions.
+permissions: {}
+
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    steps:
+      # A GitHub App identity is required only if the default branch is
+      # protected (the stock GITHUB_TOKEN cannot bypass branch protection).
+      # No branch protection? Delete this step, drop the checkout `token:`,
+      # set `permissions: { contents: write, discussions: write }`, and use
+      # `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` below.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.VOUCH_ID }}
+          private-key: ${{ secrets.VOUCH_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: mitchellh/vouch/action/manage-by-discussion@v1
+        with:
+          discussion-number: ${{ github.event.discussion.number }}
+          comment-node-id: ${{ github.event.comment.node_id }}
+          vouch-keyword: "!vouch"
+          denounce-keyword: "!denounce"
+          unvouch-keyword: "!unvouch"
+          roles: admin,maintain,write
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
