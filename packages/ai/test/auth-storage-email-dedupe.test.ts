@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AuthStorage, type OAuthCredential, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
+import { AuthStorage, type FetchImpl, type OAuthCredential, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import { registerOAuthProvider, unregisterOAuthProviders } from "../src/registry/oauth";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;
@@ -742,37 +742,35 @@ describe("AuthStorage OAuth login upgrade and multi-account coexistence", () => 
 		}
 	});
 
-	it("keeps existing API keys active when a provider login adds another key", async () => {
+	it("keeps existing NVIDIA API keys active when login adds another key", async () => {
 		if (!tempDir) throw new Error("test setup failed");
 
 		const dbPath = path.join(tempDir, "api-key-rotation.db");
 		const authStorage = await AuthStorage.create(dbPath);
 		const prompts = ["nvapi-first", "nvapi-second"];
-		registerOAuthProvider({
-			id: "unit-api-key-rotation",
-			name: "Unit API Key Rotation",
-			sourceId: "auth-storage-login-upgrade-test",
-			login: async ({ onPrompt }) => onPrompt?.({ message: "Paste API key" }) ?? "",
-		});
+		const fetchMock: FetchImpl = async () =>
+			new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
 
 		try {
-			await authStorage.login("unit-api-key-rotation", {
+			await authStorage.login("nvidia", {
 				onAuth: () => {},
 				onPrompt: async () => prompts.shift() ?? "",
+				fetch: fetchMock,
 			});
-			await authStorage.login("unit-api-key-rotation", {
+			await authStorage.login("nvidia", {
 				onAuth: () => {},
 				onPrompt: async () => prompts.shift() ?? "",
+				fetch: fetchMock,
 			});
 
-			expect(authStorage.listStoredCredentials("unit-api-key-rotation").map(entry => entry.credential)).toEqual([
+			expect(authStorage.listStoredCredentials("nvidia").map(entry => entry.credential)).toEqual([
 				{ type: "api_key", key: "nvapi-first" },
 				{ type: "api_key", key: "nvapi-second" },
 			]);
 
 			const selectedKeys = new Set<string>();
 			for (let index = 0; index < 64; index += 1) {
-				const key = await authStorage.getApiKey("unit-api-key-rotation", `session-${index}`);
+				const key = await authStorage.getApiKey("nvidia", `session-${index}`);
 				if (key) selectedKeys.add(key);
 			}
 			expect(selectedKeys).toEqual(new Set(["nvapi-first", "nvapi-second"]));
