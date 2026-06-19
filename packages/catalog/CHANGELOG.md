@@ -68,6 +68,23 @@
 
 - Fixed Fireworks-hosted Qwen turns (e.g. `fireworks/qwen3.7-plus`) failing with `400 Extra inputs are not permitted, field: 'enable_thinking'`. Fireworks serves Qwen3 with controllable thinking via OpenAI-style `reasoning_effort` and rejects the top-level `enable_thinking` boolean that Alibaba DashScope speaks; `buildOpenAICompat` was selecting `thinkingFormat: "qwen"` from the `qwen` id pattern regardless of host. Fireworks-hosted Qwen models now resolve to `thinkingFormat: "openai"`.
 - Fixed MiMo models on OpenAI-compatible gateways to expose only accepted `low`, `medium`, and `high` reasoning tiers and map unsupported raw `minimal`/`xhigh` requests to safe wire values. ([#2864](https://github.com/can1357/oh-my-pi/issues/2864))
+### Added
+
+- Added GitLab Duo Agent catalog discovery for `gitlab-duo-agent`, including namespace selection and live `aiChatAvailableModels` model mapping.
+
+### Changed
+
+- Changed GitLab Duo Agent model specs to `reasoning: false`. The Duo Agent Platform path exposes no client-controllable thinking knob (the underlying Anthropic model params are server-fixed), so OMP no longer shows a thinking-effort selector for these models.
+
+### Fixed
+
+- Fixed GitLab Duo Workflow runtime namespace discovery so agent startup can resolve a root namespace without requiring live `aiChatAvailableModels` results.
+- Fixed GitLab Duo Workflow runtime namespace discovery to preserve namespace paths for Workflow creation, including numeric/GID namespace overrides that must be resolved through GitLab group metadata.
+- Fixed GitLab Duo Workflow project namespace discovery to fall back to the GraphQL `rootAncestor` query whenever a REST project payload exposes no explicit root (the normal payload only carries the immediate `namespace`), including numeric `projectId`/`GITLAB_DUO_PROJECT_ID` values: the fallback now keys off the project's `path_with_namespace` from the REST payload instead of being blocked by the missing slash, so a numeric id pinning a leaf subgroup project resolves the correct root namespace instead of falling through to remotes or top-level groups.
+- Fixed GitLab Duo Workflow model specs to resolve a static `contextWindow` from the model ref family (Claude/Gemini → 1,000,000, default 200,000) instead of leaving it null, so OMP's context panel, usage percentage, and long-context auto-compaction work; GitLab exposes the real window only at runtime in each checkpoint's `agent_context_usage`, which the catalog ModelSpec cannot backfill.
+- Fixed GitLab Duo Workflow catalog discovery ignoring `GITLAB_DUO_PROJECT_PATH`: namespace discovery now resolves the configured project from a `projectPath` config field and the `GITLAB_DUO_PROJECT_PATH` env var (in addition to `projectId`/`GITLAB_DUO_PROJECT_ID`), so workspaces that pin a project by path no longer fall through to the wrong group or fail before runtime project handling applies.
+- Fixed GitLab Duo Workflow remote project discovery missing the current GitLab project in linked Git worktree checkouts: a worktree's `.git` points at `.git/worktrees/<name>`, whose own `config` holds no remotes — those live in the common directory named by the gitdir's `commondir` file. Discovery now follows `commondir` to read the common `config`, so workspaces in a worktree resolve the correct namespace instead of falling back to top-level group candidates.
+- Fixed GitLab Duo Workflow remote project discovery on self-managed GitLab installed under a relative path (e.g. `https://host/gitlab`): HTTPS remotes look like `https://host/gitlab/group/project.git` but project full paths stay `group/project`, so discovery previously queried `/api/v4/projects/gitlab%2Fgroup%2Fproject` and missed the project. The parser now strips the install base path from the remote before deriving the project full path.
 
 ## [16.1.7] - 2026-06-20
 
@@ -81,6 +98,7 @@
 
 - Fixed Claude 4.6 routing on the `google-antigravity` (and `google-gemini-cli`) Cloud Code Assist providers, whose backend exposes the models asymmetrically: `claude-sonnet-4-6` has no `-thinking` twin and `claude-opus-4-6` has only the `-thinking` twin. The shared `thinkingPair` family was routing thinking efforts on `claude-sonnet-4-6` to a non-existent `claude-sonnet-4-6-thinking` wire id (404 `Requested entity was not found`); replaced both 4.6 entries with bespoke single-wire families that declare the dead ids as `retiredMembers` so `reconcileRetiredRouting` re-points stale bundled-catalog and SQLite-cache rows away from the 404 wire id. Refreshed the bundled `models.json` Sonnet 4.6 entry whose stored `effortRouting` still targeted the dead `-thinking` id. Added `claude-sonnet-4-6` and `claude-opus-4-6-thinking` entries to `ANTIGRAVITY_MODEL_WIRE_PROFILES` capped at the backend's 64000-output-token limit (over-cap requests 400'd with `Request contains an invalid argument`); `modelEnum` is now optional on `AntigravityModelWireProfile` since the Claude wire ids are accepted without a captured `labels.model_enum`. ([#3067](https://github.com/can1357/oh-my-pi/issues/3067))
 
+- Fixed Claude 4.6 routing on the `google-antigravity` (and `google-gemini-cli`) Cloud Code Assist providers, whose backend exposes the models asymmetrically: `claude-sonnet-4-6` has no `-thinking` twin and `claude-opus-4-6` has only the `-thinking` twin. The shared `thinkingPair` family was routing thinking efforts on `claude-sonnet-4-6` to a non-existent `claude-sonnet-4-6-thinking` wire id (404 `Requested entity was not found`); replaced both 4.6 entries with bespoke single-wire families so every effort and off resolve to the live wire id. Added `claude-sonnet-4-6` and `claude-opus-4-6-thinking` entries to `ANTIGRAVITY_MODEL_WIRE_PROFILES` capped at the backend's 64000-output-token limit (over-cap requests 400'd with `Request contains an invalid argument`); `modelEnum` is now optional on `AntigravityModelWireProfile` since the Claude wire ids are accepted without a captured `labels.model_enum`. ([#3067](https://github.com/can1357/oh-my-pi/issues/3067))
 ## [16.1.3] - 2026-06-19
 
 ### Fixed
@@ -219,7 +237,6 @@
 - Folded the `azure-openai-responses` API into the OpenAI Responses thinking-inference branches so Azure reasoning models (o-series, GPT-5, Codex) resolve the discrete effort vocabulary (including `xhigh`) and effort-control mode instead of falling through to generic defaults.
 - Fixed `ollama-cloud` discovery inheriting an unsafe cross-provider `contextWindow`/`maxTokens` when `/api/show` returns no size metadata; it now falls back to the safe 128K context / 8K output caps.
 - Dropped internal Fireworks control-plane resource ids (`accounts/fireworks/{models,routers}/…`) from the bundle; only the public request ids ship.
-
 ## [15.13.2] - 2026-06-15
 
 ### Added

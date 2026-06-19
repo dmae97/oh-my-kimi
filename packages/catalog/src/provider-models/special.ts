@@ -1,7 +1,9 @@
 import { once } from "@oh-my-pi/pi-utils";
 import { fetchCodexModels } from "../discovery/codex";
 import type { DevinModelDiscoveryOptions } from "../discovery/devin";
+import { buildGitLabDuoWorkflowFallbackModel, fetchGitLabDuoWorkflowModels } from "../discovery/gitlab-duo-workflow";
 import type { ModelManagerOptions } from "../model-manager";
+import type { FetchImpl } from "../types";
 
 // ---------------------------------------------------------------------------
 // OpenAI Codex
@@ -58,6 +60,44 @@ export function cursorModelManagerOptions(config: CursorModelManagerConfig = {})
 const cursorDiscovery = once(() => import("../discovery/cursor"));
 
 // ---------------------------------------------------------------------------
+// GitLab Duo Workflow
+// ---------------------------------------------------------------------------
+
+export interface GitLabDuoWorkflowModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+	namespaceId?: string;
+	projectId?: string;
+	cwd?: string;
+}
+
+export function gitLabDuoWorkflowModelManagerOptions(
+	config: GitLabDuoWorkflowModelManagerConfig = {},
+): ModelManagerOptions<"gitlab-duo-agent"> {
+	const apiKey = config.apiKey;
+	return {
+		providerId: "gitlab-duo-agent",
+		dynamicModelsAuthoritative: true,
+		staticModels: [
+			buildGitLabDuoWorkflowFallbackModel("claude_sonnet_4_6_vertex", "Claude Sonnet 4.6 - Vertex", config.baseUrl),
+		],
+		...(apiKey
+			? {
+					fetchDynamicModels: async () =>
+						fetchGitLabDuoWorkflowModels({
+							apiKey,
+							baseUrl: config.baseUrl,
+							fetch: config.fetch,
+							namespaceId: config.namespaceId,
+							projectId: config.projectId,
+							cwd: config.cwd,
+						}),
+				}
+			: undefined),
+	};
+}
+
 // Devin (Codeium Cascade)
 // ---------------------------------------------------------------------------
 
@@ -82,9 +122,12 @@ export function devinModelManagerOptions(config: DevinModelManagerConfig = {}): 
 			: undefined),
 	};
 }
+				}
+			: undefined),
+	};
+}
 
 const devinDiscovery = once(() => import("../discovery/devin"));
-
 // ---------------------------------------------------------------------------
 // Zai
 // ---------------------------------------------------------------------------
