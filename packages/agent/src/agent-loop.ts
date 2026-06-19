@@ -176,10 +176,19 @@ function snapshotAssistantMessage(message: AssistantMessage): AssistantMessage {
 	};
 }
 
-function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantMessageEvent {
+/**
+ * Deep-clone an assistant streaming event so subscribers get an immutable view.
+ * Pass `partialSnapshot` when the caller has already snapshotted `event.partial`
+ * (the `message_update` push sites alias it as the event's `message`) so the
+ * identical partial is not deep-cloned twice per streaming delta.
+ */
+function snapshotAssistantMessageEvent(
+	event: AssistantMessageEvent,
+	partialSnapshot?: AssistantMessage,
+): AssistantMessageEvent {
 	switch (event.type) {
 		case "start":
-			return { ...event, partial: snapshotAssistantMessage(event.partial) };
+			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial) };
 		case "text_start":
 		case "text_delta":
 		case "text_end":
@@ -188,12 +197,12 @@ function snapshotAssistantMessageEvent(event: AssistantMessageEvent): AssistantM
 		case "thinking_end":
 		case "toolcall_start":
 		case "toolcall_delta":
-			return { ...event, partial: snapshotAssistantMessage(event.partial) };
+			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial) };
 		case "toolcall_end":
 			return {
 				...event,
 				toolCall: snapshotAssistantContentBlock(event.toolCall) as AssistantToolCallBlock,
-				partial: snapshotAssistantMessage(event.partial),
+				partial: partialSnapshot ?? snapshotAssistantMessage(event.partial),
 			};
 		case "done":
 			return { ...event, message: snapshotAssistantMessage(event.message) };
@@ -1396,10 +1405,15 @@ async function streamAssistantResponse(
 							if (addedPartial) {
 								context.messages[context.messages.length - 1] = partialMessage;
 								completedToolCallIds.clear();
+								// `message` and `assistantMessageEvent.partial` intentionally share one
+								// immutable snapshot of the streaming partial: every message_update
+								// consumer treats both as read-only, so cloning the identical partial
+								// twice per delta was pure waste.
+								const messageSnapshot = snapshotAssistantMessage(partialMessage);
 								stream.push({
 									type: "message_update",
-									assistantMessageEvent: snapshotAssistantMessageEvent(event),
-									message: snapshotAssistantMessage(partialMessage),
+									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
+									message: messageSnapshot,
 								});
 							} else {
 								context.messages.push(partialMessage);
@@ -1424,10 +1438,15 @@ async function streamAssistantResponse(
 								partialMessage = event.partial;
 								context.messages[context.messages.length - 1] = partialMessage;
 								config.onAssistantMessageEvent?.(partialMessage, event);
+								// `message` and `assistantMessageEvent.partial` intentionally share one
+								// immutable snapshot of the streaming partial: every message_update
+								// consumer treats both as read-only, so cloning the identical partial
+								// twice per delta was pure waste.
+								const messageSnapshot = snapshotAssistantMessage(partialMessage);
 								stream.push({
 									type: "message_update",
-									assistantMessageEvent: snapshotAssistantMessageEvent(event),
-									message: snapshotAssistantMessage(partialMessage),
+									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
+									message: messageSnapshot,
 								});
 							}
 							break;
