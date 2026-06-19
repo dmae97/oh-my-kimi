@@ -7598,9 +7598,6 @@ export class AgentSession {
 					convertToLlm,
 					model: this.model,
 					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-					// Providers with hard image caps (OpenRouter: 8) silently drop
-					// frames past the cap — keep the archive within budget.
-					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
 				});
 				const ctxWindow = this.model?.contextWindow ?? 0;
 				const budget =
@@ -9389,15 +9386,15 @@ export class AgentSession {
 			let details: unknown;
 
 			// Snapcompact runs locally first; if its frame archive plus the kept
-			// history still overflows the model window (frames are capped by the
-			// image budget and cost ~FRAME_TOKEN_ESTIMATE each), an LLM summary is
-			// far cheaper — downgrade to context-full and take the summarizer path.
+			// history still overflows the model window (frames default to
+			// MAX_FRAMES_DEFAULT and cost ~FRAME_TOKEN_ESTIMATE each), an LLM
+			// summary is far cheaper — downgrade to context-full and take the
+			// summarizer path.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
 				snapcompactResult = await snapcompact.compact(preparation, {
 					convertToLlm,
 					model: this.model,
-					maxFrames: snapcompact.providerFrameBudget(this.model?.provider),
 				});
 				const ctxWindow = this.model?.contextWindow ?? 0;
 				const budget =

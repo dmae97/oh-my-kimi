@@ -377,10 +377,14 @@ export function resolveShape(model?: ShapeTarget, variant?: ShapeVariantName | "
  *  shapes carry their own `frameSize`. */
 export const FRAME_SIZE = 2576;
 
-/** Maximum frames carried on a compaction entry. Oldest frames are dropped
- *  first once the budget is exceeded (mirrors how iterative text summaries
- *  fade the oldest detail). */
-export const MAX_FRAMES = 8;
+/** Default upper bound on archive frames carried per compaction. Sized to hold
+ *  ~400k tokens of the high-res Anthropic frame Opus reads (1932px ≈ 5,000
+ *  billed tokens each → 80 frames) while staying under the ~100-image
+ *  per-request wire cap. Oldest frames are dropped first once the budget is
+ *  exceeded (mirrors how iterative text summaries fade the oldest detail); a
+ *  caller may pass a lower `maxFrames` upper limit, and per-model context
+ *  fitting is handled by the caller's overflow guard. */
+export const MAX_FRAMES_DEFAULT = 80;
 
 /** Conservative per-frame token estimate used for context budgeting
  *  (upper bound across shapes: Anthropic bills 1568*1568/750 ≈ 3,278). */
@@ -411,11 +415,6 @@ export const DEFAULT_PROVIDER_IMAGE_BUDGET = 5;
 /** Per-request image budget for `provider`; unknown providers get the floor. */
 export function providerImageBudget(provider: string | undefined): number {
 	return (provider !== undefined ? PROVIDER_IMAGE_BUDGETS[provider] : undefined) ?? DEFAULT_PROVIDER_IMAGE_BUDGET;
-}
-
-/** Archive frame budget for `provider`: its image budget clamped to {@link MAX_FRAMES}. */
-export function providerFrameBudget(provider: string | undefined): number {
-	return Math.min(MAX_FRAMES, providerImageBudget(provider));
 }
 
 /** Key under `CompactionEntry.preserveData` holding the frame archive. */
@@ -481,7 +480,7 @@ export interface Options<TMessage = Message> extends SerializeOptions {
 	shape?: Shape;
 	/** Frame edge in pixels. Defaults to the shape's `frameSize`. */
 	frameSize?: number;
-	/** Frame budget. Defaults to {@link MAX_FRAMES}. */
+	/** Upper limit on archive frames; clamped to (and defaulting to) {@link MAX_FRAMES_DEFAULT}. */
 	maxFrames?: number;
 }
 
@@ -1251,7 +1250,9 @@ export async function compact<TMessage = Message>(
 	}
 	const shape = options?.shape ?? resolveShape(options?.model);
 	const frameSize = options?.frameSize ?? shape.frameSize;
-	const maxFrames = Math.max(1, options?.maxFrames ?? MAX_FRAMES);
+	// The engine default caps archive growth; a caller-supplied maxFrames only
+	// lowers it further (an upper limit), never raising it past the default.
+	const maxFrames = Math.max(1, Math.min(options?.maxFrames ?? MAX_FRAMES_DEFAULT, MAX_FRAMES_DEFAULT));
 	const geo = geometry(shape, frameSize);
 
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);

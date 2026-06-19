@@ -909,19 +909,17 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: archive })).toEqual(archive);
 	});
 
-	it("provider budgets respect hard image caps and clamp the frame budget", () => {
+	it("provider image budgets respect hard image caps", () => {
 		// OpenRouter silently drops images past 8 — the budget must match.
 		expect(snapcompact.providerImageBudget("openrouter")).toBe(8);
 		// Unknown providers fall to the safe floor.
 		expect(snapcompact.providerImageBudget(undefined)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerImageBudget("some-new-router")).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
-		// Archive frames never exceed MAX_FRAMES even on permissive providers,
-		// and never exceed the provider's own cap on strict ones.
-		expect(snapcompact.providerFrameBudget("anthropic")).toBe(snapcompact.MAX_FRAMES);
-		expect(snapcompact.providerFrameBudget("openrouter")).toBeLessThanOrEqual(8);
-		expect(snapcompact.providerFrameBudget("some-new-router")).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerImageBudget("openai-codex")).toBe(200);
-		expect(snapcompact.providerFrameBudget("openai-codex")).toBe(snapcompact.MAX_FRAMES);
+		// The default frame budget must stay under the Anthropic image wire cap:
+		// compaction no longer clamps the archive per provider, so a default above
+		// the cap would silently drop frames or error on large-window Claude.
+		expect(snapcompact.MAX_FRAMES_DEFAULT).toBeLessThanOrEqual(snapcompact.providerImageBudget("anthropic"));
 	});
 });
 
