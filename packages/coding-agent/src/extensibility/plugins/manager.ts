@@ -351,19 +351,18 @@ export class PluginManager {
 		const packageSnapshot = await this.#snapshotInstalledPackage(existingActualName);
 
 		try {
-			// Run npm install
-			const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
+			// Step 1: write the spec into plugins/package.json + node_modules.
+			const installProc = Bun.spawn(["bun", "install", packageInstallSpec], {
 				cwd: getPluginsDir(),
 				stdin: "ignore",
 				stdout: "pipe",
 				stderr: "pipe",
 				windowsHide: true,
 			});
-
-			const exitCode = await proc.exited;
-			if (exitCode !== 0) {
-				const stderr = await new Response(proc.stderr).text();
-				throw new Error(`npm install failed: ${stderr}`);
+			const installExit = await installProc.exited;
+			if (installExit !== 0) {
+				const stderr = await new Response(installProc.stderr).text();
+				throw new Error(`bun install failed: ${stderr}`);
 			}
 			// Resolve actual package name. npm specs encode the name (strip version);
 			// git specs do not, so diff plugins/package.json deps to find the new entry.
@@ -392,6 +391,31 @@ export class PluginManager {
 				actualName = resolved;
 			} else {
 				actualName = extractPackageName(spec.packageName);
+			}
+
+			// Step 2: refresh the git lockfile pin when re-installing an existing
+			// git plugin. `bun install <spec>` is a no-op when the spec matches the
+			// lockfile entry — it never re-resolves the remote ref — so re-running
+			// `omp plugin install github:owner/repo` would silently keep the user on
+			// the original resolved commit even after upstream moved (#3063).
+			// `bun update <name>` re-resolves the ref against the remote and
+			// rewrites the pin; SHA-pinned refs stay put because the commit can't
+			// move. First-time installs skip this — the initial `bun install` already
+			// fetched HEAD.
+			if (gitSource && existingActualName) {
+				const updateProc = Bun.spawn(["bun", "update", actualName], {
+					cwd: getPluginsDir(),
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+					windowsHide: true,
+				});
+				const updateExit = await updateProc.exited;
+				if (updateExit !== 0) {
+					const stderr = await new Response(updateProc.stderr).text();
+					await this.#rollbackFailedInstall(actualName, packageJsonBefore, packageSnapshot);
+					throw new Error(`bun update ${actualName} failed: ${stderr}`);
+				}
 			}
 			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 

@@ -188,30 +188,42 @@ describe("PluginManager.install load validation", () => {
 		});
 
 		vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
-			expect(cmd).toEqual(["bun", "install", "github:org/plugin#v2"]);
+			if (cmd[1] === "install") {
+				expect(cmd).toEqual(["bun", "install", "github:org/plugin#v2"]);
 
-			const prepare = (async () => {
-				await Bun.write(
-					pluginsPkgJson,
-					JSON.stringify(
-						{ name: "omp-plugins", private: true, dependencies: { "git-plugin": "github:org/plugin#v2" } },
-						null,
-						2,
-					),
-				);
-				await writePluginPackage(pluginsNodeModules, "git-plugin", {
-					version: "2.0.0",
-					peerDependencies: { "missing-peer": "^1.0.0" },
-					source:
-						'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
-				});
-			})();
+				const prepare = (async () => {
+					await Bun.write(
+						pluginsPkgJson,
+						JSON.stringify(
+							{ name: "omp-plugins", private: true, dependencies: { "git-plugin": "github:org/plugin#v2" } },
+							null,
+							2,
+						),
+					);
+					await writePluginPackage(pluginsNodeModules, "git-plugin", {
+						version: "2.0.0",
+						peerDependencies: { "missing-peer": "^1.0.0" },
+						source:
+							'import { missing } from "missing-peer";\nexport default function(pi) { pi.registerCommand(String(missing), { handler: async () => {} }); }\n',
+					});
+				})();
 
+				return {
+					pid: 1,
+					stdout: emptyStream(),
+					stderr: emptyStream(),
+					exited: prepare.then(() => 0),
+				} as Subprocess;
+			}
+			// The manager follows a git re-install with `bun update <name>` to refresh
+			// the lockfile pin (#3063). The mock treats it as a no-op exit-0 — the
+			// on-disk state already reflects the v2 install above.
+			expect(cmd).toEqual(["bun", "update", "git-plugin"]);
 			return {
-				pid: 1,
+				pid: 2,
 				stdout: emptyStream(),
 				stderr: emptyStream(),
-				exited: prepare.then(() => 0),
+				exited: Promise.resolve(0),
 			} as Subprocess;
 		}) as typeof Bun.spawn);
 
