@@ -517,7 +517,7 @@ describe("agentLoop with AgentMessage", () => {
 
 		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
 
-		const rawJsonPayload = '{"i": Finding getAvailable definition, "value": "hello"}' + "A".repeat(1000);
+		const rawJsonPayload = `{"i": Finding getAvailable definition, "value": "hello"}${"A".repeat(1000)}`;
 		const mock = createMockModel({
 			responses: [
 				{

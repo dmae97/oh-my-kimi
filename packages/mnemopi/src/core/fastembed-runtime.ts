@@ -22,27 +22,27 @@ export interface FastembedRuntimeInstallPlan {
 }
 
 /**
- * `fastembed` and `onnxruntime-node` are optional peers (~270MB of native
- * assets across platforms), never bundled and never installed eagerly. When
- * the direct import cannot resolve — bundled `dist/cli.js`, compiled binary,
- * a consumer that skipped the optional peers, or a native loader failure from
- * fastembed's nested ORT — the pinned pair is `bun install`ed into a
- * per-version runtime cache on first use and loaded from there (#2389, #2920).
+ * `fastembed` is an optional peer (~270MB of native assets across platforms),
+ * never bundled and never installed eagerly. When the direct import cannot
+ * resolve — bundled `dist/cli.js`, compiled binary, a consumer that skipped the
+ * optional peer, or a native loader failure — fastembed is `bun install`ed into
+ * a per-version runtime cache on first use and loaded from there (#2389).
  *
- * The pins live in `peerDependencies` as exact versions (not `catalog:`) so
- * this module reads concrete specs even when the workspace manifest is
- * inlined into a bundle; a workspace test asserts they match the catalog.
+ * The fastembed pin lives in `peerDependencies` as an exact version (not
+ * `catalog:`) so this module reads a concrete spec even when the workspace
+ * manifest is inlined into a bundle. The runtime install deliberately does not
+ * override fastembed's `onnxruntime-node` dependency: the prebuilt native addon
+ * links against that package's bundled ORT dylib/so/dll name.
  */
 const FASTEMBED_SPEC = packageManifest.peerDependencies.fastembed;
-const ORT_SPEC = packageManifest.peerDependencies["onnxruntime-node"];
 
 /** Build the deterministic fastembed runtime install plan used by local embeddings. */
 export function fastembedRuntimeInstallPlan(): FastembedRuntimeInstallPlan {
 	return {
-		versionKey: `fastembed-${FASTEMBED_SPEC}_ort-${ORT_SPEC}_forced-ort`.replace(/[^A-Za-z0-9._-]/g, "_"),
+		versionKey: `fastembed-${FASTEMBED_SPEC}_transitive-ort`.replace(/[^A-Za-z0-9._-]/g, "_"),
 		install: {
-			dependencies: { fastembed: FASTEMBED_SPEC, "onnxruntime-node": ORT_SPEC },
-			overrides: { "onnxruntime-common": ORT_SPEC, "onnxruntime-node": ORT_SPEC },
+			dependencies: { fastembed: FASTEMBED_SPEC },
+			trustedDependencies: ["onnxruntime-node"],
 		},
 	};
 }

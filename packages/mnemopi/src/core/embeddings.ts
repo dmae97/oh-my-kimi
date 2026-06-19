@@ -11,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
+import { ensureFastembedModelSidecars } from "./fastembed-model-cache";
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -62,7 +63,20 @@ let nextProviderId = 1;
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
-	return FlagEmbedding.init(options);
+	try {
+		return await FlagEmbedding.init(options);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		if (
+			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
+				message,
+			)
+		) {
+			throw error;
+		}
+		if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
+		return FlagEmbedding.init(options);
+	}
 }
 
 function activeEmbeddingOptions() {
