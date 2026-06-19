@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Made `getSettingsListTheme`, `getEditorTheme`, `getSelectListTheme`, and `getSymbolTheme` return a plain ASCII fallback instead of crashing with "undefined is not an object (evaluating 'theme.fg')" when the global `theme` is undefined — e.g. when a plugin calls them before `initTheme()` completes or from a separate module instance under npm-global installs. ([#2998](https://github.com/can1357/oh-my-pi/issues/2998))
+
 ## [16.0.11] - 2026-06-19
 
 ### Added

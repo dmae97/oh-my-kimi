@@ -2729,6 +2729,35 @@ export function highlightCode(code: string, lang?: string, highlightTheme: Theme
 }
 
 export function getSymbolTheme(): SymbolTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). Fall back to the ASCII preset so the returned symbols are
+	// usable instead of crashing. See #2998.
+	if (typeof theme === "undefined") {
+		const box = {
+			topLeft: "+",
+			topRight: "+",
+			bottomLeft: "+",
+			bottomRight: "+",
+			horizontal: "-",
+			vertical: "|",
+			cross: "+",
+			teeDown: "+",
+			teeUp: "+",
+			teeLeft: "+",
+			teeRight: "+",
+		};
+		return {
+			cursor: ">",
+			inputCursor: "|",
+			boxRound: box,
+			boxSharp: box,
+			table: box,
+			quoteBorder: "|",
+			hrChar: "-",
+			colorSwatch: "[]",
+			spinnerFrames: ["-", "\\", "|", "/"],
+		};
+	}
 	const preset = theme.getSymbolPreset();
 
 	return {
@@ -2794,6 +2823,19 @@ export function getMarkdownTheme(): MarkdownTheme {
 }
 
 export function getSelectListTheme(): SelectListTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			selectedPrefix: (text: string) => text,
+			selectedText: (text: string) => text,
+			description: (text: string) => text,
+			scrollInfo: (text: string) => text,
+			noMatch: (text: string) => text,
+			symbols: getSymbolTheme(),
+			hovered: (text: string) => text,
+		};
+	}
 	return {
 		selectedPrefix: (text: string) => theme.fg("accent", text),
 		selectedText: (text: string) => theme.fg("accent", text),
@@ -2806,6 +2848,16 @@ export function getSelectListTheme(): SelectListTheme {
 }
 
 export function getEditorTheme(): EditorTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			borderColor: (text: string) => text,
+			selectList: getSelectListTheme(),
+			symbols: getSymbolTheme(),
+			hintStyle: (text: string) => text,
+		};
+	}
 	return {
 		borderColor: (text: string) => theme.fg("borderMuted", text),
 		selectList: getSelectListTheme(),
@@ -2815,6 +2867,23 @@ export function getEditorTheme(): EditorTheme {
 }
 
 export function getSettingsListTheme(): SettingsListTheme {
+	// Plugins (e.g. pi-rtk-optimizer) may call this before `initTheme()` assigns
+	// the global `theme`, or from a separate module instance under npm-global
+	// installs where the live binding was never initialized. Fall back to plain
+	// text so the call returns a usable (unstyled) theme instead of crashing with
+	// "undefined is not an object (evaluating 'theme.fg')". See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			label: (text: string) => text,
+			value: (text: string) => text,
+			description: (text: string) => text,
+			cursor: "> ",
+			hint: (text: string) => text,
+			heading: (text: string) => text,
+			section: (text: string) => text,
+			hovered: (text: string) => text,
+		};
+	}
 	return {
 		label: (text: string, selected: boolean, changed: boolean) =>
 			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : text,
