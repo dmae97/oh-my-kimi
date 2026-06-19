@@ -15,7 +15,12 @@ export type MnemopiEmbedModelId = string;
 export type MnemopiEmbedWorkerInbound =
 	| { type: "ping"; id: string }
 	| { type: "init"; id: string; model: MnemopiEmbedModelId; cacheDir?: string }
-	| { type: "embed"; id: string; texts: string[]; batchSize?: number };
+	// `embed` always carries the same `model` / `cacheDir` the wrapper was
+	// initialized with so a fresh subprocess (after the parent SIGKILLed the
+	// previous one but mnemopi still holds the cached `LocalEmbeddingModel`)
+	// can lazily reload the model on demand instead of returning
+	// "embed before init".
+	| { type: "embed"; id: string; model: MnemopiEmbedModelId; cacheDir?: string; texts: string[]; batchSize?: number };
 
 export type MnemopiEmbedWorkerOutbound =
 	| { type: "pong"; id: string }

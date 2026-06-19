@@ -11,7 +11,7 @@ import type { MnemopiEmbedModelId, MnemopiEmbedWorkerInbound, MnemopiEmbedWorker
  * provider loads fastembed in the main process (issue #3031; the mnemopi
  * sibling of the tiny-model fix from #1606 / #1607).
  */
-interface WorkerHandle {
+export interface MnemopiEmbedWorkerHandle {
 	send(message: MnemopiEmbedWorkerInbound): void;
 	onMessage(handler: (message: MnemopiEmbedWorkerOutbound) => void): () => void;
 	onError(handler: (error: Error) => void): () => void;
@@ -124,7 +124,7 @@ export function createMnemopiEmbedSubprocess(): SpawnedSubprocess {
 	return { proc, inbound, errors, intentionalExit };
 }
 
-function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
+function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): MnemopiEmbedWorkerHandle {
 	return {
 		send(message) {
 			try {
@@ -159,7 +159,7 @@ function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubpr
 	};
 }
 
-function spawnInlineUnavailableWorker(error: unknown): WorkerHandle {
+function spawnInlineUnavailableWorker(error: unknown): MnemopiEmbedWorkerHandle {
 	const listeners = new Set<(message: MnemopiEmbedWorkerOutbound) => void>();
 	const errorMessage = error instanceof Error ? error.message : String(error);
 	const emit = (message: MnemopiEmbedWorkerOutbound): void => {
@@ -188,7 +188,7 @@ function spawnInlineUnavailableWorker(error: unknown): WorkerHandle {
 	};
 }
 
-function spawnMnemopiEmbedWorker(): WorkerHandle {
+function spawnMnemopiEmbedWorker(): MnemopiEmbedWorkerHandle {
 	try {
 		return wrapSubprocess(createMnemopiEmbedSubprocess());
 	} catch (error) {
@@ -217,14 +217,14 @@ export interface MnemopiSubprocessEmbeddingModel {
 }
 
 export class MnemopiEmbedClient {
-	#worker: WorkerHandle | null = null;
+	#worker: MnemopiEmbedWorkerHandle | null = null;
 	#unsubscribeMessage: (() => void) | null = null;
 	#unsubscribeError: (() => void) | null = null;
 	#pending = new Map<string, PendingRequest>();
 	#nextRequestId = 0;
-	#spawnWorker: () => WorkerHandle;
+	#spawnWorker: () => MnemopiEmbedWorkerHandle;
 
-	constructor(spawnWorker: () => WorkerHandle = spawnMnemopiEmbedWorker) {
+	constructor(spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker) {
 		this.#spawnWorker = spawnWorker;
 	}
 
@@ -259,7 +259,7 @@ export class MnemopiEmbedClient {
 			});
 			return null;
 		}
-		return { embed: (texts, batchSize) => this.#streamEmbed(model, texts, batchSize) };
+		return { embed: (texts, batchSize) => this.#streamEmbed(model, cacheDir, texts, batchSize) };
 	}
 
 	async terminate(): Promise<void> {
@@ -281,13 +281,23 @@ export class MnemopiEmbedClient {
 		}
 	}
 
-	async #embed(model: MnemopiEmbedModelId, texts: string[], batchSize: number | undefined): Promise<number[][]> {
+	async #embed(
+		model: MnemopiEmbedModelId,
+		cacheDir: string | undefined,
+		texts: string[],
+		batchSize: number | undefined,
+	): Promise<number[][]> {
 		const worker = this.#ensureWorker();
 		const id = String(++this.#nextRequestId);
 		const { promise, resolve } = Promise.withResolvers<number[][] | Error>();
 		this.#pending.set(id, { kind: "embed", model, resolve });
 		try {
-			worker.send({ type: "embed", id, texts, batchSize });
+			// Carry the (model, cacheDir) the wrapper was bound to in every
+			// embed message: dispose + respawn between two embeds on the same
+			// `LocalEmbeddingModel` handle would otherwise hit a fresh
+			// worker's "embed before init" guard. Worker `ensureLoaded` is
+			// idempotent so steady-state embeds pay no extra cost.
+			worker.send({ type: "embed", id, model, cacheDir, texts, batchSize });
 			const result = await promise;
 			if (result instanceof Error) throw result;
 			return result;
@@ -298,10 +308,11 @@ export class MnemopiEmbedClient {
 
 	async *#streamEmbed(
 		model: MnemopiEmbedModelId,
+		cacheDir: string | undefined,
 		texts: string[],
 		batchSize: number | undefined,
 	): AsyncIterable<number[][]> {
-		const vectors = await this.#embed(model, texts, batchSize);
+		const vectors = await this.#embed(model, cacheDir, texts, batchSize);
 		// Mnemopi's `collectMatrix` re-batches via async iteration anyway; yield
 		// a single batch carrying the full result so the caller's drain loop
 		// behaves identically to the in-process fastembed iterator (one yield
@@ -309,7 +320,7 @@ export class MnemopiEmbedClient {
 		yield vectors;
 	}
 
-	#ensureWorker(): WorkerHandle {
+	#ensureWorker(): MnemopiEmbedWorkerHandle {
 		if (this.#worker) return this.#worker;
 		const worker = this.#spawnWorker();
 		this.#worker = worker;

@@ -59,18 +59,12 @@ async function handleEmbed(
 	message: Extract<MnemopiEmbedWorkerInbound, { type: "embed" }>,
 ): Promise<void> {
 	try {
-		// Embedding requests always carry the model context they were initialized with
-		// — the parent issues `init` before the first `embed`, so `loaded` is set.
-		// If a request races ahead (e.g. after a recovered crash), surface the error.
-		if (loaded === null) {
-			transport.send({
-				type: "error",
-				id: message.id,
-				error: "mnemopi embed worker: embed before init",
-			});
-			return;
-		}
-		const { instance } = await loaded;
+		// Each `embed` carries the model + cacheDir the wrapper was bound to.
+		// `ensureLoaded` is idempotent for the same key, so this is a no-op
+		// once the model is in memory — and it transparently re-loads after
+		// the parent SIGKILLed the previous subprocess but mnemopi still
+		// holds the cached `LocalEmbeddingModel` wrapper from before.
+		const { instance } = await ensureLoaded(message.model, message.cacheDir);
 		const vectors: number[][] = [];
 		const batches = instance.embed([...message.texts], message.batchSize);
 		for await (const batch of batches) {
