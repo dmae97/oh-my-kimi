@@ -2181,6 +2181,11 @@ export class AgentSession {
 		return this.#toolChoiceQueue.peekPendingInvoker();
 	}
 
+	/** Clear stale non-forcing pending preview invokers after `resolve` proves none can run. */
+	clearPendingInvokers(): void {
+		this.#toolChoiceQueue.clearPendingInvokers();
+	}
+
 	/**
 	 * Force the next model call to target a specific active tool, then terminate
 	 * the agent loop. Pushes a two-step sequence [forced, "none"] so the model

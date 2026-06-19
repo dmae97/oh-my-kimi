@@ -231,6 +231,12 @@ export class ToolChoiceQueue {
 		this.#pendingInvokers = this.#pendingInvokers.filter(p => p.id !== id);
 	}
 
+	/** Drop every pending preview invoker without touching hard tool-choice directives. */
+	clearPendingInvokers(): void {
+		if (this.#pendingInvokers.length === 0) return;
+		this.#pendingInvokers = [];
+	}
+
 	/** True when at least one non-forcing pending preview is registered. */
 	get hasPendingInvoker(): boolean {
 		return this.#pendingInvokers.length > 0;
