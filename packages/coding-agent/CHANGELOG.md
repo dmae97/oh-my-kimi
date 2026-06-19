@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Cleared stale pending-preview gates when `resolve` finds no runnable handler, so phantom preview state no longer blocks all other tools after reporting no pending action. ([#3061](https://github.com/can1357/oh-my-pi/issues/3061))
+- Cleared stale pending-preview gates when `resolve` finds no runnable handler, and forwarded the missing `peekPendingInvoker` and `clearPendingInvokers` hooks on the production session so staged previews actually reach the resolve tool and the gate drains on dispatch failure. ([#3061](https://github.com/can1357/oh-my-pi/issues/3061))
 
 ## [16.1.3] - 2026-06-19
 

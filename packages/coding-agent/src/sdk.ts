@@ -1518,6 +1518,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					timestamp: Date.now(),
 				}),
 			peekQueueInvoker: () => session.peekQueueInvoker(),
+			peekPendingInvoker: () => session.peekPendingInvoker(),
+			clearPendingInvokers: () => session.clearPendingInvokers(),
 			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
 			setStandingResolveHandler: handler => session.setStandingResolveHandler(handler),
 			allocateOutputArtifact: async toolType => {
