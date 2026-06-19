@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Added automatic fallback for unsupported OpenAI reasoning effort levels
+- Improved reliability when handling invalid reasoning parameter errors across OpenAI-compatible APIs
 
 ## [16.1.0] - 2026-06-19
 

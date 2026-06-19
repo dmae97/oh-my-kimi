@@ -57,6 +57,17 @@ import type {
 	ChatCompletionToolMessageParam,
 } from "./openai-chat-wire";
 import {
+	applyOpenAIReasoningEffortFallback,
+	clearOpenAIReasoningEffortFallbackState,
+	createOpenAIReasoningEffortFallbackKey,
+	createOpenAIReasoningEffortFallbackState,
+	getOpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallbackState,
+	rememberOpenAIReasoningEffortFallback,
+	resolveOpenAIReasoningEffortFallback,
+} from "./openai-reasoning-fallback";
+import {
 	applyChatCompletionsCompatPolicy,
 	applyChatCompletionsToolStream,
 	applyOpenAIExtraBody,
@@ -444,14 +455,19 @@ type BuiltOpenAICompletionTools = {
 
 const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
 
-type OpenAICompletionsProviderSessionState = ProviderSessionState & OpenAIStrictToolsState;
+type OpenAICompletionsProviderSessionState = ProviderSessionState &
+	OpenAIStrictToolsState &
+	OpenAIReasoningEffortFallbackState;
 
 function createOpenAICompletionsProviderSessionState(): OpenAICompletionsProviderSessionState {
 	const strictToolsState = createOpenAIStrictToolsState();
+	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
 	const state: OpenAICompletionsProviderSessionState = {
 		...strictToolsState,
+		...reasoningEffortFallbackState,
 		close: () => {
 			clearOpenAIStrictToolsState(state);
+			clearOpenAIReasoningEffortFallbackState(state);
 		},
 	};
 	return state;
@@ -581,6 +597,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
+			const requestReasoningEffortFallbacks = new Map<string, OpenAIReasoningEffortFallback>();
+			const attemptedReasoningEffortFallbacks = new Set<string>();
+			let activeReasoningEffortFallbackKey: string | undefined;
+			let activeRequestParams: OpenAICompletionsParams | undefined;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
@@ -601,6 +621,19 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					effectiveToolStrictModeOverride,
 				);
 				appliedStrictTools = strictToolsApplied;
+				const reasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
+					"chat-completions",
+					trimmedBaseUrl,
+					params.model,
+				);
+				const requestReasoningEffortFallback = requestReasoningEffortFallbacks.has(reasoningEffortFallbackKey)
+					? requestReasoningEffortFallbacks.get(reasoningEffortFallbackKey)
+					: getOpenAIReasoningEffortFallback(providerSessionState, reasoningEffortFallbackKey);
+				if (requestReasoningEffortFallback !== undefined) {
+					applyOpenAIReasoningEffortFallback(params, requestReasoningEffortFallback);
+				}
+				activeReasoningEffortFallbackKey = reasoningEffortFallbackKey;
+				activeRequestParams = params;
 				options?.onPayload?.(params);
 				rawRequestDump = {
 					provider: model.provider,
@@ -650,7 +683,24 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				});
 			} catch (error) {
 				const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
-				if (
+				const reasoningEffortFallback =
+					activeReasoningEffortFallbackKey && activeRequestParams && !requestSignal.aborted
+						? resolveOpenAIReasoningEffortFallback(error, capturedErrorResponse, activeRequestParams, {
+								explicitDisable: options?.disableReasoning === true && options.reasoning === undefined,
+							})
+						: undefined;
+				if (reasoningEffortFallback !== undefined && activeReasoningEffortFallbackKey) {
+					const retryMarker = `${activeReasoningEffortFallbackKey}:${String(reasoningEffortFallback)}`;
+					if (attemptedReasoningEffortFallbacks.has(retryMarker)) throw error;
+					attemptedReasoningEffortFallbacks.add(retryMarker);
+					requestReasoningEffortFallbacks.set(activeReasoningEffortFallbackKey, reasoningEffortFallback);
+					openaiStream = await createCompletionsStream();
+					rememberOpenAIReasoningEffortFallback(
+						providerSessionState,
+						activeReasoningEffortFallbackKey,
+						reasoningEffortFallback,
+					);
+				} else if (
 					isOpenRouterAnthropicModel(model) &&
 					!disableStrictTools &&
 					isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse)
