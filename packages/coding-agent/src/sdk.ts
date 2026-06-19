@@ -2222,7 +2222,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				rules: rulebookRules,
 				alwaysApplyRules,
 				resolvedAppendSystemPrompt: appendPrompt,
-				repeatToolDescriptions,
 				skillsSettings: settings.getGroup("skills"),
 				inlineToolDescriptors,
 				nativeTools,
