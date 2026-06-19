@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.1] - 2026-06-19
+
 ### Changed
 
 - Migrated legacy macOS power settings to a single sleep prevention enum
