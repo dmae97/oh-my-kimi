@@ -1005,11 +1005,6 @@ export class TUI extends Container {
 	// fast path (`#renderResizeViewport`) instead of an authoritative full
 	// paint, and no commit/window/diff state is advanced.
 	#resizeViewportActive = false;
-	// Set only by the resize callback's cheap-paint request. A concurrent
-	// caller-forced render (tool finalization, reset, image reconciliation) must
-	// not be downgraded to the throwaway viewport path just because a resize
-	// settle window is active.
-	#resizeViewportPaintPending = false;
 	// Quiet-window timer that ends the drag: its callback clears the flag and
 	// drives the one authoritative full paint. Reset on every resize event so it
 	// only fires once the drag stops. Cancelled on stop().
@@ -1792,7 +1787,6 @@ export class TUI extends Container {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
 		if (force) {
-			this.#resizeViewportPaintPending = false;
 			// Forced repaints landing inside the multiplexer resize debounce
 			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
 			// `requestRender(true)`) would paint into a still-reflowing pane
@@ -2471,16 +2465,30 @@ export class TUI extends Container {
 		// Strictly state-isolated: it never consumes #resizeEventPending nor
 		// advances any commit/window/diff field, so the authoritative full paint
 		// the settle timer queues reconciles as if these throwaway frames never
-		// ran. A visible overlay composites over the transcript and needs the
-		// whole window, so fall through to the normal forced paint when one is up
-		// (overlay resizes are not on the drag-cost hot path).
+		// ran. Two render sources reach here mid-drag and BOTH must stay on this
+		// path:
+		//   - the resize callback's own cheap paint after each SIGWINCH;
+		//   - an ordinary (non-forced) render from a live block that keeps
+		//     animating through the drag — a spinner tick, a streamed token, a
+		//     cursor blink — firing requestRender(false)/requestComponentRender.
+		//     #resizeEventPending is still set (the fast path never consumed it),
+		//     so without this branch the ordinary render falls through to the
+		//     geometry-rebuild full paint below, which LEAVES the borrowed
+		//     alternate screen to repaint the whole transcript on the normal
+		//     screen — then the next SIGWINCH re-enters the alt screen and paints
+		//     only the tail, so the block flashes in for one frame and vanishes.
+		// A forced render (tool finalization, reset, image reconciliation) must
+		// still preempt: it set #forceViewportRepaintOnNextRender via
+		// #prepareForcedRender and owns the next authoritative paint, so it falls
+		// through. A visible overlay composites over the transcript and needs the
+		// whole window, so it also falls through (overlay resizes are not on the
+		// drag-cost hot path).
 		if (
-			this.#resizeViewportPaintPending &&
 			this.#resizeViewportActive &&
+			!this.#forceViewportRepaintOnNextRender &&
 			this.#hasEverRendered &&
 			this.#getTopmostVisibleOverlay() === undefined
 		) {
-			this.#resizeViewportPaintPending = false;
 			this.#componentRenderTargets.clear();
 			this.#renderResizeViewport(width, height);
 			return;
@@ -3145,7 +3153,6 @@ export class TUI extends Container {
 
 	#requestResizeViewportPaint(): void {
 		if (this.#stopped) return;
-		this.#resizeViewportPaintPending = true;
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();
