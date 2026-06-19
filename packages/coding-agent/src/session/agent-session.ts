@@ -2141,8 +2141,9 @@ export class AgentSession {
 		return this.#agentId;
 	}
 
-	/** Advance the tool-choice queue and return the next directive for the upcoming LLM call. */
-	nextToolChoice(): ToolChoice | undefined {
+	/** Dequeue the next HARD forced tool choice for the upcoming LLM call, dropping
+	 *  (and rejecting) one whose named tool is no longer active. */
+	#nextHardToolChoice(): ToolChoice | undefined {
 		const choice = this.#toolChoiceQueue.nextToolChoice();
 		if (isToolChoiceActive(choice, this.agent.state.tools)) {
 			return choice;
@@ -2154,7 +2155,7 @@ export class AgentSession {
 	/**
 	 * The per-turn tool-choice directive for the agent loop's `getToolChoice`. Priority:
 	 *   1. a HARD forced choice from the queue (genuine forces: user-force, eager-todo, …) —
-	 *      consuming, unchanged from `nextToolChoice`;
+	 *      consuming (advances the queue generator);
 	 *   2. else, when a non-forcing preview is pending, a {@link SoftToolRequirement} — a
 	 *      PEEK (advances/pops nothing), so the agent-loop injects the reminder once per head
 	 *      and escalates to a forced `resolve` only if the model declines. A compliant turn
@@ -2162,7 +2163,7 @@ export class AgentSession {
 	 *   3. else undefined.
 	 */
 	nextToolChoiceDirective(): ToolChoiceDirective | undefined {
-		const hard = this.nextToolChoice();
+		const hard = this.#nextHardToolChoice();
 		if (hard !== undefined) return hard;
 		const head = this.#toolChoiceQueue.peekPendingHead();
 		if (head !== undefined) {

@@ -139,7 +139,7 @@ describe("AgentSession eager task prelude", () => {
 				messages: [],
 			},
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context, options) => {
 				const lastMessage = context.messages.at(-1);
 				if (!lastMessage) {

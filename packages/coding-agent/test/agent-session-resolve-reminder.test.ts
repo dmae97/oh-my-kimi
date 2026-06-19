@@ -77,7 +77,7 @@ describe("AgentSession resolve reminder", () => {
 		});
 
 		// Forcing was removed — staging a preview never queues a hard tool_choice.
-		expect(session.nextToolChoice()).toBeUndefined();
+		expect(session.toolChoiceQueue.nextToolChoice()).toBeUndefined();
 
 		// The reminder now rides an agent-level soft requirement (delivered once by
 		// the agent loop) instead of a host-side steer that churned the prefix.

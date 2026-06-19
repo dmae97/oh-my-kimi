@@ -155,7 +155,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context) => {
 				observedCalls.push({ messageTexts: context.messages.map(message => getMessageText(message)) });
 				const call = observedCalls[observedCalls.length - 1];

@@ -192,7 +192,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Test"], tools, messages: [] },
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context, options) => {
 				const call: ObservedPromptCall = {
 					toolChoice: getToolChoiceName(options?.toolChoice),
