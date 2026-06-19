@@ -359,7 +359,14 @@ export class AgentTranscriptViewer implements Component {
 
 	render(width: number): readonly string[] {
 		const termHeight = process.stdout.rows || 40;
+		// `innerWidth` widths the editor/notice chrome (gutter-prefixed below).
+		// `contentWidth` widths the transcript: ScrollView reserves the last column
+		// for the scrollbar, and the transcript components carry their own 1-col left
+		// gutter — so body rows are emitted WITHOUT an extra outer space, sharing that
+		// gutter with the header/footer (which add one). Stacking both shifted the body
+		// one column right of the title.
 		const innerWidth = Math.max(20, width - 2);
+		const contentWidth = Math.max(1, width - 1);
 		const ref = this.deps.registry.get(this.deps.agentId);
 
 		const headerLines = this.#headerLines(ref?.status, ref?.kind, ref?.parentId);
@@ -372,8 +379,8 @@ export class AgentTranscriptViewer implements Component {
 		const viewportHeight = Math.max(3, termHeight - chrome);
 
 		const contentLines = this.#builder.isEmpty
-			? [theme.fg("dim", this.#placeholder())]
-			: this.#builder.container.render(innerWidth);
+			? [` ${theme.fg("dim", this.#placeholder())}`]
+			: this.#builder.container.render(contentWidth);
 		this.#scrollView.setLines(contentLines);
 		this.#scrollView.setHeight(viewportHeight);
 		if (this.#followBottom) this.#scrollView.scrollToBottom();
@@ -382,7 +389,7 @@ export class AgentTranscriptViewer implements Component {
 		lines.push(...new DynamicBorder().render(width));
 		for (const headerLine of headerLines) lines.push(` ${headerLine}`);
 		lines.push(...new DynamicBorder().render(width));
-		for (const row of this.#scrollView.render(Math.max(1, width - 1))) lines.push(` ${row}`);
+		for (const row of this.#scrollView.render(width)) lines.push(row);
 		if (noticeLine) lines.push(noticeLine);
 		for (const editorLine of editorLines) lines.push(` ${editorLine}`);
 		lines.push(...footerLines);

@@ -228,7 +228,9 @@ export class ChatTranscriptBuilder {
 						"accent",
 						file.path,
 					)} ${theme.fg("dim", suffix)}`;
-					block.addChild(new Text(text, 0, 0));
+					// Indent one column to match the transcript's other rows (the viewer renders
+					// body rows without an outer gutter; rows own their left pad).
+					block.addChild(new Text(text, 1, 0));
 				}
 				if (block.children.length > 0) this.container.addChild(block);
 				break;
