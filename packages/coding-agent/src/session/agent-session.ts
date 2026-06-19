@@ -7645,13 +7645,24 @@ export class AgentSession {
 			// both take the summarizer path (the latter loudly).
 			const wantsSnapcompact =
 				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
-			const snapcompactReady = wantsSnapcompact && this.model.input.includes("image");
+			let snapcompactReady = wantsSnapcompact && this.model.input.includes("image");
 			if (wantsSnapcompact && !snapcompactReady) {
 				this.emitNotice(
 					"warning",
 					`snapcompact needs a vision-capable model (${this.model.id} is text-only) — using an LLM summary instead`,
 					"compaction",
 				);
+			} else if (snapcompactReady) {
+				const text = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
+				const renderScan = snapcompact.scanRenderability(text);
+				if (!renderScan.isSafe) {
+					this.emitNotice(
+						"warning",
+						`snapcompact disabled: high non-ASCII rate detected (${(renderScan.unrenderableRatio * 100).toFixed(1)}%). Falling back to an LLM summary to prevent data loss.`,
+						"compaction",
+					);
+					snapcompactReady = false;
+				}
 			}
 
 			let summary: string;
