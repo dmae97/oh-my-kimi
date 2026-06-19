@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- Fixed effort mapping for GLM-5.2 and OpenRouter reasoning models to resolve top-tier 400 errors
+- Fixed GLM-5.2 `reasoning_effort` so the top thinking tier reaches each host's genuine maximum instead of 400ing, mapping the internal `xhigh` tier per host dialect (verified against live endpoints): Z.ai/Zhipu collapse onto the model's `none`/`high`/`max` scale (`xhigh → max`); Fireworks, resellers, and Ollama Cloud keep their distinct lower tiers and remap only the top `xhigh → max` (merged over host quirks such as Fireworks' `minimal → none`); and OpenRouter — whose API rejects `max` and treats `xhigh` as its own max tier — now exposes the `xhigh` tier and forwards it verbatim. Dialect detection keys off resolved `compat.thinkingFormat`, so custom OpenRouter/Z.ai-format providers are covered too.
 - Maintained thinking effort routing when discovery only returns the base model ID
 - Improved credential retrieval logic for Antigravity and Codex providers via auth discovery
 

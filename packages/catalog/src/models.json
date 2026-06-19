@@ -14830,9 +14830,6 @@
 				],
 				"effortMap": {
 					"minimal": "none",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
 					"xhigh": "max"
 				}
 			}
@@ -50123,10 +50120,6 @@
 					"xhigh"
 				],
 				"effortMap": {
-					"minimal": "none",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
 					"xhigh": "max"
 				}
 			}
@@ -53990,7 +53983,6 @@
 					"xhigh"
 				],
 				"effortMap": {
-					"high": "high",
 					"xhigh": "max"
 				}
 			}
@@ -56667,10 +56659,6 @@
 					"xhigh"
 				],
 				"effortMap": {
-					"minimal": "none",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
 					"xhigh": "max"
 				}
 			}

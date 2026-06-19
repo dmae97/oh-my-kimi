@@ -178,6 +178,45 @@ describe("model thinking derivation", () => {
 		});
 	});
 
+	it("maps GLM-5.2 reasoning effort per host dialect", () => {
+		const zai = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/paas/v4",
+		});
+		const fireworks = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const openRouter = createModel({
+			id: "z-ai/glm-5.2",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+
+		// Z.ai dialect: the model only does none/high/max, so the lower tiers
+		// collapse and the top `xhigh` tier reaches `max`.
+		expect(zai.thinking?.effortMap).toEqual({
+			minimal: "none",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max",
+		});
+		// Fireworks keeps its distinct lower tiers and the `minimal -> none` quirk;
+		// only the top `xhigh` UI tier remaps onto the genuine `max` budget.
+		expect(getSupportedEfforts(fireworks)).toContain(Effort.XHigh);
+		expect(fireworks.thinking?.effortMap).toEqual({ minimal: "none", xhigh: "max" });
+		// OpenRouter rejects `max` and treats `xhigh` as its max tier: expose the
+		// `xhigh` tier and pass it through unmapped.
+		expect(getSupportedEfforts(openRouter)).toContain(Effort.XHigh);
+		expect(openRouter.thinking?.effortMap).toBeUndefined();
+	});
+
 	it("encodes the Gemini 3 Pro effort gap and mandatory reasoning in metadata", () => {
 		const model = createModel({
 			id: "gemini-3-pro-preview",

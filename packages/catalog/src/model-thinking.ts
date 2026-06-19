@@ -79,11 +79,14 @@ const DEEPSEEK_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 const FIREWORKS_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "none",
 };
-const GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
+const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "none",
 	[Effort.Low]: "high",
 	[Effort.Medium]: "high",
 	[Effort.High]: "high",
+	[Effort.XHigh]: "max",
+};
+const GLM_52_XHIGH_MAX_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.XHigh]: "max",
 };
 
@@ -282,27 +285,20 @@ function getModelDefinedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] | undefined {
-	if (isOpenAICompatReasoningApi(spec.api) && isZaiGlm52ReasoningEffortModel(spec)) {
-		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
-	}
-	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
-		return GLM_52_HIGH_MAX_REASONING_EFFORTS;
-	}
-	// OpenRouter fronts GLM-5.2 on its own effort scale where `xhigh` IS the max
-	// tier (the literal `max` value 400s). Expose `xhigh` so the top tier is
-	// selectable; it passes through unmapped (excluded from the GLM dialect map)
-	// and OpenRouter resolves it to max reasoning.
-	if (isOpenRouterThinkingFormat(compat) && isGlm52ReasoningEffortModelId(spec.id)) {
-		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+	if (isGlm52ReasoningEffortModelId(spec.id)) {
+		// Z.ai/Zhipu and OpenRouter both surface GLM-5.2's full effort ladder,
+		// including the top `xhigh` (= "max") tier; Ollama Cloud exposes only
+		// high/xhigh.
+		if (isZaiThinkingFormat(compat) || isOpenRouterThinkingFormat(compat)) {
+			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
+		}
+		if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+			return GLM_52_HIGH_MAX_REASONING_EFFORTS;
+		}
 	}
 	return isOpenAICompatReasoningApi(spec.api) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
-}
-
-function isZaiGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
-	if (!isGlm52ReasoningEffortModelId(spec.id)) return false;
-	return modelMatchesHost(spec, "zai") || modelMatchesHost(spec, "zhipu");
 }
 
 function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
@@ -325,6 +321,10 @@ function isOpenRouterThinkingFormat(compat: CompatOf<Api>): boolean {
 	return compat !== undefined && "thinkingFormat" in compat && compat.thinkingFormat === "openrouter";
 }
 
+function isZaiThinkingFormat(compat: CompatOf<Api>): boolean {
+	return compat !== undefined && "thinkingFormat" in compat && compat.thinkingFormat === "zai";
+}
+
 function inferDetectedEffortMap<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
@@ -339,37 +339,42 @@ function inferDetectedEffortMap<TApi extends Api>(
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
 	}
-	// GLM-5.2 coding SKUs speak the GLM-native effort dialect (`none`/`high`/`max`)
-	// on every direct host that fronts the genuine model — Z.ai/Zhipu, Fireworks,
-	// resellers, Ollama Cloud. The internal `xhigh` has no GLM equivalent (top
-	// tier is `max`), so without this map the top tier 400s. OpenRouter is the
-	// exception: its API rejects `max` and treats `xhigh` AS GLM's max tier, so it
-	// is excluded here and passes `xhigh` through literally (the tier is exposed
-	// via `getModelDefinedEfforts`). Filtered to supported efforts downstream.
-	if (
-		isGlm52ReasoningEffortModelId(spec.id) &&
-		!isOpenRouterThinkingFormat(compat) &&
-		(isOpenAICompatReasoningApi(spec.api) || isOllamaCloudGlm52ReasoningEffortModel(spec))
-	) {
-		return GLM_52_REASONING_EFFORT_MAP;
+	// GLM-5.2 coding SKUs accept `reasoning_effort`, but the effort dialect is
+	// host-specific (verified against live endpoints):
+	//   - Z.ai/Zhipu ("zai" dialect): the model exposes only none/high/max, so
+	//     `xhigh` 400s — collapse minimal->none, low/medium/high->high, xhigh->max.
+	//   - OpenRouter: `max` 400s and `xhigh` IS its max tier, so it passes `xhigh`
+	//     through literally (no map; the tier is exposed via getModelDefinedEfforts).
+	//   - Other openai-compat hosts (Fireworks, resellers) and Ollama Cloud keep
+	//     their distinct lower tiers and host quirks (e.g. Fireworks rejects
+	//     `minimal`, so `minimal->none` stays) and only remap the top `xhigh` UI
+	//     tier onto the genuine `max` budget. Filtered to supported efforts later.
+	const isGlm52 = isGlm52ReasoningEffortModelId(spec.id);
+	if (isGlm52 && isZaiThinkingFormat(compat)) {
+		return ZAI_GLM_52_REASONING_EFFORT_MAP;
+	}
+	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+		return GLM_52_XHIGH_MAX_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
 		return undefined;
 	}
+	let map: EffortMap | undefined;
 	if (spec.provider === "groq" && spec.id === "qwen/qwen3-32b") {
-		return GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
+		map = GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
+	} else if (isDeepseekReasoningModel(spec)) {
+		map = DEEPSEEK_REASONING_EFFORT_MAP;
+	} else if (modelMatchesHost(spec, "openrouter")) {
+		map = getOpenRouterAnthropicReasoningEffortMap(spec.id);
+	} else if (modelMatchesHost(spec, "fireworks")) {
+		map = FIREWORKS_REASONING_EFFORT_MAP;
 	}
-	if (isDeepseekReasoningModel(spec)) {
-		return DEEPSEEK_REASONING_EFFORT_MAP;
+	// Overlay GLM-5.2's top-tier `xhigh -> max` on the host base map, except on
+	// OpenRouter (xhigh IS its max tier; `max` 400s there).
+	if (isGlm52 && !isOpenRouterThinkingFormat(compat)) {
+		map = { ...map, ...GLM_52_XHIGH_MAX_EFFORT_MAP };
 	}
-	if (modelMatchesHost(spec, "openrouter")) {
-		const openRouterAnthropicMap = getOpenRouterAnthropicReasoningEffortMap(spec.id);
-		if (openRouterAnthropicMap !== undefined) return openRouterAnthropicMap;
-	}
-	if (modelMatchesHost(spec, "fireworks")) {
-		return FIREWORKS_REASONING_EFFORT_MAP;
-	}
-	return undefined;
+	return map;
 }
 
 function isDeepseekReasoningModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
