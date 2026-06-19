@@ -44,6 +44,7 @@ packages/ai/test/.temp-images/
 .pi_config/
 .opencode/
 .worktrees/
+.worktree/
 compaction-results/
 changes/
 __pycache__/
