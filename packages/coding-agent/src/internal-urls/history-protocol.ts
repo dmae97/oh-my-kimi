@@ -40,9 +40,12 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	async resolve(url: InternalUrl): Promise<InternalResource> {
 		const agentId = url.rawHost || url.hostname;
 		const registry = AgentRegistry.global();
+		// Advisor transcripts are observability-only — surfaced in the Agent Hub, never
+		// in the agent-facing roster. Hide them from the index, lookup, and completions.
+		const visible = registry.list().filter(ref => ref.kind !== "advisor");
 
 		if (!agentId) {
-			const content = this.#renderIndex(registry.list());
+			const content = this.#renderIndex(visible);
 			return {
 				url: url.href,
 				content,
@@ -52,13 +55,14 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 		}
 
 		let ref = registry.get(agentId);
+		if (ref?.kind === "advisor") ref = undefined;
 		if (!ref) {
 			// Case-insensitive fallback: agent ids are human-typed (e.g. AuthLoader).
 			const lower = agentId.toLowerCase();
-			ref = registry.list().find(candidate => candidate.id.toLowerCase() === lower);
+			ref = visible.find(candidate => candidate.id.toLowerCase() === lower);
 		}
 		if (!ref) {
-			const known = registry.list().map(candidate => candidate.id);
+			const known = visible.map(candidate => candidate.id);
 			const knownStr = known.length > 0 ? known.join(", ") : "none";
 			throw new Error(`Unknown agent: ${agentId}\nKnown agents: ${knownStr}\nList all with history://`);
 		}
@@ -105,6 +109,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 	async complete(): Promise<UrlCompletion[]> {
 		return AgentRegistry.global()
 			.list()
+			.filter(ref => ref.kind !== "advisor")
 			.map(ref => ({
 				value: ref.id,
 				description: `${ref.status} · ${ref.kind}${ref.parentId ? ` · parent ${ref.parentId}` : ""}`,

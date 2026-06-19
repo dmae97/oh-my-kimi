@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Updated summary text for consistent descriptions of archived tool output
 
 ## [16.0.8] - 2026-06-18
 

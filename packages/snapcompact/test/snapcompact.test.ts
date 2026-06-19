@@ -661,9 +661,8 @@ describe("compact", () => {
 		expect(result.firstKeptEntryId).toBe("kept-1");
 		expect(result.tokensBefore).toBe(99000);
 		// Reading instructions reflect the default (anthropic 11on16-bw) shape.
-		expect(result.summary).toContain("29 characters per row");
+		expect(result.summary).toContain("29 characters wide");
 		expect(result.summary).toContain("dim gray");
-		expect(result.summary).toContain("plain black ink");
 		expect(result.summary).toContain("snapcompact frame");
 		// File operations are upserted like every other compaction summary:
 		// one grouped <files> tree with per-file access markers.
@@ -703,7 +702,7 @@ describe("compact", () => {
 		// Conversation text outside the span stays in black bw ink (frame 1).
 		const first = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
 		expect(new Set(first.pixels).has(7)).toBe(true);
-		expect(result.summary).toContain("dim gray ink");
+		expect(result.summary).toContain("archived tool output");
 	});
 
 	it("keeps frames free of dim ink when dimToolResults is false", async () => {
@@ -716,7 +715,7 @@ describe("compact", () => {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
 		expect(new Set(decoded.pixels).has(9)).toBe(false);
-		expect(result.summary).not.toContain("dim gray ink");
+		expect(result.summary).not.toContain("archived tool output");
 	});
 
 	it("keeps history past the frame budget as a text tail instead of dropping it", async () => {

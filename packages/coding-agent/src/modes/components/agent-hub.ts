@@ -19,7 +19,7 @@ import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { Container, Editor, Ellipsis, matchesKey, ScrollView, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, formatBytes, formatDuration, formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import type { AdvisorMessageDetails } from "../../advisor";
+import { ADVISOR_TRANSCRIPT_FILENAME, type AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import type { KeyId } from "../../config/keybindings";
 import { settings } from "../../config/settings";
@@ -120,8 +120,33 @@ function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string,
 	}
 	for (const entry of entries) {
 		if (!entry.isFile() || !entry.name.endsWith(".jsonl") || entry.name.includes(".bak")) continue;
-		const id = entry.name.slice(0, -6);
 		const sessionFile = path.join(dir, entry.name);
+		// The advisor transcript is observability-only: register it as a non-peer
+		// `advisor` kind under its owning session so the Hub can show its read-only
+		// transcript, but it never joins agent-facing rosters and is not revivable.
+		if (entry.name === ADVISOR_TRANSCRIPT_FILENAME) {
+			const owner = parentId ?? MAIN_AGENT_ID;
+			const advisorId = `${owner}/advisor`;
+			const existing = registry.get(advisorId);
+			// Never clobber a non-advisor ref that happens to share this id (a freak
+			// user task literally named `<owner>/advisor`): leave it, skip the advisor.
+			if (existing && existing.kind !== "advisor") continue;
+			if (existing?.sessionFile !== sessionFile) {
+				// The id is reused across `/new`; refresh it to the current session's file.
+				if (existing) registry.unregister(advisorId);
+				registry.register({
+					id: advisorId,
+					displayName: "advisor",
+					kind: "advisor",
+					parentId: owner,
+					session: null,
+					sessionFile,
+					status: "parked",
+				});
+			}
+			continue;
+		}
+		const id = entry.name.slice(0, -6);
 		if (!registry.get(id)) {
 			registry.register({
 				id,
@@ -553,7 +578,9 @@ export class AgentHubOverlayComponent extends Container {
 	#activateAgent(ref: AgentRef): void {
 		this.#notice = undefined;
 		const focusAgent = this.#focusAgent;
-		if (this.#remote || !focusAgent) {
+		// Advisor refs are read-only transcripts with no live/ revivable session;
+		// open the in-hub chat view (file-backed) instead of trying to focus one.
+		if (ref.kind === "advisor" || this.#remote || !focusAgent) {
 			this.openChat(ref.id);
 			return;
 		}
@@ -571,6 +598,11 @@ export class AgentHubOverlayComponent extends Container {
 	#reviveSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
+		if (ref.kind === "advisor") {
+			this.#notice = `"${ref.id}" is a read-only advisor transcript — nothing to revive.`;
+			this.#requestRender();
+			return;
+		}
 		if (ref.status !== "parked") {
 			this.#notice = `Agent "${ref.id}" is ${ref.status} — only parked agents can be revived.`;
 			this.#requestRender();
@@ -595,6 +627,11 @@ export class AgentHubOverlayComponent extends Container {
 	#killSelected(): void {
 		const ref = this.#rows[this.#selectedRow];
 		if (!ref) return;
+		if (ref.kind === "advisor") {
+			this.#notice = `"${ref.id}" is a read-only advisor transcript — cannot be killed.`;
+			this.#requestRender();
+			return;
+		}
 		this.#notice = undefined;
 		if (this.#remote) {
 			this.#remote.kill(ref.id);
@@ -826,6 +863,11 @@ export class AgentHubOverlayComponent extends Container {
 		if (!id || !trimmed) return;
 		this.#editor.setText("");
 		this.#notice = undefined;
+		if (this.#registry.get(id)?.kind === "advisor") {
+			this.#notice = "Advisor transcripts are read-only — the advisor cannot be messaged.";
+			this.#requestRender();
+			return;
+		}
 		if (this.#remote) {
 			this.#remote.chat(id, trimmed);
 			this.#scheduleChatRefresh();
