@@ -111,6 +111,7 @@ export type SymbolKey =
 	| "icon.agents"
 	| "icon.job"
 	| "icon.cache"
+	| "icon.cacheMiss"
 	| "icon.input"
 	| "icon.output"
 	| "icon.host"
@@ -310,6 +311,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.agents": "👥",
 	"icon.job": "⚙",
 	"icon.cache": "💾",
+	"icon.cacheMiss": "⊘",
 	"icon.input": "⤵",
 	"icon.output": "⤴",
 	"icon.host": "🖥",
@@ -579,6 +581,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.job": "\uf013",
 	// pick:  | alt:  
 	"icon.cache": "\uf1c0",
+	// pick:  (fa-ban) | alt: ⊘
+	"icon.cacheMiss": "\uf05e",
 	// pick:  | alt:  →
 	"icon.input": "\uf090",
 	// pick:  | alt:  →
@@ -810,6 +814,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.agents": "AG",
 	"icon.job": "bg",
 	"icon.cache": "cache",
+	"icon.cacheMiss": "!",
 	"icon.input": "in:",
 	"icon.output": "out:",
 	"icon.host": "host",
@@ -1770,6 +1775,7 @@ export class Theme {
 			agents: this.#symbols["icon.agents"],
 			job: this.#symbols["icon.job"],
 			cache: this.#symbols["icon.cache"],
+			cacheMiss: this.#symbols["icon.cacheMiss"],
 			input: this.#symbols["icon.input"],
 			output: this.#symbols["icon.output"],
 			host: this.#symbols["icon.host"],

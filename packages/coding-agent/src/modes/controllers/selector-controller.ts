@@ -327,6 +327,13 @@ export class SelectorController {
 				// InputController.toggleThinkingBlockVisibility).
 				this.ctx.ui.resetDisplay();
 				break;
+			case "display.cacheMissMarker":
+				// Rebuild re-runs the usage-based detection under the new setting so
+				// markers appear/disappear; full reset retires any already committed
+				// to native scrollback (mirrors hideThinking).
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.ui.resetDisplay();
+				break;
 			case "tui.tight":
 				setTuiTight(value as boolean);
 				this.ctx.ui.invalidate();

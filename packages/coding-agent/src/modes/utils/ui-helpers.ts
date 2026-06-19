@@ -412,8 +412,10 @@ export class UiHelpers {
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
 				if (assistantComponent) {
 					const usage = message.usage;
-					const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
-					if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
+					if (this.ctx.settings.get("display.cacheMissMarker")) {
+						const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+						if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
+					}
 					if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
 						this.ctx.lastAssistantUsage = usage;
 					}

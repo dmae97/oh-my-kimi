@@ -849,6 +849,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.cacheMissMarker": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Cache Miss Marker",
+			description: "Show a divider above an assistant turn whose request lost (missed) the prompt cache",
+		},
+	},
+
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined

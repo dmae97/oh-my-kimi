@@ -664,8 +664,10 @@ export class EventController {
 			// meaningful prefix and this request read none of it back, flag the turn.
 			const usage = event.message.usage;
 			if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
-				const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
-				if (invalidation) this.ctx.streamingComponent.setCacheInvalidation(invalidation);
+				if (settings.get("display.cacheMissMarker")) {
+					const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+					if (invalidation) this.ctx.streamingComponent.setCacheInvalidation(invalidation);
+				}
 				this.ctx.lastAssistantUsage = usage;
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
