@@ -1,22 +1,17 @@
 # Changelog
 
 ## [Unreleased]
-### Added
-
-- Added improved JSON repair capabilities for Anthropic tool arguments
-
-### Fixed
-
-- Improved error feedback and transparency for malformed Anthropic tool call arguments
 
 ## [16.1.2] - 2026-06-19
 
 ### Added
 
+- Added improved JSON repair capabilities for Anthropic tool arguments
 - Added authentication broker discovery to sync credentials between local SQLite and remote state
 
 ### Fixed
 
+- Improved error feedback and transparency for malformed Anthropic tool call arguments
 - Added automatic fallback for unsupported OpenAI reasoning effort levels
 - Improved reliability when handling invalid reasoning parameter errors across OpenAI-compatible APIs
 - Fixed OpenAI-compatible Chat Completions, Responses, and Azure Responses requests to retry once with the nearest provider-supported reasoning effort when an endpoint rejects `xhigh`/`minimal`-style effort values.

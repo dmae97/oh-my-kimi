@@ -1,15 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Prevented sensitive raw JSON payloads from leaking into agent events during tool validation
-- Ensured tool validation errors are handled correctly for malformed JSON parse inputs
 
 ## [16.1.2] - 2026-06-19
 
 ### Fixed
 
+- Prevented sensitive raw JSON payloads from leaking into agent events during tool validation
+- Ensured tool validation errors are handled correctly for malformed JSON parse inputs
 - Ensure deep-cloning of tool-call arguments respects own enumerable properties
 - Prevent direct object references between agent message snapshots and streaming events
 

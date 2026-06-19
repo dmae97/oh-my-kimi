@@ -1,14 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Changed
-
-- Renamed the search tool's `i` parameter to `case` and inverted its semantics to represent case-sensitive search.
-- Improved session history to export empty objects as `{}` instead of empty strings
-
-### Fixed
-
-- Fixed `omp bench` resolving an ambiguous model selector — a bare or canonical id shared by several providers (e.g. `gpt-oss-20b` or `openai/gpt-oss-20b`) — to a provider you have no credentials for. Bench resolves against the full catalog (credentials are ignored), so the default pick was decided by provider-priority order alone. It now redirects such selectors to an equivalent model under a provider with configured auth (honoring `modelProviderOrder` and canonical cross-provider variants), while an explicit `provider/id` selector is still benchmarked verbatim so forced/unauthenticated runs keep working.
 
 ## [16.1.2] - 2026-06-19
 
@@ -18,12 +10,15 @@
 
 ### Changed
 
+- Renamed the search tool's `i` parameter to `case` and inverted its semantics to represent case-sensitive search.
+- Improved session history to export empty objects as `{}` instead of empty strings
 - Refined system prompt and tool documentation to improve conciseness and clarity
 - Simplified tool input descriptions for browser, eval, find, and memory-edit operations
 - Refactored authentication storage discovery to share logic with other pi-ai tools
 
 ### Fixed
 
+- Fixed `omp bench` resolving an ambiguous model selector — a bare or canonical id shared by several providers (e.g. `gpt-oss-20b` or `openai/gpt-oss-20b`) — to a provider you have no credentials for. Bench resolves against the full catalog (credentials are ignored), so the default pick was decided by provider-priority order alone. It now redirects such selectors to an equivalent model under a provider with configured auth (honoring `modelProviderOrder` and canonical cross-provider variants), while an explicit `provider/id` selector is still benchmarked verbatim so forced/unauthenticated runs keep working.
 - Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
 - Fixed streaming reflowing Markdown — a fenced mermaid diagram or a GFM table — stranding stale fragments in native scrollback once the reply scrolled past the viewport (cleared only by a full repaint / Ctrl+L). While streaming, the assistant block defaulted to commit-stable, so the transcript advertised its scrolled-off rows as durable snapshot content and the renderer committed an intermediate layout to immutable terminal history; the later re-layout (a diagram reshaping, a table re-aligning its columns) then froze that superseded fragment in scrollback. A still-streaming reply whose Markdown carries a mermaid fence or a table — detected outside fenced code blocks so ordinary code snippets are unaffected — is now commit-unstable, so it stays wholly in the repaintable live region and commits once, at its final layout, when the turn finalizes.
 - Fixed `SYSTEM.md` prompt customization going through the raw system prompt override path, which dropped sections rendered by `custom-system-prompt.md` such as skills and rules ([#3014](https://github.com/can1357/oh-my-pi/issues/3014)).
