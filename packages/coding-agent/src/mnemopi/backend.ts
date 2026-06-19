@@ -122,7 +122,11 @@ export const mnemopiBackend: MemoryBackend = {
 		await loadMnemopiCore();
 		// Close the cached default Mnemopi instance so its SQLite handle doesn't
 		// keep the DB files locked on Windows when removeDbFiles tries to delete.
-		requireMnemopi().resetMemoryForTests();
+		// Use the core module (already awaited via loadMnemopiCore above):
+		// requireMnemopi() throws "module not loaded" when clear() runs before the
+		// fire-and-forget start() has awaited loadMnemopi() (autolearn disabled, or
+		// taskDepth > 0). resetMemoryForTests is re-exported identically from core.
+		requireMnemopiCore().resetMemoryForTests();
 		await Bun.sleep(0);
 		await removeDbFiles(getMnemopiScopedDbPaths(config));
 	},
