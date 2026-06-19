@@ -200,6 +200,19 @@ describe("normalize", () => {
 			`x ${snapcompact.DIM_ON}y${snapcompact.DIM_OFF} z`,
 		);
 	});
+
+	it("folds compatibility characters to their ASCII skeleton via NFKD", () => {
+		expect(snapcompact.normalize("x⁵")).toBe("x5"); // superscript outside Latin-1
+		expect(snapcompact.normalize("ＨＥＬＬＯ")).toBe("HELLO"); // fullwidth forms
+		expect(snapcompact.normalize("ﬁle")).toBe("file"); // fi ligature
+		expect(snapcompact.normalize("step ① then ②")).toBe("step 1 then 2"); // circled digits
+		expect(snapcompact.normalize("section Ⅻ")).toBe("section XII"); // roman numeral
+		expect(snapcompact.normalize("⅓ cup")).toBe("1/3 cup"); // vulgar fraction
+		expect(snapcompact.normalize("𝐇𝐞𝐥𝐥𝐨")).toBe("Hello"); // math-styled alphanumerics
+		expect(snapcompact.normalize("™ ‹q› ′ ″ ⇐ ↑")).toBe(`TM <q> ' " <= ^`);
+		// No decomposition and no glyph still falls back to ? (unchanged contract).
+		expect(snapcompact.normalize("emoji 🎞")).toBe("emoji ?");
+	});
 });
 
 describe("shape resolution", () => {
@@ -476,7 +489,7 @@ describe("serializeConversation", () => {
 		// Default cap 2000 at 0.6 head ratio: 1200 head + 800 tail survive.
 		expect(out).toContain("<out>");
 		expect(out).toContain("HEAD-");
-		expect(out).toContain("[... 3010 chars elided ...]");
+		expect(out).toContain("[… 3010ch elided …]");
 		expect(out.endsWith(`-TAIL${snapcompact.DIM_OFF}\n</out>`)).toBe(true);
 	});
 
@@ -486,7 +499,7 @@ describe("serializeConversation", () => {
 			toolResultMaxChars: 10,
 			truncateHeadRatio: 0.5,
 		});
-		expect(tight).toContain("[... 90 chars elided ...]");
+		expect(tight).toContain("[… 90ch elided …]");
 		const off = snapcompact.serializeConversation([createToolResultMessage(text)], {
 			toolResultMaxChars: Number.POSITIVE_INFINITY,
 		});
@@ -501,7 +514,7 @@ describe("serializeConversation", () => {
 		]);
 		// JSON-encoded content is 3002 chars; per-value cap 500 elides 2502.
 		expect(out).toContain('write(path="a.ts", content=');
-		expect(out).toContain("[... 2502 chars elided ...]");
+		expect(out).toContain("[… 2502ch elided …]");
 	});
 
 	it("caps the whole serialized argument list per call", () => {
@@ -511,7 +524,7 @@ describe("serializeConversation", () => {
 			createAssistantMessage([{ type: "toolCall", id: "c1", name: "tool", arguments: args }]),
 		]);
 		expect(out).toContain("arg0=");
-		expect(out).toContain("chars elided");
+		expect(out).toContain("ch elided");
 		// 10 values x ~400 chars collapse to the 2000-char call budget plus markers.
 		expect(out.length).toBeLessThan(2200);
 	});
@@ -773,7 +786,7 @@ describe("compact", () => {
 		);
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		expect(archive?.frames.length).toBe(1);
-		expect(archive?.textTail).toContain("chars elided");
+		expect(archive?.textTail).toContain("ch elided");
 		expect(archive?.textTail?.length).toBeLessThan(capacity * 2.5);
 		expect(archive?.truncatedChars).toBeGreaterThan(0);
 	});
