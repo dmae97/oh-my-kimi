@@ -5,6 +5,7 @@ import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
@@ -658,6 +659,14 @@ export class EventController {
 				// These calls will never produce a result either, so the tracked
 				// waiting poll cannot be displaced anymore — freeze it in place.
 				this.#resolveDisplaceablePoll();
+			}
+			// Surface a prompt-cache invalidation: if the previous turn cached a
+			// meaningful prefix and this request read none of it back, flag the turn.
+			const usage = event.message.usage;
+			if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
+				const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+				if (invalidation) this.ctx.streamingComponent.setCacheInvalidation(invalidation);
+				this.ctx.lastAssistantUsage = usage;
 			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();

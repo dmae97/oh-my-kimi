@@ -5,6 +5,7 @@ import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
 
 /**
  * Max lines of a turn-ending provider error rendered inline in the transcript.
@@ -29,6 +30,7 @@ const THINKING_DOTS_FRAME_MS = 320;
  */
 export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
+	#markerSlot: Container;
 	#lastMessage?: AssistantMessage;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#convertedKittyImages = new Map<string, ImageContent>();
@@ -75,6 +77,11 @@ export class AssistantMessageComponent extends Container {
 		super();
 		this.#transcriptBlockFinalized = message !== undefined;
 
+		// Slim cache-invalidation divider, populated above the content when this
+		// turn's request lost the prompt cache (see setCacheInvalidation).
+		this.#markerSlot = new Container();
+		this.addChild(this.#markerSlot);
+
 		// Container for text/thinking content
 		this.#contentContainer = new Container();
 		this.addChild(this.#contentContainer);
@@ -82,6 +89,20 @@ export class AssistantMessageComponent extends Container {
 		if (message) {
 			this.updateContent(message);
 		}
+	}
+
+	/**
+	 * Show or clear the slim cache-invalidation divider above this turn. Set at
+	 * `message_end` (live) or during rebuild, once the turn's usage is known and
+	 * compared against the previous turn's cache footprint. Bumps the transcript
+	 * block version so the change repaints even after content finalized.
+	 */
+	setCacheInvalidation(info: CacheInvalidation | undefined): void {
+		this.#markerSlot.clear();
+		if (info) {
+			this.#markerSlot.addChild(new CacheInvalidationMarkerComponent(info));
+		}
+		this.#blockVersion++;
 	}
 
 	override invalidate(): void {

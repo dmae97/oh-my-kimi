@@ -359,6 +359,9 @@ export class UiHelpers {
 	): void {
 		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
+		// Reseed the cache-invalidation baseline: this rebuild re-derives every
+		// turn's marker from usage, and the last turn becomes the live baseline.
+		this.ctx.lastAssistantUsage = undefined;
 
 		if (options.updateFooter) {
 			this.ctx.statusLine.invalidate();
@@ -407,6 +410,14 @@ export class UiHelpers {
 				this.ctx.addMessageToChat(message);
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
+				if (assistantComponent) {
+					const usage = message.usage;
+					const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+					if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
+					if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
+						this.ctx.lastAssistantUsage = usage;
+					}
+				}
 				const hasVisibleAssistantContent = message.content.some(
 					content =>
 						(content.type === "text" && canonicalizeMessage(content.text)) ||

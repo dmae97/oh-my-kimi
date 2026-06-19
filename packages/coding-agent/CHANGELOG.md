@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added visual markers to assistant messages when prompt caching is invalidated
+
 ### Changed
 
 - Unified injected message styling with consistent rounded outlines and icon-tagged headers

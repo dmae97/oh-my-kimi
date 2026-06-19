@@ -36,6 +36,7 @@ import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
+import { detectCacheInvalidation } from "./cache-invalidation-marker";
 import { CollabPromptMessageComponent } from "./collab-prompt-message";
 import {
 	BranchSummaryMessageComponent,
@@ -76,6 +77,7 @@ export class ChatTranscriptBuilder {
 	#readArgs = new Map<string, Record<string, unknown>>();
 	#readGroup: ReadToolGroupComponent | null = null;
 	#pendingUsage: Usage | undefined;
+	#lastAssistantUsage: Usage | undefined;
 	#waitingPoll: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
@@ -114,6 +116,7 @@ export class ChatTranscriptBuilder {
 		this.#readArgs.clear();
 		this.#readGroup = null;
 		this.#pendingUsage = undefined;
+		this.#lastAssistantUsage = undefined;
 		this.#waitingPoll = null;
 		this.#expandables = [];
 		this.container.dispose();
@@ -248,6 +251,12 @@ export class ChatTranscriptBuilder {
 			this.deps.requestRender(),
 		);
 		this.container.addChild(assistantComponent);
+
+		const invalidation = detectCacheInvalidation(this.#lastAssistantUsage, message.usage);
+		if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
+		if (message.usage.cacheRead + message.usage.cacheWrite + message.usage.input > 0) {
+			this.#lastAssistantUsage = message.usage;
+		}
 
 		const hasVisibleAssistantContent = message.content.some(
 			content =>
