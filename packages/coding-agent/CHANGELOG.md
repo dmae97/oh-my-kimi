@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Optimized network traffic by stripping tool descriptions from provider tool schemas
 
 ## [16.0.11] - 2026-06-19
 

@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
 
 ## [16.0.11] - 2026-06-19
 

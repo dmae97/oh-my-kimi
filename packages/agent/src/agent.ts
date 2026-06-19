@@ -223,6 +223,12 @@ export interface AgentOptions {
 
 	/** Enable intent tracing schema injection/stripping in the harness. */
 	intentTracing?: boolean;
+	/**
+	 * Strip tool descriptions from provider-bound tool specs (top-level + nested
+	 * schema annotations). Use when the full catalog is rendered into the system
+	 * prompt so descriptions are not duplicated on the wire. Native tool calling only.
+	 */
+	pruneToolDescriptions?: boolean;
 	/** Owned tool-calling dialect. Undefined keeps provider-native tool calling. */
 	dialect?: Dialect;
 	/**
@@ -336,6 +342,7 @@ export class Agent {
 	#preferWebsockets?: boolean;
 	#transformToolCallArguments?: (args: Record<string, unknown>, toolName: string) => Record<string, unknown>;
 	#intentTracing: boolean;
+	#pruneToolDescriptions: boolean;
 	#dialect?: Dialect;
 	#abortOnFabricatedToolResult?: boolean;
 	#getToolChoice?: () => ToolChoice | undefined;
@@ -407,6 +414,7 @@ export class Agent {
 		this.#preferWebsockets = opts.preferWebsockets;
 		this.#transformToolCallArguments = opts.transformToolCallArguments;
 		this.#intentTracing = opts.intentTracing === true;
+		this.#pruneToolDescriptions = opts.pruneToolDescriptions === true;
 		this.#dialect = opts.dialect;
 		this.#abortOnFabricatedToolResult = opts.abortOnFabricatedToolResult;
 		this.#getToolChoice = opts.getToolChoice;
@@ -1059,6 +1067,7 @@ export class Agent {
 			cursorOnToolResult,
 			transformToolCallArguments: this.#transformToolCallArguments,
 			intentTracing: this.#intentTracing,
+			pruneToolDescriptions: this.#pruneToolDescriptions,
 			dialect: this.#dialect,
 			abortOnFabricatedToolResult: this.#abortOnFabricatedToolResult,
 			appendOnlyContext: this.#appendOnlyContext,

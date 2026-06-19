@@ -921,7 +921,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			group: "Prompt",
 			label: "Repeat Tool Descriptions",
-			description: "Render full tool descriptions in the system prompt instead of a tool name list",
+			description:
+				"Render full tool descriptions in the system prompt and strip them from the provider tool schemas (top-level and nested) so they are sent once instead of duplicated on the wire",
 		},
 	},
 

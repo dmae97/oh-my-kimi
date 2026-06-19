@@ -2536,6 +2536,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return result;
 			},
 			intentTracing: !!intentField,
+			pruneToolDescriptions: repeatToolDescriptions,
 			dialect: resolveDialect(settings.get("tools.format"), model),
 			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
 			getToolChoice: () => session?.nextToolChoice(),
@@ -2606,6 +2607,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			agent,
+			pruneToolDescriptions: repeatToolDescriptions,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			sessionManager,
 			settings,

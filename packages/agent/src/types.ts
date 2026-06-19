@@ -204,6 +204,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	intentTracing?: boolean;
 	/**
+	 * Strip tool descriptions (top-level + nested schema annotations) from the
+	 * provider-bound tool specs. Use when the full catalog is rendered into the
+	 * system prompt instead, so descriptions are not duplicated on the wire.
+	 */
+	pruneToolDescriptions?: boolean;
+	/**
 	 * Owned tool calling dialect.
 	 *
 	 * Undefined keeps provider-native tool calling. A dialect value sends no

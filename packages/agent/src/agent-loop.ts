@@ -14,8 +14,10 @@ import {
 	resolveApiKeyOnce,
 	seedApiKeyResolver,
 	streamSimple,
+	stripSchemaDescriptions,
 	type ToolResultMessage,
 	type TSchema,
+	toolWireSchema,
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
@@ -518,7 +520,13 @@ function normalizeMessagesForProvider(
 	});
 }
 
-function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = "require"): unknown {
+const INTENT_FIELD_DESCRIPTION = "concise intent";
+
+function injectIntentIntoSchema(
+	schema: unknown,
+	mode: "require" | "optional" = "require",
+	describeIntent = true,
+): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
 	const schemaRecord = schema as Record<string, unknown>;
 	const propertiesValue = schemaRecord.properties;
@@ -544,10 +552,9 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 	return {
 		...schemaRecord,
 		properties: {
-			[INTENT_FIELD]: {
-				type: "string",
-				description: "Concise intent in present participle form (2-6 words) strictly on a single line, no newlines",
-			},
+			[INTENT_FIELD]: describeIntent
+				? { type: "string", description: INTENT_FIELD_DESCRIPTION }
+				: { type: "string" },
 			...properties,
 		},
 		...(mode === "require" ? { required: [...required, INTENT_FIELD] } : {}),
@@ -558,26 +565,36 @@ export function normalizeTools(
 	tools: AgentContext["tools"],
 	injectIntent: boolean,
 	exampleDialect?: Dialect,
+	pruneDescriptions = false,
 ): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
+		const doInjectIntent = injectIntent && intentMode !== "omit";
+		// When the full catalog is rendered into the system prompt, ship the tool
+		// specs without their descriptions (top-level + nested schema annotations)
+		// so they are not duplicated on the wire. Strip the STABLE wire schema (the
+		// memoized `stripSchemaDescriptions` result is reused across requests), then
+		// re-inject `_i` (without its hint, which `describeIntent: false` omits) so
+		// intent tracing keeps the field while no descriptions ride the wire.
+		if (pruneDescriptions) {
+			let parameters = stripSchemaDescriptions(toolWireSchema(t)) as TSchema;
+			if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
+			return { ...t, parameters, description: "" };
+		}
 		let parameters: TSchema = t.parameters;
-		if (injectIntent && intentMode !== "omit") {
+		if (doInjectIntent) {
 			if (isZodSchema(parameters)) {
-				const wired = zodToWireSchema(parameters);
-				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+				parameters = injectIntentIntoSchema(zodToWireSchema(parameters), intentMode) as TSchema;
 			} else if (isArkSchema(parameters)) {
-				const wired = arkToWireSchema(parameters);
-				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+				parameters = injectIntentIntoSchema(arkToWireSchema(parameters), intentMode) as TSchema;
 			} else {
 				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 			}
 		}
 		const description = t.description ?? "";
-		const injectExampleIntent = injectIntent && intentMode !== "omit";
 		const examplesBlock = exampleDialect
-			? renderToolExamples({ ...t, parameters }, exampleDialect, injectExampleIntent ? INTENT_FIELD : undefined)
+			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 			: "";
 		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
 		return { ...t, parameters, description: finalDescription };
@@ -1012,6 +1029,9 @@ async function streamAssistantResponse(
 
 	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
 	const exampleDialect = ownedDialect ?? preferredDialect(config.model.id);
+	// Owned/in-band dialects carry the catalog in the prompt as text and send no
+	// native `tools`, so description pruning only applies to native tool calling.
+	const pruneToolDescriptions = !!config.pruneToolDescriptions && !ownedDialect;
 	// Build LLM context — append-only mode caches system prompt + tools
 	// AND keeps an append-only message log so prior-turn bytes are stable.
 	let llmContext: Context;
@@ -1020,12 +1040,13 @@ async function streamAssistantResponse(
 		llmContext = config.appendOnlyContext.build(context, {
 			intentTracing: !!config.intentTracing,
 			exampleDialect,
+			pruneToolDescriptions,
 		});
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,
 			messages: normalizedMessages,
-			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect),
+			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect, pruneToolDescriptions),
 		};
 	}
 	if (config.transformProviderContext) {

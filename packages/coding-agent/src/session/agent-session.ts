@@ -102,6 +102,7 @@ import {
 	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
+import { stripToolDescriptions } from "@oh-my-pi/pi-ai/utils/schema";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
@@ -516,6 +517,12 @@ export interface AgentSessionConfig {
 	advisorReadOnlyTools?: AgentTool[];
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
+	/**
+	 * Strip tool descriptions from provider-bound tool specs on side requests
+	 * (handoff). Must match the session-start value used to build the system
+	 * prompt so descriptions are not duplicated on the wire.
+	 */
+	pruneToolDescriptions?: boolean;
 	/**
 	 * Disconnect this session's OWNED MCP manager on dispose. Provided only when
 	 * the session created the manager (top-level sessions); subagents reuse a
@@ -1305,6 +1312,8 @@ export class AgentSession {
 	// unchanged — otherwise a mid-turn estimate would survive into idle.
 	#contextUsageRevision = 0;
 	#obfuscator: SecretObfuscator | undefined;
+	/** Session-start value of `repeatToolDescriptions`; drives handoff tool pruning. */
+	#pruneToolDescriptions = false;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
@@ -1513,6 +1522,7 @@ export class AgentSession {
 		this.#modelRegistry = config.modelRegistry;
 		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
+		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#requestedToolNames = config.requestedToolNames;
@@ -7846,7 +7856,10 @@ export class AgentSession {
 				this.#modelRegistry.resolver(model, this.sessionId),
 				{
 					systemPrompt: this.#obfuscateForProvider(this.#baseSystemPrompt),
-					tools: obfuscateProviderTools(this.#obfuscator, this.agent.state.tools),
+					tools: obfuscateProviderTools(
+						this.#obfuscator,
+						this.#pruneToolDescriptions ? stripToolDescriptions(this.agent.state.tools) : this.agent.state.tools,
+					),
 					customInstructions: this.#obfuscateTextForProvider(customInstructions),
 					convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 					initiatorOverride: "agent",
