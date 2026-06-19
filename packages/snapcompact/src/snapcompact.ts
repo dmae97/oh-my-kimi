@@ -471,13 +471,8 @@ export interface Archive {
 	/** Characters dropped so far to respect the archive budget. */
 	truncatedChars: number;
 	/** Full kept archive source (oldest to newest, normalized, bounded to the
-	 *  rendered budget) — the single source re-rendered each compaction. Absent
-	 *  on legacy archives persisted before text-sourced rendering, whose frames
-	 *  are carried verbatim (see {@link pinnedFrames}). */
+	 *  rendered budget) — the single source re-rendered each compaction. */
 	text?: string;
-	/** Count of leading {@link frames} carried verbatim from a legacy archive
-	 *  (one with no source {@link text}); never re-rendered. */
-	pinnedFrames?: number;
 	/** Oldest text region kept verbatim around the imaged middle. */
 	textHead?: string;
 	/** Newest text region kept verbatim around the imaged middle. */
@@ -1234,14 +1229,11 @@ export function getPreservedArchive(preserveData: Record<string, unknown> | unde
 	// A text-only archive (everything fit in the plain-text regions) is valid;
 	// only an archive carrying neither frames nor text is empty.
 	if (frames.length === 0 && text === undefined && textHead === undefined && textTail === undefined) return undefined;
-	const pinnedFrames =
-		typeof archive.pinnedFrames === "number" ? Math.max(0, Math.min(frames.length, archive.pinnedFrames)) : undefined;
 	return {
 		frames,
 		totalChars: typeof archive.totalChars === "number" ? archive.totalChars : 0,
 		truncatedChars: typeof archive.truncatedChars === "number" ? archive.truncatedChars : 0,
 		...(text !== undefined ? { text } : {}),
-		...(pinnedFrames !== undefined ? { pinnedFrames } : {}),
 		...(textHead !== undefined ? { textHead } : {}),
 		...(textTail !== undefined ? { textTail } : {}),
 	};
@@ -1256,10 +1248,10 @@ export function images(archive: Archive): ImageContent[] {
 		...(frame.detail ? { detail: frame.detail } : {}),
 	}));
 }
-/** Ordered archive blocks for a compaction summary message: old text region,
- *  imaged middle, then new text region. Runtime-only; reconstructed from
- *  {@link Archive} on each context rebuild instead of persisted on the session
- *  entry. */
+/** Ordered archive blocks for a compaction summary message, oldest to newest:
+ *  the oldest text region, the imaged middle, then the newest text region.
+ *  Runtime-only; reconstructed from {@link Archive} on each context rebuild
+ *  instead of persisted on the session entry. */
 export function historyBlocks(archive: Archive): (TextContent | ImageContent)[] {
 	const blocks: (TextContent | ImageContent)[] = [];
 	const hasImages = archive.frames.length > 0;
@@ -1421,9 +1413,8 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
  * oldest edge, imaged middle, then plain text at the newest edge. The imaged
  * middle itself foveates (HQ/LQ/HQ) when it grows large.
  *
- * The full kept source persists on the archive (`text`) so each compaction can
- * re-tier it; legacy archives predating text-sourced rendering keep their frames
- * verbatim as a pinned head (`pinnedFrames`).
+ * The full kept source persists on the archive (`text`) so each later compaction
+ * unfolds and re-renders it coherently alongside the newly archived history.
  *
  * If the previous compaction was text-based, its summary is printed at the head
  * of the archive as `[Summary of earlier history]` so no continuity is lost.
@@ -1458,36 +1449,15 @@ export async function compact<TMessage = Message>(
 
 	let truncatedChars = previousArchive?.truncatedChars ?? 0;
 
-	// Older archive source ages into this slice ahead of the new history. A
-	// text-sourced archive replays its full kept source; a legacy one (frames,
-	// no source text) keeps its frames verbatim as a pinned head and contributes
-	// only its recoverable text tail.
-	let pinned: Frame[] = [];
-	if (previousArchive?.text !== undefined) {
-		pinned = previousArchive.frames.slice(0, previousArchive.pinnedFrames ?? 0);
-		archiveText =
-			archiveText.length > 0 ? `${previousArchive.text}${NEWLINE_GLYPH}${archiveText}` : previousArchive.text;
-	} else if (previousArchive) {
-		const cap = Math.max(1, Math.floor(maxFrames / 2));
-		if (previousArchive.frames.length <= cap) {
-			pinned = previousArchive.frames;
-		} else {
-			const dropped = previousArchive.frames.slice(1, previousArchive.frames.length - (cap - 1));
-			for (const frame of dropped) truncatedChars += frame.chars;
-			pinned = [
-				...previousArchive.frames.slice(0, 1),
-				...previousArchive.frames.slice(previousArchive.frames.length - (cap - 1)),
-			];
-		}
-		if (previousArchive.textTail) {
-			archiveText =
-				archiveText.length > 0
-					? `${previousArchive.textTail}${NEWLINE_GLYPH}${archiveText}`
-					: previousArchive.textTail;
-		}
+	// Re-compacting a snapcompacted history unfolds the prior archive's source
+	// text and treats it as one coherent transcript: the previous kept source
+	// ages in ahead of the new history, then the whole thing is re-rendered.
+	const previousText = previousArchive?.text;
+	if (previousText) {
+		archiveText = archiveText.length > 0 ? `${previousText}${NEWLINE_GLYPH}${archiveText}` : previousText;
 	}
 
-	const layout = planArchive(archiveText, high, low, Math.max(0, maxFrames - pinned.length));
+	const layout = planArchive(archiveText, high, low, maxFrames);
 	truncatedChars += layout.truncatedChars;
 
 	// Re-render the planned frames, carrying any open dim span across every
@@ -1520,7 +1490,7 @@ export async function compact<TMessage = Message>(
 	const textTail = layout.textTail.length > 0 ? (dimOpen ? DIM_ON : "") + layout.textTail : "";
 	const textChars = textHead.length + textTail.length;
 
-	const frames = [...pinned, ...newFrames];
+	const frames = newFrames;
 	const totalChars = frames.reduce((sum, frame) => sum + frame.chars, 0) + textChars;
 	const mixedShapes = frames.some(
 		frame =>
@@ -1568,7 +1538,6 @@ export async function compact<TMessage = Message>(
 		totalChars,
 		truncatedChars,
 		...(persistedText.length > 0 ? { text: persistedText } : {}),
-		...(pinned.length > 0 ? { pinnedFrames: pinned.length } : {}),
 		...(textHead ? { textHead } : {}),
 		...(textTail ? { textTail } : {}),
 	};

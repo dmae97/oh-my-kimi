@@ -8,6 +8,8 @@
 - Updated skill invocation UI with a compact header, home-shortened paths, and dynamic line counts
 - Refined session context to utilize history blocks instead of raw images for snapcompact summaries
 - Refreshed the skill-prompt transcript message to match the rest of the TUI: an icon-tagged `✦ skill <name>` header (with invocation args trailing), a single meta line with a home-shortened, click-to-open path in the accent color and the prompt size in muted, and a rounded outline around the card. Replaces the old `[skill]` label with the flat `Skill:`/`Path:`/`Prompt:` key/value dump (which also leaked the absolute home directory).
+- Refreshed the default custom/hook transcript message frame to a rounded, icon-tagged card: the `[customType]` bracket label is replaced by an `<icon> <type>` header (📦 for extension messages, 🪝 for legacy hook-role messages) with a subtle outline, matching the skill card. Covers every extension/hook custom type without a bespoke renderer.
+- Refreshed the branch-summary transcript message to render as the same slim divider banner as `/compact`, handoff, and snapcompact (`⑂ branch · ctrl+o`, summary revealed on expand) instead of a `[branch]` box.
 - Optimized network traffic by stripping tool descriptions from provider tool schemas
 - Snapcompact compaction summaries now reach the model as ordered history blocks instead of one lead-in text block plus appended images: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. This matches the new text-first snapcompact archive layout and preserves chronological order in the provider prompt.
 

@@ -263,7 +263,7 @@ Cumulative behavior:
 - In split turns, includes turn-prefix file ops too.
 - `details.readFiles` excludes files also modified; `details.modifiedFiles` carries the rest (persisted shape is unchanged).
 
-Summary text gets one `<files>` tag appended via prompt template: a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line.
+The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. LLM-summary strategies append it as a `<files>` tag (via `upsertFileOperations`); snapcompact renders it inside its summary template as a `FILES` section instead.
 
 ```xml
 <files>

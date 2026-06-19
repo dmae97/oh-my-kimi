@@ -832,6 +832,22 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: archive })).toEqual(archive);
 	});
 
+	it("historyBlocks orders text head, imaged middle, then text tail", () => {
+		const archive: snapcompact.Archive = {
+			frames: [{ data: btoa("middle"), mimeType: "image/png", cols: 8, rows: 8, chars: 4 }],
+			totalChars: 40,
+			truncatedChars: 0,
+			text: "head text middle tail text",
+			textHead: "head text",
+			textTail: "tail text",
+		};
+		const blocks = snapcompact.historyBlocks(archive);
+		expect(blocks.map(block => block.type)).toEqual(["text", "image", "text"]);
+		expect((blocks[0] as { text: string }).text).toContain("head text");
+		expect((blocks[1] as { data: string }).data).toBe(btoa("middle"));
+		expect((blocks[2] as { text: string }).text).toContain("tail text");
+	});
+
 	it("provider image budgets stay permissive while unknown providers keep the safe floor", () => {
 		expect(snapcompact.providerImageBudget("openrouter")).toBe(90);
 		// Unknown providers fall to the safe floor.

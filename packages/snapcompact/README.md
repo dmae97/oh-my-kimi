@@ -50,7 +50,7 @@ Run a full compaction pass over prepared messages:
 import { compact } from "@oh-my-pi/snapcompact";
 
 const result = await compact(preparation, { model });
-// result.summary        — short "resume prior conversation" lead-in + <files> block
+// result.summary        — short "resume prior conversation" lead-in, reading guide, and FILES section
 // result.preserveData   — bounded archive source + rendered image middle
 ```
 

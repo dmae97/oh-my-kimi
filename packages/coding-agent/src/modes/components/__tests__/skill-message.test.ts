@@ -1,6 +1,6 @@
+import { beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "../../../config/settings";
 import type { CustomMessage, SkillPromptDetails } from "../../../session/messages";
 import { getThemeByName, setThemeInstance, type Theme } from "../../theme/theme";

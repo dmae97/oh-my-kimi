@@ -13,7 +13,11 @@ const CHARS: BoxBorder["chars"] = {
 function borderedBox(border?: Partial<BoxBorder>): Box {
 	// paddingY 0 keeps the row count predictable; ignoreTight pins paddingX to exactly 1.
 	// Real SGR escapes so Bun.stripANSI removes both bg and border color before width checks.
-	const box = new Box(1, 0, t => `\x1b[48;5;236m${t}\x1b[49m`, { chars: CHARS, color: t => `\x1b[31m${t}\x1b[39m`, ...border });
+	const box = new Box(1, 0, t => `\x1b[48;5;236m${t}\x1b[49m`, {
+		chars: CHARS,
+		color: t => `\x1b[31m${t}\x1b[39m`,
+		...border,
+	});
 	box.setIgnoreTight(true);
 	box.addChild(new Text("hi", 0, 0));
 	return box;
