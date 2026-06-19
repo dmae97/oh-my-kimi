@@ -405,8 +405,12 @@ export interface CreateAgentSessionOptions {
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
-	/** System prompt blocks. Array replaces default, function receives default blocks and returns final blocks. */
+	/** Provider-facing system prompt override. Replaces the fully rendered default blocks. */
 	systemPrompt?: string | string[] | ((defaultPrompt: string[]) => string | string[]);
+	/** Already-loaded custom prompt text rendered through the bundled custom system prompt template. */
+	customSystemPrompt?: string;
+	/** Already-loaded text appended through the bundled system prompt templates. */
+	appendSystemPrompt?: string;
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
 	providerSessionId?: string;
@@ -837,6 +841,7 @@ export interface BuildSystemPromptOptions {
 	skills?: Skill[];
 	contextFiles?: Array<{ path: string; content: string }>;
 	cwd?: string;
+	customPrompt?: string;
 	appendPrompt?: string;
 	inlineToolDescriptors?: boolean;
 }
@@ -850,6 +855,7 @@ export interface BuildSystemPromptOptions {
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
+		customPrompt: options.customPrompt,
 		skills: options.skills,
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
@@ -2201,16 +2207,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Owned/in-band tool dialects (non-native) require the catalog as `# Tool:`
 			// sections; native tool calling lets the compact name list suffice.
 			const nativeTools = resolveDialect(settings.get("tools.format"), agent?.state.model ?? model) === undefined;
+			if (options.appendSystemPrompt) {
+				appendPrompt = appendPrompt
+					? `${appendPrompt}\n\n${options.appendSystemPrompt}`
+					: options.appendSystemPrompt;
+			}
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
+				resolvedCustomPrompt: options.customSystemPrompt,
 				skills,
 				contextFiles,
 				tools: promptTools,
 				toolNames,
 				rules: rulebookRules,
 				alwaysApplyRules,
+				resolvedAppendSystemPrompt: appendPrompt,
+				repeatToolDescriptions,
 				skillsSettings: settings.getGroup("skills"),
-				appendSystemPrompt: appendPrompt,
 				inlineToolDescriptors,
 				nativeTools,
 				intentField,

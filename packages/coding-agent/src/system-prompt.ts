@@ -367,12 +367,16 @@ export function buildSystemPromptToolMetadata(
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
+	/** Already-loaded custom system prompt text; bypasses path resolution. */
+	resolvedCustomPrompt?: string;
 	/** Tools to include in prompt. */
 	tools?: Map<string, SystemPromptToolMetadata>;
 	/** Tool names to include in prompt. */
 	toolNames?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
+	/** Already-loaded append prompt text; bypasses path resolution. */
+	resolvedAppendSystemPrompt?: string;
 	/** Inline full tool descriptors in the system prompt. Default: true */
 	inlineToolDescriptors?: boolean;
 	/**
@@ -431,9 +435,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	const {
 		customPrompt,
+		resolvedCustomPrompt: providedResolvedCustomPrompt,
 		tools,
 		appendSystemPrompt,
 		inlineToolDescriptors: providedInlineToolDescriptors,
+		resolvedAppendSystemPrompt: providedResolvedAppendPrompt,
 		nativeTools = true,
 		skillsSettings,
 		toolNames: providedToolNames,
@@ -500,9 +506,15 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		return result.value;
 	}
 
-	const systemPromptCustomizationPromise = logger.time("loadSystemPromptFiles", loadSystemPromptFiles, {
-		cwd: resolvedCwd,
-	});
+	// Caller-supplied `customPrompt` / `resolvedCustomPrompt` owns block 0; the
+	// secondary capability-path `SYSTEM.md` walk-up MUST NOT silently augment it,
+	// because that would defeat CLI precedence over project/user `SYSTEM.md`.
+	const callerControlsCustomPrompt =
+		(typeof providedResolvedCustomPrompt === "string" && providedResolvedCustomPrompt.length > 0) ||
+		(typeof customPrompt === "string" && customPrompt.length > 0);
+	const systemPromptCustomizationPromise: Promise<string | null> = callerControlsCustomPrompt
+		? Promise.resolve(null)
+		: logger.time("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
 	const contextFilesPromise = providedContextFiles
 		? Promise.resolve(providedContextFiles)
 		: logger.time("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
@@ -523,12 +535,16 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		await Promise.all([
 			withDeadline(
 				"customPrompt",
-				resolvePromptInput(customPrompt, "system prompt"),
+				providedResolvedCustomPrompt !== undefined
+					? Promise.resolve(providedResolvedCustomPrompt)
+					: resolvePromptInput(customPrompt, "system prompt"),
 				prepDefaults.resolvedCustomPrompt,
 			),
 			withDeadline(
 				"appendSystemPrompt",
-				resolvePromptInput(appendSystemPrompt, "append system prompt"),
+				providedResolvedAppendPrompt !== undefined
+					? Promise.resolve(providedResolvedAppendPrompt)
+					: resolvePromptInput(appendSystemPrompt, "append system prompt"),
 				prepDefaults.resolvedAppendPrompt,
 			),
 			withDeadline(
@@ -662,7 +678,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];
-	const projectPrompt = resolvedCustomPrompt ? "" : prompt.render(projectPromptTemplate, data).trim();
+	// Custom prompt templates already render context files and append text; the
+	// project footer still carries environment, cwd, workspace, and dir-context.
+	const projectPrompt = prompt
+		.render(projectPromptTemplate, resolvedCustomPrompt ? { ...data, contextFiles: [], appendPrompt: "" } : data)
+		.trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
 	}
