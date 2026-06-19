@@ -377,7 +377,7 @@ export interface BuildSystemPromptOptions {
 	appendSystemPrompt?: string;
 	/** Already-loaded append prompt text; bypasses path resolution. */
 	resolvedAppendSystemPrompt?: string;
-	/** Inline full tool descriptors in the system prompt. Default: true */
+	/** Inline full tool descriptors in the system prompt. Default: false */
 	inlineToolDescriptors?: boolean;
 	/**
 	 * Whether provider-native tool calling is active (no owned/in-band syntax).
@@ -460,7 +460,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		model,
 		personality = "default",
 	} = options;
-	const inlineToolDescriptors = providedInlineToolDescriptors ?? true;
+	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
 
 	const prepDefaults = {
