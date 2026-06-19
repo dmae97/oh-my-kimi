@@ -1352,6 +1352,54 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("zero-handler fast path", () => {
+		it("skips context allocation and handler machinery for an unsubscribed event type, but still fires when subscribed", async () => {
+			// The fast path in ExtensionRunner.emit is event-type agnostic; the hot
+			// streaming events (message_update / tool_execution_*) traverse the same
+			// path. `turn_start` stands in as a subscribed event with a trivial payload.
+			const extCode = `
+				export default function(pi) {
+					pi.on("turn_start", async () => {
+						throw new Error("turn_start handler ran");
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "turn-start-handler.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			// createContext is the per-event allocation the fast path defers; spying on
+			// it (call-through preserved) proves the slow path is entered only when a
+			// handler exists for the emitted event type.
+			const createContextSpy = vi.spyOn(runner, "createContext");
+			const errors: Array<{ event: string; error: string }> = [];
+			runner.onError(err => {
+				errors.push({ event: err.event, error: err.error });
+			});
+
+			// No extension subscribes to `agent_start`: no context allocation, and the
+			// handler-timeout machinery is never entered.
+			await runner.emit({ type: "agent_start" });
+			expect(createContextSpy).not.toHaveBeenCalled();
+			expect(errors).toHaveLength(0);
+
+			// `turn_start` has a handler: context is allocated once and the handler runs
+			// (its throw surfaces via onError, proving #runHandlerWithTimeout executed).
+			await runner.emit({ type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+			expect(createContextSpy).toHaveBeenCalledTimes(1);
+			expect(errors).toHaveLength(1);
+			expect(errors[0]?.event).toBe("turn_start");
+			expect(errors[0]?.error).toContain("turn_start handler ran");
+		});
+	});
+
 	describe("credential_disabled", () => {
 		it("delivers credential_disabled events to subscribed extensions with the typed payload", async () => {
 			const eventsPath = path.join(tempDir.path(), "credential-disabled-events.jsonl");
