@@ -34,16 +34,19 @@ describe("detectCacheInvalidation", () => {
 		expect(detectCacheInvalidation(prev, current)).toEqual({ reprocessedTokens: 50_999 });
 	});
 
-	it("flags a second consecutive cold turn using the prior turn's cacheWrite as footprint", () => {
-		// The prior turn re-cached (cacheWrite) but read nothing; the next turn
-		// still reads nothing — a genuine repeat invalidation.
+	it("does not flag a cold turn whose predecessor only wrote the cache (never read it)", () => {
+		// The session's opening request writes the prefix (cacheRead 0); a long
+		// first tool call then outlives the provider's cache TTL, so the follow-up
+		// re-writes cold. The cache was never proven live, so this is expected
+		// warming/expiry — not a user-caused invalidation worth a marker right
+		// under the opening message.
 		const prev = usage({ cacheRead: 0, cacheWrite: 50_900, input: 99 });
 		const current = usage({ cacheRead: 0, cacheWrite: 51_113, input: 16 });
-		expect(detectCacheInvalidation(prev, current)).toEqual({ reprocessedTokens: 51_129 });
+		expect(detectCacheInvalidation(prev, current)).toBeUndefined();
 	});
 
 	it("does not flag a turn that reused any cache", () => {
-		const prev = usage({ cacheRead: 0, cacheWrite: 51_113, input: 16 });
+		const prev = usage({ cacheRead: 50_900, cacheWrite: 980 });
 		const current = usage({ cacheRead: 50_900, cacheWrite: 3_459, input: 2 });
 		expect(detectCacheInvalidation(prev, current)).toBeUndefined();
 	});
