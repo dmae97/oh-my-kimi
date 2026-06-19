@@ -522,3 +522,136 @@ describe("pruneToolOutputs — small-result floor", () => {
 		expect(resultMessage(bigResult).prunedAt).toBeDefined();
 	});
 });
+
+describe("cache-stable boundary — warm prefix protection", () => {
+	// (a) The primary bug: in pruneToolOutputs a superseded result bypasses the
+	// protect window and is rewritten at any depth. With the cache guard armed it
+	// must be left alone when it sits in the warm, already-sent cached prefix.
+	test("(a) deep superseded result is rewritten WITHOUT the guard but kept WITH it", () => {
+		const build = (): { entries: SessionEntry[]; result1: SessionMessageEntry; result2: SessionMessageEntry } => {
+			const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
+			const big = textEntry(BIG_TEXT, T0 + 500); // pushes result1 deep into the suffix
+			const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000); // tail, supersedes result1
+			return { entries: [call1, result1, big, call2, result2], result1, result2 };
+		};
+		const base = {
+			protectTokens: 1_000_000, // everything inside the (age) protect window
+			minimumSavings: 0,
+			protectedTools: [],
+			supersedeKey: readToolSupersedeKey,
+		};
+
+		// Legacy (no cacheWarmSuffixTokens): superseded result1 bypasses the window -> pruned.
+		const legacy = build();
+		const legacyRun = pruneToolOutputs(legacy.entries, base);
+		expect(legacyRun.prunedCount).toBe(1);
+		expect(resultText(legacy.result1)).toBe(SUPERSEDED_NOTICE);
+
+		// Guard armed: result1's all-message suffix (BIG_TEXT + call2 + result2) far
+		// exceeds the window, so it is part of the warm cached prefix and is kept.
+		const guarded = build();
+		const guardedRun = pruneToolOutputs(guarded.entries, { ...base, cacheWarmSuffixTokens: 200 });
+		expect(guardedRun.prunedCount).toBe(0);
+		expect(resultText(guarded.result1)).toBe(FILE_CONTENT);
+		expect(resultMessage(guarded.result1).prunedAt).toBeUndefined();
+	});
+
+	test("(a) deep useless result is kept when the cache guard is armed", () => {
+		const [call1, result1] = uselessPair("search", NO_MATCH_TEXT, T0);
+		const big = textEntry(BIG_TEXT, T0 + 500);
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, big, call2, result2];
+
+		const result = pruneToolOutputs(entries, {
+			protectTokens: 1_000_000,
+			minimumSavings: 0,
+			protectedTools: [],
+			pruneUseless: true,
+			cacheWarmSuffixTokens: 200,
+		});
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(NO_MATCH_TEXT);
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+		expect(resultText(result2)).toBe(FILE_CONTENT);
+	});
+
+	// (b) The legit case must still fire: a superseded copy in the cheap-to-recache
+	// tail (suffix below the window) is still reclaimed.
+	test("(b) tail-case superseded result still prunes with the guard armed", () => {
+		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneToolOutputs(entries, {
+			protectTokens: 1_000_000,
+			minimumSavings: 0,
+			protectedTools: [],
+			supersedeKey: readToolSupersedeKey,
+			cacheWarmSuffixTokens: 100_000, // result1's suffix is far below this -> tail -> prunable
+		});
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(SUPERSEDED_NOTICE);
+		expect(resultText(result2)).toBe(FILE_CONTENT);
+	});
+
+	test("(b) supersede pass still prunes the tail case with keepBoundaryId set", () => {
+		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneSupersededToolResults(entries, cfg({ keepBoundaryId: call1.id, now: T0 + 1_000 }));
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(SUPERSEDED_NOTICE);
+		expect(resultText(result2)).toBe(FILE_CONTENT);
+	});
+
+	// (c) Entries before firstKeptEntryId are summarized away — never sent — so no
+	// pass may mutate them, not even the idle full-flush.
+	test("(c) idle flush never mutates entries before keepBoundaryId", () => {
+		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0); // idx 0,1 — before boundary
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000); // idx 2,3 — boundary at call2
+		const [call3, result3] = readPair("src/foo.ts", FILE_CONTENT, T0 + 2_000); // idx 4,5 — latest
+		const big = textEntry(BIG_TEXT, T0 + 3_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2, call3, result3, big];
+
+		// Cold cache (idle > threshold) with suffixTokenLimit 0: only the idle path can fire.
+		const result = pruneSupersededToolResults(
+			entries,
+			cfg({
+				keepBoundaryId: call2.id,
+				suffixTokenLimit: 0,
+				idleFlushMs: 30 * 60_000,
+				now: T0 + 3_000 + 31 * 60_000,
+			}),
+		);
+
+		expect(result.prunedCount).toBe(1);
+		expect(resultText(result1)).toBe(FILE_CONTENT); // before boundary -> untouched
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+		expect(resultText(result2)).toBe(SUPERSEDED_NOTICE); // at/after boundary -> flushed
+		expect(resultText(result3)).toBe(FILE_CONTENT); // latest -> kept
+	});
+
+	test("(c) pruneToolOutputs never mutates entries before keepBoundaryId", () => {
+		const [call1, result1] = readPair("src/old.ts", FILE_CONTENT, T0); // idx 0,1 — before boundary
+		const [call2, result2] = readPair("src/new.ts", FILE_CONTENT, T0 + 1_000); // idx 2,3 — boundary at call2
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		// protectTokens 0 -> the age path would prune both; the window is wide so the
+		// guard does not protect either; only keepBoundaryId shields result1.
+		pruneToolOutputs(entries, {
+			protectTokens: 0,
+			minimumSavings: 0,
+			protectedTools: [],
+			keepBoundaryId: call2.id,
+			cacheWarmSuffixTokens: 1_000_000,
+		});
+
+		expect(resultText(result1)).toBe(FILE_CONTENT); // before boundary -> untouched
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+		expect(resultMessage(result2).prunedAt).toBeDefined(); // at/after boundary, in tail -> pruned
+	});
+});
