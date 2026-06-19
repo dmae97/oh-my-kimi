@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Migrated legacy macOS power settings to a single sleep prevention enum
@@ -10,13 +11,7 @@
 ### Fixed
 
 - Cache-miss marker no longer fires on providers with implicit, best-effort prompt caching (Google/Gemini, OpenAI, Fireworks). Those report `cacheWrite: 0` and drop `cacheRead` to zero intermittently as routine propagation noise that self-heals the next turn. Only explicit, prefix-controlled caches (Anthropic/Bedrock `cache_control`), which re-create the prefix on a cold turn as `cacheWrite > 0`, now surface a marker — where a zero `cacheRead` genuinely means the prefix broke.
-
-### Fixed
-
 - Fixed advisor dependent settings staying visible while `advisor.enabled` is off ([#3027](https://github.com/can1357/oh-my-pi/issues/3027)).
-
-### Fixed
-
 - Fixed LSP servers that dynamically register capabilities, including Expert, hanging semantic requests after `client/registerCapability` was rejected ([#3029](https://github.com/can1357/oh-my-pi/issues/3029)).
 
 ## [16.1.0] - 2026-06-19
