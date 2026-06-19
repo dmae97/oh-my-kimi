@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded the `TempDir` Windows retry window from 4×10ms to 40×25ms (1s total) to accommodate SQLite WAL/SHM file handle release delays
+
 ## [16.0.11] - 2026-06-19
 
 ### Removed
 
 - Removed `getIndentation`, `setDefaultTabWidth`, and `getDefaultTabWidth` helpers
-
 ## [16.0.8] - 2026-06-18
 
 ### Changed

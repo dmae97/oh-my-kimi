@@ -1,9 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import {
 	classifyGroupedLines,
 	formatGroupedFiles,
 	groupLineIndicesByBlank,
 } from "@oh-my-pi/pi-coding-agent/tools/grouped-file-output";
+
+const REPO_ROOT = path.resolve("repo");
+const OUTSIDE_DIR = path.resolve(path.parse(REPO_ROOT).root, "outside", "dir");
+
+function toGroupedHeaderPath(filePath: string): string {
+	return filePath.split(path.sep).join("/");
+}
 
 describe("formatGroupedFiles", () => {
 	it("nests subdirectories with deeper headings and blank-separates top groups", () => {
@@ -38,30 +46,37 @@ describe("formatGroupedFiles", () => {
 describe("classifyGroupedLines", () => {
 	it("reconstructs absolute paths across a nested directory stack", () => {
 		const lines = ["# pkg/ai/", "## CHANGELOG.md", "  match", "## src/util/", "### x.ts", "*12│const y = 1;"];
-		const ctx = classifyGroupedLines(lines, "/repo");
+		const ctx = classifyGroupedLines(lines, REPO_ROOT);
 
-		expect(ctx[0]).toMatchObject({ kind: "dir", headerPath: "/repo/pkg/ai" });
-		expect(ctx[1]).toMatchObject({ kind: "file", headerPath: "/repo/pkg/ai/CHANGELOG.md" });
-		expect(ctx[2]).toMatchObject({ kind: "content", filePath: "/repo/pkg/ai/CHANGELOG.md" });
+		expect(ctx[0]).toMatchObject({ kind: "dir", headerPath: path.join(REPO_ROOT, "pkg", "ai") });
+		expect(ctx[1]).toMatchObject({ kind: "file", headerPath: path.join(REPO_ROOT, "pkg", "ai", "CHANGELOG.md") });
+		expect(ctx[2]).toMatchObject({ kind: "content", filePath: path.join(REPO_ROOT, "pkg", "ai", "CHANGELOG.md") });
 		// `src/util/` is a folded subdirectory chain under `pkg/ai/`, not the root.
-		expect(ctx[3]).toMatchObject({ kind: "dir", headerPath: "/repo/pkg/ai/src/util" });
-		expect(ctx[4]).toMatchObject({ kind: "file", headerPath: "/repo/pkg/ai/src/util/x.ts" });
-		expect(ctx[5]).toMatchObject({ kind: "content", filePath: "/repo/pkg/ai/src/util/x.ts" });
+		expect(ctx[3]).toMatchObject({ kind: "dir", headerPath: path.join(REPO_ROOT, "pkg", "ai", "src", "util") });
+		expect(ctx[4]).toMatchObject({
+			kind: "file",
+			headerPath: path.join(REPO_ROOT, "pkg", "ai", "src", "util", "x.ts"),
+		});
+		expect(ctx[5]).toMatchObject({
+			kind: "content",
+			filePath: path.join(REPO_ROOT, "pkg", "ai", "src", "util", "x.ts"),
+		});
 	});
 
 	it("keeps an absolute folded prefix instead of joining it onto the search base", () => {
-		const ctx = classifyGroupedLines(["# /outside/dir/", "## file.txt"], "/repo");
-		expect(ctx[0]).toMatchObject({ kind: "dir", headerPath: "/outside/dir" });
-		expect(ctx[1]).toMatchObject({ kind: "file", headerPath: "/outside/dir/file.txt" });
+		const ctx = classifyGroupedLines([`# ${toGroupedHeaderPath(OUTSIDE_DIR)}/`, "## file.txt"], REPO_ROOT);
+		expect(ctx[0]).toMatchObject({ kind: "dir", headerPath: OUTSIDE_DIR });
+		expect(ctx[1]).toMatchObject({ kind: "file", headerPath: path.join(OUTSIDE_DIR, "file.txt") });
 	});
 
 	it("links body lines before any header to the single-file search base", () => {
-		const ctx = classifyGroupedLines(["*7│needle();"], "/repo/file.ts");
-		expect(ctx[0]).toMatchObject({ kind: "content", filePath: "/repo/file.ts" });
+		const searchBase = path.join(REPO_ROOT, "file.ts");
+		const ctx = classifyGroupedLines(["*7│needle();"], searchBase);
+		expect(ctx[0]).toMatchObject({ kind: "content", filePath: searchBase });
 	});
 
 	it("flags url-like headers for caller-side resolution without a filesystem path", () => {
-		const ctx = classifyGroupedLines(["# omp://docs/", "  body"], "/repo");
+		const ctx = classifyGroupedLines(["# omp://docs/", "  body"], REPO_ROOT);
 		expect(ctx[0]).toMatchObject({ kind: "file", isUrl: true });
 		expect(ctx[0]?.headerPath).toBeUndefined();
 	});

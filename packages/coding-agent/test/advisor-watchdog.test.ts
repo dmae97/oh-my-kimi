@@ -1,64 +1,66 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("advisor watchdog prompt discovery", () => {
-	const tempDirs: string[] = [];
+	const tempDirs: TempDir[] = [];
 
-	afterEach(() => {
+	afterEach(async () => {
+		await Bun.sleep(0);
 		for (const tempDir of tempDirs.splice(0)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			await tempDir.remove();
 		}
 	});
 
 	it("discovers and appends WATCHDOG.md to the advisor prompt", async () => {
-		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-advisor-watchdog-${Snowflake.next()}-`));
+		const tempDir = TempDir.createSync("@pi-advisor-watchdog-");
 		tempDirs.push(tempDir);
-		const cwd = path.join(tempDir, "project-root");
+		const cwd = tempDir.join("project-root");
 		fs.mkdirSync(cwd, { recursive: true });
 
 		// Write a WATCHDOG.md file
 		const watchdogContent = "Watchdog rule: Watch out for cheating on edits.";
 		fs.writeFileSync(path.join(cwd, "WATCHDOG.md"), watchdogContent, "utf8");
 
-		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage);
-
-		const sessionManager = SessionManager.create(cwd, path.join(tempDir, "sessions"));
-		const { session } = await createAgentSession({
-			cwd,
-			agentDir: tempDir,
-			sessionManager,
-			authStorage,
-			modelRegistry,
-			settings: (() => {
-				const s = Settings.isolated({
-					"async.enabled": false,
-					"advisor.enabled": true,
-				});
-				s.setModelRole("advisor", "openai/gpt-4o-mini");
-				return s;
-			})(),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
+		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
+		let session: AgentSession | undefined;
 		try {
+			authStorage.setRuntimeApiKey("openai", "test-key");
+			const modelRegistry = new ModelRegistry(authStorage);
+			const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
+			const result = await createAgentSession({
+				cwd,
+				agentDir: tempDir.path(),
+				sessionManager,
+				authStorage,
+				modelRegistry,
+				settings: (() => {
+					const s = Settings.isolated({
+						"async.enabled": false,
+						"advisor.enabled": true,
+					});
+					s.setModelRole("advisor", "openai/gpt-4o-mini");
+					return s;
+				})(),
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			session = result.session;
+
 			expect(session.isAdvisorActive()).toBe(true);
 			const dump = session.formatAdvisorHistoryAsText();
 			expect(dump).not.toBeNull();
@@ -67,14 +69,18 @@ describe("advisor watchdog prompt discovery", () => {
 			expect(dump).toContain(watchdogContent);
 			expect(dump).toContain("</attention>");
 		} finally {
-			await session.dispose();
+			try {
+				await session?.dispose();
+			} finally {
+				authStorage.close();
+			}
 		}
 	});
 
 	it("resolves nested folders and sorts by depth", async () => {
-		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-advisor-watchdog-${Snowflake.next()}-`));
+		const tempDir = TempDir.createSync("@pi-advisor-watchdog-");
 		tempDirs.push(tempDir);
-		const parentCwd = path.join(tempDir, "project-root");
+		const parentCwd = tempDir.join("project-root");
 		const childCwd = path.join(parentCwd, "subfolder");
 		fs.mkdirSync(childCwd, { recursive: true });
 
@@ -84,36 +90,37 @@ describe("advisor watchdog prompt discovery", () => {
 		fs.writeFileSync(path.join(parentCwd, "WATCHDOG.md"), parentWatchdogContent, "utf8");
 		fs.writeFileSync(path.join(childCwd, "WATCHDOG.md"), childWatchdogContent, "utf8");
 
-		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage);
-
-		const sessionManager = SessionManager.create(childCwd, path.join(tempDir, "sessions"));
-		const { session } = await createAgentSession({
-			cwd: childCwd,
-			agentDir: tempDir,
-			sessionManager,
-			authStorage,
-			modelRegistry,
-			settings: (() => {
-				const s = Settings.isolated({
-					"async.enabled": false,
-					"advisor.enabled": true,
-				});
-				s.setModelRole("advisor", "openai/gpt-4o-mini");
-				return s;
-			})(),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
+		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
+		let session: AgentSession | undefined;
 		try {
+			authStorage.setRuntimeApiKey("openai", "test-key");
+			const modelRegistry = new ModelRegistry(authStorage);
+			const sessionManager = SessionManager.create(childCwd, tempDir.join("sessions"));
+			const result = await createAgentSession({
+				cwd: childCwd,
+				agentDir: tempDir.path(),
+				sessionManager,
+				authStorage,
+				modelRegistry,
+				settings: (() => {
+					const s = Settings.isolated({
+						"async.enabled": false,
+						"advisor.enabled": true,
+					});
+					s.setModelRole("advisor", "openai/gpt-4o-mini");
+					return s;
+				})(),
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			session = result.session;
+
 			expect(session.isAdvisorActive()).toBe(true);
 			const dump = session.formatAdvisorHistoryAsText();
 			expect(dump).not.toBeNull();
@@ -130,16 +137,20 @@ describe("advisor watchdog prompt discovery", () => {
 			expect(childIndex).toBeGreaterThan(-1);
 			expect(parentIndex).toBeLessThan(childIndex);
 		} finally {
-			await session.dispose();
+			try {
+				await session?.dispose();
+			} finally {
+				authStorage.close();
+			}
 		}
 	});
 
 	it("discovers user-level and native project-level watchdog files", async () => {
-		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-advisor-watchdog-${Snowflake.next()}-`));
+		const tempDir = TempDir.createSync("@pi-advisor-watchdog-");
 		tempDirs.push(tempDir);
-		const cwd = path.join(tempDir, "project-root");
+		const cwd = tempDir.join("project-root");
 		const ompDir = path.join(cwd, ".omp");
-		const userAgentDir = path.join(tempDir, "user-agent");
+		const userAgentDir = tempDir.join("user-agent");
 		fs.mkdirSync(cwd, { recursive: true });
 		fs.mkdirSync(ompDir, { recursive: true });
 		fs.mkdirSync(userAgentDir, { recursive: true });
@@ -152,36 +163,37 @@ describe("advisor watchdog prompt discovery", () => {
 		fs.writeFileSync(path.join(ompDir, "WATCHDOG.md"), nativeWatchdogContent, "utf8");
 		fs.writeFileSync(path.join(cwd, "WATCHDOG.md"), standaloneWatchdogContent, "utf8");
 
-		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		authStorage.setRuntimeApiKey("openai", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage);
-
-		const sessionManager = SessionManager.create(cwd, path.join(tempDir, "sessions"));
-		const { session } = await createAgentSession({
-			cwd,
-			agentDir: userAgentDir,
-			sessionManager,
-			authStorage,
-			modelRegistry,
-			settings: (() => {
-				const s = Settings.isolated({
-					"async.enabled": false,
-					"advisor.enabled": true,
-				});
-				s.setModelRole("advisor", "openai/gpt-4o-mini");
-				return s;
-			})(),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
+		const authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
+		let session: AgentSession | undefined;
 		try {
+			authStorage.setRuntimeApiKey("openai", "test-key");
+			const modelRegistry = new ModelRegistry(authStorage);
+			const sessionManager = SessionManager.create(cwd, tempDir.join("sessions"));
+			const result = await createAgentSession({
+				cwd,
+				agentDir: userAgentDir,
+				sessionManager,
+				authStorage,
+				modelRegistry,
+				settings: (() => {
+					const s = Settings.isolated({
+						"async.enabled": false,
+						"advisor.enabled": true,
+					});
+					s.setModelRole("advisor", "openai/gpt-4o-mini");
+					return s;
+				})(),
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+			});
+			session = result.session;
+
 			expect(session.isAdvisorActive()).toBe(true);
 			const dump = session.formatAdvisorHistoryAsText();
 			expect(dump).not.toBeNull();
@@ -204,7 +216,11 @@ describe("advisor watchdog prompt discovery", () => {
 			expect(userIndex).toBeLessThan(nativeIndex);
 			expect(userIndex).toBeLessThan(standaloneIndex);
 		} finally {
-			await session.dispose();
+			try {
+				await session?.dispose();
+			} finally {
+				authStorage.close();
+			}
 		}
 	});
 });

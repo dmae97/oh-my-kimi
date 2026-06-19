@@ -1,27 +1,29 @@
 import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { mkdirSync } from "node:fs";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { computeMnemopiBankScope, extendRecallWithLegacyBanks } from "@oh-my-pi/pi-coding-agent/mnemopi/config";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 // Set up a fixture filesystem we can reuse across the two regression
 // suites — same shape as `~/.omp/memories/mnemopi/` on a real install.
-let rootDir: string;
+let rootDir: TempDir;
 let dbDir: string;
 let banksDir: string;
 let mainDbPath: string;
 
 beforeAll(async () => {
-	rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mnemopi-bank-derivation-"));
-	dbDir = path.join(rootDir, "mnemopi");
+	rootDir = await TempDir.create("@mnemopi-bank-derivation-");
+	dbDir = rootDir.join("mnemopi");
 	banksDir = path.join(dbDir, "banks");
 	await fs.mkdir(banksDir, { recursive: true });
 	mainDbPath = path.join(dbDir, "mnemopi.db");
 });
 
 afterAll(async () => {
-	if (rootDir) await fs.rm(rootDir, { recursive: true, force: true });
+	await Bun.sleep(0);
+	await rootDir.remove();
 });
 
 // Schema mirrors the subset of `packages/mnemopi/src/core/beam/schema.ts`
@@ -30,7 +32,7 @@ afterAll(async () => {
 function createBankFixture(bank: string, metadataRows: readonly Record<string, unknown>[]): void {
 	const bankDir = path.join(banksDir, bank);
 	const dbPath = path.join(bankDir, "mnemopi.db");
-	require("node:fs").mkdirSync(bankDir, { recursive: true });
+	mkdirSync(bankDir, { recursive: true });
 	const db = new Database(dbPath, { create: true });
 	try {
 		db.exec(`
@@ -56,25 +58,26 @@ describe("computeMnemopiBankScope (#2412)", () => {
 	// disappearing/appearing ancestor `.git` repointed the same conversation
 	// directory to a different bank and stranded its memories.
 	it("returns the same per-project bank for one cwd regardless of git state", async () => {
-		const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mnemopi-stable-bank-"));
+		const baseDir = await TempDir.create("@mnemopi-stable-bank-");
 		try {
-			const project = path.join(baseDir, "projects", "omp-workstation");
+			const project = baseDir.join("projects", "omp-workstation");
 			await fs.mkdir(project, { recursive: true });
 			const withoutGit = computeMnemopiBankScope(undefined, project, "per-project").bank;
 
 			// Plant an ancestor `.git` marker — the old code path resolved
 			// `project` to `baseDir/projects` via this file, producing a
 			// `projects-<hash>` bank id distinct from the cwd-derived one.
-			await fs.mkdir(path.join(baseDir, "projects"), { recursive: true });
-			await fs.writeFile(path.join(baseDir, "projects", ".git"), "gitdir: /dev/null\n");
+			await fs.mkdir(baseDir.join("projects"), { recursive: true });
+			await fs.writeFile(baseDir.join("projects", ".git"), "gitdir: /dev/null\n");
 			const withAncestorGit = computeMnemopiBankScope(undefined, project, "per-project").bank;
 			expect(withAncestorGit).toBe(withoutGit);
 
-			await fs.rm(path.join(baseDir, "projects", ".git"));
+			await fs.rm(baseDir.join("projects", ".git"));
 			const afterGitRemoved = computeMnemopiBankScope(undefined, project, "per-project").bank;
 			expect(afterGitRemoved).toBe(withoutGit);
 		} finally {
-			await fs.rm(baseDir, { recursive: true, force: true });
+			await Bun.sleep(0);
+			await baseDir.remove();
 		}
 	});
 
@@ -101,9 +104,9 @@ describe("computeMnemopiBankScope (#2412)", () => {
 
 describe("extendRecallWithLegacyBanks (#2412)", () => {
 	it("adds a sibling bank only when all working_memory rows tag the active cwd", () => {
-		const activeCwd = "/home/user/projects/myrepo";
+		const activeCwd = path.join(rootDir.path(), "projects", "myrepo");
 		createBankFixture("legacy-A", [{ session_id: "old", cwd: activeCwd }]);
-		createBankFixture("unrelated-B", [{ session_id: "other", cwd: "/some/other/place" }]);
+		createBankFixture("unrelated-B", [{ session_id: "other", cwd: path.join(rootDir.path(), "other", "place") }]);
 		const extended = extendRecallWithLegacyBanks(["active-bank"], mainDbPath, activeCwd);
 		expect(extended).toContain("active-bank");
 		expect(extended).toContain("legacy-A");
@@ -111,22 +114,26 @@ describe("extendRecallWithLegacyBanks (#2412)", () => {
 	});
 
 	it("skips mixed-cwd legacy banks because recall cannot filter rows by cwd", () => {
-		const activeCwd = "/home/user/projects/safe-child";
-		createBankFixture("mixed-cwd-legacy", [{ cwd: activeCwd }, { cwd: "/home/user/projects/sibling-child" }]);
-		const extended = extendRecallWithLegacyBanks(["active-bank"], mainDbPath, activeCwd);
-		expect(extended).toContain("active-bank");
+		const childCwd = path.join(rootDir.path(), "projects", "safe-child");
+		createBankFixture("mixed-cwd-legacy", [
+			{ cwd: childCwd },
+			{ cwd: path.join(rootDir.path(), "projects", "sibling-child") },
+		]);
+		const extended = extendRecallWithLegacyBanks(["active-bank"], mainDbPath, childCwd);
 		expect(extended).not.toContain("mixed-cwd-legacy");
 	});
+});
 
+describe("extendRecallWithLegacyBanks edge cases", () => {
 	it("ignores banks already in the recall set", () => {
-		const cwd = "/home/user/projects/already-in-set";
+		const cwd = path.join(rootDir.path(), "projects", "already-in-set");
 		createBankFixture("already-in-set", [{ cwd }]);
 		const extended = extendRecallWithLegacyBanks(["already-in-set"], mainDbPath, cwd);
 		expect(extended).toEqual(["already-in-set"]);
 	});
 
 	it("returns the input unchanged when banks/ does not exist", () => {
-		const missingRoot = path.join(rootDir, "no-such-mnemopi", "mnemopi.db");
+		const missingRoot = rootDir.join("no-such-mnemopi", "mnemopi.db");
 		const out = extendRecallWithLegacyBanks(["one"], missingRoot, "/home/user/anywhere");
 		expect(out).toEqual(["one"]);
 	});
@@ -135,7 +142,7 @@ describe("extendRecallWithLegacyBanks (#2412)", () => {
 		const corruptDir = path.join(banksDir, "corrupt-C");
 		await fs.mkdir(corruptDir, { recursive: true });
 		await fs.writeFile(path.join(corruptDir, "mnemopi.db"), "not a sqlite file");
-		const out = extendRecallWithLegacyBanks(["active"], mainDbPath, "/some/cwd");
+		const out = extendRecallWithLegacyBanks(["active"], mainDbPath, path.join(rootDir.path(), "some", "cwd"));
 		expect(out).toContain("active");
 		expect(out).not.toContain("corrupt-C");
 	});

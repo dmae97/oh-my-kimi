@@ -125,12 +125,19 @@ describe("AgentSession auto-compaction queue resume", () => {
 	});
 
 	afterEach(async () => {
-		await session.dispose();
-		authStorage.close();
-		tempDir.removeSync();
-		vi.useRealTimers();
-		getRuntimeSignals().length = 0;
-		vi.restoreAllMocks();
+		try {
+			await session?.dispose();
+		} finally {
+			try {
+				authStorage?.close();
+				vi.useRealTimers();
+				await Bun.sleep(0);
+				await tempDir?.remove();
+			} finally {
+				getRuntimeSignals().length = 0;
+				vi.restoreAllMocks();
+			}
+		}
 	});
 
 	it("resumes after threshold compaction when only agent-level queued messages exist", async () => {

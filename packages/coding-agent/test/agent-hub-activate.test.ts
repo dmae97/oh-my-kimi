@@ -4,6 +4,7 @@
  * focus failure keeps the hub open and surfaces the error as a notice.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
@@ -16,6 +17,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const AGENT_ID = "Worker";
+const TEST_CWD = path.resolve("agent-hub-cwd");
 
 function makeHub(focusAgent: (id: string) => Promise<void>) {
 	const agents = new AgentRegistry();
@@ -89,9 +91,10 @@ describe("Agent hub Enter activation", () => {
 
 	it("lists persisted subagent session files after restart", async () => {
 		using tempDir = TempDir.createSync("@omp-agent-hub-persisted-");
-		const sessionFile = `${tempDir.path()}/main.jsonl`;
+		const sessionFile = path.join(tempDir.path(), "main.jsonl");
+		const workerSessionFile = path.join(tempDir.path(), "main", "Worker.jsonl");
 		await Bun.write(sessionFile, "");
-		await Bun.write(`${tempDir.path()}/main/Worker.jsonl`, "");
+		await Bun.write(workerSessionFile, "");
 		const agents = new AgentRegistry();
 		const hub = new AgentHubOverlayComponent({
 			observers: new SessionObserverRegistry(),
@@ -107,7 +110,7 @@ describe("Agent hub Enter activation", () => {
 		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
 		expect(rendered).toContain("Worker");
 		expect(rendered).toContain("parked");
-		expect(agents.get("Worker")?.sessionFile).toBe(`${tempDir.path()}/main/Worker.jsonl`);
+		expect(agents.get("Worker")?.sessionFile).toBe(workerSessionFile);
 		hub.dispose();
 	});
 
@@ -154,7 +157,7 @@ describe("Agent hub Enter activation", () => {
 				focusResolved.resolve();
 			},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => "/tmp", getSessionFile: () => null },
+			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
@@ -203,7 +206,7 @@ describe("Agent hub double-← gating", () => {
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async () => {},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => "/tmp", getSessionFile: () => null },
+			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
