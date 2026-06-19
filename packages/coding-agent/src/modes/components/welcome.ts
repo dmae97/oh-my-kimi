@@ -32,13 +32,33 @@ export const WELCOME_LSP_SLOTS = 4;
 /** Trailing marker that flags a tip as a "what's new" callout. Stripped before
  *  wrapping (with any preceding whitespace) and replaced by {@link NEW_TAG_TEXT}
  *  painted as a shimmering rainbow. Non-global so `.test` stays stateless. */
-const NEW_TIP_MARKER = /\s*\[NEW\]$/;
+const NEW_TIP_MARKER = /\s*\[NEW\]\s*$/;
 
 /** Visible text rendered in place of {@link NEW_TIP_MARKER}. */
 const NEW_TAG_TEXT = "NEW!";
 
 /** Milliseconds for one full hue rotation of the rainbow "NEW!" tag. */
 const NEW_GLOW_PERIOD_MS = 1500;
+
+/** Selection weight for "[NEW]" tips; ordinary tips weigh 1, so a freshly added
+ *  affordance surfaces this many times as often. */
+const NEW_TIP_WEIGHT = 4;
+
+/** Per-tip selection weights, parallel to {@link TIPS}. */
+const TIP_WEIGHTS: readonly number[] = TIPS.map(tip => (NEW_TIP_MARKER.test(tip) ? NEW_TIP_WEIGHT : 1));
+const TIP_WEIGHT_TOTAL = TIP_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+
+/** Pick a tip at random, biased toward "[NEW]" tips by {@link NEW_TIP_WEIGHT}.
+ *  Returns "" when no tips are embedded. */
+function pickWeightedTip(): string {
+	if (TIPS.length === 0) return "";
+	let r = Math.random() * TIP_WEIGHT_TOTAL;
+	for (let i = 0; i < TIPS.length; i++) {
+		r -= TIP_WEIGHTS[i] ?? 1;
+		if (r < 0) return TIPS[i] ?? "";
+	}
+	return TIPS[TIPS.length - 1] ?? "";
+}
 
 type ColorEncoding = "ansi-16m" | "ansi-256";
 
@@ -142,7 +162,7 @@ export class WelcomeComponent implements Component {
 			if (theme.getSymbolPreset() === "unicode" && Math.random() < 0.1) {
 				this.#selectedTip = "Please use nerdfont 😭.";
 			} else {
-				this.#selectedTip = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : "";
+				this.#selectedTip = pickWeightedTip();
 			}
 		}
 		return this.#selectedTip || undefined;
