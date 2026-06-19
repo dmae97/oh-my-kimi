@@ -66,6 +66,12 @@ describe("Settings", () => {
 			expect(settings.get("tui.maxInlineImages")).toBe(8);
 		});
 
+		it("keeps native terminal progress disabled by default", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("terminal.showProgress")).toBe(false);
+			expect(getDefault("terminal.showProgress")).toBe(false);
+		});
+
 		it("keeps the normal startup splash disabled by default", async () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			expect(settings.get("startup.showSplash")).toBe(false);
@@ -243,6 +249,17 @@ describe("Settings", () => {
 			expect(savedSettings.defaultThinkingLevel).toBe(Effort.High);
 			expect(savedSettings.theme).toEqual({ dark: "anthracite" });
 			expect((savedSettings.modelRoles as { default?: string } | undefined)?.default).toBe("claude-sonnet");
+		});
+
+		it("persists native terminal progress only after the user changes it", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(await readSettings()).toEqual({});
+
+			settings.set("terminal.showProgress", true);
+			await settings.flush();
+
+			const savedSettings = await readSettings();
+			expect(savedSettings.terminal).toEqual({ showProgress: true });
 		});
 
 		it("filters model allow-list and disabled providers by current path prefix", async () => {

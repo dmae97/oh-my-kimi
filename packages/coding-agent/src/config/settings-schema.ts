@@ -772,6 +772,17 @@ export const SETTINGS_SCHEMA = {
 			"Maximum number of inline images kept as live terminal graphics (default 8). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
 	},
 
+	"terminal.showProgress": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Native Terminal Progress",
+			description: "Emit OSC 9;4 indeterminate progress while the agent or context maintenance is running",
+		},
+	},
+
 	"tui.textSizing": {
 		type: "boolean",
 		default: false,

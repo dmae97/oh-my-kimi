@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an Appearance setting for OSC 9;4 native terminal progress indicators during active agent turns and context maintenance.
+
 ## [16.1.3] - 2026-06-19
 
 ### Changed
