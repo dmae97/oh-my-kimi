@@ -741,6 +741,45 @@ describe("AuthStorage OAuth login upgrade and multi-account coexistence", () => 
 			authStorage.close();
 		}
 	});
+
+	it("keeps existing API keys active when a provider login adds another key", async () => {
+		if (!tempDir) throw new Error("test setup failed");
+
+		const dbPath = path.join(tempDir, "api-key-rotation.db");
+		const authStorage = await AuthStorage.create(dbPath);
+		const prompts = ["nvapi-first", "nvapi-second"];
+		registerOAuthProvider({
+			id: "unit-api-key-rotation",
+			name: "Unit API Key Rotation",
+			sourceId: "auth-storage-login-upgrade-test",
+			login: async ({ onPrompt }) => onPrompt?.({ message: "Paste API key" }) ?? "",
+		});
+
+		try {
+			await authStorage.login("unit-api-key-rotation", {
+				onAuth: () => {},
+				onPrompt: async () => prompts.shift() ?? "",
+			});
+			await authStorage.login("unit-api-key-rotation", {
+				onAuth: () => {},
+				onPrompt: async () => prompts.shift() ?? "",
+			});
+
+			expect(authStorage.listStoredCredentials("unit-api-key-rotation").map(entry => entry.credential)).toEqual([
+				{ type: "api_key", key: "nvapi-first" },
+				{ type: "api_key", key: "nvapi-second" },
+			]);
+
+			const selectedKeys = new Set<string>();
+			for (let index = 0; index < 64; index += 1) {
+				const key = await authStorage.getApiKey("unit-api-key-rotation", `session-${index}`);
+				if (key) selectedKeys.add(key);
+			}
+			expect(selectedKeys).toEqual(new Set(["nvapi-first", "nvapi-second"]));
+		} finally {
+			authStorage.close();
+		}
+	});
 });
 
 describe("AuthStorage persistent session stickiness", () => {
