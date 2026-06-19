@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.0] - 2026-06-19
+
 ### Added
 
 - Added `historyBlocks(archive)` to reconstruct ordered history blocks from archive data
