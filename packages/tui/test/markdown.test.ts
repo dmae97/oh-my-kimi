@@ -752,6 +752,73 @@ again, hello world`,
 		});
 	});
 
+	describe("Custom section dividers", () => {
+		it("should render Unicode light line ───────────── as a horizontal rule with ─", () => {
+			const unicodeTheme = {
+				...defaultMarkdownTheme,
+				symbols: {
+					...defaultMarkdownTheme.symbols,
+					hrChar: "─",
+				},
+			};
+			const markdown = new Markdown("─────────────", 0, 0, unicodeTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines[0]).toBe("─".repeat(80));
+		});
+
+		it("should render double line ============ as a horizontal rule with =", () => {
+			const markdown = new Markdown("============", 0, 0, defaultMarkdownTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines[0]).toBe("=".repeat(80));
+		});
+
+		it("should render em dash line ——— as a horizontal rule with —", () => {
+			const unicodeTheme = {
+				...defaultMarkdownTheme,
+				symbols: {
+					...defaultMarkdownTheme.symbols,
+					hrChar: "─",
+				},
+			};
+			const markdown = new Markdown("———", 0, 0, unicodeTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines[0]).toBe("—".repeat(80));
+		});
+
+		it("should render em dash line ——— as a horizontal rule with - in ASCII theme", () => {
+			const asciiTheme = {
+				...defaultMarkdownTheme,
+				symbols: {
+					...defaultMarkdownTheme.symbols,
+					hrChar: "-",
+				},
+			};
+			const markdown = new Markdown("———", 0, 0, asciiTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines[0]).toBe("-".repeat(80));
+		});
+
+		it("should preserve Setext H1 headings for Title\\n===", () => {
+			const markdown = new Markdown("Title\n===", 0, 0, defaultMarkdownTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines.some(line => line.includes("Title"))).toBeTruthy();
+			expect(plainLines.includes("=".repeat(80))).toBeFalsy();
+		});
+
+		it("should preserve Setext H2 headings for Title\\n---", () => {
+			const markdown = new Markdown("Title\n---", 0, 0, defaultMarkdownTheme);
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			expect(plainLines.some(line => line.includes("Title"))).toBeTruthy();
+			expect(plainLines.includes("─".repeat(80))).toBeFalsy();
+		});
+	});
+
 	describe("Spacing after headings", () => {
 		it("should have only one blank line between heading and following paragraph", () => {
 			const markdown = new Markdown(

@@ -222,6 +222,56 @@ markdownParser.setOptions({
 // never math. Inline extensions run before marked's escape tokenizer, so
 // `\(…\)` becomes math while a genuinely escaped `\$` is left to `escape` and
 // renders as a literal dollar.
+const CUSTOM_HR_START_REGEX = /(?:^|\n) {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+const CUSTOM_HR_TOKENIZER_REGEX = /^ {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+
+function getHrChar(char: string, hrChar: string): string {
+	const isAscii = hrChar === "-";
+	switch (char) {
+		case "=":
+			return "=";
+		case "═":
+			return isAscii ? "=" : "═";
+		case "━":
+			return isAscii ? "-" : "━";
+		case "─":
+			return isAscii ? "-" : "─";
+		case "–":
+			return isAscii ? "-" : "–";
+		case "—":
+			return isAscii ? "-" : "—";
+		default:
+			return hrChar;
+	}
+}
+
+const customHrExtension: TokenizerAndRendererExtension = {
+	name: "customHr",
+	level: "block",
+	start(src) {
+		const match = CUSTOM_HR_START_REGEX.exec(src);
+		if (!match) return undefined;
+		let idx = match.index;
+		if (src[idx] === "\n") {
+			idx += 1;
+		}
+		return idx;
+	},
+	tokenizer(src) {
+		const match = CUSTOM_HR_TOKENIZER_REGEX.exec(src);
+		if (match) {
+			return {
+				type: "hr",
+				raw: match[0],
+			};
+		}
+		return undefined;
+	},
+	renderer() {
+		return "";
+	},
+};
+
 const mathExtension: TokenizerAndRendererExtension = {
 	name: "math",
 	level: "inline",
@@ -332,7 +382,7 @@ const mathEnvBlockExtension: TokenizerAndRendererExtension = {
 		return (token as { text?: string }).text ?? "";
 	},
 };
-markdownParser.use({ extensions: [mathBlockExtension, mathEnvBlockExtension, mathExtension] });
+markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnvBlockExtension, mathExtension] });
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
@@ -360,16 +410,14 @@ export function clearRenderCache(): void {
 }
 
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
-// Symbol-keyed so the id travels with the object and is invisible to consumers.
-const kObjectId = Symbol("markdown.objectId");
-type WithObjectId = object & { [kObjectId]?: number };
+// WeakMap-keyed so the ID matches strict object identity and doesn't get copied by spread/cloning.
+const themeObjectIds = new WeakMap<object, number>();
 let nextObjectId = 0;
 function objectId(o: object): number {
-	const tagged = o as WithObjectId;
-	let id = tagged[kObjectId];
+	let id = themeObjectIds.get(o);
 	if (id === undefined) {
 		id = nextObjectId++;
-		tagged[kObjectId] = id;
+		themeObjectIds.set(o, id);
 	}
 	return id;
 }
@@ -1150,12 +1198,16 @@ export class Markdown implements Component {
 				break;
 			}
 
-			case "hr":
-				lines.push(this.#theme.hr(this.#theme.symbols.hrChar.repeat(Math.min(width, 80))));
+			case "hr": {
+				const raw = "raw" in token && typeof token.raw === "string" ? token.raw.trim() : "";
+				const char = raw[0] || "";
+				const fillChar = getHrChar(char, this.#theme.symbols.hrChar);
+				lines.push(this.#theme.hr(fillChar.repeat(Math.min(width, 80))));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after horizontal rules (unless space token follows)
 				}
 				break;
+			}
 
 			case "html":
 				if ("raw" in token && typeof token.raw === "string") {
