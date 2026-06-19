@@ -185,6 +185,82 @@ describe("collapseEffortVariants", () => {
 		expect(resolveWireModelId(model, Effort.High)).toBe("claude-opus-4-6-thinking");
 	});
 
+	it("reconciles a stale Sonnet 4.6 snapshot whose routing still targets the dead -thinking wire id", () => {
+		// Bundled `models.json` and SQLite cache rows written before #3071
+		// route every effort to `claude-sonnet-4-6-thinking` (a wire id
+		// `daily-cloudcode-pa` does not expose). The `retiredMembers` entry
+		// triggers `reconcileRetiredRouting`, which re-points every retired
+		// route to the live bare wire id.
+		const stale: ModelSpec<"google-gemini-cli"> = {
+			...memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 }),
+			requestModelId: "claude-sonnet-4-6",
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "claude-sonnet-4-6",
+					[Effort.Minimal]: "claude-sonnet-4-6-thinking",
+					[Effort.Low]: "claude-sonnet-4-6-thinking",
+					[Effort.Medium]: "claude-sonnet-4-6-thinking",
+					[Effort.High]: "claude-sonnet-4-6-thinking",
+				},
+			},
+		};
+		const out = collapseEffortVariants([stale], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+
+		expect(out).toHaveLength(1);
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-sonnet-4-6");
+		expect(spec?.thinking?.effortRouting).toEqual({
+			off: "claude-sonnet-4-6",
+			minimal: "claude-sonnet-4-6",
+			low: "claude-sonnet-4-6",
+			medium: "claude-sonnet-4-6",
+			high: "claude-sonnet-4-6",
+		});
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-sonnet-4-6");
+	});
+
+	it("reconciles a stale Opus 4.6 snapshot whose routing still targets the dead bare wire id", () => {
+		// Defensive: a stale snapshot with `off`/efforts pointing at the bare
+		// `claude-opus-4-6` (never exposed by Antigravity) is re-pointed to
+		// the live `-thinking` wire id by `reconcileRetiredRouting`.
+		const stale: ModelSpec<"google-gemini-cli"> = {
+			...memberSpec("claude-opus-4-6"),
+			requestModelId: "claude-opus-4-6",
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "claude-opus-4-6",
+					[Effort.Minimal]: "claude-opus-4-6",
+					[Effort.Low]: "claude-opus-4-6",
+					[Effort.Medium]: "claude-opus-4-6",
+					[Effort.High]: "claude-opus-4-6",
+				},
+			},
+		};
+		const out = collapseEffortVariants([stale], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+
+		expect(out).toHaveLength(1);
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-opus-4-6");
+		expect(spec?.requestModelId).toBe("claude-opus-4-6-thinking");
+		expect(spec?.thinking?.effortRouting).toEqual({
+			off: "claude-opus-4-6-thinking",
+			minimal: "claude-opus-4-6-thinking",
+			low: "claude-opus-4-6-thinking",
+			medium: "claude-opus-4-6-thinking",
+			high: "claude-opus-4-6-thinking",
+		});
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, undefined)).toBe("claude-opus-4-6-thinking");
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-opus-4-6-thinking");
+	});
+
 	it("renames single-member families through requestModelId with no routing", () => {
 		const out = collapseEffortVariants(
 			[memberSpec("gpt-oss-120b-medium", { input: ["text"] })],

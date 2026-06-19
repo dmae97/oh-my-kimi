@@ -17862,10 +17862,10 @@
 				],
 				"effortRouting": {
 					"off": "claude-sonnet-4-6",
-					"minimal": "claude-sonnet-4-6-thinking",
-					"low": "claude-sonnet-4-6-thinking",
-					"medium": "claude-sonnet-4-6-thinking",
-					"high": "claude-sonnet-4-6-thinking"
+					"minimal": "claude-sonnet-4-6",
+					"low": "claude-sonnet-4-6",
+					"medium": "claude-sonnet-4-6",
+					"high": "claude-sonnet-4-6"
 				}
 			}
 		},

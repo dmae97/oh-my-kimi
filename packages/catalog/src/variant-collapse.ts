@@ -225,11 +225,15 @@ const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
 	// `claude-opus-4-6-thinking` wire id (no bare twin). Per-effort thinking is
 	// carried in the request body via `thinkingBudget`, so both ids accept on/off
 	// requests. Listing both candidates in `members` (priority order) keeps the
-	// collapse correct if the backend mix ever rebalances.
+	// collapse correct if the backend mix ever rebalances; `retiredMembers`
+	// re-points stale collapsed snapshots (bundled catalog rows, cache rows
+	// written by prior generations) away from the dead wire id via
+	// `reconcileRetiredRouting`.
 	{
 		id: "claude-sonnet-4-6",
 		name: "Claude Sonnet 4.6",
 		members: ["claude-sonnet-4-6", "claude-sonnet-4-6-thinking"],
+		retiredMembers: ["claude-sonnet-4-6-thinking"],
 		routing: {},
 		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
 	},
@@ -237,6 +241,7 @@ const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
 		id: "claude-opus-4-6",
 		name: "Claude Opus 4.6",
 		members: ["claude-opus-4-6-thinking", "claude-opus-4-6"],
+		retiredMembers: ["claude-opus-4-6"],
 		routing: {},
 		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
 	},
