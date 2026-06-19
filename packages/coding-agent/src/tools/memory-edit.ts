@@ -7,7 +7,7 @@ const memoryEditSchema = type({
 	op: type("'update' | 'forget' | 'invalidate'").describe("memory edit operation"),
 	id: type("string").describe("memory id from recall output"),
 	"content?": type("string").describe("replacement content for update"),
-	"importance?": type("number").describe("replacement importance for update, clamped to [0, 1]"),
+	"importance?": type("number").describe("replacement importance for update (0–1)"),
 	"replacement_id?": type("string").describe("replacement memory id for invalidate"),
 });
 

@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Refined system prompt and tool documentation to improve conciseness and clarity
+- Simplified tool input descriptions for browser, eval, find, and memory-edit operations
 - Refactored authentication storage discovery to share logic with other pi-ai tools
 
 ### Fixed

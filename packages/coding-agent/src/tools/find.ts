@@ -44,7 +44,7 @@ const findSchema = type({
 		.describe("globs including search paths"),
 	"hidden?": type("boolean").describe("include hidden files"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
-	"limit?": type("number").describe("max results (clamped to 1-200)"),
+	"limit?": type("number").describe("max results"),
 });
 
 export type FindToolInput = typeof findSchema.infer;

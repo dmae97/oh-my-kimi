@@ -17,7 +17,6 @@ Inspects an image file with a vision-capable model and returns compact text anal
 </output>
 
 <critical>
-- Parameters are strict: only `path` and `question` are allowed
 - If image submission is blocked by settings, the tool will fail with an actionable error
 - If configured model does not support image input, configure a vision-capable model role before retrying
 </critical>

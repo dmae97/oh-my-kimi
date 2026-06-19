@@ -8,7 +8,7 @@ Creates or overwrites file at specified path.
 </conditions>
 
 <critical>
-- You SHOULD use Edit tool for modifying existing files (more precise, preserves formatting)
+- You SHOULD use Edit tool for modifying existing files
 - You NEVER create documentation files (*.md, README) unless explicitly requested
 - You NEVER use emojis unless requested
 </critical>

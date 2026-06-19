@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Refined documentation and prompt instructions for clarity and brevity
 
 ## [16.0.2] - 2026-06-16
 
