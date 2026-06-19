@@ -8,6 +8,9 @@
 
 - Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
 - Added support for compound duration formats in `/loop` (e.g., `1h30m`)
+### Added
+
+- Added project/user/plugin `dap.json` and `dap.yaml` support for defining or overriding debugger adapters used by the `debug` tool. ([#2999](https://github.com/can1357/oh-my-pi/issues/2999))
 
 ## [16.1.5] - 2026-06-19
 
@@ -114,9 +117,6 @@
 - Snapcompact compaction summaries now reach the model as ordered history blocks instead of one lead-in text block plus appended images: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. This matches the new text-first snapcompact archive layout and preserves chronological order in the provider prompt.
 - Fixed `/dump` output repeating the tool inventory twice when `inlineToolDescriptors` is enabled.
 - Unified TUI border corners on the rounded style: tool-result frames, overlays, code fences, debug frames, and the interactive bash box now draw rounded corners (`╭╮╰╯`) to match the editor and message cards, instead of mixing rounded boxes with sharp (`┌┐└┘`) ones. `boxRound` now carries the sharp tee/cross junction glyphs (no rounded variant exists), so dividers still honor `boxSharp.tee*`/`cross` theme overrides. Markdown tables intentionally keep the fully sharp `boxSharp` set; its corner tokens now affect tables only.
-### Added
-
-- Added project/user/plugin `dap.json` and `dap.yaml` support for defining or overriding debugger adapters used by the `debug` tool. ([#2999](https://github.com/can1357/oh-my-pi/issues/2999))
 
 ## [16.0.11] - 2026-06-19
 

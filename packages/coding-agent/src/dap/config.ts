@@ -123,6 +123,7 @@ function fileConfigSource(filePath: string): ConfigSource {
 
 function readMarketplaceDapConfig(root: ClaudePluginRoot): NormalizedConfig | null {
 	const catalogPaths = [
+		path.resolve(root.path, "..", "..", ".omp-plugin", "marketplace.json"),
 		path.resolve(root.path, "..", "..", "marketplace.json"),
 		path.resolve(root.path, "..", "..", ".claude-plugin", "marketplace.json"),
 	];
