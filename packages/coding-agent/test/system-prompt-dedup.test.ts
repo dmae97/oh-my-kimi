@@ -6,12 +6,24 @@ import {
 	buildSystemPrompt,
 	loadProjectContextFiles,
 	loadSystemPromptFiles,
+	type SystemPromptToolMetadata,
 } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const READ_TOOL = new Map<string, SystemPromptToolMetadata>([
+	[
+		"read",
+		{
+			label: "Read",
+			description: "Reads files from disk.",
+			parameters: { type: "object", properties: { path: { type: "string" } } },
+		},
+	],
+]);
 
 describe("SYSTEM.md prompt assembly", () => {
 	let tempDir = "";
@@ -38,9 +50,18 @@ describe("SYSTEM.md prompt assembly", () => {
 			cwd: projectDir,
 			customPrompt: systemPrompt,
 			contextFiles: [],
-			skills: [],
+			skills: [
+				{
+					name: "focused-work",
+					description: "Focused work instructions",
+					filePath: "skills/focused-work/SKILL.md",
+					baseDir: "skills/focused-work",
+					source: "test",
+				},
+			],
 			rules: [],
-			toolNames: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
 			workspaceTree: {
 				rootPath: projectDir,
 				rendered: "",
@@ -53,6 +74,7 @@ describe("SYSTEM.md prompt assembly", () => {
 		const promptText = renderedPrompt.join("\n\n");
 		const matches = promptText.match(new RegExp(escapeRegExp(systemPrompt), "g")) ?? [];
 		expect(matches).toHaveLength(1);
+		expect(promptText).toContain('<skill name="focused-work">');
 	});
 
 	it("prefers project SYSTEM.md over user SYSTEM.md", async () => {
