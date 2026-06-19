@@ -11,6 +11,7 @@ import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-entries";
 import { framedBlock, renderStatusLine, renderTreeList } from "../tui";
+import { normalizePathLikeInput, resolveToCwd } from "./path-utils";
 import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
 
 // =============================================================================
@@ -427,6 +428,11 @@ const STATUS_TO_MARKER: Record<TodoStatus, string> = {
 	completed: "x",
 	abandoned: "-",
 };
+
+export function resolveTodoMarkdownPath(input: string, cwd: string): string {
+	const raw = normalizePathLikeInput(input) || "TODO.md";
+	return resolveToCwd(raw, cwd);
+}
 
 /** Render todo phases as a Markdown checklist suitable for editing/copying. */
 export function phasesToMarkdown(phases: TodoPhase[]): string {

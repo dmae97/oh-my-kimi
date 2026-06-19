@@ -327,6 +327,8 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 	return userLevel?.content ?? null;
 }
 
+export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "eval", "edit", "write"] as const;
+
 export interface SystemPromptToolMetadata {
 	label: string;
 	description: string;
@@ -584,18 +586,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const dateTime = date;
 	const promptCwd = shortenPath(resolvedCwd.replace(/\\/g, "/"));
 
-	// Build tool metadata for system prompt rendering
-	// Priority: explicit list > tools map > defaults
-	// Default includes both bash and python; actual availability determined by settings in createTools
+	// Build tool metadata for system prompt rendering.
+	// Priority: explicit list > tools map > conservative SDK fallback.
 	let toolNames = providedToolNames;
 	if (!toolNames) {
-		if (tools) {
-			// Tools map provided
-			toolNames = Array.from(tools.keys());
-		} else {
-			// Use defaults
-			toolNames = ["read", "bash", "eval", "edit", "write"]; // TODO: Why?
-		}
+		toolNames = tools ? Array.from(tools.keys()) : [...DEFAULT_SYSTEM_PROMPT_TOOL_NAMES];
 	}
 
 	// Build tool descriptions for system prompt rendering.
@@ -625,7 +620,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	// Filter skills for the rendered system prompt:
 	// - require the `read` tool so the model can actually fetch skill content;
 	// - drop skills with frontmatter `hide: true` (still loadable via skill:// and /skill:<name>).
-	const hasRead = tools?.has("read");
+	const hasRead = toolNames.includes("read");
 	const filteredSkills = hasRead ? skills.filter(skill => skill.hide !== true) : [];
 
 	const effectiveSystemPromptCustomization = dedupePromptSource(systemPromptCustomization, [
