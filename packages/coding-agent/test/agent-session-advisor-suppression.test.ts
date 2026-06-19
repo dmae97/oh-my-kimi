@@ -18,9 +18,6 @@
  *     follow-up stays queued for the next explicit resume rather than auto-running.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -31,7 +28,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 
 const ADVISOR_TYPE = "advisor";
 
@@ -45,20 +42,23 @@ interface ParkedHarness {
 }
 
 describe("AgentSession advisor auto-resume suppression", () => {
-	let tempDir: string;
+	let tempDir: TempDir;
 	let session: AgentSession;
 	const authStorages: AuthStorage[] = [];
 
 	beforeEach(() => {
-		tempDir = path.join(os.tmpdir(), `pi-advisor-suppress-${Snowflake.next()}`);
-		fs.mkdirSync(tempDir, { recursive: true });
+		tempDir = TempDir.createSync("@pi-advisor-suppress-");
 	});
 
 	afterEach(async () => {
 		// dispose() aborts the agent, cancelling the parked first-turn stream.
-		await session?.dispose();
-		for (const authStorage of authStorages.splice(0)) authStorage.close();
-		fs.rmSync(tempDir, { recursive: true, force: true });
+		try {
+			await session?.dispose();
+		} finally {
+			for (const authStorage of authStorages.splice(0)) authStorage.close();
+			await Bun.sleep(0);
+			await tempDir?.remove();
+		}
 	});
 
 	/**
@@ -86,10 +86,10 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		});
 		const sessionManager = SessionManager.inMemory();
 		const settings = Settings.isolated({ "compaction.enabled": false });
-		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${Snowflake.next()}.db`));
+		const authStorage = await AuthStorage.create(tempDir.join(`auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
 		return { session, sessionManager, mock, streamStarted: started.promise };
 	}

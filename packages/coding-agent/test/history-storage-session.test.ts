@@ -1,15 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
-let tempDir = "";
+let tempDir: TempDir | null = null;
 
 async function freshStorage(prefix = "omp-history-session-"): Promise<{ storage: HistoryStorage; dbPath: string }> {
-	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-	const dbPath = path.join(tempDir, "history.db");
+	tempDir = TempDir.createSync(`@${prefix}`);
+	const dbPath = tempDir.join("history.db");
 	HistoryStorage.resetInstance();
 	return { storage: HistoryStorage.open(dbPath), dbPath };
 }
@@ -29,8 +27,9 @@ afterEach(async () => {
 	HistoryStorage.resetInstance();
 	vi.useRealTimers();
 	if (tempDir) {
-		await fs.rm(tempDir, { recursive: true, force: true });
-		tempDir = "";
+		await Bun.sleep(0);
+		await tempDir.remove().catch(() => {});
+		tempDir = null;
 	}
 });
 
@@ -84,8 +83,8 @@ describe("HistoryStorage session linkage", () => {
 	});
 
 	it("adds session_id to a pre-existing schema and leaves legacy rows unstamped", async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-history-session-migrate-"));
-		const dbPath = path.join(tempDir, "history.db");
+		tempDir = TempDir.createSync("@omp-history-session-migrate-");
+		const dbPath = tempDir.join("history.db");
 		const legacyDb = new Database(dbPath);
 		legacyDb.exec(`
 			CREATE TABLE history (

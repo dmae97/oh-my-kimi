@@ -92,6 +92,16 @@
 
 - Hardened TTS, STT, and tiny-title worker IPC `send()` paths against async EPIPE rejections: `Subprocess.send()` is now wrapped so neither a synchronous "process exited" throw nor an asynchronous EPIPE rejection (when the pipe breaks between exit being observed and the next send) can escape as a fatal unhandled rejection. A dying Kokoro/TTS/STT worker can no longer crash the whole agent session mid-task. ([#2997](https://github.com/can1357/oh-my-pi/issues/2997))
 
+### Fixed
+
+- Fixed Windows test failures caused by path handling: tests now use `pathToFileURL`, `path.resolve`, and `path.join` instead of hard-coded POSIX paths; `shortenPath()` normalizes backslashes to forward slashes after `~` and respects home directory boundaries; shell-escaped interpolated paths in bash tool tests to prevent Git Bash eating backslashes
+- Fixed `HistoryStorage.resetInstance()` leaking its SQLite database handle on Windows by adding a `#close()` method that finalizes all prepared statements and closes the database; `AgentStorage` gained the same `resetInstance()`/`#close()` pattern
+- Fixed `createAgentSession` leaking the internally-created `AuthStorage` when session construction fails before the session takes ownership, causing EBUSY on Windows temp dir cleanup
+- Fixed `MnemopiBackend.removeDbFiles()` throwing on Windows when the database handle is still being released; it is now truly best-effort (logs failures instead of silently swallowing)
+- Fixed Windows EBUSY test failures by replacing raw `fs.rmSync`/`fs.rm` cleanup with `TempDir` (which retries) and best-effort `.catch(() => {})` where SQLite handles outlive the test
+- Fixed `TempDir` prefix convention: non-`@` prefixes created temp dirs relative to cwd instead of `os.tmpdir()`, causing module resolution failures on Windows
+- Fixed git line-ending mismatches in autoresearch tests by setting `core.autocrlf false` in test repo initialization
+
 ## [16.0.11] - 2026-06-19
 
 ### Added
@@ -126,6 +136,13 @@
 ### Removed
 
 - Removed `display.tabWidth` setting and configurable tab width support
+- Fixed Windows test failures caused by path handling: tests now use `pathToFileURL`, `path.resolve`, and `path.join` instead of hard-coded POSIX paths; `shortenPath()` normalizes backslashes to forward slashes after `~` and respects home directory boundaries; shell-escaped interpolated paths in bash tool tests to prevent Git Bash eating backslashes
+- Fixed `HistoryStorage.resetInstance()` leaking its SQLite database handle on Windows by adding a `#close()` method that finalizes all prepared statements and closes the database; `AgentStorage` gained the same `resetInstance()`/`#close()` pattern
+- Fixed `createAgentSession` leaking the internally-created `AuthStorage` when session construction fails before the session takes ownership, causing EBUSY on Windows temp dir cleanup
+- Fixed `MnemopiBackend.removeDbFiles()` throwing on Windows when the database handle is still being released; it is now truly best-effort
+- Fixed Windows EBUSY test failures by replacing raw `fs.rmSync`/`fs.rm` cleanup with `TempDir` (which retries) and best-effort `.catch(() => {})` where SQLite handles outlive the test
+- Fixed `TempDir` prefix convention: non-`@` prefixes created temp dirs relative to cwd instead of `os.tmpdir()`, causing module resolution failures on Windows
+- Fixed git line-ending mismatches in autoresearch tests by setting `core.autocrlf false` in test repo initialization
 
 ## [16.0.10] - 2026-06-18
 

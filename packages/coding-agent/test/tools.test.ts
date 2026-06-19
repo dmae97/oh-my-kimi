@@ -38,6 +38,10 @@ function writeFileWithMtime(filePath: string, content: string, mtimeMs: number):
 	fs.utimesSync(filePath, mtime, mtime);
 }
 
+function shellEscape(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function createFifoOrSkip(fifoPath: string): boolean {
 	if (process.platform === "win32") {
 		return false;
@@ -1199,7 +1203,7 @@ function b() {
 
 			const result = await interceptedBashTool.execute(
 				"test-call-8-intercept-empty",
-				{ command: `cat ${allowedFile}` },
+				{ command: `cat ${shellEscape(allowedFile)}` },
 				undefined,
 				undefined,
 				createTestToolContext(["read"]),
@@ -1269,7 +1273,9 @@ function b() {
 			const targetPath = path.join(testDir, "session", "local", "moved-via-bash.json");
 			fs.writeFileSync(sourcePath, '{"move":true}\n');
 
-			await bashTool.execute("test-call-8-local-mv", { command: `mv ${sourcePath} local://moved-via-bash.json` });
+			await bashTool.execute("test-call-8-local-mv", {
+				command: `mv ${shellEscape(sourcePath)} local://moved-via-bash.json`,
+			});
 
 			expect(fs.existsSync(sourcePath)).toBe(false);
 			expect(fs.existsSync(targetPath)).toBe(true);

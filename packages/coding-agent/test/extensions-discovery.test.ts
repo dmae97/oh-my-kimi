@@ -26,8 +26,8 @@ describe("extensions discovery", () => {
 		const result = await discoverAndLoadExtensions(configuredPaths, tempDir.path());
 		return {
 			...result,
-			extensions: filterUserScoped(result.extensions),
-			errors: filterUserScoped(result.errors),
+			extensions: filterUserScoped(result.extensions, [tempDir.path(), ...configuredPaths]),
+			errors: filterUserScoped(result.errors, [tempDir.path(), ...configuredPaths]),
 		};
 	};
 
@@ -153,7 +153,7 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
-		expect(result.extensions[0].path).toContain("linked-package/src/main.ts");
+		expect(result.extensions[0].path).toContain(path.join("linked-package", "src", "main.ts"));
 	});
 
 	it("discovers index.ts in a symlinked extension directory", async () => {
@@ -166,7 +166,7 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
-		expect(result.extensions[0].path).toContain("linked-index-ts/index.ts");
+		expect(result.extensions[0].path).toContain(path.join("linked-index-ts", "index.ts"));
 	});
 
 	it("discovers index.js in a symlinked extension directory", async () => {
@@ -179,7 +179,7 @@ describe("extensions discovery", () => {
 
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(1);
-		expect(result.extensions[0].path).toContain("linked-index-js/index.js");
+		expect(result.extensions[0].path).toContain(path.join("linked-index-js", "index.js"));
 	});
 
 	it("package.json can declare multiple extensions", async () => {
@@ -442,7 +442,7 @@ describe("extensions discovery", () => {
 
 	it("resolves 3rd party npm dependencies (chalk)", async () => {
 		// Load the real chalk-logger extension from examples
-		const chalkLoggerPath = path.resolve(import.meta.dirname, "../examples/extensions/chalk-logger.ts");
+		const chalkLoggerPath = path.resolve(import.meta.dirname, "..", "examples", "extensions", "chalk-logger.ts");
 
 		const result = await discoverForTest([chalkLoggerPath]);
 

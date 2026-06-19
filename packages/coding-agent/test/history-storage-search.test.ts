@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
-let tempDir = "";
+let tempDir: TempDir | null = null;
 
 async function freshStorage(): Promise<HistoryStorage> {
-	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-history-search-"));
+	tempDir = TempDir.createSync("@omp-history-search-");
 	HistoryStorage.resetInstance();
-	return HistoryStorage.open(path.join(tempDir, "history.db"));
+	return HistoryStorage.open(tempDir.join("history.db"));
 }
 
 async function seed(storage: HistoryStorage, prompts: string[]): Promise<void> {
@@ -27,8 +25,9 @@ afterEach(async () => {
 	HistoryStorage.resetInstance();
 	vi.useRealTimers();
 	if (tempDir) {
-		await fs.rm(tempDir, { recursive: true, force: true });
-		tempDir = "";
+		await Bun.sleep(0);
+		await tempDir.remove().catch(() => {});
+		tempDir = null;
 	}
 });
 

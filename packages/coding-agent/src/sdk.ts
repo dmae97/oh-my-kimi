@@ -1051,6 +1051,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry =
 		options.modelRegistry ??
 		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+	// Track whether we internally created the authStorage so we can close it
+	// if construction fails before the session takes ownership.
+	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
 	const authStorage = modelRegistry.authStorage;
 	if (options.authStorage && options.authStorage !== authStorage) {
 		throw new Error(
@@ -2854,6 +2857,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					await asyncJobManager.dispose({ timeoutMs: 3_000 });
 				}
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
+				if (ownsAuthStorage) authStorage.close();
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {
