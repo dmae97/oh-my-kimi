@@ -76,3 +76,50 @@ describe("normalizeTools — pruneDescriptions", () => {
 		expect(typeof fieldDescription(tools?.[0]?.parameters, INTENT_FIELD)).toBe("string");
 	});
 });
+
+describe("normalizeTools — omit-intent tools", () => {
+	it("wire-encodes arktype parameters when intent is a function", () => {
+		const params = type({ action: "string", reason: "string" });
+		const tool: AgentTool<typeof params> = {
+			name: "resolve",
+			label: "Resolve",
+			description: "",
+			parameters: params,
+			intent: () => "resolving",
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const out = normalizeTools([tool], true)?.[0];
+		expect(out?.parameters).toMatchObject({ type: "object" });
+		expect(hasField(out?.parameters, "action")).toBe(true);
+		expect(hasField(out?.parameters, "reason")).toBe(true);
+		// Function intent => intentMode is "omit"; INTENT_FIELD must NOT be injected.
+		expect(hasField(out?.parameters, INTENT_FIELD)).toBe(false);
+	});
+
+	it("wire-encodes arktype parameters when intent is the literal 'omit'", () => {
+		const params = type({ note: "string" });
+		const tool: AgentTool<typeof params> = {
+			name: "demo-omit",
+			label: "Demo",
+			description: "",
+			parameters: params,
+			intent: "omit",
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const out = normalizeTools([tool], true)?.[0];
+		expect(out?.parameters).toMatchObject({ type: "object" });
+		expect(hasField(out?.parameters, "note")).toBe(true);
+		expect(hasField(out?.parameters, "i")).toBe(false);
+	});
+
+	it("wire-encodes parameters even when intent injection is disabled globally", () => {
+		const out = normalizeTools([makeTool()], false)?.[0];
+		expect(out?.parameters).toMatchObject({ type: "object" });
+		expect(hasField(out?.parameters, "path")).toBe(true);
+		expect(hasField(out?.parameters, "nested")).toBe(true);
+	});
+});
