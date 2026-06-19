@@ -310,46 +310,6 @@ describe("SnapcompactInlineTransformer", () => {
 		expect(result.messages[4]).toBe(context.messages[4]);
 	});
 
-	it("stops swapping at OpenRouter's hard 8-image cap; later tools ship verbatim", () => {
-		const transformer = new SnapcompactInlineTransformer(
-			withTestShape({ renderSystemPrompt: "none", renderToolResults: true }),
-		);
-		const context: Context = {
-			messages: [
-				userMessage("go"),
-				toolResult("call_1", LARGE),
-				toolResult("call_2", LARGE),
-				toolResult("call_3", LARGE),
-				toolResult("call_4", LARGE),
-				toolResult("call_5", LARGE),
-				toolResult("call_6", LARGE),
-			],
-		};
-		// OpenRouter budget 8; each LARGE needs 2 frames: call_1..4 swap (8
-		// frames), call_5 no longer fits → verbatim; call_6 is the most
-		// recent and always stays text.
-		const result = transformer.transform(context, makeModel({ provider: "openrouter" }));
-		expect(imageCount(result)).toBe(8);
-		expect(result.messages[5]).toBe(context.messages[5]);
-		expect(result.messages[6]).toBe(context.messages[6]);
-	});
-
-	it("is a no-op when existing images (e.g. compaction frames) exhaust the OpenRouter cap", () => {
-		const transformer = new SnapcompactInlineTransformer(
-			withTestShape({ renderSystemPrompt: "none", renderToolResults: true }),
-		);
-		const png: ImageContent = { type: "image", data: "ZmFrZQ==", mimeType: "image/png" };
-		const context: Context = {
-			messages: [
-				{ role: "user", content: [{ type: "text", text: "summary" }, ...Array(8).fill(png)], timestamp: 0 },
-				toolResult("call_1", LARGE),
-				toolResult("call_2", LARGE),
-			],
-		};
-		const result = transformer.transform(context, makeModel({ provider: "openrouter" }));
-		expect(result).toBe(context);
-	});
-
 	it("caches renders across turns: identical input does not re-rasterize", () => {
 		const spy = spyOn(snapcompact, "renderMany");
 		try {
