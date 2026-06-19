@@ -274,6 +274,45 @@ describe("MarketplaceManager", () => {
 		});
 	});
 
+	it("installPlugin preserves YAML extension when embedding DAP metadata files", async () => {
+		const marketplaceDir = path.join(ctx.tmpDir, "yaml-dap-marketplace");
+		const pluginDir = path.join(marketplaceDir, "plugins", "ruby-dap-yaml");
+		await fs.promises.mkdir(pluginDir, { recursive: true });
+		await Bun.write(
+			path.join(pluginDir, "dap.yaml"),
+			["adapters:", "  ruby-debug:", "    command: ruby-debug-adapter", "    fileTypes:", "      - .rb", ""].join(
+				"\n",
+			),
+		);
+		await fs.promises.mkdir(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+		await Bun.write(
+			path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "yaml-dap-marketplace",
+					owner: { name: "Test Author" },
+					plugins: [
+						{
+							name: "ruby-dap-yaml",
+							source: "./plugins/ruby-dap-yaml",
+							version: "1.0.0",
+							dapAdapters: "dap.yaml",
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		await ctx.manager.addMarketplace(marketplaceDir);
+		const instEntry = await ctx.manager.installPlugin("ruby-dap-yaml", "yaml-dap-marketplace");
+
+		expect(fs.existsSync(path.join(instEntry.installPath, ".dap.yaml"))).toBe(true);
+		expect(fs.existsSync(path.join(instEntry.installPath, ".dap.json"))).toBe(false);
+		expect(await Bun.file(path.join(instEntry.installPath, ".dap.yaml")).text()).toContain("ruby-debug-adapter");
+	});
+
 	it("installPlugin with scope:project → persisted in project registry, isolated from user", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		const instEntry = await ctx.manager.installPlugin("hello-plugin", "test-marketplace", {

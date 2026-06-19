@@ -366,17 +366,20 @@ export class MarketplaceManager {
 		const dapAdapters = entry.dapAdapters;
 		if (!dapAdapters) return;
 
-		const targetPath = path.join(cachePath, ".dap.json");
 		if (typeof dapAdapters === "string") {
 			const sourcePath = path.resolve(cachePath, dapAdapters);
 			if (!pathIsWithin(cachePath, sourcePath)) {
 				throw new Error(`Plugin "${entry.name}" dapAdapters path escapes the plugin directory`);
 			}
+			const extension = path.extname(sourcePath).toLowerCase();
+			const targetFilename = extension === ".yaml" || extension === ".yml" ? `.dap${extension}` : ".dap.json";
+			const targetPath = path.join(cachePath, targetFilename);
 			const content = await Bun.file(sourcePath).text();
 			await Bun.write(targetPath, content);
 			return;
 		}
 
+		const targetPath = path.join(cachePath, ".dap.json");
 		await Bun.write(targetPath, `${JSON.stringify({ adapters: dapAdapters }, null, 2)}\n`);
 	}
 
