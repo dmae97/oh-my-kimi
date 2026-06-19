@@ -5,7 +5,6 @@ import {
 	type AgentTelemetryConfig,
 	type AgentTool,
 	AppendOnlyContextManager,
-	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import {
@@ -35,6 +34,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@oh-my-pi/pi-utils";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { ADVISOR_READONLY_TOOL_NAMES, discoverWatchdogFiles } from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";

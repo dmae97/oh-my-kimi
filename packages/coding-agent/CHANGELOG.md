@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `__advisor.jsonl` transcript persistence for advisor model usage attribution and visibility in the Agent Hub
@@ -21,10 +22,6 @@
 - Refined `/compact` argument parsing to reject focus instructions for modes that do not support them (e.g., `snapcompact`)
 - Protocol hosts (RPC/`rpc-ui`/ACP) now host-default the full advisor settings group — `advisor.syncBacklog` and `advisor.immuneTurns` in addition to `advisor.enabled`/`advisor.subagents` — so a host that opts the advisor in gets the default tuning instead of inheriting the user's local advisor preferences.
 
-### Removed
-
-- Removed `display.tabWidth` setting and configurable tab width support
-
 ### Fixed
 
 - Fixed memory-leaking stale transcripts in the agent viewer when underlying files are deleted
@@ -33,6 +30,10 @@
 - Fixed `Ctrl+T` (toggle thinking blocks) and the `/settings` "Hide Thinking Blocks" toggle only collapsing/expanding thinking in the live region: blocks that had scrolled into committed native scrollback on ED3-risk terminals kept their pre-toggle snapshot, so scrolling up showed the old thinking state. Both paths now `resetDisplay()` after flipping each block's flag, forcing a full clear + replay of the whole transcript (matching the tool-output expansion toggle) so every block above the fold re-renders at its new height.
 - Fixed ACP mobile voice settings being unable to call `speech.models.list` by exposing the local STT/TTS model and voice catalog without triggering setup or downloads ([#3011](https://github.com/can1357/oh-my-pi/issues/3011)).
 - Fixed the collapsed inline arg preview used by tools without a custom renderer (e.g. `advise`, MCP tools) truncating every value at a fixed 24 columns, so a long note was cut to `note="Your “stric…"` even on a wide card with empty space to spare. Each value now grows into the width the card actually has, reserving only a small slice for the keys that still follow so a long leading value can't hide them.
+
+### Removed
+
+- Removed `display.tabWidth` setting and configurable tab width support
 
 ## [16.0.10] - 2026-06-18
 

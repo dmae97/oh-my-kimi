@@ -50,6 +50,7 @@
 import type { Api, ImageContent, Message, Model } from "@oh-my-pi/pi-ai";
 import { renderSnapcompactPng } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
 import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { type: "text" };
 
@@ -752,11 +753,15 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 					// Prefer the harness-derived intent, else the raw `_i` arg; render it as
 					// a one-line `//comment` and drop `_i` from the args below.
 					const rawIntent =
-						typeof block.intent === "string" ? block.intent : typeof args._i === "string" ? args._i : "";
+						typeof block.intent === "string"
+							? block.intent
+							: typeof args[INTENT_FIELD] === "string"
+								? (args[INTENT_FIELD] as string)
+								: "";
 					const intent = stripDimMarkers(rawIntent).replace(/\s+/g, " ").trim();
 					const argsStr = truncateForSummary(
 						Object.entries(args)
-							.filter(([key]) => key !== "_i")
+							.filter(([key]) => key !== INTENT_FIELD)
 							.map(
 								([key, value]) =>
 									`${key}=${truncateForSummary(JSON.stringify(value) ?? "undefined", toolArgMaxChars, headRatio)}`,

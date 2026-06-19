@@ -1,7 +1,7 @@
 /**
  * JSON tree rendering utilities shared across tool renderers.
  */
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type { Theme } from "../modes/theme/theme";
 import { truncateToWidth } from "./render-utils";
 

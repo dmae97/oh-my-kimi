@@ -5,6 +5,7 @@ import type { Context, FetchImpl, Model, ThinkingContent, Tool, ToolCall } from 
 import { getStreamMarkupHealingPattern, StreamMarkupHealing } from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
 interface SseToolCallDelta {
 	index: number;
@@ -83,7 +84,7 @@ const bashTool: Tool = {
 	parameters: {
 		type: "object",
 		properties: {
-			_i: { type: "string" },
+			[INTENT_FIELD]: { type: "string" },
 			command: { type: "string" },
 			timeout: { type: "number" },
 		},
@@ -163,7 +164,7 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 		expect(call.id).toMatch(/^call_[0-9a-f]+$/);
 
 		const args = JSON.parse(call.arguments) as Record<string, unknown>;
-		expect(args._i).toBe("Check Fedora 42 available packages");
+		expect(args[INTENT_FIELD]).toBe("Check Fedora 42 available packages");
 		expect(args.timeout).toBe(15);
 		expect(String(args.command)).toContain("2>/dev/null");
 		expect(String(args.command)).toContain('grep -E "^python3|^git-|^sed-|^bash-"');
@@ -736,7 +737,7 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(toolCalls).toHaveLength(1);
 		expect(toolCalls[0].name).toBe("bash");
 		expect(toolCalls[0].arguments).toMatchObject({
-			_i: "Check Fedora 42 available packages",
+			[INTENT_FIELD]: "Check Fedora 42 available packages",
 			timeout: 15,
 		});
 		expect(result.stopReason).toBe("toolUse");
@@ -784,7 +785,7 @@ describe("OpenAI completions provider DSML envelope healing", () => {
 		expect(toolCalls).toHaveLength(1);
 		expect(toolCalls[0].name).toBe("bash");
 		expect(toolCalls[0].arguments).toMatchObject({
-			_i: "Check Fedora 42 available packages",
+			[INTENT_FIELD]: "Check Fedora 42 available packages",
 			timeout: 15,
 		});
 		expect(result.stopReason).toBe("toolUse");

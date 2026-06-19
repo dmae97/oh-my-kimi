@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { formatSessionHistoryMarkdown } from "@oh-my-pi/pi-coding-agent/session/session-history-format";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
 function buildMessages(): unknown[] {
 	return [
@@ -123,7 +124,7 @@ describe("formatSessionHistoryMarkdown", () => {
 						type: "toolCall",
 						id: "tc-intent",
 						name: "read",
-						arguments: { path: "src/config.ts", _i: "reading config file" },
+						arguments: { path: "src/config.ts", [INTENT_FIELD]: "reading config file" },
 					},
 					{
 						type: "toolCall",
@@ -131,7 +132,8 @@ describe("formatSessionHistoryMarkdown", () => {
 						name: "read",
 						arguments: {
 							path: "src/config.ts",
-							_i: "reading config file with a very very long and descriptive intent that will exceed the maximum length limit of eighty characters",
+							[INTENT_FIELD]:
+								"reading config file with a very very long and descriptive intent that will exceed the maximum length limit of eighty characters",
 						},
 					},
 				],

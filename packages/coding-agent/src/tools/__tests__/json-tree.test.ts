@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { formatArgsInline } from "../json-tree";
 
 describe("formatArgsInline", () => {

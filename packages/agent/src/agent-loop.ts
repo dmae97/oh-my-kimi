@@ -38,6 +38,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
 	type AgentTelemetry,
@@ -516,8 +517,6 @@ function normalizeMessagesForProvider(
 		return filtered.length === message.content.length ? message : { ...message, content: filtered };
 	});
 }
-
-export const INTENT_FIELD = "_i";
 
 function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = "require"): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;

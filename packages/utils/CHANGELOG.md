@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Removed
 
 - Removed `getIndentation`, `setDefaultTabWidth`, and `getDefaultTabWidth` helpers

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { agentLoop, agentLoopContinue, agentLoopDetailed, INTENT_FIELD } from "@oh-my-pi/pi-agent-core/agent-loop";
+import { agentLoop, agentLoopContinue, agentLoopDetailed } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -12,6 +12,7 @@ import type {
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 

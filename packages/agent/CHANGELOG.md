@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Updated the display format for truncated file operation summaries

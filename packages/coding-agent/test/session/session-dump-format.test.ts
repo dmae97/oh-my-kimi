@@ -10,6 +10,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Model, Usage } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 
 const ZERO_USAGE: Usage = {
@@ -109,7 +110,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 							type: "toolCall",
 							id: "c1",
 							name: "read",
-							arguments: { _i: "Reading the file", path: "src/foo.ts" },
+							arguments: { [INTENT_FIELD]: "Reading the file", path: "src/foo.ts" },
 						},
 					],
 					api: "mock",
@@ -138,7 +139,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 		expect(out).toContain("path: src/foo.ts");
 		// The `_i` intent renders as a `//` comment under the heading, never inside the YAML args.
 		expect(out).toContain("// Reading the file");
-		expect(out).not.toContain("_i:");
+		expect(out).not.toContain(`${INTENT_FIELD}:`);
 		// Tool calls render as a readable heading + YAML, never the <invoke>/<parameter> XML.
 		expect(out).not.toContain("<invoke ");
 		expect(out).not.toContain("<parameter ");
