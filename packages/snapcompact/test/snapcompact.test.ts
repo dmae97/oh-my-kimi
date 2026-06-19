@@ -665,7 +665,7 @@ describe("serializeConversation", () => {
 });
 
 describe("compact", () => {
-	it("archives history onto frames with a self-describing summary", async () => {
+	it("stores small archives as plain text with no frames", async () => {
 		const fileOps = snapcompact.createFileOps();
 		fileOps.read.add("src/auth.ts");
 		fileOps.edited.add("src/login.ts");
@@ -673,163 +673,102 @@ describe("compact", () => {
 
 		expect(result.firstKeptEntryId).toBe("kept-1");
 		expect(result.tokensBefore).toBe(99000);
-		// Reading instructions reflect the default (anthropic 11on16-bw) shape.
-		expect(result.summary).toContain("29 characters wide");
-		expect(result.summary).toContain("dim gray");
-		expect(result.summary).toContain("snapcompact frame");
-		// File operations are upserted like every other compaction summary:
-		// one grouped <files> tree with per-file access markers.
-		expect(result.summary).toContain("<files>\n# src/\nauth.ts (Read)\nlogin.ts (Write)\n</files>");
-		expect(result.shortSummary).toContain("snapcompact frame");
+		expect(result.summary).toContain("You are resuming a prior conversation.");
+		expect(result.summary).toContain("HISTORY");
+		expect(result.summary).toContain("FILES\n===================\n# src/\nauth.ts (Read)\nlogin.ts (Write)");
 
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		expect(archive).toBeDefined();
-		expect(archive?.frames.length).toBe(1);
-		expect(archive?.frames[0].mimeType).toBe("image/png");
-		expect(archive?.frames[0].chars).toBe(archive?.totalChars);
-		expect(archive?.frames[0].font).toBe("8x13");
-		expect(archive?.frames[0].variant).toBe("bw");
-		expect(archive?.frames[0].stopwordDim).toBeUndefined();
+		expect(archive?.frames).toHaveLength(0);
+		expect(archive?.textHead).toBeTruthy();
+		expect(archive?.textTail).toBeUndefined();
 		expect(archive?.truncatedChars).toBe(0);
-		// Frame data round-trips as a decodable PNG.
-		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
-		expect(decoded.width).toBe(TEST_FRAME_SIZE);
+
+		const blocks = archive ? snapcompact.historyBlocks(archive) : [];
+		expect(blocks).toHaveLength(1);
+		expect(blocks[0]?.type).toBe("text");
 	});
 
-	it("prints tool results in dim gray ink, persisting the span across frame boundaries", async () => {
-		// Anthropic shape at 320px holds 800 chars/frame; a 1650-char tool
-		// result spans three frames, so the reopened span must dim in each.
+	it("carries dim tool-output spans from text into the first image frame", async () => {
 		const result = await snapcompact.compact(
 			makePreparation({
 				messagesToSummarize: [createUserMessage("Run the suite."), createToolResultMessage("FAIL ".repeat(330))],
 			}),
-			{ frameSize: TEST_FRAME_SIZE },
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 2 },
 		);
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		expect(archive?.frames.length).toBeGreaterThanOrEqual(2);
-		for (const frame of archive?.frames ?? []) {
-			const decoded = decodePng(Buffer.from(frame.data, "base64"));
-			// Palette index 9 is the dim tool-output ink.
-			expect(new Set(decoded.pixels).has(9)).toBe(true);
-		}
-		// Conversation text outside the span stays in black bw ink (frame 1).
-		const first = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
-		expect(new Set(first.pixels).has(7)).toBe(true);
-		expect(result.summary).toContain("archived tool output");
+		expect(archive?.frames.length).toBeGreaterThanOrEqual(1);
+		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
+		// Palette index 9 is the dim tool-output ink.
+		expect(new Set(decoded.pixels).has(9)).toBe(true);
 	});
 
-	it("keeps frames free of dim ink when dimToolResults is false", async () => {
+	it("keeps image frames free of dim ink when dimToolResults is false", async () => {
 		const result = await snapcompact.compact(
 			makePreparation({
-				messagesToSummarize: [createUserMessage("Run."), createToolResultMessage("all good")],
+				messagesToSummarize: [createUserMessage("Run."), createToolResultMessage("all good ".repeat(200))],
 			}),
-			{ frameSize: TEST_FRAME_SIZE, dimToolResults: false },
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 2, dimToolResults: false },
 		);
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		expect(archive?.frames.length).toBeGreaterThanOrEqual(1);
 		const decoded = decodePng(Buffer.from(archive?.frames[0].data ?? "", "base64"));
 		expect(new Set(decoded.pixels).has(9)).toBe(false);
-		expect(result.summary).not.toContain("archived tool output");
 	});
 
-	it("keeps history past the frame budget as a text tail instead of dropping it", async () => {
-		const { capacity } = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
-		// Sentences avoid whitespace collapse shrinking the payload below 2.5 frames.
-		const longText = `${"Important fact number one. ".repeat(Math.ceil((capacity * 2.5) / 28))}Tail sentinel QQZZ.`;
+	it("keeps plain text at both edges and images in the middle", async () => {
+		const longText = `HEAD sentinel AA. ${"Important fact number one. ".repeat(400)}TAIL sentinel QQZZ.`;
 		const result = await snapcompact.compact(
 			makePreparation({ messagesToSummarize: [createUserMessage(longText)] }),
-			{
-				frameSize: TEST_FRAME_SIZE,
-				maxFrames: 2,
-			},
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
 		);
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		expect(archive?.frames.length).toBe(2);
-		// Nothing is dropped: the unrendered remainder ships as text.
-		expect(archive?.truncatedChars).toBe(0);
-		expect(archive?.textTail).toContain("QQZZ");
-		expect(result.summary).toContain("[Archived history, continued as text]");
-		expect(result.summary).toContain("Tail sentinel QQZZ.");
-		expect(result.shortSummary).toContain("chars as text");
+		expect(archive?.frames).toHaveLength(5);
+		expect(archive?.textHead).toContain("HEAD sentinel AA");
+		expect(archive?.textTail).toContain("TAIL sentinel QQZZ");
+
+		const blocks = archive ? snapcompact.historyBlocks(archive) : [];
+		expect(blocks[0]?.type).toBe("text");
+		expect((blocks[0] as { text: string }).text).toContain("imaged middle below");
+		expect(blocks.at(-1)?.type).toBe("text");
+		expect((blocks.at(-1) as { text: string }).text).toContain("imaged middle above");
+		expect(blocks.filter(block => block.type === "image")).toHaveLength(5);
 	});
 
-	it("folds the previous text tail back into frames on the next compaction", async () => {
-		const { capacity } = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
-		const longText = "Important fact number one. ".repeat(Math.ceil((capacity * 2.5) / 28));
-		const first = await snapcompact.compact(makePreparation({ messagesToSummarize: [createUserMessage(longText)] }), {
-			frameSize: TEST_FRAME_SIZE,
-			maxFrames: 2,
-		});
-		expect(snapcompact.getPreservedArchive(first.preserveData)?.textTail).toBeTruthy();
+	it("uses three HQ image frames on each edge when the budget allows", async () => {
+		const hugeText = `HEAD sentinel. ${"Important fact number one. ".repeat(1000)}TAIL sentinel.`;
+		const result = await snapcompact.compact(
+			makePreparation({ messagesToSummarize: [createUserMessage(hugeText)] }),
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 7 },
+		);
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		expect(archive?.frames).toHaveLength(7);
+		const hiCols = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE).cols;
+		const cols = archive?.frames.map(frame => frame.cols) ?? [];
+		expect(cols.slice(0, 3)).toEqual([hiCols, hiCols, hiCols]);
+		expect(cols.slice(-3)).toEqual([hiCols, hiCols, hiCols]);
+		expect(cols[3]).toBeGreaterThan(hiCols);
+	});
 
+	it("re-renders later compactions from the kept source text", async () => {
+		const first = await snapcompact.compact(
+			makePreparation({
+				messagesToSummarize: [createUserMessage("A long first turn. ".repeat(500))],
+			}),
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
+		);
 		const second = await snapcompact.compact(
 			makePreparation({
 				messagesToSummarize: [createUserMessage("A short follow-up turn.")],
 				previousSummary: first.summary,
 				previousPreserveData: first.preserveData,
 			}),
-			{ frameSize: TEST_FRAME_SIZE, maxFrames: 8 },
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
 		);
 		const archive = snapcompact.getPreservedArchive(second.preserveData);
-		// 2 carried frames + 1 new frame holding (old tail + new turn); no tail left.
-		expect(archive?.frames.length).toBe(3);
-		expect(archive?.textTail).toBeUndefined();
-		expect(second.summary).not.toContain("[Archived history, continued as text]");
-	});
-
-	it("caps the text tail and counts the elided middle as truncated", async () => {
-		const { capacity } = snapcompact.geometry(snapcompact.SHAPES.anthropic, TEST_FRAME_SIZE);
-		// 6 frames of payload at a 1-frame budget → tail capped at 2 frame capacities.
-		const longText = "Important fact number one. ".repeat(Math.ceil((capacity * 6) / 28));
-		const result = await snapcompact.compact(
-			makePreparation({ messagesToSummarize: [createUserMessage(longText)] }),
-			{ frameSize: TEST_FRAME_SIZE, maxFrames: 1 },
-		);
-		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		expect(archive?.frames.length).toBe(1);
-		expect(archive?.textTail).toContain("ch elided");
-		expect(archive?.textTail?.length).toBeLessThan(capacity * 2.5);
-		expect(archive?.truncatedChars).toBeGreaterThan(0);
-	});
-
-	it("keeps a text tail on two-column doc shapes (wrapped pages rejoined flat)", async () => {
-		const geo = snapcompact.geometry(snapcompact.SHAPES.google, TEST_FRAME_SIZE);
-		const longText = `${"Important fact number one. ".repeat(Math.ceil((geo.capacity * 3.5) / 28))}Tail sentinel QQZZ.`;
-		const result = await snapcompact.compact(
-			makePreparation({ messagesToSummarize: [createUserMessage(longText)] }),
-			{ frameSize: TEST_FRAME_SIZE, maxFrames: 2, shape: snapcompact.SHAPES.google },
-		);
-		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		expect(archive?.frames.length).toBe(2);
-		// The sentinel ends the archive, so it survives any tail cap.
-		expect(archive?.textTail).toContain("QQZZ");
-		// Wrap-induced line breaks flatten to spaces in the tail.
-		expect(archive?.textTail).not.toContain("\n");
-	});
-
-	it("evicts the oldest unpinned frames, keeping the session-head frame alive", async () => {
-		let previous: snapcompact.CompactionResult | undefined;
-		let headFrameData = "";
-		let secondFrameData = "";
-		for (let pass = 1; pass <= 4; pass++) {
-			previous = await snapcompact.compact(
-				makePreparation({
-					messagesToSummarize: [createUserMessage(`Distinct turn number ${pass}.`)],
-					previousSummary: previous?.summary,
-					previousPreserveData: previous?.preserveData,
-				}),
-				{ frameSize: TEST_FRAME_SIZE, maxFrames: 3 },
-			);
-			const archive = snapcompact.getPreservedArchive(previous.preserveData);
-			if (pass === 1) headFrameData = archive?.frames[0].data ?? "";
-			if (pass === 2) secondFrameData = archive?.frames[1].data ?? "";
-		}
-		const final = snapcompact.getPreservedArchive(previous?.preserveData);
-		expect(final?.frames.length).toBe(3);
-		// The head frame (original request) is pinned through every eviction;
-		// the archive fades from the middle out.
-		expect(final?.frames[0].data).toBe(headFrameData);
-		expect(final?.frames.some(frame => frame.data === secondFrameData)).toBe(false);
-		expect(final?.truncatedChars).toBeGreaterThan(0);
+		expect(archive?.text).toContain("A short follow-up turn.");
+		expect(archive?.textTail ?? archive?.textHead).toContain("A short follow-up turn.");
+		expect(archive?.frames.length).toBe(5);
 	});
 
 	it("includes the previous text summary when the prior compaction was not snapcompact", async () => {
@@ -837,13 +776,11 @@ describe("compact", () => {
 			makePreparation({ previousSummary: "Older context: project scaffolding done." }),
 			{ frameSize: TEST_FRAME_SIZE },
 		);
-		expect(result.summary).toContain("[Summary of earlier history]");
+		expect(result.summary).toContain("condensed digest of still-older context");
 	});
 
-	it("carries previous frames forward and strips the OpenAI remote payload", async () => {
+	it("strips the OpenAI remote payload and preserves unrelated preserveData", async () => {
 		const first = await snapcompact.compact(makePreparation(), { frameSize: TEST_FRAME_SIZE });
-		const firstArchive = snapcompact.getPreservedArchive(first.preserveData);
-
 		const second = await snapcompact.compact(
 			makePreparation({
 				messagesToSummarize: [createUserMessage("A new turn happened after the first compaction.")],
@@ -857,32 +794,9 @@ describe("compact", () => {
 			{ frameSize: TEST_FRAME_SIZE },
 		);
 
-		const archive = snapcompact.getPreservedArchive(second.preserveData);
-		expect(archive?.frames.length).toBe(2);
-		// Oldest frame rides along unchanged, new frame appended after it.
-		expect(archive?.frames[0].data).toBe(firstArchive?.frames[0].data ?? "");
-		// Previous archive present → previous summary is snapcompact boilerplate, not re-archived.
 		expect(second.summary).not.toContain("[Summary of earlier history]");
 		expect(second.preserveData?.openaiRemoteCompaction).toBeUndefined();
 		expect(second.preserveData?.appKey).toBe("kept");
-	});
-
-	it("flags mixed shapes when merged frames disagree with the active shape", async () => {
-		const first = await snapcompact.compact(makePreparation(), {
-			frameSize: TEST_FRAME_SIZE,
-			shape: snapcompact.SHAPES.legacy,
-		});
-		const second = await snapcompact.compact(
-			makePreparation({
-				messagesToSummarize: [createUserMessage("Another turn after a provider switch.")],
-				previousSummary: first.summary,
-				previousPreserveData: first.preserveData,
-			}),
-			{ frameSize: TEST_FRAME_SIZE, model: { api: "anthropic-messages" } },
-		);
-		expect(second.summary).toContain("Older frames may use a different font");
-		// Same-shape merges stay silent.
-		expect(first.summary).not.toContain("Older frames may use a different font");
 	});
 });
 
@@ -899,7 +813,16 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: valid })).toEqual(valid);
 	});
 
-	it("getPreservedArchive round-trips a persisted text tail", () => {
+	it("getPreservedArchive round-trips text-only and text-tail archives", () => {
+		const textOnly: snapcompact.Archive = {
+			frames: [],
+			totalChars: 21,
+			truncatedChars: 0,
+			text: "older history newer history",
+			textHead: "older history newer history",
+		};
+		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: textOnly })).toEqual(textOnly);
+
 		const archive: snapcompact.Archive = {
 			frames: [{ data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 10 }],
 			totalChars: 10,
@@ -909,9 +832,8 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: archive })).toEqual(archive);
 	});
 
-	it("provider image budgets respect hard image caps", () => {
-		// OpenRouter silently drops images past 8 — the budget must match.
-		expect(snapcompact.providerImageBudget("openrouter")).toBe(8);
+	it("provider image budgets stay permissive while unknown providers keep the safe floor", () => {
+		expect(snapcompact.providerImageBudget("openrouter")).toBe(90);
 		// Unknown providers fall to the safe floor.
 		expect(snapcompact.providerImageBudget(undefined)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerImageBudget("some-new-router")).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);

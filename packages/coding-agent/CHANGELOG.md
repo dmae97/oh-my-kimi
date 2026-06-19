@@ -1,9 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Refined session context to utilize history blocks instead of raw images for snapcompact summaries
 - Optimized network traffic by stripping tool descriptions from provider tool schemas
+- Snapcompact compaction summaries now reach the model as ordered history blocks instead of one lead-in text block plus appended images: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. This matches the new text-first snapcompact archive layout and preserves chronological order in the provider prompt.
 
 ## [16.0.11] - 2026-06-19
 

@@ -9197,14 +9197,15 @@ export class AgentSession {
 	 */
 	#projectSnapcompactContextTokens(preparation: CompactionPreparation, result: snapcompact.CompactionResult): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		const frames = archive ? snapcompact.images(archive) : undefined;
+		const blocks = archive ? snapcompact.historyBlocks(archive) : undefined;
 		const summaryMessage = createCompactionSummaryMessage(
 			result.summary,
 			result.tokensBefore,
 			new Date().toISOString(),
 			result.shortSummary,
 			undefined,
-			frames,
+			undefined,
+			blocks,
 		);
 		let tokens = computeNonMessageTokens(this) + estimateTokens(summaryMessage);
 		for (const message of preparation.recentMessages) {

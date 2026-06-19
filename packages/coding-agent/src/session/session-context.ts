@@ -226,7 +226,8 @@ export function buildSessionContext(
 						entry.timestamp,
 						entry.shortSummary,
 						undefined,
-						snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
+						undefined,
+						snapcompactArchive ? snapcompact.historyBlocks(snapcompactArchive) : undefined,
 					),
 				);
 			} else {
@@ -258,7 +259,8 @@ export function buildSessionContext(
 				compaction.timestamp,
 				compaction.shortSummary,
 				providerPayload,
-				snapcompactArchive ? snapcompact.images(snapcompactArchive) : undefined,
+				undefined,
+				snapcompactArchive ? snapcompact.historyBlocks(snapcompactArchive) : undefined,
 			),
 		);
 

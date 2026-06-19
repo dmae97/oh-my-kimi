@@ -1,9 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
+
+### Fixed
+
+- Improved token estimation accuracy for compaction summaries containing multi-block content
 
 ## [16.0.11] - 2026-06-19
 

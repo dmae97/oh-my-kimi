@@ -1,6 +1,27 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `historyBlocks(archive)` to reconstruct ordered history blocks from archive data
+- Added `historyBlocks(archive)`, which reconstructs the ordered prompt blocks for a snapcompact archive at rebuild time: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. This keeps the message ordering reconstructible from `preserveData` without duplicating image payloads onto compaction entries.
+
+### Changed
+
+- Refactored compaction to be text-sourced, re-rendering from unified `Archive.text` source
+- Implemented foveated archive layout (HQ edges, dense LQ middle) for optimized context usage
+- Raised `MAX_FRAMES_DEFAULT` to 80 and consolidated `PROVIDER_IMAGE_BUDGETS`
+- Updated OpenRouter to use standard 90-image budget
+- Updated prompt instructions to clearly distinguish between plain-text and image history regions
+- Reworked snapcompact compaction to be text-sourced and text-first: the archive now persists bounded source text (`Archive.text`) and re-renders from it every compaction instead of blindly carrying PNGs forward. History is laid out middle-out as `text head → imaged middle → text tail`, and the imaged middle foveates internally (HQ/LQ/HQ) when it grows large.
+- Renamed `MAX_FRAMES` to `MAX_FRAMES_DEFAULT`, raised the default cap to 80 (enough for ~400k tokens of high-res Opus image budget while staying under Anthropic's wire cap), and made `Options.maxFrames` a pure upper limit rather than a caller-supplied default.
+- Raised `FRAME_TOKEN_ESTIMATE` to the true high-res Claude upper bound (5,024) so coding-agent overflow checks no longer undercount large snapcompact archives.
+- Removed the old OpenRouter-specific 8-image special case from `PROVIDER_IMAGE_BUDGETS`; OpenRouter now uses the same permissive 90-image budget as Anthropic/Bedrock instead of being artificially clamped.
+
+### Fixed
+
+- Fixed context budget undercounting by raising `FRAME_TOKEN_ESTIMATE` to 5024
+- Improved file list formatting in compaction summaries
 
 ## [16.0.11] - 2026-06-19
 
