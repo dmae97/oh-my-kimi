@@ -80,27 +80,19 @@ export function sliceWithWidth(line: string, startCol: number, length: number, s
 export function truncateToWidth(
 	text: string,
 	maxWidth: number,
-	ellipsisKind?: Ellipsis | null,
+	ellipsisKind?: Ellipsis | null | "",
 	pad?: boolean | null,
 ): string {
-	// Guard nullish napi inputs: napi-rs 3 on the Windows prebuilt rejects
-	// `null` for `Option<u8>` (Ellipsis) / `Option<bool>` (pad) (issue #848),
-	// and `maxWidth` is a required `u32` that throws on `null`/`undefined`
-	// everywhere. Pass concrete defaults that mirror the Rust `unwrap_or`s.
-	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
+	maxWidth = Math.max(0, maxWidth | 0);
 	// Fast path: every UTF-16 unit is at most 3 cells wide, so a string whose
 	// `length * 3` already fits within `safeWidth` cannot need truncation.
-	if (!pad && text.length * 3 <= safeWidth) {
+	if (!pad && text.length * 3 <= maxWidth) {
 		return text;
-	}
-	let resolvedEllipsis: Ellipsis | null | undefined | string = ellipsisKind;
-	if (typeof resolvedEllipsis === "string") {
-		resolvedEllipsis = resolvedEllipsis === "" ? Ellipsis.Omit : Ellipsis.Unicode;
 	}
 	return nativeTruncateToWidth(
 		text,
-		safeWidth,
-		resolvedEllipsis ?? Ellipsis.Unicode,
+		maxWidth,
+		(ellipsisKind === "" ? Ellipsis.Omit : ellipsisKind) ?? Ellipsis.Unicode,
 		pad ?? false,
 		getDefaultTabWidth(),
 	);
