@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.11] - 2026-06-19
+
 ### Changed
 
 - Updated the display format for truncated file operation summaries

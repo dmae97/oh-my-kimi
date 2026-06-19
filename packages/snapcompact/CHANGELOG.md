@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.11] - 2026-06-19
+
 ### Changed
 
 - Refined elision markers for file operations and truncated text for better display consistency

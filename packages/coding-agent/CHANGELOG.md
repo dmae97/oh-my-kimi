@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.0.11] - 2026-06-19
+
 ### Added
 
 - Added `__advisor.jsonl` transcript persistence for advisor model usage attribution and visibility in the Agent Hub
