@@ -677,7 +677,11 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];
-	const projectPrompt = resolvedCustomPrompt ? "" : prompt.render(projectPromptTemplate, data).trim();
+	// Custom prompt templates already render context files and append text; the
+	// project footer still carries environment, cwd, workspace, and dir-context.
+	const projectPrompt = prompt
+		.render(projectPromptTemplate, resolvedCustomPrompt ? { ...data, contextFiles: [], appendPrompt: "" } : data)
+		.trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
 	}
