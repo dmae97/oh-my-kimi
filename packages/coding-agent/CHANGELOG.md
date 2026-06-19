@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.3] - 2026-06-19
+
 ### Changed
 
 - Refactored Perplexity authentication logic to prioritize cookies over OAuth in search operations

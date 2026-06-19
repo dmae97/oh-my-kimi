@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.3] - 2026-06-19
+
 ### Changed
 
 - Expanded the `TempDir` Windows retry window from 4×10ms to 40×25ms (1s total) to accommodate SQLite WAL/SHM file handle release delays
