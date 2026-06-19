@@ -900,6 +900,7 @@ export class ModelRegistry {
 				...replacementModel,
 				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
 				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
+				omitMaxOutputTokens: replacementModel.omitMaxOutputTokens ?? existing.omitMaxOutputTokens,
 				...(supportsTools !== undefined ? { supportsTools } : {}),
 			};
 		});

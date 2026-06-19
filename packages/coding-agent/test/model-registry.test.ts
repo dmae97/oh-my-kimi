@@ -2047,7 +2047,9 @@ describe("ModelRegistry", () => {
 		});
 
 		test("loads cached standard provider discovery models on startup", () => {
-			expect(standardCache.find("ollama-cloud", "deepseek-v4-pro")?.maxTokens).toBe(384_000);
+			const model = standardCache.find("ollama-cloud", "deepseek-v4-pro");
+			expect(model?.maxTokens).toBe(384_000);
+			expect(model?.omitMaxOutputTokens).toBe(true);
 		});
 
 		test("loads cached special provider discovery models on startup", () => {

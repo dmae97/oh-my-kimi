@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Marked Ollama Cloud catalog models to omit on-the-wire output-token caps, preventing context-window-sized `num_predict` values from causing HTTP 400s for models whose true output cap is not discoverable. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
+
 ## [16.0.9] - 2026-06-18
 
 ### Fixed

@@ -53268,6 +53268,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 32000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53296,6 +53297,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 163840,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53324,6 +53326,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53352,6 +53355,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 1048576,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53381,6 +53385,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 1048576,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53409,7 +53414,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"devstral-small-2:24b": {
 			"id": "devstral-small-2:24b",
@@ -53429,7 +53435,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"gemini-3-flash-preview": {
 			"id": "gemini-3-flash-preview",
@@ -53450,6 +53457,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53480,6 +53488,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53508,6 +53517,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53536,6 +53546,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53564,6 +53575,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53592,6 +53604,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53600,6 +53613,36 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"glm-5.2": {
+			"id": "glm-5.2",
+			"name": "GLM-5.2",
+			"api": "ollama-chat",
+			"provider": "ollama-cloud",
+			"baseUrl": "https://ollama.com",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 976000,
+			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
 			}
 		},
 		"gpt-oss:120b": {
@@ -53620,6 +53663,7 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53648,6 +53692,7 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53676,6 +53721,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53704,7 +53750,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"kimi-k2.5": {
 			"id": "kimi-k2.5",
@@ -53725,6 +53772,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53754,6 +53802,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53783,6 +53832,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53811,6 +53861,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 128000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53840,6 +53891,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53869,6 +53921,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53898,6 +53951,7 @@
 			},
 			"contextWindow": 196608,
 			"maxTokens": 196608,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53928,6 +53982,7 @@
 			},
 			"contextWindow": 512000,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53956,7 +54011,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"ministral-3:3b": {
 			"id": "ministral-3:3b",
@@ -53976,7 +54032,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"ministral-3:8b": {
 			"id": "ministral-3:8b",
@@ -53996,7 +54053,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"mistral-large-3:675b": {
 			"id": "mistral-large-3:675b",
@@ -54016,7 +54074,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"nemotron-3-nano:30b": {
 			"id": "nemotron-3-nano:30b",
@@ -54036,6 +54095,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54064,6 +54124,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54092,6 +54153,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 128000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54119,7 +54181,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65536
+			"maxTokens": 65536,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3-coder:480b": {
 			"id": "qwen3-coder:480b",
@@ -54138,7 +54201,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65536
+			"maxTokens": 65536,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3-next:80b": {
 			"id": "qwen3-next:80b",
@@ -54158,6 +54222,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54187,6 +54252,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54215,7 +54281,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 131072
+			"maxTokens": 131072,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3.5:397b": {
 			"id": "qwen3.5:397b",
@@ -54236,6 +54303,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -54263,7 +54331,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 32768,
-			"maxTokens": 4096
+			"maxTokens": 4096,
+			"omitMaxOutputTokens": true
 		}
 	},
 	"openai": {
