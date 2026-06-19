@@ -395,6 +395,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Advisor",
 			label: "Advisor for Subagents",
 			description: "Also enable the advisor on spawned task/eval subagents.",
+			condition: "advisorEnabled",
 		},
 	},
 	"advisor.syncBacklog": {
@@ -407,6 +408,7 @@ export const SETTINGS_SCHEMA = {
 			label: "Advisor Sync Backlog",
 			description:
 				"Pause the main agent for up to 30 seconds if the advisor falls behind by this many turns. Off disables catch-up delays.",
+			condition: "advisorEnabled",
 		},
 	},
 	"advisor.immuneTurns": {
@@ -426,6 +428,7 @@ export const SETTINGS_SCHEMA = {
 				{ value: "4", label: "4 turns" },
 				{ value: "5", label: "5 turns" },
 			],
+			condition: "advisorEnabled",
 		},
 	},
 	shellPath: { type: "string", default: undefined },
