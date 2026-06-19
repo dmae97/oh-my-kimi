@@ -79,14 +79,11 @@ const DEEPSEEK_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 const FIREWORKS_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "none",
 };
-const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
+const GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.Minimal]: "none",
 	[Effort.Low]: "high",
 	[Effort.Medium]: "high",
 	[Effort.High]: "high",
-	[Effort.XHigh]: "max",
-};
-const OLLAMA_CLOUD_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.XHigh]: "max",
 };
 
@@ -327,17 +324,19 @@ function inferDetectedEffortMap<TApi extends Api>(
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
 	}
-	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
-		return OLLAMA_CLOUD_GLM_52_REASONING_EFFORT_MAP;
+	// GLM-5.2 coding SKUs speak the GLM-native effort dialect regardless of host:
+	// the internal `xhigh` has no GLM equivalent (top tier is `max`), and the
+	// lower tiers fold to `none`/`high`. Z.ai/Zhipu, Ollama Cloud, Fireworks,
+	// resellers — every gateway serving genuine glm-5.2 gets the same map so the
+	// top tier stops 400ing. Filtered to each host's supported efforts downstream.
+	if (isGlm52ReasoningEffortModelId(spec.id)) {
+		return GLM_52_REASONING_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
 		return undefined;
 	}
 	if (spec.provider === "groq" && spec.id === "qwen/qwen3-32b") {
 		return GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
-	}
-	if (isZaiGlm52ReasoningEffortModel(spec)) {
-		return ZAI_GLM_52_REASONING_EFFORT_MAP;
 	}
 	if (isDeepseekReasoningModel(spec)) {
 		return DEEPSEEK_REASONING_EFFORT_MAP;
