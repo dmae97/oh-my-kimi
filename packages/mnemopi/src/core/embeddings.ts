@@ -11,7 +11,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
-import { ensureFastembedTokenizerSidecars } from "./fastembed-model-cache";
+import { ensureFastembedModelSidecars } from "./fastembed-model-cache";
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -68,11 +68,13 @@ async function defaultLocalModelInitializer(options: LocalModelInitOptions): Pro
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		if (
-			!/(?:Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(message)
+			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
+				message,
+			)
 		) {
 			throw error;
 		}
-		if (!(await ensureFastembedTokenizerSidecars(options.model, options.cacheDir))) throw error;
+		if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
 		return FlagEmbedding.init(options);
 	}
 }

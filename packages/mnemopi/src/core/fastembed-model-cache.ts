@@ -1,6 +1,11 @@
 import * as path from "node:path";
 
-const FASTEMBED_TOKENIZER_SIDECARS = ["tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"] as const;
+const FASTEMBED_MODEL_SIDECARS = [
+	"config.json",
+	"tokenizer.json",
+	"tokenizer_config.json",
+	"special_tokens_map.json",
+] as const;
 
 const FASTEMBED_HF_REPOS: Record<string, string> = {
 	"fast-all-MiniLM-L6-v2": "sentence-transformers/all-MiniLM-L6-v2",
@@ -12,13 +17,13 @@ const FASTEMBED_HF_REPOS: Record<string, string> = {
 	"fast-multilingual-e5-large": "intfloat/multilingual-e5-large",
 };
 
-/** Download missing tokenizer sidecars into a fastembed model cache directory. */
-export async function ensureFastembedTokenizerSidecars(model: string, cacheDir = "local_cache"): Promise<boolean> {
+/** Download missing config/tokenizer sidecars into a fastembed model cache directory. */
+export async function ensureFastembedModelSidecars(model: string, cacheDir = "local_cache"): Promise<boolean> {
 	const repo = FASTEMBED_HF_REPOS[model];
 	if (repo === undefined) return false;
 
 	const modelDir = path.join(cacheDir, model);
-	for (const fileName of FASTEMBED_TOKENIZER_SIDECARS) {
+	for (const fileName of FASTEMBED_MODEL_SIDECARS) {
 		const target = path.join(modelDir, fileName);
 		if (await Bun.file(target).exists()) continue;
 
