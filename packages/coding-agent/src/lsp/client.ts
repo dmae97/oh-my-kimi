@@ -482,6 +482,28 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		await sendResponse(client, message.id, null, message.method);
 		return;
 	}
+	if (message.method === "window/showMessageRequest") {
+		// Headless: no UI to surface the prompt. Spec says null = "no action selected".
+		await sendResponse(client, message.id, null, message.method);
+		return;
+	}
+	if (message.method === "window/showDocument") {
+		// Headless: nothing to display. Spec result is `{ success: boolean }`.
+		await sendResponse(client, message.id, { success: false }, message.method);
+		return;
+	}
+	if (
+		message.method === "workspace/semanticTokens/refresh" ||
+		message.method === "workspace/inlayHint/refresh" ||
+		message.method === "workspace/codeLens/refresh" ||
+		message.method === "workspace/codeAction/refresh" ||
+		message.method === "workspace/diagnostic/refresh"
+	) {
+		// Void acknowledgement per spec; servers that stall waiting for a reply
+		// (same failure mode as the dynamic-registration hang in #3029) move on.
+		await sendResponse(client, message.id, null, message.method);
+		return;
+	}
 	await sendResponse(client, message.id, null, message.method, {
 		code: -32601,
 		message: `Method not found: ${message.method}`,

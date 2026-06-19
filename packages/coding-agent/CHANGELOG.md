@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed LSP client returning `-32601 Method not found` for defined server→client requests (`window/showMessageRequest`, `window/showDocument`, `workspace/{semanticTokens,inlayHint,codeLens,codeAction,diagnostic}/refresh`). Servers that stall waiting for a real reply (same failure mode as #3029) now receive the spec no-op result ([#3044](https://github.com/can1357/oh-my-pi/issues/3044)).
+
 ## [16.1.1] - 2026-06-19
 
 ### Changed

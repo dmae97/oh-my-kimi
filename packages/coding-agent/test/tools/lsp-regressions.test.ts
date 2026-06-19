@@ -380,6 +380,67 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("answers defined server→client requests with spec no-op results", async () => {
+		// Same failure class as #3029: a defined server→client request
+		// (window/showMessage{Request}, window/showDocument, workspace/*/refresh)
+		// must receive a spec-shaped reply, not a -32601. Headless omp can't
+		// surface UI prompts but still owes a defined no-op.
+		const tempDir = TempDir.createSync("@omp-lsp-server-requests-");
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "initialized") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9101,
+						method: "window/showMessageRequest",
+						params: { type: 1, message: "x", actions: [{ title: "Cancel" }] },
+					});
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9102,
+						method: "window/showDocument",
+						params: { uri: "file:///tmp/a.md" },
+					});
+					srv.send({ jsonrpc: "2.0", id: 9103, method: "workspace/semanticTokens/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9104, method: "workspace/inlayHint/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9105, method: "workspace/codeLens/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9106, method: "workspace/diagnostic/refresh" });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["rs"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+
+			const showMessage = await server.waitFor(message => message.id === 9101 && message.method === undefined);
+			expect(showMessage.error).toBeUndefined();
+			expect(showMessage.result).toBeNull();
+
+			const showDocument = await server.waitFor(message => message.id === 9102 && message.method === undefined);
+			expect(showDocument.error).toBeUndefined();
+			expect(showDocument.result).toEqual({ success: false });
+
+			for (const id of [9103, 9104, 9105, 9106]) {
+				const refresh = await server.waitFor(message => message.id === id && message.method === undefined);
+				expect(refresh.error).toBeUndefined();
+				expect(refresh.result).toBeNull();
+			}
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("opens rust-analyzer Cargo workspace files before polling workspace readiness", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {
