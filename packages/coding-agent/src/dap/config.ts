@@ -87,7 +87,22 @@ function mergeAdapters(
 ): Record<string, DapAdapterConfig> {
 	const merged: Record<string, DapAdapterConfig> = { ...base };
 	for (const [name, config] of Object.entries(overrides)) {
-		const candidate = isRecord(merged[name]) && isRecord(config) ? { ...merged[name], ...config } : config;
+		const existing = merged[name];
+		const candidate =
+			isRecord(existing) && isRecord(config)
+				? {
+						...existing,
+						...config,
+						launchDefaults:
+							isRecord(existing.launchDefaults) || isRecord(config.launchDefaults)
+								? { ...existing.launchDefaults, ...normalizeObject(config.launchDefaults) }
+								: undefined,
+						attachDefaults:
+							isRecord(existing.attachDefaults) || isRecord(config.attachDefaults)
+								? { ...existing.attachDefaults, ...normalizeObject(config.attachDefaults) }
+								: undefined,
+					}
+				: config;
 		const normalized = normalizeAdapterConfig(candidate);
 		if (normalized) {
 			merged[name] = normalized;

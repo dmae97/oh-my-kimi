@@ -62,7 +62,7 @@ describe("DAP adapter configuration", () => {
 				adapters: {
 					debugpy: {
 						args: ["-m", "debugpy.adapter", "--log-dir", ".debugpy-logs"],
-						launchDefaults: { request: "launch", justMyCode: false },
+						launchDefaults: { justMyCode: false },
 					},
 				},
 			}),
