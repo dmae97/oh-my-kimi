@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -21,6 +22,21 @@ async function makeRedWebP(width: number, height: number): Promise<string> {
 	return Buffer.from(upscaled).toBase64();
 }
 
+function buildLocalVisionModel(provider: string, api: Api = "openai-completions"): Model {
+	return buildModel({
+		id: "local-vision",
+		name: "Local vision",
+		api,
+		provider,
+		baseUrl: "http://localhost:8001/v1",
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	});
+}
+
 describe("modelLacksWebpSupport", () => {
 	test("flags the local + cloud Ollama providers", () => {
 		expect(modelLacksWebpSupport({ provider: "ollama", api: "openai-responses" })).toBe(true);
@@ -32,8 +48,10 @@ describe("modelLacksWebpSupport", () => {
 		expect(modelLacksWebpSupport({ provider: "my-local-ollama", api: "ollama-chat" })).toBe(true);
 	});
 
-	test("flags local-server models", () => {
-		expect(modelLacksWebpSupport({ provider: "local-server", api: "openai-completions" })).toBe(true);
+	test("flags local model provider ids", () => {
+		for (const provider of ["llama.cpp", "lm-studio", "local-server"]) {
+			expect(modelLacksWebpSupport({ provider, api: "openai-completions" })).toBe(true);
+		}
 	});
 
 	test("leaves WebP-capable providers and undefined untouched", () => {
@@ -75,27 +93,17 @@ describe("normalizeModelContextImages model-aware WebP exclusion", () => {
 		expect(["image/png", "image/jpeg"]).toContain(mime);
 	});
 
-	test("re-encodes a WebP image out of WebP for a local-server model", async () => {
-		const localServer = buildModel({
-			id: "local-vision",
-			name: "Local vision",
-			api: "openai-completions",
-			provider: "local-server",
-			baseUrl: "http://localhost:8001/v1",
-			reasoning: false,
-			input: ["text", "image"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128_000,
-			maxTokens: 8_192,
-		});
-		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
+	test("re-encodes a WebP image out of WebP for local model provider ids", async () => {
+		for (const provider of ["llama.cpp", "lm-studio", "local-server"]) {
+			const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
 
-		const result = await normalizeModelContextImages([webp], { model: localServer });
+			const result = await normalizeModelContextImages([webp], { model: buildLocalVisionModel(provider) });
 
-		expect(result).toHaveLength(1);
-		const mime = result![0]!.mimeType;
-		expect(mime).not.toBe("image/webp");
-		expect(["image/png", "image/jpeg"]).toContain(mime);
+			expect(result).toHaveLength(1);
+			const mime = result![0]!.mimeType;
+			expect(mime).not.toBe("image/webp");
+			expect(["image/png", "image/jpeg"]).toContain(mime);
+		}
 	});
 
 	test("keeps WebP for a WebP-capable model when OMP_NO_WEBP is unset", async () => {

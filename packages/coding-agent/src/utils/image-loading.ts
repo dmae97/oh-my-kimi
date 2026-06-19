@@ -18,6 +18,8 @@ export function modelLacksWebpSupport(model: Pick<Model, "provider" | "api"> | u
 	return (
 		model.provider === "ollama" ||
 		model.provider === "ollama-cloud" ||
+		model.provider === "llama.cpp" ||
+		model.provider === "lm-studio" ||
 		model.provider === "local-server" ||
 		model.api === "ollama-chat"
 	);
