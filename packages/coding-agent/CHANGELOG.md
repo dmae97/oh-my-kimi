@@ -80,6 +80,10 @@
 
 - Fixed WebP images being sent unchanged to `local-server` vision models, which can fail through llama.cpp/STB-backed decoders that do not support WebP ([#2922](https://github.com/can1357/oh-my-pi/issues/2922)).
 
+### Fixed
+
+- Made `getSettingsListTheme`, `getEditorTheme`, `getSelectListTheme`, and `getSymbolTheme` return a plain ASCII fallback instead of crashing with "undefined is not an object (evaluating 'theme.fg')" when the global `theme` is undefined — e.g. when a plugin calls them before `initTheme()` completes or from a separate module instance under npm-global installs. ([#2998](https://github.com/can1357/oh-my-pi/issues/2998))
+
 ## [16.0.11] - 2026-06-19
 
 ### Added
