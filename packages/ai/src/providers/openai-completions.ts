@@ -27,6 +27,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
@@ -537,7 +538,7 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 // converts the already-successful response into a timeout error.
 const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
-export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
+const streamOpenAICompletionsOnce = (
 	model: Model<"openai-completions">,
 	context: Context,
 	options?: OpenAICompletionsOptions,
@@ -1234,7 +1235,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			if (
 				policy.stream.emptyLengthFinishIsContextError &&
 				output.stopReason === "length" &&
-				!hasVisibleCompletionContent(output)
+				!hasVisibleAssistantContent(output)
 			) {
 				output.stopReason = "error";
 				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;
@@ -1287,6 +1288,15 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 	return stream;
 };
+
+/**
+ * Public entry: wrap the single-attempt streamer with bounded empty-completion
+ * retries — flaky gateways occasionally 200 with `delta: {}` + `finish_reason:
+ * "stop"` and no usage, which would otherwise stall the agent loop. Shared with
+ * the Anthropic provider via `withEmptyCompletionRetry`.
+ */
+export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamOpenAICompletionsOnce);
 
 function createRequestSetup(
 	model: Model<"openai-completions">,
@@ -2059,16 +2069,6 @@ function convertTools(
 			tools.length > 0 &&
 			(toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && adaptedTools.some(tool => tool.strict))),
 	};
-}
-
-const NON_WHITESPACE_RE = /\S/;
-
-function hasVisibleCompletionContent(message: AssistantMessage): boolean {
-	for (const block of message.content) {
-		if (block.type === "toolCall") return true;
-		if (block.type === "text" && NON_WHITESPACE_RE.test(block.text)) return true;
-	}
-	return false;
 }
 
 const EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE =

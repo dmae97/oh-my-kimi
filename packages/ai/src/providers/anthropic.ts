@@ -46,6 +46,7 @@ import type {
 import { resolveServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
@@ -1575,7 +1576,7 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 	}
 }
 
-export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+const streamAnthropicOnce = (
 	model: Model<"anthropic-messages">,
 	context: Context,
 	options?: AnthropicOptions,
@@ -2308,6 +2309,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 	return stream;
 };
+
+/**
+ * Public entry: wrap the single-attempt streamer with bounded empty-completion
+ * retries (a benign terminal stop carrying no content/usage would otherwise
+ * stall the agent loop). The inner attempt keeps its own provider-failure retry
+ * loop; this layer only re-issues a fresh request on an empty success. Shared
+ * with the OpenAI-completions provider via `withEmptyCompletionRetry`.
+ */
+export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamAnthropicOnce);
 
 export type AnthropicSystemBlock = {
 	type: "text";

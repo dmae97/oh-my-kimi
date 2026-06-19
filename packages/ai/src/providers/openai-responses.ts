@@ -21,6 +21,7 @@ import {
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
 } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
@@ -338,7 +339,7 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 /**
  * Generate function for OpenAI Responses API
  */
-export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
+const streamOpenAIResponsesOnce = (
 	model: Model<"openai-responses">,
 	context: Context,
 	options?: OpenAIResponsesOptions,
@@ -736,6 +737,15 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 
 	return stream;
 };
+
+/**
+ * Public entry: wrap the single-attempt Responses streamer with bounded
+ * empty-completion retries — a `response.completed` carrying no content/usage
+ * would otherwise stall the agent loop. Shared with the OpenAI-completions and
+ * Anthropic providers via `withEmptyCompletionRetry`.
+ */
+export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamOpenAIResponsesOnce);
 
 export function buildParams(
 	model: Model<"openai-responses">,

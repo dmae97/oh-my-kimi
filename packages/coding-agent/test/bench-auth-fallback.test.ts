@@ -39,6 +39,21 @@ function fakeStream(): AssistantMessageEventStream {
 	return Object.assign(iterator, { result: async () => message }) as unknown as AssistantMessageEventStream;
 }
 
+function emptyStream(): AssistantMessageEventStream {
+	const message = {
+		role: "assistant",
+		content: [],
+		stopReason: "stop",
+		usage: { input: 5, output: 0 },
+		duration: 120,
+	} as unknown as AssistantMessage;
+	const events = [{ type: "done", message }] as unknown as AssistantMessageEvent[];
+	const iterator = (async function* () {
+		for (const event of events) yield event;
+	})();
+	return Object.assign(iterator, { result: async () => message }) as unknown as AssistantMessageEventStream;
+}
+
 interface FakeRegistryOptions {
 	models: Model<Api>[];
 	authedProviders: string[];
@@ -66,7 +81,11 @@ function fakeRegistry(opts: FakeRegistryOptions): BenchModelRegistry {
 	};
 }
 
-async function runBench(selector: string, registry: BenchModelRegistry) {
+async function runBench(
+	selector: string,
+	registry: BenchModelRegistry,
+	streamFactory: () => AssistantMessageEventStream = fakeStream,
+) {
 	const stderr: string[] = [];
 	const summary = await runBenchCommand(
 		{ models: [selector], flags: { runs: 1, maxTokens: 64, json: false } },
@@ -76,7 +95,7 @@ async function runBench(selector: string, registry: BenchModelRegistry) {
 			writeStdout: () => {},
 			writeStderr: text => stderr.push(text),
 			setExitCode: () => {},
-			streamSimple: () => fakeStream(),
+			streamSimple: () => streamFactory(),
 			now: () => 0,
 			stdoutIsTTY: false,
 		},
@@ -133,5 +152,19 @@ describe("bench credential-aware provider selection", () => {
 		expect(summary.failures).toBe(1);
 		expect(summary.models[0].results[0]).toMatchObject({ ok: false });
 		expect(stderr).not.toContain("benchmarking");
+	});
+});
+
+describe("bench empty-output guard", () => {
+	it("reports a run with no streamed content and no tokens as a failure", async () => {
+		const registry = fakeRegistry({ models: [fakeModel("acme", "model-x")], authedProviders: ["acme"] });
+
+		const { summary } = await runBench("acme/model-x", registry, emptyStream);
+
+		expect(summary.failures).toBe(1);
+		const run = summary.models[0].results[0];
+		expect(run.ok).toBe(false);
+		if (!run.ok) expect(run.error).toContain("no output");
+		expect(summary.models[0].average).toBeNull();
 	});
 });
