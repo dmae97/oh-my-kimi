@@ -2480,6 +2480,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				disableReasoning: shouldDisableReasoning(effectiveThinkingLevel),
 				tools: initialTools,
 			},
+			cwd,
 			convertToLlm: convertToLlmFinal,
 			onPayload,
 			onResponse,

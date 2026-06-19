@@ -45,6 +45,9 @@
 ### Changed
 
 - Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
+### Fixed
+
+- Fixed `Agent` forwarding the working directory (`cwd`) into provider stream options so the GitLab Duo Agent provider can scope local tool execution to the workspace.
 
 ## [16.1.5] - 2026-06-19
 
@@ -143,7 +146,6 @@
 ### Fixed
 
 - Fixed `pruneToolOutputs` blanking tiny tool results during overflow pruning: results below `50` tokens (`MIN_PRUNE_TOKENS`) are no longer replaced with the `[Output truncated - N tokens]` placeholder, which cost more tokens than the result itself and churned the prompt cache for zero savings.
-
 ## [15.13.2] - 2026-06-15
 
 ### Breaking Changes

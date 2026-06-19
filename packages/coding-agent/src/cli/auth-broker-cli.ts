@@ -223,6 +223,12 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 			onPrompt(p) {
 				return ask(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
 			},
+			onManualCodeInput() {
+				// Providers with a fixed non-loopback redirect (e.g. GitLab Duo Agent's
+				// vscode:// URI) never hit the local callback server, so offer the same
+				// paste-the-redirect fallback the interactive TUI sign-in uses.
+				return ask("Paste the authorization code (or full redirect URL):");
+			},
 		});
 		process.stdout.write(`\nCredentials saved to ${getAgentDbPath()}\n`);
 	} finally {
