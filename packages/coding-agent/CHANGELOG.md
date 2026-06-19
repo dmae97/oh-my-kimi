@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
+- Added support for compound duration formats in `/loop` (e.g., `1h30m`)
 
 ## [16.1.5] - 2026-06-19
 

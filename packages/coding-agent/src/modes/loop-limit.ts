@@ -38,53 +38,105 @@ const TIME_UNITS_MS = new Map<string, number>([
 	["hours", 3_600_000],
 ]);
 
-export function parseLoopLimitArgs(args: string): LoopLimitConfig | undefined | string {
-	const trimmed = args.trim().toLowerCase();
-	if (!trimmed) return undefined;
+const LOOP_USAGE = "Usage: /loop [count|duration]. Examples: /loop 10, /loop 10m, /loop 10min.";
 
-	const parts = trimmed.split(/\s+/);
-	if (parts.length > 2) {
-		return "Usage: /loop [count|duration]. Examples: /loop 10, /loop 10m, /loop 10min.";
-	}
-
-	if (parts.length === 2) {
-		return parseDurationParts(parts[0], parts[1]);
-	}
-
-	const token = parts[0];
-	const iterationMatch = /^(\d+)$/.exec(token);
-	if (iterationMatch) {
-		const iterations = Number(iterationMatch[1]);
-		if (!Number.isSafeInteger(iterations) || iterations <= 0) {
-			return "Loop count must be a positive integer.";
-		}
-		return { kind: "iterations", iterations };
-	}
-
-	const durationMatch = /^(\d+)([a-z]+)$/.exec(token);
-	if (durationMatch) {
-		return parseDurationParts(durationMatch[1], durationMatch[2]);
-	}
-
-	return "Usage: /loop [count|duration]. Examples: /loop 10, /loop 10m, /loop 10min.";
+export interface ParsedLoopArgs {
+	/** Iteration/duration budget, when the user supplied a leading limit token. */
+	limit?: LoopLimitConfig;
+	/** Inline loop prompt: text after the limit, or the whole argument when no limit was given. */
+	prompt?: string;
 }
 
-function parseDurationParts(amountText: string, unitText: string): LoopLimitConfig | string {
-	if (!/^\d+$/.test(amountText)) {
-		return "Loop duration must use a positive integer amount.";
+/**
+ * Parse `/loop` arguments into an optional leading limit plus an optional inline
+ * prompt. A token that *looks* like a limit (starts with a digit or sign) but
+ * fails to parse is a hard error; anything else is treated as prompt text, so
+ * plain prose after `/loop` keeps starting an unbounded loop instead of erroring
+ * (the pre-arg-parsing behavior). Returns the error message string on failure.
+ */
+export function parseLoopLimitArgs(args: string): ParsedLoopArgs | string {
+	const trimmed = args.trim();
+	if (!trimmed) return {};
+
+	const firstSpace = trimmed.search(/\s/);
+	const firstToken = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+	const rest = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
+	const token = firstToken.toLowerCase();
+
+	// Not a limit attempt (prose like "keep going") → unbounded loop, prompt = full args.
+	if (!/^[+-]?\d/.test(token)) {
+		return { prompt: trimmed };
 	}
 
+	// Bare integer: iteration count, unless the next token is a time unit ("10 minutes").
+	if (/^\d+$/.test(token)) {
+		if (rest) {
+			const restTokens = rest.split(/\s+/);
+			const unitMs = TIME_UNITS_MS.get(restTokens[0].toLowerCase());
+			if (unitMs !== undefined) {
+				const limit = makeDuration(token, unitMs);
+				if (typeof limit === "string") return limit;
+				return { limit, prompt: restTokens.slice(1).join(" ").trim() || undefined };
+			}
+		}
+		const limit = makeIterations(token);
+		if (typeof limit === "string") return limit;
+		return { limit, prompt: rest || undefined };
+	}
+
+	// Compact / compound duration: "10m", "90s", "1h30m".
+	const duration = parseCompoundDuration(token);
+	if (duration !== undefined) {
+		if (typeof duration === "string") return duration;
+		return { limit: duration, prompt: rest || undefined };
+	}
+
+	// Limit-shaped but unparseable ("-1", "1.5h", "10x10").
+	return LOOP_USAGE;
+}
+
+function makeIterations(amountText: string): LoopLimitConfig | string {
+	const amount = Number(amountText);
+	if (!Number.isSafeInteger(amount) || amount <= 0) {
+		return "Loop count must be a positive integer.";
+	}
+	return { kind: "iterations", iterations: amount };
+}
+
+function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | string {
 	const amount = Number(amountText);
 	if (!Number.isSafeInteger(amount) || amount <= 0) {
 		return "Loop duration must be positive.";
 	}
-
-	const unitMs = TIME_UNITS_MS.get(unitText);
-	if (unitMs === undefined) {
-		return "Loop duration unit must be seconds, minutes, or hours.";
-	}
-
 	return { kind: "duration", durationMs: amount * unitMs };
+}
+
+/**
+ * Parse a compact duration token such as `10m`, or a compound one like `1h30m`.
+ * Returns `undefined` when the token is not duration-shaped, or an error string
+ * when it is shaped like a duration but uses an unknown unit / non-positive
+ * amount.
+ */
+function parseCompoundDuration(token: string): LoopLimitConfig | string | undefined {
+	if (!/^(?:\d+[a-z]+)+$/.test(token)) return undefined;
+	const segments = token.match(/\d+[a-z]+/g);
+	if (!segments) return undefined;
+	let totalMs = 0;
+	for (const segment of segments) {
+		const match = /^(\d+)([a-z]+)$/.exec(segment);
+		if (!match) return LOOP_USAGE;
+		const unitMs = TIME_UNITS_MS.get(match[2]);
+		if (unitMs === undefined) {
+			return "Loop duration unit must be seconds, minutes, or hours.";
+		}
+		const amount = Number(match[1]);
+		if (!Number.isSafeInteger(amount) || amount <= 0) {
+			return "Loop duration must be positive.";
+		}
+		totalMs += amount * unitMs;
+	}
+	if (totalMs <= 0) return "Loop duration must be positive.";
+	return { kind: "duration", durationMs: totalMs };
 }
 
 export function createLoopLimitRuntime(
