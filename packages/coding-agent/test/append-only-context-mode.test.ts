@@ -41,4 +41,46 @@ describe("shouldEnableAppendOnlyContext", () => {
 	test("auto remains off for unknown providers without prefix-cache signals", () => {
 		expect(shouldEnableAppendOnlyContext("auto", GENERIC_PROXY)).toBe(false);
 	});
+
+	test("auto enables for local inference providers", () => {
+		// Ollama serves both `ollama-chat` (cloud-managed) and the openai-responses
+		// path used by locally pulled models — issue #3033 (llama.cpp KV-cache prefix
+		// resets every turn without append-only mode).
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "ollama", baseUrl: "http://127.0.0.1:11434" })).toBe(
+			true,
+		);
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "ollama-cloud", baseUrl: "https://ollama.com" })).toBe(
+			true,
+		);
+		expect(
+			shouldEnableAppendOnlyContext("auto", { provider: "lm-studio", baseUrl: "http://127.0.0.1:1234/v1" }),
+		).toBe(true);
+	});
+
+	test("auto enables for loopback and private baseUrls (user-defined llama.cpp/vLLM)", () => {
+		const cases: Array<{ provider: string; baseUrl: string }> = [
+			{ provider: "my-llamacpp", baseUrl: "http://localhost:8080/v1" },
+			{ provider: "my-vllm", baseUrl: "http://127.0.0.1:8000/v1" },
+			{ provider: "my-sglang", baseUrl: "http://[::1]:30000/v1" },
+			{ provider: "lan-host", baseUrl: "http://192.168.1.42:11434" },
+			{ provider: "lan-host", baseUrl: "http://10.0.0.5:11434" },
+			{ provider: "lan-host", baseUrl: "http://172.17.0.3:11434" },
+			{ provider: "mdns-host", baseUrl: "http://gpu-box.local:11434" },
+		];
+		for (const model of cases) {
+			expect(shouldEnableAppendOnlyContext("auto", model)).toBe(true);
+		}
+	});
+
+	test("auto stays off for public hosts that merely share an IP prefix", () => {
+		// 172.15.x.x sits just outside the RFC1918 16-31 band.
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "x", baseUrl: "http://172.15.0.1/v1" })).toBe(false);
+		// 172.32.x.x sits just outside the RFC1918 16-31 band on the other side.
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "x", baseUrl: "http://172.32.0.1/v1" })).toBe(false);
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "x", baseUrl: "https://example.com/v1" })).toBe(false);
+	});
+
+	test("malformed baseUrl never crashes the resolver", () => {
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "x", baseUrl: "not a url" })).toBe(false);
+	});
 });
