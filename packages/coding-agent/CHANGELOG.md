@@ -7,6 +7,10 @@
 - Defaulted `display.cacheMissMarker` setting to `false` to suppress the cache-miss marker by default.
 - Replaced the four separate `power.preventIdleSleep`, `power.preventSystemSleep`, `power.declareUserActive`, and `power.preventDisplaySleep` boolean settings with a single cumulative `power.sleepPrevention` enum (`off` → `idle` → `display` → `system`). Each level adds the caffeinate flags of all lower levels. Existing configs are migrated automatically.
 
+### Fixed
+
+- Cache-miss marker no longer fires on providers with implicit, best-effort prompt caching (Google/Gemini, OpenAI, Fireworks). Those report `cacheWrite: 0` and drop `cacheRead` to zero intermittently as routine propagation noise that self-heals the next turn. Only explicit, prefix-controlled caches (Anthropic/Bedrock `cache_control`), which re-create the prefix on a cold turn as `cacheWrite > 0`, now surface a marker — where a zero `cacheRead` genuinely means the prefix broke.
+
 ## [16.1.0] - 2026-06-19
 
 ### Added

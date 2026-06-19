@@ -25,8 +25,13 @@ export interface CacheInvalidation {
  * request reads nothing from cache and re-pays for the whole prompt. We detect
  * that as: the previous turn cached a meaningful prefix, yet this turn's
  * `cacheRead` collapsed to zero while it still reprocessed a non-trivial prompt.
- * Returns `undefined` (no marker) for the first turn, tiny contexts, and turns
- * that reused any cache.
+ * Returns `undefined` (no marker) for the first turn, tiny contexts, turns
+ * that reused any cache, and — crucially — turns on providers with *implicit*
+ * best-effort caching. Only an explicit, prefix-controlled cache (Anthropic /
+ * Bedrock `cache_control`) re-creates the prefix on a cold turn (`cacheWrite >
+ * 0`); implicit caches (Google / OpenAI / Fireworks) report `cacheWrite: 0` and
+ * drop `cacheRead` to zero intermittently as routine propagation noise that
+ * self-heals the next turn, so flagging it would be a false positive.
  */
 export function detectCacheInvalidation(prev: Usage | undefined, current: Usage): CacheInvalidation | undefined {
 	if (!prev) return undefined;
@@ -34,6 +39,11 @@ export function detectCacheInvalidation(prev: Usage | undefined, current: Usage)
 	if (prevFootprint < MIN_CACHE_FOOTPRINT) return undefined;
 	// Any cache reuse this turn means the prefix survived (at least partly).
 	if (current.cacheRead > 0) return undefined;
+	// Only an explicit, prefix-controlled cache re-creates the prefix on a cold
+	// turn — Anthropic/Bedrock report that as `cacheWrite`. Implicit best-effort
+	// caches (Google/OpenAI/Fireworks) report `cacheWrite: 0` and drop `cacheRead`
+	// to zero intermittently as propagation noise, not a real invalidation.
+	if (current.cacheWrite <= 0) return undefined;
 	const reprocessedTokens = current.cacheWrite + current.input;
 	if (reprocessedTokens < MIN_CACHE_FOOTPRINT) return undefined;
 	return { reprocessedTokens };
