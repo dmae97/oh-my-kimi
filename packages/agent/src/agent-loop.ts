@@ -40,7 +40,7 @@ import {
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
@@ -150,22 +150,6 @@ function resolveOwnedDialectFromEnv(value: string | undefined): Dialect | undefi
 
 type AssistantContentBlock = AssistantMessage["content"][number];
 type AssistantToolCallBlock = Extract<AssistantContentBlock, { type: "toolCall" }>;
-type CloneableRecord = Record<string, unknown>;
-
-function cloneUnknown(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(cloneUnknown);
-	if (!value || typeof value !== "object") return value;
-	const source = value as CloneableRecord;
-	const out: CloneableRecord = {};
-	for (const [key, child] of Object.entries(source)) {
-		out[key] = cloneUnknown(child);
-	}
-	return out;
-}
-
-function cloneToolArguments(args: AssistantToolCallBlock["arguments"]): AssistantToolCallBlock["arguments"] {
-	return cloneUnknown(args) as AssistantToolCallBlock["arguments"];
-}
 
 function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantContentBlock {
 	switch (block.type) {
@@ -176,7 +160,7 @@ function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantC
 		case "redactedThinking":
 			return { ...block };
 		case "toolCall":
-			return { ...block, arguments: cloneToolArguments(block.arguments) };
+			return { ...block, arguments: structuredCloneJSON(block.arguments) };
 	}
 }
 
