@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Refactored Perplexity authentication logic to prioritize cookies over OAuth in search operations
@@ -8,6 +9,8 @@
 
 ### Fixed
 
+- Enabled auto-retry for AI "thinking loop" errors encountered during model inference
+- Cleared stale error banners automatically when triggered by an auto-retry recovery phase
 - Preserved bundled `omitMaxOutputTokens` policy when fresh cached provider discovery rows replace Ollama Cloud catalog models, so stale `models.db` entries cannot re-enable context-window-sized `num_predict` values. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
 - Normalized cached-only Ollama Cloud discovery rows to omit on-the-wire output-token caps even when the cached model id has no bundled catalog entry. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
 - Fixed Ollama, LM Studio, and llama.cpp (plus loopback vLLM / sglang servers) reprocessing the full prompt on every turn because `provider.appendOnlyContext: auto` only recognized DeepSeek and Xiaomi as prefix-cache providers. The auto-detect now enables append-only mode for `ollama`, `ollama-cloud`, `lm-studio`, `llama.cpp`, and any baseUrl resolving to a loopback/RFC1918/`.local` host, so the system prompt + tool catalogue + prior-turn message bytes stay byte-stable across turns and llama.cpp's KV-cache prefix reuse can hit ([#3033](https://github.com/can1357/oh-my-pi/issues/3033)).

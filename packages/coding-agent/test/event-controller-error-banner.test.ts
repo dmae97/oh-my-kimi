@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ErrorBannerComponent } from "@oh-my-pi/pi-coding-agent/modes/components/error-banner";
@@ -60,15 +61,22 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	};
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();
+	const statusContainer = {
+		clear: vi.fn(),
+		addChild: vi.fn(),
+	};
 
 	const session = { isTtsrAbortPending: false, retryAttempt: 0 };
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
-		ui: { requestRender: vi.fn() },
+		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
+		statusContainer,
+		loadingAnimation: undefined,
+		retryLoader: undefined,
 		editor: {},
 		streamingComponent: streamingMessage ? streamingComponent : undefined,
 		streamingMessage,
@@ -119,6 +127,35 @@ describe("EventController error banner", () => {
 
 		expect(clearPinnedError).toHaveBeenCalledTimes(1);
 		expect(streamingComponent.setErrorPinned).toHaveBeenCalledWith(false);
+	});
+
+	it("clears retryable thinking-loop banners without restoring the dropped inline error", async () => {
+		const errorMessage = `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content. Treating as a stream stall and retrying.`;
+		const message = makeAssistantMessage({ stopReason: "error", errorMessage });
+		const { controller, clearPinnedError, streamingComponent } = createFixture(message);
+
+		await controller.handleEvent({ type: "message_end", message } as Extract<
+			AgentSessionEvent,
+			{ type: "message_end" }
+		>);
+		clearPinnedError.mockClear();
+		streamingComponent.setErrorPinned.mockClear();
+
+		await controller.handleEvent({
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 2,
+			delayMs: 0,
+			errorMessage,
+		} as Extract<AgentSessionEvent, { type: "auto_retry_start" }>);
+
+		expect(clearPinnedError).toHaveBeenCalledTimes(1);
+		expect(streamingComponent.setErrorPinned).not.toHaveBeenCalledWith(false);
+		await controller.handleEvent({
+			type: "auto_retry_end",
+			success: true,
+			attempt: 1,
+		} as Extract<AgentSessionEvent, { type: "auto_retry_end" }>);
 	});
 
 	it("does not pin a banner for a normal assistant stop", async () => {

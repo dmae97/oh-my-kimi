@@ -1,4 +1,5 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
@@ -1014,6 +1015,13 @@ export class EventController {
 	async #handleAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): Promise<void> {
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
+		if (event.errorMessage?.includes(THINKING_LOOP_ERROR_MARKER)) {
+			// The retry path drops the failed assistant from runtime context. Do not
+			// restore its inline Error row; just unpin the fixed-region banner so the
+			// retry UI is the visible state.
+			this.#pinnedErrorComponent = undefined;
+			this.ctx.clearPinnedError();
+		}
 		const delaySeconds = Math.round(event.delayMs / 1000);
 		this.ctx.retryLoader = new Loader(
 			this.ctx.ui,

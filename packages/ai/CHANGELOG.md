@@ -1,10 +1,14 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added regression test pinning that `openai-completions` emits a `thinking` block for `reasoning_content` deltas even when `delta.content` is explicitly JSON `null` (the DeepSeek-format dual-key pattern used by custom GLM/Qwen reasoning providers). See [#2996](https://github.com/can1357/oh-my-pi/issues/2996).
+
+### Changed
+
+- Improved the thinking loop guard to treat assistant text loops as retryable errors
+- Refined text normalization logic to reduce false positives in the thinking loop detector
 
 ### Fixed
 

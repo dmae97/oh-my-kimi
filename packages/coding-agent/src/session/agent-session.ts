@@ -104,6 +104,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { stripToolDescriptions } from "@oh-my-pi/pi-ai/utils/schema";
+import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
@@ -9983,6 +9984,7 @@ export class AgentSession {
 		if (this.#isProviderErrorFinishReasonBeforeToolUse(message)) return true;
 		if (this.#isMalformedFunctionCallError(message)) return true;
 		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		if (message.errorMessage.includes(THINKING_LOOP_ERROR_MARKER)) return true;
 		if (this.#isStaleOpenAIResponsesReplayError(message)) return true;
 
 		const err = message.errorMessage;
