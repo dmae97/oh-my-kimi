@@ -688,6 +688,37 @@ export async function loadSessionExtensions(
 }
 
 /**
+ * Load discovered/configured extensions and register their providers into
+ * `modelRegistry`, then discover the dynamic provider catalogs. One-shot CLIs
+ * (`omp bench`, dry-balance) build a bare {@link ModelRegistry} that only knows
+ * built-in catalog providers; without this, providers contributed by an
+ * extension (e.g. a custom OpenAI-compatible provider under
+ * `~/.omp/agent/extensions/`) never reach model resolution. Mirrors the
+ * session / `omp models` path: drain the queued provider registrations, then
+ * `refreshRuntimeProviders` so dynamically-discovered models exist before
+ * selectors are resolved.
+ */
+export async function loadCliExtensionProviders(
+	modelRegistry: ModelRegistry,
+	settings: Settings,
+	cwd: string,
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths"> = {},
+): Promise<void> {
+	const eventBus = new EventBus();
+	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
+	const activeSources = extensionsResult.extensions.map(extension => extension.path);
+	modelRegistry.syncExtensionSources(activeSources);
+	for (const sourceId of new Set(activeSources)) {
+		modelRegistry.clearSourceRegistrations(sourceId);
+	}
+	for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
+		modelRegistry.registerProvider(name, config, sourceId);
+	}
+	extensionsResult.runtime.pendingProviderRegistrations = [];
+	await modelRegistry.refreshRuntimeProviders();
+}
+
+/**
  * Discover skills from cwd and agentDir.
  */
 export async function discoverSkills(

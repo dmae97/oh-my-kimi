@@ -26,7 +26,7 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import dryBalanceBenchPrompt from "../prompts/dry-balance-bench.md" with { type: "text" };
-import { discoverAuthStorage } from "../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 
 const DEFAULT_SAMPLE_COUNT = 100;
 const DEFAULT_CONCURRENCY = 32;
@@ -523,8 +523,10 @@ async function runBenchTargets(
 async function createDefaultRuntime(): Promise<DryBalanceRuntime> {
 	const authStorage = await discoverAuthStorage();
 	try {
-		const settings = await Settings.init({ cwd: getProjectDir() });
+		const cwd = getProjectDir();
+		const settings = await Settings.init({ cwd });
 		const modelRegistry = new ModelRegistry(authStorage);
+		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 		return {
 			modelRegistry,
 			settings,

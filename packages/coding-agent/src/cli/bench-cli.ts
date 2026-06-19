@@ -25,7 +25,7 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
-import { discoverAuthStorage } from "../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 import { resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const DEFAULT_RUNS = 1;
@@ -145,6 +145,23 @@ function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
 	}
 }
 
+/** Final message carries visible output — non-empty text/thinking or a tool call. */
+function hasVisibleFinalContent(message: AssistantMessage): boolean {
+	return message.content.some(block => {
+		switch (block.type) {
+			case "text":
+				return block.text.length > 0;
+			case "thinking":
+				return block.thinking.length > 0;
+			case "redactedThinking":
+			case "toolCall":
+				return true;
+			default:
+				return false;
+		}
+	});
+}
+
 /**
  * Tokens/s over the generation window (duration minus TTFT) so queue/prefill
  * latency does not dilute throughput. Falls back to total duration when the
@@ -232,6 +249,18 @@ async function runBenchRequest(
 		const rawTtft = message.ttft ?? (firstTokenAt === undefined ? durationMs : firstTokenAt - startedAt);
 		const ttftMs = Number.isFinite(rawTtft) && rawTtft > 0 ? rawTtft : 0;
 		const outputTokens = Number.isFinite(message.usage.output) && message.usage.output > 0 ? message.usage.output : 0;
+		// A run that streamed no content (no delta/end event set firstTokenAt),
+		// carries no visible final content, and measured no output tokens
+		// benchmarked nothing — a genuinely empty stream (e.g. a gateway that 200s
+		// with an empty body). Surface it as a failure instead of a misleading
+		// 0-token "✓". Streaming and buffered providers that produce content keep
+		// passing even when usage is omitted.
+		if (firstTokenAt === undefined && outputTokens === 0 && !hasVisibleFinalContent(message)) {
+			return {
+				ok: false,
+				error: `provider returned no output (0 tokens, empty stream; stop reason: ${message.stopReason ?? "unknown"})`,
+			};
+		}
 		return {
 			ok: true,
 			ttftMs,
@@ -328,8 +357,10 @@ export function formatBenchTable(summary: BenchSummary): string {
 async function createDefaultRuntime(): Promise<BenchRuntime> {
 	const authStorage = await discoverAuthStorage();
 	try {
-		const settings = await Settings.init({ cwd: getProjectDir() });
+		const cwd = getProjectDir();
+		const settings = await Settings.init({ cwd });
 		const modelRegistry = new ModelRegistry(authStorage);
+		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 		return {
 			modelRegistry,
 			settings,
