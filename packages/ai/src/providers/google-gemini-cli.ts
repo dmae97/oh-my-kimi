@@ -940,7 +940,7 @@ function buildAntigravityRequestEnvelope(
 	const labels: Record<string, string> = {};
 	if (state?.lastExecutionId) labels.last_execution_id = state.lastExecutionId;
 	labels.last_step_index = String(step - 1);
-	if (profile) labels.model_enum = profile.modelEnum;
+	if (profile?.modelEnum !== undefined) labels.model_enum = profile.modelEnum;
 	labels.trajectory_id = trajectoryId;
 	labels.used_claude = String(isClaude);
 	labels.used_claude_conservative = String(isClaude);

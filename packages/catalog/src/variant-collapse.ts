@@ -220,8 +220,26 @@ const SHARED_CCA_FAMILIES: readonly EffortVariantFamily[] = [
 		routing: {},
 		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
 	},
-	thinkingPair("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-	thinkingPair("claude-opus-4-6", "Claude Opus 4.6"),
+	// Antigravity Cloud Code Assist exposes Claude 4.6 asymmetrically: only the
+	// bare `claude-sonnet-4-6` wire id (no `-thinking` twin) and only the
+	// `claude-opus-4-6-thinking` wire id (no bare twin). Per-effort thinking is
+	// carried in the request body via `thinkingBudget`, so both ids accept on/off
+	// requests. Listing both candidates in `members` (priority order) keeps the
+	// collapse correct if the backend mix ever rebalances.
+	{
+		id: "claude-sonnet-4-6",
+		name: "Claude Sonnet 4.6",
+		members: ["claude-sonnet-4-6", "claude-sonnet-4-6-thinking"],
+		routing: {},
+		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+	},
+	{
+		id: "claude-opus-4-6",
+		name: "Claude Opus 4.6",
+		members: ["claude-opus-4-6-thinking", "claude-opus-4-6"],
+		routing: {},
+		thinking: { mode: "budget", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+	},
 	thinkingPair("claude-sonnet-4-5", "Claude Sonnet 4.5"),
 	thinkingPair("claude-opus-4-5", "Claude Opus 4.5"),
 	thinkingPair("gemini-2.5-flash", "Gemini 2.5 Flash"),

@@ -233,6 +233,24 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.request.labels?.model_enum).toBe("MODEL_PLACEHOLDER_M20");
 	});
 
+	it("caps Claude maxOutputTokens at 64000 and omits the unset model_enum label", () => {
+		// Regression for #3067: discovery may advertise 65536, but
+		// `daily-cloudcode-pa` 400s when Claude requests exceed 64000.
+		// The Claude profiles also lack a captured model_enum token, so
+		// the request must not emit a stale or placeholder label.
+		const cases = [{ requestModelId: "claude-sonnet-4-6" }, { requestModelId: "claude-opus-4-6-thinking" }];
+		for (const opts of cases) {
+			const payload = buildRequest(createModel("google-antigravity"), createContext(), "proj-123", opts, true) as {
+				model?: string;
+				request: { generationConfig?: { maxOutputTokens?: number }; labels?: Record<string, string> };
+			};
+
+			expect(payload.model).toBe(opts.requestModelId);
+			expect(payload.request.generationConfig?.maxOutputTokens).toBe(64000);
+			expect(payload.request.labels?.model_enum).toBeUndefined();
+		}
+	});
+
 	it("defaults antigravity tools to VALIDATED but omits AUTO toolConfig for plain gemini-cli", () => {
 		const context: Context = {
 			messages: [{ role: "user", content: "inspect repo", timestamp: Date.now() }],
