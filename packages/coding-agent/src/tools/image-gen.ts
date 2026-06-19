@@ -1572,19 +1572,15 @@ export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails
 };
 
 export async function getImageGenTools(
-	modelRegistry?: ModelRegistry,
-	activeModel?: Model,
+	_modelRegistry?: ModelRegistry,
+	_activeModel?: Model,
 ): Promise<Array<CustomTool<typeof imageGenSchema, ImageGenToolDetails>>> {
-	const apiKey = await findImageApiKey(modelRegistry, activeModel);
-	if (!apiKey) return [];
 	return [imageGenTool];
 }
 
 export async function getImageGenToolsWithRegistry(
-	modelRegistry: ModelRegistry,
-	activeModel?: Model,
+	_modelRegistry: ModelRegistry,
+	_activeModel?: Model,
 ): Promise<Array<CustomTool<typeof imageGenSchema, ImageGenToolDetails>>> {
-	const apiKey = await findImageApiKey(modelRegistry, activeModel);
-	if (!apiKey) return [];
 	return [imageGenTool];
 }
