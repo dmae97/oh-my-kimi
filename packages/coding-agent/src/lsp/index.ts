@@ -598,7 +598,7 @@ async function runWorkspaceDiagnostics(
 		// Limit output length
 		const lines = combined.split("\n");
 		if (lines.length > 50) {
-			return { output: `${lines.slice(0, 50).join("\n")}\n... and ${lines.length - 50} more lines`, projectType };
+			return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
 		}
 		return { output: combined, projectType };
 	} catch (e) {
