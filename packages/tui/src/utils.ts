@@ -88,6 +88,11 @@ export function truncateToWidth(
 	// and `maxWidth` is a required `u32` that throws on `null`/`undefined`
 	// everywhere. Pass concrete defaults that mirror the Rust `unwrap_or`s.
 	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
+	// Fast path: every UTF-16 unit is at most 3 cells wide, so a string whose
+	// `length * 3` already fits within `safeWidth` cannot need truncation.
+	if (!pad && text.length * 3<= safeWidth) {
+		return text;
+	}
 	let resolvedEllipsis: Ellipsis | null | undefined | string = ellipsisKind;
 	if (typeof resolvedEllipsis === "string") {
 		resolvedEllipsis = resolvedEllipsis === "" ? Ellipsis.Omit : Ellipsis.Unicode;
