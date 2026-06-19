@@ -65,6 +65,19 @@ function runCleanup(reason: Reason): Promise<void> {
 // Worker thread: exit only (workers use self.addEventListener for exceptions)
 let inspectorOpened = false;
 
+/**
+ * Detect an EPIPE rejection that originated from an IPC `send()` to a worker
+ * subprocess (`syscall: "send"`), as opposed to a stdin/stdout pipe write
+ * (`syscall: "write"`). Only the IPC-send path can break an optional worker
+ * subsystem without affecting the main process, so only this shape is safe to
+ * swallow at the global `unhandledRejection` level. See issue #2997.
+ */
+export function isIpcSendEpipe(err: Error): boolean {
+	const code = (err as { code?: unknown }).code;
+	const syscall = (err as { syscall?: unknown }).syscall;
+	return code === "EPIPE" && syscall === "send";
+}
+
 function formatFatalError(label: string, err: Error): string {
 	const name = err.name || "Error";
 	const message = err.message || "(no message)";
@@ -95,6 +108,19 @@ if (isMainThread) {
 		})
 		.on("unhandledRejection", async reason => {
 			const err = reason instanceof Error ? reason : new Error(String(reason));
+			// EPIPE from an IPC `send()` (`syscall: "send"`) originates from a
+			// worker subprocess whose pipe broke between the exit being observed
+			// and the next `proc.send()` — a race window that Bun surfaces as an
+			// async rejection rather than the synchronous "cannot be used after
+			// the process has exited" guard. Every `send()` target is an optional
+			// worker subsystem (TTS, STT, tiny-title, MCP servers), so a broken
+			// send pipe must never take down the whole session. Log and continue
+			// instead of exiting; the owning client detects the dead worker via
+			// its own `onExit`/error path and respawns or disables it. See #2997.
+			if (isIpcSendEpipe(err)) {
+				logger.warn("Ignoring EPIPE from worker IPC send; optional subsystem will self-recover", { err });
+				return;
+			}
 			process.stderr.write(formatFatalError("Unhandled Rejection", err));
 			logger.error("Unhandled rejection", { err });
 			await runCleanup(Reason.UNHANDLED_REJECTION);
