@@ -72,7 +72,7 @@ function chunk(model: string, delta: SseChoiceDelta, finish: SseChunk["choices"]
 const REPORTED_DSML_LEAK =
 	"<｜DSML｜tool_calls>\n" +
 	' <｜DSML｜invoke name="bash">\n' +
-	' <｜DSML｜parameter name="_i" string="true">Check Fedora 42 available packages</｜DSML｜parameter>\n' +
+	' <｜DSML｜parameter name="i" string="true">Check Fedora 42 available packages</｜DSML｜parameter>\n' +
 	' <｜DSML｜parameter name="command" string="true">docker run --rm --platform linux/arm64 fedora:42 bash -c \'type python3; type git; type sed; type cp; ls /usr/bin/python3 2>/dev/null; rpm -qa | grep -E "^python3|^git-|^sed-|^bash-" | sort\'</｜DSML｜parameter>\n' +
 	' <｜DSML｜parameter name="timeout" string="false">15</｜DSML｜parameter>\n' +
 	" </｜DSML｜invoke>\n" +
@@ -616,7 +616,7 @@ describe("Ollama provider DSML envelope healing", () => {
 		expect(toolCalls).toHaveLength(1);
 		expect(toolCalls[0].name).toBe("bash");
 		expect(toolCalls[0].arguments).toMatchObject({
-			_i: "Check Fedora 42 available packages",
+			[INTENT_FIELD]: "Check Fedora 42 available packages",
 			timeout: 15,
 		});
 		expect(String(toolCalls[0].arguments.command)).toContain("docker run");

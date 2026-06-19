@@ -5,7 +5,7 @@ if "__omp_prelude_loaded__" not in globals():
     from pathlib import Path
     import os, json, math, re
     from urllib.parse import unquote
-    INTENT_FIELD = "_i"
+    INTENT_FIELD = "i"
 
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.

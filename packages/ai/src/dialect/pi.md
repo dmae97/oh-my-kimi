@@ -23,7 +23,7 @@ Call with a verbatim body — everything between `«` and `»` is taken literall
 
 Argument values:
 
-- Strings are written bare and verbatim (`path=src/a.ts`). Quote with `"…"` only when the value contains spaces or starts with `"`, `[`, or `{` (`_i="run the tests"`).
+- Strings are written bare and verbatim (`path=src/a.ts`). Quote with `"…"` only when the value contains spaces or starts with `"`, `[`, or `{` (`i="run the tests"`).
 - Numbers, booleans, and `null` are JSON literals (`offset=50`, `force=true`).
 - Arrays and objects are inline JSON (`paths=["src","test"]`).
 - The body fence holds the call's first long/multi-line string parameter; its key is implied, never written.
