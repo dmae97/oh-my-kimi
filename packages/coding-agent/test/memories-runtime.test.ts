@@ -102,7 +102,7 @@ const flushAsync = (): Promise<void> => new Promise<void>(resolve => setTimeout(
 // instead of polling, racing a generous timeout so a stalled regression fails
 // loudly rather than hanging.
 async function settle(promise: Promise<void>, label: string, timeoutMs = 3000): Promise<void> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: Timer | undefined;
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
 	});

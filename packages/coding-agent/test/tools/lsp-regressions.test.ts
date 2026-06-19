@@ -78,7 +78,7 @@ function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 	const waiters: Array<{
 		predicate: (message: RpcMessage) => boolean;
 		resolve: (message: RpcMessage) => void;
-		timer: ReturnType<typeof setTimeout>;
+		timer: Timer;
 	}> = [];
 	let exitCode: number | null = null;
 	let killed = false;

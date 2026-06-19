@@ -12,6 +12,7 @@ import {
 	todoMatchesAnyDescription,
 	todoToolRenderer,
 } from "@oh-my-pi/pi-coding-agent/tools";
+import type { Component } from "@oh-my-pi/pi-tui";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -435,7 +436,7 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		// Beta and Gamma untouched by this update.
 		return tool.execute("done", { ops: [{ op: "done", task: "a1" }] });
 	}
-	function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {
+	function innerLines(component: Component): string[] {
 		const lines = Bun.stripANSI(component.render(100).join("\n")).split("\n");
 		return lines.slice(1, -1).map(line => line.replace(/^│/, "").replace(/│\s*$/, "").trim());
 	}

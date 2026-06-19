@@ -718,7 +718,7 @@ async function runLoopBody(
 	stepCounter: StepCounter,
 	streamFn?: StreamFn,
 ): Promise<void> {
-	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+	let deadlineTimer: Timer | undefined;
 	if (config.deadline !== undefined) {
 		const deadlineAbortController = new AbortController();
 		const delay = config.deadline - Date.now();
