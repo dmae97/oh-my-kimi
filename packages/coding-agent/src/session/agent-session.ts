@@ -1344,19 +1344,15 @@ export class AgentSession {
 		if (process.platform !== "darwin") return;
 		if (isBunTestRuntime()) return;
 		if (this.#powerAssertion) return;
-		const idle = this.settings.get("power.preventIdleSleep");
-		const system = this.settings.get("power.preventSystemSleep");
-		const user = this.settings.get("power.declareUserActive");
-		const display = this.settings.get("power.preventDisplaySleep");
-		// All four off → user opted out; do nothing.
-		if (!idle && !system && !user && !display) return;
+		const mode = this.settings.get("power.sleepPrevention");
+		if (mode === "off") return;
 		try {
 			this.#powerAssertion = MacOSPowerAssertion.start({
 				reason: "Oh My Pi agent session",
-				idle,
-				system,
-				user,
-				display,
+				idle: true,
+				display: mode === "display" || mode === "system",
+				system: mode === "system",
+				user: mode === "system",
 			});
 		} catch (error) {
 			logger.warn("Failed to acquire macOS power assertion", { error: String(error) });

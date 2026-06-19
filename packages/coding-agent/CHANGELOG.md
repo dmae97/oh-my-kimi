@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Migrated legacy macOS power settings to a single sleep prevention enum
+- Defaulted `display.cacheMissMarker` setting to `false` to suppress the cache-miss marker by default.
+- Replaced the four separate `power.preventIdleSleep`, `power.preventSystemSleep`, `power.declareUserActive`, and `power.preventDisplaySleep` boolean settings with a single cumulative `power.sleepPrevention` enum (`off` → `idle` → `display` → `system`). Each level adds the caffeinate flags of all lower levels. Existing configs are migrated automatically.
 
 ## [16.1.0] - 2026-06-19
 

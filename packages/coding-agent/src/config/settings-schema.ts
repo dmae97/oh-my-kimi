@@ -342,44 +342,38 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// macOS power assertions (caffeinate flags). No-op on other platforms.
-	"power.preventIdleSleep": {
-		type: "boolean",
-		default: true,
+	"power.sleepPrevention": {
+		type: "enum",
+		values: ["off", "idle", "display", "system"] as const,
+		default: "idle",
 		ui: {
 			tab: "interaction",
 			group: "Power (macOS)",
-			label: "Prevent Idle Sleep",
-			description: "Keep the system awake while a session is open (caffeinate -i)",
-		},
-	},
-	"power.preventSystemSleep": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Prevent System Sleep on AC",
-			description: "Block all system sleep while on AC power (caffeinate -s)",
-		},
-	},
-	"power.declareUserActive": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Declare User Active",
-			description: "Keep the display lit and treat the user as active (caffeinate -u)",
-		},
-	},
-	"power.preventDisplaySleep": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Prevent Display Sleep",
-			description: "Keep the display from idle-sleeping while a session is open (caffeinate -d)",
+			label: "Sleep Prevention",
+			description:
+				"Prevent macOS sleep during active sessions. Each level is cumulative — it adds the flags of all lower levels.",
+			options: [
+				{
+					value: "off",
+					label: "Off",
+					description: "Do not prevent any sleep",
+				},
+				{
+					value: "idle",
+					label: "Prevent Idle Sleep",
+					description: "Keep the system awake while a session is open (caffeinate -i)",
+				},
+				{
+					value: "display",
+					label: "Prevent Display Sleep",
+					description: "Also keep the display from idle-sleeping (caffeinate -i -d)",
+				},
+				{
+					value: "system",
+					label: "Prevent System Sleep",
+					description: "Also block all system sleep on AC and declare the user active (caffeinate -i -d -s -u)",
+				},
+			],
 		},
 	},
 	"advisor.enabled": {
@@ -851,7 +845,7 @@ export const SETTINGS_SCHEMA = {
 
 	"display.cacheMissMarker": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "appearance",
 			group: "Display",
