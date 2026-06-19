@@ -41,49 +41,53 @@ export default class Token extends Command {
 		const provider = providerName.toLowerCase();
 
 		const authStorage = await discoverAuthStorage();
-		const modelRegistry = new ModelRegistry(authStorage);
+		try {
+			const modelRegistry = new ModelRegistry(authStorage);
 
-		// Resolve the API key / token
-		const apiKey = await modelRegistry.getApiKeyForProvider(provider, undefined, {
-			forceRefresh: flags["force-refresh"],
-		});
+			// Resolve the API key / token
+			const apiKey = await modelRegistry.getApiKeyForProvider(provider, undefined, {
+				forceRefresh: flags["force-refresh"],
+			});
 
-		if (!isAuthenticated(apiKey)) {
-			// Find all active/configured providers
-			const activeProviders = new Set<string>();
-			for (const p of PROVIDER_REGISTRY) {
-				if (authStorage.hasAuth(p.id)) {
-					activeProviders.add(p.id);
+			if (!isAuthenticated(apiKey)) {
+				// Find all active/configured providers
+				const activeProviders = new Set<string>();
+				for (const p of PROVIDER_REGISTRY) {
+					if (authStorage.hasAuth(p.id)) {
+						activeProviders.add(p.id);
+					}
+				}
+				const all = authStorage.getAll();
+				for (const p in all) {
+					if (authStorage.hasAuth(p)) {
+						activeProviders.add(p);
+					}
+				}
+
+				const msg = `No active credential found for provider "${providerName}".`;
+				process.stderr.write(`${chalk.red(msg)}\n`);
+				if (activeProviders.size > 0) {
+					process.stderr.write(`Configured providers: ${Array.from(activeProviders).sort().join(", ")}\n`);
+				}
+				process.exitCode = 1;
+				return;
+			}
+
+			if (!flags.raw) {
+				try {
+					const parsed = JSON.parse(apiKey);
+					if (parsed && typeof parsed === "object" && typeof parsed.token === "string") {
+						process.stdout.write(`${parsed.token}\n`);
+						return;
+					}
+				} catch {
+					// Not a JSON string, print as-is
 				}
 			}
-			const all = authStorage.getAll();
-			for (const p in all) {
-				if (authStorage.hasAuth(p)) {
-					activeProviders.add(p);
-				}
-			}
 
-			const msg = `No active credential found for provider "${providerName}".`;
-			process.stderr.write(`${chalk.red(msg)}\n`);
-			if (activeProviders.size > 0) {
-				process.stderr.write(`Configured providers: ${Array.from(activeProviders).sort().join(", ")}\n`);
-			}
-			process.exitCode = 1;
-			return;
+			process.stdout.write(`${apiKey}\n`);
+		} finally {
+			authStorage.close();
 		}
-
-		if (!flags.raw) {
-			try {
-				const parsed = JSON.parse(apiKey);
-				if (parsed && typeof parsed === "object" && typeof parsed.token === "string") {
-					process.stdout.write(`${parsed.token}\n`);
-					return;
-				}
-			} catch {
-				// Not a JSON string, print as-is
-			}
-		}
-
-		process.stdout.write(`${apiKey}\n`);
 	}
 }
