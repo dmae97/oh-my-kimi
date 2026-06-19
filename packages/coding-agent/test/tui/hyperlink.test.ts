@@ -60,6 +60,17 @@ afterEach(() => {
 });
 
 describe("isHyperlinkEnabled", () => {
+	it("falls back to plain text before Settings.init", async () => {
+		resetSettingsForTest();
+		try {
+			expect(isHyperlinkEnabled()).toBe(false);
+			expect(fileHyperlink(path.resolve("/Users/foo/bar.ts"), "bar.ts")).toBe("bar.ts");
+			expect(urlHyperlinkAlways("https://example.com/path", "example")).toBe("example");
+		} finally {
+			await Settings.init({ inMemory: true });
+		}
+	});
+
 	it('returns false when mode is "off"', () => {
 		setHyperlinkMode("off");
 		expect(isHyperlinkEnabled()).toBe(false);
