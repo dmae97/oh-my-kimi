@@ -30,19 +30,19 @@ export interface EmbeddingProvider {
 	available?(): boolean | Promise<boolean>;
 }
 
-type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
+export type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
 
-interface LocalEmbeddingModel {
+export interface LocalEmbeddingModel {
 	embed(texts: string[], batchSize?: number): EmbeddingOutput;
 	queryEmbed?(query: string): Promise<number[]>;
 }
 
-type LocalModelInitOptions = {
+export type LocalModelInitOptions = {
 	model: StandardEmbeddingModel;
 	cacheDir?: string;
 	showDownloadProgress?: boolean;
 };
-type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
+export type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
 const QUERY_CACHE_MAX = 512;
 
@@ -323,6 +323,16 @@ export function setLocalModelInitializerForTests(initializer: LocalModelInitiali
 	localModelPromise = null;
 	queryCache.clear();
 }
+
+/**
+ * Override the function used to construct the local fastembed model the next
+ * time `embed()` is called. Lets a host (e.g. the agent CLI) keep
+ * `onnxruntime-node` out of its own address space by routing every fastembed
+ * load + inference through a dedicated subprocess. Same wipe semantics as the
+ * `*ForTests` form: clears the cached model promise and the query cache so
+ * subsequent embeds run through the new initializer immediately.
+ */
+export const setLocalModelInitializer = setLocalModelInitializerForTests;
 
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;
