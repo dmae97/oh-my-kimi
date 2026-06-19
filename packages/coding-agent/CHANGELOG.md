@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `omp plugin install github:owner/repo` silently keeping the user on a stale commit when re-run on an already-installed GitHub plugin. `bun install <spec>` respects the existing `bun.lock` pin when the spec is unchanged and never re-resolves the remote ref, so the manager now follows a git re-install with `bun update <name>` to refresh the lockfile pin against the upstream. First-time installs are unaffected. ([#3063](https://github.com/can1357/oh-my-pi/issues/3063))
+- Fixed `omp plugin install github:owner/repo` silently keeping the user on a stale commit when re-run on an already-installed GitHub plugin. `bun install <spec>` respects the existing `bun.lock` pin when the spec is unchanged and never re-resolves the remote ref, so the manager now follows a git re-install with `bun update <name>` to refresh the lockfile pin against the upstream. The install transaction also snapshots `bun.lock` up front and routes feature validation, extension validation, and runtime-config save through one rollback path so a failed install can never leave the rejected commit pinned in the active tree or lockfile. First-time installs are unaffected. ([#3063](https://github.com/can1357/oh-my-pi/issues/3063))
 
 ## [16.1.3] - 2026-06-19
 
