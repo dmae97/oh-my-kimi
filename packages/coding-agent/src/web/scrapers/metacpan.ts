@@ -162,7 +162,7 @@ function formatModuleMarkdown(module: ModuleResponse, release: ReleaseResponse |
 				md += "\n";
 			}
 			if (runtimeDeps.length > 20) {
-				md += `\n*...and ${runtimeDeps.length - 20} more*\n`;
+				md += `\n[…${runtimeDeps.length - 20} dependencies elided…]\n`;
 			}
 		}
 	}
@@ -212,7 +212,7 @@ function formatReleaseMarkdown(release: ReleaseResponse): string {
 			md += "\n";
 		}
 		if (runtimeDeps.length > 20) {
-			md += `\n*...and ${runtimeDeps.length - 20} more*\n`;
+			md += `\n[…${runtimeDeps.length - 20} dependencies elided…]\n`;
 		}
 	}
 
