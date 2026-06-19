@@ -230,14 +230,16 @@ function nearestEnabledReasoningFallback(currentEffort: string, allowed: Set<str
 	if (currentRank === undefined) return undefined;
 	let best: string | undefined;
 	let bestDistance = Number.POSITIVE_INFINITY;
+	let bestRank = Number.NEGATIVE_INFINITY;
 	for (const candidate of allowedEnabled) {
 		if (candidate === current) continue;
 		const candidateRank = REASONING_VALUE_RANK[candidate];
 		if (candidateRank === undefined) continue;
 		const distance = Math.abs(candidateRank - currentRank);
-		if (distance < bestDistance) {
+		if (distance < bestDistance || (distance === bestDistance && candidateRank > bestRank)) {
 			best = candidate;
 			bestDistance = distance;
+			bestRank = candidateRank;
 		}
 	}
 	return best;

@@ -71,6 +71,19 @@ function invalidReasoningResponse(param: "reasoning_effort" | "reasoning.effort"
 		{ status: 400, headers: { "content-type": "application/json" } },
 	);
 }
+function invalidMediumReasoningResponse(): Response {
+	return new Response(
+		JSON.stringify({
+			error: {
+				message: 'reasoning.effort: Invalid option: expected one of "high"|"low"|"minimal"|"none"',
+				type: "invalid_request_error",
+				param: "reasoning.effort",
+			},
+		}),
+		{ status: 400, headers: { "content-type": "application/json" } },
+	);
+}
+
 function pipeDelimitedReasoningEffortResponse(): Response {
 	return new Response(
 		JSON.stringify({
@@ -269,6 +282,30 @@ describe("OpenAI reasoning effort fallback retry", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(bodies.map(body => (body.reasoning as { effort?: string } | undefined)?.effort)).toEqual(["max", "xhigh"]);
+	});
+
+	it("retries medium as high when medium is missing and high is the closest upper tier", async () => {
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock: FetchImpl = Object.assign(
+			async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+				const body = parseJsonBody(init);
+				bodies.push(body);
+				return bodies.length === 1 ? invalidMediumReasoningResponse() : createResponsesSseResponse();
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		const result = await streamOpenAIResponses(createResponsesModel(), testContext, {
+			apiKey: "test-key",
+			fetch: fetchMock,
+			reasoning: "medium",
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(bodies.map(body => (body.reasoning as { effort?: string } | undefined)?.effort)).toEqual([
+			"medium",
+			"high",
+		]);
 	});
 
 	it("retries Azure Responses xhigh as provider max", async () => {
