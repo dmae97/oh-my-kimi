@@ -609,6 +609,22 @@ describe("serializeConversation", () => {
 		expect(out).toBe("# Assistant ¶\nbefore\nafter");
 	});
 
+	it("drops blank text/thinking blocks instead of emitting an empty assistant heading", () => {
+		const out = snapcompact.serializeConversation(
+			[
+				createAssistantMessage([
+					{ type: "thinking", thinking: "   " },
+					{ type: "text", text: "" },
+					{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+				]),
+				{ ...createToolResultMessage("body"), toolCallId: "c1" } as Message,
+			],
+			{ dimToolResults: false },
+		);
+		expect(out).toBe('# Tool call ¶\nread(path="a.ts")\n<out>\nbody\n</out>');
+		expect(out).not.toContain("# Assistant ¶");
+	});
+
 	it("wraps tool-result bodies in dim toggles by default and strips stray toggles from content", () => {
 		const out = snapcompact.serializeConversation([
 			createUserMessage(`hello ${snapcompact.DIM_ON}world`),

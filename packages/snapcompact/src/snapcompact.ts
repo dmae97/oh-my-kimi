@@ -740,9 +740,11 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
-					pendingText.push(stripDimMarkers(block.text));
+					const text = stripDimMarkers(block.text);
+					if (text.trim()) pendingText.push(text);
 				} else if (block.type === "thinking") {
-					pendingThinking.push(stripDimMarkers(block.thinking));
+					const thinking = stripDimMarkers(block.thinking);
+					if (thinking.trim()) pendingThinking.push(thinking);
 				} else if (block.type === "toolCall") {
 					if (uselessCallIds.has(block.id)) continue;
 					flushAssistant();
