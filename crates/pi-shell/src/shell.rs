@@ -2237,6 +2237,64 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!output.contains("unterminated"));
 	}
 
+	/// Regression: a `&&` / `;` chain whose later pipeline stage is a compound
+	/// command (`while … done`) must execute instead of failing with
+	/// "pi-natives:command: syntax error at end of input". The segmented chain
+	/// runner rebuilt each segment via the brush AST `Display` impl, but only
+	/// validated the *first* pipeline stage — so a compound later stage was
+	/// reconstructed without its terminator and re-run as invalid shell. Such a
+	/// command now bails out of segmentation and runs whole via the single path.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn compound_stage_in_chain_runs_via_single_path() {
+		let root = unique_temp_dir("compound-chain");
+		let minimizer = printf_minimizer(&root.join("minimizer.toml"), None);
+		let (result, output) = run_command_capture(
+			"printf 'start\\n' && seq 5 | while read n; do echo \"n=$n\"; done | head -2",
+			None,
+			Some(minimizer),
+			CancelToken::default(),
+		)
+		.await;
+		let _ = std::fs::remove_dir_all(&root);
+		assert_eq!(result.exit_code, Some(0));
+		assert_eq!(output, "start\nn=1\nn=2\n");
+		assert!(!output.contains("syntax error"));
+		// Ran whole (unsegmented), so nothing was minimized.
+		assert!(result.minimized.is_none());
+	}
+
+	/// A segment that carries a file redirect is still segmented, and the brush
+	/// `Display` reconstruction the runner executes must round-trip through
+	/// brush's own parser **without losing the redirect**. `echo hidden >/dev/null`
+	/// suppresses its own stdout: if the reconstruction dropped the redirect,
+	/// `hidden` would leak into the captured output. Proves the reconstruction
+	/// path is semantically sound for the redirect-bearing shapes the per-stage
+	/// whitelist accepts (not just syntactically parseable).
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn segmented_chain_with_redirect_executes_correctly() {
+		let root = unique_temp_dir("redirect-chain");
+		let minimizer = printf_minimizer(&root.join("minimizer.toml"), None);
+		let (result, output) = run_command_capture(
+			"echo hidden >/dev/null && printf 'hello\\n'",
+			None,
+			Some(minimizer),
+			CancelToken::default(),
+		)
+		.await;
+		let _ = std::fs::remove_dir_all(&root);
+		assert_eq!(result.exit_code, Some(0));
+		// The redirect survived reconstruction: segment 1's stdout went to
+		// /dev/null, so only segment 2's output is captured.
+		assert!(!output.contains("hidden"), "redirect must suppress segment-1 stdout");
+		assert_eq!(output, "hello\n");
+		let minimized = result.minimized.expect("redirect chain should be minimized");
+		assert_eq!(minimized.original_text, "hello\n");
+		assert_eq!(minimized.text, "HI\n");
+		assert!(!output.contains("syntax error"));
+	}
+
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn segmented_chain_exceeding_aggregate_capture_cap_stays_raw() {
