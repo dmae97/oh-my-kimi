@@ -501,9 +501,9 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -2314,7 +2314,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.1.3"
+version = "16.1.4"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2384,7 +2384,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.1.3"
+version = "16.1.4"
 dependencies = [
  "async-trait",
  "libc",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.1.3"
+version = "16.1.4"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.1.3"
+version = "16.1.4"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -3803,9 +3803,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-r"
-version = "1.2.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "429133cbda9f8a46e03ef3aae6abb6c3d22875f8585cad472138101bfd517255"
+checksum = "ffc9954ec870dcad6cffdd302b405306c68cf031ed79a78cd9746f6740d9fe20"
 dependencies = [
  "cc",
  "tree-sitter-language",

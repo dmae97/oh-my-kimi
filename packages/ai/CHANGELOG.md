@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.4] - 2026-06-19
+
 ### Added
 
 - Added bounded auto-retry for empty assistant completions specifically to the OpenAI Responses provider

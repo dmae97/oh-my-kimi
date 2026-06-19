@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.4] - 2026-06-19
+
 ### Fixed
 
 - Fixed `omp bench` and `omp dry-balance` failing to resolve models from extension providers
