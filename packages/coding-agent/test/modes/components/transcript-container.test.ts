@@ -353,6 +353,25 @@ describe("TranscriptContainer", () => {
 		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeGreaterThan(0);
 	});
 
+	it("withholds the durable snapshot commit for a streaming GFM table, then promotes it on finalize", () => {
+		// A streaming table re-aligns its columns as rows arrive; its scrolled-off
+		// rows must not commit an intermediate alignment to immutable scrollback.
+		const container = new TranscriptContainer();
+		container.addChild(new StreamingBlock(["earlier turn"], true));
+		const assistant = new AssistantMessageComponent();
+		assistant.updateContent(
+			makeAssistantMessage({ content: [{ type: "text", text: "| Name | Score |\n| --- | --- |\n| a | 1 |" }] }),
+		);
+		container.addChild(assistant);
+
+		for (let frame = 0; frame < 4; frame++) container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeUndefined();
+
+		assistant.markTranscriptBlockFinalized();
+		container.render(60);
+		expect(container.getNativeScrollbackSnapshotSafeEnd()).toBeGreaterThan(0);
+	});
+
 	it("still commits the durable snapshot of a streaming reply without a mermaid fence", () => {
 		// Guard the narrow scope: an ordinary streaming reply stays commit-stable,
 		// so its settled rows still reach native scrollback while it streams.

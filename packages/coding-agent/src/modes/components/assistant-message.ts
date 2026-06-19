@@ -17,22 +17,57 @@ import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cach
 const MAX_TRANSCRIPT_ERROR_LINES = 8;
 
 /**
- * A fenced ` ```mermaid ` block anchored at a line start (≤3 leading spaces,
- * 3+ backticks, optional info-string whitespace) so prose that merely mentions
- * a mermaid fence inline does not match. See
- * {@link AssistantMessageComponent.isTranscriptBlockCommitStable}.
+ * A GFM table delimiter row (`| --- | :--: |`, with or without bounding pipes).
+ * The header row alone does not render a table — this delimiter is what makes
+ * Markdown lay one out, and a streaming table re-aligns its columns as rows
+ * arrive. Requires at least one column pipe so a bare thematic break (`---`)
+ * does not match.
  */
-const LIVE_MERMAID_FENCE = /^ {0,3}`{3,}[ \t]*mermaid\b/m;
+const MARKDOWN_TABLE_DELIMITER = /^ {0,3}\|?(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*:?-*:?[ \t]*$/;
+
+/** Opening or closing fence of a code block: ≥3 backticks/tildes plus info string. */
+const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /**
- * A GFM table delimiter row (`| --- | :--: |`, with or without bounding pipes)
- * anchored at a line start. The header row alone does not render a table — this
- * delimiter is what makes Markdown lay one out, and a streaming table re-aligns
- * its columns as rows arrive. Requires at least one column pipe so a bare
- * thematic break (`---`) does not match. See
+ * Whether `text` currently contains reflowing Markdown whose layout is not yet
+ * permanent: an open ` ```mermaid ` fence (the diagram reshapes as source
+ * arrives) or a GFM table (columns re-align as rows arrive). Used by
  * {@link AssistantMessageComponent.isTranscriptBlockCommitStable}.
+ *
+ * Fence-aware: a mermaid block is detected by its opener, and table delimiters
+ * inside ordinary fenced code (shell pipes, ASCII separators, doc examples) are
+ * ignored so a long streamed code block is never held out of native scrollback.
+ * A delimiter counts only directly under a pipe-bearing header row, outside any
+ * code fence.
  */
-const MARKDOWN_TABLE_DELIMITER = /^ {0,3}\|?(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*:?-*:?[ \t]*$/m;
+function detectLiveReflowingMarkdown(text: string): boolean {
+	let fence: string | null = null;
+	let prevLine = "";
+	for (const line of text.split("\n")) {
+		const fenceMatch = CODE_FENCE_LINE.exec(line);
+		if (fence !== null) {
+			// Inside a code block: only a bare matching closing fence ends it.
+			if (
+				fenceMatch &&
+				fenceMatch[2]!.trim() === "" &&
+				fenceMatch[1]![0] === fence[0] &&
+				fenceMatch[1]!.length >= fence.length
+			) {
+				fence = null;
+			}
+			continue;
+		}
+		if (fenceMatch) {
+			if (/^mermaid\b/.test(fenceMatch[2]!.trim())) return true;
+			fence = fenceMatch[1]!;
+			prevLine = "";
+			continue;
+		}
+		if (prevLine.includes("|") && MARKDOWN_TABLE_DELIMITER.test(line)) return true;
+		prevLine = line;
+	}
+	return false;
+}
 
 /**
  * Frames for the streaming "thinking" pulse rendered in place of a hidden
@@ -466,9 +501,7 @@ export class AssistantMessageComponent extends Container {
 		// parser only resolves these once the closing fence / delimiter row
 		// arrives, but the stale native-scrollback commits happen mid-stream.
 		this.#hasLiveReflowingMarkdown = message.content.some(
-			content =>
-				content.type === "text" &&
-				(LIVE_MERMAID_FENCE.test(content.text) || MARKDOWN_TABLE_DELIMITER.test(content.text)),
+			content => content.type === "text" && detectLiveReflowingMarkdown(content.text),
 		);
 
 		// Fast path: reuse Markdown children when shape is stable during streaming

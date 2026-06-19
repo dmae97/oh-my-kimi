@@ -164,6 +164,24 @@ describe("AssistantMessageComponent reflowing-markdown commit stability", () => 
 		component.updateContent(createAssistantMessage("| Name | Score |"));
 		expect(component.isTranscriptBlockCommitStable()).toBe(true);
 	});
+
+	it("stays commit-stable for a fenced code block containing a table delimiter", () => {
+		// A shell snippet with pipes and dashes inside a code fence is literal text,
+		// not a reflowing table, so a long code-heavy reply still commits normally.
+		const component = new AssistantMessageComponent();
+		component.updateContent(
+			createAssistantMessage("Run it:\n\n```sh\necho '| --- | --- |'\ncat data | sort\n```"),
+		);
+		expect(component.isTranscriptBlockCommitStable()).toBe(true);
+	});
+
+	it("stays commit-stable for a mermaid fence shown as example content inside a code block", () => {
+		const component = new AssistantMessageComponent();
+		component.updateContent(
+			createAssistantMessage("Example:\n\n````md\n```mermaid\nflowchart TD\n  A-->B\n```\n````"),
+		);
+		expect(component.isTranscriptBlockCommitStable()).toBe(true);
+	});
 });
 
 describe("AssistantMessageComponent thinking renderers", () => {
