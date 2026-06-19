@@ -12,7 +12,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
+import { type TUI } from "@oh-my-pi/pi-tui";
+import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
 import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -36,7 +37,7 @@ function makeSubagentRegistry(sessions: ObservableSession[]) {
 	} as unknown as import("@oh-my-pi/pi-coding-agent/modes/session-observer-registry").SessionObserverRegistry;
 }
 
-function makeHub(sessionFile: string, observed: ObservableSession[]): AgentHubOverlayComponent {
+function makeViewer(sessionFile: string, observed: ObservableSession[]): AgentTranscriptViewer {
 	const agents = new AgentRegistry();
 	agents.register({
 		id: SESSION_ID,
@@ -47,15 +48,19 @@ function makeHub(sessionFile: string, observed: ObservableSession[]): AgentHubOv
 		sessionFile,
 		status: "parked",
 	});
-	const hub = new AgentHubOverlayComponent({
-		observers: makeSubagentRegistry(observed),
-		hubKeys: ["ctrl+s"],
-		onDone: () => {},
-		requestRender: () => {},
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+	return new AgentTranscriptViewer({
+		agentId: SESSION_ID,
 		registry: agents,
+		observers: makeSubagentRegistry(observed),
+		ui,
+		cwd: tmpDir,
+		expandKeys: ["ctrl+o"],
+		hubKeys: ["ctrl+s"],
+		requestRender: () => {},
+		onClose: () => {},
+		onHubClose: () => {},
 	});
-	hub.openChat(SESSION_ID);
-	return hub;
 }
 
 describe("Agent hub silent-abort regression", () => {

@@ -320,9 +320,12 @@ export class SelectorController {
 				for (const child of this.ctx.chatContainer.children) {
 					if (child instanceof AssistantMessageComponent) {
 						child.setHideThinkingBlock(value as boolean);
-						child.invalidate();
 					}
 				}
+				// Full clear + replay so blocks frozen in committed scrollback on
+				// ED3-risk terminals retire their stale snapshots too (see
+				// InputController.toggleThinkingBlockVisibility).
+				this.ctx.ui.resetDisplay();
 				break;
 			case "tui.tight":
 				setTuiTight(value as boolean);
