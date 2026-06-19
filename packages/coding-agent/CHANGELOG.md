@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
 ### Added
 
 - Added a welcome-screen tip for the `/advisor` runtime. Tips ending in a `[NEW]` marker now render a bold rainbow `NEW!` tag (it shimmers across the welcome intro's animation frames, then settles into a still rainbow) and are weighted to surface more often in the random tip rotation.

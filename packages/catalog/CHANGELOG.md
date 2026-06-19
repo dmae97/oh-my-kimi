@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
 ### Added
 
 - Added support for Gemini 2.5 Flash-Lite, 3.1 Flash-Lite, and 3.5 Flash models

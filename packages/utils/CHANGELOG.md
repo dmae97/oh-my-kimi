@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
 ### Added
 
 - Added `directoryExists(dir)` to `dirs`: resolves whether a path is an existing directory, returning `false` on any stat failure (ENOENT, permission, non-directory). Lets callers check a directory is safe to `chdir` into before `setProjectDir` throws.

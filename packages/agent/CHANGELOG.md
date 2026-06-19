@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
 ### Fixed
 
 - Ensure deep-cloning of tool-call arguments respects own enumerable properties

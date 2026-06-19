@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
 ### Added
 
 - Added authentication broker discovery to sync credentials between local SQLite and remote state
