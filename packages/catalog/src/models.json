@@ -78643,7 +78643,11 @@
 			"compat": {
 				"includeEncryptedReasoning": false,
 				"filterReasoningHistory": true,
-				"omitReasoningEffort": true
+				"omitReasoningEffort": true,
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"supportsReasoningEffort": false
 			}
 		},
 		"grok-composer-2.5-fast": {

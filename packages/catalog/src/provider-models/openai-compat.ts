@@ -854,8 +854,20 @@ interface XAICuratedModel {
 // omit/include/history replay defaults live in catalog compat so every
 // OpenAI-family endpoint consumes the same constraint.
 export const XAI_OAUTH_CURATED_MODELS: readonly XAICuratedModel[] = [
-	// grok-build is text-only per the bundled catalog; omit `input` for the default.
-	{ id: "grok-build", contextWindow: 512_000, name: "Grok Build", supportsReasoningEffort: false },
+	{
+		id: "grok-build",
+		contextWindow: 512_000,
+		name: "Grok Build",
+		supportsReasoningEffort: false,
+		input: ["text", "image"],
+	},
+	{
+		id: "grok-build-0.1",
+		contextWindow: 256_000,
+		name: "Grok Build 0.1",
+		supportsReasoningEffort: false,
+		input: ["text", "image"],
+	},
 	{ id: "grok-4.3", contextWindow: 1_000_000, name: "Grok 4.3", input: ["text", "image"] },
 	// grok-4.20-multi-agent-0309 is text-only per the bundled catalog; omit `input` for the default.
 	{ id: "grok-4.20-multi-agent-0309", contextWindow: 2_000_000, name: "Grok 4.20 (Multi-Agent)" },

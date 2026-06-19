@@ -169,9 +169,7 @@ describe("AssistantMessageComponent reflowing-markdown commit stability", () => 
 		// A shell snippet with pipes and dashes inside a code fence is literal text,
 		// not a reflowing table, so a long code-heavy reply still commits normally.
 		const component = new AssistantMessageComponent();
-		component.updateContent(
-			createAssistantMessage("Run it:\n\n```sh\necho '| --- | --- |'\ncat data | sort\n```"),
-		);
+		component.updateContent(createAssistantMessage("Run it:\n\n```sh\necho '| --- | --- |'\ncat data | sort\n```"));
 		expect(component.isTranscriptBlockCommitStable()).toBe(true);
 	});
 

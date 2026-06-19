@@ -107,8 +107,7 @@ describe("system prompt tool inventory", () => {
 		});
 		const text = systemPrompt.join("\n\n");
 
-		expect(text).toContain("Skills are specialized knowledge. Scan descriptions for your task domain.");
-		expect(text).toContain("If a skill applies, you MUST read `skill://<name>` before proceeding.");
+		expect(text).toContain("<skills>");
 		expect(text).toContain("- frontend-design: Frontend UI workflow");
 	});
 

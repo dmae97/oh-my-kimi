@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
 - Refined documentation and prompt instructions for clarity and brevity

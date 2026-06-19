@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
 - Ensure deep-cloning of tool-call arguments respects own enumerable properties

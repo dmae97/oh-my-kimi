@@ -2110,10 +2110,10 @@ describe("agentLoop streaming snapshots", () => {
 		};
 
 		// Arguments carry a nested object, a nested array, primitives, and an
-		// INHERITED enumerable property. cloneUnknown must deep-clone the own
+		// INHERITED enumerable property. The snapshot must deep-clone the own
 		// nested structures (fresh references), pass primitives through by value,
-		// and copy only OWN enumerable keys — the inherited key must not leak in
-		// (this pins the `Object.hasOwn` guard that replaced `Object.entries`).
+		// and carry only OWN enumerable data — the inherited key must never leak
+		// into the immutable view subscribers receive.
 		const inheritedProto = { inheritedKey: "from-prototype" };
 		const innerArray = [2, 3];
 		const base: Record<string, unknown> = Object.create(inheritedProto);
@@ -2175,7 +2175,7 @@ describe("agentLoop streaming snapshots", () => {
 		// Nested object: deep-cloned (equal value, distinct reference).
 		expect(cloned.nestedObj).toEqual({ a: 1, b: "two" });
 		expect(cloned.nestedObj).not.toBe(sourceArgs.nestedObj);
-		// Nested array: deep-cloned through the Array.isArray fast path, recursively.
+		// Nested array: deep-cloned recursively (distinct references at every level).
 		expect(Array.isArray(cloned.nestedArr)).toBe(true);
 		expect(cloned.nestedArr).toEqual([1, [2, 3], { c: 4 }]);
 		expect(cloned.nestedArr).not.toBe(sourceArgs.nestedArr);
