@@ -3,6 +3,12 @@ name: CI
 on:
    push:
       branches: [main]
+      # Vouch bookkeeping commits (mitchellh/vouch writes VOUCHED.td back to
+      # main on !vouch/!denounce/!unvouch) only edit the vouch list and need no
+      # build. Skip CI when a main push changes nothing but the vouch file; a
+      # push that also touches anything else still runs the full matrix.
+      paths-ignore:
+         - .github/VOUCHED.td
    pull_request:
       branches: [main]
    workflow_dispatch:
