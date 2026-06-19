@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `mode` property to the `CompactOptions` interface for extension-based compaction control
+- Updated `/compact` slash command to support `soft`, `remote`, and `snapcompact` subcommands for per-run strategy overrides
+- Added `/compact` mode subcommands so a manual compaction can override the configured `compaction.strategy`/`remoteEnabled` for that one run: `/compact soft` (summarize locally, skip remote endpoints), `/compact remote` (summarize via the remote endpoint / provider-native compaction; warns and falls back to a local summary when no remote path is available), and `/compact snapcompact` (archive history onto dense bitmap images, no LLM call). Bare `/compact` and `/compact <focus text>` keep their existing behavior; `soft`/`remote` still accept trailing focus instructions, `snapcompact` rejects them. The subcommands are advertised to ACP clients and surface in TUI autocomplete. Extensions can pass the same selection via `compact(instructions, { mode })`.
+
+### Changed
+
+- Refined `/compact` argument parsing to reject focus instructions for modes that do not support them (e.g., `snapcompact`)
 
 ### Fixed
 

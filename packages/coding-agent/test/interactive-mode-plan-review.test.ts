@@ -957,7 +957,7 @@ describe("InteractiveMode plan review rendering", () => {
 		let modelAtFlushTime: string | undefined;
 		// Mirror executeCompaction's ordering: invoke beforeFlush, THEN observe the
 		// model the queue would flush on.
-		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async (_instructions, beforeFlush) => {
+		vi.spyOn(mode, "handleCompactCommand").mockImplementation(async (_instructions, _mode, beforeFlush) => {
 			hookWasFunction = typeof beforeFlush === "function";
 			if (beforeFlush) await beforeFlush("ok");
 			modelAtFlushTime = session.model?.id;

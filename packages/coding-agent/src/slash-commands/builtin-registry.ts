@@ -27,6 +27,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
+import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
@@ -1257,13 +1258,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "compact",
 		description: "Manually compact the session context",
 		acpDescription: "Compact the conversation",
-		inlineHint: "[focus instructions]",
+		subcommands: COMPACT_MODES.map(mode => ({
+			name: mode.name,
+			description: mode.description,
+			usage: mode.rejectsFocus ? undefined : "[focus]",
+		})),
+		acpInputHint: `[${COMPACT_MODES.map(mode => mode.name).join("|")}] [focus]`,
 		allowArgs: true,
 		handle: async (command, runtime) => {
+			const parsed = parseCompactArgs(command.args);
+			if ("error" in parsed) return usage(parsed.error, runtime);
 			const before = runtime.session.getContextUsage?.();
 			const beforeTokens = before?.tokens;
 			try {
-				await runtime.session.compact(command.args || undefined);
+				await runtime.session.compact(parsed.instructions, parsed.mode ? { mode: parsed.mode } : undefined);
 			} catch (err) {
 				// Compaction precondition failures (no model, already compacted, too
 				// small) and provider errors propagate as plain Errors; surface them
@@ -1281,9 +1289,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
-			const customInstructions = command.args || undefined;
+			const parsed = parseCompactArgs(command.args);
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleCompactCommand(customInstructions);
+			if ("error" in parsed) {
+				runtime.ctx.showWarning(parsed.error);
+				return;
+			}
+			await runtime.ctx.handleCompactCommand(parsed.instructions, parsed.mode);
 		},
 	},
 	{

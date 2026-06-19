@@ -62,6 +62,7 @@ import {
 	type ShakeRegion,
 	type SummaryOptions,
 	shouldCompact,
+	shouldUseOpenAiRemoteCompaction,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	DEFAULT_PRUNE_CONFIG,
@@ -277,6 +278,7 @@ import {
 	shouldEvaluateCodexAutoRedeem,
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
+import { findCompactMode } from "./compact-modes";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -7433,6 +7435,15 @@ export class AgentSession {
 		if (this.#compactionAbortController) {
 			throw new Error("Compaction already in progress");
 		}
+		// Resolve the `/compact <mode>` subcommand up front so input validation
+		// runs before we disconnect/abort the active agent operation below.
+		const compactMode = options?.mode ? findCompactMode(options.mode) : undefined;
+		// Modes that produce no LLM summary (snapcompact) have nothing to focus.
+		// Reject focus text loudly so programmatic callers don't silently lose
+		// instructions (the slash path pre-validates via parseCompactArgs).
+		if (compactMode?.rejectsFocus && customInstructions) {
+			throw new Error(`/compact ${compactMode.name} does not take focus instructions.`);
+		}
 		this.#disconnectFromAgent();
 		await this.abort({ goalReason: "internal" });
 		const compactionAbortController = new AbortController();
@@ -7444,8 +7455,26 @@ export class AgentSession {
 			}
 
 			const compactionSettings = this.settings.getGroup("compaction");
+			// The `/compact <mode>` override (resolved above) replaces the configured
+			// strategy/remote flags for this one invocation. Merged before
+			// prepareCompaction so the remote gating (preparation.settings.
+			// remoteEnabled/endpoint) and the snapcompact decision below both see it.
+			const effectiveSettings = compactMode
+				? { ...compactionSettings, ...compactMode.overrides }
+				: compactionSettings;
+			if (compactMode?.requiresRemote) {
+				const remoteReady =
+					Boolean(effectiveSettings.remoteEndpoint) || shouldUseOpenAiRemoteCompaction(this.model);
+				if (!remoteReady) {
+					this.emitNotice(
+						"warning",
+						`remote compaction is unavailable for ${this.model.id} (no remote endpoint configured) — using a local summary instead`,
+						"compaction",
+					);
+				}
+			}
 			const pathEntries = this.sessionManager.getBranch();
-			const preparation = prepareCompaction(pathEntries, compactionSettings);
+			const preparation = prepareCompaction(pathEntries, effectiveSettings);
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -7484,7 +7513,7 @@ export class AgentSession {
 			// directed LLM summary; a text-only model cannot read the frames back —
 			// both take the summarizer path (the latter loudly).
 			const wantsSnapcompact =
-				compactionPrep.kind !== "fromHook" && compactionSettings.strategy === "snapcompact" && !customInstructions;
+				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
 			const snapcompactReady = wantsSnapcompact && this.model.input.includes("image");
 			if (wantsSnapcompact && !snapcompactReady) {
 				this.emitNotice(
@@ -7516,7 +7545,7 @@ export class AgentSession {
 				const ctxWindow = this.model?.contextWindow ?? 0;
 				const budget =
 					ctxWindow > 0
-						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+						? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
 						: Number.POSITIVE_INFINITY;
 				if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
 					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {

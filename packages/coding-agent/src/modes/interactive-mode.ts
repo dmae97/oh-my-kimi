@@ -82,6 +82,7 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 	type: "text",
 };
 import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
+import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext } from "../session/session-context";
 import { getRecentSessions } from "../session/session-listing";
@@ -2350,7 +2351,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
-				compactOutcome = await this.handleCompactCommand(compactionPrompt, outcome =>
+				compactOutcome = await this.handleCompactCommand(compactionPrompt, undefined, outcome =>
 					this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
 				);
 			}
@@ -3616,9 +3617,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleCompactCommand(
 		customInstructions?: string,
+		mode?: CompactMode,
 		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
 	): Promise<CompactionOutcome> {
-		return this.#commandController.handleCompactCommand(customInstructions, beforeFlush);
+		return this.#commandController.handleCompactCommand(customInstructions, mode, beforeFlush);
 	}
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {
