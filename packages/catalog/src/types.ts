@@ -283,6 +283,8 @@ export interface OpenAICompat {
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
 	strictResponsesPairing?: boolean;
+	/** Whether the Responses API accepts the `detail: "original"` image hint. Default: auto-detected (false for GitHub Copilot, which rejects it with a 400). */
+	supportsImageDetailOriginal?: boolean;
 	/**
 	 * Append a trailing `# Juice: 0 !important` developer item when the caller
 	 * did not request reasoning, suppressing default reasoning on models that
@@ -504,6 +506,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "cacheControlFormat"
 			| "thinkingKeep"
 			| "strictResponsesPairing"
+			| "supportsImageDetailOriginal"
 			| "requiresJuiceZeroHack"
 			| "enableGeminiThinkingLoopGuard"
 			| "whenThinking"
@@ -527,6 +530,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompat {
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
+	supportsImageDetailOriginal: boolean;
 	requiresJuiceZeroHack: boolean;
 	supportsObfuscationOptOut: boolean;
 }

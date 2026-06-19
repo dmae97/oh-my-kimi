@@ -38,9 +38,13 @@ async function runCommand(
 }
 
 async function main(): Promise<void> {
-	await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--generate"]);
+	// Generate inside the try so the finally always restores the empty checked-in
+	// placeholders (stats client archive, docs index) even on failure.
 	try {
+		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--generate"]);
+		await runCommand(["bun", "scripts/generate-docs-index.ts", "--generate"]);
 		await runCommand(["bun", "--cwd=../natives", "run", "embed:native"]);
+		await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--generate"]);
 		try {
 			const buildEnv = shouldAdhocSignDarwinBinary() ? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" } : Bun.env;
 			await runCommand(
@@ -57,8 +61,6 @@ async function main(): Promise<void> {
 					'process.env.PI_COMPILED="true"',
 					"--define",
 					`process.env.PI_TINY_TRANSFORMERS_VERSION=${JSON.stringify(transformersVersion)}`,
-					"--external",
-					"mupdf",
 					"--external",
 					"fastembed",
 					"--external",
@@ -94,10 +96,12 @@ async function main(): Promise<void> {
 				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
 			}
 		} finally {
+			await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--reset"]);
 			await runCommand(["bun", "--cwd=../natives", "run", "embed:native", "--reset"]);
 		}
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--reset"]);
+		await runCommand(["bun", "scripts/generate-docs-index.ts", "--reset"]);
 	}
 }
 

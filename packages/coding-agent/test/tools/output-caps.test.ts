@@ -8,7 +8,7 @@
 import { describe, expect, it } from "bun:test";
 import { DEFAULT_MAX_BYTES, enforceInlineByteCap } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 
-const MARKER_PATTERN = /\[… elided \d+ bytes of test output …\]/;
+const MARKER_PATTERN = /\[…\d+B elided…\]/;
 
 /** Build `count` complete lines of the form `line-00001 <pad>`. */
 function makeLines(count: number, pad = "x".repeat(40)): string {
@@ -22,24 +22,24 @@ function makeLines(count: number, pad = "x".repeat(40)): string {
 describe("enforceInlineByteCap", () => {
 	it("returns sub-cap text unchanged (identity, not just equality)", async () => {
 		const text = makeLines(10);
-		const result = await enforceInlineByteCap(text, { maxBytes: 4096, label: "test output" });
+		const result = await enforceInlineByteCap(text, { maxBytes: 4096 });
 		expect(result).toBe(text);
 	});
 
 	it("returns text exactly at the cap unchanged", async () => {
 		const text = "a".repeat(1000);
 		expect(Buffer.byteLength(text, "utf-8")).toBe(1000);
-		const result = await enforceInlineByteCap(text, { maxBytes: 1000, label: "test output" });
+		const result = await enforceInlineByteCap(text, { maxBytes: 1000 });
 		expect(result).toBe(text);
 	});
 
 	it("uses DEFAULT_MAX_BYTES when maxBytes is omitted", async () => {
 		const under = "a".repeat(DEFAULT_MAX_BYTES - 1);
-		expect(await enforceInlineByteCap(under, { label: "test output" })).toBe(under);
+		expect(await enforceInlineByteCap(under, {})).toBe(under);
 
 		const over = makeLines(2000); // ~94KB, well over the 50KB default
 		expect(Buffer.byteLength(over, "utf-8")).toBeGreaterThan(DEFAULT_MAX_BYTES);
-		const result = await enforceInlineByteCap(over, { label: "test output" });
+		const result = await enforceInlineByteCap(over, {});
 		expect(result).not.toBe(over);
 		expect(result).toMatch(MARKER_PATTERN);
 		expect(Buffer.byteLength(result, "utf-8")).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
@@ -48,7 +48,7 @@ describe("enforceInlineByteCap", () => {
 	it("elides over-cap text to head + tail on line boundaries within the budget", async () => {
 		const maxBytes = 4096;
 		const text = makeLines(500); // ~23KB
-		const result = await enforceInlineByteCap(text, { maxBytes, label: "test output" });
+		const result = await enforceInlineByteCap(text, { maxBytes });
 
 		expect(result).toMatch(MARKER_PATTERN);
 		// Stays within the cap plus a sliver of slack for the marker line.
@@ -80,7 +80,7 @@ describe("enforceInlineByteCap", () => {
 		// Each line is multi-byte heavy: é (2B), € (3B), 😀 (4B).
 		const text = makeLines(800, "é€😀".repeat(12));
 		const maxBytes = 4096;
-		const result = await enforceInlineByteCap(text, { maxBytes, label: "test output" });
+		const result = await enforceInlineByteCap(text, { maxBytes });
 
 		expect(result).toMatch(MARKER_PATTERN);
 		// Valid UTF-8 round-trip: encode/decode is lossless and introduces no
@@ -102,7 +102,6 @@ describe("enforceInlineByteCap", () => {
 		let saved: string | undefined;
 		const result = await enforceInlineByteCap(text, {
 			maxBytes: 4096,
-			label: "test output",
 			saveArtifact: full => {
 				saved = full;
 				return Promise.resolve("17");
@@ -118,7 +117,6 @@ describe("enforceInlineByteCap", () => {
 		const text = makeLines(500);
 		const result = await enforceInlineByteCap(text, {
 			maxBytes: 4096,
-			label: "test output",
 			saveArtifact: () => undefined,
 		});
 		expect(result).not.toContain("[raw output: artifact://");
@@ -130,7 +128,6 @@ describe("enforceInlineByteCap", () => {
 		const text = "short output";
 		const result = await enforceInlineByteCap(text, {
 			maxBytes: 4096,
-			label: "test output",
 			saveArtifact: () => {
 				called = true;
 				return "99";

@@ -66,7 +66,16 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// loses the reasoning chain and can destabilize the next tool-call
 		// arguments (#2005). Known non-signing hosts (Z.AI, DeepSeek) are also
 		// preserved for compatibility.
-		replayUnsignedThinking: isZai || modelMatchesHost(spec, "deepseekFamily") || (spec.reasoning && !official),
+		//
+		// GitHub Copilot's `anthropic-messages` proxy is excluded: it forwards to
+		// signature-enforcing Anthropic and returns full thinking signatures, so it
+		// is a SIGNING endpoint. Replaying a stripped/unsigned thinking block as
+		// `signature: ""` there 400s the whole request ("Invalid signature") — most
+		// visibly when a checkpoint/branch-return turn's end_turn-bound signature is
+		// stripped on replay (issue #2851). Treating it like official Anthropic
+		// degrades such blocks to text instead, which the API accepts.
+		replayUnsignedThinking:
+			!isCopilot && (isZai || modelMatchesHost(spec, "deepseekFamily") || (spec.reasoning && !official)),
 		escapeBuiltinToolNames: modelMatchesHost(spec, "umans"),
 	};
 	applyCompatOverrides(compat, spec.compat);

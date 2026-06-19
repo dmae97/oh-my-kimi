@@ -4,6 +4,7 @@ import {
 	type Api,
 	type Context,
 	clearCustomApis,
+	type ImageContent,
 	type Message,
 	type Model,
 	type ModelSpec,
@@ -120,6 +121,34 @@ describe("AgentSession message pipeline", () => {
 		expect(queued.steering).toBe(true);
 		expect(queued.content).toEqual([{ type: "text", text: "raw <steer> &" }]);
 		session.clearQueue();
+	});
+
+	it("resolves image attachments from submitted messages, not tool-result images", () => {
+		const userImage: ImageContent = { type: "image", data: "user-image", mimeType: "image/png" };
+		const toolImage: ImageContent = { type: "image", data: "tool-image", mimeType: "image/png" };
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+		});
+		sessions.push(session);
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "inspect this" }, userImage],
+			timestamp: Date.now(),
+		});
+		session.agent.appendMessage({
+			role: "toolResult",
+			toolCallId: "eval-1",
+			toolName: "eval",
+			content: [{ type: "text", text: "plot output" }, toolImage],
+			timestamp: Date.now(),
+			isError: false,
+		});
+
+		expect(session.getImageAttachments()).toEqual([{ label: "Image #1", uri: "attachment://1", image: userImage }]);
 	});
 
 	it("keeps stored steering text raw while pre-LLM conversion wraps it", async () => {
@@ -433,6 +462,7 @@ describe("AgentSession message pipeline", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			extensionRunner: {
+				hasHandlers: () => true,
 				emit: extensionEmit,
 			} as never,
 		});

@@ -326,9 +326,16 @@ export function estimateTokens(message: AgentMessage): number {
 		case "branchSummary":
 		case "compactionSummary": {
 			fragments.push(message.summary);
-			if (message.role === "compactionSummary" && message.images) {
-				// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
-				extra += message.images.length * snapcompact.FRAME_TOKEN_ESTIMATE;
+			if (message.role === "compactionSummary") {
+				if (message.blocks) {
+					for (const block of message.blocks) {
+						if (block.type === "text") fragments.push(block.text);
+						else extra += snapcompact.FRAME_TOKEN_ESTIMATE;
+					}
+				} else if (message.images) {
+					// Snapcompact frames render at ≥1568px; providers bill the downscaled cap.
+					extra += message.images.length * snapcompact.FRAME_TOKEN_ESTIMATE;
+				}
 			}
 			break;
 		}

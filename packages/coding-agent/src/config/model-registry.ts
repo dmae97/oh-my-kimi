@@ -563,10 +563,16 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 	} as ModelSpec<Api>);
 }
 
-function normalizeSuppressedSelector(selector: string): string {
+function normalizeSuppressedSelector(
+	selector: string,
+	hasLiveModel?: (provider: string, id: string) => boolean,
+): string {
 	const trimmed = selector.trim();
 	if (!trimmed) return trimmed;
-	const parsed = parseModelString(trimmed);
+	const parsed = parseModelString(trimmed, {
+		allowMaxAlias: true,
+		isLiteralModelId: (provider, id) => hasLiveModel?.(provider, id) === true,
+	});
 	if (!parsed) return trimmed;
 	// Retired effort-tier variant ids normalize to their collapsed logical id
 	// so persisted suppressions keyed by raw member ids still bind.
@@ -2155,14 +2161,20 @@ export class ModelRegistry {
 	 * Suppress a specific model selector (e.g., "provider/id") until a specific timestamp.
 	 */
 	suppressSelector(selector: string, untilMs: number): void {
-		this.#suppressedSelectors.set(normalizeSuppressedSelector(selector), untilMs);
+		this.#suppressedSelectors.set(
+			normalizeSuppressedSelector(selector, (provider, id) => this.find(provider, id) !== undefined),
+			untilMs,
+		);
 	}
 
 	/**
 	 * Check if a model selector is currently suppressed due to rate limits.
 	 */
 	isSelectorSuppressed(selector: string): boolean {
-		const normalizedSelector = normalizeSuppressedSelector(selector);
+		const normalizedSelector = normalizeSuppressedSelector(
+			selector,
+			(provider, id) => this.find(provider, id) !== undefined,
+		);
 		const suppressedUntil = this.#suppressedSelectors.get(normalizedSelector);
 		if (!suppressedUntil) return false;
 		if (suppressedUntil <= Date.now()) {

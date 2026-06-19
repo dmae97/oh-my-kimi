@@ -20,6 +20,8 @@ Collab session started!
 
 The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
+Running `/collab` or `/collab view` starts or displays the active hosting session, rendering both the terminal/browser join links and their corresponding QR codes.
+
 ```
 /join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
 ```
@@ -30,9 +32,9 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 | Command | Effect |
 |---|---|
-| `/collab` | Start sharing (or re-print the link when already hosting) |
+| `/collab` | Start sharing full-control (or re-print the link/QR when already hosting) |
 | `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
-| `/collab view` | Print a read-only (view-only) link (starts sharing first if needed) |
+| `/collab view` | Start sharing read-only (or re-print the link/QR when already hosting) |
 | `/collab status` | Show link + participants |
 | `/collab stop` | Stop sharing |
 | `/join <link>` | Join a shared session as a guest |
@@ -40,19 +42,29 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 
 ## Link format
 
+Accepted by `/join <link>` and `omp join "<link>"`:
+
 ```
-https://host[:port]/#<link>          → browser deep link (printed by /collab; /join accepts it too)
-<roomId>.<key>                       → default relay (my.omp.sh)
-host[:port]/r/<roomId>.<key>         → custom relay, wss:// inferred
-ws://localhost:7475/r/<roomId>.<key> → plain ws, allowed for localhost only
+<roomId>.<key>                                                    → default relay (wss://my.omp.sh)
+<roomId>#<key>                                                    → legacy bare form
+host[:port]/r/<roomId>.<key>                                     → custom relay, wss:// inferred
+host[:port]/r/<roomId>#<key>                                     → legacy direct relay form
+https://host[:port]/r/<roomId>.<key>                             → direct relay URL, normalized to wss://
+wss://host[:port]/r/<roomId>.<key>                               → direct websocket relay URL
+ws://localhost:7475/r/<roomId>.<key>                             → direct plain ws, localhost only
+https://host[:port]/#<link>                                      → browser deep link when web UI and relay share a host
+https://web-host[:port][/<path>]/#<relay-link>                   → browser UI wrapper with relay link in the fragment
+https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → web UI and relay on different hosts
 ```
 
-The trailing `.<key>` part is the room secret, base64url-encoded, in one of two strengths:
+`<link>` / `<relay-link>` are parsed recursively as any accepted link above. For `http(s)` browser wrappers with a parseable fragment, the fragment wins before the HTTP host/path are treated as a relay. This lets `https://web.example/collab/#relay.example.com/r/<roomId>.<key>` open the web UI at `web.example` while joining `wss://relay.example.com/r/<roomId>`. If the fragment is not a complete collab link, parsing falls back to the legacy direct relay form, so `https://relay.example.com/r/<roomId>#<key>` still means relay `relay.example.com`.
+
+The trailing `.<key>` or `#<key>` part is the room secret, base64url-encoded, in one of two strengths:
 
 - **Full link** — 48 bytes: the 32-byte AES-256-GCM room key followed by a 16-byte write token. Grants prompting, interrupting, and subagent control.
 - **View-only link** — the bare 32-byte key, no write token. Grants live read access only. Pre-token links parse as view-only.
 
-The room secret is dot-joined rather than `#`-joined: RFC 3986 forbids a raw `#` inside a URL fragment, so strict URL stacks (macOS Foundation behind terminal click-to-open) percent-encode a second `#` to `%23` and break the link. Parsers leniently accept the legacy `#` form and the mangled `%23` form. In the browser deep link, everything after the `#` — room id and key — is a URL fragment: it never appears in any HTTP request, and neither secret is ever sent to the relay.
+The room secret is dot-joined in newly generated links because RFC 3986 forbids a raw `#` inside a URL fragment; parsers still accept legacy `#` forms and `%23`-mangled legacy deep links.
 
 ## End-to-end encryption
 
@@ -85,11 +97,14 @@ Known v1 limit for guests: a turn already streaming when you join becomes visibl
 
 `packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. The relay serves it at `/`, which is what makes the `/collab` deep link click-to-join: `https://<relay>/#<link>` loads the client and auto-connects from the fragment. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
 
+Set `collab.webUrl` when the browser UI is hosted separately from the websocket relay. When empty, `/collab` derives `http(s)://host[:port]` from `collab.relayUrl`; explicit web UI URLs must use `https://` except for `http://localhost` development origins. The generated browser URL still carries the relay-specific collab link in the fragment.
+
 ## Settings
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `collab.relayUrl` | `wss://my.omp.sh` | Relay used by `/collab` when no relay is passed inline |
+| `collab.webUrl` | empty | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
 | `collab.displayName` | OS username | Name shown to other participants |
 | `share.serverUrl` | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`) |
 | `share.redactSecrets` | `true` | Run the secret obfuscator over `/share` snapshots before upload |

@@ -239,7 +239,7 @@ export const handleRepology: SpecialHandler = async (
 		}
 
 		if (packages.length > 15) {
-			md += `\n*...and ${packages.length - 15} more repositories*\n`;
+			md += `\n[…${packages.length - 15} repositories elided…]\n`;
 		}
 
 		md += `\n---\n\n[View on Repology](${url})\n`;

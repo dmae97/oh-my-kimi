@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
+### Changed
+
+- Refined documentation and prompt instructions for clarity and brevity
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed

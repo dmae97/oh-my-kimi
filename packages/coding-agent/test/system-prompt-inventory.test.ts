@@ -46,7 +46,7 @@ describe("system prompt tool inventory", () => {
 
 	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
 
-	async function render(opts: { nativeTools: boolean; repeatToolDescriptions: boolean }): Promise<string> {
+	async function render(opts: { nativeTools: boolean; inlineToolDescriptors: boolean }): Promise<string> {
 		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,
 			contextFiles: [],
@@ -55,13 +55,14 @@ describe("system prompt tool inventory", () => {
 			toolNames: ["read", "bash"],
 			tools: TOOLS,
 			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
-			...opts,
+			nativeTools: opts.nativeTools,
+			inlineToolDescriptors: opts.inlineToolDescriptors,
 		});
 		return systemPrompt.join("\n\n");
 	}
 
-	it("renders a compact name list only when native tools are active and descriptions are not repeated", async () => {
-		const text = await render({ nativeTools: true, repeatToolDescriptions: false });
+	it("renders a compact name list only when native tools are active and descriptors stay in schemas", async () => {
+		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
 		expect(text).toContain("- Read: `read`");
 		expect(text).toContain("- Bash: `bash`");
 		// No full per-tool sections in list mode.
@@ -70,7 +71,7 @@ describe("system prompt tool inventory", () => {
 	});
 
 	it("renders `# Tool:` sections (not a name list) when tools are not native", async () => {
-		const text = await render({ nativeTools: false, repeatToolDescriptions: false });
+		const text = await render({ nativeTools: false, inlineToolDescriptors: false });
 		expect(text).toContain("# Tool: read");
 		expect(text).toContain("# Tool: bash");
 		expect(text).toContain("Reads files from disk.");
@@ -79,8 +80,8 @@ describe("system prompt tool inventory", () => {
 		expect(text).not.toContain("<tool name=");
 	});
 
-	it("renders `# Tool:` sections when descriptions are repeated even with native tools", async () => {
-		const text = await render({ nativeTools: true, repeatToolDescriptions: true });
+	it("renders `# Tool:` sections when descriptors are inlined even with native tools", async () => {
+		const text = await render({ nativeTools: true, inlineToolDescriptors: true });
 		expect(text).toContain("# Tool: read");
 		expect(text).toContain("Executes a shell command.");
 		expect(text).not.toContain("- Read: `read`");
@@ -106,13 +107,12 @@ describe("system prompt tool inventory", () => {
 		});
 		const text = systemPrompt.join("\n\n");
 
-		expect(text).toContain("Skills are specialized knowledge. Scan descriptions for your task domain.");
-		expect(text).toContain("If a skill applies, you MUST read `skill://<name>` before proceeding.");
+		expect(text).toContain("<skills>");
 		expect(text).toContain("- frontend-design: Frontend UI workflow");
 	});
 
 	it("places the inventory at the bottom of the TOOLS section (after I/O and Exploration)", async () => {
-		const text = await render({ nativeTools: true, repeatToolDescriptions: false });
+		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
 		const inventoryIdx = text.indexOf("# Inventory");
 		const ioIdx = text.indexOf("# I/O");
 		const explorationIdx = text.indexOf("# Exploration");

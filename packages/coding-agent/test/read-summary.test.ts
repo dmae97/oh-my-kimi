@@ -72,8 +72,8 @@ describe("read summary", () => {
 		const result = await tool.execute("read-summary-ts", { path: fixture });
 		const text = textOutput(result);
 
-		expect(text).toContain("export function alpha(value: string): string { .. }");
-		expect(text).toContain("export function beta(): number { .. }");
+		expect(text).toContain("export function alpha(value: string): string { … }");
+		expect(text).toContain("export function beta(): number { … }");
 		expect(text).not.toContain("const clean = value.trim()");
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 	});
@@ -124,7 +124,7 @@ describe("read summary", () => {
 		const text = textOutput(result);
 
 		expect(text).toContain("const clean = 'alpha';");
-		expect(text).not.toContain("...");
+		expect(text).not.toContain("…");
 		expect(result.details?.summary).toBeUndefined();
 	});
 
@@ -197,10 +197,10 @@ describe("read summary", () => {
 		expect(text).toContain("name: Ada");
 	});
 
-	it("renders brace-pair elisions as a single numbered line with `..`", async () => {
+	it("renders brace-pair elisions as a single numbered line with `…`", async () => {
 		// Regression for the read-tool format request: collapse the head /
 		// elided / closing-brace sandwich into one numbered line of the form
-		// `START-END:head { .. }` instead of three separate lines.
+		// `START-END:head { … }` instead of three separate lines.
 		const fixture = path.join(tmpDir, "merge.ts");
 		await fs.writeFile(
 			fixture,
@@ -211,9 +211,9 @@ describe("read summary", () => {
 		const result = await tool.execute("read-summary-merge", { path: fixture });
 		const text = textOutput(result);
 
-		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { .. }");
-		// The plain `...` ellipsis line must NOT appear once the merge fires.
-		expect(text).not.toContain("\n...\n");
+		expect(text).toContain("export function stripNewLinePrefixes(lines: string[]): string[] { … }");
+		// The plain `…` ellipsis line must NOT appear once the merge fires.
+		expect(text).not.toContain("\n…\n");
 		// The merged line must use the numbered range shape.
 		expect(text).toMatch(/\b1-7:export function stripNewLinePrefixes/);
 		expect(result.details?.summary?.elidedSpans).toBe(1);
@@ -229,8 +229,8 @@ describe("read summary", () => {
 		const result = await tool.execute("read-summary-merge-trailing", { path: fixture });
 		const text = textOutput(result);
 
-		expect(text).toContain("export const config = { .. };");
-		expect(text).not.toContain("\n...\n");
+		expect(text).toContain("export const config = { … };");
+		expect(text).not.toContain("\n…\n");
 	});
 
 	it("does not merge when the closing line is not a bare brace", async () => {
@@ -248,15 +248,15 @@ describe("read summary", () => {
 		const text = textOutput(result);
 
 		expect(text).toContain("def greet(name: str) -> str:");
-		// Python's body elision keeps first/last body lines, so plain `...`
+		// Python's body elision keeps first/last body lines, so plain `…`
 		// must remain as the elided segment.
-		expect(text).toContain("\n...\n");
-		expect(text).not.toContain(" .. ");
+		expect(text).toContain("\n…\n");
+		expect(text).not.toContain(" … ");
 	});
 
 	it("appends an elision footer that names targeted recovery ranges", async () => {
 		// Regression for issue #1046: summarized reads must tell the model how
-		// to recover the elided body so it does not stall on `...` / `{ .. }`
+		// to recover the elided body so it does not stall on `…` / `{ … }`
 		// markers and burn a turn guessing the selector.
 		const fixture = path.join(tmpDir, "footer.ts");
 		await fs.writeFile(
@@ -270,7 +270,7 @@ describe("read summary", () => {
 
 		expect(result.details?.summary?.elidedSpans).toBe(2);
 		expect(result.details?.summary?.elidedLines).toBeGreaterThan(0);
-		expect(text).toContain("lines elided");
+		expect(text).toContain("ln elided");
 		expect(text).toContain(`${fixture}:1-5,7-11`);
 		expect(text).not.toContain(`${fixture}:raw`);
 		expect(text).not.toContain(`${fixture}:1-9999`);

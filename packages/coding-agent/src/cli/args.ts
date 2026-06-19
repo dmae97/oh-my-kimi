@@ -56,6 +56,7 @@ export interface Args {
 	noExtensions?: boolean;
 	pluginDirs?: string[];
 	print?: boolean;
+	printThoughts?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -200,6 +201,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.advisor = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
+		} else if (arg === "--print-thoughts") {
+			result.printThoughts = true;
 		} else if (arg === "--no-extensions") {
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {
@@ -211,7 +214,13 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			let filePath = arg.slice(1);
+			if (filePath.startsWith('"') && filePath.endsWith('"') && filePath.length > 1) {
+				filePath = filePath.slice(1, -1);
+			} else if (filePath.startsWith("'") && filePath.endsWith("'") && filePath.length > 1) {
+				filePath = filePath.slice(1, -1);
+			}
+			result.fileArgs.push(filePath);
 		} else if (!arg.startsWith("-") || arg === "-") {
 			// Plain positional or lone `-` (stdin marker) — pass through as a
 			// message rather than flagging it.

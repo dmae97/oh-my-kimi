@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Message, UsageReport } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Container, EditorTheme, Loader, Spacer, Text, TUI } from "@oh-my-pi/pi-tui";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
@@ -17,6 +17,7 @@ import type { CompactOptions } from "../extensibility/extensions/types";
 import type { MCPManager } from "../mcp";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
+import type { CompactMode } from "../session/compact-modes";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext } from "../session/session-context";
 import type { SessionManager } from "../session/session-manager";
@@ -158,6 +159,12 @@ export interface InteractiveModeContext {
 	isPythonMode: boolean;
 	streamingComponent: AssistantMessageComponent | undefined;
 	streamingMessage: AssistantMessage | undefined;
+	/**
+	 * Usage of the most recently rendered assistant turn, used to detect a
+	 * prompt-cache invalidation on the next turn (cache footprint collapse).
+	 * Reseeded by `renderSessionContext` on every rebuild/session switch.
+	 */
+	lastAssistantUsage: Usage | undefined;
 	loadingAnimation: Loader | undefined;
 	autoCompactionLoader: Loader | undefined;
 	retryLoader: Loader | undefined;
@@ -293,7 +300,7 @@ export interface InteractiveModeContext {
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
 	handleSSHCommand(text: string): Promise<void>;
-	handleCompactCommand(customInstructions?: string): Promise<CompactionOutcome>;
+	handleCompactCommand(customInstructions?: string, mode?: CompactMode): Promise<CompactionOutcome>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath: string): Promise<void>;

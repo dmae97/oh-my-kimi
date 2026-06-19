@@ -2,16 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthStorage, type OAuthCredential, REMOTE_REFRESH_SENTINEL, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
 import {
 	AuthBrokerClient,
 	type AuthBrokerServerHandle,
-	AuthStorage,
-	type OAuthCredential,
-	REMOTE_REFRESH_SENTINEL,
 	RemoteAuthCredentialStore,
-	SqliteAuthCredentialStore,
 	startAuthBroker,
-} from "@oh-my-pi/pi-ai";
+} from "@oh-my-pi/pi-ai/auth-broker";
 
 // MCP OAuth credentials extend the base OAuthCredential with refresh material
 // (tokenUrl/clientId/clientSecret/resource) embedded so token refresh works for

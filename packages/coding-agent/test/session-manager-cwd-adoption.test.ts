@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -85,5 +86,39 @@ describe("SessionManager cwd adoption on resume", () => {
 		manager.restoreState(snapshot);
 		expect(manager.getCwd()).toBe(path.resolve(projectA));
 		expect(manager.getSessionDir()).toBe(path.resolve(sessionsA));
+	});
+
+	it("keeps the current cwd when the resumed session's project directory is gone", async () => {
+		const launch = makeTempDir("@pi-cwd-launch-");
+		const store = makeTempDir("@pi-cwd-store-");
+		const goneProject = makeTempDir("@pi-cwd-gone-");
+		// The session file survives in `store` (like ~/.omp), but its header cwd
+		// points at a project directory that we then delete.
+		const file = await writeSession(goneProject, store);
+		await fs.rm(goneProject, { recursive: true, force: true });
+
+		const launchSessions = path.join(launch, "sessions");
+		const manager = SessionManager.create(launch, launchSessions);
+		await manager.setSessionFile(file);
+
+		// Adopting the missing cwd would make the follow-up `setProjectDir` chdir
+		// throw, so resume stays put instead.
+		expect(manager.getCwd()).toBe(path.resolve(launch));
+		expect(manager.getSessionDir()).toBe(path.resolve(launchSessions));
+	});
+
+	it("falls back to the launch cwd when opening a session whose project directory is gone", async () => {
+		const launch = makeTempDir("@pi-cwd-launch-");
+		const store = makeTempDir("@pi-cwd-store-");
+		const goneProject = makeTempDir("@pi-cwd-gone-");
+		const file = await writeSession(goneProject, store);
+		await fs.rm(goneProject, { recursive: true, force: true });
+
+		const manager = await SessionManager.open(file, undefined, undefined, { initialCwd: launch });
+
+		expect(manager.getCwd()).toBe(path.resolve(launch));
+		// /new and /branch anchor to the launch cwd, not the deleted project's store.
+		expect(manager.getSessionDir()).toBe(SessionManager.getDefaultSessionDir(launch));
+		expect(manager.getSessionDir()).not.toBe(path.resolve(store));
 	});
 });

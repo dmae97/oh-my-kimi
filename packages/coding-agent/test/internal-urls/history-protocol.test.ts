@@ -13,6 +13,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { HistoryProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/history-protocol";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
@@ -185,5 +186,68 @@ describe("history:// protocol", () => {
 			);
 
 		expect(error?.message).toContain("no transcript");
+	});
+
+	it("hides advisor transcripts from the index and direct lookup", async () => {
+		AgentRegistry.global().register({
+			id: "HubAgent",
+			displayName: "task",
+			kind: "sub",
+			session: fakeLiveSession([]),
+			status: "idle",
+		});
+		AgentRegistry.global().register({
+			id: "Main/advisor",
+			displayName: "advisor",
+			kind: "advisor",
+			session: fakeLiveSession([{ role: "user", content: "should stay hidden", timestamp: 1 }]),
+			status: "parked",
+		});
+		AgentRegistry.global().register({
+			id: "AdvisorProbe",
+			displayName: "advisor",
+			kind: "advisor",
+			session: fakeLiveSession([{ role: "user", content: "should stay hidden", timestamp: 1 }]),
+			status: "parked",
+		});
+
+		// Index lists the subagent but never the advisor.
+		const index = await InternalUrlRouter.instance().resolve("history://");
+		expect(index.content).toContain("HubAgent");
+		expect(index.content).not.toContain("advisor");
+
+		// Direct lookup of an advisor-kind ref is reported as unknown — the driving
+		// agent must not be able to read it via history://.
+		const error = await InternalUrlRouter.instance()
+			.resolve("history://AdvisorProbe")
+			.then(
+				() => null,
+				err => err as Error,
+			);
+		expect(error).toBeInstanceOf(Error);
+		expect(error?.message).toContain("Unknown agent");
+	});
+
+	it("omits advisor refs from history:// completions", async () => {
+		AgentRegistry.global().register({
+			id: "HubAgent",
+			displayName: "task",
+			kind: "sub",
+			session: fakeLiveSession([]),
+			status: "idle",
+		});
+		AgentRegistry.global().register({
+			id: "AdvisorProbe",
+			displayName: "advisor",
+			kind: "advisor",
+			session: null,
+			sessionFile: "/tmp/x/__advisor.jsonl",
+			status: "parked",
+		});
+
+		const completions = await new HistoryProtocolHandler().complete();
+		const values = completions.map(c => c.value);
+		expect(values).toContain("HubAgent");
+		expect(values).not.toContain("AdvisorProbe");
 	});
 });

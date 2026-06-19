@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+## [16.1.0] - 2026-06-19
+
+### Added
+
+- `Box` now accepts an optional `border` (box-drawing glyphs + colorizer) and exposes `setBorder()`, drawing a colored outline around its padded/background content. The border is automatically dropped at widths too narrow to frame so a bordered box never overflows its given width.
+
+## [16.0.11] - 2026-06-19
+
+### Breaking Changes
+
+- Removed `getIndentation` and `getIndentationNoescape` exported utilities
+- Tab-related operations no longer respect per-file or globally configured indentation settings
+
+### Changed
+
+- Standardized tab expansion to use a fixed display width instead of configurable settings
+- Removed support for custom tab width configuration in text rendering and input handling
+
+### Fixed
+
+- Corrected logic in string truncation to prevent improper truncation of short strings
+- Fixed a one-frame transcript flash during a non-multiplexer resize drag: while the drag borrowed the alternate screen and painted only the viewport, any ordinary (non-forced) render from a still-animating block — a tool spinner tick, a streamed token, a cursor blink — fell through to the deferred geometry-rebuild full paint, which left the alternate screen to repaint the whole transcript on the normal screen for a single frame before the next SIGWINCH re-entered the viewport fast path, so a live tool block flashed in and vanished. Ordinary renders mid-drag now stay on the viewport fast path; only forced renders (tool finalization, reset, image reconciliation) still preempt it.
+
+## [16.0.10] - 2026-06-18
+
+### Fixed
+
+- Fixed Markdown renderer rendering raw HTML tags (like `<br>`, `<li>`, `<ul>`, `<ol>`, and `<p>`) literally in the terminal by parsing and converting them to appropriate terminal formatting, preserving repeated HTML line breaks, nested HTML list indentation, ordered list numbering, paragraph-wrapped list item markers, paragraph separation, and table sizing after HTML line breaks.
+- Fixed animated working-message loader frames repainting at 30fps on terminals without synchronized-output support, which could cause visible flicker during normal prompt rendering ([#2771](https://github.com/can1357/oh-my-pi/issues/2771)).
+
+## [16.0.9] - 2026-06-18
+
+### Fixed
+
+- Fixed bottom-anchored fullscreen overlays keeping their body rows but clipping off footer actions when terminal-height clamping is applied, restoring plan-mode approval options on short or stale-size terminals ([#2957](https://github.com/can1357/oh-my-pi/issues/2957)).
+
+## [16.0.8] - 2026-06-18
+
+### Fixed
+
+- Fixed bracketed paste under kitty+tmux leaking `[27;5;106~` escape tails throughout the pasted text (newlines became visible garbage instead of line breaks). tmux's default `extended-keys-format=xterm` re-encodes paste control bytes as `modifyOtherKeys` sequences (`ESC[27;5;<code>~`), which the paste sanitizer did not decode — only the sibling `csi-u` form (`ESC[<code>;5u`) was handled. Both forms are now decoded back to their literal control byte (Ctrl+J → "\n") before control-character stripping, and the decoder is shared by the multi-line editor and the single-line modal input.
+
 ## [16.0.5] - 2026-06-17
 
 ### Added

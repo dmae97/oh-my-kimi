@@ -31,7 +31,7 @@ const evalCellSchema = type({
 	language: type("'py' | 'js'").describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
 	code: type("string").describe("cell body, verbatim. Use top-level await freely."),
 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
-	"timeout?": type("number").describe("per-cell timeout in seconds (1-3600, default 30)"),
+	"timeout?": type("number").describe("per-cell timeout in seconds"),
 	"reset?": type("boolean").describe(
 		"wipe this cell's language kernel before running. Other languages are untouched.",
 	),
@@ -64,7 +64,7 @@ function formatDisplayJsonForText(value: unknown): string {
 		text = String(value);
 	}
 	if (text.length > MAX_DISPLAY_TEXT_BYTES) {
-		text = `${text.slice(0, MAX_DISPLAY_TEXT_BYTES)}\n… (${text.length - MAX_DISPLAY_TEXT_BYTES} chars truncated)`;
+		text = `${text.slice(0, MAX_DISPLAY_TEXT_BYTES)}\n[…${text.length - MAX_DISPLAY_TEXT_BYTES}ch elided…]`;
 	}
 	return text;
 }

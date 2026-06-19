@@ -1,4 +1,5 @@
 export * from "./client";
+export * from "./discover";
 export * from "./refresher";
 export * from "./remote-store";
 export * from "./server";

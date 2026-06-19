@@ -17,7 +17,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { BusChannel, AgentEvent as WireAgentEvent, SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
+import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
@@ -133,7 +133,7 @@ export class CollabHost {
 		return this.#link;
 	}
 
-	/** Browser deep link (`https://<relay>/#<link>`) — the relay serves the web client at `/`. */
+	/** Browser deep link for the configured collab web UI. */
 	get webLink(): string {
 		return this.#webLink;
 	}
@@ -156,15 +156,15 @@ export class CollabHost {
 		return list;
 	}
 
-	async start(relayUrl: string): Promise<void> {
+	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
 		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
 		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
@@ -445,18 +445,24 @@ export class CollabHost {
 	}
 
 	#snapshotAgents(): AgentSnapshot[] {
-		return AgentRegistry.global()
-			.list()
-			.map(ref => ({
-				id: ref.id,
-				displayName: ref.displayName,
-				kind: ref.kind,
-				parentId: ref.parentId,
-				status: ref.status,
-				hasSessionFile: !!ref.sessionFile,
-				createdAt: ref.createdAt,
-				lastActivity: ref.lastActivity,
-			}));
+		return (
+			AgentRegistry.global()
+				.list()
+				// Advisor transcripts are local observability only; never mirror them to
+				// guests (the wire AgentSnapshot kind has no `advisor`, and guests must not
+				// be able to chat/kill/revive them).
+				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor")
+				.map(ref => ({
+					id: ref.id,
+					displayName: ref.displayName,
+					kind: ref.kind,
+					parentId: ref.parentId,
+					status: ref.status,
+					hasSessionFile: !!ref.sessionFile,
+					createdAt: ref.createdAt,
+					lastActivity: ref.lastActivity,
+				}))
+		);
 	}
 
 	#scheduleAgentsBroadcast(): void {
@@ -470,6 +476,12 @@ export class CollabHost {
 	#handleAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined, fromPeer: number): void {
 		if (!this.#peers.get(fromPeer)?.canWrite) {
 			this.#rejectReadOnly("agent control", fromPeer);
+			return;
+		}
+		// Advisor refs are excluded from snapshots, but reject control by id defensively:
+		// a stale/malicious client must never chat/kill/revive a read-only advisor transcript.
+		if (AgentRegistry.global().get(agentId)?.kind === "advisor") {
+			this.#socket?.send({ t: "error", message: `agent ${agentId}: advisor transcripts are read-only` }, fromPeer);
 			return;
 		}
 		const fail = (err: unknown) => {

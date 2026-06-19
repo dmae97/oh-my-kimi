@@ -122,10 +122,10 @@ describe("read ToolExecutionComponent framing", () => {
 		try {
 			const lines = component.render(80).map(line => Bun.stripANSI(line));
 			const topBorderIndex = lines.findIndex(
-				line => line.includes(activeTheme.boxSharp.topLeft) && line.includes("Read"),
+				line => line.includes(activeTheme.boxRound.topLeft) && line.includes("Read"),
 			);
 			const bottomBorderIndex = lines.findIndex(
-				(line, index) => index > topBorderIndex && line.includes(activeTheme.boxSharp.bottomLeft),
+				(line, index) => index > topBorderIndex && line.includes(activeTheme.boxRound.bottomLeft),
 			);
 
 			expect(topBorderIndex).toBeGreaterThanOrEqual(0);

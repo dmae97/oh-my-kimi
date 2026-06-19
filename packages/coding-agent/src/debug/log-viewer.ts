@@ -866,21 +866,21 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#frameTop(innerWidth: number): string {
-		return `${theme.boxSharp.topLeft}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.topRight}`;
+		return `${theme.boxRound.topLeft}${theme.boxRound.horizontal.repeat(innerWidth)}${theme.boxRound.topRight}`;
 	}
 
 	#frameSeparator(innerWidth: number): string {
-		return `${theme.boxSharp.teeRight}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.teeLeft}`;
+		return `${theme.boxRound.teeRight}${theme.boxRound.horizontal.repeat(innerWidth)}${theme.boxRound.teeLeft}`;
 	}
 
 	#frameBottom(innerWidth: number): string {
-		return `${theme.boxSharp.bottomLeft}${theme.boxSharp.horizontal.repeat(innerWidth)}${theme.boxSharp.bottomRight}`;
+		return `${theme.boxRound.bottomLeft}${theme.boxRound.horizontal.repeat(innerWidth)}${theme.boxRound.bottomRight}`;
 	}
 
 	#frameLine(content: string, innerWidth: number): string {
 		const truncated = truncateToWidth(content, innerWidth);
 		const remaining = Math.max(0, innerWidth - visibleWidth(truncated));
-		return `${theme.boxSharp.vertical}${truncated}${padding(remaining)}${theme.boxSharp.vertical}`;
+		return `${theme.boxRound.vertical}${truncated}${padding(remaining)}${theme.boxRound.vertical}`;
 	}
 
 	#copySelected() {

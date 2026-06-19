@@ -46,8 +46,8 @@ export type SnapcompactSavingsSink = (
 // Per-provider image-count budgets live in @oh-my-pi/snapcompact
 // (`providerImageBudget`): snapcompact frames are 1568px (<2000px) so
 // dimension/size limits never bind; only COUNT does. Once the budget is
-// spent (e.g. OpenRouter's hard 8-image cap, already consumed by archive
-// frames), tool results ship verbatim as text.
+// spent by already-attached archive/system-prompt images, tool results ship
+// verbatim as text.
 const MAX_SYSTEM_PROMPT_FRAMES = 6;
 /** Tool results under this many tokens are never rasterized — the swap can't
  *  save enough to justify trading crisp text for an image. */

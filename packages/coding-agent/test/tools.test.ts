@@ -18,8 +18,8 @@ import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { DEFAULT_FILE_LIMIT, MULTI_FILE_PER_FILE_MATCHES, SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 import * as toolTimeouts from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { unzip } from "@oh-my-pi/pi-coding-agent/utils/zip";
 import { $which, Snowflake } from "@oh-my-pi/pi-utils";
-import { unzipSync } from "fflate";
 
 // Helper to extract text from content blocks
 function getTextOutput(result: any): string {
@@ -931,7 +931,7 @@ describe("Coding Agent Tools", () => {
 				`Successfully wrote ${content.length} bytes to ${path.basename(archivePath)}:pkg/README.md`,
 			);
 
-			const unzipped = unzipSync(new Uint8Array(fs.readFileSync(archivePath)));
+			const unzipped = unzip(new Uint8Array(fs.readFileSync(archivePath)));
 			expect(new TextDecoder().decode(unzipped["pkg/README.md"])).toBe(content);
 			expect(new TextDecoder().decode(unzipped["pkg/src/index.ts"])).toBe("export const archiveValue = 1;\n");
 		});

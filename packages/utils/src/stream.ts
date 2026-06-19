@@ -1,4 +1,4 @@
-import { createAbortableStream } from "./abortable";
+import { abortableSource } from "./abortable";
 
 const LF = 0x0a;
 type JsonlChunkResult = {
@@ -23,7 +23,7 @@ function parseJsonlChunkCompat(input: Uint8Array | string, beg?: number, end?: n
 
 export async function* readLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
 	const buffer = new ConcatSink();
-	const source = createAbortableStream(stream, signal);
+	const source = abortableSource(stream, signal);
 	try {
 		for await (const chunk of source) {
 			for (const line of buffer.appendAndFlushLines(chunk)) {
@@ -46,7 +46,7 @@ export async function* readLines(stream: ReadableStream<Uint8Array>, signal?: Ab
 
 export async function* readJsonl<T>(stream: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<T> {
 	const buffer = new ConcatSink();
-	const source = createAbortableStream(stream, signal);
+	const source = abortableSource(stream, signal);
 	try {
 		for await (const chunk of source) {
 			yield* buffer.pullJSONL<T>(chunk, 0, chunk.length);
@@ -339,7 +339,7 @@ export async function* readSseEvents(
 ): AsyncGenerator<ServerSentEvent> {
 	const lineBuffer = new ConcatSink();
 	const state: SseEventState = { event: null, data: null, raw: [] };
-	const source = createAbortableStream(stream, signal);
+	const source = abortableSource(stream, signal);
 	try {
 		for await (const chunk of source) {
 			for (const line of lineBuffer.appendAndFlushLines(chunk)) {

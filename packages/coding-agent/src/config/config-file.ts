@@ -40,7 +40,7 @@ function migrateJsonToYml(jsonPath: string, ymlPath: string) {
 		}
 
 		const content = fs.readFileSync(jsonPath, "utf-8");
-		const parsed = JSON.parse(content);
+		const parsed = JSONC.parse(content);
 		if (!parsed) {
 			logger.warn("migrateJsonToYml: invalid json structure", { path: jsonPath });
 			migratedPaths.add(key);

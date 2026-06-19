@@ -102,6 +102,79 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(wireText(internalResult!)).toBe("echoed:hello world");
 	});
 
+	it("prunes native tool descriptions from the wire when pruneToolDescriptions is set", async () => {
+		const toolSchema = type({ msg: type("string").describe("the message to echo") });
+		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo a message back",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+			},
+		};
+		const captured: Context[] = [];
+		const mock = createMockModel({
+			responses: [
+				context => {
+					captured.push(context);
+					return { content: ["done"] };
+				},
+			],
+		});
+		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			pruneToolDescriptions: true,
+		};
+		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
+
+		const wireTools = captured[0]?.tools;
+		expect(wireTools).toHaveLength(1);
+		expect(wireTools?.[0].name).toBe("echo");
+		// Native tool calling: spec ships with no description text (top-level or nested).
+		expect(wireTools?.[0].description).toBe("");
+		expect(JSON.stringify(wireTools?.[0].parameters)).not.toContain("the message to echo");
+	});
+
+	it("keeps in-band tool descriptions for owned dialects even when pruneToolDescriptions is set", async () => {
+		const toolSchema = type({ msg: "string" });
+		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo a message back",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+			},
+		};
+		const captured: Context[] = [];
+		const mock = createMockModel({
+			responses: [
+				context => {
+					captured.push(context);
+					return { content: ["done"] };
+				},
+			],
+		});
+		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			dialect: "glm",
+			pruneToolDescriptions: true,
+		};
+		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
+
+		// Owned dialect carries the catalog in the prompt as text and sends no native
+		// tools, so pruning must not strip its descriptions.
+		expect(captured[0]?.tools).toBeUndefined();
+		const promptSection = (captured[0]?.systemPrompt ?? []).join("\n");
+		expect(promptSection).toContain("<tools>");
+		expect(promptSection).toContain("Echo a message back");
+	});
+
 	it("executes Hermes/Qwen JSON tool calls when that dialect is selected", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
 		const toolSchema = type({ msg: "string" });

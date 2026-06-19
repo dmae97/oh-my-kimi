@@ -173,16 +173,16 @@ fn compact_grep_grouped(
 			out.push('\n');
 		}
 		if matches.len() > 4 {
-			out.push_str("  … ");
+			out.push_str("  […");
 			out.push_str(&(matches.len() - 4).to_string());
-			out.push_str(" more in file\n");
+			out.push_str(" matches in file elided…]\n");
 		}
 	}
 
 	let omitted_files = grouped.len().saturating_sub(shown_files);
 	let omitted_matches = match_count.saturating_sub(shown_matches);
 	if omitted_files > 0 || omitted_matches > 0 {
-		out.push_str("\n… ");
+		out.push_str("\n[…");
 		out.push_str(&omitted_matches.to_string());
 		out.push_str(" matches");
 		if omitted_files > 0 {
@@ -190,7 +190,7 @@ fn compact_grep_grouped(
 			out.push_str(&omitted_files.to_string());
 			out.push_str(" files");
 		}
-		out.push_str(" omitted\n");
+		out.push_str(" elided…]\n");
 	}
 	for line in ungrouped {
 		out.push_str(line);
@@ -365,14 +365,14 @@ fn compact_find_output_inner(input: &str, paths: &[&str]) -> String {
 		push_wrapped_names(&mut out, names, 4, 24);
 	}
 	if grouped.len() > 16 {
-		out.push_str("\n… ");
+		out.push_str("\n[…");
 		out.push_str(&(grouped.len() - 16).to_string());
-		out.push_str(" dirs omitted\n");
+		out.push_str(" dirs elided…]\n");
 	}
 	if skipped_noise > 0 {
-		out.push_str("… ");
+		out.push_str("[…");
 		out.push_str(&skipped_noise.to_string());
-		out.push_str(" noisy paths omitted\n");
+		out.push_str(" noisy paths elided…]\n");
 	}
 	out
 }
@@ -407,9 +407,9 @@ fn push_wrapped_names(out: &mut String, names: &[String], per_line: usize, max_n
 	}
 	out.push('\n');
 	if names.len() > max_names {
-		out.push_str("  … ");
+		out.push_str("  […");
 		out.push_str(&(names.len() - max_names).to_string());
-		out.push_str(" more\n");
+		out.push_str(" names elided…]\n");
 	}
 }
 
@@ -453,9 +453,9 @@ fn compact_ls_output(input: &str) -> Option<String> {
 	}
 	let shown = dir_count.min(12) + file_count.min(36);
 	if entries.len() > shown {
-		out.push_str("… ");
+		out.push_str("[…");
 		out.push_str(&(entries.len() - shown).to_string());
-		out.push_str(" entries omitted\n");
+		out.push_str(" entries elided…]\n");
 	}
 	out.push('\n');
 	out.push_str(&file_count.to_string());
@@ -622,9 +622,9 @@ fn summarize_cargo_toml(input: &str) -> Option<String> {
 		out.push('\n');
 	}
 	if dependencies.len() > 15 {
-		out.push_str("  … ");
+		out.push_str("  […");
 		out.push_str(&(dependencies.len() - 15).to_string());
-		out.push_str(" more\n");
+		out.push_str(" dependencies elided…]\n");
 	}
 	Some(out)
 }
@@ -705,9 +705,9 @@ fn summarize_package_json(input: &str) -> Option<String> {
 		out.push('\n');
 	}
 	if deps.len() > 15 {
-		out.push_str("  … ");
+		out.push_str("  […");
 		out.push_str(&(deps.len() - 15).to_string());
-		out.push_str(" more\n");
+		out.push_str(" dependencies elided…]\n");
 	}
 	Some(out)
 }
@@ -752,9 +752,9 @@ fn summarize_go_mod(input: &str) -> Option<String> {
 		out.push('\n');
 	}
 	if deps.len() > 15 {
-		out.push_str("  … ");
+		out.push_str("  […");
 		out.push_str(&(deps.len() - 15).to_string());
-		out.push_str(" more\n");
+		out.push_str(" dependencies elided…]\n");
 	}
 	Some(out)
 }
@@ -1265,7 +1265,7 @@ mod tests {
 		let out = filter(&ctx, &input, 0);
 		assert!(out.text.starts_with("grep: 20 matches in 20 files"));
 		assert!(out.text.contains("17: pub fn run(...) -> Result<()> {"));
-		assert!(out.text.contains("matches in 8 files omitted"));
+		assert!(out.text.contains("matches in 8 files elided…]"));
 	}
 
 	#[test]
@@ -1447,7 +1447,7 @@ mod tests {
 		let out = filter(&ctx, &input, 0);
 		assert!(out.text.starts_with("find: 31 paths in 3 dirs"));
 		assert!(out.text.contains("src/module0/ file0.rs file1.rs"));
-		assert!(out.text.contains("1 noisy paths omitted"));
+		assert!(out.text.contains("[…1 noisy paths elided…]"));
 		assert!(!out.text.contains("target/debug"));
 	}
 
@@ -1488,7 +1488,7 @@ mod tests {
 			out.text
 				.contains("Filesystem 1K-blocks Used Available Use% Mounted on")
 		);
-		assert!(out.text.contains("… 13 lines omitted …"));
+		assert!(out.text.contains("[…13ln elided…]"));
 		assert!(out.text.contains("/dev/disk35"));
 	}
 

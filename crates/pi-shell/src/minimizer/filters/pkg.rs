@@ -251,7 +251,7 @@ fn compact_package_tree_output(input: &str) -> String {
 		out.push_str(line);
 		out.push('\n');
 	}
-	let _ = writeln!(out, "… {} package entries omitted …", lines.len() - PACKAGE_TREE_HEAD_LINES);
+	let _ = writeln!(out, "[…{} package entries elided…]", lines.len() - PACKAGE_TREE_HEAD_LINES);
 	out
 }
 
@@ -292,7 +292,7 @@ fn summarize_package_rows(rows: Vec<String>) -> Option<String> {
 		out.push('\n');
 	}
 	if rows.len() > PACKAGE_TREE_HEAD_LINES {
-		let _ = writeln!(out, "… {} package entries omitted …", rows.len() - PACKAGE_TREE_HEAD_LINES);
+		let _ = writeln!(out, "[…{} package entries elided…]", rows.len() - PACKAGE_TREE_HEAD_LINES);
 	}
 	Some(out)
 }
@@ -793,7 +793,7 @@ mod tests {
 		assert!(out.text.contains("├── dep000@1.0.0"));
 		assert!(out.text.contains("├── dep078@1.0.0"));
 		assert!(!out.text.contains("├── dep089@1.0.0"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -808,7 +808,7 @@ mod tests {
 		let out = filter(&context, &input, 0);
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("dep000"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -825,7 +825,7 @@ mod tests {
 		assert!(out.text.starts_with("package tree/list: 92 entries\n"));
 		assert!(out.text.contains("react 19.0.0"));
 		assert!(out.text.contains("└─ dependent000"));
-		assert!(out.text.contains("… 12 package entries omitted …"));
+		assert!(out.text.contains("[…12 package entries elided…]"));
 	}
 
 	#[test]
@@ -889,7 +889,7 @@ mod tests {
 		assert!(out.text.contains("pkg000 1.0.0"));
 		assert!(out.text.contains("pkg078 1.0.78"));
 		assert!(!out.text.contains("pkg089 1.0.89"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -905,7 +905,7 @@ mod tests {
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("project v1.0.0"));
 		assert!(out.text.contains("pkg000"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -920,7 +920,7 @@ mod tests {
 		let out = filter(&context, &input, 0);
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("requests 2.32.0"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -951,7 +951,7 @@ mod tests {
 		let out = filter(&context, &input, 0);
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("pkg000==1.0.0"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -966,7 +966,7 @@ mod tests {
 		let out = filter(&context, &input, 0);
 		assert!(out.text.starts_with("package tree/list: 91 entries\n"));
 		assert!(out.text.contains("dep000==2.0.0"));
-		assert!(out.text.contains("… 11 package entries omitted …"));
+		assert!(out.text.contains("[…11 package entries elided…]"));
 	}
 
 	#[test]
@@ -996,7 +996,7 @@ mod tests {
 		let out = filter(&context, &input, 0);
 		assert!(out.text.starts_with("package tree/list: 92 entries\n"));
 		assert!(out.text.contains("pkg000"));
-		assert!(out.text.contains("… 12 package entries omitted …"));
+		assert!(out.text.contains("[…12 package entries elided…]"));
 	}
 
 	#[test]

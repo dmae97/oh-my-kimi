@@ -57,7 +57,7 @@ async function withEnvPatch<T>(patch: Record<string, string | undefined>, run: (
 class DeferScheduler implements RenderScheduler {
 	#time = 0;
 	#immediates: (() => void)[] = [];
-	#renders = new Map<number, () => void>();
+	#renders = new Map<number, { run: () => void; delay: number }>();
 	#nextId = 0;
 
 	now(): number {
@@ -69,9 +69,9 @@ class DeferScheduler implements RenderScheduler {
 		this.#immediates.push(callback);
 	}
 
-	scheduleRender(callback: () => void, _delayMs: number): RenderTimer {
+	scheduleRender(callback: () => void, delayMs: number): RenderTimer {
 		const id = this.#nextId++;
-		this.#renders.set(id, callback);
+		this.#renders.set(id, { run: callback, delay: delayMs });
 		return {
 			cancel: () => {
 				this.#renders.delete(id);
@@ -94,6 +94,28 @@ class DeferScheduler implements RenderScheduler {
 		await term.flush();
 	}
 
+	// Fire immediates plus any throttled render whose delay is below `maxDelayMs`,
+	// leaving longer timers (the 120ms resize settle) pending. Lets a test drive
+	// an interleaved ordinary render — a spinner tick / streamed token, scheduled
+	// at the ~33ms render throttle — mid-drag without ending the drag.
+	async flushOrdinaryRenders(term: VirtualTerminal, maxDelayMs = 100): Promise<void> {
+		let rounds = 0;
+		for (;;) {
+			if (++rounds > 100) throw new Error("ordinary renders did not settle");
+			const immediates = this.#immediates;
+			this.#immediates = [];
+			for (const callback of immediates) callback();
+			if (this.#immediates.length > 0) continue;
+			const due = [...this.#renders.entries()].filter(([, entry]) => entry.delay < maxDelayMs);
+			if (due.length === 0) break;
+			for (const [id, entry] of due) {
+				this.#renders.delete(id);
+				entry.run();
+			}
+		}
+		await term.flush();
+	}
+
 	async flushAll(term: VirtualTerminal): Promise<void> {
 		let rounds = 0;
 		while (this.#immediates.length > 0 || this.#renders.size > 0) {
@@ -104,7 +126,7 @@ class DeferScheduler implements RenderScheduler {
 			if (this.#immediates.length > 0) continue;
 			const renders = [...this.#renders.values()];
 			this.#renders.clear();
-			for (const callback of renders) callback();
+			for (const entry of renders) entry.run();
 		}
 		await term.flush();
 	}
@@ -263,6 +285,53 @@ describe("non-multiplexer resize viewport fast path", () => {
 					expect(buffer.filter(line => line === `b${i}-y`).length).toBe(1);
 				}
 				expect(visible(term).at(-1)).toBe("b14-y");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("keeps an interleaved live-block render on the viewport fast path instead of flashing a normal-screen full paint", async () => {
+		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				// One drag SIGWINCH enters the fast path and borrows the alt screen.
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+				expect(tui.resizeViewportActive).toBe(true);
+
+				const baselineFull = tui.fullRedraws;
+				const baselinePaints = tui.resizeViewportPaints;
+				const writes = captureWrites(term);
+
+				// A live block keeps animating mid-drag: a spinner tick / streamed
+				// token fires an ordinary (non-forced) render before the 120ms settle
+				// elapses. It must stay on the viewport fast path. Without the guard it
+				// falls through to the geometry-rebuild full paint, which leaves the
+				// borrowed alternate screen (ALT_SCREEN_EXIT) and erases native
+				// scrollback (ED3) to repaint the whole transcript on the normal screen
+				// for one frame — the flash — before the next SIGWINCH hides it again.
+				tui.requestRender();
+				await scheduler.flushOrdinaryRenders(term);
+
+				// Still mid-drag, still on the alternate screen: a viewport-only paint,
+				// no authoritative full redraw, no scrollback erase, no alt-screen exit.
+				expect(tui.resizeViewportActive).toBe(true);
+				expect(tui.resizeViewportPaints).toBeGreaterThan(baselinePaints);
+				expect(tui.fullRedraws).toBe(baselineFull);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_EXIT);
+				expect(eraseScrollbackCount(writes)).toBe(0);
+
+				// The settle still fires exactly one authoritative full paint once the
+				// drag goes quiet — the interleaved render did not consume or corrupt
+				// the deferred geometry rebuild.
+				await scheduler.flushAll(term);
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.fullRedraws).toBe(baselineFull + 1);
 			} finally {
 				tui.stop();
 			}

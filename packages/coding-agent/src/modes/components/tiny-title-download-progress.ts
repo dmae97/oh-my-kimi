@@ -74,7 +74,7 @@ export class TinyTitleDownloadProgressComponent implements Component {
 	render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		const spec = getTinyTitleModelSpec(this.#modelKey);
-		const border = theme.fg("border", theme.boxSharp.horizontal.repeat(width));
+		const border = theme.fg("border", theme.boxRound.horizontal.repeat(width));
 		const status = statusLabel(this.#event);
 		const file = currentFile(this.#event);
 		const pct =

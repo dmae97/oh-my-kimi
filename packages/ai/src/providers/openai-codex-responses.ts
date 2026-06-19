@@ -3253,7 +3253,15 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
-			appendResponsesToolResultMessages(messages, msg, model, false, knownCallIds, customCallIds);
+			appendResponsesToolResultMessages(
+				messages,
+				msg,
+				model,
+				false,
+				model.compat.supportsImageDetailOriginal,
+				knownCallIds,
+				customCallIds,
+			);
 		}
 
 		msgIndex += 1;
@@ -3271,7 +3279,10 @@ function normalizeInputMessageContent(
 		return [{ type: "input_text", text: content.toWellFormed() }];
 	}
 
-	return convertResponsesInputContent(content, model.input.includes("image")) ?? [];
+	return (
+		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
+		[]
+	);
 }
 
 /** @internal Exported for tests. */

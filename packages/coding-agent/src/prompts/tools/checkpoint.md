@@ -4,7 +4,6 @@ Use this when you need to investigate with many intermediate tool calls (read/se
 
 Rules:
 - You MUST call `rewind` before yielding after starting a checkpoint.
-- You MUST provide a clear `goal` explaining what you are investigating.
 - You NEVER call `checkpoint` while another checkpoint is active.
 - Not available in subagents.
 

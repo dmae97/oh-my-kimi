@@ -102,7 +102,7 @@ const HASHLINE_LINE_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
 /**
  * The 1-indexed file lines a hashline-formatted body actually displayed.
  * Single `NN:` rows contribute that line; a collapsed summary `NN-MM:` row
- * (a `{ .. }` brace pair) contributes only its boundary lines `NN` and `MM` —
+ * (a `{ … }` brace pair) contributes only its boundary lines `NN` and `MM` —
  * the elided interior was never shown, so editing inside it must be rejected.
  */
 export function parseSeenLinesFromHashlineBody(body: string): number[] {

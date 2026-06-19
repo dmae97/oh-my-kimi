@@ -495,8 +495,10 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
  * Returned without surrounding newlines so callers can position it freely.
  */
 export function formatMiddleElisionMarker(elidedLines: number, elidedBytes: number): string {
-	const linesPart = `${elidedLines.toLocaleString()} line${elidedLines === 1 ? "" : "s"}`;
-	return `[… ${linesPart} elided (${formatBytes(elidedBytes)}) …]`;
+	// A 0/1-line elision (e.g. one giant single line) would read as
+	// "[…0ln elided…]"; fall back to a byte count there.
+	if (elidedLines <= 1) return `[…${elidedBytes}B elided…]`;
+	return `[…${elidedLines}ln elided…]`;
 }
 
 /**
@@ -578,8 +580,6 @@ export function truncateMiddle(content: string, options: TruncationOptions = {})
 export interface InlineByteCapOptions {
 	/** Inline byte budget. Defaults to {@link DEFAULT_MAX_BYTES}. */
 	maxBytes?: number;
-	/** What the text is, for the elision marker (e.g. "bash output"). */
-	label: string;
 	/**
 	 * Persist the full text as a session artifact. When an artifact id is
 	 * returned, a `[raw output: artifact://<id>]` footer is appended so the
@@ -619,7 +619,7 @@ export async function enforceInlineByteCap(text: string, options: InlineByteCapO
 	const head = trimHeadToLineBoundary(truncateHeadBytes(text, Math.floor(maxBytes * 0.6)).text);
 	const tail = trimTailToLineBoundary(truncateTailBytes(text, Math.floor(maxBytes * 0.25)).text);
 	const elidedBytes = Math.max(0, totalBytes - Buffer.byteLength(head, "utf-8") - Buffer.byteLength(tail, "utf-8"));
-	const marker = `[… elided ${elidedBytes} bytes of ${options.label} …]`;
+	const marker = `[…${elidedBytes}B elided…]`;
 	let composed = `${head}\n${marker}\n${tail}`;
 
 	const artifactId = await options.saveArtifact?.(text);

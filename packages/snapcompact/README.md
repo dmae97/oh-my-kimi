@@ -49,18 +49,18 @@ Run a full compaction pass over prepared messages:
 ```ts
 import { compact } from "@oh-my-pi/snapcompact";
 
-const result = await compact(preparation, { model, maxFrames: 8 });
-// result.summary        — text summary with <files> operations block
-// result.preserveData   — frame archive, re-attachable via getPreservedArchive() + images()
+const result = await compact(preparation, { model });
+// result.summary        — short "resume prior conversation" lead-in, reading guide, and FILES section
+// result.preserveData   — bounded archive source + rendered image middle
 ```
 
 ## API surface
 
-- **Compaction**: `compact`, `CompactionPreparation`, `CompactionResult`, `getPreservedArchive`, `images`
+- **Compaction**: `compact`, `CompactionPreparation`, `CompactionResult`, `getPreservedArchive`, `images`, `historyBlocks`
 - **Rendering**: `render`, `renderMany`, `frames`, `geometry`
 - **Shapes**: `SHAPES`, `SHAPE_VARIANTS`, `resolveShape`, `idealShapeVariant`, `isShape`, `isShapeVariantName`
 - **Text**: `serializeConversation`, `normalize`, `dimStopwords`, `wrap`
-- **Budgets**: `providerImageBudget`, `providerFrameBudget`, `MAX_FRAMES`, `FRAME_TOKEN_ESTIMATE`
+- **Budgets**: `providerImageBudget`, `MAX_FRAMES_DEFAULT`, `FRAME_TOKEN_ESTIMATE`, `HQ_EDGE_FRAMES`
 - **File ops**: `createFileOps`, `computeFileLists`, `upsertFileOperations`
 
 ## References

@@ -1,9 +1,4 @@
-Resolves a pending action by either applying or discarding it.
-- `action` is required:
-  - `"apply"` persists / submits the pending action.
-  - `"discard"` rejects the pending action.
-- `reason` is required: one short complete sentence explaining why, starting with a capital letter and ending with a period.
-- `extra` (optional) is free-form metadata passed to the resolving tool. When the pending action is a plan-approval gate, supply `extra.title` (kebab/PascalCase slug for the approved plan filename). For preview-style pending actions (e.g. `ast_edit`), `extra` is unused.
-
-Valid whenever a pending action exists — either a preview-style staging (e.g. `ast_edit`) or a long-lived approval gate.
-Call fails with an error when no pending action exists.
+Resolves a pending action — apply or discard. Valid only when a pending action exists; errors otherwise.
+- `action` (required): `"apply"` persists/submits; `"discard"` rejects.
+- `reason` (required): one short sentence explaining why.
+- `extra` (optional): free-form metadata. Plan-approval gate? Supply `extra.title` (kebab/PascalCase slug = approved plan filename). Unused for preview actions (e.g. `ast_edit`).

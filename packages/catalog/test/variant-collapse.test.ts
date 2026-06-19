@@ -151,13 +151,31 @@ describe("collapseEffortVariants", () => {
 		});
 	});
 
-	it("preserves off routing for a -thinking-only claude family", () => {
+	it("keeps claude -thinking routing when discovery only returns the bare id", () => {
+		const out = collapseEffortVariants(
+			[memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 })],
+			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+		);
+
+		expect(out).toHaveLength(1);
+		expect(out[0]?.id).toBe("claude-sonnet-4-6");
+		expect(out[0]?.requestModelId).toBe("claude-sonnet-4-6");
+		expect(out[0]?.thinking?.effortRouting).toEqual({
+			off: "claude-sonnet-4-6",
+			minimal: "claude-sonnet-4-6-thinking",
+			low: "claude-sonnet-4-6-thinking",
+			medium: "claude-sonnet-4-6-thinking",
+			high: "claude-sonnet-4-6-thinking",
+		});
+	});
+
+	it("keeps the thinking backing id for a -thinking-only claude family", () => {
 		const out = collapseEffortVariants([memberSpec("claude-opus-4-6-thinking")], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
 		const opus = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
 
 		expect(out[0]?.id).toBe("claude-opus-4-6");
 		expect(out[0]?.requestModelId).toBe("claude-opus-4-6-thinking");
-		expect(resolveWireModelId(opus, undefined)).toBe("claude-opus-4-6");
+		expect(resolveWireModelId(opus, undefined)).toBe("claude-opus-4-6-thinking");
 		expect(resolveWireModelId(opus, Effort.High)).toBe("claude-opus-4-6-thinking");
 	});
 
@@ -166,11 +184,10 @@ describe("collapseEffortVariants", () => {
 		const sonnet = buildModel(out[0] as ModelSpec<"google-gemini-cli">);
 
 		expect(out[0]?.id).toBe("claude-sonnet-4-6");
-		expect(out[0]?.requestModelId).toBeUndefined();
+		expect(out[0]?.requestModelId).toBe("claude-sonnet-4-6");
 		expect(resolveWireModelId(sonnet, undefined)).toBe("claude-sonnet-4-6");
 		expect(resolveWireModelId(sonnet, Effort.High)).toBe("claude-sonnet-4-6-thinking");
 	});
-
 	it("renames single-member families through requestModelId with no routing", () => {
 		const out = collapseEffortVariants(
 			[memberSpec("gpt-oss-120b-medium", { input: ["text"] })],

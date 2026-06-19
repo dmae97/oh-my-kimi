@@ -87,7 +87,7 @@ function truncateDiffContent(diff: string): { content: string; truncated: boolea
 	const truncatedCount = lines.length - KEEP_HEAD_LINES - KEEP_TAIL_LINES;
 
 	return {
-		content: [...head, `\n... (truncated ${truncatedCount} lines) ...\n`, ...tail].join("\n"),
+		content: [...head, `\n[…${truncatedCount}ln elided…]\n`, ...tail].join("\n"),
 		truncated: true,
 	};
 }
@@ -117,7 +117,7 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 			}
 			content = truncated;
 			if (content.length > remaining) {
-				content = `${content.slice(0, remaining)}\n... (diff truncated due to size) ...`;
+				content = `${content.slice(0, remaining)}\n[…${content.length - remaining}ch elided…]`;
 				if (!truncatedFiles.includes(file)) {
 					truncatedFiles.push(file);
 				}

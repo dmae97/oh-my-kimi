@@ -540,9 +540,9 @@ pub fn group_diagnostics(input: &str) -> String {
 			out.push('\n');
 		}
 		if entries.len() > 12 {
-			out.push_str("  … ");
+			out.push_str("  […");
 			out.push_str(&(entries.len() - 12).to_string());
-			out.push_str(" more\n");
+			out.push_str(" diagnostics elided…]\n");
 		}
 	}
 
@@ -551,9 +551,9 @@ pub fn group_diagnostics(input: &str) -> String {
 		out.push('\n');
 	}
 	if ungrouped.len() > 40 {
-		out.push_str("… ");
+		out.push_str("[…");
 		out.push_str(&(ungrouped.len() - 40).to_string());
-		out.push_str(" ungrouped lines omitted\n");
+		out.push_str(" ungrouped lines elided…]\n");
 	}
 	out
 }
@@ -701,7 +701,7 @@ mod tests {
 		}
 		let out = group_diagnostics(&input);
 		assert!(out.contains("src/main.rs (20 diagnostics)"));
-		assert!(out.contains("… 8 more"));
+		assert!(out.contains("  […8 diagnostics elided…]"));
 	}
 
 	#[test]

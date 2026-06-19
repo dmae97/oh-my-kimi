@@ -1097,10 +1097,15 @@ strip_lines_matching = [".*"]
 		}
 		let out = apply("rails db:migrate", &input, 0, &cfg);
 		assert!(out.changed);
-		// The def's max_lines=40 produces ONE truncation marker.
-		// filter_rake's head_tail marker ("lines omitted") must NOT appear.
-		assert!(!out.text.contains("lines omitted"), "double truncation detected: {:#?}", out.text);
-		assert!(out.text.contains("lines truncated"));
+		// Only the def's max_lines=40 cap should fire; filter_rake's head_tail must
+		// NOT also condense. Both now emit `[…Nln elided…]`, so a single marker
+		// proves no double truncation (two would mean both stages fired).
+		assert_eq!(
+			out.text.matches("ln elided…]").count(),
+			1,
+			"double truncation detected: {:#?}",
+			out.text
+		);
 	}
 
 	#[test]

@@ -107,4 +107,18 @@ describe("config CLI schema coverage", () => {
 			value: 600,
 		});
 	});
+
+	it("accepts max as a persisted default thinking level", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runConfigCommand({ action: "set", key: "defaultThinkingLevel", value: "max", flags: { json: true } });
+		await runConfigCommand({ action: "get", key: "defaultThinkingLevel", flags: { json: true } });
+
+		const payload = logSpy.mock.calls.at(-1)?.[0];
+		expect(typeof payload).toBe("string");
+		const parsed = JSON.parse(String(payload)) as { key: string; value: unknown; type: string };
+		expect(parsed.key).toBe("defaultThinkingLevel");
+		expect(parsed.type).toBe("enum");
+		expect(parsed.value).toBe("max");
+	});
 });

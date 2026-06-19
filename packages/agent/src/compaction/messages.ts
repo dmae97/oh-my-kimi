@@ -51,7 +51,11 @@ export interface CompactionSummaryMessage {
 	shortSummary?: string;
 	tokensBefore: number;
 	providerPayload?: ProviderPayload;
-	/** Snapcompact frames archived by this compaction; appended as image blocks after the summary text. */
+	/** Runtime-only ordered archive blocks for snapcompact: old text region,
+	 *  imaged middle, then new text region. When present, `summary` is already
+	 *  the final lead-in text (no legacy wrapper applied). */
+	blocks?: (TextContent | ImageContent)[];
+	/** Snapcompact image blocks, kept for display counts / legacy consumers. */
 	images?: ImageContent[];
 	timestamp: number;
 }
@@ -101,14 +105,19 @@ export function createCompactionSummaryMessage(
 	shortSummary?: string,
 	providerPayload?: ProviderPayload,
 	images?: ImageContent[],
+	blocks?: (TextContent | ImageContent)[],
 ): CompactionSummaryMessage {
+	const imageBlocks =
+		blocks?.filter((block): block is ImageContent => block.type === "image") ??
+		(images && images.length > 0 ? images : undefined);
 	return {
 		role: "compactionSummary",
 		summary,
 		shortSummary,
 		tokensBefore,
 		providerPayload,
-		images: images && images.length > 0 ? images : undefined,
+		blocks: blocks && blocks.length > 0 ? blocks : undefined,
+		images: imageBlocks && imageBlocks.length > 0 ? imageBlocks : undefined,
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
@@ -182,13 +191,16 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 			case "compactionSummary":
 				return {
 					role: "user",
-					content: [
-						{
-							type: "text" as const,
-							text: renderCompactionSummaryContext(message.summary),
-						},
-						...(message.images ?? []),
-					],
+					content:
+						message.blocks !== undefined
+							? [{ type: "text" as const, text: message.summary }, ...message.blocks]
+							: [
+									{
+										type: "text" as const,
+										text: renderCompactionSummaryContext(message.summary),
+									},
+									...(message.images ?? []),
+								],
 					attribution: "agent",
 					providerPayload: message.providerPayload,
 					timestamp: message.timestamp,

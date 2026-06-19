@@ -19,11 +19,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import {
-	AuthBrokerClient,
 	type AuthCredential,
 	AuthStorage,
 	type CredentialDisabledEvent,
-	DEFAULT_AUTH_BROKER_BIND,
 	getEnvApiKey,
 	getOAuthProviders,
 	listProvidersWithEnvKey,
@@ -32,8 +30,8 @@ import {
 	type OAuthProviderInfo,
 	PROVIDER_REGISTRY,
 	SqliteAuthCredentialStore,
-	startAuthBroker,
 } from "@oh-my-pi/pi-ai";
+import { AuthBrokerClient, DEFAULT_AUTH_BROKER_BIND, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
 import { $which, APP_NAME, getAgentDbPath, getConfigRootDir, isEnoent, logger, VERSION } from "@oh-my-pi/pi-utils";
 import { setTransports as setLoggerTransports } from "@oh-my-pi/pi-utils/logger";
 import { $ } from "bun";

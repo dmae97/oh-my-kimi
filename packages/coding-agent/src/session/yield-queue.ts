@@ -124,7 +124,13 @@ export class YieldQueue {
 		return thunks;
 	}
 
-	clear(): void {
+	/** Drop queued entries. With `kind`, drop only that kind's entries (leaving
+	 *  any pending idle-flush for other kinds intact); otherwise drop everything. */
+	clear(kind?: string): void {
+		if (kind !== undefined) {
+			this.#entries.delete(kind);
+			return;
+		}
 		this.#entries.clear();
 		this.#idleFlushPending = false;
 	}

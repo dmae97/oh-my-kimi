@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
+### Fixed
+
+- Ensure deep-cloning of tool-call arguments respects own enumerable properties
+- Prevent direct object references between agent message snapshots and streaming events
+
+## [16.1.0] - 2026-06-19
+
+### Added
+
+- Added `SoftToolRequirement` support to `getToolChoice`: a host can require a tool by returning a soft requirement instead of a hard `ToolChoice`. The loop injects the supplied reminder once (leaving `tool_choice` on auto), and escalates to a one-turn forced choice — skipping any detour tool batch — only if the model fails to call the required tool, avoiding the provider message-cache invalidation of forcing every turn.
+- Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
+
+### Fixed
+
+- Improved token estimation accuracy for compaction summaries containing multi-block content
+
+## [16.0.11] - 2026-06-19
+
+### Changed
+
+- Updated the display format for truncated file operation summaries
+
+## [16.0.8] - 2026-06-18
+
+### Fixed
+
+- Stopped the compaction `<files>` summary from tracking `scheme://` URLs — internal URIs (`conflict://`, `artifact://`, `local://`, `history://`, …) and web URLs are no longer recorded as files, and legacy entries rehydrated from older compaction summaries are dropped.
+
 ## [16.0.6] - 2026-06-18
 
 ### Added

@@ -22,7 +22,13 @@ export const MAIN_AGENT_ID = "Main";
  * - `aborted`: hard-killed, terminal.
  */
 export type AgentStatus = "running" | "idle" | "parked" | "aborted";
-export type AgentKind = "main" | "sub";
+/**
+ * - `main`/`sub`: the user-facing agent tree (driving agent + task subagents).
+ * - `advisor`: a passive review transcript persisted like a subagent for usage
+ *   attribution and Agent Hub observability, but never a peer — hidden from
+ *   agent-facing rosters (`irc`, `history://`) and not messageable/revivable.
+ */
+export type AgentKind = "main" | "sub" | "advisor";
 
 export interface AgentRef {
 	id: string;
@@ -157,11 +163,14 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * Returns every alive agent (running | idle) except the caller.
-	 * Flat namespace: every agent can see every other agent.
+	 * Returns every alive agent (running | idle) except the caller. Advisor refs
+	 * are observability-only transcripts, never peers, so they are excluded.
+	 * Flat namespace: every other agent is visible.
 	 */
 	listVisibleTo(id: string): AgentRef[] {
-		return this.list().filter(ref => ref.id !== id && (ref.status === "running" || ref.status === "idle"));
+		return this.list().filter(
+			ref => ref.id !== id && ref.kind !== "advisor" && (ref.status === "running" || ref.status === "idle"),
+		);
 	}
 
 	onChange(listener: RegistryListener): () => void {

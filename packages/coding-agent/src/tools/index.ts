@@ -1,6 +1,6 @@
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { FetchImpl, Model, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { FetchImpl, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
@@ -111,6 +111,13 @@ export type ContextFileEntry = {
 	path: string;
 	content: string;
 	depth?: number;
+};
+
+/** Image attachment handle exposed to tools for user-facing labels such as `Image #1`. */
+export type ImageAttachmentEntry = {
+	label: string;
+	uri: string;
+	image: ImageContent;
 };
 
 export type {
@@ -305,6 +312,10 @@ export interface ToolSession {
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Peek the most-recently registered non-forcing pending preview invoker. The `resolve`
+	 *  tool dispatches to it so a staged preview resolves WITHOUT forcing tool_choice — the
+	 *  agent-loop's SoftToolRequirement lifecycle owns reminder injection and escalation. */
+	peekPendingInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
 	/** Peek the long-lived "standing" resolve handler registered by a mode (e.g. plan mode).
 	 *  Consulted by the `resolve` tool as a fallback when no queue invoker is in flight,
 	 *  letting modes accept `resolve` invocations without forcing the tool choice every turn. */
@@ -353,6 +364,8 @@ export interface ToolSession {
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
+	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
+	getImageAttachments?: () => ImageAttachmentEntry[];
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;

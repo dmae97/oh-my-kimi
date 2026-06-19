@@ -2,13 +2,158 @@
 
 ## [Unreleased]
 
+## [16.1.2] - 2026-06-19
+
+### Added
+
+- Added a welcome-screen tip for the `/advisor` runtime. Tips ending in a `[NEW]` marker now render a bold rainbow `NEW!` tag (it shimmers across the welcome intro's animation frames, then settles into a still rainbow) and are weighted to surface more often in the random tip rotation.
+
+### Changed
+
+- Refined system prompt and tool documentation to improve conciseness and clarity
+- Simplified tool input descriptions for browser, eval, find, and memory-edit operations
+- Refactored authentication storage discovery to share logic with other pi-ai tools
+
 ### Fixed
 
+- Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
+- Fixed streaming reflowing Markdown — a fenced mermaid diagram or a GFM table — stranding stale fragments in native scrollback once the reply scrolled past the viewport (cleared only by a full repaint / Ctrl+L). While streaming, the assistant block defaulted to commit-stable, so the transcript advertised its scrolled-off rows as durable snapshot content and the renderer committed an intermediate layout to immutable terminal history; the later re-layout (a diagram reshaping, a table re-aligning its columns) then froze that superseded fragment in scrollback. A still-streaming reply whose Markdown carries a mermaid fence or a table — detected outside fenced code blocks so ordinary code snippets are unaffected — is now commit-unstable, so it stays wholly in the repaintable live region and commits once, at its final layout, when the turn finalizes.
+- Fixed `SYSTEM.md` prompt customization going through the raw system prompt override path, which dropped sections rendered by `custom-system-prompt.md` such as skills and rules ([#3014](https://github.com/can1357/oh-my-pi/issues/3014)).
+
+## [16.1.1] - 2026-06-19
+
+### Changed
+
+- Migrated legacy macOS power settings to a single sleep prevention enum
+- Defaulted `display.cacheMissMarker` setting to `false` to suppress the cache-miss marker by default.
+- Replaced the four separate `power.preventIdleSleep`, `power.preventSystemSleep`, `power.declareUserActive`, and `power.preventDisplaySleep` boolean settings with a single cumulative `power.sleepPrevention` enum (`off` → `idle` → `display` → `system`). Each level adds the caffeinate flags of all lower levels. Existing configs are migrated automatically.
+
+### Fixed
+
+- Cache-miss marker no longer fires on providers with implicit, best-effort prompt caching (Google/Gemini, OpenAI, Fireworks). Those report `cacheWrite: 0` and drop `cacheRead` to zero intermittently as routine propagation noise that self-heals the next turn. Only explicit, prefix-controlled caches (Anthropic/Bedrock `cache_control`), which re-create the prefix on a cold turn as `cacheWrite > 0`, now surface a marker — where a zero `cacheRead` genuinely means the prefix broke.
+- Fixed advisor dependent settings staying visible while `advisor.enabled` is off ([#3027](https://github.com/can1357/oh-my-pi/issues/3027)).
+- Fixed LSP servers that dynamically register capabilities, including Expert, hanging semantic requests after `client/registerCapability` was rejected ([#3029](https://github.com/can1357/oh-my-pi/issues/3029)).
+
+## [16.1.0] - 2026-06-19
+
+### Added
+
+- Added a prompt-cache miss marker: a slim `⊘ cache miss · <n> tokens` divider above an assistant turn whose request lost the provider prompt cache. Detected from per-turn usage — the previous turn cached a meaningful prefix but this request read none of it back and reprocessed the prompt (e.g. after a thinking-level / service-tier / model change, tool or system-prompt change, or a history rewrite). Reports the reprocessed token count. Toggle with the `display.cacheMissMarker` setting (Appearance → Display, on by default).
+
+### Changed
+
+- Optimized preview workflows by removing forced tool choices, reducing prompt cache invalidations
+- Unified injected message styling with consistent rounded outlines and icon-tagged headers
+- Refreshed branch summary messages with a uniform banner style to match compaction points
+- Updated skill invocation UI with a compact header, home-shortened paths, and dynamic line counts
+- Refined session context to utilize history blocks instead of raw images for snapcompact summaries
+- Refreshed the skill-prompt transcript message to match the rest of the TUI: an icon-tagged `✦ skill <name>` header (with invocation args trailing), a single meta line with a home-shortened, click-to-open path in the accent color and the prompt size in muted, and a rounded outline around the card. Replaces the old `[skill]` label with the flat `Skill:`/`Path:`/`Prompt:` key/value dump (which also leaked the absolute home directory).
+- Refreshed the default custom/hook transcript message frame to a rounded, icon-tagged card: the `[customType]` bracket label is replaced by an `<icon> <type>` header (📦 for extension messages, 🪝 for legacy hook-role messages) with a subtle outline, matching the skill card. Covers every extension/hook custom type without a bespoke renderer.
+- Refreshed the branch-summary transcript message to render as the same slim divider banner as `/compact`, handoff, and snapcompact (`⑂ branch · ctrl+o`, summary revealed on expand) instead of a `[branch]` box.
+- Optimized network traffic by stripping tool descriptions from provider tool schemas
+- Renamed the prompt setting from `repeatToolDescriptions` / "Repeat Tool Descriptions" to `inlineToolDescriptors` / "Inline Tool Descriptors" and enabled inline descriptors by default.
+- Snapcompact compaction summaries now reach the model as ordered history blocks instead of one lead-in text block plus appended images: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. This matches the new text-first snapcompact archive layout and preserves chronological order in the provider prompt.
+- Fixed `/dump` output repeating the tool inventory twice when `inlineToolDescriptors` is enabled.
+- Unified TUI border corners on the rounded style: tool-result frames, overlays, code fences, debug frames, and the interactive bash box now draw rounded corners (`╭╮╰╯`) to match the editor and message cards, instead of mixing rounded boxes with sharp (`┌┐└┘`) ones. `boxRound` now carries the sharp tee/cross junction glyphs (no rounded variant exists), so dividers still honor `boxSharp.tee*`/`cross` theme overrides. Markdown tables intentionally keep the fully sharp `boxSharp` set; its corner tokens now affect tables only.
+
+## [16.0.11] - 2026-06-19
+
+### Added
+
+- Added `__advisor.jsonl` transcript persistence for advisor model usage attribution and visibility in the Agent Hub
+- Added defensive reservation against naming a task `__advisor` to prevent filesystem collisions with internal transcripts
+- Added `mode` property to the `CompactOptions` interface for extension-based compaction control
+- Updated `/compact` slash command to support `soft`, `remote`, and `snapcompact` subcommands for per-run strategy overrides
+- Added `/compact` mode subcommands so a manual compaction can override the configured `compaction.strategy`/`remoteEnabled` for that one run: `/compact soft` (summarize locally, skip remote endpoints), `/compact remote` (summarize via the remote endpoint / provider-native compaction; warns and falls back to a local summary when no remote path is available), and `/compact snapcompact` (archive history onto dense bitmap images, no LLM call). Bare `/compact` and `/compact <focus text>` keep their existing behavior; `soft`/`remote` still accept trailing focus instructions, `snapcompact` rejects them. The subcommands are advertised to ACP clients and surface in TUI autocomplete. Extensions can pass the same selection via `compact(instructions, { mode })`.
+- The advisor now persists its own turns to a subagent-style transcript (`<session>/__advisor.jsonl`) so the advisor model's usage is attributed in `omp stats` and its transcript is observable in the Agent Hub (read-only). The transcript follows session switches (`/new`, resume, branch) and is drained/released before a `/drop` deletes the old artifacts dir. The advisor remains a non-peer: it is hidden from agent-facing rosters (`irc` list, `history://`, subagent peer prompt, broadcast targets), is not messageable (`irc send` / collab chat), and is not revivable/killable from the Hub or collab.
+
+### Changed
+
+- Standardized file elision markers to a compact `[…Nln elided…]` format
+- Updated transcript viewer to clear cached content if the session file is deleted while opened
+- Refactored agent hub to use a fullscreen overlay for agent transcripts instead of inline chat
+- Improved transcript rendering stability by using a non-incremental builder for viewer replays
+- Advisor transcripts are now excluded from agent-facing surfaces like `irc`, `history://`, and peer rosters
+- Advisor transcripts are read-only and cannot be messaged, revived, or killed via the Agent Hub or IRC
+- Refined `/compact` argument parsing to reject focus instructions for modes that do not support them (e.g., `snapcompact`)
+- Protocol hosts (RPC/`rpc-ui`/ACP) now host-default the full advisor settings group — `advisor.syncBacklog` and `advisor.immuneTurns` in addition to `advisor.enabled`/`advisor.subagents` — so a host that opts the advisor in gets the default tuning instead of inheriting the user's local advisor preferences.
+
+### Fixed
+
+- Fixed memory-leaking stale transcripts in the agent viewer when underlying files are deleted
+- Fixed the Agent Hub transcript viewer rendering the transcript body one column right of the "Agent Hub" title (and the title appearing to shift when scrolled to the top): the fullscreen viewer added its own outer gutter on top of the transcript rows, which already carry a 1-column left pad, so the header and body no longer shared a gutter. The viewer now renders the scroll body at full width without the extra gutter, and the file-mention row carries the same 1-column pad as every other row.
+- Fixed the bash tool failing with `pi-natives:command: syntax error at end of input` on a valid `&&`/`;` chain whose later pipeline stage is a compound command, e.g. `echo x && git log | while read h; do …; done | head`. The minimizer's segmented-chain runner rebuilds each chain segment from the brush AST via `pipeline.to_string()` and re-executes that string, but `simple_segment` only validated the *first* pipeline stage — so a compound later stage (`while`/`for`/`if`/subshell) was re-serialized without its terminator and re-run as broken shell. Every stage is now required to be a Display-safe simple command, and — as a general guard against the recurring class of brush `Display` round-trip divergences (previously: quoted here-doc close tags, multi-byte char/byte offsets) — each reconstructed segment is now re-parsed and must match the original pipeline shape before the chain runner executes it; any divergence runs the command whole, unsegmented, instead of corrupting it.
+- Fixed `Ctrl+T` (toggle thinking blocks) and the `/settings` "Hide Thinking Blocks" toggle only collapsing/expanding thinking in the live region: blocks that had scrolled into committed native scrollback on ED3-risk terminals kept their pre-toggle snapshot, so scrolling up showed the old thinking state. Both paths now `resetDisplay()` after flipping each block's flag, forcing a full clear + replay of the whole transcript (matching the tool-output expansion toggle) so every block above the fold re-renders at its new height.
+- Fixed ACP mobile voice settings being unable to call `speech.models.list` by exposing the local STT/TTS model and voice catalog without triggering setup or downloads ([#3011](https://github.com/can1357/oh-my-pi/issues/3011)).
+- Fixed the collapsed inline arg preview used by tools without a custom renderer (e.g. `advise`, MCP tools) truncating every value at a fixed 24 columns, so a long note was cut to `note="Your “stric…"` even on a wide card with empty space to spare. Each value now grows into the width the card actually has, reserving only a small slice for the keys that still follow so a long leading value can't hide them.
+
+### Removed
+
+- Removed `display.tabWidth` setting and configurable tab width support
+
+## [16.0.10] - 2026-06-18
+
+### Added
+
+- Updated the `pi` option of the `tools.format` setting to use the new compact sigil-delimited owned tool-calling dialect (`§`/`«…»`/`¤`/`‡‡`) that uses ~46% fewer tokens than the legacy format on typical calls.
+- Integrated terminal QR codes directly into `/collab` and `/collab view` to display both deep links and scannable codes, and added a `collab.webUrl` setting for separately hosted collab web clients.
+
+### Changed
+
+- Updated description of Pi dialect in tool-calling settings to clarify compact sigil format
+
+### Fixed
+
+- Fixed legacy `settings.json`, `models.json`, and `keybindings.json` migration/loading to accept comments in JSON config files.
+- Support quoted file paths with spaces (such as default macOS screenshots) in file mentions and `@`-prefixed CLI arguments ([#2909](https://github.com/can1357/oh-my-pi/pull/2909)).
+- Fixed the first steering/follow-up message typed as auto-compaction begins being dropped instead of queued; the compaction abort controller (which backs `isCompacting`) is now installed before the `auto_compaction_start` event fires, so input routed during that window lands in the compaction queue rather than the core agent queue.
+- Fixed queued steering/follow-up messages being silently cleared by the agent reset during a handoff; they are now captured and restored across the new-session reset.
+- Fixed the `/login` provider list still offering providers listed in `disabledProviders` (and their credential-alias logins, e.g. `openai-codex-device` → `openai-codex`) as login targets ([#2906](https://github.com/can1357/oh-my-pi/pull/2906)).
+- Fixed an owned MCP manager not being disconnected on `AgentSession.dispose()`, orphaning stdio MCP subprocesses across session teardown (`/exit`, print mode, subagent teardown); the dispose-time disconnect is now bounded so a slow HTTP/SSE transport close cannot stall exit ([#2839](https://github.com/can1357/oh-my-pi/pull/2839)).
+- Fixed `inspect_image` resolving pasted image labels such as `Image #1`, `[Image #1, WxH]`, and `attachment://1` against current chat attachments instead of falling back to `<cwd>/Image #1` ([#2787](https://github.com/can1357/oh-my-pi/issues/2787)).
+- Accepted `max` as an alias for the top thinking level (`xhigh`) in selectors and `--thinking`, so DeepSeek V4 Pro can be selected with its provider-facing maximum effort ([#2727](https://github.com/can1357/oh-my-pi/issues/2727)).
+- Fixed `--provider=amazon-bedrock --model <application-inference-profile ARN>` being rejected as an unknown model before the Bedrock provider could send the ARN to Converse Stream. ([#3004](https://github.com/can1357/oh-my-pi/issues/3004))
+
+## [16.0.9] - 2026-06-18
+
+### Added
+
+- Added a `--print-thoughts` flag for single-shot print mode that includes sanitized thinking blocks in the text output; default print output stays the final answer only. When thinking is hidden by the `hideThinkingBlock` setting, `--print-thoughts` un-hides it for the print run so the flag is not a silent no-op (an explicit `--hide-thinking` still wins).
+
+### Fixed
+
+- Fixed active `/goal` mode being paused by internal compaction and session-switch lifecycle aborts, and made those switches persist wall-clock goal usage without charging time spent in another session to a preserved goal.
+
+## [16.0.8] - 2026-06-18
+
+### Changed
+
+- Optimized app startup time by lazily loading site-specific scraper modules
+- Refactored internal archive handling into a unified `src/utils/zip.ts` module
+- Centralized all `fflate` (ZIP) and `Bun.Archive` (tar/tar.gz) operations into `zip.ts`
+- Optimized archive reading by using lazy, ranged central-directory access for ZIP files
+- Updated internal image processing to no longer include metadata text for fetched images
+- Optimized `omp://` documentation indexing by compressing doc bodies into a lazily-inflated blob
+- Changed Mermaid fenced-block ASCII rendering to use the first-party vendored renderer in `@oh-my-pi/pi-utils` (`src/vendor/mermaid-ascii`), dropping the `beautiful-mermaid` npm package, its transitive `elkjs` (~3.13MB), and the `beautiful-mermaid` `bun patch`; CJK/emoji width handling and the layout-direction override are preserved.
+- Changed `omp://` documentation embedding to a gzipped base64 index (`docs-index.generated.txt`, populated at build time and reset afterward) inflated on first read, instead of a ~1.6MB raw TypeScript map. The compiled binary / npm bundle drops ~0.9MB; the dev tree and source checkouts read `docs/` from disk.
+- Replaced the `markit-ai` package with a vendored in-house document engine (`src/markit`) for the document formats it converts: PDF (via `mupdf`), DOCX (via `mammoth`), and PPTX/XLSX/EPUB (via `fast-xml-parser`). Conversion output is preserved, including the PDF column/table-detection pipeline and HTML-table normalization; `markit-ai`'s unused converters and their dependency tail are gone. Legacy `.doc`/`.ppt`/`.xls`/`.rtf` remain unsupported (a conversion error), as before.
+- Centralized ZIP handling behind a single `src/utils/zip.ts` (`fflate`): the new document converters, the `write` tool's in-place archive editing, and the `read` tool's ranged archive reader now share one ZIP implementation instead of mixing `jszip` and `fflate`.
+
+### Fixed
+
+- Fixed settings overlay crash when scrolling past the last row in list views
+- Improved tool result formatting by correctly wrapping `<out>` blocks in dim-ink toggles
+- Fixed auto-retry after transient model-stream socket closes to replay text/thinking-only partial assistant output, including turns where incomplete tool-call arguments were dropped; completed tool calls still block retry to avoid duplicating tool execution.
 - Fixed `omp update` reporting `EPERM: operation not permitted, unlink '<binary>.bak'` on Windows when self-replacing a standalone binary, even though the new binary had already been installed. The backed-up old executable is still the running process image and cannot be unlinked until the process exits, so the post-verify backup cleanup is now best-effort, backups use a unique per-attempt name, and stale backups are swept on the next update ([#845](https://github.com/can1357/oh-my-pi/issues/845)).
 - Fixed plan-mode `Refine plan` so the internal approval abort is hidden and the editor is ready for a follow-up prompt instead of showing `Operation aborted` ([#2971](https://github.com/can1357/oh-my-pi/issues/2971)).
 - Fixed TUI prompts beginning with shell-style variables such as `$HOME` being misrouted to Python eval; Python shortcuts now require `$ <code>` or `$$ <code>`. ([#2944](https://github.com/can1357/oh-my-pi/issues/2944))
 - Fixed LM Studio runtime discovery to use native `/api/v0/models` metadata so `inspect_image` can select VLM models. ([#2945](https://github.com/can1357/oh-my-pi/issues/2945))
 - Fixed `omp` crashing at startup with `Cannot find module './browser-data/browser-data.js'` (e.g. on Termux/proot Linux arm64). `tools/browser/attach.ts` value-imported the `TargetType` enum from `puppeteer-core`, which dragged the puppeteer-core barrel (and its `@puppeteer/browsers` Chromium downloader) back onto the eager startup import graph — defeating the lazy-load deferral and turning any bundling quirk in that subtree into a fatal boot crash instead of a recoverable browser-tool error. The import is now `import type` and the target check compares against the `"page"` literal, so puppeteer only loads on first browser use.
+- Fixed the standalone compiled binary aborting at startup with `error: Cannot find package 'mupdf'`. The vendored document engine kept `mupdf` external, but a single-file `bun --compile` binary has no `node_modules` to resolve it from, and the bundler resolves the otherwise-lazy import eagerly at boot. `mupdf` (and its WASM module, embedded at build time via `scripts/embed-mupdf-wasm.ts`) is now bundled into the binary, so startup and PDF/document conversion both work in the standalone binary; npm and source installs still load `mupdf` from `node_modules`. `mupdf` is also imported lazily inside the PDF converter now, which fixes a compiled-bundle init-order hazard — `mupdf`'s top-level await made the bundled markit chunk's module init async, exposing the converters before their extension tables initialized — and keeps the ~10MB WASM off non-PDF document conversions.
+
+### Removed
+
+- Removed the `markit-ai`, `exifr`, `music-metadata`, and direct `jszip` dependencies. As a side effect, fetching an image or audio URL no longer appends EXIF/audio metadata text; image inlining and resizing are unchanged, and document conversion (PDF/DOCX/PPTX/XLSX/EPUB) is unaffected.
 
 ## [16.0.7] - 2026-06-18
 

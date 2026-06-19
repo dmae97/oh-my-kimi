@@ -1,6 +1,18 @@
-MIT License
+This directory contains a vendored, locally-patched copy of brush-core from the
+brush shell project (https://github.com/reubeno/brush), used under the MIT
+License. It is wired into the workspace via `[patch.crates-io]` so these
+modifications can be maintained against the published release (brush-core
+0.5.0).
 
-Copyright (c) 2024 reuben olinsky
+  Copyright (c) 2024 reuben olinsky
+
+Local modifications include: Windows path handling fixes (drive-alias and
+rooted-path normalization in globs), an async background-PID fix for the nohup
+wrapper, treating `/dev/null` as poll-ready to avoid an infinite poll on macOS,
+and indentation/formatting standardization. The remaining logic tracks upstream
+so behavior matches the published crate.
+
+MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

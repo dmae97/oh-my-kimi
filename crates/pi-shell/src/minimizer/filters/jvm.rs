@@ -606,7 +606,7 @@ impl<'a> SurefireBlock<'a> {
 
 /// `[ERROR] Failures:` summary block cap. Maven emits a summary at the end of a
 /// failing test run; on builds with hundreds of failures this can be large. Cap
-/// entries at [`max_mvn_failing_classes`] and emit `\n… +N more failures\n`
+/// entries at [`max_mvn_failing_classes`] and emit `\n[…N failures elided…]\n`
 /// immediately before the `Tests run:` aggregate when entries were dropped.
 struct FailuresSummaryCap {
 	cap:        usize,
@@ -648,14 +648,14 @@ impl FailuresSummaryCap {
 		}
 	}
 
-	/// Pre-emit the `… +N more failures` tail when the aggregate
+	/// Pre-emit the `[…N failures elided…]` tail when the aggregate
 	/// `[ERROR] Tests run:` line is about to be written, then close the summary.
 	fn handle_aggregate(&mut self, line: &str, out: &mut String) {
 		if !self.in_summary || !AGG.is_match(line) {
 			return;
 		}
 		if self.dropped > 0 {
-			let _ = write!(out, "\n… +{} more failures\n", self.dropped);
+			let _ = write!(out, "\n[…{} failures elided…]\n", self.dropped);
 		}
 		self.in_summary = false;
 		self.emitted = 0;
@@ -665,7 +665,7 @@ impl FailuresSummaryCap {
 	/// End-of-stream tail emission for cases where the AGG line never arrives.
 	fn finish(&self, out: &mut String) {
 		if self.in_summary && self.dropped > 0 {
-			let _ = write!(out, "\n… +{} more failures\n", self.dropped);
+			let _ = write!(out, "\n[…{} failures elided…]\n", self.dropped);
 		}
 	}
 }
@@ -744,7 +744,7 @@ fn filter_surefire_with_cap(raw: &str, cap: usize) -> String {
 	block.finish(&mut out);
 	summary.finish(&mut out);
 	if dropped_failing > 0 {
-		let _ = write!(out, "\n… +{dropped_failing} more failing test classes\n");
+		let _ = write!(out, "\n[…{dropped_failing} failing test classes elided…]\n");
 	}
 	out
 }
@@ -903,7 +903,7 @@ fn filter_package_with_cap(raw: &str, cap: usize) -> String {
 	block.finish(&mut out);
 	summary.finish(&mut out);
 	if dropped_failing > 0 {
-		let _ = write!(out, "\n… +{dropped_failing} more failing test classes\n");
+		let _ = write!(out, "\n[…{dropped_failing} failing test classes elided…]\n");
 	}
 	out
 }
@@ -1602,7 +1602,7 @@ fn filter_gradle_dependencies(input: &str) -> String {
 			let _ = writeln!(result, "  {dep}");
 		}
 		if deps.len() > cap {
-			let _ = writeln!(result, "  ... +{} more", deps.len() - cap);
+			let _ = writeln!(result, "  […{} dependencies elided…]", deps.len() - cap);
 		}
 	}
 
@@ -1994,7 +1994,7 @@ mod tests {
 			"capped class second per-test block dropped (re-arm inherits drop); got:\n{o}"
 		);
 		assert!(
-			o.contains("… +1 more failing test classes"),
+			o.contains("[…1 failing test classes elided…]"),
 			"tail counts one class, not one per failure; got:\n{o}"
 		);
 	}
@@ -2214,7 +2214,7 @@ mod tests {
 				"Fail{n} exception dropped; got:\n{o}"
 			);
 		}
-		assert!(o.contains("… +2 more failing test classes"), "tail emitted; got:\n{o}");
+		assert!(o.contains("[…2 failing test classes elided…]"), "tail emitted; got:\n{o}");
 	}
 
 	#[test]
@@ -2235,7 +2235,7 @@ mod tests {
 				"Fail{n} dropped under cap=0; got:\n{o}"
 			);
 		}
-		assert!(o.contains("+5 more failing test classes"), "tail counts all 5; got:\n{o}");
+		assert!(o.contains("[…5 failing test classes elided…]"), "tail counts all 5; got:\n{o}");
 	}
 
 	#[test]
@@ -2256,7 +2256,7 @@ mod tests {
 		for n in 4..=5 {
 			assert!(!o.contains(&format!("ClassA.test{n}:25")), "entry {n} dropped; got:\n{o}");
 		}
-		let tail_idx = o.find("… +2 more failures").expect("tail must appear");
+		let tail_idx = o.find("[…2 failures elided…]").expect("tail must appear");
 		let agg_idx = o
 			.find("[ERROR] Tests run: 100")
 			.expect("aggregate must appear");

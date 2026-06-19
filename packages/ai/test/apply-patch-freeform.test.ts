@@ -659,8 +659,17 @@ describe("history replay: custom_tool_call round-trip", () => {
 		};
 		const knownCallIds = new Set<string>(["call_1"]);
 		const customCallIds = new Set<string>(["call_1"]);
+		const model = makeModel();
 
-		appendResponsesToolResultMessages(messages as never, toolResult, makeModel(), true, knownCallIds, customCallIds);
+		appendResponsesToolResultMessages(
+			messages as never,
+			toolResult,
+			model,
+			true,
+			model.compat.supportsImageDetailOriginal,
+			knownCallIds,
+			customCallIds,
+		);
 
 		expect(messages).toHaveLength(1);
 		const item = messages[0] as { type: string; call_id: string; output: string };
@@ -681,8 +690,17 @@ describe("history replay: custom_tool_call round-trip", () => {
 		};
 		const knownCallIds = new Set<string>(["call_2"]);
 		const customCallIds = new Set<string>(); // call_2 not custom
+		const model = makeModel();
 
-		appendResponsesToolResultMessages(messages as never, toolResult, makeModel(), true, knownCallIds, customCallIds);
+		appendResponsesToolResultMessages(
+			messages as never,
+			toolResult,
+			model,
+			true,
+			model.compat.supportsImageDetailOriginal,
+			knownCallIds,
+			customCallIds,
+		);
 
 		const item = messages[0] as { type: string };
 		expect(item.type).toBe("function_call_output");

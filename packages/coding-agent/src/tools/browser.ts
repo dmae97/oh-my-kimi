@@ -45,7 +45,7 @@ const browserSchema = type({
 	),
 	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
 	"code?": type("string").describe("js body to run in tab"),
-	"timeout?": type("number").describe("timeout in seconds (default 30, max 300)"),
+	"timeout?": type("number").describe("timeout in seconds"),
 	"all?": type("boolean").describe("close every tab"),
 	"kill?": type("boolean").describe("also kill spawned-app browsers"),
 });
@@ -332,7 +332,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		// text inline; the full text stays recoverable via the artifact footer
 		// when allocation succeeds.
 		const cappedText = await enforceInlineByteCap(textOnly, {
-			label: "browser output",
 			saveArtifact: full => saveBrowserOutputArtifact(this.session, full),
 		});
 		details.result = cappedText;
