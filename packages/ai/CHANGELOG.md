@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added regression test pinning that `openai-completions` emits a `thinking` block for `reasoning_content` deltas even when `delta.content` is explicitly JSON `null` (the DeepSeek-format dual-key pattern used by custom GLM/Qwen reasoning providers). See [#2996](https://github.com/can1357/oh-my-pi/issues/2996).
+
 ## [16.0.10] - 2026-06-18
 
 ### Added
