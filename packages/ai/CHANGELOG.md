@@ -1,10 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added authentication broker discovery to sync credentials between local SQLite and remote state
+
 ### Fixed
 
 - Added automatic fallback for unsupported OpenAI reasoning effort levels
 - Improved reliability when handling invalid reasoning parameter errors across OpenAI-compatible APIs
+- Fixed OpenAI-compatible Chat Completions, Responses, and Azure Responses requests to retry once with the nearest provider-supported reasoning effort when an endpoint rejects `xhigh`/`minimal`-style effort values.
 
 ## [16.1.0] - 2026-06-19
 

@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Refactored authentication storage discovery to share logic with other pi-ai tools
 
 ### Fixed
 

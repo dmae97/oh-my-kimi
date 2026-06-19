@@ -1,6 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for Gemini 2.5 Flash-Lite, 3.1 Flash-Lite, and 3.5 Flash models
+- Added support for Moonshot V1 model family
+
+### Changed
+
+- Updated context window and token limits for various Claude, Gemini, and GPT-OSS models
+- Refined thinking mode behaviors and routing for supported LLM families
+
+### Fixed
+
+- Fixed effort mapping for GLM-5.2 and OpenRouter reasoning models to resolve top-tier 400 errors
+- Maintained thinking effort routing when discovery only returns the base model ID
+- Improved credential retrieval logic for Antigravity and Codex providers via auth discovery
 
 ## [16.0.9] - 2026-06-18
 

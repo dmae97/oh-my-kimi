@@ -14829,7 +14829,11 @@
 					"xhigh"
 				],
 				"effortMap": {
-					"minimal": "none"
+					"minimal": "none",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
 				}
 			}
 		},
@@ -17775,8 +17779,9 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
+			"contextWindow": 250000,
 			"maxTokens": 64000,
+			"requestModelId": "claude-opus-4-6-thinking",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17786,14 +17791,12 @@
 					"high"
 				],
 				"effortRouting": {
-					"off": "claude-opus-4-6",
 					"minimal": "claude-opus-4-6-thinking",
 					"low": "claude-opus-4-6-thinking",
 					"medium": "claude-opus-4-6-thinking",
 					"high": "claude-opus-4-6-thinking"
 				}
-			},
-			"requestModelId": "claude-opus-4-6-thinking"
+			}
 		},
 		"claude-sonnet-4-5": {
 			"id": "claude-sonnet-4-5",
@@ -17849,8 +17852,9 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
+			"contextWindow": 250000,
+			"maxTokens": 64000,
+			"requestModelId": "claude-sonnet-4-6",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17866,8 +17870,7 @@
 					"medium": "claude-sonnet-4-6-thinking",
 					"high": "claude-sonnet-4-6-thinking"
 				}
-			},
-			"requestModelId": "claude-sonnet-4-6"
+			}
 		},
 		"gemini-2.5-flash": {
 			"id": "gemini-2.5-flash",
@@ -17887,7 +17890,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 65536,
+			"maxTokens": 65535,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17903,6 +17906,35 @@
 					"medium": "gemini-2.5-flash-thinking",
 					"high": "gemini-2.5-flash-thinking"
 				}
+			}
+		},
+		"gemini-2.5-flash-lite": {
+			"id": "gemini-2.5-flash-lite",
+			"name": "Gemini 2.5 Flash-Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
 			}
 		},
 		"gemini-2.5-pro": {
@@ -18013,6 +18045,55 @@
 			},
 			"requestModelId": "gemini-3-pro-low"
 		},
+		"gemini-3.1-flash-image": {
+			"id": "gemini-3.1-flash-image",
+			"name": "Gemini 3.1 Flash Image",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"gemini-3.1-flash-lite": {
+			"id": "gemini-3.1-flash-lite",
+			"name": "Gemini 3.1 Flash Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
+			"thinking": {
+				"mode": "google-level",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
 		"gemini-3.1-pro": {
 			"id": "gemini-3.1-pro",
 			"name": "Gemini 3.1 Pro Preview",
@@ -18032,6 +18113,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 65535,
+			"requestModelId": "gemini-3.1-pro-low",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -18048,8 +18130,51 @@
 					"high": "gemini-pro-agent"
 				},
 				"suppressWhenOff": true
+			}
+		},
+		"gemini-3.5-flash": {
+			"id": "gemini-3.5-flash",
+			"name": "Gemini 3.5 Flash",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
 			},
-			"requestModelId": "gemini-3.1-pro-low"
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"requestModelId": "gemini-3.5-flash-extra-low",
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"effortBudgets": {
+					"minimal": 1000,
+					"low": 1000,
+					"medium": 4000,
+					"high": 10000
+				},
+				"effortRouting": {
+					"off": "gemini-3.5-flash-extra-low",
+					"minimal": "gemini-3.5-flash-extra-low",
+					"low": "gemini-3.5-flash-extra-low",
+					"medium": "gemini-3.5-flash-low",
+					"high": "gemini-3-flash-agent"
+				},
+				"suppressWhenOff": true
+			}
 		},
 		"gpt-oss-120b": {
 			"id": "gpt-oss-120b",
@@ -18067,8 +18192,9 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 114000,
+			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"requestModelId": "gpt-oss-120b-medium",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -18077,8 +18203,45 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"tab_flash_lite_preview": {
+			"id": "tab_flash_lite_preview",
+			"name": "tab_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
 			},
-			"requestModelId": "gpt-oss-120b-medium"
+			"contextWindow": 16384,
+			"maxTokens": 4096
+		},
+		"tab_jump_flash_lite_preview": {
+			"id": "tab_jump_flash_lite_preview",
+			"name": "tab_jump_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 16384,
+			"maxTokens": 4096
 		}
 	},
 	"google-gemini-cli": {
@@ -23018,8 +23181,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		},
 		"google/gemini-3.1-flash-image-preview": {
 			"id": "google/gemini-3.1-flash-image-preview",
@@ -33153,6 +33316,142 @@
 					"high"
 				]
 			}
+		},
+		"moonshot-v1-128k": {
+			"id": "moonshot-v1-128k",
+			"name": "moonshot-v1-128k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
+		},
+		"moonshot-v1-128k-vision-preview": {
+			"id": "moonshot-v1-128k-vision-preview",
+			"name": "moonshot-v1-128k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
+		},
+		"moonshot-v1-32k": {
+			"id": "moonshot-v1-32k",
+			"name": "moonshot-v1-32k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 32768,
+			"maxTokens": null
+		},
+		"moonshot-v1-32k-vision-preview": {
+			"id": "moonshot-v1-32k-vision-preview",
+			"name": "moonshot-v1-32k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 32768,
+			"maxTokens": null
+		},
+		"moonshot-v1-8k": {
+			"id": "moonshot-v1-8k",
+			"name": "moonshot-v1-8k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
+		},
+		"moonshot-v1-8k-vision-preview": {
+			"id": "moonshot-v1-8k-vision-preview",
+			"name": "moonshot-v1-8k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
+		},
+		"moonshot-v1-auto": {
+			"id": "moonshot-v1-auto",
+			"name": "moonshot-v1-auto",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
 		}
 	},
 	"nanogpt": {
@@ -49822,7 +50121,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"zai-org/glm-latest": {
@@ -53684,6 +53990,7 @@
 					"xhigh"
 				],
 				"effortMap": {
+					"high": "high",
 					"xhigh": "max"
 				}
 			}
@@ -56358,7 +56665,14 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"minimal": "none",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"kimi-k2.5": {
@@ -67541,7 +67855,8 @@
 					"minimal",
 					"low",
 					"medium",
-					"high"
+					"high",
+					"xhigh"
 				]
 			}
 		},
@@ -78226,14 +78541,6 @@
 			},
 			"contextWindow": 2000000,
 			"maxTokens": 2000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				},
-				"includeEncryptedReasoning": false,
-				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -78246,6 +78553,14 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
 			}
 		},
 		"grok-4.3": {
@@ -78267,14 +78582,6 @@
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 1000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				},
-				"includeEncryptedReasoning": false,
-				"filterReasoningHistory": true,
-				"omitReasoningEffort": false
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -78287,6 +78594,14 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
 			}
 		},
 		"grok-build": {
@@ -78297,7 +78612,8 @@
 			"baseUrl": "https://api.x.ai/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -78315,6 +78631,31 @@
 				"filterReasoningHistory": true,
 				"omitReasoningEffort": true,
 				"supportsReasoningEffort": false
+			}
+		},
+		"grok-build-0.1": {
+			"id": "grok-build-0.1",
+			"name": "Grok Build 0.1",
+			"api": "openai-responses",
+			"provider": "xai-oauth",
+			"baseUrl": "https://api.x.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"compat": {
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true
 			}
 		},
 		"grok-composer-2.5-fast": {

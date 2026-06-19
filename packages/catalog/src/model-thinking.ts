@@ -161,7 +161,7 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	thinking: ThinkingConfig,
 ): ThinkingConfig {
 	const parsed = parseKnownModel(spec.id);
-	const normalizedEfforts = getModelDefinedEfforts(spec) ?? thinking.efforts;
+	const normalizedEfforts = getModelDefinedEfforts(spec, compat) ?? thinking.efforts;
 	const effortsChanged = !sameEffortList(normalizedEfforts, thinking.efforts);
 	const effortMap =
 		thinking.effortMap === undefined
@@ -248,7 +248,7 @@ function inferEffortMap<TApi extends Api>(
 	mode: ThinkingConfig["mode"],
 	efforts: readonly Effort[],
 ): EffortMap | undefined {
-	const detected = inferDetectedEffortMap(spec, parsedModel, mode);
+	const detected = inferDetectedEffortMap(spec, compat, parsedModel, mode);
 	const configured = readCompatEffortMap(compat);
 	const merged =
 		detected === undefined ? configured : configured === undefined ? detected : { ...detected, ...configured };
@@ -278,12 +278,22 @@ function isOpenAICompatReasoningApi(api: Api): boolean {
 	return api === "openai-completions" || api === "openrouter";
 }
 
-function getModelDefinedEfforts<TApi extends Api>(spec: ModelSpec<TApi>): readonly Effort[] | undefined {
+function getModelDefinedEfforts<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): readonly Effort[] | undefined {
 	if (isOpenAICompatReasoningApi(spec.api) && isZaiGlm52ReasoningEffortModel(spec)) {
 		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
 		return GLM_52_HIGH_MAX_REASONING_EFFORTS;
+	}
+	// OpenRouter fronts GLM-5.2 on its own effort scale where `xhigh` IS the max
+	// tier (the literal `max` value 400s). Expose `xhigh` so the top tier is
+	// selectable; it passes through unmapped (excluded from the GLM dialect map)
+	// and OpenRouter resolves it to max reasoning.
+	if (isOpenRouterThinkingFormat(compat) && isGlm52ReasoningEffortModelId(spec.id)) {
+		return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 	}
 	return isOpenAICompatReasoningApi(spec.api) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
@@ -311,8 +321,13 @@ function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
 	return map && Object.keys(map).length > 0 ? map : undefined;
 }
 
+function isOpenRouterThinkingFormat(compat: CompatOf<Api>): boolean {
+	return compat !== undefined && "thinkingFormat" in compat && compat.thinkingFormat === "openrouter";
+}
+
 function inferDetectedEffortMap<TApi extends Api>(
 	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
 	parsedModel: ParsedModel,
 	mode: ThinkingConfig["mode"],
 ): EffortMap | undefined {
@@ -324,12 +339,18 @@ function inferDetectedEffortMap<TApi extends Api>(
 			? ANTHROPIC_ADAPTIVE_EFFORT_MAP_5_TIER
 			: ANTHROPIC_ADAPTIVE_EFFORT_MAP_4_TIER;
 	}
-	// GLM-5.2 coding SKUs speak the GLM-native effort dialect regardless of host:
-	// the internal `xhigh` has no GLM equivalent (top tier is `max`), and the
-	// lower tiers fold to `none`/`high`. Z.ai/Zhipu, Ollama Cloud, Fireworks,
-	// resellers — every gateway serving genuine glm-5.2 gets the same map so the
-	// top tier stops 400ing. Filtered to each host's supported efforts downstream.
-	if (isGlm52ReasoningEffortModelId(spec.id)) {
+	// GLM-5.2 coding SKUs speak the GLM-native effort dialect (`none`/`high`/`max`)
+	// on every direct host that fronts the genuine model — Z.ai/Zhipu, Fireworks,
+	// resellers, Ollama Cloud. The internal `xhigh` has no GLM equivalent (top
+	// tier is `max`), so without this map the top tier 400s. OpenRouter is the
+	// exception: its API rejects `max` and treats `xhigh` AS GLM's max tier, so it
+	// is excluded here and passes `xhigh` through literally (the tier is exposed
+	// via `getModelDefinedEfforts`). Filtered to supported efforts downstream.
+	if (
+		isGlm52ReasoningEffortModelId(spec.id) &&
+		!isOpenRouterThinkingFormat(compat) &&
+		(isOpenAICompatReasoningApi(spec.api) || isOllamaCloudGlm52ReasoningEffortModel(spec))
+	) {
 		return GLM_52_REASONING_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
@@ -382,7 +403,7 @@ function inferSupportedEfforts<TApi extends Api>(
 	spec: ModelSpec<TApi>,
 	compat: CompatOf<TApi>,
 ): readonly Effort[] {
-	const modelDefinedEfforts = getModelDefinedEfforts(spec);
+	const modelDefinedEfforts = getModelDefinedEfforts(spec, compat);
 	if (modelDefinedEfforts !== undefined) {
 		return modelDefinedEfforts;
 	}
