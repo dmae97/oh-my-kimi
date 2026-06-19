@@ -49,6 +49,7 @@ WORKDIR /pi
 # matched path under /pi/ (requires syntax 1.7-labs).
 COPY --parents \
     package.json bun.lock bunfig.toml \
+    patches/*.patch \
     tsconfig.base.json tsconfig.json \
     Cargo.toml Cargo.lock rust-toolchain.toml \
     packages/*/package.json \
@@ -169,6 +170,7 @@ WORKDIR /pi
 # only re-runs when a package.json / lockfile changes.
 COPY --parents \
     package.json bun.lock bunfig.toml \
+    patches/*.patch \
     tsconfig.base.json tsconfig.json \
     packages/*/package.json \
     packages/tsconfig.workspace.json \

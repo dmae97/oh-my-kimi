@@ -28,6 +28,9 @@ WORKDIR /work
 # --filter robomp-web` to hydrate just the dashboard's node_modules.
 COPY package.json bun.lock ./
 COPY python/robomp/web/package.json ./python/robomp/web/package.json
+# Root package.json declares patchedDependencies, so the patch file must be
+# present before any root-level `bun install` (even a filtered one).
+COPY patches/*.patch ./patches/
 RUN bun install --filter robomp-web
 COPY --exclude=node_modules --exclude=dist python/robomp/web/ ./python/robomp/web/
 RUN bun --cwd=python/robomp/web run build
