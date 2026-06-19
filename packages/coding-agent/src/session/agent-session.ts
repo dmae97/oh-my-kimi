@@ -3860,7 +3860,11 @@ export class AgentSession {
 		if (event.type === "agent_start") {
 			this.#turnIndex = 0;
 			await this.#extensionRunner.emit({ type: "agent_start" });
-		} else if (event.type === "agent_end") {
+			return;
+		}
+
+		if (!this.#extensionRunner.hasHandlers(event.type)) return;
+		if (event.type === "agent_end") {
 			// `agent_end` extension notification is emitted from the settled
 			// agent_end maintenance path so `session_stop` control hooks are not
 			// blocked by unrelated notification-only work.
