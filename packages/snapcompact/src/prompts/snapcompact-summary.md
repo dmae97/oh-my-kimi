@@ -1,6 +1,9 @@
 Prior conversation history has been archived verbatim onto {{frameCount}} snapcompact frame{{#if multipleFrames}}s{{/if}} — the bitmap image{{#if multipleFrames}}s{{/if}} attached below{{#if multipleFrames}}, ordered oldest to newest{{/if}}.
 
-Reading a frame: a grid {{cols}} cells wide and up to {{rows}} tall{{#if docColumns}}, set as two word-wrapped columns — read the left column top to bottom, then the right{{else}} — read left to right, top to bottom, with no word wrap, so words may break across rows{{/if}}. A solid black cell is a newline; runs of spaces collapse to one. Turns are headed # User ¶, # Assistant ¶, or # Tool call ¶; assistant reasoning is _italic_ and tool output sits in <out>…</out>.
+Reading a frame: a solid black cell marks a newline and runs of spaces collapse to one; each turn opens with a heading — # User ¶, # Assistant ¶, or # Tool call ¶ — with assistant reasoning in _italics_ and tool output inside <out>…</out>.
+{{#if docColumns}}- Two side-by-side text columns, each {{cols}} characters wide and up to {{rows}} rows tall: read the left column top to bottom, then the right.
+{{else}}- A single grid {{cols}} characters wide and up to {{rows}} rows tall: read left to right, top to bottom — no word wrap, so words may break across rows.
+{{/if}}
 {{#if sentenceInk}}- Ink cycles six colors, one per sentence.
 {{/if}}{{#if stopwordDimmed}}- Function words are dim gray; content words keep full ink.
 {{/if}}{{#if dimmedToolResults}}- Text inside <out> is dim gray; that gray is archived tool output, not conversation.
