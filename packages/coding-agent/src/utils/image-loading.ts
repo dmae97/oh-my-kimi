@@ -15,7 +15,12 @@ export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;
  */
 export function modelLacksWebpSupport(model: Pick<Model, "provider" | "api"> | undefined): boolean {
 	if (!model) return false;
-	return model.provider === "ollama" || model.provider === "ollama-cloud" || model.api === "ollama-chat";
+	return (
+		model.provider === "ollama" ||
+		model.provider === "ollama-cloud" ||
+		model.provider === "local-server" ||
+		model.api === "ollama-chat"
+	);
 }
 
 /**

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
 	modelLacksWebpSupport,
@@ -29,6 +30,10 @@ describe("modelLacksWebpSupport", () => {
 	test("flags the ollama-chat api even behind a custom provider id", () => {
 		// A proxy/custom provider still routes images through Ollama's STB decoder.
 		expect(modelLacksWebpSupport({ provider: "my-local-ollama", api: "ollama-chat" })).toBe(true);
+	});
+
+	test("flags local-server models", () => {
+		expect(modelLacksWebpSupport({ provider: "local-server", api: "openai-completions" })).toBe(true);
 	});
 
 	test("leaves WebP-capable providers and undefined untouched", () => {
@@ -64,6 +69,29 @@ describe("normalizeModelContextImages model-aware WebP exclusion", () => {
 		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
 
 		const result = await normalizeModelContextImages([webp], { model: ollama });
+		expect(result).toHaveLength(1);
+		const mime = result![0]!.mimeType;
+		expect(mime).not.toBe("image/webp");
+		expect(["image/png", "image/jpeg"]).toContain(mime);
+	});
+
+	test("re-encodes a WebP image out of WebP for a local-server model", async () => {
+		const localServer = buildModel({
+			id: "local-vision",
+			name: "Local vision",
+			api: "openai-completions",
+			provider: "local-server",
+			baseUrl: "http://localhost:8001/v1",
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		});
+		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
+
+		const result = await normalizeModelContextImages([webp], { model: localServer });
+
 		expect(result).toHaveLength(1);
 		const mime = result![0]!.mimeType;
 		expect(mime).not.toBe("image/webp");
