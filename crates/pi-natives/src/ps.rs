@@ -166,6 +166,7 @@ impl Process {
 
 	/// Process group id for this process, when supported by the platform.
 	#[napi]
+	#[allow(clippy::missing_const_for_fn, reason = "#[napi] generates a non-const wrapper")]
 	pub fn group_id(&self) -> Option<i32> {
 		self.inner.group_id()
 	}
