@@ -226,12 +226,18 @@ fn io_redirect_is_safe(io: &IoRedirect) -> bool {
 /// [`reconstruction_reparses_to_same_shape`] before any segment is executed.
 fn simple_command_is_safe(simple: &SimpleCommand) -> bool {
 	if let Some(prefix) = simple.prefix.as_ref()
-		&& prefix.0.iter().any(|item| !command_prefix_or_suffix_item_is_safe(item))
+		&& prefix
+			.0
+			.iter()
+			.any(|item| !command_prefix_or_suffix_item_is_safe(item))
 	{
 		return false;
 	}
 	if let Some(suffix) = simple.suffix.as_ref()
-		&& suffix.0.iter().any(|item| !command_prefix_or_suffix_item_is_safe(item))
+		&& suffix
+			.0
+			.iter()
+			.any(|item| !command_prefix_or_suffix_item_is_safe(item))
 	{
 		return false;
 	}
