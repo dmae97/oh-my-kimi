@@ -5,12 +5,9 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
-	arkToWireSchema,
 	type Context,
 	EventStream,
 	isApiKeyResolver,
-	isArkSchema,
-	isZodSchema,
 	resolveApiKeyOnce,
 	seedApiKeyResolver,
 	streamSimple,
@@ -20,7 +17,6 @@ import {
 	type TSchema,
 	toolWireSchema,
 	validateToolArguments,
-	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
 import {
 	type Dialect,
@@ -598,16 +594,8 @@ export function normalizeTools(
 			if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
 			return { ...t, parameters, description: "" };
 		}
-		let parameters: TSchema = t.parameters;
-		if (doInjectIntent) {
-			if (isZodSchema(parameters)) {
-				parameters = injectIntentIntoSchema(zodToWireSchema(parameters), intentMode) as TSchema;
-			} else if (isArkSchema(parameters)) {
-				parameters = injectIntentIntoSchema(arkToWireSchema(parameters), intentMode) as TSchema;
-			} else {
-				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
-			}
-		}
+		let parameters = toolWireSchema(t) as TSchema;
+		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 		const description = t.description ?? "";
 		const examplesBlock = exampleDialect
 			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
