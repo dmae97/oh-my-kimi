@@ -46,7 +46,7 @@
 	},
 	"peerDependencies": {
 		"fastembed": "2.1.0",
-		"onnxruntime-node": "1.26.0"
+		"onnxruntime-node": "1.21.0"
 	},
 	"peerDependenciesMeta": {
 		"fastembed": {
