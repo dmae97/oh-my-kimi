@@ -1,4 +1,4 @@
-export { createAbortableStream, once, untilAborted } from "./abortable";
+export { once, untilAborted } from "./abortable";
 export * from "./async";
 export * from "./color";
 export * from "./dirs";
