@@ -1023,12 +1023,21 @@ export class ModelRegistry {
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+		const withDecoderMetadata =
+			providerConfig.discovery.type === "ollama" ||
+			providerConfig.discovery.type === "llama.cpp" ||
+			providerConfig.discovery.type === "lm-studio"
+				? models.map(model =>
+						buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
+					)
+				: models;
+
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
-			return models;
+			return withDecoderMetadata;
 		}
 
 		const contextLengthOverride = getOllamaContextLengthOverride();
-		return models.map(model => {
+		return withDecoderMetadata.map(model => {
 			const normalized =
 				model.api === "openai-completions"
 					? buildModel({
