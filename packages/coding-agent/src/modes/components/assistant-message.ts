@@ -17,6 +17,24 @@ import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cach
 const MAX_TRANSCRIPT_ERROR_LINES = 8;
 
 /**
+ * A fenced ` ```mermaid ` block anchored at a line start (≤3 leading spaces,
+ * 3+ backticks, optional info-string whitespace) so prose that merely mentions
+ * a mermaid fence inline does not match. See
+ * {@link AssistantMessageComponent.isTranscriptBlockCommitStable}.
+ */
+const LIVE_MERMAID_FENCE = /^ {0,3}`{3,}[ \t]*mermaid\b/m;
+
+/**
+ * A GFM table delimiter row (`| --- | :--: |`, with or without bounding pipes)
+ * anchored at a line start. The header row alone does not render a table — this
+ * delimiter is what makes Markdown lay one out, and a streaming table re-aligns
+ * its columns as rows arrive. Requires at least one column pipe so a bare
+ * thematic break (`---`) does not match. See
+ * {@link AssistantMessageComponent.isTranscriptBlockCommitStable}.
+ */
+const MARKDOWN_TABLE_DELIMITER = /^ {0,3}\|?(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*:?-*:?[ \t]*$/m;
+
+/**
  * Frames for the streaming "thinking" pulse rendered in place of a hidden
  * thinking block while the model is still producing it. A single fixed-width
  * glyph that rises ▁▃▄▃ so the indicator animates without shifting the line.
@@ -36,6 +54,15 @@ export class AssistantMessageComponent extends Container {
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
 	#transcriptBlockFinalized: boolean;
+	/**
+	 * True while a non-finalized text item carries reflowing Markdown — a
+	 * ` ```mermaid ` fence or a GFM table — whose layout re-flows every frame as
+	 * source arrives (a diagram reshaping, a table re-aligning its columns), so
+	 * no prefix is byte-stable until the message finalizes. See
+	 * {@link isTranscriptBlockCommitStable}. Recomputed in {@link updateContent}
+	 * ahead of the fast-path return, so it tracks every stream tick.
+	 */
+	#hasLiveReflowingMarkdown = false;
 	/**
 	 * When true, the turn-ending `Error: …` line for `stopReason === "error"` is
 	 * suppressed because the same error is currently shown in the pinned banner
@@ -190,6 +217,21 @@ export class AssistantMessageComponent extends Container {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#transcriptBlockFinalized;
+	}
+
+	/**
+	 * Whether this still-live block's scrolled-off rows may be committed to
+	 * immutable native scrollback (the {@link TranscriptContainer} durable-
+	 * snapshot path). Reflowing Markdown — a streaming mermaid diagram or a GFM
+	 * table — re-lays-out its body as source arrives (the diagram reshapes, the
+	 * table re-aligns its columns), so committing an intermediate layout strands
+	 * a stale fragment in native scrollback that only a full repaint (Ctrl+L) can
+	 * clear. While such content is still streaming the block therefore stays
+	 * wholly in the repaintable live region and commits once, at its final
+	 * layout, when the turn finalizes.
+	 */
+	isTranscriptBlockCommitStable(): boolean {
+		return this.#transcriptBlockFinalized || !this.#hasLiveReflowingMarkdown;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -417,6 +459,17 @@ export class AssistantMessageComponent extends Container {
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
+
+		// Streaming reflowing Markdown (a mermaid diagram reshaping, a GFM table
+		// re-aligning columns) re-lays-out its body each frame; see
+		// isTranscriptBlockCommitStable. Detect it from raw text — a Markdown
+		// parser only resolves these once the closing fence / delimiter row
+		// arrives, but the stale native-scrollback commits happen mid-stream.
+		this.#hasLiveReflowingMarkdown = message.content.some(
+			content =>
+				content.type === "text" &&
+				(LIVE_MERMAID_FENCE.test(content.text) || MARKDOWN_TABLE_DELIMITER.test(content.text)),
+		);
 
 		// Fast path: reuse Markdown children when shape is stable during streaming
 		if (this.#tryFastPathUpdate(message)) return;

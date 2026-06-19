@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added a welcome-screen tip for the `/advisor` runtime. Tips ending in a `[NEW]` marker now render a bold rainbow `NEW!` tag (it shimmers across the welcome intro's animation frames, then settles into a still rainbow) and are weighted to surface more often in the random tip rotation.
@@ -14,7 +13,9 @@
 
 ### Fixed
 
+- Prevented stale fragments in scrollback when streaming GFM tables by delaying commit until final
 - Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
+- Fixed a streaming mermaid diagram stranding stale diagram fragments in native scrollback once the reply scrolled past the viewport (cleared only by a full repaint / Ctrl+L). While streaming, the assistant block defaulted to commit-stable, so the transcript advertised the diagram's scrolled-off rows as durable snapshot content and the renderer committed an intermediate layout to immutable terminal history; the diagram's later re-layout then froze that superseded fragment in scrollback. A still-streaming reply carrying a ` ```mermaid ` fence is now commit-unstable, so the diagram stays wholly in the repaintable live region and commits once, at its final layout, when the turn finalizes.
 
 ## [16.1.1] - 2026-06-19
 

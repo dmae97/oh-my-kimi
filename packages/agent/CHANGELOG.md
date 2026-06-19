@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Ensure deep-cloning of tool-call arguments respects own enumerable properties
+- Prevent direct object references between agent message snapshots and streaming events
 
 ## [16.1.0] - 2026-06-19
 
