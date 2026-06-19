@@ -212,6 +212,7 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 				this.session.peekPendingInvoker?.() ??
 				this.session.peekStandingResolveHandler?.();
 			if (!invoker) {
+				this.session.clearPendingInvokers?.();
 				// `discard` is a request to cancel/abort a staged action. When nothing is
 				// pending, the desired end-state (no staged change) already holds, so honor
 				// it as a successful cancellation instead of surfacing a hard error to the
