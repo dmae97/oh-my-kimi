@@ -111,7 +111,6 @@ describe("formatSessionDumpText tool parameters", () => {
 		expect(out).not.toContain("## Available Tools");
 	});
 
-
 	it("does not falsely omit the Available Tools section even if systemPrompt contains tool headings", () => {
 		const out = formatSessionDumpText({
 			messages: [],

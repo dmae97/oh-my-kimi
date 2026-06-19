@@ -1860,6 +1860,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planModePreviousTools = previousTools;
 		this.planModePlanFilePath = planFilePath;
 		this.planModeEnabled = true;
+		// Suppress cache-miss marker on the next turn: plan mode changes the system
+		// prompt, which predictably invalidates the cache.
+		this.lastAssistantUsage = undefined;
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
 		this.session.setPlanModeState({
@@ -1977,6 +1980,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setStandingResolveHandler?.(null);
 		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
+		// Suppress cache-miss marker on the next turn: plan exit changes the system
+		// prompt, which predictably invalidates the cache.
+		this.lastAssistantUsage = undefined;
 		this.planModePaused = options?.paused ?? false;
 		this.planModePlanFilePath = undefined;
 		this.#planModePreviousTools = undefined;

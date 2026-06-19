@@ -980,12 +980,14 @@ export class EventController {
 				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
+				this.ctx.lastAssistantUsage = undefined;
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorTopBorder();
 				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {
+			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
@@ -993,6 +995,7 @@ export class EventController {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {
 			this.ctx.chatContainer.clear();
+			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();

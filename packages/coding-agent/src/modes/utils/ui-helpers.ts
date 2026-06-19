@@ -403,7 +403,10 @@ export class UiHelpers {
 			// updateResult armed.
 			previous.seal();
 		};
-		for (const message of sessionContext.messages) {
+		const messages = sessionContext.messages;
+		const count = messages.length;
+		for (let i = 0; i < count; i++) {
+			const message = messages[i]!;
 			if (message.role !== "toolResult") flushPendingUsage();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
@@ -412,7 +415,8 @@ export class UiHelpers {
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
 				if (assistantComponent) {
 					const usage = message.usage;
-					if (this.ctx.settings.get("display.cacheMissMarker")) {
+					const explained = sessionContext.cacheMissExplainedAt?.[i] ?? false;
+					if (this.ctx.settings.get("display.cacheMissMarker") && !explained) {
 						const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
 						if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
 					}
