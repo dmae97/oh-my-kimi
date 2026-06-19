@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Refactored Perplexity authentication logic to prioritize cookies over OAuth in search operations
+- Updated `token` command to correctly display active Perplexity OAuth tokens when present
 
 ### Fixed
 

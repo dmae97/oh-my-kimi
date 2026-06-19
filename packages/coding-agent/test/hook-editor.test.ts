@@ -67,8 +67,8 @@ function createControllerContext() {
 		stop: vi.fn(),
 		terminal: { columns: 120 },
 	} as unknown as TestContext["ui"] & {
-		setFocus: Mock;
-		requestRender: Mock;
+		setFocus: Mock<any>;
+		requestRender: Mock<any>;
 	};
 	const ctx = {
 		editor,
