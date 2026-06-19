@@ -3,7 +3,7 @@
 ## [Unreleased]
 ### Added
 
-- Added `SoftToolRequirement` support to `getToolChoice` for non-invasive tool enforcement
+- Added `SoftToolRequirement` support to `getToolChoice`: a host can require a tool by returning a soft requirement instead of a hard `ToolChoice`. The loop injects the supplied reminder once (leaving `tool_choice` on auto), and escalates to a one-turn forced choice — skipping any detour tool batch — only if the model fails to call the required tool, avoiding the provider message-cache invalidation of forcing every turn.
 - Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
 
 ### Fixed

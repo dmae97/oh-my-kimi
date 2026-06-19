@@ -1716,6 +1716,14 @@ export class Theme {
 			bottomRight: this.#symbols["boxRound.bottomRight"],
 			horizontal: this.#symbols["boxRound.horizontal"],
 			vertical: this.#symbols["boxRound.vertical"],
+			// Junctions have no rounded Unicode variant, so a rounded box reuses the
+			// sharp tee/cross glyphs. Sourcing them from the boxSharp.* tokens keeps a
+			// theme's `boxSharp.tee*` overrides effective for rounded-box dividers.
+			cross: this.#symbols["boxSharp.cross"],
+			teeDown: this.#symbols["boxSharp.teeDown"],
+			teeUp: this.#symbols["boxSharp.teeUp"],
+			teeRight: this.#symbols["boxSharp.teeRight"],
+			teeLeft: this.#symbols["boxSharp.teeLeft"],
 		};
 	}
 

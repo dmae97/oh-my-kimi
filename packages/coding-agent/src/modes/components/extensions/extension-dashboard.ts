@@ -380,7 +380,7 @@ class TwoColumnBody implements Component {
 		// Fill the full body height so the dashboard reads as a full-screen view.
 		const numLines = this.maxHeight;
 		const combined: string[] = [];
-		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
+		const separator = theme.fg("dim", ` ${theme.boxRound.vertical} `);
 
 		for (let i = 0; i < numLines; i++) {
 			const left = truncateToWidth(leftLines[i] ?? "", leftWidth);

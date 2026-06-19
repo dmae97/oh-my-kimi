@@ -223,10 +223,10 @@ function renderHover(
 	const langLabel = lang ? theme.fg("mdCodeBlockBorder", ` ${lang}`) : "";
 
 	if (expanded) {
-		const h = theme.boxSharp.horizontal;
-		const v = theme.boxSharp.vertical;
-		const top = `${theme.boxSharp.topLeft}${h.repeat(3)}`;
-		const bottom = `${theme.boxSharp.bottomLeft}${h.repeat(3)}`;
+		const h = theme.boxRound.horizontal;
+		const v = theme.boxRound.vertical;
+		const top = `${theme.boxRound.topLeft}${h.repeat(3)}`;
+		const bottom = `${theme.boxRound.bottomLeft}${h.repeat(3)}`;
 		let output = `${icon}${langLabel}`;
 		if (beforeCode) {
 			for (const line of beforeCode.split("\n")) {
@@ -254,9 +254,9 @@ function renderHover(
 		const preview = truncateToWidth(beforeCode, TRUNCATE_LENGTHS.TITLE);
 		output += `\n ${theme.fg("dim", theme.tree.branch)} ${theme.fg("muted", preview)}`;
 	}
-	const h = theme.boxSharp.horizontal;
-	const v = theme.boxSharp.vertical;
-	const bottom = `${theme.boxSharp.bottomLeft}${h.repeat(3)}`;
+	const h = theme.boxRound.horizontal;
+	const v = theme.boxRound.vertical;
+	const bottom = `${theme.boxRound.bottomLeft}${h.repeat(3)}`;
 	output += `\n ${theme.fg("mdCodeBlockBorder", v)} ${firstCodeLine}`;
 
 	if (codeLines.length > 1) {

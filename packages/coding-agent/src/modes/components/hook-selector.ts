@@ -123,7 +123,7 @@ class OutlinedList extends Container {
 
 	render(width: number): readonly string[] {
 		const borderColor = (text: string) => theme.fg("border", text);
-		const horizontal = borderColor(theme.boxSharp.horizontal.repeat(Math.max(1, width)));
+		const horizontal = borderColor(theme.boxRound.horizontal.repeat(Math.max(1, width)));
 		const innerWidth = Math.max(1, width - 2);
 		const content: string[] = [];
 		for (const line of this.#lines) {
@@ -134,7 +134,7 @@ class OutlinedList extends Container {
 				const wrappedLine = `${indent}${wrappedBody}`;
 				const pad = Math.max(0, innerWidth - visibleWidth(wrappedLine));
 				content.push(
-					`${borderColor(theme.boxSharp.vertical)}${wrappedLine}${padding(pad)}${borderColor(theme.boxSharp.vertical)}`,
+					`${borderColor(theme.boxRound.vertical)}${wrappedLine}${padding(pad)}${borderColor(theme.boxRound.vertical)}`,
 				);
 			}
 		}
