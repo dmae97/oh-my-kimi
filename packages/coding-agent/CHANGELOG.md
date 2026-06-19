@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added live state previews for high-value built-in slash commands in TUI autocomplete.
+
 ## [16.1.1] - 2026-06-19
 
 ### Changed

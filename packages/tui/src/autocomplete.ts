@@ -163,6 +163,8 @@ export interface SlashCommand {
 	aliases?: string[];
 	description?: string;
 	argumentHint?: string;
+	/** Dynamic display-only description for slash-command autocomplete. Must be synchronous and side-effect free. */
+	getAutocompleteDescription?: () => string | undefined;
 	// Function to get argument completions for this command
 	// Returns null if no argument completion is available
 	getArgumentCompletions?(argumentPrefix: string): Awaitable<AutocompleteItem[] | null>;
@@ -222,6 +224,17 @@ function getCommandAliases(cmd: CommandEntry): string[] {
 	return cmd.aliases.filter(alias => typeof alias === "string" && alias.length > 0);
 }
 
+function getStaticCommandDescription(cmd: CommandEntry): string {
+	return cmd.description ?? "";
+}
+
+function getAutocompleteCommandDescription(cmd: CommandEntry): string {
+	if ("getAutocompleteDescription" in cmd) {
+		return cmd.getAutocompleteDescription?.() ?? cmd.description ?? "";
+	}
+	return cmd.description ?? "";
+}
+
 function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): boolean {
 	const name = getCommandName(cmd);
 	if (name === commandName) return true;
@@ -245,12 +258,13 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 			const name = getCommandName(cmd);
 			if (!name) return [];
 			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
-			const desc = cmd.description ?? "";
-			const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
+			const staticDesc = getStaticCommandDescription(cmd);
+			const displayDesc = getAutocompleteCommandDescription(cmd);
+			const fullDesc = hint ? (displayDesc ? `${hint} - ${displayDesc}` : hint) : displayDesc;
 			const candidates: Array<AutocompleteItem & { score: number }> = [];
 
 			const nameScore = scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
-			const lowerDesc = desc.toLowerCase();
+			const lowerDesc = staticDesc.toLowerCase();
 			const descScore =
 				lowerDesc && fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
 			const primaryScore = Math.max(nameScore, descScore);
