@@ -55,6 +55,14 @@ describe("shouldEnableAppendOnlyContext", () => {
 		expect(
 			shouldEnableAppendOnlyContext("auto", { provider: "lm-studio", baseUrl: "http://127.0.0.1:1234/v1" }),
 		).toBe(true);
+		// `llama.cpp` is a built-in provider id (ModelRegistry registers it for keyless local discovery);
+		// the allowlist must catch it even when the user reverse-proxies the server through a public host.
+		expect(
+			shouldEnableAppendOnlyContext("auto", { provider: "llama.cpp", baseUrl: "https://llamacpp.example.com/v1" }),
+		).toBe(true);
+		expect(shouldEnableAppendOnlyContext("auto", { provider: "llama.cpp", baseUrl: "http://127.0.0.1:8080" })).toBe(
+			true,
+		);
 	});
 
 	test("auto enables for loopback and private baseUrls (user-defined llama.cpp/vLLM)", () => {

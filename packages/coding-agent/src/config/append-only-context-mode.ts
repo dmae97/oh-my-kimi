@@ -16,12 +16,14 @@ export interface AppendOnlyContextModel {
  * tool catalogue, and message log all flow through fresh allocations every
  * step (see `agent-loop.ts` `streamAssistantResponse` fallback path).
  */
-const LOCAL_INFERENCE_PROVIDERS = new Set(["ollama", "ollama-cloud", "lm-studio"]);
+const LOCAL_INFERENCE_PROVIDERS = new Set(["ollama", "ollama-cloud", "lm-studio", "llama.cpp"]);
 
-/** True when `baseUrl` resolves to a loopback or RFC1918 host — the heuristic
- * for user-defined providers (llama.cpp / vLLM via `models.yaml`) that omp
- * has no provider id for. Substring match on parsed hostname only; ports,
- * paths, and unparseable URLs return false.
+/** True when `baseUrl` resolves to a loopback or RFC1918 host — covers
+ * llama.cpp/vLLM/sglang servers registered under a user-defined provider id
+ * via `models.yaml`. Built-in local provider ids (`ollama`, `lm-studio`,
+ * `llama.cpp`) are already handled by `LOCAL_INFERENCE_PROVIDERS`.
+ * Substring match on the parsed hostname only; ports, paths, and unparseable
+ * URLs return false.
  */
 function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;
