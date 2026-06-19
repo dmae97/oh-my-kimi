@@ -67,6 +67,36 @@ function makePreparation(
 	};
 }
 
+describe("scanRenderability", () => {
+	it("considers pure ASCII text safe", () => {
+		const res = snapcompact.scanRenderability("function hello() { return 'world'; }");
+		expect(res.isSafe).toBe(true);
+		expect(res.unrenderableRatio).toBe(0);
+	});
+
+	it("considers Latin-1 text safe", () => {
+		const res = snapcompact.scanRenderability("café résumé naïve");
+		expect(res.isSafe).toBe(true);
+		expect(res.unrenderableRatio).toBe(0);
+	});
+
+	it("detects high unrenderable rates in CJK text and marks it unsafe", () => {
+		// Mix of ASCII and CJK: "const a = '你好世界';"
+		// Total graphics: ~15. Unrenderable: 4. Ratio > 5% (0.05).
+		const res = snapcompact.scanRenderability("const a = '你好世界';");
+		expect(res.isSafe).toBe(false);
+		expect(res.unrenderableRatio).toBeGreaterThan(0.05);
+	});
+
+	it("ignores whitespace, ANSI, and zero-width markers in ratio calculations", () => {
+		// \u001b[31m is ANSI.
+		// \u000e \u000f are DIM markers.
+		const res = snapcompact.scanRenderability("\u001b[31mhello \u000e \u000f \n\t   world\u001b[0m");
+		expect(res.isSafe).toBe(true);
+		expect(res.unrenderableRatio).toBe(0);
+	});
+});
+
 describe("computeFileLists", () => {
 	it("drops scheme:// URLs from legacy fileOps before rendering <files>", () => {
 		const fileOps = snapcompact.createFileOps();
