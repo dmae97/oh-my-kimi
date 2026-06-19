@@ -367,12 +367,16 @@ export function buildSystemPromptToolMetadata(
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
+	/** Already-loaded custom system prompt text; bypasses path resolution. */
+	resolvedCustomPrompt?: string;
 	/** Tools to include in prompt. */
 	tools?: Map<string, SystemPromptToolMetadata>;
 	/** Tool names to include in prompt. */
 	toolNames?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
+	/** Already-loaded append prompt text; bypasses path resolution. */
+	resolvedAppendSystemPrompt?: string;
 	/** Repeat full tool descriptions in system prompt. Default: false */
 	repeatToolDescriptions?: boolean;
 	/**
@@ -431,8 +435,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	const {
 		customPrompt,
+		resolvedCustomPrompt: providedResolvedCustomPrompt,
 		tools,
 		appendSystemPrompt,
+		resolvedAppendSystemPrompt: providedResolvedAppendPrompt,
 		repeatToolDescriptions = false,
 		nativeTools = true,
 		skillsSettings,
@@ -522,12 +528,16 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		await Promise.all([
 			withDeadline(
 				"customPrompt",
-				resolvePromptInput(customPrompt, "system prompt"),
+				providedResolvedCustomPrompt !== undefined
+					? Promise.resolve(providedResolvedCustomPrompt)
+					: resolvePromptInput(customPrompt, "system prompt"),
 				prepDefaults.resolvedCustomPrompt,
 			),
 			withDeadline(
 				"appendSystemPrompt",
-				resolvePromptInput(appendSystemPrompt, "append system prompt"),
+				providedResolvedAppendPrompt !== undefined
+					? Promise.resolve(providedResolvedAppendPrompt)
+					: resolvePromptInput(appendSystemPrompt, "append system prompt"),
 				prepDefaults.resolvedAppendPrompt,
 			),
 			withDeadline(

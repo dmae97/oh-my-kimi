@@ -407,9 +407,9 @@ export interface CreateAgentSessionOptions {
 
 	/** Provider-facing system prompt override. Replaces the fully rendered default blocks. */
 	systemPrompt?: string | string[] | ((defaultPrompt: string[]) => string | string[]);
-	/** Custom base prompt rendered through the bundled custom system prompt template. */
+	/** Already-loaded custom prompt text rendered through the bundled custom system prompt template. */
 	customSystemPrompt?: string;
-	/** Text appended through the bundled system prompt templates. */
+	/** Already-loaded text appended through the bundled system prompt templates. */
 	appendSystemPrompt?: string;
 	/** Optional provider-facing session identifier for prompt caches and sticky auth selection.
 	 * Keeps persisted session files isolated while reusing provider-side caches. */
@@ -2214,14 +2214,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			const defaultPrompt = await buildSystemPromptInternal({
 				cwd,
-				customPrompt: options.customSystemPrompt,
+				resolvedCustomPrompt: options.customSystemPrompt,
 				skills,
 				contextFiles,
 				tools: promptTools,
 				toolNames,
 				rules: rulebookRules,
 				alwaysApplyRules,
-				appendSystemPrompt: appendPrompt,
+				resolvedAppendSystemPrompt: appendPrompt,
 				repeatToolDescriptions,
 				nativeTools,
 				intentField,

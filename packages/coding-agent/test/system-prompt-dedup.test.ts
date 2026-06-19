@@ -77,6 +77,35 @@ describe("SYSTEM.md prompt assembly", () => {
 		expect(promptText).toContain('<skill name="focused-work">');
 	});
 
+	it("does not resolve already-loaded prompt text as a path", async () => {
+		const projectDir = path.join(tempDir, "project");
+		const readablePromptText = path.join(projectDir, "README.md");
+		fs.mkdirSync(projectDir, { recursive: true });
+		fs.writeFileSync(readablePromptText, "File content that must not replace the prompt.");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			resolvedCustomPrompt: readablePromptText,
+			resolvedAppendSystemPrompt: readablePromptText,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		expect(promptText).toContain(readablePromptText);
+		expect(promptText).not.toContain("File content that must not replace the prompt.");
+	});
+
 	it("prefers project SYSTEM.md over user SYSTEM.md", async () => {
 		const projectDir = path.join(tempDir, "project");
 		fs.mkdirSync(path.join(projectDir, ".omp"), { recursive: true });
