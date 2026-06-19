@@ -404,9 +404,10 @@ fn push_line(out: &mut String, line: &str) {
 
 #[cfg(test)]
 mod tests {
+	use std::fmt::Write as _;
+
 	use super::*;
 	use crate::minimizer::MinimizerConfig;
-	use std::fmt::Write as _;
 
 	fn ctx<'a>(
 		program: &'a str,

@@ -20,9 +20,9 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 /// sections). Mirrors RTK's `MAX_PYTEST_FAILURES` (== `CAP_WARNINGS` == 10),
 /// re-derived for the minimizer's streaming, line-based renderer: once this
 /// many traceback blocks have been emitted, further blocks are suppressed and
-/// a single `+N more failures` overflow marker stands in for the remainder.
-/// The compact `FAILED …` short-summary one-liners are NOT capped here — they
-/// name every failed test cheaply and stay intact.
+/// a single `[…N failures elided…]` overflow marker stands in for the
+/// remainder. The compact `FAILED …` short-summary one-liners are NOT capped
+/// here — they name every failed test cheaply and stay intact.
 ///
 /// The `=== ERRORS ===` section (collection / fixture-setup errors) is capped
 /// by a SEPARATE counter (see `filter_pytest`): pytest renders ERRORS *before*
@@ -674,7 +674,7 @@ mod tests {
 	#[test]
 	fn pytest_caps_error_blocks_independently_of_failures() {
 		// 12 collection-error banners (ERRORS section) exceed the cap and yield
-		// their OWN `+N more errors` marker, while the 2 real failure tracebacks
+		// their OWN `[…N errors elided…]` marker, while the 2 real failure tracebacks
 		// in the FAILURES section are untouched (their counter is separate).
 		let mut input = String::from(
 			"============================= test session starts \

@@ -606,7 +606,7 @@ impl<'a> SurefireBlock<'a> {
 
 /// `[ERROR] Failures:` summary block cap. Maven emits a summary at the end of a
 /// failing test run; on builds with hundreds of failures this can be large. Cap
-/// entries at [`max_mvn_failing_classes`] and emit `\n… +N more failures\n`
+/// entries at [`max_mvn_failing_classes`] and emit `\n[…N failures elided…]\n`
 /// immediately before the `Tests run:` aggregate when entries were dropped.
 struct FailuresSummaryCap {
 	cap:        usize,
@@ -648,7 +648,7 @@ impl FailuresSummaryCap {
 		}
 	}
 
-	/// Pre-emit the `… +N more failures` tail when the aggregate
+	/// Pre-emit the `[…N failures elided…]` tail when the aggregate
 	/// `[ERROR] Tests run:` line is about to be written, then close the summary.
 	fn handle_aggregate(&mut self, line: &str, out: &mut String) {
 		if !self.in_summary || !AGG.is_match(line) {

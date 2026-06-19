@@ -1,7 +1,6 @@
 //! Conservative text filters for system-style commands.
 
-use std::collections::HashMap;
-use std::fmt::Write as _;
+use std::{collections::HashMap, fmt::Write as _};
 
 use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
