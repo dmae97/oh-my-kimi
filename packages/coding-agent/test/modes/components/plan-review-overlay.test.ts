@@ -58,9 +58,9 @@ describe("PlanReviewOverlay", () => {
 		for (const option of APPROVAL_OPTIONS) expect(out).toContain(option);
 		expect(out).toContain("esc cancel");
 		// Outlined like the /copy overlay.
-		expect(out).toContain("┌");
+		expect(out).toContain(theme.boxRound.topLeft);
 		expect(out).toContain("│");
-		expect(out).toContain("└");
+		expect(out).toContain(theme.boxRound.bottomLeft);
 	});
 
 	it("confirms the highlighted option on Enter", () => {

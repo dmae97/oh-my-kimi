@@ -157,15 +157,20 @@ export function parseCollabLink(link: string): ParsedCollabLink | { error: strin
 	} catch {
 		return { error: `Invalid collab link: ${link}` };
 	}
+	if ((url.protocol === "http:" || url.protocol === "https:") && url.hash) {
+		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+		const parsed = parseCollabLink(inner);
+		if (!("error" in parsed)) return parsed;
+	}
 	const normalized = normalizeRelayOrigin(url.origin);
 	if ("error" in normalized) return normalized;
 	const match = ROOM_PATH_RE.exec(url.pathname);
 	if (!match) {
-		// Web deep link: `http(s)://<relay>/#<collab-link>` — the fragment holds
-		// the whole link, so recurse on it. The recursion terminates because
-		// the inner text is a strict suffix of the input.
+		// Non-http(s) deep links may also carry a complete collab link in the
+		// fragment. http(s) links are handled once above so invalid fragments
+		// fall through to direct relay validation instead of double-recursing.
 		const inner = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
-		if (inner) return parseCollabLink(inner);
+		if (inner && url.protocol !== "http:" && url.protocol !== "https:") return parseCollabLink(inner);
 		return { error: "Collab link must contain a /r/<roomId> path" };
 	}
 	const roomId = match[1] as string;

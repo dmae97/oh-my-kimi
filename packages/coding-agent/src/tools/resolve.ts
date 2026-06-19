@@ -1,4 +1,10 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	CustomMessage,
+} from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -28,11 +34,18 @@ export interface ResolveToolDetails {
 	sourceResultDetails?: unknown;
 }
 
+/** Monotonic suffix making each staged preview's pending-invoker id UNIQUE, so
+ *  stacked previews never clobber one another by label. */
+let pendingPreviewSeq = 0;
+
 /**
- * Queue a resolve-protocol handler on the tool-choice queue. Forces the next
- * LLM call to invoke the hidden `resolve` tool, wraps the caller's apply/reject
- * callbacks into an onInvoked closure that matches the resolve schema, and
- * steers a preview reminder so the model understands why.
+ * Register a non-forcing resolve-protocol handler for a staged preview. Wraps the
+ * caller's apply/reject into an onInvoked closure (matching the resolve schema) and
+ * stores it on the tool-choice queue's pending-invoker registry under a UNIQUE id.
+ * The `resolve` tool dispatches to it; the agent-loop's SoftToolRequirement
+ * lifecycle injects the preview reminder and escalates to a forced `resolve` only
+ * if the model declines — so a compliant turn pays ZERO tool_choice change (no
+ * prompt-cache messages-cache invalidation).
  *
  * This is the canonical entry point for any tool that wants preview/apply
  * semantics. No session-level abstraction is needed: callers pass their
@@ -48,46 +61,55 @@ export function queueResolveHandler(
 	},
 ): void {
 	const queue = session.getToolChoiceQueue?.();
-	const forced = session.buildToolChoice?.("resolve");
-	if (!queue || !forced || typeof forced === "string") return;
+	if (!queue) return;
 
-	const steerReminder = (): void => {
-		session.steer?.({
-			customType: "resolve-reminder",
-			content: [
-				"<system-reminder>",
-				"This is a preview. Call the `resolve` tool to apply or discard these changes.",
-				"</system-reminder>",
-			].join("\n"),
-			details: { toolName: options.sourceToolName },
+	// Unique per preview: stacked/sequential previews each get their own entry.
+	const id = `pending-action:${options.sourceToolName}:${pendingPreviewSeq++}`;
+
+	const onInvoked = async (input: unknown): Promise<AgentToolResult<unknown>> => {
+		const result = await runResolveInvocation(input as ResolveParams, {
+			sourceToolName: options.sourceToolName,
+			label: options.label,
+			apply: options.apply,
+			reject: options.reject,
+			onApplyError: () => {
+				// Apply threw (e.g. ast_edit overlapping replacements). Keep the preview
+				// pending under the SAME id so the model can `discard` or fix-and-retry;
+				// runResolveInvocation rethrows, so the success-path removal below is skipped.
+				queue.registerPendingInvoker(id, options.sourceToolName, onInvoked);
+			},
 		});
+		// Resolved (apply succeeded, or discard): consume the staged action exactly once.
+		queue.removePendingInvoker(id);
+		return result;
 	};
 
-	const pushDirective = (): void => {
-		queue.pushOnce(forced, {
-			label: `pending-action:${options.sourceToolName}`,
-			now: true,
-			onRejected: () => "requeue",
-			onInvoked: async (input: unknown) =>
-				runResolveInvocation(input as ResolveParams, {
-					sourceToolName: options.sourceToolName,
-					label: options.label,
-					apply: options.apply,
-					reject: options.reject,
-					onApplyError: () => {
-						// Apply threw (e.g. ast_edit overlapping replacements). Re-push the
-						// same directive so the preview remains pending and the model can
-						// `discard` or fix-and-retry on the next turn instead of being
-						// stranded with no pending action to address.
-						pushDirective();
-						steerReminder();
-					},
-				}),
-		});
-	};
+	// NON-FORCING: register so `resolve` can dispatch here WITHOUT changing
+	// tool_choice. The agent-loop injects the reminder (from the SoftToolRequirement
+	// the session builds) and forces a resolve turn only on non-compliance.
+	queue.registerPendingInvoker(id, options.sourceToolName, onInvoked);
+}
 
-	pushDirective();
-	steerReminder();
+/**
+ * The canonical preview reminder. The resolve mechanism owns the wording; the
+ * agent-loop delivers it via the session's `SoftToolRequirement.reminder` (injected
+ * once per pending-preview head) instead of a host-side steer, so it lands as a
+ * stable mid-history append and never churns the cached prefix.
+ */
+export function buildResolveReminderMessage(sourceToolName: string): CustomMessage {
+	return {
+		role: "custom",
+		customType: "resolve-reminder",
+		content: [
+			"<system-reminder>",
+			"This is a preview. Call the `resolve` tool to apply or discard these changes.",
+			"</system-reminder>",
+		].join("\n"),
+		display: false,
+		details: { toolName: sourceToolName },
+		attribution: "agent",
+		timestamp: Date.now(),
+	};
 }
 
 /**
@@ -185,7 +207,10 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<ResolveToolDetails>> {
 		return untilAborted(signal, async () => {
-			const invoker = this.session.peekQueueInvoker?.() ?? this.session.peekStandingResolveHandler?.();
+			const invoker =
+				this.session.peekQueueInvoker?.() ??
+				this.session.peekPendingInvoker?.() ??
+				this.session.peekStandingResolveHandler?.();
 			if (!invoker) {
 				// `discard` is a request to cancel/abort a staged action. When nothing is
 				// pending, the desired end-state (no staged change) already holds, so honor

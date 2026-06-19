@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
 	runTtsrCommand,
@@ -10,6 +11,18 @@ import {
 } from "@oh-my-pi/pi-coding-agent/cli/ttsr-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getProjectAgentDir, getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+
+let testTmpDir: string;
+
+beforeAll(() => {
+	testTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-ttsr-tests-"));
+});
+
+afterAll(() => {
+	if (testTmpDir && fs.existsSync(testTmpDir)) {
+		fs.rmSync(testTmpDir, { force: true, recursive: true });
+	}
+});
 
 // Capture stdout writes so assertions don't leak to the test runner.
 let stdout = "";
@@ -58,7 +71,7 @@ async function writeTempRule(condition: string, scope: string[], astCondition?: 
 	// Stable basename "test-rule.md" so buildRuleFromMarkdown derives name
 	// "test-rule" — assertions rely on it. Each call uses a unique parent dir
 	// to avoid collisions across tests.
-	const dir = path.join(import.meta.dir, `.tmp-ttsr-${Math.random().toString(36).slice(2)}`);
+	const dir = path.join(testTmpDir, `rule-${Math.random().toString(36).slice(2)}`);
 	fs.mkdirSync(dir, { recursive: true });
 	const tmp = path.join(dir, "test-rule.md");
 	const fm: string[] = [`description: test rule`, `condition: "${condition.replace(/"/g, '\\"')}"`];
@@ -69,7 +82,7 @@ async function writeTempRule(condition: string, scope: string[], astCondition?: 
 }
 
 async function writeTempSnippet(content: string, ext: string): Promise<string> {
-	const dir = path.join(import.meta.dir, `.tmp-ttsr-${Math.random().toString(36).slice(2)}`);
+	const dir = path.join(testTmpDir, `snippet-${Math.random().toString(36).slice(2)}`);
 	fs.mkdirSync(dir, { recursive: true });
 	const tmp = path.join(dir, `snippet.${ext}`);
 	await Bun.write(tmp, content);
@@ -77,10 +90,9 @@ async function writeTempSnippet(content: string, ext: string): Promise<string> {
 }
 
 function cleanupTmp(): void {
-	for (const entry of fs.readdirSync(import.meta.dir)) {
-		if (entry.startsWith(".tmp-ttsr-")) {
-			fs.rmSync(path.join(import.meta.dir, entry), { force: true, recursive: true });
-		}
+	if (!testTmpDir || !fs.existsSync(testTmpDir)) return;
+	for (const entry of fs.readdirSync(testTmpDir)) {
+		fs.rmSync(path.join(testTmpDir, entry), { force: true, recursive: true });
 	}
 }
 
@@ -208,7 +220,7 @@ describe("omp ttsr", () => {
 			captureStreams();
 
 			// 1. Create a temporary project root directory
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 
 			// 2. Set project root
@@ -239,7 +251,7 @@ describe("omp ttsr", () => {
 		it("keeps default scan output summary-only", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -262,7 +274,7 @@ describe("omp ttsr", () => {
 		it("outputs json format correctly when json flag is set", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -290,7 +302,7 @@ describe("omp ttsr", () => {
 		it("reports no matches when files do not match rule conditions", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -313,7 +325,7 @@ describe("omp ttsr", () => {
 		it("respects project gitignore when scanning a subdirectory", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, ".git"), { recursive: true });
 			fs.mkdirSync(path.join(projectDir, "packages/generated"), { recursive: true });
 			fs.mkdirSync(path.join(projectDir, "packages/src"), { recursive: true });
@@ -342,7 +354,7 @@ describe("omp ttsr", () => {
 		it("honors ttsr.enabled=false for project scans", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
 			setProjectDir(projectDir);
@@ -362,7 +374,7 @@ describe("omp ttsr", () => {
 		it("includes ignored files when gitignore filtering is disabled", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, ".git"), { recursive: true });
 			fs.mkdirSync(path.join(projectDir, "packages/generated"), { recursive: true });
 			setProjectDir(projectDir);
@@ -388,7 +400,7 @@ describe("omp ttsr", () => {
 		it("includes hidden source files like GitHub workflows", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, ".github/workflows"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -411,7 +423,7 @@ describe("omp ttsr", () => {
 		it("keeps AST-only matches in default summary when type assertion spans whitespace", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -436,7 +448,7 @@ describe("omp ttsr", () => {
 		it("skips files larger than the scan byte limit", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 
@@ -463,7 +475,7 @@ describe("omp ttsr", () => {
 		it("skips binary-looking files before text matching", async () => {
 			captureStreams();
 
-			const projectDir = path.join(import.meta.dir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
+			const projectDir = path.join(testTmpDir, `.tmp-ttsr-project-${Math.random().toString(36).slice(2)}`);
 			fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
 			setProjectDir(projectDir);
 

@@ -51,7 +51,7 @@ describe("eval renderer: agent() progress below the cell box", () => {
 
 	/** Index of the box's closing border (bottom-right corner glyph). */
 	function boxBottomIndex(lines: string[]): number {
-		return lines.findIndex(line => line.includes(theme.boxSharp.bottomRight));
+		return lines.findIndex(line => line.includes(theme.boxRound.bottomRight));
 	}
 
 	it("draws a running subagent below the box with its current tool and intent", () => {

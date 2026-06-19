@@ -82,10 +82,42 @@ describe("collab link parsing", () => {
 		expect(local.wsUrl).toBe(`ws://localhost:7466/r/${ROOM}`);
 	});
 
+	it("parses custom web UI wrappers by their relay fragment", () => {
+		const parsed = parseCollabLink(`http://web.example/collab/#relay.example.com:8443/r/${ROOM}.${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com:8443/r/${ROOM}`);
+	});
+
+	it("parses split web UI wrappers with full relay URLs in the fragment", () => {
+		const parsed = parseCollabLink(`https://web.example/collab/#wss://relay.example.com/r/${ROOM}.${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com/r/${ROOM}`);
+	});
+
+	it("falls through invalid http wrapper fragments without reparsing them", () => {
+		expect(parseCollabLink("https://web.example/#not-a-collab-link")).toEqual({
+			error: "Collab link must contain a /r/<roomId> path",
+		});
+	});
+
+	it("prefers browser wrapper fragments over relay-like web paths", () => {
+		const inner = formatCollabLink("wss://relay.example.com", ROOM, KEY);
+		const parsed = parseCollabLink(`https://web.example/r/abcdefghij#${inner}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com/r/${ROOM}`);
+	});
+
 	it("parses dot-joined web deep links (https://<relay>/#<roomId>.<key>)", () => {
 		const parsed = parseCollabLink(`https://my.omp.sh/#${ROOM}.${KEY_TEXT}`);
 		if ("error" in parsed) throw new Error(parsed.error);
 		expect(parsed.wsUrl).toBe(`${DEFAULT_RELAY_URL}/r/${ROOM}`);
+		expect(parsed.key).toEqual(KEY);
+	});
+
+	it("parses legacy https direct relay links with key-only fragments", () => {
+		const parsed = parseCollabLink(`https://relay.example.com/r/${ROOM}#${KEY_TEXT}`);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed.wsUrl).toBe(`wss://relay.example.com/r/${ROOM}`);
 		expect(parsed.key).toEqual(KEY);
 	});
 

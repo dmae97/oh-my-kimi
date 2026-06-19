@@ -529,6 +529,15 @@ For architecture and contribution guidelines, see [packages/coding-agent/DEVELOP
 | **[brush-core-vendored](crates/brush-core-vendored)**         | Vendored fork of [brush-shell](https://github.com/reubeno/brush) for embedded bash execution        |
 | **[brush-builtins-vendored](crates/brush-builtins-vendored)** | Vendored bash builtins (cd, echo, test, printf, read, export, etc.)                                 |
 
+## Contributing
+
+Issues are open to everyone. **Pull requests require a vouch** — PRs from
+unvouched or denounced authors are closed automatically. If you're not yet
+vouched, open a [Discussion](https://github.com/can1357/oh-my-pi/discussions)
+and ask a maintainer to `!vouch` you rather than opening a PR (which would be
+closed on sight). See **[CONTRIBUTING.md](CONTRIBUTING.md)** and
+[`.github/VOUCHED.td`](.github/VOUCHED.td) for the full policy.
+
 ---
 
 ## License

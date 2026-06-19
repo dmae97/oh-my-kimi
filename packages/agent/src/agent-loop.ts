@@ -14,8 +14,11 @@ import {
 	resolveApiKeyOnce,
 	seedApiKeyResolver,
 	streamSimple,
+	stripSchemaDescriptions,
+	type ToolChoice,
 	type ToolResultMessage,
 	type TSchema,
+	toolWireSchema,
 	validateToolArguments,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
@@ -38,6 +41,7 @@ import {
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type AgentRunCoverage, type AgentRunSummary, ToolCallBlockedError } from "./run-collector";
 import {
 	type AgentTelemetry,
@@ -65,6 +69,7 @@ import type {
 	AsideMessage,
 	StreamFn,
 } from "./types";
+import { isSoftToolRequirement } from "./types";
 import { yieldIfDue } from "./utils/yield";
 
 /** Stop-details marker for a provider error after assistant content/tool args already streamed. */
@@ -80,6 +85,27 @@ const ABORTED: unique symbol = Symbol("agent-loop-aborted");
  * must not spin the loop forever. Resets whenever a turn carries tool calls.
  */
 const MAX_PAUSED_TURN_CONTINUATIONS = 8;
+
+/**
+ * Cap on consecutive forced escalations for a single soft tool requirement.
+ * A forced `toolChoice` guarantees the call, so this is purely defensive: if a
+ * model somehow never satisfies the requirement, give up forcing rather than
+ * spin the loop. Reset whenever the requirement id changes or clears.
+ */
+const MAX_SOFT_TOOL_ESCALATIONS = 3;
+
+/**
+ * Whether a hard `toolChoice` for a turn conflicts with a pending soft tool
+ * requirement — i.e. forbids tools (`"none"`) or forces a *different* specific
+ * tool. `"auto"`/`"required"`/`"any"` and a same-tool force still let the model
+ * satisfy the requirement, so they do not conflict and the soft gate stays active.
+ */
+function hardToolChoiceBlocks(choice: ToolChoice | undefined, requiredTool: string): boolean {
+	if (choice === undefined) return false;
+	if (typeof choice === "string") return choice === "none";
+	const name = choice.type === "tool" ? choice.name : "function" in choice ? choice.function.name : choice.name;
+	return name !== requiredTool;
+}
 
 /**
  * Cadence (ms) for polling queued steering while an `interruptible` tool is in
@@ -517,9 +543,13 @@ function normalizeMessagesForProvider(
 	});
 }
 
-export const INTENT_FIELD = "_i";
+const INTENT_FIELD_DESCRIPTION = "concise intent";
 
-function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = "require"): unknown {
+function injectIntentIntoSchema(
+	schema: unknown,
+	mode: "require" | "optional" = "require",
+	describeIntent = true,
+): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
 	const schemaRecord = schema as Record<string, unknown>;
 	const propertiesValue = schemaRecord.properties;
@@ -545,10 +575,9 @@ function injectIntentIntoSchema(schema: unknown, mode: "require" | "optional" = 
 	return {
 		...schemaRecord,
 		properties: {
-			[INTENT_FIELD]: {
-				type: "string",
-				description: "Concise intent in present participle form (2-6 words) strictly on a single line, no newlines",
-			},
+			[INTENT_FIELD]: describeIntent
+				? { type: "string", description: INTENT_FIELD_DESCRIPTION }
+				: { type: "string" },
 			...properties,
 		},
 		...(mode === "require" ? { required: [...required, INTENT_FIELD] } : {}),
@@ -559,26 +588,36 @@ export function normalizeTools(
 	tools: AgentContext["tools"],
 	injectIntent: boolean,
 	exampleDialect?: Dialect,
+	pruneDescriptions = false,
 ): Context["tools"] {
 	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
+		const doInjectIntent = injectIntent && intentMode !== "omit";
+		// When the full catalog is rendered into the system prompt, ship the tool
+		// specs without their descriptions (top-level + nested schema annotations)
+		// so they are not duplicated on the wire. Strip the STABLE wire schema (the
+		// memoized `stripSchemaDescriptions` result is reused across requests), then
+		// re-inject `_i` (without its hint, which `describeIntent: false` omits) so
+		// intent tracing keeps the field while no descriptions ride the wire.
+		if (pruneDescriptions) {
+			let parameters = stripSchemaDescriptions(toolWireSchema(t)) as TSchema;
+			if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
+			return { ...t, parameters, description: "" };
+		}
 		let parameters: TSchema = t.parameters;
-		if (injectIntent && intentMode !== "omit") {
+		if (doInjectIntent) {
 			if (isZodSchema(parameters)) {
-				const wired = zodToWireSchema(parameters);
-				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+				parameters = injectIntentIntoSchema(zodToWireSchema(parameters), intentMode) as TSchema;
 			} else if (isArkSchema(parameters)) {
-				const wired = arkToWireSchema(parameters);
-				parameters = injectIntentIntoSchema(wired, intentMode) as TSchema;
+				parameters = injectIntentIntoSchema(arkToWireSchema(parameters), intentMode) as TSchema;
 			} else {
 				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 			}
 		}
 		const description = t.description ?? "";
-		const injectExampleIntent = injectIntent && intentMode !== "omit";
 		const examplesBlock = exampleDialect
-			? renderToolExamples({ ...t, parameters }, exampleDialect, injectExampleIntent ? INTENT_FIELD : undefined)
+			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 			: "";
 		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
 		return { ...t, parameters, description: finalDescription };
@@ -714,6 +753,19 @@ async function runLoopBody(
 		let harmonyTruncateResumeCount = 0;
 		let pausedTurnContinuations = 0;
 
+		// Soft tool requirement lifecycle (reminder → escalate; see SoftToolRequirement).
+		// `forcedToolChoice` carries a one-turn escalation into the next model call. It
+		// overrides the static toolChoice but NEVER the host's hard getToolChoice().
+		let softRequirementId: string | undefined;
+		let forcedToolChoice: ToolChoice | undefined;
+		let softEscalations = 0;
+		// Resolved once per logical turn at the fetch site below and reused across
+		// Harmony-leak re-samples (which re-enter the same turn) so the consuming
+		// getToolChoice is never advanced twice; the flag resets at the message boundary.
+		let hostToolChoice: ToolChoice | undefined;
+		let softRequiredTool: string | undefined;
+		let directiveResolvedForTurn = false;
+
 		// Outer loop: continues when queued follow-up messages arrive after agent would stop
 		while (true) {
 			let hasMoreToolCalls = true;
@@ -749,6 +801,41 @@ async function runLoopBody(
 					await config.syncContextBeforeModelCall(currentContext);
 				}
 
+				// Resolve the per-turn tool-choice directive ONCE per logical turn. The
+				// host hard-choice path (getToolChoice → nextToolChoice) is CONSUMING — it
+				// advances a generator on every call — so Harmony-leak retries, which
+				// re-sample the same turn via `continue` without a turn_end, must reuse the
+				// values fetched on the first attempt rather than double-advancing it.
+				// Fetched here (after pending-message flush + context sync, immediately
+				// before the call) so a throw in between cannot wedge an in-flight
+				// directive. A hard ToolChoice is applied verbatim; a SoftToolRequirement
+				// triggers the remind-then-escalate lifecycle: inject its reminder inline
+				// once per new id (toolChoice stays auto), and the gate below escalates to
+				// a forced choice only if the model declines. The host wrapper already
+				// dropped a soft requirement whose tool is inactive.
+				if (!directiveResolvedForTurn) {
+					const directive = signal?.aborted ? undefined : config.getToolChoice?.();
+					const softReq = isSoftToolRequirement(directive) ? directive : undefined;
+					hostToolChoice = directive === undefined || isSoftToolRequirement(directive) ? undefined : directive;
+					softRequiredTool = softReq?.toolName;
+					if (softReq !== undefined) {
+						if (softReq.id !== softRequirementId) {
+							softRequirementId = softReq.id;
+							softEscalations = 0;
+							for (const reminder of softReq.reminder) {
+								stream.push({ type: "message_start", message: reminder });
+								stream.push({ type: "message_end", message: reminder });
+								currentContext.messages.push(reminder);
+								newMessages.push(reminder);
+							}
+						}
+					} else {
+						softRequirementId = undefined;
+						softEscalations = 0;
+					}
+					directiveResolvedForTurn = true;
+				}
+
 				// Stream assistant response
 				let recovered: HarmonyRecoveredToolCall | undefined;
 				let message: AssistantMessage;
@@ -763,6 +850,8 @@ async function runLoopBody(
 						stepCounter,
 						streamFn,
 						harmonyRetryAttempt,
+						hostToolChoice,
+						forcedToolChoice,
 					);
 					harmonyRetryAttempt = 0;
 					harmonyTruncateResumeCount = 0;
@@ -779,6 +868,10 @@ async function runLoopBody(
 						recovered = err.recovered;
 						message = recovered.message;
 						await emitHarmonyAudit(config, err, "truncate_resume", harmonyRetryAttempt);
+						// A recovered message completes the turn, so the abort-retry counter
+						// resets like the normal success path (the truncate-resume counter
+						// keeps accumulating for its cross-turn cap).
+						harmonyRetryAttempt = 0;
 					} else {
 						if (harmonyRetryAttempt >= 2) {
 							await emitHarmonyAudit(config, err, "escalated", harmonyRetryAttempt);
@@ -798,6 +891,14 @@ async function runLoopBody(
 					stream.push({ type: "message_end", message: snapshotAssistantMessage(message) });
 				}
 				newMessages.push(message);
+
+				// The escalation choice (if any) applied to the call above; clear it so
+				// only the single escalation turn carries the forced choice.
+				forcedToolChoice = undefined;
+
+				// A fresh logical turn re-resolves the directive next iteration; a Harmony
+				// retry `continue`s before this line and keeps the cached value.
+				directiveResolvedForTurn = false;
 
 				if (message.stopReason === "error" || message.stopReason === "aborted") {
 					// Create placeholder tool results for any tool calls in the aborted message
@@ -851,8 +952,51 @@ async function runLoopBody(
 					hasMoreToolCalls = false;
 				}
 
+				// A turn is compliant ONLY when it calls the required tool and nothing
+				// else — mirroring the forced-tool_choice turn, which can emit only that
+				// tool. A required+detour batch is treated as non-compliant so detour
+				// tools never run side effects while the requirement is still pending.
+				const calledOnlyRequiredTool =
+					softRequiredTool !== undefined &&
+					toolCalls.length > 0 &&
+					toolCalls.every(toolCall => toolCall.name === softRequiredTool);
+				const softGateActive =
+					softRequiredTool !== undefined && !hardToolChoiceBlocks(config.toolChoice, softRequiredTool);
+				const softNonCompliant = softGateActive && !calledOnlyRequiredTool;
+
 				const toolResults: ToolResultMessage[] = [];
-				if (hasMoreToolCalls) {
+				if (softNonCompliant && softRequiredTool !== undefined) {
+					if (softEscalations >= MAX_SOFT_TOOL_ESCALATIONS) {
+						throw new Error(
+							`Soft tool requirement '${softRequiredTool}' was not satisfied after ${MAX_SOFT_TOOL_ESCALATIONS} forced turns; aborting to avoid an unbounded force loop.`,
+						);
+					}
+					// A soft-required tool is pending but the model called something else
+					// (or yielded). Do NOT execute the detour — pair each call with a
+					// skipped result and force the required tool next turn. This is the
+					// only turn that changes toolChoice; a model that complies with the
+					// reminder pays no message-cache invalidation. Re-engage so the loop
+					// never yields while the requirement is unmet.
+					for (const toolCall of toolCalls) {
+						const result = createAbortedToolResult(
+							toolCall,
+							stream,
+							"skipped",
+							`Not executed: call the \`${softRequiredTool}\` tool to resolve the pending action before using other tools.`,
+						);
+						currentContext.messages.push(result);
+						newMessages.push(result);
+						toolResults.push(result);
+						recordSkippedTool(telemetry, {
+							toolCallId: toolCall.id,
+							toolName: toolCall.name,
+							status: "skipped",
+						});
+					}
+					forcedToolChoice = { type: "tool", name: softRequiredTool };
+					softEscalations++;
+					hasMoreToolCalls = true;
+				} else if (hasMoreToolCalls) {
 					const executionResult = await executeToolCalls(
 						currentContext,
 						message,
@@ -1000,6 +1144,8 @@ async function streamAssistantResponse(
 	stepCounter: StepCounter,
 	streamFn?: StreamFn,
 	harmonyRetryAttempt = 0,
+	hostToolChoice?: ToolChoice,
+	forcedToolChoice?: ToolChoice,
 ): Promise<AssistantMessage> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
@@ -1013,6 +1159,9 @@ async function streamAssistantResponse(
 
 	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
 	const exampleDialect = ownedDialect ?? preferredDialect(config.model.id);
+	// Owned/in-band dialects carry the catalog in the prompt as text and send no
+	// native `tools`, so description pruning only applies to native tool calling.
+	const pruneToolDescriptions = !!config.pruneToolDescriptions && !ownedDialect;
 	// Build LLM context — append-only mode caches system prompt + tools
 	// AND keeps an append-only message log so prior-turn bytes are stable.
 	let llmContext: Context;
@@ -1021,12 +1170,13 @@ async function streamAssistantResponse(
 		llmContext = config.appendOnlyContext.build(context, {
 			intentTracing: !!config.intentTracing,
 			exampleDialect,
+			pruneToolDescriptions,
 		});
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,
 			messages: normalizedMessages,
-			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect),
+			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect, pruneToolDescriptions),
 		};
 	}
 	if (config.transformProviderContext) {
@@ -1049,7 +1199,6 @@ async function streamAssistantResponse(
 
 	const streamFunction = streamFn || streamSimple;
 
-	const dynamicToolChoice = config.getToolChoice?.();
 	const dynamicReasoning = config.getReasoning?.();
 	const dynamicDisableReasoning = config.getDisableReasoning?.();
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
@@ -1084,7 +1233,7 @@ async function streamAssistantResponse(
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
 	// Owned tool calling sends no native tools, so any tool_choice would error.
-	const effectiveToolChoice = ownedDialect ? undefined : (dynamicToolChoice ?? config.toolChoice);
+	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 

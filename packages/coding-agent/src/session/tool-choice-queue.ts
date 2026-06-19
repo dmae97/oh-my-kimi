@@ -65,6 +65,20 @@ interface InFlight {
 	invoked: boolean;
 }
 
+/**
+ * A non-forcing pending preview invoker. Registered by `queueResolveHandler`
+ * (resolve previews) so the `resolve` tool can dispatch to a staged action
+ * WITHOUT this queue forcing `tool_choice`. The agent-loop's
+ * SoftToolRequirement lifecycle (remind-then-escalate) owns any forcing.
+ */
+interface PendingInvoker {
+	/** Unique id for this staged preview; never reused (never clobbered by label). */
+	id: string;
+	/** Source tool that staged the preview (e.g. "ast_edit"), for the reminder. */
+	sourceToolName: string;
+	onInvoked: (input: unknown) => Promise<unknown> | unknown;
+}
+
 // ── Queue ───────────────────────────────────────────────────────────────────
 
 export class ToolChoiceQueue {
@@ -75,6 +89,12 @@ export class ToolChoiceQueue {
 	 * Consumers (e.g. todo reminder suppression) read via consumeLastServedLabel().
 	 */
 	#lastResolvedLabel: string | undefined;
+	/**
+	 * Non-forcing pending preview invokers, stacked by UNIQUE id. The `resolve`
+	 * tool dispatches to the head; the agent-loop's soft-tool-requirement
+	 * lifecycle drives resolution without this queue forcing `tool_choice`.
+	 */
+	#pendingInvokers: PendingInvoker[] = [];
 
 	// ── Push ──────────────────────────────────────────────────────────────
 
@@ -190,6 +210,44 @@ export class ToolChoiceQueue {
 		};
 	}
 
+	// ── Non-forcing pending invokers ──────────────────────────────────────
+	// Preview producers (queueResolveHandler) register here so `resolve` can
+	// dispatch to a staged action WITHOUT a forced tool_choice (no messages-cache
+	// bust). Stacked by UNIQUE id: a re-register replaces only the same id, so
+	// concurrent/sequential previews each survive and resolve independently.
+
+	/** Register (or replace by exact id) a non-forcing pending preview invoker. */
+	registerPendingInvoker(
+		id: string,
+		sourceToolName: string,
+		onInvoked: (input: unknown) => Promise<unknown> | unknown,
+	): void {
+		this.removePendingInvoker(id);
+		this.#pendingInvokers.push({ id, sourceToolName, onInvoked });
+	}
+
+	/** Drop the pending invoker with this id (e.g. after it resolves). */
+	removePendingInvoker(id: string): void {
+		this.#pendingInvokers = this.#pendingInvokers.filter(p => p.id !== id);
+	}
+
+	/** True when at least one non-forcing pending preview is registered. */
+	get hasPendingInvoker(): boolean {
+		return this.#pendingInvokers.length > 0;
+	}
+
+	/** The head (most-recently registered) pending invoker's handler, for resolve dispatch. */
+	peekPendingInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
+		return this.#pendingInvokers.at(-1)?.onInvoked;
+	}
+
+	/** The head pending preview's stable id + source tool, for building the agent-level
+	 *  SoftToolRequirement (the id drives reminder re-injection when the head changes). */
+	peekPendingHead(): { id: string; sourceToolName: string } | undefined {
+		const head = this.#pendingInvokers.at(-1);
+		return head ? { id: head.id, sourceToolName: head.sourceToolName } : undefined;
+	}
+
 	// ── Cleanup ───────────────────────────────────────────────────────────
 
 	/** Remove all directives with the given label. Rejects in-flight if it matches. */
@@ -206,6 +264,7 @@ export class ToolChoiceQueue {
 			this.reject("cleared");
 		}
 		this.#queue = [];
+		this.#pendingInvokers = [];
 		this.#lastResolvedLabel = undefined;
 	}
 

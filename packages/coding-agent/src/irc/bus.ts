@@ -98,6 +98,14 @@ export class IrcBus {
 		if (!ref || ref.status === "aborted") {
 			return { to: message.to, outcome: "failed", error: `Unknown or terminated agent "${message.to}".` };
 		}
+		// Advisor refs are observability-only transcripts, never messageable peers.
+		if (ref.kind === "advisor") {
+			return {
+				to: message.to,
+				outcome: "failed",
+				error: `Agent "${message.to}" is a read-only advisor transcript and cannot be messaged.`,
+			};
+		}
 
 		let revived = false;
 		if (ref.status === "parked") {

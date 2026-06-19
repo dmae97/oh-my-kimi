@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.0.10] - 2026-06-18
+
+### Added
+
+- Added support for collab browser wrapper links whose web UI host differs from the relay host, so the connect screen joins the relay encoded in the URL fragment.
+
 ## [16.0.5] - 2026-06-17
 
 ### Fixed

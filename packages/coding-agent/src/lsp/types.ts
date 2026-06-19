@@ -399,7 +399,7 @@ export interface LspClient {
 	diagnostics: Map<string, PublishedDiagnostics>;
 	diagnosticsVersion: number;
 	openFiles: Map<string, OpenFile>;
-	pendingRequests: Map<number, PendingRequest>;
+	pendingRequests: Map<number | string, PendingRequest>;
 	messageBuffer: Uint8Array;
 	isReading: boolean;
 	/** Lifecycle state: "connecting" until initialize completes, then "ready"; "error" on init failure or reader death. */
@@ -420,16 +420,19 @@ export interface LspClient {
 // JSON-RPC Protocol Types
 // =============================================================================
 
+/** JSON-RPC request/response identifier accepted by LSP peers. */
+export type LspJsonRpcId = number | string;
+
 export interface LspJsonRpcRequest {
 	jsonrpc: "2.0";
-	id: number;
+	id: LspJsonRpcId;
 	method: string;
 	params: unknown;
 }
 
 export interface LspJsonRpcResponse {
 	jsonrpc: "2.0";
-	id?: number;
+	id?: LspJsonRpcId;
 	result?: unknown;
 	error?: { code: number; message: string; data?: unknown };
 }

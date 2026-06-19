@@ -92,7 +92,7 @@ describe("Loader component", () => {
 	it("requests render when animated message bytes change between spinner frames", () => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));
-		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
+		const ui = { synchronizedOutput: true, requestComponentRender: vi.fn() } as unknown as TUI;
 		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
 		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0"]);
@@ -102,6 +102,26 @@ describe("Loader component", () => {
 		vi.advanceTimersByTime(34);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(40).join("\n")).toContain("0 Checking-");
+
+		loader.stop();
+	});
+
+	it("holds animated message-only frames when synchronized output is unavailable", () => {
+		vi.useFakeTimers();
+		setSystemTime(new Date(1_000));
+		const ui = { synchronizedOutput: false, requestComponentRender: vi.fn() } as unknown as TUI;
+		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
+		colorMessage.animated = true;
+		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1"]);
+
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(34);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(67);
+		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		expect(loader.render(40).join("\n")).toContain("1 Checking-");
 
 		loader.stop();
 	});

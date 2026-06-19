@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { AppendOnlyContextManager, AppendOnlyLog, StablePrefix } from "@oh-my-pi/pi-agent-core/append-only-context";
 import type { AgentContext, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { Message, Tool, ToolExample } from "@oh-my-pi/pi-ai";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 
 // ---------------------------------------------------------------------------
@@ -603,8 +604,8 @@ describe("intent injection through build()", () => {
 		const result = mgr.build(ctx, { intentTracing: true });
 		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
 		expect(params?.properties).toBeDefined();
-		expect(params!.properties!._i).toBeDefined();
-		expect(params!.required).toContain("_i");
+		expect(params!.properties![INTENT_FIELD]).toBeDefined();
+		expect(params!.required).toContain(INTENT_FIELD);
 	});
 
 	it("materializes ArkType params and keeps `_i` first in authored order", () => {
@@ -616,8 +617,8 @@ describe("intent injection through build()", () => {
 		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
 		// `_i` must lead; authored order (path before content) is preserved rather
 		// than ArkType's alphabetized-by-hash order (content, path).
-		expect(Object.keys(params.properties ?? {})).toEqual(["_i", "path", "content"]);
-		expect(params.required).toContain("_i");
+		expect(Object.keys(params.properties ?? {})).toEqual([INTENT_FIELD, "path", "content"]);
+		expect(params.required).toContain(INTENT_FIELD);
 	});
 
 	it("omits `_i` when intentTracing is false", () => {
@@ -631,8 +632,8 @@ describe("intent injection through build()", () => {
 
 		const result = mgr.build(ctx, { intentTracing: false });
 		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
-		expect(params?.properties?._i).toBeUndefined();
-		expect(params?.required ?? []).not.toContain("_i");
+		expect(params?.properties?.[INTENT_FIELD]).toBeUndefined();
+		expect(params?.required ?? []).not.toContain(INTENT_FIELD);
 	});
 
 	it("intentTracing flip invalidates the fingerprint cache", () => {
@@ -685,7 +686,7 @@ describe("tool examples injection through build()", () => {
 
 		const result = mgr.build(ctx, { intentTracing: true, exampleDialect: "anthropic" });
 		const desc = result.tools?.[0]?.description ?? "";
-		expect(desc).toContain('<parameter name="_i"');
+		expect(desc).toContain(`<parameter name="${INTENT_FIELD}"`);
 		expect(desc).toContain("…");
 	});
 

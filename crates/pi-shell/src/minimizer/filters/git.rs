@@ -209,7 +209,7 @@ fn compact_diff_listing(input: &str, mode: DiffListingMode) -> String {
 		out.push_str(entry);
 		out.push('\n');
 	}
-	let _ = writeln!(out, "… {} files omitted …", entries.len() - DIFF_LISTING_LIMIT);
+	let _ = writeln!(out, "[…{} files elided…]", entries.len() - DIFF_LISTING_LIMIT);
 	out
 }
 
@@ -512,9 +512,7 @@ fn format_status_summary(summary: &StatusSummary) -> String {
 		out.push('\n');
 	}
 	if summary.paths.len() > 40 {
-		out.push_str("… ");
-		out.push_str(&(summary.paths.len() - 40).to_string());
-		out.push_str(" paths omitted\n");
+		let _ = writeln!(out, "[…{} paths elided…]", summary.paths.len() - 40);
 	}
 	out
 }
@@ -531,9 +529,7 @@ fn condense_log(input: &str, head: usize, tail: usize) -> String {
 			for entry in entries.iter().take(head) {
 				push_log_entry(&mut out, entry);
 			}
-			out.push_str("… ");
-			out.push_str(&(entries.len() - head - tail).to_string());
-			out.push_str(" commits omitted …\n");
+			let _ = writeln!(out, "[…{} commits elided…]", entries.len() - head - tail);
 			for entry in entries.iter().skip(entries.len() - tail) {
 				push_log_entry(&mut out, entry);
 			}
@@ -566,8 +562,8 @@ struct LogEntry {
 	subject: String,
 	body:    Vec<String>,
 	/// Body lines dropped past the per-commit body cap, surfaced as an explicit
-	/// `[+N lines omitted]` marker instead of being silently lost.
-	omitted: usize,
+	/// `[…Nln elided…]` marker instead of being silently lost.
+	elided:  usize,
 }
 
 /// Soft cap on rendered subject/body line width. Long commit subjects and body
@@ -587,10 +583,8 @@ fn push_log_entry(out: &mut String, entry: &LogEntry) {
 		out.push_str(&primitives::truncate_line(line, LOG_LINE_WIDTH));
 		out.push('\n');
 	}
-	if entry.omitted > 0 {
-		out.push_str("  [+");
-		out.push_str(&entry.omitted.to_string());
-		out.push_str(" lines omitted]\n");
+	if entry.elided > 0 {
+		let _ = writeln!(out, "  […{}ln elided…]", entry.elided);
 	}
 }
 
@@ -611,7 +605,7 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 				hash:    short_hash(hash),
 				subject: subject.to_string(),
 				body:    Vec::new(),
-				omitted: 0,
+				elided:  0,
 			});
 			continue;
 		}
@@ -627,12 +621,12 @@ fn parse_log_entries(input: &str) -> Vec<LogEntry> {
 			entry.subject = trimmed.to_string();
 		} else if !is_git_trailer(trimmed) {
 			// Real (non-trailer) body lines past the 3-line cap are tallied so
-			// `push_log_entry` can emit an explicit `[+N lines omitted]` marker
+			// `push_log_entry` can emit an explicit `[…Nln elided…]` marker
 			// rather than dropping them silently.
 			if entry.body.len() < 3 {
 				entry.body.push(trimmed.to_string());
 			} else {
-				entry.omitted += 1;
+				entry.elided += 1;
 			}
 		}
 	}
@@ -930,9 +924,7 @@ pub(crate) fn compact_diff_output(input: &str) -> String {
 		out.push('\n');
 	}
 	if files.len() > 20 {
-		out.push_str("… ");
-		out.push_str(&(files.len() - 20).to_string());
-		out.push_str(" files omitted from stat\n");
+		let _ = writeln!(out, "[…{} files from stat elided…]", files.len() - 20);
 	}
 	out.push_str(&format_file_count(files.len()));
 	out.push_str(" changed, ");
@@ -956,21 +948,15 @@ pub(crate) fn compact_diff_output(input: &str) -> String {
 				out.push('\n');
 			}
 			if hunk.lines.len() > 6 {
-				out.push_str("  … ");
-				out.push_str(&(hunk.lines.len() - 6).to_string());
-				out.push_str(" changed lines omitted\n");
+				let _ = writeln!(out, "  […{} changed lines elided…]", hunk.lines.len() - 6);
 			}
 		}
 		if file.hunks.len() > 8 {
-			out.push_str("  … ");
-			out.push_str(&(file.hunks.len() - 8).to_string());
-			out.push_str(" hunks omitted\n");
+			let _ = writeln!(out, "  […{} hunks elided…]", file.hunks.len() - 8);
 		}
 	}
 	if files.len() > 12 {
-		out.push_str("\n… ");
-		out.push_str(&(files.len() - 12).to_string());
-		out.push_str(" files omitted from changes\n");
+		let _ = writeln!(out, "\n[…{} files from changes elided…]", files.len() - 12);
 	}
 	out
 }
@@ -1311,7 +1297,7 @@ fn condense_diff_stat(input: &str) -> String {
 		out.push('\n');
 	}
 	if entries.len() > 20 {
-		let _ = writeln!(out, "… {} files omitted …", entries.len() - 20);
+		let _ = writeln!(out, "[…{} files elided…]", entries.len() - 20);
 	}
 	out
 }
@@ -1528,7 +1514,7 @@ fn condense_worktree(input: &str) -> String {
 ///
 /// Listing-shaped lines (`<abs-path> <hash> [<branch>]`, plus the `(bare)` and
 /// `(detached HEAD)` variants) get a leading `$HOME` abbreviated to `~` and are
-/// capped with an omitted-count marker. Any non-listing output (`add`'s
+/// capped with an elided-count marker. Any non-listing output (`add`'s
 /// "Preparing worktree…"/"HEAD is now at …" confirmations, errors) is left to
 /// `condense_noisy_output`/passthrough so its meaning is preserved.
 fn condense_worktree_with_home(input: &str, home: &str) -> String {
@@ -1554,9 +1540,7 @@ fn condense_worktree_with_home(input: &str, home: &str) -> String {
 		out.push('\n');
 	}
 	if entries.len() > WORKTREE_LIMIT {
-		out.push_str("… ");
-		out.push_str(&(entries.len() - WORKTREE_LIMIT).to_string());
-		out.push_str(" worktrees omitted …\n");
+		let _ = writeln!(out, "[…{} worktrees elided…]", entries.len() - WORKTREE_LIMIT);
 	}
 	out
 }
@@ -1920,7 +1904,7 @@ mod tests {
 			input.push('\n');
 		}
 		let out = filter(&ctx, &input, 0);
-		assert!(out.text.contains("… 22 commits omitted …"));
+		assert!(out.text.contains("[…22 commits elided…]"));
 		assert!(out.text.contains("abcdef1 message 0"));
 		assert!(!out.text.contains("message 47"));
 		assert!(out.text.contains("abcdef1 message 69"));
@@ -1983,7 +1967,7 @@ mod tests {
 	}
 
 	#[test]
-	fn log_body_over_cap_shows_omitted_marker() {
+	fn log_body_over_cap_shows_elided_marker() {
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("log"), "git log", &cfg);
 		// Subject + 5 body lines: 3 kept, 2 past the cap surfaced as a marker.
@@ -1995,7 +1979,7 @@ mod tests {
 		assert!(out.text.contains("body line one"));
 		assert!(out.text.contains("body line three"));
 		assert!(!out.text.contains("body line four"), "{:?}", out.text);
-		assert!(out.text.contains("[+2 lines omitted]"), "{:?}", out.text);
+		assert!(out.text.contains("[…2ln elided…]"), "{:?}", out.text);
 	}
 
 	#[test]
@@ -2062,7 +2046,7 @@ mod tests {
 		assert!(out.text.contains("src/file-0.rs\n"));
 		assert!(out.text.contains("src/file-19.rs\n"));
 		assert!(!out.text.contains("src/file-20.rs\n"));
-		assert!(out.text.contains("… 6 files omitted …"));
+		assert!(out.text.contains("[…6 files elided…]"));
 	}
 
 	#[test]
@@ -2091,7 +2075,7 @@ mod tests {
 		assert!(out.text.contains("R100\told-0.rs\tnew-0.rs\n"));
 		assert!(out.text.contains("M\tpath-1.rs\n"));
 		assert!(!out.text.contains("path-20.rs\n"));
-		assert!(out.text.contains("… 4 files omitted …"));
+		assert!(out.text.contains("[…4 files elided…]"));
 	}
 
 	#[test]
@@ -2139,7 +2123,7 @@ mod tests {
 		assert!(out.text.contains("1\t0\tsrc/file-0.rs\n"));
 		assert!(out.text.contains("20\t5\tsrc/file-19.rs\n"));
 		assert!(!out.text.contains("src/file-20.rs\n"));
-		assert!(out.text.contains("… 2 files omitted …"));
+		assert!(out.text.contains("[…2 files elided…]"));
 	}
 
 	#[test]
@@ -2695,13 +2679,13 @@ hint: See the 'Note about fast-forwards' in 'git push --help' for details.
 
 		assert!(out.text.contains("fatal:"), "error header must survive: {:?}", out.text);
 		assert!(out.text.contains("badref"), "offending ref must survive: {:?}", out.text);
-		assert!(!out.text.contains("commits omitted"), "must not fabricate commit listing on error");
+		assert!(!out.text.contains("commits elided"), "must not fabricate commit listing on error");
 	}
 
 	#[test]
 	fn log_oneline_short_run_emits_all_entries() {
 		// A short log that fits within head+tail should emit all entries
-		// without any "omitted" line, and each entry should carry the
+		// without any "elided" line, and each entry should carry the
 		// 7-char short hash followed by the subject.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("log"), "git log -5", &cfg);
@@ -2712,7 +2696,7 @@ commit abcdef1234567890\nAuthor: A <a@x.com>\nDate: today\n    feat: first\ncomm
 
 		let out = filter(&ctx, input, 0);
 
-		assert!(!out.text.contains("commits omitted"));
+		assert!(!out.text.contains("commits elided"));
 		assert!(out.text.contains("abcdef1 feat: first"), "{:?}", out.text);
 		assert!(out.text.contains("1111111 fix: second"), "{:?}", out.text);
 		assert!(out.text.contains("2222222 chore: third"), "{:?}", out.text);
@@ -2780,8 +2764,8 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		assert!(out.contains("(bare)"));
 		assert!(out.contains("(detached HEAD)"));
 		assert!(!out.contains("/home/alice"), "no absolute $HOME paths should survive: {out:?}");
-		// 22 entries → capped at 20 with a 2-omitted marker.
-		assert!(out.contains("… 2 worktrees omitted …"), "{out:?}");
+		// 22 entries → capped at 20 with a 2-elided marker.
+		assert!(out.contains("[…2 worktrees elided…]"), "{out:?}");
 		assert_eq!(out.lines().filter(|l| l.starts_with('~')).count(), 20);
 	}
 
@@ -2799,7 +2783,7 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 	#[test]
 	fn worktree_porcelain_passthrough() {
 		// `git worktree list --porcelain` emits machine-readable records;
-		// the minimizer must not insert "… N lines omitted …" markers.
+		// the minimizer must not insert "[…Nln elided…]" markers.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("worktree"), "git worktree list --porcelain", &cfg);
 		let input = "worktree /home/user/project\nHEAD abc1234def\nbranch \
@@ -2825,7 +2809,7 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 	fn worktree_non_porcelain_still_condensed() {
 		// Normal (non-porcelain) listing should still go through the condenser.
 		// Build 22 listing-shaped entries so the cap (20) is exceeded; the condenser
-		// would insert an "… N worktrees omitted …" marker that a passthrough would
+		// would insert an "[…N worktrees elided…]" marker that a passthrough would
 		// never emit.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("worktree"), "git worktree list", &cfg);
@@ -2835,8 +2819,8 @@ error: could not apply abc1234... fix: something\nhint: Resolve all conflicts ma
 		}
 		let out = filter(&ctx, &input, 0);
 		assert!(
-			out.text.contains("worktrees omitted"),
-			"non-porcelain output over the cap must show omitted marker; got: {:?}",
+			out.text.contains("worktrees elided"),
+			"non-porcelain output over the cap must show elided marker; got: {:?}",
 			out.text
 		);
 	}

@@ -15,6 +15,7 @@ import {
 	AUTO_THINKING,
 	clampAutoThinkingEffort,
 	parseConfiguredThinkingLevel,
+	parseEffort,
 	parseThinkingLevel,
 } from "@oh-my-pi/pi-coding-agent/thinking";
 import type { TinyMemoryLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
@@ -129,5 +130,19 @@ describe("auto thinking classifier helpers", () => {
 
 		expect(clampAutoThinkingEffort(model, Effort.XHigh)).toBe(Effort.High);
 		expect(clampAutoThinkingEffort(model, Effort.Minimal)).toBe(Effort.Low);
+	});
+
+	it("accepts max as the top configured thinking alias", () => {
+		expect(parseEffort("max")).toBe(Effort.XHigh);
+		expect(parseThinkingLevel("max")).toBeUndefined();
+		expect(parseConfiguredThinkingLevel("max")).toBe(ThinkingLevel.XHigh);
+	});
+
+	it("rejects inherited object keys as thinking selectors", () => {
+		for (const selector of ["toString", "constructor", "__proto__"]) {
+			expect(parseEffort(selector)).toBeUndefined();
+			expect(parseThinkingLevel(selector)).toBeUndefined();
+			expect(parseConfiguredThinkingLevel(selector)).toBeUndefined();
+		}
 	});
 });

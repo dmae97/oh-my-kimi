@@ -8,6 +8,8 @@ import {
 	normalizeEmptySchemas,
 	normalizeSchemaForCCA,
 	normalizeSchemaForGoogle,
+	stripSchemaDescriptions,
+	stripToolDescriptions,
 	toolWireSchema,
 	zodToWireSchema,
 } from "@oh-my-pi/pi-ai/utils/schema";
@@ -403,5 +405,116 @@ describe("arkToWireSchema — authored property order", () => {
 			arkTool(type({ pattern: "string", "paths?": "string", i: "boolean", "skip?": "number" })),
 		);
 		expect(Object.keys(wire.properties as Record<string, unknown>)).toEqual(["pattern", "i", "paths", "skip"]);
+	});
+});
+
+describe("stripSchemaDescriptions", () => {
+	it("removes annotations through nested schema keywords while preserving structure", () => {
+		const schema = {
+			type: "object",
+			description: "object annotation",
+			properties: {
+				path: { type: "string", description: "the path" },
+				choice: {
+					anyOf: [
+						{ type: "string", description: "string variant" },
+						{ type: "number", description: "number variant" },
+					],
+				},
+			},
+			dependentSchemas: {
+				path: { type: "object", description: "dependent annotation" },
+			},
+			required: ["path"],
+		};
+		const stripped = stripSchemaDescriptions(schema);
+		expect(JSON.stringify(stripped)).not.toContain("annotation");
+		expect(JSON.stringify(stripped)).not.toContain("variant");
+		expect(JSON.stringify(stripped)).not.toContain("the path");
+		// Structure survives: types, property names, required, union arity.
+		const props = stripped.properties as Record<string, { type?: string; anyOf?: unknown[] }>;
+		expect(props.path.type).toBe("string");
+		expect(props.choice.anyOf).toHaveLength(2);
+		expect(stripped.required).toEqual(["path"]);
+	});
+
+	it("keeps a property literally named `description` (only its own annotation is dropped)", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				description: { type: "string", description: "a field that is named description" },
+			},
+		};
+		const stripped = stripSchemaDescriptions(schema);
+		const prop = (stripped.properties as Record<string, { type: string; description?: string }>).description;
+		expect(prop).toBeDefined();
+		expect(prop.type).toBe("string");
+		expect(prop.description).toBeUndefined();
+	});
+
+	it("never descends into data-bearing keywords (default/const/examples)", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				mode: {
+					type: "string",
+					description: "the mode",
+					default: { description: "data, keep me" },
+					examples: [{ description: "example data" }],
+				},
+			},
+		};
+		const stripped = stripSchemaDescriptions(schema);
+		const mode = (stripped.properties as Record<string, Record<string, unknown>>).mode;
+		expect(mode.description).toBeUndefined();
+		expect(mode.default).toEqual({ description: "data, keep me" });
+		expect(mode.examples).toEqual([{ description: "example data" }]);
+	});
+
+	it("does not mutate the input schema", () => {
+		const schema = {
+			type: "object",
+			description: "keep",
+			properties: { a: { type: "string", description: "keep a" } },
+		};
+		stripSchemaDescriptions(schema);
+		expect(schema.description).toBe("keep");
+		expect(schema.properties.a.description).toBe("keep a");
+	});
+
+	it("memoizes the result on the input via a hidden stamp", () => {
+		const schema = { type: "object", properties: { a: { type: "string", description: "x" } } };
+		const first = stripSchemaDescriptions(schema);
+		const second = stripSchemaDescriptions(schema);
+		expect(second).toBe(first);
+	});
+});
+
+describe("stripToolDescriptions", () => {
+	const tool: Tool = {
+		name: "demo",
+		description: "top-level tool description",
+		parameters: {
+			type: "object",
+			properties: {
+				path: { type: "string", description: "where to read" },
+			},
+			required: ["path"],
+		},
+	};
+
+	it("empties the top-level description and strips nested schema descriptions", () => {
+		const [stripped] = stripToolDescriptions([tool]);
+		expect(stripped.description).toBe("");
+		expect(JSON.stringify(stripped.parameters)).not.toContain("where to read");
+		expect((stripped.parameters as { properties: Record<string, { type: string }> }).properties.path.type).toBe(
+			"string",
+		);
+	});
+
+	it("leaves the original tool and the cached wire schema intact", () => {
+		stripToolDescriptions([tool]);
+		expect(tool.description).toBe("top-level tool description");
+		expect(JSON.stringify(toolWireSchema(tool))).toContain("where to read");
 	});
 });

@@ -182,7 +182,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		const bus = IrcBus.global();
 		const peers = registry
 			.list()
-			.filter(ref => ref.id !== senderId && ref.status !== "aborted")
+			.filter(ref => ref.id !== senderId && ref.status !== "aborted" && ref.kind !== "advisor")
 			.map(ref => ({
 				id: ref.id,
 				displayName: ref.displayName,

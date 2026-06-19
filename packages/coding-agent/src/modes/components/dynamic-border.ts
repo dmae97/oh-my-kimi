@@ -26,7 +26,7 @@ export class DynamicBorder implements Component {
 		if (this.#cachedLines && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
-		const lines = [this.#color(theme.boxSharp.horizontal.repeat(Math.max(1, width)))];
+		const lines = [this.#color(theme.boxRound.horizontal.repeat(Math.max(1, width)))];
 		this.#cachedWidth = width;
 		this.#cachedLines = lines;
 		return lines;

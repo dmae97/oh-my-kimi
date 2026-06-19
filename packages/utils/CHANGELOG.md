@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [16.0.11] - 2026-06-19
+
+### Removed
+
+- Removed `getIndentation`, `setDefaultTabWidth`, and `getDefaultTabWidth` helpers
+
 ## [16.0.8] - 2026-06-18
 
 ### Changed

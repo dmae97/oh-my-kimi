@@ -253,9 +253,9 @@ fn compact_bun_check_output(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32)
 	}
 	let omitted = nonzero_exits.len() + diagnostics.len();
 	if omitted > 40 {
-		out.push_str("… ");
+		out.push_str("[…");
 		out.push_str(&(omitted - 40).to_string());
-		out.push_str(" diagnostic lines omitted\n");
+		out.push_str(" diagnostic lines elided…]\n");
 	}
 	Some(out)
 }

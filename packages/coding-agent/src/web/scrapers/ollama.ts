@@ -139,7 +139,7 @@ function formatTagList(tags: string[], maxItems: number): string {
 	const limited = tags.slice(0, maxItems);
 	const formatted = limited.map(tag => `\`${tag}\``).join(", ");
 	if (tags.length > maxItems) {
-		return `${formatted} (and ${tags.length - maxItems} more)`;
+		return `${formatted} […${tags.length - maxItems} tags elided…]`;
 	}
 	return formatted;
 }

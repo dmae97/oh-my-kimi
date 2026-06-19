@@ -308,6 +308,78 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("accepts dynamic capability registration before semantic requests", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-dynamic-registration-");
+		try {
+			let dynamicRegistrationAccepted = false;
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
+				} else if (message.method === "initialized") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9002,
+						method: "client/registerCapability",
+						params: {
+							registrations: [
+								{
+									id: "-42",
+									method: "workspace/didChangeWatchedFiles",
+									registerOptions: {
+										watchers: [{ globPattern: "**/mix.lock" }, { globPattern: "**/*.{ex,exs}" }],
+									},
+								},
+							],
+						},
+					});
+					srv.send({
+						jsonrpc: "2.0",
+						id: "expert-unregister-1",
+						method: "client/unregisterCapability",
+						params: { unregisterations: [{ id: "-42", method: "workspace/didChangeWatchedFiles" }] },
+					});
+				} else if (message.id === 9002 && message.method === undefined) {
+					dynamicRegistrationAccepted = message.error === undefined;
+				} else if (message.method === "textDocument/hover" && dynamicRegistrationAccepted) {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "Atas.version()" } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["ex"],
+				rootMarkers: [],
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const registerResponse = await server.waitFor(message => message.id === 9002 && message.method === undefined);
+			const unregisterResponse = await server.waitFor(
+				message => message.id === "expert-unregister-1" && message.method === undefined,
+			);
+			expect(registerResponse.error).toBeUndefined();
+			expect(unregisterResponse.error).toBeUndefined();
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/hover",
+				{
+					textDocument: { uri: fileToUri(path.join(tempDir.path(), "lib", "atas.ex")) },
+					position: { line: 0, character: 0 },
+				},
+				undefined,
+				50,
+			);
+
+			expect(result).toEqual({ contents: "Atas.version()" });
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("opens rust-analyzer Cargo workspace files before polling workspace readiness", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {

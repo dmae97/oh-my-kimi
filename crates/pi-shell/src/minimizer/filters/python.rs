@@ -20,9 +20,9 @@ use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 /// sections). Mirrors RTK's `MAX_PYTEST_FAILURES` (== `CAP_WARNINGS` == 10),
 /// re-derived for the minimizer's streaming, line-based renderer: once this
 /// many traceback blocks have been emitted, further blocks are suppressed and
-/// a single `+N more failures` overflow marker stands in for the remainder.
-/// The compact `FAILED …` short-summary one-liners are NOT capped here — they
-/// name every failed test cheaply and stay intact.
+/// a single `[…N failures elided…]` overflow marker stands in for the
+/// remainder. The compact `FAILED …` short-summary one-liners are NOT capped
+/// here — they name every failed test cheaply and stay intact.
 ///
 /// The `=== ERRORS ===` section (collection / fixture-setup errors) is capped
 /// by a SEPARATE counter (see `filter_pytest`): pytest renders ERRORS *before*
@@ -172,15 +172,15 @@ fn filter_pytest(input: &str, exit_code: i32) -> String {
 	// overflow markers so the compact output reads top-to-bottom.
 	let error_overflow = error_blocks.saturating_sub(MAX_PYTEST_FAILURES);
 	if error_overflow > 0 {
-		out.push_str("… +");
+		out.push_str("[…");
 		out.push_str(&error_overflow.to_string());
-		out.push_str(" more errors\n");
+		out.push_str(" errors elided…]\n");
 	}
 	let overflow = failure_blocks.saturating_sub(MAX_PYTEST_FAILURES);
 	if overflow > 0 {
-		out.push_str("… +");
+		out.push_str("[…");
 		out.push_str(&overflow.to_string());
-		out.push_str(" more failures\n");
+		out.push_str(" failures elided…]\n");
 	}
 
 	if has_content(&out) {
@@ -575,7 +575,7 @@ mod tests {
 		assert!(out.contains("test_case_0"), "got: {out}");
 		assert!(out.contains("test_case_9"), "got: {out}");
 		// The overflow marker accounts for the remaining 2 verbose blocks.
-		assert!(out.contains("… +2 more failures"), "got: {out}");
+		assert!(out.contains("[…2 failures elided…]"), "got: {out}");
 		// The traceback bodies for the capped blocks are gone, but the compact
 		// short-summary one-liners for every test survive uncapped.
 		let assert_false_lines = out.matches("E       assert False").count();
@@ -664,17 +664,17 @@ mod tests {
 		let assert_lines = out.matches("E   assert 0 == 100").count();
 		assert_eq!(assert_lines, 5, "all 5 assertion bodies must survive: {out}");
 		// 5 < cap, so there is NO failure overflow stealing real tracebacks.
-		assert!(!out.contains("more failures"), "no failures should be capped: {out}");
+		assert!(!out.contains("failures elided"), "no failures should be capped: {out}");
 		// Collection errors are still surfaced (under their own cap of 10).
 		assert!(out.contains("ERROR collecting tests/test_imp_0.py"), "got: {out}");
-		assert!(!out.contains("more errors"), "9 errors < cap, no error overflow: {out}");
+		assert!(!out.contains("errors elided"), "9 errors < cap, no error overflow: {out}");
 		assert!(out.contains("pytest: 5 failed, 9 errors"), "got: {out}");
 	}
 
 	#[test]
 	fn pytest_caps_error_blocks_independently_of_failures() {
 		// 12 collection-error banners (ERRORS section) exceed the cap and yield
-		// their OWN `+N more errors` marker, while the 2 real failure tracebacks
+		// their OWN `[…N errors elided…]` marker, while the 2 real failure tracebacks
 		// in the FAILURES section are untouched (their counter is separate).
 		let mut input = String::from(
 			"============================= test session starts \
@@ -706,9 +706,9 @@ mod tests {
 		let out = filter_pytest(&input, 1);
 
 		// Error overflow marker fires for the 2 capped collection banners…
-		assert!(out.contains("… +2 more errors"), "got: {out}");
+		assert!(out.contains("[…2 errors elided…]"), "got: {out}");
 		// …but NOT a failure overflow — both real tracebacks render in full.
-		assert!(!out.contains("more failures"), "failures must be uncapped here: {out}");
+		assert!(!out.contains("failures elided"), "failures must be uncapped here: {out}");
 		assert!(out.contains("test_real_0"), "got: {out}");
 		assert!(out.contains("test_real_1"), "got: {out}");
 		let assert_false = out.matches("E   assert False").count();

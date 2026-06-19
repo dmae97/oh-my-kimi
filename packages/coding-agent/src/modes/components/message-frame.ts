@@ -34,16 +34,18 @@ export interface RebuildFrameOptions<M extends FramedMessage> {
 	message: M;
 	box: Box;
 	expanded: boolean;
+	/** Icon glyph shown before the customType in the default header (e.g. a hook/extension icon). */
+	icon?: string;
 	/** Collapse the markdown body to this many lines when `expanded` is false. Omit to never collapse. */
 	collapseAfterLines?: number;
 	customRenderer?: FramedRenderer<M>;
 }
 
 /**
- * Attempt the custom renderer; on failure or undefined return, populate
- * `box` with the default `[customType]` label + markdown body and return
- * undefined. When the custom renderer succeeds, return its Component so the
- * caller can mount it and skip the default box.
+ * Attempt the custom renderer; on failure or undefined return, populate `box`
+ * with the default outlined card — an `icon customType` header + markdown body —
+ * and return undefined. When the custom renderer succeeds, return its Component
+ * so the caller can mount it and skip the default box.
  */
 export function renderFramedMessage<M extends FramedMessage>(opts: RebuildFrameOptions<M>): Component | undefined {
 	if (opts.customRenderer) {
@@ -56,9 +58,11 @@ export function renderFramedMessage<M extends FramedMessage>(opts: RebuildFrameO
 	}
 
 	opts.box.clear();
+	// Match the skill card: a subtle rounded outline so injected messages read as cards.
+	opts.box.setBorder({ chars: theme.boxRound, color: t => theme.fg("borderMuted", t) });
 
-	const label = theme.fg("customMessageLabel", theme.bold(`[${opts.message.customType}]`));
-	opts.box.addChild(new Text(label, 0, 0));
+	const tag = opts.icon ? `${opts.icon} ${opts.message.customType}` : opts.message.customType;
+	opts.box.addChild(new Text(theme.fg("customMessageLabel", theme.bold(tag)), 0, 0));
 	opts.box.addChild(new Spacer(1));
 
 	let text: string;

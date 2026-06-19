@@ -57,12 +57,15 @@ export class Loader extends Text {
 		this.#intervalId = setInterval(() => {
 			const now = performance.now();
 			const elapsed = now - this.#lastSpinnerTick;
-			if (elapsed >= SPINNER_ADVANCE_MS) {
+			const shouldAdvanceSpinner = elapsed >= SPINNER_ADVANCE_MS;
+			if (shouldAdvanceSpinner) {
 				const steps = Math.floor(elapsed / SPINNER_ADVANCE_MS);
 				this.#currentFrame = (this.#currentFrame + steps) % this.#frames.length;
 				this.#lastSpinnerTick += steps * SPINNER_ADVANCE_MS;
 			}
-			this.#updateDisplay();
+			if (shouldAdvanceSpinner || this.#ui?.synchronizedOutput === true) {
+				this.#updateDisplay();
+			}
 		}, intervalMs);
 	}
 

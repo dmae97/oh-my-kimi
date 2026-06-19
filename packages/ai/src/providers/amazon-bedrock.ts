@@ -80,6 +80,13 @@ function resolveBearerToken(options: BedrockOptions): string | undefined {
 	return options.bearerToken || apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
 }
 
+function inferRegionFromBedrockArn(modelId: string): string | undefined {
+	const parts = modelId.split(":", 6);
+	if (parts[0] !== "arn" || parts[2] !== "bedrock") return undefined;
+	const region = parts[3];
+	return region || undefined;
+}
+
 type Block = (TextContent | ThinkingContent | ToolCall) & {
 	index?: number;
 	partialJson?: string;
@@ -206,7 +213,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		const blocks = output.content as Block[];
 		let rawRequestDump: RawHttpRequestDump | undefined;
-		const region = options.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
+		const region =
+			options.region ||
+			inferRegionFromBedrockArn(model.id) ||
+			$env.AWS_REGION ||
+			$env.AWS_DEFAULT_REGION ||
+			"us-east-1";
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);

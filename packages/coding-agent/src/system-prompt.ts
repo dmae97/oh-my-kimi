@@ -373,11 +373,11 @@ export interface BuildSystemPromptOptions {
 	toolNames?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
-	/** Repeat full tool descriptions in system prompt. Default: false */
-	repeatToolDescriptions?: boolean;
+	/** Inline full tool descriptors in the system prompt. Default: true */
+	inlineToolDescriptors?: boolean;
 	/**
 	 * Whether provider-native tool calling is active (no owned/in-band syntax).
-	 * When true and `repeatToolDescriptions` is false, the inventory renders as a
+	 * When true and `inlineToolDescriptors` is false, the inventory renders as a
 	 * compact tool-name list; otherwise it renders full `# Tool:` sections. Default: true
 	 */
 	nativeTools?: boolean;
@@ -433,7 +433,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		customPrompt,
 		tools,
 		appendSystemPrompt,
-		repeatToolDescriptions = false,
+		inlineToolDescriptors: providedInlineToolDescriptors,
 		nativeTools = true,
 		skillsSettings,
 		toolNames: providedToolNames,
@@ -454,6 +454,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		model,
 		personality = "default",
 	} = options;
+	const inlineToolDescriptors = providedInlineToolDescriptors ?? true;
 	const resolvedCwd = cwd ?? getProjectDir();
 
 	const prepDefaults = {
@@ -599,10 +600,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			examples: meta?.examples,
 		};
 	});
-	// List mode shows a compact tool-name list; it only applies when descriptions
-	// are not repeated AND native tool calling is active (the model already has the
-	// schemas). Otherwise render full `# Tool:` sections.
-	const toolListMode = !repeatToolDescriptions && nativeTools;
+	// List mode shows a compact tool-name list; it only applies when descriptors
+	// stay in provider-native tool schemas AND native tool calling is active.
+	// Otherwise render full `# Tool:` sections inline in the system prompt.
+	const toolListMode = !inlineToolDescriptors && nativeTools;
 	const toolInventory = toolListMode ? "" : renderToolInventory(inventoryTools, model ?? "");
 
 	// Filter skills for the rendered system prompt:
@@ -632,7 +633,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		tools: toolNames,
 		toolInfo,
 		toolInventory,
-		repeatToolDescriptions,
+		inlineToolDescriptors,
 		toolListMode,
 		toolRefs,
 		environment,

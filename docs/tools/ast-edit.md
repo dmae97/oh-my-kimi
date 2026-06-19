@@ -61,7 +61,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - compiles every rewrite pattern for that language,
    - parses each file, skips files with syntax-error trees, collects `replace_by(...)` edits for every match, enforces replacement and file caps, and returns textual before/after slices plus source ranges.
 7. The TS wrapper deduplicates and caps parse errors, groups changes by file, and renders preview diff lines.
-8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a forced `resolve` action and injects a `resolve-reminder` steering message.
+8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a non-forcing pending `resolve` invoker. While it is pending the session surfaces a `SoftToolRequirement` carrying the resolve reminder; the agent runtime injects the reminder and forces `resolve` only if the model declines that turn (no per-preview `tool_choice` cache bust).
 9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
 10. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard, `resolve` returns a discard message without mutating files.
 
@@ -79,8 +79,8 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
   - Preview reads files and scans directories.
   - Apply rewrites files in place with `std::fs::write(...)`, but only when the computed output differs from the original source.
 - Session state (transcript, memory, jobs, checkpoints, registries)
-  - Queues a one-shot forced `resolve` tool choice through `queueResolveHandler(...)`.
-  - Adds a `resolve-reminder` steering message.
+  - Registers a non-forcing pending `resolve` invoker through `queueResolveHandler(...)`.
+  - Surfaces a `SoftToolRequirement` (with the resolve reminder) while pending; the agent runtime forces `resolve` only on non-compliance — no steering message and no per-preview forced tool choice.
 - User-visible prompts / interactive UI
   - Direct `ast_edit` results are previews.
   - Follow-up apply/discard is exposed through the hidden `resolve` tool.

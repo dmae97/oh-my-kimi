@@ -206,6 +206,54 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
+	it("has isCompacting true when the auto_compaction_start event fires", async () => {
+		// Defect 1: the compaction AbortController (which backs isCompacting) must be
+		// installed before auto_compaction_start is emitted. If it is installed after,
+		// a message typed the instant the loader appears is read while
+		// isCompacting === false and mis-routed into the core steering queue (which a
+		// later handoff reset would wipe) instead of the safe UI compaction queue.
+		let capturedIsCompacting: boolean | undefined;
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_start") {
+				capturedIsCompacting = session.isCompacting;
+			} else if (event.type === "auto_compaction_end") {
+				onCompactionDone();
+			}
+		});
+
+		// Defensive: mirror the resume-drain stub so any queued continuation settles
+		// instead of spinning the drain (see the threshold test above).
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		const assistantMsg = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "Done." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 190000,
+				output: 1000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+
+		expect(capturedIsCompacting).toBe(true);
+	});
+
 	it("forwards todo reminder lifecycle signals to extensions", async () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 

@@ -3,7 +3,7 @@ import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { getIndentation } from "@oh-my-pi/pi-utils";
+import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 
 function renderedWidth(input: Input, width: number): number {
 	const [line] = input.render(width);
@@ -155,7 +155,7 @@ describe("Input component", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("normalizes tabs in buffered bracketed paste using configured indentation", () => {
+	it("normalizes tabs in buffered bracketed paste using the fixed display width", () => {
 		const input = setupAtEnd("");
 
 		input.handleInput("\x1b[200~a\t");
@@ -165,7 +165,7 @@ describe("Input component", () => {
 		expect(input.getValue()).toBe("");
 
 		input.handleInput("c\x1b[201~");
-		expect(input.getValue()).toBe(`a${" ".repeat(getIndentation())}bc`);
+		expect(input.getValue()).toBe(`a${" ".repeat(DEFAULT_TAB_WIDTH)}bc`);
 	});
 
 	it("decodes tmux re-encoded control bytes in bracketed paste without leaking tails or storing raw C0", () => {

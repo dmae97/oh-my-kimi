@@ -55,6 +55,43 @@ describe("KeybindingsManager.create", () => {
 		}
 	});
 
+	it("migrates legacy keybinding JSON with comments to YAML during create", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
+		const jsonPath = path.join(agentDir, "keybindings.json");
+		const ymlPath = path.join(agentDir, "keybindings.yml");
+
+		await Bun.write(
+			jsonPath,
+			`{
+	// Legacy config files may contain comments from hand-edited examples.
+	"fork": "ctrl+f",
+	"selectConfirm": "enter",
+	"cursorUp": "ctrl+p",
+	"app.clipboard.copyPrompt": ["alt+c", "ctrl+shift+c"]
+}
+`,
+		);
+
+		try {
+			const manager = KeybindingsManager.create(agentDir);
+			const writtenConfig = YAML.parse(await Bun.file(ymlPath).text());
+
+			expect(manager.getKeys("app.session.fork")).toEqual(["ctrl+f"]);
+			expect(manager.getKeys("tui.select.confirm")).toEqual(["enter"]);
+			expect(manager.getKeys("tui.editor.cursorUp")).toEqual(["ctrl+p"]);
+			expect(manager.getKeys("app.clipboard.copyPrompt")).toEqual(["alt+c", "ctrl+shift+c"]);
+			expect(writtenConfig).toEqual({
+				"app.clipboard.copyPrompt": ["alt+c", "ctrl+shift+c"],
+				"app.session.fork": "ctrl+f",
+				"tui.editor.cursorUp": "ctrl+p",
+				"tui.select.confirm": "enter",
+			});
+			expect(await Bun.file(jsonPath).exists()).toBe(true);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+		}
+	});
+
 	it("loads keybindings.yml directly", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-keybindings-"));
 		const configPath = path.join(agentDir, "keybindings.yml");

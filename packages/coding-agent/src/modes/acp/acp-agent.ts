@@ -68,10 +68,17 @@ import type { SessionInfo as StoredSessionInfo } from "../../session/session-lis
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
+import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "../../stt/models";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
 import { runResolveInvocation } from "../../tools/resolve";
 import { ToolError } from "../../tools/tool-errors";
+import {
+	DEFAULT_TTS_LOCAL_MODEL_KEY,
+	DEFAULT_TTS_VOICE,
+	TTS_LOCAL_MODELS,
+	TTS_LOCAL_VOICE_OPTIONS,
+} from "../../tts/models";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
@@ -91,6 +98,7 @@ const MODEL_CONFIG_ID = "model";
 const THINKING_CONFIG_ID = "thinking";
 const THINKING_OFF = "off";
 const SESSION_PAGE_SIZE = 50;
+const SPEECH_MODELS_LIST_METHOD = "speech.models.list";
 /**
  * Delay between `session/new` (or `session/load` / `session/resume` /
  * `unstable_session/fork`) returning and the agent firing the first
@@ -194,6 +202,59 @@ type MCPSourceMap = {
 };
 
 type CreateAcpSession = (cwd: string) => Promise<AgentSession>;
+
+type AcpSpeechOption = {
+	value: string;
+	label: string;
+	description?: string;
+};
+
+type AcpSpeechVoiceOption = {
+	value: string;
+	label: string;
+};
+
+type AcpSpeechTtsModelOption = AcpSpeechOption & {
+	voices: AcpSpeechVoiceOption[];
+};
+
+function buildAcpSpeechModelsCatalog(): Record<string, unknown> {
+	const voices = TTS_LOCAL_VOICE_OPTIONS.map(({ value, label }) => ({ value, label }));
+	return {
+		settings: {
+			speechToTextModel: "stt.modelName",
+			textToSpeechModel: "tts.localModel",
+			textToSpeechVoice: "tts.localVoice",
+			speechVoice: "speech.voice",
+		},
+		defaults: {
+			speechToTextModel: DEFAULT_STT_MODEL_KEY,
+			textToSpeechModel: DEFAULT_TTS_LOCAL_MODEL_KEY,
+			voice: DEFAULT_TTS_VOICE,
+		},
+		speechToText: {
+			setting: "stt.modelName",
+			defaultValue: DEFAULT_STT_MODEL_KEY,
+			models: STT_MODEL_OPTIONS.map(({ value, label, description }) => ({ value, label, description })),
+		},
+		textToSpeech: {
+			modelSetting: "tts.localModel",
+			voiceSetting: "tts.localVoice",
+			speechVoiceSetting: "speech.voice",
+			defaultModel: DEFAULT_TTS_LOCAL_MODEL_KEY,
+			defaultVoice: DEFAULT_TTS_VOICE,
+			models: TTS_LOCAL_MODELS.map(
+				({ key, label, description, voices: modelVoices }): AcpSpeechTtsModelOption => ({
+					value: key,
+					label,
+					description,
+					voices: modelVoices.map(({ id, label: voiceLabel }) => ({ value: id, label: voiceLabel })),
+				}),
+			),
+			voices,
+		},
+	};
+}
 
 /**
  * Bridge a single ExtensionUIContext call to the ACP `unstable_createElicitation`
@@ -850,6 +911,8 @@ export class AcpAgent implements Agent {
 
 	async extMethod(method: string, params: { [key: string]: unknown }): Promise<{ [key: string]: unknown }> {
 		switch (method) {
+			case SPEECH_MODELS_LIST_METHOD:
+				return buildAcpSpeechModelsCatalog();
 			case "_omp/sessions/listAll": {
 				const limit = typeof params.limit === "number" ? Math.max(1, Math.min(5000, params.limit as number)) : 1000;
 				const sessions = await SessionManager.listAll();

@@ -321,7 +321,7 @@ class TwoColumnBody implements Component {
 		const rightLines = this.rightPane.render(rightWidth);
 		const lineCount = this.maxHeight;
 		const out: string[] = [];
-		const separator = theme.fg("dim", ` ${theme.boxSharp.vertical} `);
+		const separator = theme.fg("dim", ` ${theme.boxRound.vertical} `);
 
 		for (let i = 0; i < lineCount; i++) {
 			const left = truncateToWidth(leftLines[i] ?? "", leftWidth);

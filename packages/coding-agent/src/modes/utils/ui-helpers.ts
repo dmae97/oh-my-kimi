@@ -9,9 +9,10 @@ import { createAdvisorMessageCard } from "../../modes/components/advisor-message
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { createBackgroundTanDispatchBlock } from "../../modes/components/background-tan-message";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
-import { BranchSummaryMessageComponent } from "../../modes/components/branch-summary-message";
+import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import { CollabPromptMessageComponent } from "../../modes/components/collab-prompt-message";
 import {
+	BranchSummaryMessageComponent,
 	CompactionSummaryMessageComponent,
 	createHandoffSummaryMessageComponent,
 } from "../../modes/components/compaction-summary-message";
@@ -358,6 +359,9 @@ export class UiHelpers {
 	): void {
 		// Preserved: message_start handler owns this lifecycle (see #783)
 		this.ctx.pendingTools.clear();
+		// Reseed the cache-invalidation baseline: this rebuild re-derives every
+		// turn's marker from usage, and the last turn becomes the live baseline.
+		this.ctx.lastAssistantUsage = undefined;
 
 		if (options.updateFooter) {
 			this.ctx.statusLine.invalidate();
@@ -399,13 +403,27 @@ export class UiHelpers {
 			// updateResult armed.
 			previous.seal();
 		};
-		for (const message of sessionContext.messages) {
+		const messages = sessionContext.messages;
+		const count = messages.length;
+		for (let i = 0; i < count; i++) {
+			const message = messages[i]!;
 			if (message.role !== "toolResult") flushPendingUsage();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				this.ctx.addMessageToChat(message);
 				const lastChild = this.ctx.chatContainer.children[this.ctx.chatContainer.children.length - 1];
 				const assistantComponent = lastChild instanceof AssistantMessageComponent ? lastChild : undefined;
+				if (assistantComponent) {
+					const usage = message.usage;
+					const explained = sessionContext.cacheMissExplainedAt?.[i] ?? false;
+					if (this.ctx.settings.get("display.cacheMissMarker") && !explained) {
+						const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+						if (invalidation) assistantComponent.setCacheInvalidation(invalidation);
+					}
+					if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
+						this.ctx.lastAssistantUsage = usage;
+					}
+				}
 				const hasVisibleAssistantContent = message.content.some(
 					content =>
 						(content.type === "text" && canonicalizeMessage(content.text)) ||

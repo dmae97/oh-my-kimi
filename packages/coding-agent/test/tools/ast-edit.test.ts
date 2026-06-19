@@ -113,9 +113,8 @@ describe("ast_edit tool schema", () => {
 			expect(previewResult.details).toBeDefined();
 			expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
 
-			expect(queue.inspect().some(l => l.startsWith("pending-action:ast_edit"))).toBe(true);
-			queue.nextToolChoice();
-			const invoker = queue.peekInFlightInvoker()!;
+			expect(queue.hasPendingInvoker).toBe(true);
+			const invoker = queue.peekPendingInvoker()!;
 			const applyResult = (await invoker({
 				action: "apply",
 				reason: "apply previewed AST edit",
@@ -160,8 +159,7 @@ describe("ast_edit tool schema", () => {
 			const mutatedContent = "otherWrap(x, value)\n";
 			await Bun.write(filePath, mutatedContent);
 
-			queue.nextToolChoice();
-			const invoker = queue.peekInFlightInvoker()!;
+			const invoker = queue.peekPendingInvoker()!;
 			const applyResult = (await invoker({ action: "apply", reason: "apply stale preview" })) as InvokedToolResult;
 			const applyText = applyResult.content.find(content => content.type === "text")?.text ?? "";
 
@@ -225,8 +223,7 @@ describe("ast_edit tool schema", () => {
 				]),
 			);
 
-			queue.nextToolChoice();
-			const invoker = queue.peekInFlightInvoker()!;
+			const invoker = queue.peekPendingInvoker()!;
 			await invoker({ action: "apply", reason: "apply previewed AST edit with combined globs" });
 
 			expect(await Bun.file(path.join(sourceDir, "root.ts")).text()).toContain("modernWrap(rootValue, rootArg)");
@@ -270,8 +267,7 @@ describe("ast_edit tool schema", () => {
 			expect(details?.totalReplacements).toBe(1);
 			expect(details?.parseErrors).toBeUndefined();
 
-			queue.nextToolChoice();
-			const invoker = queue.peekInFlightInvoker()!;
+			const invoker = queue.peekPendingInvoker()!;
 			await invoker({ action: "apply", reason: "apply tlaplus AST edit" });
 			expect(await Bun.file(filePath).text()).toContain("Start == x = 0");
 		} finally {

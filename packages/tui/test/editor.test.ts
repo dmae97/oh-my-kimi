@@ -6,7 +6,6 @@ import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { setDefaultTabWidth } from "@oh-my-pi/pi-utils";
 import { defaultEditorTheme } from "./test-themes";
 
 describe("Editor component", () => {
@@ -545,16 +544,10 @@ describe("Editor component", () => {
 			expect(text).toBe("Hällö Wörld! 😀 äöüÄÖÜß");
 		});
 
-		it("uses the configured tab width when loading text programmatically", () => {
+		it("expands tabs to the fixed display width when loading text programmatically", () => {
 			const editor = new Editor(defaultEditorTheme);
-
-			try {
-				setDefaultTabWidth(5);
-				editor.setText("foo\tbar");
-				expect(editor.getText()).toBe("foo     bar");
-			} finally {
-				setDefaultTabWidth(3);
-			}
+			editor.setText("foo\tbar");
+			expect(editor.getText()).toBe("foo   bar");
 		});
 
 		it("strips control characters from programmatically loaded text before render", () => {

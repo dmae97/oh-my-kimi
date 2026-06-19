@@ -1,10 +1,11 @@
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
 	readArgsHaveTarget,
@@ -659,6 +660,16 @@ export class EventController {
 				// waiting poll cannot be displaced anymore — freeze it in place.
 				this.#resolveDisplaceablePoll();
 			}
+			// Surface a prompt-cache invalidation: if the previous turn cached a
+			// meaningful prefix and this request read none of it back, flag the turn.
+			const usage = event.message.usage;
+			if (usage.cacheRead + usage.cacheWrite + usage.input > 0) {
+				if (settings.get("display.cacheMissMarker")) {
+					const invalidation = detectCacheInvalidation(this.ctx.lastAssistantUsage, usage);
+					if (invalidation) this.ctx.streamingComponent.setCacheInvalidation(invalidation);
+				}
+				this.ctx.lastAssistantUsage = usage;
+			}
 			this.#lastAssistantComponent = this.ctx.streamingComponent;
 			this.#lastAssistantComponent.markTranscriptBlockFinalized();
 			if (settings.get("display.showTokenUsage")) {
@@ -969,12 +980,14 @@ export class EventController {
 				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
+				this.ctx.lastAssistantUsage = undefined;
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorTopBorder();
 				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {
+			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();
@@ -982,6 +995,7 @@ export class EventController {
 			this.ctx.showWarning(event.errorMessage);
 		} else if (isHandoffAction) {
 			this.ctx.chatContainer.clear();
+			this.ctx.lastAssistantUsage = undefined;
 			this.ctx.rebuildChatFromMessages();
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorTopBorder();

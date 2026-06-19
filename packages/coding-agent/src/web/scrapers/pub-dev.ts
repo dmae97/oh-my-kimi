@@ -109,7 +109,7 @@ export const handlePubDev: SpecialHandler = async (url: string, timeout: number,
 					md += "\n";
 				}
 				if (deps.length > 20) {
-					md += `\n*...and ${deps.length - 20} more*\n`;
+					md += `\n[…${deps.length - 20} dependencies elided…]\n`;
 				}
 				md += "\n";
 			}

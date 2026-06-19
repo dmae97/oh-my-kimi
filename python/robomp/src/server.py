@@ -341,6 +341,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             maintainers=cfg.maintainer_logins,
             reviewer_bots=cfg.reviewer_bots,
             pr_review_enabled=cfg.pr_review_enabled,
+            pr_review_trigger=cfg.pr_review_trigger,
+            vouch_review_label=cfg.vouch_review_label,
+            vouch_review_labeler=cfg.vouch_review_labeler,
             resolve_issue_from_pr=_resolve,
         )
 

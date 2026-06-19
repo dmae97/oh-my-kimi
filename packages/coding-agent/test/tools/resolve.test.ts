@@ -147,7 +147,7 @@ it("renders a highlighted apply summary", async () => {
 	expect(rendered).toContain("All replacements are correct");
 	expect(rendered).not.toContain("Applied 2 replacements in 1 file.");
 	expect(rendered).not.toContain("Decision");
-	expect(rendered).not.toContain("┌");
+	expect(rendered).not.toContain(uiTheme.boxRound.topLeft);
 });
 
 it("keeps the inverse block color across the full line (no mid-line fg reset)", async () => {
