@@ -35,6 +35,7 @@ import {
 	countTokens,
 	resolveTelemetry,
 	ThinkingLevel,
+	type ToolChoiceDirective,
 } from "@oh-my-pi/pi-agent-core";
 import {
 	AGGRESSIVE_SHAKE_CONFIG,
@@ -261,6 +262,7 @@ import type { CheckpointState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
+import { buildResolveReminderMessage } from "../tools/resolve";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
@@ -2149,6 +2151,36 @@ export class AgentSession {
 		}
 		this.#toolChoiceQueue.reject("unavailable");
 		return undefined;
+	}
+
+	/**
+	 * The per-turn tool-choice directive for the agent loop's `getToolChoice`. Priority:
+	 *   1. a HARD forced choice from the queue (genuine forces: user-force, eager-todo, …) —
+	 *      consuming, unchanged from `nextToolChoice`;
+	 *   2. else, when a non-forcing preview is pending, a {@link SoftToolRequirement} — a
+	 *      PEEK (advances/pops nothing), so the agent-loop injects the reminder once per head
+	 *      and escalates to a forced `resolve` only if the model declines. A compliant turn
+	 *      pays ZERO tool_choice change (no prompt-cache messages-cache invalidation);
+	 *   3. else undefined.
+	 */
+	nextToolChoiceDirective(): ToolChoiceDirective | undefined {
+		const hard = this.nextToolChoice();
+		if (hard !== undefined) return hard;
+		const head = this.#toolChoiceQueue.peekPendingHead();
+		if (head !== undefined) {
+			return {
+				soft: true,
+				id: head.id,
+				toolName: "resolve",
+				reminder: [buildResolveReminderMessage(head.sourceToolName)],
+			};
+		}
+		return undefined;
+	}
+
+	/** Peek the head non-forcing pending preview invoker, for the `resolve` tool's dispatch. */
+	peekPendingInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
+		return this.#toolChoiceQueue.peekPendingInvoker();
 	}
 
 	/**

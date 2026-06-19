@@ -39,7 +39,9 @@ import type {
 	AsideMessage,
 	StreamFn,
 	ToolCallContext,
+	ToolChoiceDirective,
 } from "./types";
+import { isSoftToolRequirement } from "./types";
 import { EventLoopKeepalive } from "./utils/yield";
 
 /**
@@ -238,8 +240,8 @@ export interface AgentOptions {
 	 * the loop's {@link AgentLoopConfig.abortOnFabricatedToolResult}.
 	 */
 	abortOnFabricatedToolResult?: boolean;
-	/** Dynamic tool choice override, resolved per LLM call. */
-	getToolChoice?: () => ToolChoice | undefined;
+	/** Dynamic tool-choice directive (hard {@link ToolChoice} or {@link SoftToolRequirement}), resolved once per turn. */
+	getToolChoice?: () => ToolChoiceDirective | undefined;
 
 	/**
 	 * Cursor exec handlers for local tool execution.
@@ -345,7 +347,7 @@ export class Agent {
 	#pruneToolDescriptions: boolean;
 	#dialect?: Dialect;
 	#abortOnFabricatedToolResult?: boolean;
-	#getToolChoice?: () => ToolChoice | undefined;
+	#getToolChoice?: () => ToolChoiceDirective | undefined;
 	#onPayload?: SimpleStreamOptions["onPayload"];
 	#onResponse?: SimpleStreamOptions["onResponse"];
 	#onSseEvent?: SimpleStreamOptions["onSseEvent"];
@@ -1017,10 +1019,13 @@ export class Agent {
 					}
 				: undefined;
 
-		const getToolChoice = () => {
-			const queuedToolChoice = this.#getToolChoice?.();
-			if (queuedToolChoice !== undefined) {
-				return refreshToolChoiceForActiveTools(queuedToolChoice, this.#state.tools);
+		const getToolChoice = (): ToolChoiceDirective | undefined => {
+			const queued = this.#getToolChoice?.();
+			if (queued !== undefined) {
+				if (isSoftToolRequirement(queued)) {
+					return (this.#state.tools ?? []).some(tool => tool.name === queued.toolName) ? queued : undefined;
+				}
+				return refreshToolChoiceForActiveTools(queued, this.#state.tools);
 			}
 			return refreshToolChoiceForActiveTools(options?.toolChoice, this.#state.tools);
 		};

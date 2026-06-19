@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added `SoftToolRequirement` support to `getToolChoice` for non-invasive tool enforcement
 - Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
 
 ### Fixed

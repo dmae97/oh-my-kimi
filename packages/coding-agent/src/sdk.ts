@@ -2539,7 +2539,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			pruneToolDescriptions: repeatToolDescriptions,
 			dialect: resolveDialect(settings.get("tools.format"), model),
 			abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
 				? shouldEnableAppendOnlyContext(settings.get("provider.appendOnlyContext"), model)

@@ -37,6 +37,43 @@ export type StreamFn = (
 export type AsideMessage = AgentMessage | (() => AgentMessage | null);
 
 /**
+ * A soft tool requirement: the host wants `toolName` called before the loop
+ * runs other tools or yields, but WITHOUT paying the forced-`toolChoice` cost
+ * up front (changing `tool_choice` invalidates the provider message cache).
+ * Returned from {@link AgentLoopConfig.getToolChoice} in place of a hard
+ * {@link ToolChoice}: the loop injects `reminder` once when a new `id` becomes
+ * active, runs with `toolChoice` unchanged, and escalates to a one-turn forced
+ * choice only if the model fails to call `toolName`. Auto-clears when the host
+ * stops returning it or `toolName` is no longer an active tool.
+ */
+export interface SoftToolRequirement {
+	/** Discriminates a soft requirement from a hard {@link ToolChoice}. */
+	soft: true;
+	/**
+	 * Stable id of the *current* requirement. The loop injects `reminder` when
+	 * this id first becomes active and again whenever it changes (e.g. one
+	 * stacked preview resolves and the next becomes the head), but never
+	 * re-injects for an unchanged id across turns.
+	 */
+	id: string;
+	/** Tool that must be called before the loop runs other tools or yields. */
+	toolName: string;
+	/** Host-owned reminder messages, injected once per `id` activation. */
+	reminder: AgentMessage[];
+}
+
+/**
+ * A per-turn tool-choice directive: either a hard provider {@link ToolChoice}
+ * (applied verbatim) or a {@link SoftToolRequirement} (remind-then-escalate).
+ */
+export type ToolChoiceDirective = ToolChoice | SoftToolRequirement;
+
+/** True when a {@link ToolChoiceDirective} is a soft requirement, not a hard choice. */
+export function isSoftToolRequirement(directive: ToolChoiceDirective | undefined): directive is SoftToolRequirement {
+	return typeof directive === "object" && directive !== null && (directive as SoftToolRequirement).soft === true;
+}
+
+/**
  * Configuration for the agent loop.
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
@@ -252,10 +289,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 
 	/**
-	 * Dynamic tool choice override, resolved per LLM call.
-	 * When set and returns a value, overrides the static `toolChoice`.
+	 * Dynamic tool-choice directive, resolved once per turn. Returns a hard
+	 * {@link ToolChoice} (applied verbatim, overriding the static `toolChoice`),
+	 * a {@link SoftToolRequirement} (the loop reminds-then-escalates instead of
+	 * forcing `tool_choice` immediately, so a model that complies with the
+	 * reminder pays no message-cache invalidation), or `undefined` to fall back
+	 * to the static `toolChoice`.
 	 */
-	getToolChoice?: () => ToolChoice | undefined;
+	getToolChoice?: () => ToolChoiceDirective | undefined;
 
 	/**
 	 * Dynamic reasoning effort override, resolved per LLM call.

@@ -638,8 +638,7 @@ describe("tool path arrays", () => {
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
 
-		queue.nextToolChoice();
-		const invoker = queue.peekInFlightInvoker();
+		const invoker = queue.peekPendingInvoker();
 		if (!invoker) throw new Error("Expected pending resolve invoker");
 		await invoker({ action: "apply", reason: "apply multi-path ast edit" });
 

@@ -1,13 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added visual markers to assistant messages when prompt caching is invalidated
 
 ### Changed
 
+- Optimized preview workflows by removing forced tool choices, reducing prompt cache invalidations
 - Unified injected message styling with consistent rounded outlines and icon-tagged headers
 - Refreshed branch summary messages with a uniform banner style to match compaction points
 - Updated skill invocation UI with a compact header, home-shortened paths, and dynamic line counts
