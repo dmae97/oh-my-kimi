@@ -532,9 +532,8 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Background-refresh the Anthropic OAuth quota report outside the render call.
-	 * Startup redraws only arm a short-delayed task; the fetch itself gets a hard
-	 * timeout and render continues with cached/empty quota data.
+	 * Startup redraws only arm a short-delayed task; timeout releases the render
+	 * cadence while a late successful fetch can still refresh the cached segment.
 	 */
 	refreshUsageInBackground(): void {
 		const now = Date.now();
@@ -556,17 +555,36 @@ export class StatusLineComponent implements Component {
 			return;
 		}
 		const signal = AbortSignal.timeout(STATUS_USAGE_REFRESH_TIMEOUT_MS);
+		let reportsPromise: Promise<unknown> | undefined;
 		try {
-			const reports = await this.#raceUsageRefreshWithSignal(fetcher.call(session, signal), signal);
-			if (this.session !== session) return;
-			this.#cachedUsage = this.#normalizeUsageReports(reports);
-			this.#usageFetchedAt = Date.now();
+			reportsPromise = fetcher.call(session, signal);
+			this.#applyUsageRefreshReports(session, await this.#raceUsageRefreshWithSignal(reportsPromise, signal));
 		} catch {
 			if (this.session !== session) return;
 			this.#usageFetchedAt = Date.now();
+			if (signal.aborted && reportsPromise) {
+				this.#observeLateUsageRefresh(session, reportsPromise);
+			}
 		} finally {
 			if (this.session === session) this.#usageInFlight = false;
 		}
+	}
+
+	#applyUsageRefreshReports(session: AgentSession, reports: unknown): void {
+		if (this.#disposed || this.session !== session) return;
+		this.#cachedUsage = this.#normalizeUsageReports(reports);
+		this.#usageFetchedAt = Date.now();
+	}
+
+	#observeLateUsageRefresh(session: AgentSession, reportsPromise: Promise<unknown>): void {
+		void reportsPromise
+			.then(reports => {
+				this.#applyUsageRefreshReports(session, reports);
+			})
+			.catch(() => {
+				if (this.#disposed || this.session !== session) return;
+				this.#usageFetchedAt = Date.now();
+			});
 	}
 
 	async #raceUsageRefreshWithSignal(promise: Promise<unknown>, signal: AbortSignal): Promise<unknown> {
