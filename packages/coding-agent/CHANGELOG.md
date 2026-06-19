@@ -13,6 +13,10 @@
 
 - Cleared stale pending-preview gates when `resolve` finds no runnable handler, and forwarded the missing `peekPendingInvoker` and `clearPendingInvokers` hooks on the production session so staged previews actually reach the resolve tool and the gate drains on dispatch failure. ([#3061](https://github.com/can1357/oh-my-pi/issues/3061))
 
+### Fixed
+
+- Deferred status-line usage refreshes off the render path and timeboxed the startup fetch so slow Anthropic quota lookups no longer block interactive startup. ([#3057](https://github.com/can1357/oh-my-pi/issues/3057))
+
 ## [16.1.3] - 2026-06-19
 
 ### Changed
