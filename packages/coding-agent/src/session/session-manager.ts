@@ -72,6 +72,21 @@ function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 }
 
 /**
+ * Whether `dir` resolves to an existing directory. Any stat failure (ENOENT for
+ * a deleted project, EACCES, ENOTDIR, …) means it is not usable as a working
+ * directory, so the caller keeps the current cwd instead of adopting a path it
+ * cannot `chdir` into.
+ */
+async function directoryExists(dir: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(dir)).isDirectory();
+	} catch (err) {
+		if (!isEnoent(err)) logger.debug("session cwd stat failed", { dir, error: toError(err).message });
+		return false;
+	}
+}
+
+/**
  * Resolve a breadcrumb's recorded session file to its interactive root. Subagent
  * (and other artifact) sessions live inside a parent session's artifacts dir —
  * `<parent>.jsonl` strips its suffix to `<parent>/`, and a child writes
@@ -743,9 +758,12 @@ export class SessionManager {
 
 		// Adopt the loaded session's working directory. Sessions live in a dir
 		// keyed by their cwd, so resuming a session from another project must
-		// re-point cwd/sessionDir at that project.
+		// re-point cwd/sessionDir at that project — unless that project directory
+		// no longer exists on disk, in which case adopting it (and the process
+		// chdir interactive mode then performs) would fail with ENOENT. Keep the
+		// current cwd so the resumed session stays where the user already is.
 		const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
-		if (headerCwd && headerCwd !== path.resolve(this.#cwd)) {
+		if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
 			this.#cwd = headerCwd;
 			this.#sessionDir = path.dirname(resolvedSessionFile);
 			this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
