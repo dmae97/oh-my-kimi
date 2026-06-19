@@ -497,6 +497,8 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		message.method === "workspace/inlayHint/refresh" ||
 		message.method === "workspace/codeLens/refresh" ||
 		message.method === "workspace/codeAction/refresh" ||
+		message.method === "workspace/inlineValue/refresh" ||
+		message.method === "workspace/foldingRange/refresh" ||
 		message.method === "workspace/diagnostic/refresh"
 	) {
 		// Void acknowledgement per spec; servers that stall waiting for a reply

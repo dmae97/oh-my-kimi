@@ -407,6 +407,8 @@ describe("lsp regressions", () => {
 					srv.send({ jsonrpc: "2.0", id: 9104, method: "workspace/inlayHint/refresh" });
 					srv.send({ jsonrpc: "2.0", id: 9105, method: "workspace/codeLens/refresh" });
 					srv.send({ jsonrpc: "2.0", id: 9106, method: "workspace/diagnostic/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9107, method: "workspace/inlineValue/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9108, method: "workspace/foldingRange/refresh" });
 				} else if (message.method === "shutdown") {
 					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
 				} else if (message.method === "exit") {
@@ -430,7 +432,7 @@ describe("lsp regressions", () => {
 			expect(showDocument.error).toBeUndefined();
 			expect(showDocument.result).toEqual({ success: false });
 
-			for (const id of [9103, 9104, 9105, 9106]) {
+			for (const id of [9103, 9104, 9105, 9106, 9107, 9108]) {
 				const refresh = await server.waitFor(message => message.id === id && message.method === undefined);
 				expect(refresh.error).toBeUndefined();
 				expect(refresh.result).toBeNull();
