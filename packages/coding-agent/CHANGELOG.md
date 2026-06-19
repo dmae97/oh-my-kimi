@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced `new Promise((resolve, reject) => ...)` in `AsyncDrain` with `Promise.withResolvers()` per the repo's promise-construction convention
+
 ## [16.1.5] - 2026-06-19
 
 ### Changed
