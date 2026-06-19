@@ -13,6 +13,7 @@ export * from "./providers/anthropic-client";
 export * from "./providers/azure-openai-responses";
 export type * from "./providers/cursor";
 export * from "./providers/gitlab-duo";
+export * from "./providers/gitlab-duo-workflow";
 export type * from "./providers/google";
 export type * from "./providers/google-gemini-cli";
 export type * from "./providers/google-vertex";

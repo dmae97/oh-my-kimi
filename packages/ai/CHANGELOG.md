@@ -177,6 +177,51 @@
 - Fixed API-key login flows replacing existing stored keys for the same provider, so providers such as NVIDIA NIM can keep multiple active keys available for session-level rotation. ([#2923](https://github.com/can1357/oh-my-pi/issues/2923))
 - Fixed `openai-codex-responses` forwarding sampling controls (`temperature`, `top_p`, `top_k`, `min_p`, `presence_penalty`, `repetition_penalty`) into the Codex request body — the ChatGPT-subscription Codex backend rejects each of them with a 400 `{"detail":"Unsupported parameter: temperature"}`, so any caller setting non-default `StreamOptions` saw every turn fail. The provider now drops the full sampling set (matching codex-rs), and the auth-gateway's defensive strip on both `buildStreamOptions` and the pi-native path was widened from `{temperature, topP}` to the same set plus `stopSequences`/`frequencyPenalty`. ([#3117](https://github.com/can1357/oh-my-pi/issues/3117))
 - Fixed Anthropic Messages retry classification for transient TLS/server-error failures such as `tls: bad record MAC (type=server_error)`. These pre-content transport blips are now retried inside the provider loop before the session sees an error banner.
+### Added
+
+- Added the GitLab Duo Agent provider (id `gitlab-duo-agent`, API id `gitlab-duo-agent`), registry metadata, and the built-in implementation. The id mirrors GitLab's official "GitLab Duo Agent Platform" naming; the existing AI Gateway proxy provider is renamed to display "GitLab Duo Non-Agentic" (id `gitlab-duo` unchanged) to match GitLab's "Non-Agentic" classification.
+- Added GitLab Duo Workflow provider protocol helpers, stream routing, WebSocket action response handling, and provider-level contract tests.
+- Added GitLab Duo Workflow OAuth login using GitLab's official VS Code OAuth application, with paste-code instructions for the `vscode://gitlab.gitlab-workflow/authentication` callback.
+- Added GitLab Duo Workflow project auto-discovery: the inline `ambient` flow requires a GitLab project server-side but OMP has no project of its own, so when no project is configured the provider discovers an accessible one (preferring a project under the resolved namespace group, then any membership project) and scopes `direct_access`, workflow creation, and WebSocket routing to it.
+
+### Changed
+
+- Changed GitLab Duo Workflow provider to run an inline custom `ambient` flow (`flowConfig` over the WebSocket, schema `v1`) instead of the built-in `chat` flow, with MCP-only agent privileges so GitLab native tools stay hidden and OMP MCP tools receive `runMCPTool` actions. The inline flow supplies OMP's own system prompt (no server-side jinja wrapper or GitLab project/namespace metadata reaches the agent) and opts into `on_agent_reasoning`, and uses the `DUO_AGENT_PLATFORM` unit primitive.
+- Changed GitLab Duo Workflow start requests to restore GitLab's official routing/model metadata while leaving `additional_context` empty because custom client-context items can make namespace-only chat workflows open the WebSocket without replying.
+
+### Fixed
+
+- Fixed GitLab Duo Workflow `direct_access` failures to surface sanitized GitLab quota/auth details instead of a bare HTTP status.
+- Fixed GitLab Duo Agent treating the server's per-workflow step (graph-recursion) limit as a fatal error. A long but healthy OMP tool-call loop legitimately overruns the cap and surfaced as `FAILED` ("The workflow reached its maximum step limit and could not complete."); the provider now transparently starts a fresh workflow that continues the same conversation (the accumulated context replays through the goal envelope) instead of failing the turn, bounded so a perpetually-overrunning task degrades to a graceful stop. Genuine `FAILED`/`STOPPED` statuses still surface as errors.
+- Fixed GitLab Duo Workflow `direct_access` to send `root_namespace_id` in GitLab's GraphQL GID form, avoiding `404 Namespace Not Found` responses when OAuth credentials require canonical namespace metadata.
+- Fixed GitLab Duo Workflow runtime namespace resolution so Workflow startup no longer requires `aiChatAvailableModels` to return a selectable model before sending the prompt.
+- Fixed GitLab Duo Workflow create to use the discovered namespace path when no project is configured, avoiding `404 Namespace Not Found` responses with OAuth credentials.
+- Fixed GitLab Duo Workflow project-path runs to resolve the numeric project id for WebSocket routing while keeping REST `direct_access` and workflow creation scoped to the original project path.
+- Fixed GitLab Duo Workflow runtime model selection to honor GitLab `pinnedModel` metadata in both WebSocket routing and start request metadata when available.
+- Fixed GitLab Duo Workflow runtime namespace selection to ignore stale model metadata and discover the namespace for the current OAuth credential unless an explicit namespace is configured.
+- Fixed GitLab Duo Workflow action handlers so class-based OMP bridge methods keep their receiver when executing `runMCPTool` and native action callbacks.
+- Fixed GitLab Duo Workflow action replay IDs so provider-driven `runMCPTool` results can be paired with synthetic assistant tool-call blocks instead of persisting standalone tool results after a stopped assistant.
+- Fixed GitLab Duo Workflow start requests to carry OMP system instructions and replay-safe conversation history in the `goal` envelope while keeping `additional_context` empty.
+- Fixed GitLab Duo Workflow goal serialization to escape XML-like tag delimiters before sending replay history or non-chat workflow create goals to GitLab, without altering or redacting the message content.
+- Fixed GitLab Duo Workflow checkpoint streaming to process `ui_chat_log` entries in order, preserving tool boundaries and per-entry agent deltas instead of only rendering the last agent message.
+- Fixed GitLab Duo Workflow checkpoint streaming to map `ui_chat_log` agent entries tagged `message_sub_type: "reasoning"` (the inline flow's `on_agent_reasoning` pre-tool-call commentary) to thinking blocks, and other agent text to assistant text, matching the chain-of-thought the official Duo CLI surfaces.
+- Fixed GitLab Duo Workflow checkpoint streaming to ignore same-key non-prefix checkpoint rewrites instead of appending the rewritten text as a duplicate continuation.
+- Fixed GitLab Duo Workflow goal instructions to treat `workflowMetadata`, `additional_context`, `mcpTools`, preapprovals, namespace/project IDs, and `mcp__omp__*` names as GitLab transport metadata instead of user-visible OMP tool policy.
+- Fixed GitLab Duo Workflow WebSocket transport errors to report sanitized event fields (`type`, `message`, `error`, `code`, `reason`) instead of a bare `[object ErrorEvent]`.
+- Fixed GitLab Duo Workflow tracing so trace-file directory/append failures can never raise an unhandled rejection that crashes the host process.
+- Fixed GitLab Duo Workflow server-side tool steps (GitLab native `gitlab_*` tools the agent runs without a client `runMCPTool` action) to emit a `pause_turn` stop at each checkpoint tool boundary, so multi-step server-side reasoning resumes on the same WebSocket and renders as separate independent assistant messages instead of one collapsed block.
+- Fixed GitLab Duo Workflow usage reporting to map each checkpoint's per-agent `agent_context_usage` (`total_tokens`/`max_tokens`, preferring the `Chat Agent` then `context_builder` entry) onto the assistant message's `usage.input`/`totalTokens` so the per-message usage row reflects the real server-side context occupancy, without inflating output or cost.
+- Fixed GitLab Duo Workflow to stop redacting credential-like substrings from goals, conversation history, and tool results before sending them to GitLab; content redaction is not a provider responsibility (no other OMP provider scrubs message content), and the over-broad marker was clobbering ordinary prose. Content is now forwarded verbatim.
+- Fixed GitLab Duo Workflow runs hanging indefinitely when the WebSocket silently goes half-open (a proxy/LB drops the TCP link without delivering `close`/`error`), which previously left the request waiting forever until the user pressed Esc; the socket now aborts after a 90s idle deadline (no frame before open or between checkpoints) and reconnects once on the same `workflowID` so the server resumes the existing run.
+- Fixed GitLab Duo Workflow leaving the remote workflow running and the resumable session pointing at a dead socket when a turn ends abnormally — either a user abort or the WebSocket rejecting (e.g. `onerror`). The stop `PATCH` previously got the request's already-aborted signal (so it never reached the server) and only ran when the socket loop returned normally. It now runs from a `finally` path with a fresh signal whenever the turn aborts or the socket loop throws, and drops `providerSessionState.active` so the next turn does not reuse the closed socket.
+- Fixed GitLab Duo Workflow dropping a paused session when a tool-result resume crosses a server-side tool boundary: the post-action resume now preserves `providerSessionState.active` on a `pause` result (matching the paused-session resume path) instead of clearing it, so the buffered continuation replays on the next turn instead of starting a new workflow.
+- Fixed GitLab Duo Workflow resume turns hanging when a preserved socket, replayed for a tool result or a paused continuation, returned a non-terminal result (`closed`/`approval`/`timeout`) for which the socket emits no `done` event: both resume paths now share the fresh-workflow finalizer, which drops the resumable session and pushes a terminal `done` for every non-`action`/non-`pause`/non-`terminal` result so the assistant stream always closes instead of waiting forever.
+- Fixed GitLab Duo Workflow turning normal streaming into a `pause_turn` per checkpoint: since GitLab checkpoints are full `ui_chat_log` snapshots, a later frame replays the earlier `request`/`tool` boundary before the new agent delta, and the previous logic paused on any boundary once a segment had been emitted earlier in the socket call — eventually hitting the agent loop's pause-continuation cap. Pause now fires only on a boundary that follows a delta emitted in the current checkpoint, so a stale replayed boundary no longer pauses.
+- Fixed GitLab Duo Workflow API URL construction dropping a self-managed GitLab relative install base path: building request/WebSocket URLs with a leading-slash path against `https://host/gitlab` discarded `/gitlab` and hit `https://host/api/...`. `direct_access`, workflow creation, `aiChatAvailableModels`, project discovery/lookup, and the non-`serviceEndpoint` WebSocket URL now append onto the normalized base so the install path is preserved.
+
+### Removed
+
+- Removed the GitLab Duo Workflow legacy `chat`/`software_development` flow paths and the non-MCP action bridge. The inline custom `ambient` flow (MCP-only) is now the sole code path, so the server-side flow-registry branch, the `chat`/`software_development` workflow definitions, and the action-to-OMP-tool mappers for native GitLab `runReadFile`/`listDirectory`/`findFiles`/`grep`/`runWriteFile`/`runEditFile`/`runShellCommand`/`runCommand`/`runGitCommand`/`runHTTPRequest`/`gitlab_api_request` actions (plus the `GitLabHttpResponse` action-response shape) are gone; only `runMCPTool`/`run_mcp_tool` actions remain.
 
 ## [16.1.4] - 2026-06-19
 
@@ -188,7 +233,6 @@
 ### Fixed
 
 - Fixed the Antigravity (`google-antigravity`) request builder dropping `labels.model_enum` when the wire profile does not declare one. Required for Claude 4.6 ids whose `AntigravityModelWireProfile` carries only `maxOutputTokens` (no captured `model_enum`); the label is now emitted only when the catalog defines it. ([#3067](https://github.com/can1357/oh-my-pi/issues/3067))
-
 ## [16.1.3] - 2026-06-19
 
 ### Added
@@ -451,7 +495,6 @@
 - Dropped nameless native `toolCall` events so they no longer appear as surfaced tool calls in owned-mode streams
 - Fixed truncated Gemini and Gemma tool blocks from being emitted as plain text during streaming
 - Fixed Gemini/Gemma in-band tool-call parsing around Python comments, raw/unicode string literals, and Gemma close-token text inside string values.
-
 ## [15.13.2] - 2026-06-15
 
 ### Added

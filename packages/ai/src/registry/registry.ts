@@ -13,6 +13,7 @@ import { firepassProvider } from "./firepass";
 import { fireworksProvider } from "./fireworks";
 import { githubCopilotProvider } from "./github-copilot";
 import { gitlabDuoProvider } from "./gitlab-duo";
+import { gitLabDuoWorkflowProvider } from "./gitlab-duo-workflow";
 import { googleProvider } from "./google";
 import { googleAntigravityProvider } from "./google-antigravity";
 import { googleGeminiCliProvider } from "./google-gemini-cli";
@@ -86,6 +87,7 @@ const ALL = [
 	openaiCodexDeviceProvider,
 	xaiOauthProvider,
 	gitlabDuoProvider,
+	gitLabDuoWorkflowProvider,
 	alibabaCodingPlanProvider,
 	aimlApiProvider,
 	zhipuCodingPlanProvider,

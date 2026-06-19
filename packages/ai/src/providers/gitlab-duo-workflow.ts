@@ -1,0 +1,2117 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import {
+	discoverGitLabDuoWorkflowRuntimeNamespace,
+	type GitLabDuoWorkflowNamespaceSelection,
+} from "@oh-my-pi/pi-catalog/discovery/gitlab-duo-workflow";
+import { prompt } from "@oh-my-pi/pi-utils";
+import type {
+	Api,
+	AssistantMessage,
+	Context,
+	FetchImpl,
+	Message,
+	Model,
+	ProviderSessionState,
+	StreamFunction,
+	StreamOptions,
+	Tool,
+	ToolCall,
+	ToolResultMessage,
+} from "../types";
+import { normalizeSystemPrompts } from "../utils";
+import { AssistantMessageEventStream } from "../utils/event-stream";
+import { toolWireSchema } from "../utils/schema/wire";
+import gitLabDuoWorkflowGoalTemplate from "./gitlab-duo-workflow-goal.md" with { type: "text" };
+import gitLabDuoWorkflowSystemPrompt from "./gitlab-duo-workflow-system.md" with { type: "text" };
+
+export const GITLAB_DUO_WORKFLOW_PROVIDER_ID = "gitlab-duo-agent";
+export const GITLAB_DUO_WORKFLOW_API = "gitlab-duo-agent";
+export const GITLAB_DUO_WORKFLOW_DEFINITION = "ambient";
+export type GitLabDuoWorkflowDefinition = "ambient" | (string & {});
+
+const DEFAULT_GITLAB_BASE_URL = "https://gitlab.com";
+const GITLAB_DUO_WORKFLOW_TRACE_ENV = "GITLAB_DUO_WORKFLOW_TRACE";
+const GITLAB_DUO_WORKFLOW_TRACE_FILE_ENV = "GITLAB_DUO_WORKFLOW_TRACE_FILE";
+const DEFAULT_GITLAB_DUO_WORKFLOW_TRACE_FILE = path.resolve(
+	import.meta.dir,
+	"../../../../.tmp/gitlab-duo-workflow-trace.log",
+);
+const GITLAB_DUO_WORKFLOW_CLIENT_TYPE = "node-websocket";
+/**
+ * Idle deadline for the workflow WebSocket. The socket has no server-side
+ * keepalive contract OMP can rely on, so a connection silently going half-open
+ * (proxy/LB drops the TCP link without delivering FIN/RST) would otherwise leave
+ * `runGitLabDuoWorkflowSocket` waiting forever. If no frame arrives within this
+ * window — before open or between checkpoints — the socket is aborted and the
+ * run reconnects once on the same `workflowID` (server-side resume).
+ */
+const GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS = 90_000;
+/**
+ * How many times a single stream may restart on a FRESH workflow after the server
+ * reports its per-workflow step (graph-recursion) limit. Long OMP tool-call loops
+ * legitimately overrun the cap; each restart resets the budget. Bounded so a task
+ * that perpetually overruns degrades to a graceful stop instead of looping on quota.
+ */
+const GITLAB_DUO_WORKFLOW_MAX_STEP_LIMIT_RESTARTS = 4;
+const GITLAB_DUO_WORKFLOW_LANGUAGE_SERVER_VERSION = "8.104.0";
+const GITLAB_DUO_WORKFLOW_AVAILABLE_MODELS_QUERY = `query omp_gitlabDuoWorkflowAvailableModels($rootNamespaceId: GroupID!) {
+  aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
+    defaultModel { name ref }
+    selectableModels { name ref }
+    pinnedModel { name ref }
+  }
+}`;
+
+export const GITLAB_DUO_WORKFLOW_CLIENT_CAPABILITIES = [
+	"incremental_streaming",
+	"read_file_chunked",
+	"shell_command",
+	"command_timeout",
+	"tool_call_approval",
+] as const;
+
+const GITLAB_DUO_WORKFLOW_INLINE_AGENT_NAME = "omp_agent";
+const GITLAB_DUO_WORKFLOW_INLINE_PROMPT_ID = "omp_inline_prompt";
+// `on_agent_reasoning` is what makes the server tag an agent's pre-tool-call
+// commentary as `message_sub_type: "reasoning"` — the chain-of-thought the
+// official Duo CLI surfaces. An inline flow must opt in explicitly.
+const GITLAB_DUO_WORKFLOW_INLINE_UI_LOG_EVENTS = [
+	"on_agent_reasoning",
+	"on_agent_final_answer",
+	"on_tool_execution_success",
+	"on_tool_execution_failed",
+] as const;
+
+const GITLAB_DUO_WORKFLOW_ACTION_NAMES = ["runMCPTool", "run_mcp_tool"] as const;
+
+export interface GitLabMcpToolArgs {
+	name?: string;
+	tool_name?: string;
+	toolName?: string;
+	providerIdentifier?: string;
+	provider_identifier?: string;
+	toolCallId?: string;
+	tool_call_id?: string;
+	args?: Record<string, unknown> | string;
+	arguments?: Record<string, unknown> | string;
+}
+
+export interface GitLabPlainTextResponse {
+	response?: string;
+	error?: string;
+}
+
+export type PlainTextResponse = GitLabPlainTextResponse;
+export interface GitLabDuoWorkflowOptions extends StreamOptions {
+	rootNamespaceId?: string;
+	namespaceId?: string;
+	projectId?: string;
+	projectPath?: string;
+	workflowDefinition?: GitLabDuoWorkflowDefinition;
+	workflowId?: string;
+	workflowToken?: string;
+	cwd?: string;
+	webSocketFactory?: GitLabDuoWorkflowWebSocketFactory;
+	/** Idle WebSocket deadline (ms) before aborting and resuming; defaults to {@link GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS}. */
+	idleTimeoutMs?: number;
+}
+
+export interface GitLabDuoWorkflowWebSocketLike {
+	readyState?: number;
+	binaryType?: string;
+	onopen: ((event: Event) => void) | null;
+	onmessage: ((event: MessageEvent) => void) | null;
+	onerror: ((event: Event) => void) | null;
+	onclose: ((event: CloseEvent) => void) | null;
+	send(data: string): void;
+	close(code?: number, reason?: string): void;
+}
+
+export interface GitLabDuoWorkflowWebSocketFactoryOptions {
+	headers: Record<string, string>;
+	protocols?: string[];
+}
+
+export type GitLabDuoWorkflowWebSocketFactory = (
+	url: string,
+	options: GitLabDuoWorkflowWebSocketFactoryOptions,
+) => GitLabDuoWorkflowWebSocketLike;
+
+export interface GitLabDirectAccessResponse {
+	token?: string;
+	access_token?: string;
+	jwt?: string;
+	workflow_token?: string;
+	duo_workflow_access_token?: string;
+	duo_workflow_service?: { token?: string; base_url?: string; headers?: Record<string, string> };
+	gitlab_rails?: { token?: string };
+	[key: string]: unknown;
+}
+
+interface GitLabDuoWorkflowDirectAccessConnection {
+	token: string;
+	baseUrl?: string;
+	headers: Record<string, string>;
+	serviceEndpoint: boolean;
+}
+
+interface GitLabCreateWorkflowResponse {
+	id?: string | number;
+	workflow_id?: string | number;
+	workflowId?: string | number;
+	[key: string]: unknown;
+}
+
+interface GitLabDuoWorkflowCreateBodyOptions {
+	projectId?: string;
+	goal?: string;
+	workflowDefinition?: GitLabDuoWorkflowDefinition;
+}
+
+interface GitLabDuoWorkflowStartMetadataOptions {
+	projectId?: string;
+	projectPath?: string;
+	namespaceId?: string;
+	rootNamespaceId?: string;
+	workflowDefinition?: GitLabDuoWorkflowDefinition;
+	inlineFlow?: boolean;
+}
+export interface GitLabMcpToolDefinition {
+	name: string;
+	originalToolName: string;
+	serverName: string;
+	description: string;
+	inputSchema: string;
+	isApproved: boolean;
+}
+
+export interface GitLabDuoWorkflowAdditionalContextItem {
+	id: string;
+	category: "agent_user_environment" | "user_rule";
+	content: string;
+	metadata: {
+		title: string;
+		enabled: boolean;
+		subType: "snippet";
+		icon: string;
+		secondaryText: string;
+		subTypeLabel: string;
+	};
+}
+
+export interface GitLabDuoWorkflowStartRequest {
+	workflowID: string;
+	clientVersion: "1.0";
+	workflowDefinition: GitLabDuoWorkflowDefinition;
+	goal: string;
+	workflowMetadata: string;
+	additional_context: readonly GitLabDuoWorkflowAdditionalContextItem[];
+	approval?: {
+		approval?: Record<string, never>;
+		rejection?: { message?: string };
+	};
+	clientCapabilities: readonly (typeof GITLAB_DUO_WORKFLOW_CLIENT_CAPABILITIES)[number][];
+	mcpTools: GitLabMcpToolDefinition[];
+	preapproved_tools: string[];
+	flowConfigSchemaVersion?: "v1";
+	flowConfigId?: string;
+	flowVersion?: string;
+	flowConfig?: GitLabDuoWorkflowInlineFlowConfig;
+}
+
+export interface GitLabDuoWorkflowInlineFlowComponent {
+	name: string;
+	type: "AgentComponent";
+	prompt_id: string;
+	toolset: string[];
+	inputs: { from: string; as: string }[];
+	ui_log_events: string[];
+}
+
+export interface GitLabDuoWorkflowInlineFlowPrompt {
+	name: string;
+	prompt_id: string;
+	unit_primitives: string[];
+	prompt_template: { system: string; user: string; placeholder: string };
+}
+
+export interface GitLabDuoWorkflowInlineFlowConfig {
+	version: "v1";
+	environment: "ambient";
+	flow: { entry_point: string };
+	components: GitLabDuoWorkflowInlineFlowComponent[];
+	routers: { from: string; to: string }[];
+	prompts: GitLabDuoWorkflowInlineFlowPrompt[];
+}
+
+export interface GitLabDuoWorkflowActionResponse {
+	actionResponse: {
+		requestID: string;
+		plainTextResponse?: GitLabPlainTextResponse;
+	};
+}
+
+interface GitLabDuoWorkflowActionDescriptor {
+	requestID: string;
+	name: string;
+	args: unknown;
+}
+
+interface GitLabDuoWorkflowActiveSession {
+	workflowId: string;
+	startPayload: GitLabDuoWorkflowStartRequest;
+	ws: GitLabDuoWorkflowWebSocketLike;
+	pendingAction?: GitLabDuoWorkflowActionDescriptor;
+	checkpointAgentContentByKey?: Record<string, string>;
+	checkpointAgentContentSignatures?: Record<string, true>;
+	paused?: boolean;
+	pauseBuffer?: unknown[];
+}
+
+interface GitLabDuoWorkflowProviderSessionState extends ProviderSessionState {
+	active?: GitLabDuoWorkflowActiveSession;
+}
+
+export interface GitLabDuoWorkflowStreamState {
+	stream: AssistantMessageEventStream;
+	output: AssistantMessage;
+	activeTextIndex?: number;
+	activeThinkingIndex?: number;
+	activeCheckpointMessageKey?: string;
+	started: boolean;
+	checkpointAgentContentByKey?: Record<string, string>;
+	checkpointAgentContentSignatures?: Record<string, true>;
+	pauseRequested?: boolean;
+	stepLimitRequested?: boolean;
+	providerSessionState?: GitLabDuoWorkflowProviderSessionState;
+	lastApprovalStatus?: string;
+}
+
+type GitLabDuoWorkflowSocketResult = "closed" | "terminal" | "approval" | "action" | "pause" | "timeout" | "step_limit";
+
+export interface GitLabAvailableModel {
+	name?: string | null;
+	ref?: string | null;
+}
+
+export interface GitLabAvailableModelsPayload {
+	pinnedModel?: GitLabAvailableModel | null;
+	selectedModel?: GitLabAvailableModel | null;
+	defaultModel?: GitLabAvailableModel | null;
+	selectableModels?: GitLabAvailableModel[] | null;
+}
+
+export const streamGitLabDuoWorkflow: StreamFunction<"gitlab-duo-agent"> = (
+	model: Model<"gitlab-duo-agent">,
+	context: Context,
+	options: GitLabDuoWorkflowOptions,
+): AssistantMessageEventStream => {
+	const stream = new AssistantMessageEventStream();
+	const output = createAssistantMessage(model);
+	stream.push({ type: "start", partial: output });
+	const state: GitLabDuoWorkflowStreamState = { stream, output, started: true };
+
+	void runGitLabDuoWorkflow(model, context, options, state).catch(error => {
+		const errorText = gitLabDuoWorkflowErrorText(error);
+		if (!stream.done) {
+			output.stopReason = "error";
+			output.errorMessage = errorText;
+			stream.push({ type: "error", reason: "error", error: output });
+		}
+	});
+
+	return stream;
+};
+
+export function buildGitLabDuoWorkflowDirectAccessBody(
+	rootNamespaceId: string,
+	projectId?: string,
+	workflowDefinition: GitLabDuoWorkflowDefinition = GITLAB_DUO_WORKFLOW_DEFINITION,
+): Record<string, string> {
+	return {
+		workflow_definition: workflowDefinition,
+		root_namespace_id: toGitLabGraphQLNamespaceId(rootNamespaceId),
+		...(projectId ? { project_id: projectId } : undefined),
+	};
+}
+
+export function buildGitLabDuoWorkflowCreateBody(
+	namespaceId?: string,
+	options: GitLabDuoWorkflowCreateBodyOptions = {},
+): Record<string, string | boolean | string[] | number[]> {
+	return {
+		workflow_definition: options.workflowDefinition ?? GITLAB_DUO_WORKFLOW_DEFINITION,
+		environment: "ide",
+		allow_agent_to_request_user: false,
+		agent_privileges: [6],
+		pre_approved_agent_privileges: [6],
+		requires_duo_cli_enabled: false,
+		...(namespaceId && !options.projectId ? { namespace_id: namespaceId } : undefined),
+		...(options.projectId ? { project_id: options.projectId } : undefined),
+		...(options.goal !== undefined ? { goal: options.goal } : { goal: "" }),
+	};
+}
+
+export function buildGitLabDuoWorkflowStopBody(): Record<string, string> {
+	return { status_event: "stop" };
+}
+
+export function buildGitLabDuoWorkflowWebSocketUrl(
+	baseUrl: string,
+	options: {
+		projectId?: string;
+		namespaceId?: string;
+		rootNamespaceId?: string;
+		selectedModelIdentifier?: string;
+		workflowDefinition?: GitLabDuoWorkflowDefinition;
+		serviceEndpoint?: boolean;
+	} = {},
+): string {
+	// serviceEndpoint connects to the DWS runway host (root path); otherwise route to the
+	// GitLab instance, preserving any relative install base path (e.g. `https://host/gitlab`).
+	const wsUrl = options.serviceEndpoint
+		? new URL("/", normalizeGitLabBaseUrl(baseUrl))
+		: gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/ws");
+	wsUrl.protocol = wsUrl.protocol === "http:" ? "ws:" : "wss:";
+	if (options.projectId) wsUrl.searchParams.set("project_id", options.projectId);
+	if (options.namespaceId && !options.serviceEndpoint)
+		wsUrl.searchParams.set("namespace_id", toGitLabRestNamespaceId(options.namespaceId));
+	if (options.rootNamespaceId)
+		wsUrl.searchParams.set("root_namespace_id", toGitLabRestNamespaceId(options.rootNamespaceId));
+	if (options.selectedModelIdentifier)
+		wsUrl.searchParams.set("user_selected_model_identifier", options.selectedModelIdentifier);
+	if (options.workflowDefinition) wsUrl.searchParams.set("workflow_definition", options.workflowDefinition);
+	return wsUrl.toString();
+}
+
+export function buildGitLabDuoWorkflowWebSocketHeaders(options: {
+	token: string;
+	baseUrl?: string;
+	projectId?: string;
+	namespaceId?: string;
+	rootNamespaceId?: string;
+	extraHeaders?: Record<string, string>;
+}): Record<string, string> {
+	const base = new URL(normalizeGitLabBaseUrl(options.baseUrl ?? DEFAULT_GITLAB_BASE_URL));
+	return {
+		...options.extraHeaders,
+		authorization: `Bearer ${options.token}`,
+		"x-gitlab-client-type": GITLAB_DUO_WORKFLOW_CLIENT_TYPE,
+		"x-gitlab-language-server-version": GITLAB_DUO_WORKFLOW_LANGUAGE_SERVER_VERSION,
+		"user-agent": `unknown/unknown unknown/unknown gitlab-language-server/${GITLAB_DUO_WORKFLOW_LANGUAGE_SERVER_VERSION}`,
+		origin: base.origin,
+		...(options.projectId ? { "x-gitlab-project-id": options.projectId } : {}),
+		...(options.namespaceId ? { "x-gitlab-namespace-id": toGitLabRestNamespaceId(options.namespaceId) } : {}),
+		...(options.rootNamespaceId
+			? { "x-gitlab-root-namespace-id": toGitLabRestNamespaceId(options.rootNamespaceId) }
+			: {}),
+	};
+}
+export function buildGitLabDuoWorkflowStartRequest(
+	workflowId: string,
+	model: Model<"gitlab-duo-agent">,
+	context: Context,
+	tools: Tool[] | undefined = context.tools,
+	availableModels?: GitLabAvailableModelsPayload | null,
+	metadataOptions: GitLabDuoWorkflowStartMetadataOptions = {},
+): GitLabDuoWorkflowStartRequest {
+	const workflowMetadata = buildGitLabDuoWorkflowStartMetadata(model, availableModels, metadataOptions);
+	const mcpTools = buildGitLabDuoWorkflowMcpTools(tools);
+	return {
+		workflowID: workflowId,
+		clientVersion: "1.0",
+		workflowDefinition: metadataOptions.workflowDefinition ?? GITLAB_DUO_WORKFLOW_DEFINITION,
+		goal: buildGitLabDuoWorkflowGoal(context),
+		workflowMetadata: JSON.stringify(workflowMetadata),
+		additional_context: buildGitLabDuoWorkflowClientAdditionalContext(),
+		clientCapabilities: GITLAB_DUO_WORKFLOW_CLIENT_CAPABILITIES,
+		mcpTools,
+		preapproved_tools: mcpTools.map(tool => tool.name),
+		flowConfigSchemaVersion: "v1" as const,
+		flowConfig: buildGitLabDuoWorkflowInlineFlowConfig(),
+	};
+}
+
+// Build the inline ambient flow sent over the wire (Path B / `flowConfig`). The
+// server constructs the whole flow from this struct: a single agent component
+// with our own system prompt (no GitLab jinja wrapper / project metadata) and
+// `on_agent_reasoning` so pre-tool-call commentary streams back as reasoning.
+// `toolset: []` because MCP tools auto-attach from `startRequest.mcpTools` when
+// the workflow's `mcp_enabled` is true.
+export function buildGitLabDuoWorkflowInlineFlowConfig(): GitLabDuoWorkflowInlineFlowConfig {
+	return {
+		version: "v1",
+		environment: "ambient",
+		flow: { entry_point: GITLAB_DUO_WORKFLOW_INLINE_AGENT_NAME },
+		components: [
+			{
+				name: GITLAB_DUO_WORKFLOW_INLINE_AGENT_NAME,
+				type: "AgentComponent",
+				prompt_id: GITLAB_DUO_WORKFLOW_INLINE_PROMPT_ID,
+				toolset: [],
+				inputs: [{ from: "context:goal", as: "goal" }],
+				ui_log_events: [...GITLAB_DUO_WORKFLOW_INLINE_UI_LOG_EVENTS],
+			},
+		],
+		routers: [{ from: GITLAB_DUO_WORKFLOW_INLINE_AGENT_NAME, to: "end" }],
+		prompts: [
+			{
+				name: GITLAB_DUO_WORKFLOW_INLINE_PROMPT_ID,
+				prompt_id: GITLAB_DUO_WORKFLOW_INLINE_PROMPT_ID,
+				unit_primitives: ["duo_agent_platform"],
+				prompt_template: { system: gitLabDuoWorkflowSystemPrompt, user: "{{goal}}", placeholder: "history" },
+			},
+		],
+	};
+}
+
+function buildGitLabDuoWorkflowStartMetadata(
+	model: Model<"gitlab-duo-agent">,
+	availableModels: GitLabAvailableModelsPayload | null | undefined,
+	metadataOptions: GitLabDuoWorkflowStartMetadataOptions,
+): Record<string, string> {
+	return {
+		environment: "ide",
+		client_type: GITLAB_DUO_WORKFLOW_CLIENT_TYPE,
+		...(metadataOptions.projectId ? { projectId: metadataOptions.projectId } : undefined),
+		...(metadataOptions.namespaceId
+			? { namespaceId: toGitLabRestNamespaceId(metadataOptions.namespaceId) }
+			: undefined),
+		...(metadataOptions.rootNamespaceId
+			? { rootNamespaceId: toGitLabRestNamespaceId(metadataOptions.rootNamespaceId) }
+			: undefined),
+		selectedModelIdentifier: selectGitLabDuoWorkflowModelRef(model.id, availableModels),
+	};
+}
+
+export function buildGitLabDuoWorkflowClientAdditionalContext(): GitLabDuoWorkflowAdditionalContextItem[] {
+	return [];
+}
+
+export function buildGitLabDuoWorkflowMcpTools(tools: Tool[] | undefined): GitLabMcpToolDefinition[] {
+	return tools?.map(buildGitLabMcpToolDefinition) ?? [];
+}
+
+export function selectGitLabDuoWorkflowModelRef(
+	selectedModel: string,
+	availableModels?: GitLabAvailableModelsPayload | null,
+): string {
+	const pinned = availableModels?.pinnedModel?.ref;
+	if (pinned) return pinned;
+	return selectedModel;
+}
+
+export function buildGitLabPlainTextFromToolResult(toolResult: ToolResultMessage): GitLabPlainTextResponse {
+	const text = gitLabToolResultToText(toolResult);
+	return toolResult.isError ? { error: text } : { response: text };
+}
+function findGitLabDuoWorkflowPendingToolResult(
+	messages: readonly Message[],
+	action: GitLabDuoWorkflowActionDescriptor,
+): ToolResultMessage | undefined {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message?.role !== "toolResult") continue;
+		return message.toolCallId === action.requestID ? message : undefined;
+	}
+	return undefined;
+}
+
+function buildGitLabDuoWorkflowResponseFromToolResult(toolResult: ToolResultMessage): GitLabPlainTextResponse {
+	return buildGitLabPlainTextFromToolResult(toolResult);
+}
+
+function emitGitLabDuoWorkflowActionToolCall(
+	state: GitLabDuoWorkflowStreamState,
+	action: GitLabDuoWorkflowActionDescriptor,
+): void {
+	endGitLabDuoWorkflowText(state);
+	endGitLabDuoWorkflowThinking(state);
+	const toolCall = buildGitLabDuoWorkflowActionToolCall(action);
+	state.output.content.push(toolCall);
+	const contentIndex = state.output.content.length - 1;
+	state.stream.push({ type: "toolcall_start", contentIndex, partial: state.output });
+	state.stream.push({
+		type: "toolcall_delta",
+		contentIndex,
+		delta: JSON.stringify(toolCall.arguments),
+		partial: state.output,
+	});
+	state.stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: state.output });
+	finishGitLabDuoWorkflowStream(state, "toolUse");
+}
+
+function buildGitLabDuoWorkflowActionToolCall(action: GitLabDuoWorkflowActionDescriptor): ToolCall {
+	const args =
+		action.args && typeof action.args === "object" && !Array.isArray(action.args)
+			? (action.args as Record<string, unknown>)
+			: {};
+	const mapped = mapGitLabDuoWorkflowActionToOmpTool(action.name, args);
+	return {
+		type: "toolCall",
+		id: action.requestID,
+		name: mapped.name,
+		arguments: mapped.arguments,
+	};
+}
+
+function mapGitLabDuoWorkflowActionToOmpTool(
+	actionName: string,
+	args: Record<string, unknown>,
+): { name: string; arguments: Record<string, unknown> } {
+	switch (actionName) {
+		case "runMCPTool":
+		case "run_mcp_tool":
+			return mapGitLabDuoWorkflowMcpToolCall(args);
+		default:
+			return { name: actionName, arguments: { ...args } };
+	}
+}
+
+function mapGitLabDuoWorkflowMcpToolCall(args: Record<string, unknown>): {
+	name: string;
+	arguments: Record<string, unknown>;
+} {
+	const rawName = stringField(args, "toolName") ?? stringField(args, "tool_name") ?? stringField(args, "name") ?? "";
+	const toolName = rawName.startsWith("mcp__omp__") ? rawName.slice("mcp__omp__".length) : rawName;
+	const parsedArgs = parseGitLabDuoWorkflowMcpArguments(args.args ?? args.arguments);
+	if (toolName === "edit" && typeof parsedArgs.input === "string") {
+		return { name: "edit", arguments: { input: parsedArgs.input } };
+	}
+	return { name: toolName, arguments: parsedArgs };
+}
+
+function parseGitLabDuoWorkflowMcpArguments(value: unknown): Record<string, unknown> {
+	if (value === undefined) return {};
+	if (typeof value === "string") {
+		try {
+			const parsed = JSON.parse(value) as unknown;
+			return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+				? (parsed as Record<string, unknown>)
+				: {};
+		} catch {
+			return {};
+		}
+	}
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function gitLabDuoWorkflowProviderSessionStateKey(
+	baseUrl: string,
+	modelId: string,
+	sessionId: string | undefined,
+): string {
+	return `gitlab-duo-agent:${baseUrl}\u0000${modelId}\u0000${sessionId ?? ""}`;
+}
+
+function createGitLabDuoWorkflowProviderSessionState(): GitLabDuoWorkflowProviderSessionState {
+	const state: GitLabDuoWorkflowProviderSessionState = {
+		close: () => {
+			try {
+				state.active?.ws.close();
+			} catch {
+				// Ignore close failures from already-closed sockets.
+			}
+			state.active = undefined;
+		},
+	};
+	return state;
+}
+
+function getGitLabDuoWorkflowProviderSessionState(
+	providerSessionState: Map<string, ProviderSessionState> | undefined,
+	baseUrl: string,
+	modelId: string,
+	sessionId: string | undefined,
+): GitLabDuoWorkflowProviderSessionState | undefined {
+	if (!providerSessionState) return undefined;
+	const key = gitLabDuoWorkflowProviderSessionStateKey(baseUrl, modelId, sessionId);
+	const existing = providerSessionState.get(key) as GitLabDuoWorkflowProviderSessionState | undefined;
+	if (existing) return existing;
+	const created = createGitLabDuoWorkflowProviderSessionState();
+	providerSessionState.set(key, created);
+	return created;
+}
+
+export function gitLabDuoWorkflowErrorText(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function safeGitLabDuoWorkflowGoalJson(value: unknown): string {
+	const json = JSON.stringify(value) ?? "null";
+	return json.replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
+}
+
+async function readGitLabDuoWorkflowResponseErrorMessage(response: Response): Promise<string | undefined> {
+	try {
+		const payload: unknown = await response.json();
+		const message =
+			getGitLabDuoWorkflowErrorField(payload, "message") ?? getGitLabDuoWorkflowErrorField(payload, "error");
+		return message ? gitLabDuoWorkflowErrorText(message) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function getGitLabDuoWorkflowErrorField(payload: unknown, field: "message" | "error"): string | undefined {
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+	const value = (payload as Record<string, unknown>)[field];
+	if (typeof value !== "string" || value.trim().length === 0) return undefined;
+	return value;
+}
+
+async function runGitLabDuoWorkflow(
+	model: Model<"gitlab-duo-agent">,
+	context: Context,
+	options: GitLabDuoWorkflowOptions,
+	state: GitLabDuoWorkflowStreamState,
+): Promise<void> {
+	const apiKey = options.apiKey;
+	if (!apiKey) throw new Error("No API key for provider: gitlab-duo-agent");
+	const baseUrl = normalizeGitLabBaseUrl(model.baseUrl || DEFAULT_GITLAB_BASE_URL);
+	const providerSessionState = getGitLabDuoWorkflowProviderSessionState(
+		options.providerSessionState,
+		baseUrl,
+		model.id,
+		options.sessionId,
+	);
+	state.providerSessionState = providerSessionState;
+	const pendingSession = providerSessionState?.active;
+	if (pendingSession) {
+		hydrateGitLabDuoWorkflowCheckpointState(state, pendingSession);
+	}
+	const pendingAction = pendingSession?.pendingAction;
+	const pendingResult = pendingAction
+		? findGitLabDuoWorkflowPendingToolResult(context.messages, pendingAction)
+		: undefined;
+	if (pendingSession && pendingAction && pendingResult) {
+		const response = buildGitLabDuoWorkflowActionResponse(
+			pendingAction.requestID,
+			buildGitLabDuoWorkflowResponseFromToolResult(pendingResult),
+		);
+		pendingSession.pendingAction = undefined;
+		const socketResult = await runGitLabDuoWorkflowSocket(
+			pendingSession.ws,
+			pendingSession.startPayload,
+			state,
+			options,
+			response,
+		);
+		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, socketResult);
+		return;
+	}
+	if (providerSessionState?.active?.paused) {
+		const session = providerSessionState.active;
+		const replay = session.pauseBuffer ?? [];
+		session.paused = false;
+		session.pauseBuffer = [];
+		const socketResult = await runGitLabDuoWorkflowSocket(
+			session.ws,
+			session.startPayload,
+			state,
+			options,
+			undefined,
+			replay,
+		);
+		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, socketResult);
+		return;
+	}
+	const fetchImpl = options.fetch ?? fetch;
+	const namespaceSelection = await resolveGitLabDuoWorkflowNamespaceSelection(
+		model,
+		options,
+		apiKey,
+		baseUrl,
+		fetchImpl,
+	);
+	const rootNamespaceId = namespaceSelection.rootNamespaceId;
+	const restNamespaceId = toGitLabRestNamespaceId(rootNamespaceId);
+	const createNamespaceId = namespaceSelection.namespacePath ?? restNamespaceId;
+	traceGitLabDuoWorkflow("run.start", {
+		baseUrl,
+		model: model.id,
+		rootNamespaceId,
+		restNamespaceId,
+		toolCount: context.tools?.length ?? 0,
+	});
+	const workflowDefinition = resolveGitLabDuoWorkflowDefinition(options.workflowDefinition);
+	const configuredProjectPath = nonEmptyString(options.projectPath) ?? nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_PATH);
+	const configuredProjectId = nonEmptyString(options.projectId) ?? nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_ID);
+	// The inline `ambient` flow fails server-side without a project, and OMP has
+	// no project of its own, so auto-discover one under the resolved namespace
+	// when nothing is configured. The built-in `chat` flow runs namespace-only.
+	const discoveredProject =
+		!configuredProjectPath && !configuredProjectId && isGitLabDuoWorkflowInlineFlow(workflowDefinition)
+			? await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
+			: undefined;
+	if (discoveredProject) {
+		traceGitLabDuoWorkflow("project.discover", { projectId: discoveredProject.id, hasPath: true });
+	}
+	const projectPath = configuredProjectPath ?? discoveredProject?.path;
+	const projectId = configuredProjectId ?? discoveredProject?.id;
+	const restProjectId = configuredProjectPath ?? configuredProjectId ?? discoveredProject?.path;
+	const webSocketProjectId =
+		projectId ??
+		(projectPath
+			? await resolveGitLabDuoWorkflowNumericProjectId(fetchImpl, baseUrl, apiKey, projectPath)
+			: undefined);
+	const goal = extractLatestUserPrompt(context.messages);
+	const workflowConnection: GitLabDuoWorkflowDirectAccessConnection = options.workflowToken
+		? { token: options.workflowToken, headers: {}, serviceEndpoint: false }
+		: await requestGitLabDuoWorkflowDirectAccess(
+				fetchImpl,
+				baseUrl,
+				apiKey,
+				rootNamespaceId,
+				restProjectId,
+				workflowDefinition,
+			);
+	let workflowId =
+		options.workflowId ??
+		(await createGitLabDuoWorkflow(
+			fetchImpl,
+			baseUrl,
+			apiKey,
+			createNamespaceId,
+			goal,
+			restProjectId,
+			workflowDefinition,
+			options.signal,
+		));
+	const availableModels = await fetchGitLabDuoWorkflowAvailableModels(fetchImpl, baseUrl, apiKey, rootNamespaceId);
+	const selectedModelIdentifier = selectGitLabDuoWorkflowModelRef(model.id, availableModels);
+	let startPayload = buildGitLabDuoWorkflowStartRequest(workflowId, model, context, context.tools, availableModels, {
+		projectId: webSocketProjectId,
+		projectPath,
+		namespaceId: restNamespaceId,
+		rootNamespaceId: restNamespaceId,
+		workflowDefinition,
+		inlineFlow: isGitLabDuoWorkflowInlineFlow(workflowDefinition),
+	});
+	let lastSocketResult: GitLabDuoWorkflowSocketResult = "closed";
+	let timeoutReconnected = false;
+	let stepLimitRestarts = 0;
+	let settledNormally = false;
+	try {
+		for (let attempt = 0; attempt < 12; attempt++) {
+			const ws = openGitLabDuoWorkflowSocket(workflowConnection.baseUrl ?? baseUrl, {
+				token: workflowConnection.token,
+				projectId: webSocketProjectId,
+				namespaceId: webSocketProjectId ? restNamespaceId : undefined,
+				rootNamespaceId: webSocketProjectId ? restNamespaceId : undefined,
+				selectedModelIdentifier,
+				workflowDefinition,
+				serviceEndpoint: workflowConnection.serviceEndpoint,
+				extraHeaders: workflowConnection.headers,
+				originBaseUrl: baseUrl,
+				webSocketFactory: options.webSocketFactory,
+			});
+			if (providerSessionState) {
+				providerSessionState.active = { workflowId, startPayload, ws };
+			}
+			lastSocketResult = await runGitLabDuoWorkflowSocket(ws, startPayload, state, options);
+			if (lastSocketResult === "approval") {
+				startPayload = buildGitLabDuoWorkflowApprovalStartRequest(startPayload);
+				state.lastApprovalStatus = undefined;
+				continue;
+			}
+			// A silent half-open socket (no frame within the idle window) is recoverable:
+			// reconnect once on the same workflowID so the server resumes the existing run.
+			// Bound to a single retry so a persistently dead endpoint can't loop on quota.
+			if (lastSocketResult === "timeout" && !timeoutReconnected) {
+				timeoutReconnected = true;
+				traceGitLabDuoWorkflow("websocket.idle_reconnect", { workflowId });
+				continue;
+			}
+			// The server caps each workflow at a fixed step (graph-recursion) limit.
+			// A long but healthy OMP tool-call loop legitimately overruns it; that is
+			// not a real failure. Stop the exhausted run and create a FRESH workflow
+			// (a new id resets the step budget — unlike the timeout case, resending on
+			// the same id would not), then reopen the socket. The conversation so far
+			// (assistant text + tool results accumulated in `context`) replays through
+			// the goal envelope, so the new workflow continues where it left off; the
+			// checkpoint dedupe drops any re-sent ui_chat_log entries. Bounded so a
+			// task that perpetually overruns degrades to a graceful stop, not a quota
+			// sink.
+			if (lastSocketResult === "step_limit" && stepLimitRestarts < GITLAB_DUO_WORKFLOW_MAX_STEP_LIMIT_RESTARTS) {
+				stepLimitRestarts++;
+				state.stepLimitRequested = false;
+				traceGitLabDuoWorkflow("websocket.step_limit_restart", { workflowId, restart: stepLimitRestarts });
+				await stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, workflowId);
+				workflowId = await createGitLabDuoWorkflow(
+					fetchImpl,
+					baseUrl,
+					apiKey,
+					createNamespaceId,
+					goal,
+					restProjectId,
+					workflowDefinition,
+					options.signal,
+				);
+				startPayload = { ...startPayload, workflowID: workflowId };
+				continue;
+			}
+			break;
+		}
+		settledNormally = true;
+		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, lastSocketResult);
+	} finally {
+		// The socket loop can exit two abnormal ways that both leave the remote
+		// workflow running and `active` referencing a dead socket: a user abort, or
+		// `runGitLabDuoWorkflowSocket` rejecting (e.g. `ws.onerror`) so the settle
+		// block above never ran (`settledNormally` stays false). In either case drop
+		// the resumable session and stop the workflow with a fresh signal — the
+		// request's own signal may be aborted, which would cancel the PATCH before it
+		// is sent. The happy path that intentionally keeps `active` for an
+		// `action`/`pause` resume is gated on `settledNormally && !aborted`.
+		const aborted = options.signal?.aborted ?? false;
+		if (aborted || !settledNormally) {
+			if (providerSessionState) {
+				providerSessionState.active = undefined;
+			}
+			await stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, workflowId);
+		}
+	}
+}
+
+async function fetchGitLabDuoWorkflowAvailableModels(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	rootNamespaceId: string,
+): Promise<GitLabAvailableModelsPayload | undefined> {
+	try {
+		const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/graphql"), {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				query: GITLAB_DUO_WORKFLOW_AVAILABLE_MODELS_QUERY,
+				variables: { rootNamespaceId: toGitLabGraphQLNamespaceId(rootNamespaceId) },
+			}),
+		});
+		if (!response.ok) return undefined;
+		const payload: unknown = await response.json();
+		const models = getRecord(getRecord(payload, "data"), "aiChatAvailableModels");
+		return parseGitLabAvailableModelsPayload(models);
+	} catch {
+		return undefined;
+	}
+}
+
+function parseGitLabAvailableModelsPayload(value: unknown): GitLabAvailableModelsPayload | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	return {
+		pinnedModel: parseGitLabAvailableModel(getRecord(value, "pinnedModel")),
+		selectedModel: parseGitLabAvailableModel(getRecord(value, "selectedModel")),
+		defaultModel: parseGitLabAvailableModel(getRecord(value, "defaultModel")),
+		selectableModels: parseGitLabAvailableModelArray((value as Record<string, unknown>).selectableModels),
+	};
+}
+
+function parseGitLabAvailableModel(value: unknown): GitLabAvailableModel | null {
+	if (!value || typeof value !== "object") return null;
+	return { name: getRecordString(value, "name") ?? null, ref: getRecordString(value, "ref") ?? null };
+}
+
+function parseGitLabAvailableModelArray(value: unknown): GitLabAvailableModel[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	return value.map(parseGitLabAvailableModel).filter((model): model is GitLabAvailableModel => Boolean(model));
+}
+
+async function resolveGitLabDuoWorkflowNumericProjectId(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	projectPath: string,
+): Promise<string | undefined> {
+	try {
+		const response = await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/projects/${encodeURIComponent(projectPath)}`), {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				"content-type": "application/json",
+			},
+		});
+		if (!response.ok) return undefined;
+		const payload: unknown = await response.json();
+		return getRecordString(payload, "id");
+	} catch {
+		return undefined;
+	}
+}
+
+interface GitLabDuoWorkflowDiscoveredProject {
+	id: string;
+	path: string;
+}
+
+// OMP has no GitLab project of its own, but the inline `ambient` flow fails
+// server-side without a project context. When the caller did not configure a
+// project, discover one the credential can access: prefer a project inside the
+// resolved namespace group, then fall back to any membership project. Returns
+// the numeric id (WebSocket routing) and full path (REST scoping) together so
+// no second lookup is needed.
+async function discoverGitLabDuoWorkflowProject(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	restNamespaceId: string,
+): Promise<GitLabDuoWorkflowDiscoveredProject | undefined> {
+	const query = "per_page=1&min_access_level=30&order_by=last_activity_at&sort=desc";
+	const endpoints = [
+		`/api/v4/groups/${encodeURIComponent(restNamespaceId)}/projects?include_subgroups=true&${query}`,
+		`/api/v4/projects?membership=true&${query}`,
+	];
+	for (const endpoint of endpoints) {
+		try {
+			const response = await fetchImpl(gitLabApiUrl(baseUrl, endpoint), {
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					"content-type": "application/json",
+				},
+			});
+			if (!response.ok) continue;
+			const payload: unknown = await response.json();
+			const first = Array.isArray(payload) ? payload[0] : undefined;
+			const id = getRecordString(first, "id");
+			const path = getRecordString(first, "path_with_namespace");
+			if (id && path) return { id, path };
+		} catch {}
+	}
+	return undefined;
+}
+
+async function requestGitLabDuoWorkflowDirectAccess(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	rootNamespaceId: string,
+	projectId?: string,
+	workflowDefinition: GitLabDuoWorkflowDefinition = GITLAB_DUO_WORKFLOW_DEFINITION,
+): Promise<GitLabDuoWorkflowDirectAccessConnection> {
+	const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/direct_access"), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify(buildGitLabDuoWorkflowDirectAccessBody(rootNamespaceId, projectId, workflowDefinition)),
+	});
+	traceGitLabDuoWorkflow("direct_access.response", {
+		status: response.status,
+		ok: response.ok,
+		rootNamespaceId,
+		hasProjectId: Boolean(projectId),
+	});
+	if (!response.ok) {
+		const message = await readGitLabDuoWorkflowResponseErrorMessage(response);
+		if (message) {
+			throw new Error(`GitLab Duo Workflow direct_access failed: ${message}`);
+		}
+		throw new Error(`GitLab Duo Workflow direct_access failed with HTTP ${response.status}`);
+	}
+	const payload = (await response.json()) as GitLabDirectAccessResponse;
+	const token = extractGitLabWorkflowToken(payload);
+	if (!token) {
+		throw new Error("GitLab Duo Workflow direct_access did not return credentials");
+	}
+	traceGitLabDuoWorkflow("direct_access.token", { hasToken: true });
+	const serviceEndpoint = !payload.gitlab_rails?.token && Boolean(payload.duo_workflow_service?.base_url);
+	return {
+		token,
+		...(serviceEndpoint && payload.duo_workflow_service?.base_url
+			? { baseUrl: normalizeGitLabDuoWorkflowServiceBaseUrl(payload.duo_workflow_service.base_url) }
+			: {}),
+		headers: serviceEndpoint ? (payload.duo_workflow_service?.headers ?? {}) : {},
+		serviceEndpoint,
+	};
+}
+
+async function createGitLabDuoWorkflow(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	namespaceId: string,
+	goal?: string,
+	projectId?: string,
+	workflowDefinition: GitLabDuoWorkflowDefinition = GITLAB_DUO_WORKFLOW_DEFINITION,
+	signal?: AbortSignal,
+): Promise<string> {
+	const body = buildGitLabDuoWorkflowCreateBody(namespaceId, {
+		goal: isGitLabDuoWorkflowInlineFlow(workflowDefinition) ? "" : goal,
+		projectId,
+		workflowDefinition,
+	});
+	const response = await fetchImpl(gitLabApiUrl(baseUrl, "/api/v4/ai/duo_workflows/workflows"), {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify(body),
+		signal,
+	});
+	traceGitLabDuoWorkflow("workflow.create.response", {
+		status: response.status,
+		ok: response.ok,
+		namespaceId,
+		hasProjectId: Boolean(projectId),
+	});
+	if (!response.ok) {
+		throw new Error(`GitLab Duo Workflow create failed with HTTP ${response.status}`);
+	}
+	const payload = (await response.json()) as GitLabCreateWorkflowResponse;
+	const workflowId = payload.id ?? payload.workflow_id ?? payload.workflowId;
+	if (workflowId === undefined) {
+		throw new Error(`GitLab Duo Workflow create response missing workflow id (HTTP ${response.status})`);
+	}
+	traceGitLabDuoWorkflow("workflow.create.id", { workflowId });
+	return String(workflowId);
+}
+
+async function stopGitLabDuoWorkflow(
+	fetchImpl: FetchImpl,
+	baseUrl: string,
+	apiKey: string,
+	workflowId: string,
+): Promise<void> {
+	await fetchImpl(new URL(`/api/v4/ai/duo_workflows/workflows/${encodeURIComponent(workflowId)}`, baseUrl), {
+		method: "PATCH",
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			"content-type": "application/json",
+		},
+		body: JSON.stringify(buildGitLabDuoWorkflowStopBody()),
+	});
+}
+
+function openGitLabDuoWorkflowSocket(
+	baseUrl: string,
+	options: {
+		token: string;
+		projectId?: string;
+		namespaceId?: string;
+		rootNamespaceId?: string;
+		selectedModelIdentifier?: string;
+		originBaseUrl?: string;
+		workflowDefinition?: GitLabDuoWorkflowDefinition;
+		serviceEndpoint?: boolean;
+		extraHeaders?: Record<string, string>;
+		webSocketFactory?: GitLabDuoWorkflowWebSocketFactory;
+	},
+): GitLabDuoWorkflowWebSocketLike {
+	const url = buildGitLabDuoWorkflowWebSocketUrl(baseUrl, options);
+	const headers = buildGitLabDuoWorkflowWebSocketHeaders({
+		...options,
+		baseUrl: normalizeGitLabBaseUrl(options.originBaseUrl ?? baseUrl),
+	});
+	const factory = options.webSocketFactory ?? defaultGitLabDuoWorkflowWebSocketFactory;
+	traceGitLabDuoWorkflow("websocket.create", { url });
+	return factory(url, { headers });
+}
+function defaultGitLabDuoWorkflowWebSocketFactory(
+	url: string,
+	options: GitLabDuoWorkflowWebSocketFactoryOptions,
+): GitLabDuoWorkflowWebSocketLike {
+	return new (
+		WebSocket as unknown as new (
+			url: string,
+			options: Bun.WebSocketOptions,
+		) => GitLabDuoWorkflowWebSocketLike
+	)(url, { headers: options.headers });
+}
+
+export function runGitLabDuoWorkflowSocket(
+	ws: GitLabDuoWorkflowWebSocketLike,
+	startPayload: GitLabDuoWorkflowStartRequest,
+	state: GitLabDuoWorkflowStreamState,
+	options: GitLabDuoWorkflowOptions,
+	resumeResponse?: GitLabDuoWorkflowActionResponse,
+	replayMessages?: readonly unknown[],
+): Promise<GitLabDuoWorkflowSocketResult> {
+	const { promise, resolve, reject } = Promise.withResolvers<GitLabDuoWorkflowSocketResult>();
+	let settled = false;
+	let idleTimer: NodeJS.Timeout | undefined;
+	const clearIdleTimer = (): void => {
+		if (idleTimer !== undefined) {
+			clearTimeout(idleTimer);
+			idleTimer = undefined;
+		}
+	};
+	const settle = (result: GitLabDuoWorkflowSocketResult = "closed", error?: unknown): void => {
+		if (settled) return;
+		settled = true;
+		clearIdleTimer();
+		if (error) reject(error);
+		else resolve(result);
+	};
+	const idleTimeoutMs =
+		options.idleTimeoutMs !== undefined && options.idleTimeoutMs > 0
+			? options.idleTimeoutMs
+			: GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS;
+	const resetIdleTimer = (): void => {
+		clearIdleTimer();
+		if (settled) return;
+		idleTimer = setTimeout(() => {
+			traceGitLabDuoWorkflow("websocket.idle_timeout", { timeoutMs: idleTimeoutMs });
+			close();
+			settle("timeout");
+		}, idleTimeoutMs);
+	};
+	const close = (): void => {
+		try {
+			ws.close();
+		} catch {
+			// Ignore close failures from test doubles or already closed sockets.
+		}
+	};
+	const abort = (): void => {
+		close();
+		settle("closed", new Error("GitLab Duo Workflow request aborted"));
+	};
+	if (options.signal?.aborted) {
+		abort();
+		return promise;
+	}
+	options.signal?.addEventListener("abort", abort, { once: true });
+
+	const active = state.providerSessionState?.active;
+	const handleSocketResult = (
+		result: GitLabDuoWorkflowMessageResult,
+		data: unknown,
+		remaining: readonly unknown[],
+	): boolean => {
+		if (result === "pause") {
+			if (active) {
+				active.paused = true;
+				active.pauseBuffer = [data, ...remaining, ...(active.pauseBuffer ?? [])];
+			}
+			pauseGitLabDuoWorkflowStream(state);
+			settle("pause");
+			return false;
+		}
+		if (result === "action") {
+			settle("action");
+			return false;
+		}
+		if (result !== "continue") {
+			close();
+			settle(result);
+			return false;
+		}
+		return true;
+	};
+	ws.onerror = event => {
+		const detail = describeGitLabDuoWorkflowSocketEvent(event);
+		traceGitLabDuoWorkflow("websocket.error", { event: detail });
+		settle("closed", new Error(`GitLab Duo Workflow WebSocket error: ${detail}`));
+	};
+	ws.onclose = event => {
+		traceGitLabDuoWorkflow("websocket.close", { code: event.code, reason: event.reason });
+		settle(state.lastApprovalStatus ? "approval" : "closed");
+	};
+	ws.onmessage = event => {
+		resetIdleTimer();
+		if (active?.paused) {
+			active.pauseBuffer ??= [];
+			active.pauseBuffer.push(event.data);
+			return;
+		}
+		void handleGitLabDuoWorkflowSocketMessage(event.data, state).then(
+			result => {
+				handleSocketResult(result, event.data, []);
+			},
+			error => settle("closed", error),
+		);
+	};
+	if (replayMessages && replayMessages.length > 0) {
+		ws.onopen = null;
+		void (async () => {
+			if (active) active.paused = true;
+			const pending: unknown[] = [...replayMessages];
+			while (!settled) {
+				if (pending.length === 0) {
+					if (active?.pauseBuffer && active.pauseBuffer.length > 0) {
+						pending.push(...active.pauseBuffer);
+						active.pauseBuffer = [];
+						continue;
+					}
+					break;
+				}
+				const data = pending.shift();
+				let result: GitLabDuoWorkflowMessageResult;
+				try {
+					result = await handleGitLabDuoWorkflowSocketMessage(data, state);
+				} catch (error) {
+					settle("closed", error);
+					return;
+				}
+				if (!handleSocketResult(result, data, pending)) return;
+				if (active?.pauseBuffer && active.pauseBuffer.length > 0) {
+					pending.push(...active.pauseBuffer);
+					active.pauseBuffer = [];
+				}
+			}
+			if (!settled && active) active.paused = false;
+		})();
+	} else if (resumeResponse) {
+		ws.onopen = null;
+		ws.send(JSON.stringify(resumeResponse));
+	} else {
+		ws.onopen = () => {
+			traceGitLabDuoWorkflow("websocket.open", {
+				workflowId: startPayload.workflowID,
+				workflowDefinition: startPayload.workflowDefinition,
+				flowConfigId: startPayload.flowConfigId,
+				flowVersion: startPayload.flowVersion,
+				flowConfigSchemaVersion: startPayload.flowConfigSchemaVersion,
+				mcpTools: startPayload.mcpTools.length,
+				preapprovedTools: startPayload.preapproved_tools.length,
+			});
+			ws.send(JSON.stringify({ startRequest: startPayload }));
+		};
+	}
+	resetIdleTimer();
+	return promise.finally(() => {
+		clearIdleTimer();
+		options.signal?.removeEventListener("abort", abort);
+	});
+}
+
+type GitLabDuoWorkflowMessageResult = "continue" | "terminal" | "approval" | "action" | "pause" | "step_limit";
+
+type GitLabDuoWorkflowCheckpointKind = "text" | "thinking";
+
+interface GitLabDuoWorkflowCheckpointAgentEntry {
+	kind: GitLabDuoWorkflowCheckpointKind;
+	messageIndex: number;
+	messageKey: string;
+	content: string;
+}
+
+interface GitLabDuoWorkflowCheckpointBoundaryEntry {
+	kind: "boundary";
+	messageIndex: number;
+}
+
+type GitLabDuoWorkflowCheckpointEntry =
+	| GitLabDuoWorkflowCheckpointAgentEntry
+	| GitLabDuoWorkflowCheckpointBoundaryEntry;
+
+interface GitLabDuoWorkflowContextUsage {
+	used: number;
+	window: number;
+}
+
+interface GitLabDuoWorkflowCheckpointContent {
+	entries: GitLabDuoWorkflowCheckpointEntry[];
+	contentLength: number;
+	messageCount?: number;
+	latestMessageType?: string;
+	contextUsage?: GitLabDuoWorkflowContextUsage;
+}
+
+async function handleGitLabDuoWorkflowSocketMessage(
+	data: unknown,
+	state: GitLabDuoWorkflowStreamState,
+): Promise<GitLabDuoWorkflowMessageResult> {
+	const event = parseGitLabDuoWorkflowSocketData(data);
+	if (!event) return "continue";
+	const status =
+		getRecordString(event, "status") ??
+		getNestedRecordString(event, "workflowStatus", "status") ??
+		getNestedRecordString(event, "newCheckpoint", "status");
+	const checkpoint = extractGitLabDuoWorkflowCheckpoint(event);
+	traceGitLabDuoWorkflow("websocket.message", {
+		keys: Object.keys(event),
+		status,
+		hasCheckpoint: Boolean(getRecord(event, "newCheckpoint") ?? getRecord(event, "checkpoint")),
+		checkpointLength: checkpoint?.contentLength ?? 0,
+	});
+	if (checkpoint) {
+		emitGitLabDuoWorkflowCheckpoint(state, checkpoint);
+	}
+	if (state.pauseRequested) {
+		state.pauseRequested = false;
+		return "pause";
+	}
+	if (isGitLabWorkflowApprovalStatus(status)) {
+		state.lastApprovalStatus = status;
+		traceGitLabDuoWorkflow("websocket.approval", { status });
+		return "approval";
+	}
+	if (isGitLabWorkflowCompletionStatus(status)) {
+		traceGitLabDuoWorkflow("websocket.terminal", { status, checkpointLength: checkpoint?.contentLength ?? 0 });
+		finishGitLabDuoWorkflowStream(state, "stop");
+		return "terminal";
+	}
+	if (status === "FAILED" || status === "STOPPED") {
+		const message = gitLabDuoWorkflowErrorText(
+			getRecordString(event, "error") ?? getRecordString(event, "message") ?? status,
+		);
+		// The server caps each workflow at a fixed graph-recursion limit (DWS
+		// RECURSION_LIMIT). A long but healthy OMP tool-call loop legitimately hits
+		// it and surfaces as FAILED with this message. That is not a real failure —
+		// resume by starting a fresh workflow that continues the same conversation
+		// (the accumulated context/tool results replay via the goal envelope).
+		if (status === "FAILED" && isGitLabDuoWorkflowStepLimitMessage(message)) {
+			traceGitLabDuoWorkflow("websocket.step_limit", { status });
+			state.stepLimitRequested = true;
+			return "step_limit";
+		}
+		traceGitLabDuoWorkflow("websocket.failed", { status });
+		state.output.stopReason = "error";
+		state.output.errorMessage = message;
+		state.stream.push({ type: "error", reason: "error", error: state.output });
+		return "terminal";
+	}
+	const action = extractGitLabDuoWorkflowAction(event);
+	if (!action) return "continue";
+	traceGitLabDuoWorkflow("websocket.action", {
+		actionName: action.name,
+		requestID: action.requestID,
+		toolName:
+			getRecordString(action.args as Record<string, unknown>, "name") ??
+			getRecordString(action.args as Record<string, unknown>, "toolName") ??
+			getRecordString(action.args as Record<string, unknown>, "tool_name"),
+		argKeys: Object.keys(action.args as Record<string, unknown>).slice(0, 20),
+	});
+	emitGitLabDuoWorkflowActionToolCall(state, action);
+	if (state.providerSessionState?.active) {
+		state.providerSessionState.active.pendingAction = action;
+	}
+	return "action";
+}
+function isGitLabWorkflowApprovalStatus(status: string | undefined): boolean {
+	return status === "PLAN_APPROVAL_REQUIRED" || status === "TOOL_CALL_APPROVAL_REQUIRED";
+}
+
+function isGitLabWorkflowCompletionStatus(status: string | undefined): boolean {
+	return status === "INPUT_REQUIRED" || status === "FINISHED";
+}
+// Matches the DWS GraphRecursionError surface ("The workflow reached its maximum
+// step limit and could not complete."). The leading clause is stable across
+// flows; match on it case-insensitively so a fresh workflow can continue the run.
+function isGitLabDuoWorkflowStepLimitMessage(message: string): boolean {
+	return message.toLowerCase().includes("reached its maximum step limit");
+}
+export function buildGitLabDuoWorkflowApprovalStartRequest(
+	startPayload: GitLabDuoWorkflowStartRequest,
+): GitLabDuoWorkflowStartRequest {
+	return {
+		...startPayload,
+		goal: "",
+		additional_context: [],
+		approval: { approval: {} },
+	};
+}
+
+function buildGitLabDuoWorkflowActionResponse(
+	requestID: string,
+	response: GitLabPlainTextResponse,
+): GitLabDuoWorkflowActionResponse {
+	return { actionResponse: { requestID, plainTextResponse: response } };
+}
+
+function gitLabToolResultToText(toolResult: ToolResultMessage): string {
+	return toolResult.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
+}
+
+function buildGitLabMcpToolDefinition(tool: Tool): GitLabMcpToolDefinition {
+	const schema = toolWireSchema(tool);
+	return {
+		name: `mcp__omp__${tool.name}`,
+		originalToolName: tool.name,
+		serverName: "omp",
+		description: tool.description || "",
+		inputSchema: JSON.stringify(
+			schema && typeof schema === "object" ? schema : { type: "object", properties: {}, required: [] },
+		),
+		isApproved: true,
+	};
+}
+
+function createAssistantMessage(model: Model<Api>): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+function hydrateGitLabDuoWorkflowCheckpointState(
+	state: GitLabDuoWorkflowStreamState,
+	session: GitLabDuoWorkflowActiveSession,
+): void {
+	state.checkpointAgentContentByKey = session.checkpointAgentContentByKey;
+	state.checkpointAgentContentSignatures = session.checkpointAgentContentSignatures;
+}
+
+function syncGitLabDuoWorkflowCheckpointState(state: GitLabDuoWorkflowStreamState): void {
+	const active = state.providerSessionState?.active;
+	if (!active) return;
+	active.checkpointAgentContentByKey = state.checkpointAgentContentByKey;
+	active.checkpointAgentContentSignatures = state.checkpointAgentContentSignatures;
+}
+
+function emitGitLabDuoWorkflowCheckpoint(
+	state: GitLabDuoWorkflowStreamState,
+	checkpoint: GitLabDuoWorkflowCheckpointContent,
+): void {
+	if (checkpoint.contextUsage) {
+		applyGitLabDuoWorkflowContextUsage(state, checkpoint.contextUsage);
+	}
+	// GitLab checkpoints are full ui_chat_log snapshots, so a later frame replays
+	// earlier request/tool boundaries before the new agent delta. Pause only on a
+	// boundary that follows a delta emitted in THIS checkpoint (`deltaThisCheckpoint`),
+	// not any delta emitted earlier in the socket call — otherwise a stale replayed
+	// boundary would fire one pause_turn per snapshot and hit the loop's continuation cap.
+	let deltaThisCheckpoint = false;
+	for (const entry of checkpoint.entries) {
+		if (entry.kind === "boundary") {
+			if (deltaThisCheckpoint && state.providerSessionState?.active) {
+				state.pauseRequested = true;
+				return;
+			}
+			endGitLabDuoWorkflowText(state);
+			endGitLabDuoWorkflowThinking(state);
+			continue;
+		}
+
+		const contentByKey = state.checkpointAgentContentByKey ?? {};
+		const contentSignatures = state.checkpointAgentContentSignatures ?? {};
+		const previousContent = contentByKey[entry.messageKey];
+		const contentSignature = `${entry.kind}\u0000${entry.content}`;
+		const contentOnlySignature = `content\u0000${entry.content}`;
+		const duplicateContent =
+			previousContent === undefined &&
+			(contentSignatures[contentSignature] === true || contentSignatures[contentOnlySignature] === true);
+		const rewroteExistingContent =
+			previousContent !== undefined &&
+			!entry.content.startsWith(previousContent) &&
+			previousContent !== entry.content;
+		const delta = duplicateContent
+			? ""
+			: rewroteExistingContent
+				? ""
+				: previousContent !== undefined
+					? entry.content.slice(previousContent.length)
+					: entry.content;
+
+		contentByKey[entry.messageKey] = entry.content;
+		contentSignatures[contentSignature] = true;
+		contentSignatures[contentOnlySignature] = true;
+		state.checkpointAgentContentByKey = contentByKey;
+		state.checkpointAgentContentSignatures = contentSignatures;
+		syncGitLabDuoWorkflowCheckpointState(state);
+
+		if (delta.length === 0) continue;
+
+		if (
+			state.activeCheckpointMessageKey &&
+			state.activeCheckpointMessageKey !== entry.messageKey &&
+			previousContent === undefined
+		) {
+			endGitLabDuoWorkflowText(state);
+			endGitLabDuoWorkflowThinking(state);
+		}
+		emitGitLabDuoWorkflowCheckpointSegment(state, entry.kind, delta);
+		state.activeCheckpointMessageKey = entry.messageKey;
+		deltaThisCheckpoint = true;
+	}
+}
+
+// Map the server's per-agent context occupancy onto the assistant usage so the per-message
+// usage row reflects the real prompt/context size. total_tokens is GitLab's full-history
+// estimate (the input/prompt side); there is no separate billing usage on this transport.
+function applyGitLabDuoWorkflowContextUsage(
+	state: GitLabDuoWorkflowStreamState,
+	contextUsage: GitLabDuoWorkflowContextUsage,
+): void {
+	const usage = state.output.usage;
+	usage.input = contextUsage.used;
+	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+}
+
+function emitGitLabDuoWorkflowCheckpointSegment(
+	state: GitLabDuoWorkflowStreamState,
+	kind: GitLabDuoWorkflowCheckpointKind,
+	delta: string,
+): void {
+	if (kind === "thinking") {
+		emitGitLabDuoWorkflowThinking(state, delta);
+		return;
+	}
+	emitGitLabDuoWorkflowText(state, delta);
+}
+
+function emitGitLabDuoWorkflowText(state: GitLabDuoWorkflowStreamState, text: string): void {
+	if (!text) return;
+	endGitLabDuoWorkflowThinking(state);
+	let activeTextIndex = state.activeTextIndex;
+	if (activeTextIndex === undefined) {
+		const block = { type: "text" as const, text: "" };
+		state.output.content.push(block);
+		activeTextIndex = state.output.content.length - 1;
+		state.activeTextIndex = activeTextIndex;
+		state.stream.push({ type: "text_start", contentIndex: activeTextIndex, partial: state.output });
+	}
+	const block = state.output.content[activeTextIndex];
+	if (block?.type !== "text") return;
+	block.text += text;
+	state.stream.push({ type: "text_delta", contentIndex: activeTextIndex, delta: text, partial: state.output });
+}
+
+function emitGitLabDuoWorkflowThinking(state: GitLabDuoWorkflowStreamState, thinking: string): void {
+	if (!thinking) return;
+	endGitLabDuoWorkflowText(state);
+	let activeThinkingIndex = state.activeThinkingIndex;
+	if (activeThinkingIndex === undefined) {
+		const block = { type: "thinking" as const, thinking: "" };
+		state.output.content.push(block);
+		activeThinkingIndex = state.output.content.length - 1;
+		state.activeThinkingIndex = activeThinkingIndex;
+		state.stream.push({ type: "thinking_start", contentIndex: activeThinkingIndex, partial: state.output });
+	}
+	const block = state.output.content[activeThinkingIndex];
+	if (block?.type !== "thinking") return;
+	block.thinking += thinking;
+	state.stream.push({
+		type: "thinking_delta",
+		contentIndex: activeThinkingIndex,
+		delta: thinking,
+		partial: state.output,
+	});
+}
+
+function endGitLabDuoWorkflowText(state: GitLabDuoWorkflowStreamState): void {
+	if (state.activeTextIndex === undefined) return;
+	const block = state.output.content[state.activeTextIndex];
+	if (block?.type === "text") {
+		state.stream.push({
+			type: "text_end",
+			contentIndex: state.activeTextIndex,
+			content: block.text,
+			partial: state.output,
+		});
+	}
+	state.activeTextIndex = undefined;
+}
+
+function endGitLabDuoWorkflowThinking(state: GitLabDuoWorkflowStreamState): void {
+	if (state.activeThinkingIndex === undefined) return;
+	const block = state.output.content[state.activeThinkingIndex];
+	if (block?.type === "thinking") {
+		state.stream.push({
+			type: "thinking_end",
+			contentIndex: state.activeThinkingIndex,
+			content: block.thinking,
+			partial: state.output,
+		});
+	}
+	state.activeThinkingIndex = undefined;
+}
+
+function finishGitLabDuoWorkflowStream(
+	state: GitLabDuoWorkflowStreamState,
+	reason: Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">,
+): void {
+	endGitLabDuoWorkflowText(state);
+	endGitLabDuoWorkflowThinking(state);
+	state.output.stopReason = reason;
+	state.stream.push({ type: "done", reason, message: state.output });
+}
+
+// Finalize a resumed-socket turn. `action`/`pause` keep the session alive for the
+// next resume; every other result (`terminal`/`closed`/`approval`/`timeout`) drops
+// the resumable session, and — because only `terminal` carries a server `done` —
+// emits a terminal `done` for the rest so the assistant stream never hangs open
+// after a tool result the way the fresh-workflow loop already finalizes.
+function finalizeGitLabDuoWorkflowResumeResult(
+	state: GitLabDuoWorkflowStreamState,
+	providerSessionState: GitLabDuoWorkflowProviderSessionState | undefined,
+	result: GitLabDuoWorkflowSocketResult,
+): void {
+	if (result === "action" || result === "pause") return;
+	if (providerSessionState) {
+		providerSessionState.active = undefined;
+	}
+	if (result !== "terminal" && !state.stream.done) {
+		finishGitLabDuoWorkflowStream(state, "stop");
+	}
+}
+
+function pauseGitLabDuoWorkflowStream(state: GitLabDuoWorkflowStreamState): void {
+	endGitLabDuoWorkflowText(state);
+	endGitLabDuoWorkflowThinking(state);
+	state.output.stopReason = "stop";
+	state.output.stopDetails = { type: "pause_turn" };
+	state.stream.push({ type: "done", reason: "stop", message: state.output });
+}
+
+interface GitLabDuoWorkflowReplayMessage {
+	role: Message["role"];
+	content: string;
+	toolCallId?: string;
+	toolName?: string;
+	isError?: boolean;
+}
+
+function buildGitLabDuoWorkflowGoal(context: Context): string {
+	const latestUserRequest = extractLatestUserPrompt(context.messages);
+	const systemInstructions = normalizeSystemPrompts(context.systemPrompt);
+	const conversationHistory = buildGitLabDuoWorkflowConversationHistory(context.messages);
+	if (systemInstructions.length === 0 && conversationHistory.length === 0) return latestUserRequest;
+	return prompt.render(gitLabDuoWorkflowGoalTemplate, {
+		systemInstructionsJson: safeGitLabDuoWorkflowGoalJson(systemInstructions),
+		conversationHistoryJson: safeGitLabDuoWorkflowGoalJson(conversationHistory),
+		latestUserRequestJson: safeGitLabDuoWorkflowGoalJson(latestUserRequest),
+	});
+}
+
+function buildGitLabDuoWorkflowConversationHistory(messages: readonly Message[]): GitLabDuoWorkflowReplayMessage[] {
+	const latestUserIndex = findLatestGitLabDuoWorkflowUserMessageIndex(messages);
+	const endIndex = latestUserIndex >= 0 ? latestUserIndex : messages.length;
+	const history: GitLabDuoWorkflowReplayMessage[] = [];
+	for (let index = 0; index < endIndex; index++) {
+		const replayMessage = buildGitLabDuoWorkflowReplayMessage(messages[index]);
+		if (replayMessage) history.push(replayMessage);
+	}
+	return history;
+}
+
+function buildGitLabDuoWorkflowReplayMessage(message: Message | undefined): GitLabDuoWorkflowReplayMessage | undefined {
+	if (!message) return undefined;
+	const content = gitLabDuoWorkflowMessageContentToText(message);
+	if (content.length === 0) return undefined;
+	if (message.role === "toolResult") {
+		return {
+			role: message.role,
+			content,
+			toolCallId: message.toolCallId,
+			toolName: message.toolName,
+			isError: message.isError,
+		};
+	}
+	return { role: message.role, content };
+}
+
+function extractLatestUserPrompt(messages: readonly Message[]): string {
+	const index = findLatestGitLabDuoWorkflowUserMessageIndex(messages);
+	if (index < 0) return "";
+	return gitLabDuoWorkflowUserContentToText(messages[index] as Exclude<Message, AssistantMessage>);
+}
+
+function findLatestGitLabDuoWorkflowUserMessageIndex(messages: readonly Message[]): number {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message?.role === "user" || message?.role === "developer") return index;
+	}
+	return -1;
+}
+
+function gitLabDuoWorkflowMessageContentToText(message: Message): string {
+	if (message.role === "assistant") {
+		return message.content
+			.map(item => {
+				if (item.type === "text") return item.text;
+				if (item.type === "thinking" || item.type === "redactedThinking") return "";
+				return "";
+			})
+			.join("\n");
+	}
+	return gitLabDuoWorkflowUserContentToText(message);
+}
+
+function gitLabDuoWorkflowUserContentToText(message: Exclude<Message, AssistantMessage>): string {
+	if (typeof message.content === "string") return message.content;
+	return message.content.map(item => (item.type === "text" ? item.text : `[${item.mimeType} image]`)).join("\n");
+}
+
+export function describeGitLabDuoWorkflowSocketEvent(event: unknown): string {
+	const fields: string[] = [];
+	if (event && typeof event === "object") {
+		const type = getRecordString(event, "type");
+		const message = getRecordString(event, "message");
+		const code = getRecordString(event, "code");
+		const reason = getRecordString(event, "reason");
+		const error = socketEventErrorText((event as Record<string, unknown>).error);
+		if (type) fields.push(`type=${type}`);
+		if (message) fields.push(`message=${message}`);
+		if (error) fields.push(`error=${error}`);
+		if (code) fields.push(`code=${code}`);
+		if (reason) fields.push(`reason=${reason}`);
+	}
+	const fallback = fields.length > 0 ? fields.join(", ") : String(event);
+	return gitLabDuoWorkflowErrorText(fallback);
+}
+
+function socketEventErrorText(error: unknown): string | undefined {
+	if (typeof error === "string" || typeof error === "number") return String(error);
+	if (error instanceof Error) return error.message;
+	if (error && typeof error === "object") {
+		return getRecordString(error, "message") ?? getRecordString(error, "name");
+	}
+	return undefined;
+}
+
+export function traceGitLabDuoWorkflow(event: string, data: Record<string, unknown> = {}): void {
+	if (Bun.env[GITLAB_DUO_WORKFLOW_TRACE_ENV] !== "1") return;
+	const traceFile = Bun.env[GITLAB_DUO_WORKFLOW_TRACE_FILE_ENV]?.trim() || DEFAULT_GITLAB_DUO_WORKFLOW_TRACE_FILE;
+	const line = `${JSON.stringify({
+		time: new Date().toISOString(),
+		event,
+		...truncateGitLabTraceData(data),
+	})}\n`;
+	void fs
+		.mkdir(path.dirname(traceFile), { recursive: true })
+		.then(() => fs.appendFile(traceFile, line, "utf8"))
+		.catch(() => {});
+}
+
+function truncateGitLabTraceData(data: Record<string, unknown>): Record<string, unknown> {
+	const truncated: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(data)) {
+		truncated[key] = truncateGitLabTraceValue(value);
+	}
+	return truncated;
+}
+
+function truncateGitLabTraceValue(value: unknown): unknown {
+	if (typeof value === "string") return value.slice(0, 500);
+	if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+	if (Array.isArray(value)) return value.slice(0, 20).map(item => truncateGitLabTraceValue(item));
+	if (value && typeof value === "object") return truncateGitLabTraceData(value as Record<string, unknown>);
+	return value;
+}
+
+function normalizeGitLabBaseUrl(baseUrl: string): string {
+	return baseUrl.replace(/\/+$/, "") || DEFAULT_GITLAB_BASE_URL;
+}
+
+// Join a GitLab API path onto a base URL while preserving any relative install path
+// (e.g. self-managed `https://host/gitlab`). `new URL("/api/...", base)` discards the
+// base path; concatenating onto the trailing-slash-trimmed base keeps it.
+function gitLabApiUrl(baseUrl: string, path: string): URL {
+	const normalized = normalizeGitLabBaseUrl(baseUrl);
+	return new URL(`${normalized}${path.startsWith("/") ? path : `/${path}`}`);
+}
+
+function normalizeGitLabDuoWorkflowServiceBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.trim();
+	const absolute = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+	return normalizeGitLabBaseUrl(absolute);
+}
+
+function toGitLabGraphQLNamespaceId(rootNamespaceId: string): string {
+	if (/^\d+$/.test(rootNamespaceId)) return `gid://gitlab/Group/${rootNamespaceId}`;
+	return rootNamespaceId;
+}
+
+function toGitLabRestNamespaceId(rootNamespaceId: string): string {
+	const match = rootNamespaceId.match(/^gid:\/\/gitlab\/(?:Group|Namespace)\/(\d+)$/);
+	return match?.[1] ?? rootNamespaceId;
+}
+
+export function extractGitLabWorkflowToken(payload: GitLabDirectAccessResponse): string | undefined {
+	return (
+		payload.gitlab_rails?.token ??
+		payload.duo_workflow_service?.token ??
+		payload.duo_workflow_access_token ??
+		payload.workflow_token ??
+		payload.token ??
+		payload.access_token ??
+		payload.jwt
+	);
+}
+
+export async function resolveGitLabDuoWorkflowNamespaceSelection(
+	model: Model<"gitlab-duo-agent">,
+	options: GitLabDuoWorkflowOptions,
+	apiKey: string,
+	baseUrl: string,
+	fetchImpl: FetchImpl,
+): Promise<GitLabDuoWorkflowNamespaceSelection> {
+	// Re-discover the namespace from the current credentials/cwd each turn rather than
+	// trusting model.gitlabDuoWorkflowRootNamespaceId, which can be stale (the account's
+	// other top-level groups, or a cwd/env shift between model refresh and this turn).
+	void model;
+	const configured =
+		nonEmptyString(options.rootNamespaceId) ??
+		nonEmptyString(options.namespaceId) ??
+		nonEmptyString(Bun.env.GITLAB_DUO_NAMESPACE_ID);
+
+	try {
+		const projectId =
+			nonEmptyString(options.projectId) ??
+			nonEmptyString(options.projectPath) ??
+			nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_ID) ??
+			nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_PATH);
+		return await discoverGitLabDuoWorkflowRuntimeNamespace({
+			apiKey,
+			baseUrl,
+			fetch: fetchImpl,
+			namespaceId: configured,
+			projectId,
+			cwd: options.cwd,
+		});
+	} catch (error) {
+		throw new Error(`GitLab Duo Workflow runtime namespace resolution failed: ${gitLabDuoWorkflowErrorText(error)}`);
+	}
+}
+
+export async function resolveGitLabDuoWorkflowRootNamespaceId(
+	model: Model<"gitlab-duo-agent">,
+	options: GitLabDuoWorkflowOptions,
+	apiKey: string,
+	baseUrl: string,
+	fetchImpl: FetchImpl,
+): Promise<string> {
+	const selection = await resolveGitLabDuoWorkflowNamespaceSelection(model, options, apiKey, baseUrl, fetchImpl);
+	return selection.rootNamespaceId;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function resolveGitLabDuoWorkflowDefinition(
+	workflowDefinition: GitLabDuoWorkflowDefinition | undefined,
+): GitLabDuoWorkflowDefinition {
+	const configured =
+		nonEmptyString(workflowDefinition) ??
+		nonEmptyString(Bun.env.GITLAB_DUO_WORKFLOW_DEFINITION) ??
+		GITLAB_DUO_WORKFLOW_DEFINITION;
+	return configured;
+}
+
+// Every workflow definition OMP ships is the inline ambient flow (Path B /
+// `flowConfig`); the predicate is kept as a seam for future server-side flows.
+function isGitLabDuoWorkflowInlineFlow(workflowDefinition: GitLabDuoWorkflowDefinition): boolean {
+	void workflowDefinition;
+	return true;
+}
+
+function parseGitLabDuoWorkflowSocketData(data: unknown): Record<string, unknown> | null {
+	if (typeof data === "string") return parseJsonRecord(data);
+	if (data instanceof ArrayBuffer) return parseJsonRecord(new TextDecoder().decode(data));
+	if (data instanceof Uint8Array) return parseJsonRecord(new TextDecoder().decode(data));
+	if (data && typeof data === "object") return data as Record<string, unknown>;
+	return null;
+}
+
+function parseJsonRecord(text: string): Record<string, unknown> | null {
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+	} catch {
+		return null;
+	}
+}
+
+function numberField(record: Record<string, unknown>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+	return nonEmptyString(record[key]);
+}
+
+function extractGitLabDuoWorkflowCheckpoint(
+	event: Record<string, unknown>,
+): GitLabDuoWorkflowCheckpointContent | undefined {
+	const action = getRecord(event, "action");
+	const checkpoint =
+		getRecord(action, "newCheckpoint") ?? getRecord(event, "newCheckpoint") ?? getRecord(event, "checkpoint");
+	if (!checkpoint) return undefined;
+	const directText =
+		getRecordString(checkpoint, "message") ??
+		getRecordString(checkpoint, "text") ??
+		getRecordString(checkpoint, "content") ??
+		getNestedRecordString(checkpoint, "checkpoint", "message") ??
+		getNestedRecordString(checkpoint, "checkpoint", "text");
+	const contextUsage = extractGitLabDuoWorkflowContextUsage(event, action, checkpoint);
+	if (directText) {
+		return {
+			entries: [{ kind: "text", messageIndex: 0, messageKey: "direct:text", content: directText }],
+			contentLength: directText.length,
+			contextUsage,
+		};
+	}
+	const checkpointJson = getRecordString(checkpoint, "checkpoint");
+	const content = checkpointJson ? extractGitLabCheckpointEntries(checkpointJson) : undefined;
+	if (content) {
+		if (contextUsage) content.contextUsage = contextUsage;
+		return content;
+	}
+	if (contextUsage) {
+		return { entries: [], contentLength: 0, contextUsage };
+	}
+	return undefined;
+}
+
+// GitLab Duo Workflow Service attaches per-agent context occupancy to every checkpoint
+// (`checkpointer/notifier.py`): agent_context_usage[<agent>] = { total_tokens, max_tokens }.
+// total_tokens is the server-side token estimate of that agent's full history; max_tokens
+// is the model context window (claude_opus_4_8 observed at 1_000_000). The field rides on
+// the event root in practice but can also appear under `action`/`newCheckpoint`.
+function extractGitLabDuoWorkflowContextUsage(
+	...sources: (Record<string, unknown> | undefined)[]
+): GitLabDuoWorkflowContextUsage | undefined {
+	for (const source of sources) {
+		const usageMap = getRecord(source, "agent_context_usage");
+		if (!usageMap) continue;
+		const selected = selectGitLabDuoWorkflowContextUsageAgent(usageMap);
+		if (selected) return selected;
+	}
+	return undefined;
+}
+
+const GITLAB_DUO_WORKFLOW_CONTEXT_AGENT_PRIORITY = ["Chat Agent", "context_builder"];
+
+function selectGitLabDuoWorkflowContextUsageAgent(
+	usageMap: Record<string, unknown>,
+): GitLabDuoWorkflowContextUsage | undefined {
+	for (const preferred of GITLAB_DUO_WORKFLOW_CONTEXT_AGENT_PRIORITY) {
+		const usage = readGitLabDuoWorkflowAgentUsage(usageMap[preferred]);
+		if (usage) return usage;
+	}
+	for (const value of Object.values(usageMap)) {
+		const usage = readGitLabDuoWorkflowAgentUsage(value);
+		if (usage) return usage;
+	}
+	return undefined;
+}
+
+function readGitLabDuoWorkflowAgentUsage(value: unknown): GitLabDuoWorkflowContextUsage | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const record = value as Record<string, unknown>;
+	const used = numberField(record, "total_tokens");
+	const window = numberField(record, "max_tokens");
+	if (used === undefined || window === undefined || window <= 0) return undefined;
+	return { used, window };
+}
+
+function extractGitLabCheckpointEntries(checkpointJson: string): GitLabDuoWorkflowCheckpointContent | undefined {
+	const checkpoint = parseJsonRecord(checkpointJson);
+	const channelValues = getRecord(checkpoint, "channel_values");
+	const chatLog = channelValues?.ui_chat_log;
+	if (!Array.isArray(chatLog)) return undefined;
+	const entries: GitLabDuoWorkflowCheckpointEntry[] = [];
+	for (let index = 0; index < chatLog.length; index++) {
+		const entry = chatLog[index];
+		if (!entry || typeof entry !== "object") continue;
+		const record = entry as Record<string, unknown>;
+		const messageType = getRecordString(record, "message_type");
+		if (messageType === "agent") {
+			const content = getRecordString(record, "content");
+			if (!content) continue;
+			const messageId = getRecordString(record, "message_id");
+			// `message_sub_type: "reasoning"` is the agent's pre-tool-call
+			// commentary the inline flow opts into via `on_agent_reasoning`; map it
+			// to a thinking block. Other agent text is the answer → text.
+			const isReasoning = getRecordString(record, "message_sub_type") === "reasoning";
+			const fallbackKey = isReasoning ? `reasoning:${index}` : `agent:${index}`;
+			entries.push({
+				kind: isReasoning ? "thinking" : "text",
+				messageIndex: index,
+				messageKey: messageId ? `agent:${messageId}` : fallbackKey,
+				content,
+			});
+			continue;
+		}
+		if (messageType === "request" || messageType === "tool") {
+			entries.push({ kind: "boundary", messageIndex: index });
+		}
+	}
+	return {
+		entries,
+		contentLength: checkpointJson.length,
+		messageCount: chatLog.length,
+		latestMessageType: getGitLabDuoWorkflowLatestMessageType(chatLog),
+	};
+}
+
+function getGitLabDuoWorkflowLatestMessageType(chatLog: unknown[]): string | undefined {
+	for (let index = chatLog.length - 1; index >= 0; index--) {
+		const entry = chatLog[index];
+		if (!entry || typeof entry !== "object") continue;
+		const messageType = getRecordString(entry, "message_type");
+		if (messageType) return messageType;
+	}
+	return undefined;
+}
+
+function extractGitLabDuoWorkflowAction(event: Record<string, unknown>): GitLabDuoWorkflowActionDescriptor | undefined {
+	const wrappedAction =
+		getRecord(event, "action") ?? getRecord(event, "workflowAction") ?? getRecord(event, "toolCall");
+	if (wrappedAction) {
+		if (getRecord(wrappedAction, "newCheckpoint")) return undefined;
+		const name =
+			getRecordString(wrappedAction, "name") ??
+			getRecordString(wrappedAction, "action") ??
+			getRecordString(wrappedAction, "type") ??
+			getRecordString(event, "actionName");
+		if (!name) return undefined;
+		const requestID =
+			getRecordString(wrappedAction, "requestID") ??
+			getRecordString(wrappedAction, "requestId") ??
+			getRecordString(wrappedAction, "id") ??
+			getRecordString(event, "requestID") ??
+			getRecordString(event, "requestId") ??
+			crypto.randomUUID();
+		const args = getRecord(wrappedAction, "args") ?? getRecord(wrappedAction, "arguments") ?? wrappedAction;
+		return { requestID, name, args: withGitLabDuoWorkflowToolCallId(args, requestID) };
+	}
+	for (const name of GITLAB_DUO_WORKFLOW_ACTION_NAMES) {
+		const args = getRecord(event, name);
+		if (args) {
+			const requestID =
+				getRecordString(event, "requestID") ?? getRecordString(event, "requestId") ?? crypto.randomUUID();
+			return { requestID, name, args: withGitLabDuoWorkflowToolCallId(args, requestID) };
+		}
+	}
+	return undefined;
+}
+
+function withGitLabDuoWorkflowToolCallId(args: unknown, requestID: string): unknown {
+	const record = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+	if (typeof record.toolCallId === "string" || typeof record.tool_call_id === "string") {
+		return record;
+	}
+	return { ...record, toolCallId: requestID, tool_call_id: requestID };
+}
+
+function getRecord(value: unknown, key: string): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const nested = (value as Record<string, unknown>)[key];
+	return nested && typeof nested === "object" ? (nested as Record<string, unknown>) : undefined;
+}
+
+function getRecordString(value: unknown, key: string): string | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const nested = (value as Record<string, unknown>)[key];
+	return typeof nested === "string" || typeof nested === "number" ? String(nested) : undefined;
+}
+
+function getNestedRecordString(value: unknown, parentKey: string, key: string): string | undefined {
+	return getRecordString(getRecord(value, parentKey), key);
+}
