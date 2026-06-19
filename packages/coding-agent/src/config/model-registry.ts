@@ -1278,7 +1278,12 @@ export class ModelRegistry {
 					models: cached?.models.map(model => model.id) ?? [],
 				});
 				this.#lastDiscoveryWarnings.delete(providerConfig.provider);
-				return cached ? cached.models.map(model => buildModel(model)) : [];
+				return cached
+					? this.#normalizeDiscoverableModels(
+							providerConfig,
+							cached.models.map(model => buildModel(model)),
+						)
+					: [];
 			}
 		}
 
