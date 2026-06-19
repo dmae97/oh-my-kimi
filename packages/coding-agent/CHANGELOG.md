@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
+
 ## [16.1.1] - 2026-06-19
 
 ### Changed

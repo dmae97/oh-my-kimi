@@ -133,7 +133,23 @@ Split a job across workers and get typed results back. task fans out into isolat
 
 _[Watch the capture ↗](https://omp.sh/clips/irc.mp4)_
 
-### 06 · Read a pdf on arxiv, why not?
+### 06 · A second model, watching every turn.
+
+Pair a reviewer model to the 'advisor' role and it reads every turn the main agent takes, injecting notes inline — a quiet aside, a concern, or a hard blocker. It runs on its own context and its own model, so it catches what the doer rushed past. The main agent sees the note and course-corrects, or tells you why it won't.
+
+![omp TUI: /advisor status shows the advisor running on openai-codex/gpt-5.5; after the main agent scopes a catch to ENOENT instead of swallowing every error, an amber 'Advisor 1 note (concern)' card warns the fix no longer matches the user's literal acceptance criterion.](https://omp.sh/clips/advisor-poster.webp)
+
+_[Watch the capture ↗](https://omp.sh/clips/advisor.mp4)_
+
+### 07 · Hand someone the link, they're in.
+
+/collab puts your live session on a relay and hands back a link — and a QR. A teammate joins from another terminal with omp join, or just opens it in a browser. Share read-write to pair on the same agent, or /collab view for a read-only link anyone can watch but no one can steer. Frames are sealed client-side; the relay never sees your keys.
+
+![omp TUI: /collab view prints 'Collab session started!' with an omp join command, a my.omp.sh browser link, the note 'Anyone with this link can watch the session but cannot prompt the agent', and a large scannable QR code.](https://omp.sh/clips/collab-poster.webp)
+
+_[Watch the capture ↗](https://omp.sh/clips/collab.mp4)_
+
+### 08 · Read a pdf on arxiv, why not?
 
 web_search chains fourteen ranked providers and hands whatever URLs it finds straight to read. Arxiv PDFs, GitHub pages, Stack Overflow threads come back as structured markdown with anchors intact — the same tool surface you use on local files. Cite, follow, quote, never lose where you came from.
 
@@ -141,45 +157,45 @@ web_search chains fourteen ranked providers and hands whatever URLs it finds str
 
 _[Watch the capture ↗](https://omp.sh/clips/web.mp4)_
 
-### 07 · Unapologetically native. Even on Windows.
+### 09 · Unapologetically native. Even on Windows.
 
 Other agents shell out to rg, grep, find, and bash. On many machines those binaries don't exist, and on the ones where they do, every call costs a fork-exec round-trip. omp links the real implementations into the process. ripgrep, glob, find: in-process. brush is the bash, with sessions that survive across calls. The same omp binary runs on macOS, Linux, and Windows — no WSL bridge.
 
-### 08 · Code review with priorities and a verdict
+### 10 · Code review with priorities and a verdict
 
 Get a clear verdict on whether the change ships, with every issue ranked P0 through P3 and scored for confidence. /review spawns dedicated reviewer subagents that sweep branches, single commits, or uncommitted work in parallel. You tackle what blocks release first; nothing important hides in a wall of prose.
 
-### 09 · Hashline: edit by content hash
+### 11 · Hashline: edit by content hash
 
 Perfect edits, fewer tokens. The model points at anchors instead of retyping the lines it wants to change, so whitespace battles and string-not-found loops just stop happening. Edit a stale file and the anchors diverge — we reject the patch before it corrupts anything. Grok 4 Fast spends 61% fewer output tokens on the same work.
 
-### 10 · GitHub is just another filesystem
+### 12 · GitHub is just another filesystem
 
 Other harnesses bolt on gh_issue_view, gh_pr_view, gh_search — each with its own parameters the agent has to learn and you have to debug. We skipped that. read already handles paths; PRs are paths. One interface to teach the model, one surface to keep correct.
 
-### 11 · Hindsight: memory the agent curates
+### 13 · Hindsight: memory the agent curates
 
 The agent remembers your codebase between sessions. It writes facts mid-run with retain, pulls them back with recall, and compresses each session into a mental model that loads on the first turn of the next one. Project-scoped by default, so what it learns about this repo stays with this repo.
 
-### 12 · ACP: editor-drivable agent
+### 14 · ACP: editor-drivable agent
 
 Run omp inside Zed and you get the same agent you drive from the terminal — reading the buffer you're actually looking at, writing through the editor's save path, spawning shells in the editor's terminal. Destructive tools pause for a permission prompt you can answer once and forget. No bridge, no plugin, no second brain to keep in sync.
 
-### 13 · Inherits what your other tools already wrote
+### 15 · Inherits what your other tools already wrote
 
 Every other agent ships an importer and expects you to convert. omp reads the eight formats already on disk in their native shape — Cursor MDC, Cline .clinerules, Codex AGENTS.md, Copilot applyTo, and the rest. No migration script, no YAML-to-TOML port, no "supported subset" footnotes. The config your team wrote last quarter still works tonight.
 
-### 14 · omp commit: atomic splits, validated messages
+### 16 · omp commit: atomic splits, validated messages
 
 omp reads the working tree through git_overview, git_file_diff, and git_hunk, then splits unrelated changes into atomic commits ordered by their dependencies. Cycles are rejected before anything is written. Source files score above tests, docs, and configs, so the headline commit is the one that matters. Lock files are excluded from analysis entirely.
 
-### 15 · Read PRs. _Walk skills._ Pull JSON out of subagents.
+### 17 · Read PRs. _Walk skills._ Pull JSON out of subagents.
 
 Twelve internal schemes — `pr://`, `issue://`, `agent://`, `skill://`, `rule://`, and the rest — resolve transparently inside every FS-shaped tool the agent already calls. `read pr://1428` returns the same shape as `read src/foo.ts`. `search` walks a diff like a directory. `agent://<id>/findings.0.path` pulls a field out of a subagent's output by path.
 
 ![omp TUI reading pr://can1357/oh-my-pi/1063 and then /diff/1, showing hunk headers, added lines, and a [MODIFIED] (+12 -0) summary.](https://omp.sh/captures/pr.webp)
 
-### 16 · Conflict resolution, made easy.
+### 18 · Conflict resolution, made easy.
 
 Each merge conflict becomes one URL. The agent writes `@theirs`, `@ours`, or `@base` to `conflict://N` and the file resolves cleanly. Bulk form: `conflict://*`.
 
@@ -187,7 +203,7 @@ Each merge conflict becomes one URL. The agent writes `@theirs`, `@ours`, or `@b
 
 _[Watch the capture ↗](https://omp.sh/clips/conflict.mp4)_
 
-### 17 · Preview, then accept.
+### 19 · Preview, then accept.
 
 `ast_edit` returns a _(proposed)_ card with the replacement count. The change is staged. The agent calls `resolve` with a reason; the TUI turns it into an **Accept** card and the disk move happens — atomic, all or nothing.
 
@@ -195,7 +211,7 @@ _[Watch the capture ↗](https://omp.sh/clips/conflict.mp4)_
 
 _[Watch the capture ↗](https://omp.sh/clips/codemod.mp4)_
 
-### 18 · Drives a _real browser_. _Or your Slack?_
+### 20 · Drives a _real browser_. _Or your Slack?_
 
 Stealth's on by default, so pages see a normal user instead of a headless bot. The same API drives any Electron app in place — point it at Slack and the agent reads your DMs the way it reads the web.
 

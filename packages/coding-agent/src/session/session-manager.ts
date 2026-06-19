@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ImageContent, Message, MessageAttribution, ServiceTier, TextContent, Usage } from "@oh-my-pi/pi-ai";
-import { getBlobsDir, getProjectDir, getSessionsDir, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
+import {
+	directoryExists,
+	getBlobsDir,
+	getProjectDir,
+	getSessionsDir,
+	isEnoent,
+	logger,
+	toError,
+} from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {
@@ -69,21 +77,6 @@ function fileSafeTimestamp(iso: string): string {
 
 function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFile.slice(0, -JSONL_SUFFIX_LENGTH) : null;
-}
-
-/**
- * Whether `dir` resolves to an existing directory. Any stat failure (ENOENT for
- * a deleted project, EACCES, ENOTDIR, …) means it is not usable as a working
- * directory, so the caller keeps the current cwd instead of adopting a path it
- * cannot `chdir` into.
- */
-async function directoryExists(dir: string): Promise<boolean> {
-	try {
-		return (await fs.promises.stat(dir)).isDirectory();
-	} catch (err) {
-		if (!isEnoent(err)) logger.debug("session cwd stat failed", { dir, error: toError(err).message });
-		return false;
-	}
 }
 
 /**
@@ -1580,8 +1573,19 @@ export class SessionManager {
 	): Promise<SessionManager> {
 		const loaded = await loadEntriesFromFile(filePath, storage);
 		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
-		const cwd = header?.cwd ?? options?.initialCwd ?? getProjectDir();
-		const dir = sessionDir ?? path.dirname(path.resolve(filePath));
+		// Resume into the session's recorded cwd only when that directory still
+		// exists. A deleted project dir would make the constructor's #cwd — and the
+		// `setProjectDir` chdir interactive mode runs next — point at (and fail on)
+		// a missing path, so fall back to the launch cwd and anchor /new and /branch
+		// there too, keeping the resumed session where the user already is.
+		const recordedCwd = header?.cwd;
+		const recordedCwdUsable = !!recordedCwd && (await directoryExists(recordedCwd));
+		const cwd = recordedCwdUsable ? recordedCwd : (options?.initialCwd ?? getProjectDir());
+		const dir =
+			sessionDir ??
+			(recordedCwd && !recordedCwdUsable
+				? SessionManager.getDefaultSessionDir(cwd, undefined, storage)
+				: path.dirname(path.resolve(filePath)));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		await manager.setSessionFile(filePath);
@@ -1692,7 +1696,12 @@ export class SessionManager {
 					(newestInTargetDir === null || (newestIsBreadcrumb && !currentProjectAlreadyHasSession));
 				if (looksLikeMovedProject) {
 					logger.info("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
-					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
+					// Anchor at the gone breadcrumb cwd so the moveTo below relocates the
+					// session: open() now falls back to the launch cwd for a missing
+					// recorded cwd, which would no-op moveTo when it equals `cwd`.
+					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage, {
+						initialCwd: breadcrumbCwd,
+					});
 					await manager.moveTo(cwd, sessionDir);
 					return manager;
 				}
