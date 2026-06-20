@@ -256,6 +256,11 @@ export class CollabGuestLink {
 			void this.#restoreLocalSession();
 		};
 		socket.connect();
+		// Cover the connect phase too: if the relay blackholes the WebSocket
+		// handshake (no onOpen, no onClose), onOpen never arms the welcome timer,
+		// so without this the join would hang forever. onOpen re-arms (resetting
+		// the budget) once the socket actually opens.
+		this.#armWelcomeTimer();
 
 		try {
 			await firstWelcome.promise;
