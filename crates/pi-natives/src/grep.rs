@@ -1084,6 +1084,11 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 			return WalkState::Continue;
 		}
 		let matched_count = search.match_count;
+		// Budget on matches we actually return (post per-file cap), mirroring the
+		// sequential path and the aggregator's page accounting. `match_count` can
+		// exceed `collected` by one when a file overflows its per-file cap, which
+		// would stop the walk short of the requested page.
+		let collected = search.collected;
 		self.results.push(FileSearchResult {
 			relative_path: relative.into_owned(),
 			matches:       search.matches,
@@ -1091,8 +1096,8 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 			limit_reached: search.limit_reached,
 		});
 		if let Some(stop) = self.stop_after_matches {
-			let previous = self.emitted.fetch_add(matched_count, Ordering::Relaxed);
-			if previous.saturating_add(matched_count) >= stop {
+			let previous = self.emitted.fetch_add(collected, Ordering::Relaxed);
+			if previous.saturating_add(collected) >= stop {
 				return WalkState::Quit;
 			}
 		}
