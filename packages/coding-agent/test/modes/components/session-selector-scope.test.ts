@@ -90,18 +90,24 @@ describe("SessionSelectorComponent scope toggle", () => {
 		expect(selected[0]?.cwd).toBe("/work/other-project");
 	});
 
-	it("opens directly in all-projects scope when started there with a preloaded list", () => {
+	it("starts in current-folder scope even when the cwd is empty and a global list is preloaded (#3099)", () => {
 		const global = [createSession("remote", "Remote", "/work/other-project")];
 		const selector = new SessionSelectorComponent(
 			[],
 			() => {},
 			() => {},
 			() => {},
-			{ allSessions: global, startInAllScope: true, loadAllSessions: async () => global },
+			{ allSessions: global, loadAllSessions: async () => global },
 		);
 
 		const rendered = selector.render(120).join("\n");
-		expect(rendered).toContain("(all projects)");
-		expect(rendered).toContain("other-project");
+		// Header stays scoped to the cwd so the user is never silently shown
+		// other projects' sessions just because the current folder is empty.
+		expect(rendered).toContain("(current folder)");
+		expect(rendered).not.toContain("(all projects)");
+		expect(rendered).not.toContain("other-project");
+		// The empty-state hint must be visible so the user knows Tab is the way out.
+		expect(rendered).toContain("No sessions in current folder");
+		expect(rendered).toContain("Press Tab to view all");
 	});
 });

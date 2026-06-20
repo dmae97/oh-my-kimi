@@ -454,8 +454,6 @@ export interface SessionSelectorOptions {
 	loadAllSessions?: () => Promise<SessionInfo[]>;
 	/** Preloaded all-projects list; cached so the first Tab toggle is instant. */
 	allSessions?: SessionInfo[];
-	/** Open directly in all-projects scope (e.g. the current folder has no sessions). */
-	startInAllScope?: boolean;
 	/**
 	 * Reads the live terminal height so the visible window fits the viewport.
 	 * Omitted only in tests; defaults to a conservative 24 rows.
@@ -493,11 +491,6 @@ export class SessionSelectorComponent extends Container {
 		this.#loadAllSessions = options.loadAllSessions;
 		this.#folderSessions = sessions;
 		this.#globalSessions = options.allSessions ?? null;
-		// Open in all-projects scope when asked and we already have that list
-		// (e.g. the current folder has no sessions to show).
-		const startAll = options.startInAllScope === true && this.#globalSessions !== null;
-		this.#scope = startAll ? "all" : "folder";
-		const initialSessions = startAll ? this.#globalSessions! : sessions;
 		// Add header
 		this.addChild(new Spacer(1));
 		this.#headerText = new Text(this.#headerLabel(), 1, 0);
@@ -506,8 +499,10 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 		this.addChild(this.#messageContainer);
-		// Create session list
-		this.#sessionList = new SessionList(initialSessions, startAll, options.historyMatcher, options.getTerminalRows);
+		// Create session list in folder scope; the empty-state hint invites the
+		// user to Tab into all-projects rather than silently surfacing other
+		// projects' history (issue #3099).
+		this.#sessionList = new SessionList(sessions, false, options.historyMatcher, options.getTerminalRows);
 		this.#sessionList.onSelect = onSelect;
 		this.#sessionList.onCancel = onCancel;
 		this.#sessionList.onExit = onExit;

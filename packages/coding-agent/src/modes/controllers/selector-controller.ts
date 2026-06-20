@@ -828,14 +828,9 @@ export class SelectorController {
 			this.ctx.sessionManager.getCwd(),
 			this.ctx.sessionManager.getSessionDir(),
 		);
-		// Current folder has no sessions: preload the global list so the picker
-		// can open straight into all-projects scope instead of dead-ending.
-		let allSessions: SessionInfo[] | undefined;
-		let startInAllScope = false;
-		if (sessions.length === 0) {
-			allSessions = await SessionManager.listAll();
-			startInAllScope = allSessions.length > 0;
-		}
+		// Always open in current-folder scope; the empty-state hint in SessionList
+		// invites the user to Tab into all-projects rather than silently surfacing
+		// every project's history when the cwd has nothing to resume. See #3099.
 		const historyStorage = this.ctx.historyStorage;
 		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
 		this.showSelector(done => {
@@ -869,8 +864,6 @@ export class SelectorController {
 					},
 					historyMatcher,
 					loadAllSessions: () => SessionManager.listAll(),
-					allSessions,
-					startInAllScope,
 					getTerminalRows: () => this.ctx.ui.terminal.rows,
 				},
 			);
