@@ -44,7 +44,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 			throw new Error("Expected bundled test models to exist");
 		}
 
-		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1 });
+		const settings = Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" });
 		settings.setModelRole("default", `${defaultRoleModel.provider}/${defaultRoleModel.id}`);
 
 		const agent = new Agent({

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added "Prose Only Thinking" setting to opt-out of rendering code blocks within AI thinking traces
@@ -8,6 +9,7 @@
 - Added a live tokens-per-second readout to the thinking pulse, counting only provider-reported tokens (no character estimate, which undercounts a summarized reasoning trace) and hiding itself whenever the rate is zero. Live numbers therefore appear only for providers that report usage mid-turn; otherwise the bare pulse keeps signalling that the model is thinking.
 - Updated the thinking pulse to a faster starburst whose rotation eases across each cycle (instead of ticking at a fixed rate), with a speed badge that fades from gray to the theme accent as the rate climbs.
 - Added live state previews for high-value built-in slash commands in TUI autocomplete.
+- Added a copy affordance for completed `/btw` answers so users can copy the visible side-answer text before branching or dismissing the panel.
 
 ### Changed
 
@@ -42,6 +44,7 @@
 - Fixed the Alt+M model-configuration menu so role assignment remains selectable for models whose context window is smaller than the current session; the context-size disabling still applies to the Alt+P temporary active-model switch ([#2861](https://github.com/can1357/oh-my-pi/issues/2861)).
 - Fixed the advisor raising false `blocker`s in plan mode (e.g. "don't write a plan file") because it only saw a 120-char truncation of the injected plan-mode rules, which cut off at `NEVER create, edit, or delete files — excep…` and hid the "except the single plan file" carve-out. The advisor delta now expands the primary agent's constraint context (`plan-mode-context`, `plan-mode-reference`) verbatim inside an XML-escaped `<primary-context>` wrapper instead of a one-liner, and `AdvisorRuntime` dedupes the re-injected prompts so an unchanged copy collapses to a marker rather than re-feeding the full rules every turn.
 - Fixed auto-compaction being suppressed when a `before_provider_request` extension shrinks the outgoing request below the real stored conversation (e.g. a context-compression proxy such as Headroom, or an aggressive obfuscator). The provider then reports deflated prompt tokens, so the threshold check never fired and the stored history grew unbounded until it overflowed the context window and could no longer be compacted at all. The compaction decision (both the pre-prompt and post-response paths) now floors the provider-reported context tokens by the agent's own local estimate of the stored conversation, so on-wire compression can no longer hide a too-large history from the auto-compactor. Context display and cost accounting still use the exact provider usage; only the compaction trigger takes the floor.
+- Fixed mnemopi proactive linking being configurable only through the `MNEMOPI_PROACTIVE_LINKING` environment variable, unlike the sibling `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall` settings: added a `mnemopi.proactiveLinking` config.yml setting (off by default, `/settings` → Memory → Mnemopi) that ingests new memories into the episodic graph as they are stored, linking them to related entities and memories; `MNEMOPI_PROACTIVE_LINKING` still overrides the configured value when set ([#2440](https://github.com/can1357/oh-my-pi/issues/2440)).
 
 ## [16.1.7] - 2026-06-20
 
@@ -267,12 +270,6 @@
 
 - Fixed `/model` in the TUI to open the model setup picker again, leaving `/switch` as the temporary session model switcher ([#2933](https://github.com/can1357/oh-my-pi/issues/2933)).
 - Fixed OpenCode Go sessions recording per-request cost history so `/usage` can show local cap utilization. ([#2942](https://github.com/can1357/oh-my-pi/issues/2942))
-### Added
-
-- Added a copy affordance for completed `/btw` answers so users can copy the visible side-answer text before branching or dismissing the panel.
-### Fixed
-
-- Fixed mnemopi proactive linking being configurable only through the `MNEMOPI_PROACTIVE_LINKING` environment variable, unlike the sibling `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall` settings: added a `mnemopi.proactiveLinking` config.yml setting (off by default, `/settings` → Memory → Mnemopi) that ingests new memories into the episodic graph as they are stored, linking them to related entities and memories; `MNEMOPI_PROACTIVE_LINKING` still overrides the configured value when set ([#2440](https://github.com/can1357/oh-my-pi/issues/2440)).
 
 ## [16.0.6] - 2026-06-18
 
