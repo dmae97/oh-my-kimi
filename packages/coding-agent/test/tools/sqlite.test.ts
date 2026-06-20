@@ -370,6 +370,36 @@ describe("SQLite tool support", () => {
 		}
 	});
 
+	it("falls back to vertical row blocks when the column count exceeds the horizontal budget (#3107)", () => {
+		const columns = ["_id", ...Array.from({ length: 32 }, (_, i) => `col_${i + 1}`)];
+		const row: Record<string, unknown> = { _id: 7 };
+		for (let i = 1; i <= 32; i++) row[`col_${i}`] = `value_${i}`;
+
+		const rendered = renderTable(columns, [row], {
+			totalCount: 1,
+			offset: 0,
+			limit: 20,
+			table: "wide_columns",
+			dbPath: sqlitePath,
+		});
+
+		// Horizontal layout would shrink every column to width 1 and chop the
+		// right edge — i.e., the line would look like `| … | … | … | …` (>=2
+		// ellipses chained by ` | `). Vertical mode renders one `col: value`
+		// per line, so that signature must NOT be present.
+		expect(rendered).not.toMatch(/…(?: \| …){2,}/);
+
+		// Each declared column must appear with its real value on its own line.
+		expect(rendered).toContain("── Row 1 ──");
+		expect(rendered).toContain("_id   : 7");
+		expect(rendered).toContain("col_1 : value_1");
+		expect(rendered).toContain("col_32: value_32");
+
+		for (const line of rendered.split("\n")) {
+			expect(Bun.stringWidth(line)).toBeLessThanOrEqual(120);
+		}
+	});
+
 	it("inserts rows through the write tool with JSON5 content", async () => {
 		const dbPath = await stampFreshDb("write-insert.sqlite");
 		await writeTool.execute("sqlite-write-insert", {
