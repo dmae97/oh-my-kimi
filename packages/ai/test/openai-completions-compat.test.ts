@@ -541,6 +541,29 @@ describe("openai-completions compatibility", () => {
 			{ role: "user", content: "hello" },
 		]);
 	});
+	it("coalesces system blocks for the bundled Fireworks Qwen model (Qwen template rejects multiple)", () => {
+		// Repro of the live `fireworks/qwen3.7-plus` 500: the Qwen 3.5+ chat
+		// template `internal_server_error`s when more than one leading system
+		// block is present, and Fireworks was previously on the multi-system
+		// allowlist. The bundled entry must auto-detect single-system.
+		const model = getBundledModel<"openai-completions">("fireworks", "qwen3.7-plus");
+		expect(model.compat.supportsMultipleSystemMessages).toBe(false);
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			model.compat,
+		);
+
+		expect(messages.filter(m => m.role === "system")).toHaveLength(1);
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "stable instructions\n\ncacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
 
 	it("reads usage from choice usage fallback", async () => {
 		const model: Model<"openai-completions"> = buildModel({

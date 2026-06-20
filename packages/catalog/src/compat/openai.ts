@@ -239,17 +239,21 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isGroqHost = modelMatchesHost(hostModel, "groq");
 	const isCopilotHost = provider === "github-copilot";
 	const isZenmuxHost = provider === "zenmux";
-	// Endpoints that MUST receive a single system block. MiniMax's OpenAI
-	// endpoint returns error 2013 on multiple system messages; Alibaba's
-	// Dashscope and Qwen Portal serve Qwen models whose chat template
-	// raises "System message must be at the beginning" if any system
-	// message appears past index 0.
+	// Endpoints/models that MUST receive a single system block. MiniMax's OpenAI
+	// endpoint returns error 2013 on multiple system messages; the Qwen 3.5+ chat
+	// template raises "System message must be at the beginning" / 500s with an
+	// internal_server_error when any system block appears past index 0. That
+	// template ships with the weights, so every Qwen-serving vLLM/SGLang host
+	// hits it — confirmed on Alibaba Dashscope, Qwen Portal, and Fireworks
+	// (`fireworks/qwen3.7-plus` 500'd on two leading system blocks). Gate on the
+	// Qwen family itself, not per-host: coalescing only trades away KV-cache reuse.
 	const isMiniMaxHost = modelMatchesHost(hostModel, "minimax");
 	const isQwenPortal = modelMatchesHost(hostModel, "qwenPortal");
 	const supportsMultipleSystemMessagesDefault =
 		!isMiniMaxHost &&
 		!isAlibaba &&
 		!isQwenPortal &&
+		!isQwen &&
 		(isOpenAIHost ||
 			isAzureHost ||
 			isOpenRouter ||
