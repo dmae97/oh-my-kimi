@@ -1,5 +1,9 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import type { AutocompleteProvider, CombinedAutocompleteProvider } from "../autocomplete";
+import {
+	type AutocompleteProvider,
+	type CombinedAutocompleteProvider,
+	findLeadingSlashCommandStart,
+} from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
@@ -1116,7 +1120,10 @@ export class Editor implements Component, Focusable {
 				}
 
 				// If Enter was pressed on a slash command, apply completion and submit
-				if ((kb.matches(data, "tui.input.submit") || data === "\n") && this.#autocompletePrefix.startsWith("/")) {
+				if (
+					(kb.matches(data, "tui.input.submit") || data === "\n") &&
+					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null
+				) {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
@@ -1263,7 +1270,7 @@ export class Editor implements Component, Focusable {
 				const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 				if (
-					textBeforeCursor.startsWith("/") &&
+					findLeadingSlashCommandStart(textBeforeCursor) !== null &&
 					this.#isInSubmittedSlashCommandContext() &&
 					this.#autocompleteProvider?.trySyncSlashCompletion
 				) {
