@@ -3828,6 +3828,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#btwController.handleBranch();
 	}
 
+	canCopyBtw(): boolean {
+		return this.#btwController.canCopy();
+	}
+
+	handleBtwCopyKey(): Promise<boolean> {
+		return this.#btwController.handleCopy();
+	}
+
 	async handleBtwBranch(question: string, assistantMessage: AssistantMessage): Promise<void> {
 		try {
 			const result = await this.session.branchFromBtw(question, assistantMessage);
