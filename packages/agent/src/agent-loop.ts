@@ -121,7 +121,7 @@ class HarmonyLeakInterruption extends Error {
 		this.name = "HarmonyLeakInterruption";
 	}
 }
-function resolveOwnedDialectFromEnv(value: string | undefined): Dialect | undefined {
+export function resolveOwnedDialectFromEnv(value: string | undefined): Dialect | undefined {
 	switch (value) {
 		case "1":
 		case "true":
@@ -502,7 +502,7 @@ function createDetailedCapture(config: AgentLoopConfig): {
 	};
 }
 
-function normalizeMessagesForProvider(
+export function normalizeMessagesForProvider(
 	messages: Context["messages"],
 	model: AgentLoopConfig["model"],
 ): Context["messages"] {

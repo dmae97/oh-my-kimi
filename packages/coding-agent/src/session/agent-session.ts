@@ -74,7 +74,6 @@ import {
 import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
 import type {
 	AssistantMessage,
-	Context,
 	ImageContent,
 	Message,
 	MessageAttribution,
@@ -229,6 +228,7 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
+import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
@@ -11245,12 +11245,14 @@ export class AgentSession {
 
 	/**
 	 * Run a single ephemeral side-channel turn against this session's current
-	 * model + system prompt + history.  No tools are used; the side request
-	 * does not block on, or interfere with, any in-flight main turn.  The
+	 * model + system prompt + history. The main turn's tool catalog is sent
+	 * to preserve the prompt cache, but the model is reminded not to call
+	 * tools and any tool calls are discarded. The side request
+	 * does not block on, or interfere with, any in-flight main turn. The
 	 * session's history and persisted state are NOT modified by this call.
 	 *
 	 * Used by `BtwController` (`/btw`) and `OmfgController` (`/omfg`) to share
-	 * the snapshot + stream pipeline.  The snapshot includes any in-flight
+	 * the snapshot + stream pipeline. The snapshot includes any in-flight
 	 * streaming assistant text so the model sees the half-finished response
 	 * rather than missing context.
 	 */
@@ -11267,15 +11269,7 @@ export class AgentSession {
 		const cacheSessionId = this.sessionId;
 		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
 		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
-		const context: Context = {
-			systemPrompt: this.systemPrompt,
-			messages: llmMessages,
-			// Empty tools array: with toolChoice="none" some encoders still serialize the
-			// recipient's tool catalog and the model leaks raw call markup
-			// (<function_calls>, DSML envelopes) into IRC replies. Stripping tools here
-			// removes the surface entirely.
-			tools: [],
-		};
+		const context = this.agent.buildSideRequestContext(llmMessages);
 		const options = this.prepareSimpleStreamOptions(
 			{
 				apiKey: this.#modelRegistry.resolver(model, cacheSessionId),
@@ -11291,7 +11285,6 @@ export class AgentSession {
 				hideThinkingSummary: this.agent.hideThinkingSummary,
 				serviceTier: this.#effectiveServiceTier(model),
 				signal: args.signal,
-				toolChoice: "none",
 			},
 			model.provider,
 		);
@@ -11331,9 +11324,13 @@ export class AgentSession {
 		if (args.onTextDelta && replyText.length > emittedReplyText.length) {
 			args.onTextDelta(replyText.slice(emittedReplyText.length));
 		}
+		const sanitizedMessage: AssistantMessage = {
+			...assistantMessage,
+			content: assistantMessage.content.filter(block => block.type !== "toolCall"),
+		};
 		return {
 			replyText: args.dedupeReply === false ? replyText.trim() : dedupeEphemeralReply(replyText.trim()),
-			assistantMessage,
+			assistantMessage: sanitizedMessage,
 		};
 	}
 
@@ -11374,6 +11371,12 @@ export class AgentSession {
 				}
 			}
 		}
+		messages.push({
+			role: "developer",
+			content: [{ type: "text", text: sideChannelNoToolsReminder }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
 		messages.push({
 			role: "user",
 			content: [{ type: "text", text: promptText }],

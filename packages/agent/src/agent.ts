@@ -24,9 +24,17 @@ import {
 } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
+import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { logger } from "@oh-my-pi/pi-utils";
-import { abortReasonText, agentLoop, agentLoopContinue } from "./agent-loop";
+import {
+	abortReasonText,
+	agentLoop,
+	agentLoopContinue,
+	normalizeMessagesForProvider,
+	normalizeTools,
+	resolveOwnedDialectFromEnv,
+} from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
 import type {
 	AgentContext,
@@ -660,6 +668,32 @@ export class Agent {
 
 	setAppendOnlyContext(manager?: AppendOnlyContextManager): void {
 		this.#appendOnlyContext = manager;
+	}
+
+	/**
+	 * Assemble the provider Context for a side-channel (no-loop) request, mirroring
+	 * the main loop's prefix (system + normalized tools) so it shares the prompt
+	 * cache. Never touches the append-only log or the tool-choice queue. Owned/
+	 * in-band dialect sessions stay tools-less (matching their no-native-tools wire
+	 * shape and avoiding tool-markup leakage). `llmMessages` is already converted
+	 * (and, in production, obfuscated) by the caller.
+	 */
+	buildSideRequestContext(llmMessages: Message[]): Context {
+		const model = this.#state.model;
+		if (!model) throw new Error("No active model on agent");
+		const ownedDialect = this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
+		const messages = normalizeMessagesForProvider(llmMessages, model);
+		const tools = ownedDialect
+			? []
+			: (normalizeTools(
+					this.#state.tools,
+					this.#intentTracing,
+					preferredDialect(model.id),
+					this.#pruneToolDescriptions,
+				) ?? []);
+		let context: Context = { systemPrompt: this.#state.systemPrompt, messages, tools };
+		if (this.#transformProviderContext) context = this.#transformProviderContext(context, model);
+		return context;
 	}
 
 	subscribe(fn: (e: AgentEvent) => void): () => void {
