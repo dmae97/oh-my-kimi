@@ -24,6 +24,10 @@
 
 - Fixed `/join` failing with `timed out waiting for the host's welcome` on collab sessions whose existing transcript was more than a few MB. The host now sends a small `welcome` frame (header + state + agents + `entryCount`) followed by a train of `snapshot-chunk` frames (`SNAPSHOT_CHUNK_BYTES = 512 KB`), and the guest accumulates them under a per-chunk progress timeout that resets on each chunk arrival. The first welcome lands well under one second on the default relay, so the guest's 30s first-welcome budget is no longer spent transferring the snapshot. Requires the new `COLLAB_PROTO = 2` on both sides; older hosts/guests are rejected with the existing protocol-mismatch error. ([#3144](https://github.com/can1357/oh-my-pi/issues/3144))
 
+### Fixed
+
+- Stopped Mnemopi retention from overflowing the embedding model's context window: `embed()` now caps each input at `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 32000 chars) so a long multi-turn `MnemopiSessionState.retainMessages` transcript can't make llama.cpp's `/embeddings` server reject the request with `request (N tokens) exceeds the available context size` and silently drop vector recall for that memory ([#3126](https://github.com/can1357/oh-my-pi/issues/3126)).
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

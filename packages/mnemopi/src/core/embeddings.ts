@@ -120,6 +120,54 @@ export function embeddingsDisabled(): boolean {
 	return $flag("MNEMOPI_NO_EMBEDDINGS");
 }
 
+/**
+ * Resolved per-input character cap for {@link embed}.
+ *
+ * Reads (in order): the active runtime scope's `embeddings.maxInputChars`, then
+ * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `32000` default. `0`
+ * disables the cap entirely.
+ */
+function effectiveMaxInputChars(): number {
+	const override = activeEmbeddingOptions()?.maxInputChars;
+	if (override !== undefined) return Math.max(0, Math.trunc(override));
+	const envValue = Number.parseInt($env.MNEMOPI_EMBEDDING_MAX_INPUT_CHARS ?? "", 10);
+	if (Number.isFinite(envValue) && envValue >= 0) return envValue;
+	return 32000;
+}
+
+/**
+ * Right-truncate every input to {@link effectiveMaxInputChars} so a runaway
+ * retention transcript can't blow past the embedding model's context window.
+ * Returns the original array when no input needs trimming (the common case);
+ * the new array is allocated only when at least one input is oversized so
+ * we don't churn arrays for the typical short-query path through `embedQuery`.
+ * Emits one debug-or-warn log per call summarizing how many inputs were
+ * trimmed and by how much — silent truncation was the original bug (#3126).
+ */
+function capInputs(texts: readonly string[]): readonly string[] {
+	const max = effectiveMaxInputChars();
+	if (max === 0) return texts;
+	let trimmed: string[] | null = null;
+	let trimmedCount = 0;
+	let maxOriginalLen = 0;
+	for (let i = 0; i < texts.length; i++) {
+		const text = texts[i] ?? "";
+		if (text.length <= max) continue;
+		if (trimmed === null) trimmed = texts.slice() as string[];
+		trimmed[i] = text.slice(0, max);
+		trimmedCount++;
+		if (text.length > maxOriginalLen) maxOriginalLen = text.length;
+	}
+	if (trimmed === null) return texts;
+	logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: embedding input truncated", {
+		inputCount: texts.length,
+		trimmedCount,
+		maxOriginalLen,
+		maxInputChars: max,
+	});
+	return trimmed;
+}
+
 function embeddingApiKey(): ApiKey {
 	const active = activeEmbeddingOptions();
 	if (active?.apiKey !== undefined) {
@@ -408,6 +456,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 	if (texts.length === 0 || embeddingsDisabled()) {
 		return null;
 	}
+	texts = capInputs(texts);
 	const activeProvider = resolveEmbeddingProvider(activeEmbeddingOptions()?.provider);
 	if (activeProvider !== undefined) {
 		try {
