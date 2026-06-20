@@ -32,6 +32,7 @@
 - Fixed `/omfg` saved-state copy to advertise `Esc dismiss` after saving and registering the rule live.
 - Fixed legacy Pi extensions importing `getModel`/`getModels` from the `@oh-my-pi/pi-ai` package root failing to load, by restoring them as compatibility aliases for `@oh-my-pi/pi-catalog`'s `getBundledModel`/`getBundledModels`. The root `StringEnum` compatibility shim also accepts TypeScript enum objects in addition to value arrays ([#2907](https://github.com/can1357/oh-my-pi/pull/2907)).
 - Fixed the Alt+M model-configuration menu so role assignment remains selectable for models whose context window is smaller than the current session; the context-size disabling still applies to the Alt+P temporary active-model switch ([#2861](https://github.com/can1357/oh-my-pi/issues/2861)).
+- Fixed the advisor raising false `blocker`s in plan mode (e.g. "don't write a plan file") because it only saw a 120-char truncation of the injected plan-mode rules, which cut off at `NEVER create, edit, or delete files — excep…` and hid the "except the single plan file" carve-out. The advisor delta now expands the primary agent's constraint context (`plan-mode-context`, `plan-mode-reference`) verbatim inside an XML-escaped `<primary-context>` wrapper instead of a one-liner, and `AdvisorRuntime` dedupes the re-injected prompts so an unchanged copy collapses to a marker rather than re-feeding the full rules every turn.
 
 ## [16.1.7] - 2026-06-20
 

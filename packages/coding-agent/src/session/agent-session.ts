@@ -1355,6 +1355,7 @@ export class AgentSession {
 	#pruneToolDescriptions = false;
 	#checkpointState: CheckpointState | undefined = undefined;
 	#pendingRewindReport: string | undefined = undefined;
+	#rewoundToolResultIds = new Set<string>();
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
@@ -2625,7 +2626,13 @@ export class AgentSession {
 						};
 					}
 				}
-				this.sessionManager.appendMessage(event.message);
+				const skipPersistedRewindResult =
+					event.message.role === "toolResult" &&
+					event.message.toolName === "rewind" &&
+					this.#rewoundToolResultIds.delete(event.message.toolCallId);
+				if (!skipPersistedRewindResult) {
+					this.sessionManager.appendMessage(event.message);
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -2741,8 +2748,9 @@ export class AgentSession {
 
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
+			const settledMessages = this.agent.state.messages;
 			const emitAgentEndNotification = async () => {
-				await this.#emitAgentEndNotification(event.messages);
+				await this.#emitAgentEndNotification(settledMessages);
 			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({
@@ -2753,7 +2761,7 @@ export class AgentSession {
 					cacheWrite: usage.cacheWrite,
 				},
 			});
-			const fallbackAssistant = [...event.messages]
+			const fallbackAssistant = [...settledMessages]
 				.reverse()
 				.find((message): message is AssistantMessage => message.role === "assistant");
 			const msg = this.#lastAssistantMessage ?? fallbackAssistant;
@@ -2865,7 +2873,7 @@ export class AgentSession {
 					return;
 				}
 			}
-			await this.#emitSessionStopEvent(event.messages);
+			await this.#emitSessionStopEvent(settledMessages);
 			await emitAgentEndNotification();
 		}
 	};
@@ -8556,6 +8564,13 @@ export class AgentSession {
 		const details = { startedAt: checkpointState.startedAt, rewoundAt: new Date().toISOString() };
 		this.sessionManager.appendCustomMessageEntry("rewind-report", report, false, details, "agent");
 
+		if (activeMessages) {
+			for (const message of activeMessages) {
+				if (message.role === "toolResult" && message.toolName === "rewind") {
+					this.#rewoundToolResultIds.add(message.toolCallId);
+				}
+			}
+		}
 		const sessionContext = this.buildDisplaySessionContext();
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
