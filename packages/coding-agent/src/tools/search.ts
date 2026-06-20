@@ -278,6 +278,15 @@ interface InternalSearchInputResolution {
 	virtualScopePath?: string;
 }
 
+function isImmutableSourcePath(filePath: string, immutableSourcePaths: ReadonlySet<string>): boolean {
+	for (const immutablePath of immutableSourcePaths) {
+		if (filePath === immutablePath || filePath.startsWith(`${immutablePath}${path.sep}`)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 interface IndexedContentLines {
 	lines: string[];
 	starts: number[];
@@ -1131,7 +1140,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath) || virtualPathSet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-						if (immutableSourcePaths.has(absoluteFilePath)) continue;
+						if (isImmutableSourcePath(absoluteFilePath, immutableSourcePaths)) continue;
 						// Mint a whole-file content tag so any anchor validates while the
 						// file is unchanged; over-cap / unreadable files get no tag (and
 						// therefore plain, non-editable line output).

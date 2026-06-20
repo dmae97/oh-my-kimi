@@ -7,8 +7,12 @@
  * - skill://<name> - Reads SKILL.md
  * - skill://<name>/<path> - Reads relative path within skill's baseDir
  */
+import type * as fsTypes from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { getActiveSkills } from "../extensibility/skills";
+import { buildDirectoryResource } from "./filesystem-resource";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 function getContentType(filePath: string): InternalResource["contentType"] {
@@ -71,12 +75,24 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			targetPath = skill.filePath;
 		}
 
-		const file = Bun.file(targetPath);
-		if (!(await file.exists())) {
-			throw new Error(`File not found: ${targetPath}`);
+		let stats: fsTypes.Stats;
+		try {
+			stats = await fs.stat(targetPath);
+		} catch (error) {
+			if (isEnoent(error)) {
+				throw new Error(`File not found: ${targetPath}`);
+			}
+			throw error;
 		}
 
-		const content = await file.text();
+		if (stats.isDirectory()) {
+			return buildDirectoryResource(url.href, targetPath);
+		}
+		if (!stats.isFile()) {
+			throw new Error(`skill:// URL must resolve to a file or directory: ${url.href}`);
+		}
+
+		const content = await Bun.file(targetPath).text();
 		return {
 			url: url.href,
 			content,
