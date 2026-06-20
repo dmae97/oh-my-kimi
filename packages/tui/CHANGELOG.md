@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed empty `/` autocomplete burying user skill commands below every built-in command, and fixed slash command autocomplete/completion after leading whitespace ([#2875](https://github.com/can1357/oh-my-pi/issues/2875)).
+- Fixed empty `/` autocomplete burying user skill commands below every built-in command, so installed skills appear in the initial slash popup ([#2875](https://github.com/can1357/oh-my-pi/issues/2875)).
 
 ## [16.0.3] - 2026-06-16
 

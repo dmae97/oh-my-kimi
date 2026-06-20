@@ -78,26 +78,6 @@ describe("Editor slash autocomplete acceptance", () => {
 
 		expect(editor.getText()).toBe("/skills:fix-bug ");
 	});
-
-	it("triggers slash autocomplete after leading whitespace and accepts Tab", async () => {
-		const editor = new Editor(defaultEditorTheme);
-		editor.setAutocompleteProvider(
-			new CombinedAutocompleteProvider([{ name: "skills:fix-bug", description: "Fix a bug" }], "/tmp"),
-		);
-
-		editor.handleInput(" ");
-		editor.handleInput(" ");
-		editor.handleInput("/");
-		await Bun.sleep(0);
-		expect(editor.isShowingAutocomplete()).toBe(true);
-
-		editor.handleInput("s");
-		editor.handleInput("k");
-		editor.handleInput("i");
-		editor.handleInput("\t");
-
-		expect(editor.getText()).toBe("  /skills:fix-bug ");
-	});
 });
 class SyncSlashProvider implements AutocompleteProvider {
 	async getSuggestions(
@@ -110,11 +90,11 @@ class SyncSlashProvider implements AutocompleteProvider {
 
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		this.callCount += 1;
-		const trimmedText = textBeforeCursor.trimStart();
-		if (!trimmedText.startsWith("/")) return null;
-		if (trimmedText.length <= 1) return null;
-		if (trimmedText.includes(" ")) return null;
-		const prefix = trimmedText.slice(1);
+		if (!textBeforeCursor.startsWith("/")) return null;
+		if (textBeforeCursor.length <= 1) return null;
+		if (textBeforeCursor.includes(" ")) return null;
+		// Only match known slash commands: /mo or /model
+		const prefix = textBeforeCursor.slice(1);
 		if (prefix === "mo" || prefix === "model") {
 			return {
 				prefix: textBeforeCursor,
@@ -182,22 +162,6 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.handleInput("\r");
 
 		expect(submitted).toBe("/model");
-	});
-
-	it("completes slash command synchronously with leading whitespace", () => {
-		const provider = new SyncSlashProvider();
-		const editor = new Editor(defaultEditorTheme);
-		editor.setAutocompleteProvider(provider);
-		let submitted = "";
-		editor.onSubmit = text => {
-			submitted = text;
-		};
-
-		editor.setText("  /mo");
-		editor.handleInput("\r");
-
-		expect(submitted).toBe("/model");
-		expect(provider.callCount).toBe(1);
 	});
 
 	it("completes slash command after leading blank lines", () => {

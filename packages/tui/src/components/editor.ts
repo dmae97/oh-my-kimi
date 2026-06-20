@@ -1116,14 +1116,11 @@ export class Editor implements Component, Focusable {
 				}
 
 				// If Enter was pressed on a slash command, apply completion and submit
-				if (
-					(kb.matches(data, "tui.input.submit") || data === "\n") &&
-					this.#autocompletePrefix.trimStart().startsWith("/")
-				) {
+				if ((kb.matches(data, "tui.input.submit") || data === "\n") && this.#autocompletePrefix.startsWith("/")) {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (currentTextBeforeCursor.trimStart() !== this.#autocompletePrefix.trimStart()) {
+					if (currentTextBeforeCursor !== this.#autocompletePrefix) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
@@ -1265,7 +1262,11 @@ export class Editor implements Component, Focusable {
 			if (!this.#autocompleteState) {
 				const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-				if (this.#isInSubmittedSlashCommandContext() && this.#autocompleteProvider?.trySyncSlashCompletion) {
+				if (
+					textBeforeCursor.startsWith("/") &&
+					this.#isInSubmittedSlashCommandContext() &&
+					this.#autocompleteProvider?.trySyncSlashCompletion
+				) {
 					const syncResult = this.#autocompleteProvider.trySyncSlashCompletion(textBeforeCursor);
 					if (syncResult && syncResult.items.length > 0) {
 						// Invalidate any pending async autocomplete so its stale results are discarded
