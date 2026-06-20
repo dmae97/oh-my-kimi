@@ -18,7 +18,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
 import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
 import { type MnemopiSessionState, setMnemopiSessionState } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
-import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
+import { obfuscateProviderContext, SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -54,6 +54,20 @@ function getConvertedUserText(message: Message | undefined): string {
 		throw new Error("Expected converted text content");
 	}
 	return text.text;
+}
+
+async function withNativeDialectEnv<T>(fn: () => Promise<T>): Promise<T> {
+	const previous = Bun.env.PI_DIALECT;
+	delete Bun.env.PI_DIALECT;
+	try {
+		return await fn();
+	} finally {
+		if (previous === undefined) {
+			delete Bun.env.PI_DIALECT;
+		} else {
+			Bun.env.PI_DIALECT = previous;
+		}
+	}
 }
 
 describe("AgentSession message pipeline", () => {
@@ -430,6 +444,83 @@ describe("AgentSession message pipeline", () => {
 		expect(result.replyText).toBe("Answer");
 		expect(capturedContext).toBeDefined();
 		expect(JSON.stringify(capturedContext)).not.toContain(secret);
+	});
+
+	it("keeps obfuscated side-channel stable prefix byte-identical to the main turn", async () => {
+		await withNativeDialectEnv(async () => {
+			const api = "test-ephemeral-obfuscated-prefix-parity";
+			const secret = "PREFIX_SECRET_TOKEN_12345";
+			let callCount = 0;
+			let mainContext: Context | undefined;
+			let sideContext: Context | undefined;
+			registerCustomApi(api, (_model, context, _options) => {
+				if (callCount === 0) {
+					mainContext = context;
+				} else {
+					sideContext = context;
+				}
+				callCount += 1;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage("Answer");
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			});
+
+			const model = buildModel({
+				id: "side-model-prefix-parity",
+				name: "Side Model Prefix Parity",
+				api,
+				provider: "test-provider",
+				baseUrl: "",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>;
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const tool: AgentTool = {
+				name: "secret_probe",
+				label: "Secret Probe",
+				description: `Tool description ${secret}`,
+				parameters: {
+					type: "object",
+					properties: {
+						value: { type: "string", description: `Schema description ${secret}` },
+					},
+					required: ["value"],
+				},
+				execute: async () => ({ content: [], details: {} }),
+			};
+			const agent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: [`system prompt with ${secret}`],
+					messages: [],
+					tools: [tool],
+				},
+				transformProviderContext: context => obfuscateProviderContext(obfuscator, context),
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: createModelRegistryStub() as never,
+				obfuscator,
+			});
+			sessions.push(session);
+
+			await agent.prompt("Main Question?");
+			await session.runEphemeralTurn({ promptText: `Side Question ${secret}?` });
+
+			expect(JSON.stringify(mainContext?.systemPrompt)).toBe(JSON.stringify(sideContext?.systemPrompt));
+			expect(JSON.stringify(mainContext?.tools)).toBe(JSON.stringify(sideContext?.tools));
+			expect(JSON.stringify(sideContext?.systemPrompt)).not.toContain(secret);
+			expect(JSON.stringify(sideContext?.tools)).not.toContain(secret);
+		});
 	});
 
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
@@ -876,81 +967,83 @@ describe("AgentSession message pipeline", () => {
 	});
 
 	it("ephemeral side-channel forwards native tools, injects developer reminder, leaves toolChoice auto", async () => {
-		const api = "test-ephemeral-tools-warm-cache";
-		let capturedContext: Context | undefined;
-		let capturedOptions: SimpleStreamOptions | undefined;
-		registerCustomApi(api, (_model, context, options) => {
-			capturedContext = context;
-			capturedOptions = options;
-			const stream = new AssistantMessageEventStream();
-			queueMicrotask(() => {
-				const message = createAssistantMessage("Not using tools");
-				stream.push({ type: "text_delta", contentIndex: 0, delta: "Not using tools", partial: message });
-				stream.push({ type: "done", reason: "stop", message });
+		await withNativeDialectEnv(async () => {
+			const api = "test-ephemeral-tools-warm-cache";
+			let capturedContext: Context | undefined;
+			let capturedOptions: SimpleStreamOptions | undefined;
+			registerCustomApi(api, (_model, context, options) => {
+				capturedContext = context;
+				capturedOptions = options;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage("Not using tools");
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "Not using tools", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
 			});
-			return stream;
+
+			const model = buildModel({
+				id: "side-model-with-tools",
+				name: "Side Model with Tools",
+				api,
+				provider: "test-provider",
+				baseUrl: "",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>;
+
+			const tool: AgentTool = {
+				name: "side_tool",
+				label: "Side Tool",
+				description: "A tool in side channel",
+				parameters: { type: "object", properties: {} },
+				execute: async () => ({ content: [], details: {} }),
+			};
+
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: {
+						model,
+						systemPrompt: ["system prompt"],
+						messages: [],
+						tools: [tool],
+					},
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: createModelRegistryStub() as never,
+			});
+			sessions.push(session);
+
+			const result = await session.runEphemeralTurn({ promptText: "Side Question?" });
+
+			expect(result.replyText).toBe("Not using tools");
+			expect(capturedContext).toBeDefined();
+			expect(capturedContext!.tools).toBeDefined();
+			expect(capturedContext!.tools!.length).toBe(1);
+			expect(capturedContext!.tools![0].name).toBe("side_tool");
+
+			// Developer reminder injected immediately before user prompt
+			const messages = capturedContext!.messages;
+			expect(messages.length).toBeGreaterThanOrEqual(2);
+			const lastMessage = messages.at(-1);
+			const secondToLast = messages.at(-2);
+
+			expect(lastMessage?.role).toBe("user");
+			expect(getConvertedUserText(lastMessage)).toBe("Side Question?");
+
+			expect(secondToLast?.role).toBe("developer");
+			expect(secondToLast?.content).toBeDefined();
+			const textContent = secondToLast?.content as { text?: string }[];
+			expect(textContent[0].text).toContain("tool catalog stays attached");
+
+			// Tool choice must be undefined (not "none") for cache hits
+			expect(capturedOptions?.toolChoice).toBeUndefined();
 		});
-
-		const model = buildModel({
-			id: "side-model-with-tools",
-			name: "Side Model with Tools",
-			api,
-			provider: "test-provider",
-			baseUrl: "",
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 4096,
-			maxTokens: 1024,
-		} as ModelSpec<Api>) as Model<Api>;
-
-		const tool: AgentTool = {
-			name: "side_tool",
-			label: "Side Tool",
-			description: "A tool in side channel",
-			parameters: { type: "object", properties: {} },
-			execute: async () => ({ content: [], details: {} }),
-		};
-
-		const session = new AgentSession({
-			agent: new Agent({
-				initialState: {
-					model,
-					systemPrompt: ["system prompt"],
-					messages: [],
-					tools: [tool],
-				},
-			}),
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "compaction.enabled": false }),
-			modelRegistry: createModelRegistryStub() as never,
-		});
-		sessions.push(session);
-
-		const result = await session.runEphemeralTurn({ promptText: "Side Question?" });
-
-		expect(result.replyText).toBe("Not using tools");
-		expect(capturedContext).toBeDefined();
-		expect(capturedContext!.tools).toBeDefined();
-		expect(capturedContext!.tools!.length).toBe(1);
-		expect(capturedContext!.tools![0].name).toBe("side_tool");
-
-		// Developer reminder injected immediately before user prompt
-		const messages = capturedContext!.messages;
-		expect(messages.length).toBeGreaterThanOrEqual(2);
-		const lastMessage = messages.at(-1);
-		const secondToLast = messages.at(-2);
-
-		expect(lastMessage?.role).toBe("user");
-		expect(getConvertedUserText(lastMessage)).toBe("Side Question?");
-
-		expect(secondToLast?.role).toBe("developer");
-		expect(secondToLast?.content).toBeDefined();
-		const textContent = secondToLast?.content as { text?: string }[];
-		expect(textContent[0].text).toContain("tool catalog stays attached");
-
-		// Tool choice must be undefined (not "none") for cache hits
-		expect(capturedOptions?.toolChoice).toBeUndefined();
 	});
 
 	it("ephemeral side-channel discards any emitted tool calls", async () => {

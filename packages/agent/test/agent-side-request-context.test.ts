@@ -1,8 +1,43 @@
 import { describe, expect, it, mock } from "bun:test";
-import { type Context, z } from "@oh-my-pi/pi-ai";
+import { type AssistantMessage, type Context, z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { Agent } from "../src/agent";
 import type { AgentTool } from "../src/types";
+
+async function withNativeDialectEnv<T>(fn: () => T | Promise<T>): Promise<T> {
+	const previous = Bun.env.PI_DIALECT;
+	delete Bun.env.PI_DIALECT;
+	try {
+		return await fn();
+	} finally {
+		if (previous === undefined) {
+			delete Bun.env.PI_DIALECT;
+		} else {
+			Bun.env.PI_DIALECT = previous;
+		}
+	}
+}
+
+function testAssistantMessage(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "mock",
+		provider: "mock",
+		model: "mock",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
 
 describe("Agent — buildSideRequestContext", () => {
 	const model = createMockModel({ responses: [] });
@@ -14,23 +49,64 @@ describe("Agent — buildSideRequestContext", () => {
 		execute: async () => ({ content: [{ type: "text", text: "success" }], details: { value: "success" } }),
 	};
 
-	it("forwards the tool catalog for native providers", () => {
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["system"],
-				tools: [tool],
-			},
+	it("forwards the tool catalog for native providers", async () => {
+		await withNativeDialectEnv(() => {
+			const agent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system"],
+					tools: [tool],
+				},
+			});
+
+			const context = agent.buildSideRequestContext([
+				{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
+			]);
+
+			expect(context.tools).toBeDefined();
+			expect(context.tools!.length).toBe(1);
+			expect(context.tools![0].name).toBe("test_tool");
+			expect(context.systemPrompt).toEqual(["system"]);
 		});
+	});
 
-		const context = agent.buildSideRequestContext([
-			{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
-		]);
+	it("matches the main loop's native stable prefix", async () => {
+		await withNativeDialectEnv(async () => {
+			let mainContext: Context | undefined;
+			const agent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system"],
+					tools: [tool],
+				},
+				streamFn: (_model, context) => {
+					mainContext = context;
+					const stream = new AssistantMessageEventStream();
+					queueMicrotask(() => {
+						const message = testAssistantMessage("ok");
+						stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+						stream.push({ type: "done", reason: "stop", message });
+					});
+					return stream;
+				},
+			});
 
-		expect(context.tools).toBeDefined();
-		expect(context.tools!.length).toBe(1);
-		expect(context.tools![0].name).toBe("test_tool");
-		expect(context.systemPrompt).toEqual(["system"]);
+			await agent.prompt("Q?");
+
+			const sideAgent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system"],
+					tools: [tool],
+				},
+			});
+			const sideContext = sideAgent.buildSideRequestContext([
+				{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
+			]);
+
+			expect(JSON.stringify(sideContext.systemPrompt)).toBe(JSON.stringify(mainContext?.systemPrompt));
+			expect(JSON.stringify(sideContext.tools)).toBe(JSON.stringify(mainContext?.tools));
+		});
 	});
 
 	it("returns empty tools when owned dialect is active", () => {
