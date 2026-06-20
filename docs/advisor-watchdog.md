@@ -52,7 +52,9 @@ If `advisor.enabled` is true but no `modelRoles.advisor` value resolves to an av
 
 ## What the advisor sees
 
-At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true, includeToolIntent: true, watchedRoles: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
+At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true, includeToolIntent: true, watchedRoles: true, expandPrimaryContext: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
+
+Most hidden `custom` messages collapse to a one-line summary in the delta. The exception is the primary agent's injected constraint context — the types in `PRIMARY_CONTEXT_CUSTOM_TYPES` (`plan-mode-context`, `plan-mode-reference`). `expandPrimaryContext` renders these verbatim inside a `<primary-context kind="…">` wrapper (XML-escaped, so plan/objective text cannot break out or read as advisor instructions). Without this the advisor only saw a 120-char truncation of the plan-mode rules — which cut off mid-sentence at `NEVER create, edit, or delete files — excep…`, hiding the "except the single plan file" carve-out and producing false blockers against the agent writing its own plan file. Because these prompts are re-injected verbatim every primary turn, `AdvisorRuntime` dedupes them: a byte-identical re-injection collapses to a `(unchanged — still in effect)` marker, and the full body re-expands whenever the content changes or the advisor re-primes. `goal-mode-context` is deliberately excluded — its live budget counters change every turn, so it can neither dedupe nor expand cheaply.
 
 Advisor messages already injected into the primary transcript are filtered out before the next delta is rendered. This prevents the advisor from recursively reviewing its own advice.
 
