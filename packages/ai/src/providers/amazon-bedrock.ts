@@ -142,6 +142,14 @@ interface WireToolConfig {
 	toolChoice?: WireToolChoice;
 }
 
+const NO_TOOLS_SENTINEL: WireToolSpec = {
+	toolSpec: {
+		name: "__no_tools__",
+		description: "Placeholder required when Bedrock replays prior tool history with tools disabled.",
+		inputSchema: { json: { type: "object", properties: {} } },
+	},
+};
+
 interface ConverseStreamRequest {
 	messages: WireMessage[];
 	system?: SystemContent[];
@@ -222,10 +230,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
-			const historyHasToolBlocks = context.messages.some(
-				m => m.role === "toolResult" || (m.role === "assistant" && m.content.some(b => b.type === "toolCall")),
-			);
-			const toolConfig = convertToolConfig(context.tools, options.toolChoice, historyHasToolBlocks);
+			const convertedMessages = convertMessages(context, model, cacheRetention);
+			const toolConfig = convertToolConfig(context.tools, options.toolChoice, convertedMessages);
 			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
 			// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
@@ -236,7 +242,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			}
 
 			const commandInput: ConverseStreamRequest = {
-				messages: convertMessages(context, model, cacheRetention),
+				messages: convertedMessages,
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: {
 					maxTokens: options.maxTokens,
@@ -784,28 +790,44 @@ function convertMessages(
 	return result;
 }
 
-function convertToolConfig(
-	tools: Tool[] | undefined,
-	toolChoice: BedrockOptions["toolChoice"],
-	historyHasToolBlocks: boolean,
-): WireToolConfig | undefined {
-	if (!tools?.length) return undefined;
+function messagesHaveToolBlocks(messages: WireMessage[]): boolean {
+	for (const message of messages) {
+		for (const block of message.content) {
+			if ("toolUse" in block || "toolResult" in block) return true;
+		}
+	}
+	return false;
+}
 
-	const bedrockTools: WireToolSpec[] = tools.map(tool => ({
+function convertToolSpec(tool: Tool): WireToolSpec {
+	return {
 		toolSpec: {
 			name: tool.name,
 			description: tool.description || "",
 			inputSchema: { json: toolWireSchema(tool) },
 		},
-	}));
+	};
+}
 
-	// Bedrock rejects requests whose history contains toolUse/toolResult blocks without a
-	// toolConfig. With prior tool use we must keep the tool specs and merely omit the choice
-	// (there is no "none" choice on Converse); dropping toolConfig entirely would 400.
+function convertToolConfig(
+	tools: Tool[] | undefined,
+	toolChoice: BedrockOptions["toolChoice"],
+	messages: WireMessage[],
+): WireToolConfig | undefined {
+	const activeTools = tools ?? [];
+	const hasTools = activeTools.length > 0;
+	const historyHasToolBlocks = messagesHaveToolBlocks(messages);
+
 	if (toolChoice === "none") {
-		return historyHasToolBlocks ? { tools: bedrockTools } : undefined;
+		if (!historyHasToolBlocks) return undefined;
+		if (!hasTools) return { tools: [NO_TOOLS_SENTINEL], toolChoice: { auto: {} } };
+		const bedrockTools = activeTools.map(convertToolSpec);
+		return { tools: bedrockTools };
 	}
 
+	if (!hasTools) return undefined;
+
+	const bedrockTools = activeTools.map(convertToolSpec);
 	let bedrockToolChoice: WireToolChoice | undefined;
 	switch (toolChoice) {
 		case "auto":
