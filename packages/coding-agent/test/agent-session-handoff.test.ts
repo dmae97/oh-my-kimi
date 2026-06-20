@@ -483,6 +483,89 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(mock.calls).toHaveLength(1);
 	});
+	it("floors pre-prompt context-full checks by the stored conversation when provider usage is deflated", async () => {
+		// Mirror of the provider-anchored test, but the large payload is real, on-wire-
+		// compressible text (what a before_provider_request hook like Headroom shrinks),
+		// NOT encrypted reasoning. The provider reports a deflated 1k prompt tokens, yet
+		// the stored conversation is ~20k tokens — compaction MUST still fire.
+		await session.dispose();
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		events = [];
+
+		const mock = createMockModel({
+			id: "gpt-5.5",
+			provider: "openai",
+			contextWindow: 10_000,
+			responses: [{ content: ["ok"], stopReason: "stop" }],
+		});
+		const seedUser: AgentMessage = {
+			role: "user",
+			content: [{ type: "text", text: "seed" }],
+			timestamp: Date.now() - 2,
+		};
+		// ~20k tokens of plain text in a normal text block — counted by the floor.
+		const bulkText = "alpha beta gamma delta epsilon ".repeat(3_000);
+		const seedAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: bulkText }],
+			api: mock.api,
+			provider: "openai",
+			model: mock.id,
+			stopReason: "stop",
+			// Deflated: a before_provider_request compressor shrank the request, so the
+			// provider only billed ~1k prompt tokens for a ~20k-token conversation.
+			usage: {
+				input: 1_000,
+				output: 10,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_010,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now() - 1,
+		};
+		sessionManager.appendMessage(seedUser);
+		sessionManager.appendMessage(seedAssistant);
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: mock, systemPrompt: ["Test"], tools: [], messages: [seedUser, seedAssistant] },
+			streamFn: mock.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+				"compaction.strategy": "context-full",
+				"compaction.thresholdTokens": 8_000,
+				"contextPromotion.enabled": false,
+			}),
+			modelRegistry,
+		});
+		session.subscribe(event => {
+			events.push(event);
+		});
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "pre-prompt compacted",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		// Display still shows the provider-anchored (deflated) usage — only the
+		// compaction decision takes the local floor.
+		expect(session.getContextUsage({ contextWindow: 10_000 })?.tokens).toBe(1_000);
+
+		await session.prompt("small pending prompt");
+
+		// The floor (~20k from the stored text) exceeds the 8k threshold, so the
+		// deflated 1k provider count no longer suppresses compaction.
+		expect(compactSpy).toHaveBeenCalled();
+	});
 	it("counts current non-message token growth in provider-anchored pre-prompt checks", async () => {
 		await session.dispose();
 		authStorage.setRuntimeApiKey("openai", "test-key");
