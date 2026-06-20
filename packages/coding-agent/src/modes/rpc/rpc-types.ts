@@ -108,7 +108,7 @@ export interface RpcSessionState {
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
 	dumpTools?: Array<{ name: string; description: string; parameters: unknown; examples?: readonly ToolExample[] }>;
-	/** Current context window usage. Null tokens/percent when unknown (e.g. right after compaction). */
+	/** Current context window usage. */
 	contextUsage?: ContextUsage;
 }
 

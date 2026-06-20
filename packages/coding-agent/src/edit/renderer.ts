@@ -230,7 +230,7 @@ function truncateEditTitlePath(displayPath: string, maxWidth: number | undefined
 }
 
 function formatEditTitlePath(pathValue: string, maxWidth?: number): string {
-	return truncateEditTitlePath(replaceTabs(shortenPath(pathValue), pathValue), maxWidth);
+	return truncateEditTitlePath(replaceTabs(shortenPath(pathValue)), maxWidth);
 }
 
 function formatEditPathDisplay(
@@ -275,8 +275,8 @@ function formatEditDescription(
 }
 
 function editHeaderLabelBudget(width: number, uiTheme: Theme): number {
-	const leftGlyphs = `${uiTheme.boxSharp.topLeft}${uiTheme.boxSharp.horizontal.repeat(3)}`;
-	return Math.max(0, width - visibleWidth(leftGlyphs) - visibleWidth(uiTheme.boxSharp.topRight) - 2);
+	const leftGlyphs = `${uiTheme.boxRound.topLeft}${uiTheme.boxRound.horizontal.repeat(3)}`;
+	return Math.max(0, width - visibleWidth(leftGlyphs) - visibleWidth(uiTheme.boxRound.topRight) - 2);
 }
 
 function renderEditHeader(
@@ -326,11 +326,11 @@ function renderEditHeader(
 	return buildHeader(fitted.description);
 }
 
-function renderPlainTextPreview(text: string, uiTheme: Theme, filePath?: string): string {
+function renderPlainTextPreview(text: string, uiTheme: Theme, _filePath?: string): string {
 	const previewLines = sanitizeText(text).split("\n");
 	let preview = "\n\n";
 	for (const line of previewLines.slice(0, CALL_TEXT_PREVIEW_LINES)) {
-		preview += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line, filePath), CALL_TEXT_PREVIEW_WIDTH))}\n`;
+		preview += `${uiTheme.fg("toolOutput", truncateToWidth(replaceTabs(line), CALL_TEXT_PREVIEW_WIDTH))}\n`;
 	}
 	if (previewLines.length > CALL_TEXT_PREVIEW_LINES) {
 		preview += uiTheme.fg("dim", `… ${previewLines.length - CALL_TEXT_PREVIEW_LINES} more lines`);
@@ -395,7 +395,7 @@ function formatMultiFileStreamingDiff(
 		if (!preview.diff && !preview.error) continue;
 		const header = uiTheme.fg("dim", `\n\n── ${shortenPath(preview.path)} ──`);
 		if (preview.error) {
-			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error, preview.path))}`);
+			parts.push(`${header}\n${uiTheme.fg("error", replaceTabs(preview.error))}`);
 			continue;
 		}
 		if (preview.diff) {
@@ -591,7 +591,6 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 	): Component {
 		const renderContext = options.renderContext;
-
 		const editArgs = args as EditRenderArgs;
 		const hashlineInputSummary = getHashlineInputRenderSummary(editArgs, renderContext?.editMode);
 		const applyPatchSummary = getApplyPatchRenderSummary(editArgs, options.isPartial, renderContext?.editMode);
@@ -638,7 +637,7 @@ export const editToolRenderer = {
 				callPreviewCaches,
 			);
 			if (applyPatchSummary?.error) {
-				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error, rawPath), Math.max(1, width - 2)))}`;
+				body += `\n${uiTheme.fg("error", truncateToWidth(replaceTabs(applyPatchSummary.error), Math.max(1, width - 2)))}`;
 			}
 			const bodyLines = body ? body.split("\n") : [];
 			while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
@@ -734,11 +733,11 @@ function renderSingleFileResult(
 
 		let body = "";
 		if (isError) {
-			if (errorText) body = uiTheme.fg("error", replaceTabs(errorText, rawPath));
+			if (errorText) body = uiTheme.fg("error", replaceTabs(errorText));
 		} else if (details?.diff) {
 			body = renderDiffSection(details.diff, rawPath, expanded, uiTheme, renderDiffFn, diffSectionCache);
 		} else if (editDiffPreview) {
-			if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error, rawPath));
+			if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error));
 			else if (editDiffPreview.diff)
 				body = renderDiffSection(editDiffPreview.diff, rawPath, expanded, uiTheme, renderDiffFn, diffSectionCache);
 		}

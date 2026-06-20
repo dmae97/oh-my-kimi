@@ -91,9 +91,7 @@ fn compact_log(input: &str) -> String {
 	}
 
 	if omitted_entries > 0 {
-		out.push_str("… ");
-		out.push_str(&omitted_entries.to_string());
-		out.push_str(" entries omitted …\n");
+		let _ = writeln!(out, "[…{omitted_entries} entries elided…]");
 	}
 
 	primitives::head_tail_lines(&out, 80, 24)
@@ -172,13 +170,13 @@ fn dense_sync_summary(input: &str, exit_code: i32) -> Option<String> {
 		// head_tail_lines bound that compact_noisy_command (the fallback) applies.
 		// Without a cap every name lands on one unbounded line, defeating the
 		// minimizer's bounding guarantee. Show the first DELETED_NAME_CAP names and
-		// summarize the rest as `+N more` (the count above stays exact).
+		// summarize the rest as `[…N names elided…]` (the count above stays exact).
 		const DELETED_NAME_CAP: usize = 20;
 		let shown = deleted_names.len().min(DELETED_NAME_CAP);
 		let names = deleted_names[..shown].join(", ");
 		let _ = write!(summary, " ({names}");
 		if deleted_names.len() > DELETED_NAME_CAP {
-			let _ = write!(summary, ", +{} more", deleted_names.len() - DELETED_NAME_CAP);
+			let _ = write!(summary, " […{} names elided…]", deleted_names.len() - DELETED_NAME_CAP);
 		}
 		summary.push(')');
 	}
@@ -344,7 +342,7 @@ mod tests {
 
 		assert!(out.changed);
 		assert!(out.text.contains("abc1230"));
-		assert!(out.text.contains("entries omitted"));
+		assert!(out.text.contains("entries elided"));
 		assert!(!out.text.contains("user@example.com"));
 	}
 
@@ -439,7 +437,8 @@ mod tests {
 	fn sync_dense_summary_caps_deleted_name_list() {
 		// A long-lived stack cleanup can delete hundreds of merged branches at
 		// once. The dense summary must stay bounded: cap the inline name list and
-		// summarize the remainder as `+N more`, never emit one unbounded line.
+		// summarize the remainder as `[…N names elided…]`, never emit one unbounded
+		// line.
 		let cfg = MinimizerConfig { enabled: true, ..Default::default() };
 		let ctx = test_ctx(Some("sync"), &cfg);
 		let mut input = String::from("Synced with remote\n");
@@ -452,9 +451,9 @@ mod tests {
 		assert!(out.changed);
 		// Exact deleted count is preserved.
 		assert!(out.text.contains("ok sync: 1 synced, 500 deleted"));
-		// First names stay visible; the rest collapse to a `+N more` marker.
+		// First names stay visible; the rest collapse to a `[…N names elided…]` marker.
 		assert!(out.text.contains("feat/merged-0"));
-		assert!(out.text.contains("+480 more"));
+		assert!(out.text.contains("[…480 names elided…]"));
 		// Bounded: a single short line, not 500 names concatenated.
 		assert!(!out.text.contains("feat/merged-499"));
 		let longest = out.text.lines().map(str::len).max().unwrap_or(0);

@@ -13,6 +13,7 @@ import {
 	resolveModelReference,
 	stripBracketedModelIdAffixes,
 } from "@oh-my-pi/pi-catalog/identity";
+import { fetchLmStudioNativeModelMetadata } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
@@ -274,6 +275,7 @@ export async function discoverOllamaModels(
 			baseUrl: `${endpoint}/v1`,
 			reasoning: metadata?.reasoning ?? false,
 			input: metadata?.input ?? ["text"],
+			imageInputDecoder: "stb",
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: metadata?.contextWindow ?? 128000,
 			maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
@@ -351,6 +353,7 @@ export async function discoverLlamaCppModels(
 				baseUrl,
 				reasoning: false,
 				input: serverMetadata?.input ?? ["text"],
+				imageInputDecoder: "stb",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: serverMetadata?.contextWindow ?? 128000,
 				maxTokens: Math.min(
@@ -379,18 +382,25 @@ export async function discoverOpenAIModelsList(
 	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
 	let headers = baseHeaders;
 	const attempt = async (h: Record<string, string>) => {
-		const res = await ctx.fetch(modelsUrl, {
-			headers: h,
-			signal: AbortSignal.timeout(10_000),
-		});
+		const nativeMetadataPromise =
+			providerConfig.discovery.type === "lm-studio"
+				? fetchLmStudioNativeModelMetadata(baseUrl, ctx.fetch, { headers: h })
+				: Promise.resolve(null);
+		const [res, nativeMetadata] = await Promise.all([
+			ctx.fetch(modelsUrl, {
+				headers: h,
+				signal: AbortSignal.timeout(10_000),
+			}),
+			nativeMetadataPromise,
+		]);
 		if (!res.ok) {
 			throw new Error(`HTTP ${res.status} from ${modelsUrl}`);
 		}
 		headers = h;
-		return res;
+		return [res, nativeMetadata] as const;
 	};
 	const apiKey = await ctx.getBearerApiKeyResolver(providerConfig.provider);
-	const response = apiKey
+	const [response, nativeMetadata] = apiKey
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
 	const payload = (await response.json()) as {
@@ -401,8 +411,12 @@ export async function discoverOpenAIModelsList(
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
+		const nativeMetadataForModel = nativeMetadata?.get(id);
 		const contextWindow =
-			toPositiveNumberOrUndefined(item.max_model_len) ?? toPositiveNumberOrUndefined(item.context_length) ?? 128000;
+			toPositiveNumberOrUndefined(item.max_model_len) ??
+			toPositiveNumberOrUndefined(item.context_length) ??
+			nativeMetadataForModel?.contextWindow ??
+			128000;
 		discovered.push(
 			buildModel({
 				id,
@@ -411,7 +425,8 @@ export async function discoverOpenAIModelsList(
 				provider: providerConfig.provider,
 				baseUrl,
 				reasoning: false,
-				input: ["text"],
+				input: nativeMetadataForModel?.input ?? ["text"],
+				...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow,
 				maxTokens: Math.min(contextWindow, discoveryDefaultMaxTokens(providerConfig.api)),

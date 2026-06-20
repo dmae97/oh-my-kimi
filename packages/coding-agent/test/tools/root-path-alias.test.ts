@@ -148,8 +148,7 @@ describe("tool path root alias", () => {
 		expect(details?.scopePath).toBe(".");
 		expect(details?.totalReplacements).toBe(1);
 
-		queue.nextToolChoice();
-		const invoker = queue.peekInFlightInvoker()!;
+		const invoker = queue.peekPendingInvoker()!;
 		expect(invoker).toBeDefined();
 		await invoker({ action: "apply", reason: "apply root alias rewrite" });
 

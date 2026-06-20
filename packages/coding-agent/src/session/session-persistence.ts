@@ -36,10 +36,33 @@ export function isImageBlock(value: unknown): value is { type: "image"; data: st
 	);
 }
 
+function isImageMimeType(value: unknown): value is string {
+	return typeof value === "string" && value.toLowerCase().startsWith("image/");
+}
+
+export function isImageDataPayload(value: unknown): value is { data: string; mimeType?: string } {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"data" in value &&
+		typeof (value as { data?: string }).data === "string" &&
+		(isImageBlock(value) || ("mimeType" in value && isImageMimeType((value as { mimeType?: unknown }).mimeType)))
+	);
+}
+
+function shouldExternalizeImagePayload(
+	value: unknown,
+	key: string | undefined,
+): value is { data: string; mimeType?: string } {
+	if (!isImageDataPayload(value)) return false;
+	if (isBlobRef(value.data) || value.data.length < BLOB_EXTERNALIZE_THRESHOLD) return false;
+	return (key === TEXT_CONTENT_KEY && isImageBlock(value)) || key === "images";
+}
+
 /**
  * Recursively truncate large strings in an object for session persistence.
  * - Truncates any oversized string fields (key-agnostic)
- * - Replaces oversized image blocks with text notices
+ * - Externalizes oversized image payloads to blob refs
  * - Updates lineCount when content is truncated
  * - Returns original object if no changes needed (structural sharing)
  *
@@ -50,6 +73,9 @@ export function isImageBlock(value: unknown): value is { type: "image"; data: st
  */
 function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string): unknown {
 	if (obj === null || obj === undefined) return obj;
+	if (shouldExternalizeImagePayload(obj, key)) {
+		return { ...obj, data: externalizeImageDataSync(blobStore, obj.data, obj.mimeType) };
+	}
 
 	if (typeof obj === "string") {
 		if (key === "image_url" && isImageDataUrl(obj)) {
@@ -72,16 +98,6 @@ function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string
 		const result: unknown[] = new Array(obj.length);
 		for (let i = 0; i < obj.length; i++) {
 			const item = obj[i];
-			if (
-				key === TEXT_CONTENT_KEY &&
-				isImageBlock(item) &&
-				!isBlobRef(item.data) &&
-				item.data.length >= BLOB_EXTERNALIZE_THRESHOLD
-			) {
-				changed = true;
-				result[i] = { ...item, data: externalizeImageDataSync(blobStore, item.data, item.mimeType) };
-				continue;
-			}
 			const newItem = truncateForPersistence(item, blobStore, key);
 			if (newItem !== item) changed = true;
 			result[i] = newItem;

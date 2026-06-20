@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core/types";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 export interface GetCurrentTimeResult extends AgentToolResult<{ utcTimestamp: number }> {}
 
@@ -27,11 +27,11 @@ export async function getCurrentTime(timezone?: string): Promise<GetCurrentTimeR
 	};
 }
 
-const getCurrentTimeSchema = z.object({
-	timezone: z.string().describe("Optional timezone (e.g., 'America/New_York', 'Europe/London')").optional(),
+const getCurrentTimeSchema = type({
+	"timezone?": type("string").describe("Optional timezone (e.g., 'America/New_York', 'Europe/London')"),
 });
 
-type GetCurrentTimeParams = z.infer<typeof getCurrentTimeSchema>;
+type GetCurrentTimeParams = typeof getCurrentTimeSchema.infer;
 
 export const getCurrentTimeTool: AgentTool<typeof getCurrentTimeSchema, { utcTimestamp: number }> = {
 	label: "Current Time",

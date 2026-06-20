@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
 import { CollabHost } from "../collab/host";
@@ -27,9 +27,11 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
+import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
+import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
@@ -97,6 +99,19 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 				: "Anyone with the link can read the session and prompt the agent. Read-only link: /collab view",
 		),
 	].join("\n");
+}
+
+function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
+	try {
+		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
+	} catch (err) {
+		ctx.showError(`Failed to render collab QR code: ${errorMessage(err)}`);
+	}
+}
+
+function showCollabLink(ctx: InteractiveModeContext, host: CollabHost, heading: string, view = false): void {
+	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
+	showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
 }
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -240,13 +255,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const hadArgs = !!command.args;
-			// Capture state BEFORE the call: when plan mode is already active,
-			// handlePlanModeCommand may exit it (on confirmed exit) or leave it on (on cancel
-			// or warning). In every "already active" case the typed args are NOT consumed,
-			// so preserve them in history regardless of the user's confirm/cancel choice.
-			const wasPlanModeEnabled = runtime.ctx.planModeEnabled;
 			await runtime.ctx.handlePlanModeCommand(command.args || undefined);
-			if (hadArgs && wasPlanModeEnabled) {
+			if (hadArgs) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
 			runtime.ctx.editor.setText("");
@@ -275,10 +285,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const hadArgs = !!command.args;
-			// Capture state BEFORE the call (see /plan above for rationale).
-			const wasGoalModeEnabled = runtime.ctx.goalModeEnabled;
 			await runtime.ctx.handleGoalModeCommand(command.args || undefined);
-			if (hadArgs && wasGoalModeEnabled) {
+			if (hadArgs) {
 				runtime.ctx.editor.addToHistory(command.text);
 			}
 			runtime.ctx.editor.setText("");
@@ -298,17 +306,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "loop",
 		description:
 			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
-		inlineHint: "[count|duration]",
+		inlineHint: "[count|duration] [prompt]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
-			await runtime.ctx.handleLoopCommand(command.args);
+			const prompt = await runtime.ctx.handleLoopCommand(command.args);
 			runtime.ctx.editor.setText("");
+			// Surface any inline prompt so the dispatcher returns it and the normal
+			// submit flow runs the first loop iteration (recording it as the loop prompt).
+			if (prompt) return { prompt };
 		},
 	},
 	{
 		name: "model",
 		aliases: ["models"],
-		description: "Select model (opens selector UI)",
+		description: "Switch model for this session",
 		acpDescription: "Show current model selection",
 		handle: async (command, runtime) => {
 			if (command.args) {
@@ -547,17 +558,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "dump",
 		description: "Copy session transcript to clipboard",
 		acpDescription: "Return full transcript as plain text",
-		inlineHint: "[raw]",
 		allowArgs: true,
-		handle: async (command, runtime) => {
-			const isRaw = command.args.trim().toLowerCase() === "raw";
-			const text = runtime.session.formatSessionAsText({ compact: !isRaw });
+		handle: async (_command, runtime) => {
+			const text = runtime.session.formatSessionAsText();
 			await runtime.output(text || "No messages to dump yet.");
 			return commandConsumed();
 		},
-		handleTui: (command, runtime) => {
-			const isRaw = command.args.trim().toLowerCase() === "raw";
-			runtime.ctx.handleDumpCommand(isRaw);
+		handleTui: (_command, runtime) => {
+			runtime.ctx.handleDumpCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -599,8 +607,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
 			const args = command.args.trim();
-			const [first = ""] = args.split(/\s+/, 1);
-			if (first === "stop") {
+			const { verb, rest } = parseSubcommand(args);
+			if (verb === "stop") {
 				if (!ctx.collabHost) {
 					ctx.showStatus("Not hosting a collab session");
 					return;
@@ -609,7 +617,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showStatus("Collab stopped");
 				return;
 			}
-			if (first === "status") {
+			if (verb === "status") {
 				if (ctx.collabHost) {
 					const names = ctx.collabHost.participants.map(p =>
 						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
@@ -630,15 +638,18 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				ctx.showError("Already in a collab session as a guest (/leave first)");
 				return;
 			}
-			const view = first === "view";
+			const knownStartVerb = verb === "start" || verb === "view";
+			const view = verb === "view";
 			if (ctx.collabHost) {
-				ctx.showStatus(
-					collabLinkHint(ctx.collabHost, view ? "Read-only collab link" : "Collab session active", view),
-					{ dim: false },
+				showCollabLink(
+					ctx,
+					ctx.collabHost,
+					view ? "Read-only collab session active" : "Collab session active",
+					view,
 				);
 				return;
 			}
-			const explicitUrl = first === "start" || view ? args.slice(first.length).trim() : args;
+			const explicitUrl = knownStartVerb ? rest : args;
 			const relayInput = explicitUrl || ctx.settings.get("collab.relayUrl") || "";
 			if (!relayInput) {
 				ctx.showError(
@@ -648,15 +659,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			}
 			// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
 			const relayUrl = relayInput.includes("://") ? relayInput : `wss://${relayInput}`;
+			const webUrl = ctx.settings.get("collab.webUrl") || "";
 			const host = new CollabHost(ctx);
 			try {
-				await host.start(relayUrl);
+				await host.start(relayUrl, webUrl);
 			} catch (err) {
 				ctx.showError(`Failed to start collab session: ${errorMessage(err)}`);
 				return;
 			}
 			ctx.collabHost = host;
-			ctx.showStatus(collabLinkHint(host, "Collab session started!", view), { dim: false });
+			showCollabLink(ctx, host, "Collab session started!", view);
 		},
 	},
 	{
@@ -1249,13 +1261,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "compact",
 		description: "Manually compact the session context",
 		acpDescription: "Compact the conversation",
-		inlineHint: "[focus instructions]",
+		subcommands: COMPACT_MODES.map(mode => ({
+			name: mode.name,
+			description: mode.description,
+			usage: mode.rejectsFocus ? undefined : "[focus]",
+		})),
+		acpInputHint: `[${COMPACT_MODES.map(mode => mode.name).join("|")}] [focus]`,
 		allowArgs: true,
 		handle: async (command, runtime) => {
+			const parsed = parseCompactArgs(command.args);
+			if ("error" in parsed) return usage(parsed.error, runtime);
 			const before = runtime.session.getContextUsage?.();
 			const beforeTokens = before?.tokens;
 			try {
-				await runtime.session.compact(command.args || undefined);
+				await runtime.session.compact(parsed.instructions, parsed.mode ? { mode: parsed.mode } : undefined);
 			} catch (err) {
 				// Compaction precondition failures (no model, already compacted, too
 				// small) and provider errors propagate as plain Errors; surface them
@@ -1273,9 +1292,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
-			const customInstructions = command.args || undefined;
+			const parsed = parseCompactArgs(command.args);
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleCompactCommand(customInstructions);
+			if ("error" in parsed) {
+				runtime.ctx.showWarning(parsed.error);
+				return;
+			}
+			await runtime.ctx.handleCompactCommand(parsed.instructions, parsed.mode);
 		},
 	},
 	{

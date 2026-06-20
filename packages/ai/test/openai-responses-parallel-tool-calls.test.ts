@@ -13,8 +13,8 @@
 // `output_item.done` event must be routed by `output_index`/`item_id`, not by
 // arrival order.
 import { describe, expect, test } from "bun:test";
-import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-responses-shared";
 import type { ResponseStreamEvent } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
+import { processResponsesStream } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -65,8 +65,8 @@ describe("processResponsesStream: parallel function_call items", () => {
 		const emitted: EmittedEvent[] = [];
 		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
 
-		const argsA = JSON.stringify({ _i: "Reading test", path: "test.txt" });
-		const argsB = JSON.stringify({ _i: "Reading test", path: "test.md" });
+		const argsA = JSON.stringify({ i: "Reading test", path: "test.txt" });
+		const argsB = JSON.stringify({ i: "Reading test", path: "test.md" });
 
 		await processResponsesStream(
 			makeStream([
@@ -125,8 +125,8 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(blockA?.type).toBe("toolCall");
 		expect(blockB?.type).toBe("toolCall");
 		if (blockA?.type !== "toolCall" || blockB?.type !== "toolCall") throw new Error("expected toolCalls");
-		expect(blockA.arguments).toEqual({ _i: "Reading test", path: "test.txt" });
-		expect(blockB.arguments).toEqual({ _i: "Reading test", path: "test.md" });
+		expect(blockA.arguments).toEqual({ i: "Reading test", path: "test.txt" });
+		expect(blockB.arguments).toEqual({ i: "Reading test", path: "test.md" });
 
 		const ends = emitted.filter(e => e.type === "toolcall_end") as Array<{
 			toolCall: { id: string; arguments: Record<string, unknown> };
@@ -134,8 +134,8 @@ describe("processResponsesStream: parallel function_call items", () => {
 		}>;
 		expect(ends).toHaveLength(2);
 		const byCallId = new Map(ends.map(e => [e.toolCall.id.split("|")[0], e]));
-		expect(byCallId.get("call_a")?.toolCall.arguments).toEqual({ _i: "Reading test", path: "test.txt" });
-		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({ _i: "Reading test", path: "test.md" });
+		expect(byCallId.get("call_a")?.toolCall.arguments).toEqual({ i: "Reading test", path: "test.txt" });
+		expect(byCallId.get("call_b")?.toolCall.arguments).toEqual({ i: "Reading test", path: "test.md" });
 		expect(byCallId.get("call_a")?.contentIndex).toBe(0);
 		expect(byCallId.get("call_b")?.contentIndex).toBe(1);
 
@@ -150,6 +150,60 @@ describe("processResponsesStream: parallel function_call items", () => {
 		const deltaForB = deltas.find(d => d.delta === argsB);
 		expect(deltaForA?.contentIndex).toBe(0);
 		expect(deltaForB?.contentIndex).toBe(1);
+	});
+
+	test("drops stale keyed deltas after their item closes instead of routing to a sibling", async () => {
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		const argsA = JSON.stringify({ path: "a" });
+		const argsB = JSON.stringify({ path: "b" });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "read", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "read", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: { type: "function_call", id: "fc_a", call_id: "call_a", name: "read", arguments: argsA },
+				},
+				{
+					type: "response.function_call_arguments.delta",
+					output_index: 0,
+					item_id: "fc_a",
+					delta: JSON.stringify({ late: true }),
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 1,
+					item: { type: "function_call", id: "fc_b", call_id: "call_b", name: "read", arguments: argsB },
+				},
+				{
+					type: "response.completed",
+					response: { id: "resp_parallel_stale_delta", status: "completed" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		const [, blockB] = output.content;
+		if (blockB?.type !== "toolCall") throw new Error("expected second toolCall");
+		expect(blockB.arguments).toEqual({ path: "b" });
+
+		const deltas = emitted.filter(e => e.type === "toolcall_delta");
+		expect(deltas).toEqual([]);
 	});
 
 	test("routes done-only finalization to the correct block when arguments stream as a single chunk on each item", async () => {
@@ -335,5 +389,168 @@ describe("processResponsesStream: parallel function_call items", () => {
 		expect(byCallId.get("fc_a")?.contentIndex).toBe(0);
 		expect(byCallId.get("fc_b")?.contentIndex).toBe(1);
 		expect(byCallId.get("fc_c")?.contentIndex).toBe(2);
+	});
+	test("routes Ollama Responses deltas whose item_id prefixes the call_id", async () => {
+		// Ollama's OpenAI-compatible Responses stream can add parallel calls with
+		// only `call_id`, then send argument deltas with `item_id = fc_<call_id>`
+		// even when `call_id` already starts with `fc_`.
+		// If the parser only indexes the bare call_id, every delta falls back to the
+		// most recently added call and earlier ast_grep calls execute with `{}`.
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		const argsA = JSON.stringify({ pat: "console.log($$$)", paths: ["src/**/*.ts"] });
+		const argsB = JSON.stringify({ pat: "logger.$_($$$ARGS)", paths: ["src/**/*.ts"] });
+		const argsC = JSON.stringify({ pat: "processItems", paths: ["src/worker.ts"] });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "x", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "fc_x", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "call_c", name: "ast_grep", arguments: "" },
+				},
+				{ type: "response.function_call_arguments.delta", item_id: "fc_x", delta: argsA },
+				{ type: "response.function_call_arguments.delta", item_id: "fc_fc_x", delta: argsB },
+				{ type: "response.function_call_arguments.delta", item_id: "fc_call_c", delta: argsC },
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "x", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "fc_x", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "call_c", name: "ast_grep", arguments: "" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toHaveLength(3);
+		const [a, b, c] = output.content;
+		if (a?.type !== "toolCall" || b?.type !== "toolCall" || c?.type !== "toolCall") {
+			throw new Error("expected toolCalls");
+		}
+		expect(a.arguments).toEqual({ pat: "console.log($$$)", paths: ["src/**/*.ts"] });
+		expect(b.arguments).toEqual({ pat: "logger.$_($$$ARGS)", paths: ["src/**/*.ts"] });
+		expect(c.arguments).toEqual({ pat: "processItems", paths: ["src/worker.ts"] });
+
+		const ends = emitted.filter(e => e.type === "toolcall_end") as Array<{
+			toolCall: { id: string; arguments: Record<string, unknown> };
+			contentIndex: number;
+		}>;
+		expect(ends).toHaveLength(3);
+		const byCallId = new Map(ends.map(e => [e.toolCall.id.split("|")[0], e]));
+		expect(byCallId.get("x")?.toolCall.arguments).toEqual({
+			pat: "console.log($$$)",
+			paths: ["src/**/*.ts"],
+		});
+		expect(byCallId.get("fc_x")?.toolCall.arguments).toEqual({
+			pat: "logger.$_($$$ARGS)",
+			paths: ["src/**/*.ts"],
+		});
+		expect(byCallId.get("call_c")?.toolCall.arguments).toEqual({
+			pat: "processItems",
+			paths: ["src/worker.ts"],
+		});
+		expect(byCallId.get("x")?.contentIndex).toBe(0);
+		expect(byCallId.get("fc_x")?.contentIndex).toBe(1);
+		expect(byCallId.get("call_c")?.contentIndex).toBe(2);
+	});
+	test("routes prefixed deltas whose output_index was never registered (issue #2715)", async () => {
+		// The OpenAI Responses spec marks `output_index` as required on
+		// `function_call_arguments.{delta,done}`, so a spec-shaped delta always
+		// carries it. llama.cpp/Ollama still omit `output_index`/`item.id` on
+		// `output_item.added` (issue #2015), registering each parallel call only by
+		// `call_id`. The deltas then point at an `output_index` that was never
+		// registered while routing by `item_id = fc_<call_id>`. Trusting the stale
+		// output_index and skipping the prefixed-alias lookup folds every delta into
+		// the most-recently-added call, leaving earlier ast_grep calls with `{}`.
+		const output = makeOutput();
+		const emitted: EmittedEvent[] = [];
+		const stream = { push: (e: unknown) => emitted.push(e as EmittedEvent), end: () => {} } as never;
+
+		const argsA = JSON.stringify({ pat: "console.log($$$)", paths: ["src/**/*.ts"] });
+		const argsB = JSON.stringify({ pat: "logger.$_($$$ARGS)", paths: ["src/**/*.ts"] });
+		const argsC = JSON.stringify({ pat: "processItems", paths: ["src/worker.ts"] });
+
+		await processResponsesStream(
+			makeStream([
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "a", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "b", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.added",
+					item: { type: "function_call", call_id: "c", name: "ast_grep", arguments: "" },
+				},
+				{ type: "response.function_call_arguments.delta", output_index: 0, item_id: "fc_a", delta: argsA },
+				{ type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_b", delta: argsB },
+				{ type: "response.function_call_arguments.delta", output_index: 2, item_id: "fc_c", delta: argsC },
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "a", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "b", name: "ast_grep", arguments: "" },
+				},
+				{
+					type: "response.output_item.done",
+					item: { type: "function_call", call_id: "c", name: "ast_grep", arguments: "" },
+				},
+			]),
+			output,
+			stream,
+			makeModel(),
+		);
+
+		expect(output.content).toHaveLength(3);
+		const [a, b, c] = output.content;
+		if (a?.type !== "toolCall" || b?.type !== "toolCall" || c?.type !== "toolCall") {
+			throw new Error("expected toolCalls");
+		}
+		expect(a.arguments).toEqual({ pat: "console.log($$$)", paths: ["src/**/*.ts"] });
+		expect(b.arguments).toEqual({ pat: "logger.$_($$$ARGS)", paths: ["src/**/*.ts"] });
+		expect(c.arguments).toEqual({ pat: "processItems", paths: ["src/worker.ts"] });
+
+		const ends = emitted.filter(e => e.type === "toolcall_end") as Array<{
+			toolCall: { id: string; arguments: Record<string, unknown> };
+			contentIndex: number;
+		}>;
+		expect(ends).toHaveLength(3);
+		const byCallId = new Map(ends.map(e => [e.toolCall.id.split("|")[0], e]));
+		expect(byCallId.get("a")?.toolCall.arguments).toEqual({
+			pat: "console.log($$$)",
+			paths: ["src/**/*.ts"],
+		});
+		expect(byCallId.get("b")?.toolCall.arguments).toEqual({
+			pat: "logger.$_($$$ARGS)",
+			paths: ["src/**/*.ts"],
+		});
+		expect(byCallId.get("c")?.toolCall.arguments).toEqual({
+			pat: "processItems",
+			paths: ["src/worker.ts"],
+		});
+		expect(byCallId.get("a")?.contentIndex).toBe(0);
+		expect(byCallId.get("b")?.contentIndex).toBe(1);
+		expect(byCallId.get("c")?.contentIndex).toBe(2);
 	});
 });

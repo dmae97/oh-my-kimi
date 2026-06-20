@@ -4,8 +4,12 @@ import {
 	type RequestBody,
 	transformRequestBody,
 } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
-import { streamOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import {
+	convertCodexResponsesMessages,
+	streamOpenAICodexResponses,
+} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import type { Context, FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { createCodexModel } from "./helpers";
 
 function createCodexTestToken(accountId = "acc_test"): string {
@@ -139,6 +143,38 @@ describe("openai-codex Responses Lite input shaping", () => {
 		const plain = await transformRequestBody({ model: model.id, input: makeInput() }, model, {});
 		const plainMessage = plain.input?.[0]?.content as Array<Record<string, unknown>>;
 		expect(plainMessage[1]?.detail).toBe("auto");
+	});
+
+	it("clamps original image detail when Codex compat disables it", () => {
+		const model = buildModel({
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-codex-responses",
+			provider: "cc-switch",
+			baseUrl: "http://127.0.0.1:8080/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 100_000,
+			compat: { supportsImageDetailOriginal: false },
+		});
+		const messages = convertCodexResponsesMessages(model, {
+			messages: [
+				{
+					role: "user",
+					timestamp: Date.now(),
+					content: [
+						{ type: "text", text: "look" },
+						{ type: "image", mimeType: "image/png", data: "AAAA", detail: "original" },
+					],
+				},
+			],
+		});
+		expect(messages[0]).toMatchObject({
+			role: "user",
+			content: [{ type: "input_text" }, { type: "input_image", detail: "auto" }],
+		});
 	});
 
 	it("forces parallel_tool_calls off under lite when tools are present", async () => {

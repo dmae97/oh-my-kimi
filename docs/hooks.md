@@ -4,13 +4,14 @@ This document describes the **current hook subsystem code** in `src/extensibilit
 
 ## Current status in runtime
 
-The hook package (`src/extensibility/hooks/`) is still exported and usable as an API surface, but the default CLI runtime now initializes the **extension runner** path. In current startup flow:
+The default CLI runtime initializes the **extension runner** path. In current startup flow:
 
 - `--hook` is treated as an alias for `--extension` (CLI paths are merged into `additionalExtensionPaths`)
+- JS/TS hook factories discovered through `hookCapability` (for example `.omp/hooks/pre/*.ts`) are loaded as extension modules so their `pi.on(...)` handlers bind to the runtime event bus
 - tools are wrapped by `ExtensionToolWrapper`, not `HookToolWrapper`
 - context transforms and lifecycle emissions go through `ExtensionRunner`
 
-So this file documents the hook subsystem implementation itself (types/loader/runner/wrapper), including legacy behavior and constraints.
+So this file documents the legacy hook subsystem implementation itself (types/loader/runner/wrapper), plus the factory shape still accepted when a discovered hook path is loaded by the extension runner.
 
 ## Key files
 
@@ -51,7 +52,14 @@ The factory can:
 
 ## Discovery and loading
 
-`discoverAndLoadHooks(configuredPaths, cwd)` does:
+Default sessions load JS/TS hook factories discovered by `hookCapability` through the extension runner. `discoverExtensionPaths(configuredPaths, cwd)` does:
+
+1. Load native extension modules from the capability registry
+2. Load importable `.ts`/`.js` hook factories from the hook capability registry
+3. Append plugin extension entry points
+4. Append explicitly configured paths
+
+The legacy `discoverAndLoadHooks(configuredPaths, cwd)` helper still exists and does:
 
 1. Load discovered hooks from capability registry (`loadCapability("hooks")`)
 2. Append explicitly configured paths (deduped by absolute path)
@@ -66,12 +74,6 @@ The factory can:
 - absolute path: used as-is
 - `~` path: expanded
 - relative path: resolved against `cwd`
-
-### Important legacy mismatch
-
-Discovery providers for `hookCapability` still model pre/post shell-style hook files (for example `.claude/hooks/pre/*`, `.omp/.../hooks/pre/*`).
-
-The hook loader here uses dynamic module import and requires a default JS/TS hook factory. If a discovered hook path is not importable as a module, load fails and is reported in `LoadHooksResult.errors`.
 
 ## Event surfaces
 
@@ -94,7 +96,7 @@ Hook events are strongly typed in `types.ts`.
 ### Agent/context events
 
 - `context` → can return `{ messages?: Message[] }`
-- `before_agent_start` → can return `{ message?: { customType; content; display; details } }`
+- `before_agent_start` → can return `{ message?: { customType; content; display; details; attribution } }`
 - `agent_start`
 - `agent_end`
 - `turn_start`

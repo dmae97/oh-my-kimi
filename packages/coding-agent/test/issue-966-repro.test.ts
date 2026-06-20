@@ -30,7 +30,7 @@ try {
 		diffCached: true,
 	});
 	const firstStage = await git.diff.changedFiles(dir, { cached: true });
-	if (JSON.stringify(firstStage) !== JSON.stringify(["new-file.txt"])) {
+	if (!Bun.deepEquals(firstStage, ["new-file.txt"])) {
 		throw new Error("unexpected first stage: " + JSON.stringify(firstStage));
 	}
 	await git.commit(dir, "feat: add new file");
@@ -39,16 +39,16 @@ try {
 		diffCached: true,
 	});
 	const secondStage = await git.diff.changedFiles(dir, { cached: true });
-	if (JSON.stringify(secondStage) !== JSON.stringify(["tracked.txt"])) {
+	if (!Bun.deepEquals(secondStage, ["tracked.txt"])) {
 		throw new Error("unexpected second stage: " + JSON.stringify(secondStage));
 	}
 	await git.commit(dir, "fix: update tracked file");
 	const log = (await $\`git log --format=%s -2\`.cwd(dir).text()).trim().split("\\n");
-	if (JSON.stringify(log) !== JSON.stringify(["fix: update tracked file", "feat: add new file"])) {
+	if (!Bun.deepEquals(log, ["fix: update tracked file", "feat: add new file"])) {
 		throw new Error("unexpected log: " + JSON.stringify(log));
 	}
 	const summary = await git.status.summary(dir);
-	if (JSON.stringify(summary) !== JSON.stringify({ staged: 0, unstaged: 0, untracked: 0 })) {
+	if (!Bun.deepEquals(summary, { staged: 0, unstaged: 0, untracked: 0 })) {
 		throw new Error("unexpected status: " + JSON.stringify(summary));
 	}
 } finally {

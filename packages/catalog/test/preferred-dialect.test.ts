@@ -14,6 +14,8 @@ describe("preferredDialect", () => {
 		expect(preferredDialect("gemini-3.5-flash")).toBe("gemini");
 		expect(preferredDialect("gemma-3-27b-it")).toBe("gemma");
 		expect(preferredDialect("google/gemma-4-E2B-it")).toBe("gemma");
+		expect(preferredDialect("MiniMax-M3")).toBe("minimax");
+		expect(preferredDialect("minimax/minimax-m3")).toBe("minimax");
 		expect(preferredDialect("unclassified-model-id")).toBe(FALLBACK_DIALECT);
 	});
 });

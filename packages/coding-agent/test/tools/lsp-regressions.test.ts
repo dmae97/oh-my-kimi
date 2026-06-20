@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
@@ -39,6 +40,7 @@ import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
+import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 
 interface RpcMessage {
 	jsonrpc?: string;
@@ -76,7 +78,7 @@ function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 	const waiters: Array<{
 		predicate: (message: RpcMessage) => boolean;
 		resolve: (message: RpcMessage) => void;
-		timer: ReturnType<typeof setTimeout>;
+		timer: Timer;
 	}> = [];
 	let exitCode: number | null = null;
 	let killed = false;
@@ -307,6 +309,141 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("accepts dynamic capability registration before semantic requests", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-dynamic-registration-");
+		try {
+			let dynamicRegistrationAccepted = false;
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
+				} else if (message.method === "initialized") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9002,
+						method: "client/registerCapability",
+						params: {
+							registrations: [
+								{
+									id: "-42",
+									method: "workspace/didChangeWatchedFiles",
+									registerOptions: {
+										watchers: [{ globPattern: "**/mix.lock" }, { globPattern: "**/*.{ex,exs}" }],
+									},
+								},
+							],
+						},
+					});
+					srv.send({
+						jsonrpc: "2.0",
+						id: "expert-unregister-1",
+						method: "client/unregisterCapability",
+						params: { unregisterations: [{ id: "-42", method: "workspace/didChangeWatchedFiles" }] },
+					});
+				} else if (message.id === 9002 && message.method === undefined) {
+					dynamicRegistrationAccepted = message.error === undefined;
+				} else if (message.method === "textDocument/hover" && dynamicRegistrationAccepted) {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "Atas.version()" } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["ex"],
+				rootMarkers: [],
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const registerResponse = await server.waitFor(message => message.id === 9002 && message.method === undefined);
+			const unregisterResponse = await server.waitFor(
+				message => message.id === "expert-unregister-1" && message.method === undefined,
+			);
+			expect(registerResponse.error).toBeUndefined();
+			expect(unregisterResponse.error).toBeUndefined();
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/hover",
+				{
+					textDocument: { uri: fileToUri(path.join(tempDir.path(), "lib", "atas.ex")) },
+					position: { line: 0, character: 0 },
+				},
+				undefined,
+				50,
+			);
+
+			expect(result).toEqual({ contents: "Atas.version()" });
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
+	it("answers defined server→client requests with spec no-op results", async () => {
+		// Same failure class as #3029: a defined server→client request
+		// (window/showMessage{Request}, window/showDocument, workspace/*/refresh)
+		// must receive a spec-shaped reply, not a -32601. Headless omp can't
+		// surface UI prompts but still owes a defined no-op.
+		const tempDir = TempDir.createSync("@omp-lsp-server-requests-");
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "initialized") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9101,
+						method: "window/showMessageRequest",
+						params: { type: 1, message: "x", actions: [{ title: "Cancel" }] },
+					});
+					srv.send({
+						jsonrpc: "2.0",
+						id: 9102,
+						method: "window/showDocument",
+						params: { uri: "file:///tmp/a.md" },
+					});
+					srv.send({ jsonrpc: "2.0", id: 9103, method: "workspace/semanticTokens/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9104, method: "workspace/inlayHint/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9105, method: "workspace/codeLens/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9106, method: "workspace/diagnostic/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9107, method: "workspace/inlineValue/refresh" });
+					srv.send({ jsonrpc: "2.0", id: 9108, method: "workspace/foldingRange/refresh" });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["rs"],
+				rootMarkers: [],
+			};
+
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+
+			const showMessage = await server.waitFor(message => message.id === 9101 && message.method === undefined);
+			expect(showMessage.error).toBeUndefined();
+			expect(showMessage.result).toBeNull();
+
+			const showDocument = await server.waitFor(message => message.id === 9102 && message.method === undefined);
+			expect(showDocument.error).toBeUndefined();
+			expect(showDocument.result).toEqual({ success: false });
+
+			for (const id of [9103, 9104, 9105, 9106, 9107, 9108]) {
+				const refresh = await server.waitFor(message => message.id === id && message.method === undefined);
+				expect(refresh.error).toBeUndefined();
+				expect(refresh.result).toBeNull();
+			}
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("opens rust-analyzer Cargo workspace files before polling workspace readiness", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rust-workspace-");
 		try {
@@ -481,9 +618,9 @@ describe("lsp regressions", () => {
 		const tempDir = TempDir.createSync("@omp-lsp-glob-");
 		try {
 			await Promise.all([
-				Bun.write(`${tempDir.path()}/a.ts`, "export const a = 1;\n"),
-				Bun.write(`${tempDir.path()}/b.ts`, "export const b = 1;\n"),
-				Bun.write(`${tempDir.path()}/c.ts`, "export const c = 1;\n"),
+				Bun.write(path.join(tempDir.path(), "a.ts"), "export const a = 1;\n"),
+				Bun.write(path.join(tempDir.path(), "b.ts"), "export const b = 1;\n"),
+				Bun.write(path.join(tempDir.path(), "c.ts"), "export const c = 1;\n"),
 			]);
 			const result = await collectGlobMatches("*.ts", tempDir.path(), 2);
 			expect(result.matches).toHaveLength(2);
@@ -496,17 +633,23 @@ describe("lsp regressions", () => {
 	it("treats existing bracket paths as literal diagnostic targets", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-bracket-path-");
 		try {
-			const filePath = `${tempDir.path()}/apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx`;
+			const diagnosticTarget = path.join(
+				"apps",
+				"frontend",
+				"src",
+				"app",
+				"runs",
+				"[runId]",
+				"public",
+				"opengraph-image.tsx",
+			);
+			const filePath = path.join(tempDir.path(), diagnosticTarget);
 			await Bun.write(filePath, "export default function OpenGraphImage() {}\n");
 
-			const result = await resolveDiagnosticTargets(
-				"apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx",
-				tempDir.path(),
-				10,
-			);
+			const result = await resolveDiagnosticTargets(diagnosticTarget, tempDir.path(), 10);
 
 			expect(result).toEqual({
-				matches: ["apps/frontend/src/app/runs/[runId]/public/opengraph-image.tsx"],
+				matches: [diagnosticTarget],
 				truncated: false,
 			});
 		} finally {
@@ -517,7 +660,7 @@ describe("lsp regressions", () => {
 	it("resolves the requested symbol occurrence on a line", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-regression-");
 		try {
-			const filePath = `${tempDir.path()}/symbol.ts`;
+			const filePath = path.join(tempDir.path(), "symbol.ts");
 			await Bun.write(filePath, "foo(bar(foo));\n");
 
 			expect(await resolveSymbolColumn(filePath, 1, "foo")).toBe(0);
@@ -530,7 +673,7 @@ describe("lsp regressions", () => {
 	it("throws when symbol does not exist on the target line", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-missing-symbol-");
 		try {
-			const filePath = `${tempDir.path()}/symbol.ts`;
+			const filePath = path.join(tempDir.path(), "symbol.ts");
 			await Bun.write(filePath, "winston.info('x');\n");
 
 			await expect(resolveSymbolColumn(filePath, 1, "nonexistent_symbol")).rejects.toThrow(
@@ -544,7 +687,7 @@ describe("lsp regressions", () => {
 	it("throws when occurrence is out of bounds", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-occurrence-");
 		try {
-			const filePath = `${tempDir.path()}/symbol.ts`;
+			const filePath = path.join(tempDir.path(), "symbol.ts");
 			await Bun.write(filePath, "foo();\n");
 
 			await expect(resolveSymbolColumn(filePath, 1, "foo#2")).rejects.toThrow(
@@ -556,12 +699,15 @@ describe("lsp regressions", () => {
 	});
 
 	it("filters and deduplicates workspace symbols by query", () => {
+		const rustUri = fileToUri(path.join(os.tmpdir(), "rust.rs"));
+		const loggerUri = fileToUri(path.join(os.tmpdir(), "logger.ts"));
+
 		const symbols: SymbolInformation[] = [
 			{
 				name: "DisallowOverwritingRegularFilesViaOutputRedirection",
 				kind: 12,
 				location: {
-					uri: "file:///tmp/rust.rs",
+					uri: rustUri,
 					range: {
 						start: { line: 10, character: 2 },
 						end: { line: 10, character: 60 },
@@ -572,7 +718,7 @@ describe("lsp regressions", () => {
 				name: "logger",
 				kind: 13,
 				location: {
-					uri: "file:///tmp/logger.ts",
+					uri: loggerUri,
 					range: {
 						start: { line: 5, character: 1 },
 						end: { line: 5, character: 7 },
@@ -583,7 +729,7 @@ describe("lsp regressions", () => {
 				name: "logger",
 				kind: 13,
 				location: {
-					uri: "file:///tmp/logger.ts",
+					uri: loggerUri,
 					range: {
 						start: { line: 5, character: 1 },
 						end: { line: 5, character: 7 },
@@ -628,7 +774,7 @@ describe("lsp regressions", () => {
 				...action,
 				edit: {
 					changes: {
-						"file:///tmp/example.ts": [
+						[fileToUri(path.join(os.tmpdir(), "example.ts"))]: [
 							{
 								range: {
 									start: { line: 0, character: 0 },
@@ -834,9 +980,10 @@ describe("lsp regressions", () => {
 
 		await Bun.write(specPath, "---- MODULE Spec ----\n====\n");
 
+		const resolvedTlapmLsp = path.join(tempDir.path(), "bin", "tlapm_lsp");
 		const whichSpy = vi
 			.spyOn(piUtils, "$which")
-			.mockImplementation(command => (command === "tlapm_lsp" ? "/usr/local/bin/tlapm_lsp" : null));
+			.mockImplementation(command => (command === "tlapm_lsp" ? resolvedTlapmLsp : null));
 		const existsSpy = vi
 			.spyOn(fs, "existsSync")
 			.mockImplementation(candidate => typeof candidate === "string" && candidate === specPath);
@@ -851,6 +998,12 @@ describe("lsp regressions", () => {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+
+	it("detects extensionless .emacs files for UI and LSP language ids", () => {
+		const emacsPath = path.join(os.tmpdir(), "example", ".emacs");
+		expect(getLanguageFromPath(emacsPath)).toBe("emacs-lisp");
+		expect(detectLanguageId(emacsPath)).toBe("emacs-lisp");
 	});
 
 	it("loads config-only marketplace LSP servers from Claude plugin cache", async () => {
@@ -919,16 +1072,17 @@ describe("lsp regressions", () => {
 			)}\n`,
 		);
 
+		const resolvedCsharpLs = path.join(tempDir.path(), "bin", "csharp-ls");
 		const whichSpy = vi
 			.spyOn(piUtils, "$which")
-			.mockImplementation(command => (command === "csharp-ls" ? "/usr/local/bin/csharp-ls" : null));
+			.mockImplementation(command => (command === "csharp-ls" ? resolvedCsharpLs : null));
 
 		try {
 			await preloadPluginRoots(home, cwd);
 
 			const config = loadConfig(cwd);
 
-			expect(config.servers["csharp-ls"]?.resolvedCommand).toBe("/usr/local/bin/csharp-ls");
+			expect(config.servers["csharp-ls"]?.resolvedCommand).toBe(resolvedCsharpLs);
 			expect(getServersForFile(config, path.join(cwd, "Program.cs")).map(([name]) => name)).toEqual(["csharp-ls"]);
 			expect(config.servers["csharp-ls"]?.rootMarkers).toEqual(["."]);
 			expect(whichSpy).toHaveBeenCalledWith("csharp-ls");
@@ -1526,14 +1680,15 @@ describe("lsp regressions", () => {
 	});
 
 	it("round-trips file URIs containing percent and hash characters", () => {
-		const tricky = path.join("/tmp", "omp uri", "100% #1.ts");
+		const tricky = path.resolve(os.tmpdir(), "omp uri", "100% #1.ts");
 		const uri = fileToUri(tricky);
 		// Percent-encoded so the server cannot misparse a fragment or escape.
 		expect(uri).not.toContain("#");
 		expect(uri).not.toContain(" ");
 		expect(uriToFile(uri)).toBe(tricky);
 		// Lax servers sending unencoded paths are tolerated.
-		expect(uriToFile("file:///tmp/omp uri/plain.ts")).toBe("/tmp/omp uri/plain.ts");
+		const plain = path.resolve(os.tmpdir(), "omp uri", "plain.ts");
+		expect(uriToFile(fileToUri(plain).replaceAll("%20", " "))).toBe(plain);
 	});
 
 	it("resolves $-prefixed identifiers past compound matches", async () => {

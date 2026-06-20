@@ -3,6 +3,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TaskTool, taskSchema } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { type } from "arktype";
 
 // Contract: the single-spawn schema (`task.batch: false`; the exported
 // `taskSchema` instance) carries no batch fields. The batch shape (`tasks[]` +
@@ -12,35 +13,35 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 describe("task schema (single-spawn)", () => {
 	it("accepts {agent, assignment}", () => {
-		const parsed = taskSchema.safeParse({ agent: "explore", assignment: "Map the auth module." });
-		expect(parsed.success).toBe(true);
+		const parsed = taskSchema({ agent: "explore", assignment: "Map the auth module." });
+		expect(parsed instanceof type.errors).toBe(false);
 	});
 
 	it("requires agent", () => {
-		const parsed = taskSchema.safeParse({ assignment: "Map the auth module." });
-		expect(parsed.success).toBe(false);
+		const parsed = taskSchema({ assignment: "Map the auth module." });
+		expect(parsed instanceof type.errors).toBe(true);
 	});
 
 	it("requires assignment", () => {
-		const parsed = taskSchema.safeParse({ agent: "explore" });
-		expect(parsed.success).toBe(false);
+		const parsed = taskSchema({ agent: "explore" });
+		expect(parsed instanceof type.errors).toBe(true);
 	});
 
 	it("strips tasks/context/schema from the single-spawn schema", () => {
-		const parsed = taskSchema.safeParse({
+		const parsed = taskSchema({
 			agent: "explore",
 			assignment: "Map the auth module.",
 			context: "shared background",
 			tasks: [{ id: "A", assignment: "..." }],
 			schema: '{"properties":{}}',
 		});
-		expect(parsed.success).toBe(true);
-		if (parsed.success) {
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
 			// Unknown keys are stripped: batch/context exist only on the batch
 			// schema and the per-call schema input was removed outright.
-			expect("tasks" in parsed.data).toBe(false);
-			expect("context" in parsed.data).toBe(false);
-			expect("schema" in parsed.data).toBe(false);
+			expect("tasks" in parsed).toBe(false);
+			expect("context" in parsed).toBe(false);
+			expect("schema" in parsed).toBe(false);
 		}
 	});
 });

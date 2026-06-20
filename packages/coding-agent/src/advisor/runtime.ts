@@ -48,6 +48,11 @@ export class AdvisorRuntime {
 	#consecutiveFailures = 0;
 	#latestMessages?: AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
+	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
+	 *  captures it before its awaits; a mismatch on resume means a reset aborted
+	 *  the in-flight advisor prompt, so the stale batch is dropped instead of
+	 *  being retried/requeued into the post-reset conversation. */
+	#epoch = 0;
 	disposed = false;
 
 	constructor(
@@ -95,6 +100,7 @@ export class AdvisorRuntime {
 
 	dispose(): void {
 		this.disposed = true;
+		this.#epoch++;
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
@@ -130,6 +136,7 @@ export class AdvisorRuntime {
 	 * leaving it blind to everything before the rewrite.
 	 */
 	reset(): void {
+		this.#epoch++;
 		this.#resetAdvisorContext(true, true);
 	}
 
@@ -157,8 +164,13 @@ export class AdvisorRuntime {
 			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
-		const md = formatSessionHistoryMarkdown(delta, { includeThinking: true, includeToolIntent: true });
-		return md.trim() ? md : null;
+		const md = formatSessionHistoryMarkdown(delta, {
+			includeThinking: true,
+			includeToolIntent: true,
+			watchedRoles: true,
+		});
+		if (!md.trim()) return null;
+		return `### Session update\n\n${md}`;
 	}
 
 	#notifyWaiters(): void {
@@ -182,7 +194,10 @@ export class AdvisorRuntime {
 		try {
 			while (!this.disposed && this.#pending.length) {
 				const popped = this.#pending.splice(0);
-				const candidateBatch = popped.map(b => b.text).join("\n\n---\n\n");
+				const epoch = this.#epoch;
+				// Each delta already opens with a `### Session update` heading, so
+				// join with a blank line rather than a `---` rule.
+				const candidateBatch = popped.map(b => b.text).join("\n\n");
 				const turnsCovered = popped.reduce((sum, b) => sum + b.turns, 0);
 				const incomingTokens = estimateTokens({
 					role: "user",
@@ -198,6 +213,8 @@ export class AdvisorRuntime {
 						logger.debug("advisor context maintenance failed", { err: String(err) });
 					}
 				}
+				// A reset/dispose during context maintenance invalidates this batch.
+				if (this.#epoch !== epoch) continue;
 
 				let batch: string | null;
 				let finalTurns: number;
@@ -224,6 +241,11 @@ export class AdvisorRuntime {
 					success = true;
 					this.#consecutiveFailures = 0;
 				} catch (err) {
+					// reset()/dispose() aborts the in-flight prompt; the rejection is the
+					// reset itself, not a transient advisor failure. Drop the stale batch
+					// (reset already cleared #pending and rewound the cursor) instead of
+					// requeuing it into the post-reset conversation.
+					if (this.#epoch !== epoch) continue;
 					logger.debug("advisor turn failed", { err: String(err) });
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
@@ -236,7 +258,7 @@ export class AdvisorRuntime {
 					}
 				}
 
-				if (success) {
+				if (success && this.#epoch === epoch) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
 					this.#notifyWaiters();
 				}

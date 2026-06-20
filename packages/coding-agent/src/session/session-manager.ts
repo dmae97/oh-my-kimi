@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ImageContent, Message, MessageAttribution, ServiceTier, TextContent, Usage } from "@oh-my-pi/pi-ai";
-import { getBlobsDir, getProjectDir, getSessionsDir, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
+import {
+	directoryExists,
+	getBlobsDir,
+	getProjectDir,
+	getSessionsDir,
+	isEnoent,
+	logger,
+	toError,
+} from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {
@@ -69,6 +77,27 @@ function fileSafeTimestamp(iso: string): string {
 
 function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	return sessionFile ? sessionFile.slice(0, -JSONL_SUFFIX_LENGTH) : null;
+}
+
+/**
+ * Resolve a breadcrumb's recorded session file to its interactive root. Subagent
+ * (and other artifact) sessions live inside a parent session's artifacts dir —
+ * `<parent>.jsonl` strips its suffix to `<parent>/`, and a child writes
+ * `<parent>/<agentId>.jsonl`. A breadcrumb that points at such a child — a
+ * pre-fix poisoned crumb left by a subagent that opened in the parent's TTY, or
+ * any nested artifact — must resolve back up to the top-level session so
+ * `--continue` resumes the real conversation instead of a subagent transcript.
+ */
+function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
+	let current = path.resolve(sessionFile);
+	// Walk up while the containing dir is itself a session's artifacts dir
+	// (`<dir>.jsonl` exists). Capped to defend against pathological layouts.
+	for (let depth = 0; depth < 8; depth++) {
+		const parentSessionFile = `${path.dirname(current)}.jsonl`;
+		if (!fs.existsSync(parentSessionFile)) return current;
+		current = parentSessionFile;
+	}
+	return current;
 }
 
 function emptyUsageStatistics(): UsageStatistics {
@@ -462,7 +491,7 @@ export class SessionManager {
 	 * bytes in the kernel page cache, so the file is software-crash durable.
 	 */
 	#rewriteSynchronously(): void {
-		if (!this.#persist || !this.#sessionFile) return;
+		if (!this.#persist || !this.#sessionFile || !this.#shouldHaveSessionFile()) return;
 
 		try {
 			const body = this.#fileBody();
@@ -722,9 +751,12 @@ export class SessionManager {
 
 		// Adopt the loaded session's working directory. Sessions live in a dir
 		// keyed by their cwd, so resuming a session from another project must
-		// re-point cwd/sessionDir at that project.
+		// re-point cwd/sessionDir at that project — unless that project directory
+		// no longer exists on disk, in which case adopting it (and the process
+		// chdir interactive mode then performs) would fail with ENOENT. Keep the
+		// current cwd so the resumed session stays where the user already is.
 		const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
-		if (headerCwd && headerCwd !== path.resolve(this.#cwd)) {
+		if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
 			this.#cwd = headerCwd;
 			this.#sessionDir = path.dirname(resolvedSessionFile);
 			this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
@@ -931,8 +963,10 @@ export class SessionManager {
 	async close(): Promise<void> {
 		if (!this.#persist) return;
 		await this.#scheduleDiskWork(async () => {
+			const hadWriter = this.#writer !== undefined;
 			await this.#closeWriterHandle();
-			this.#fileIsCurrent = true;
+			if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+				this.#fileIsCurrent = true;
 		});
 		if (this.#diskFailure) throw this.#diskFailure;
 	}
@@ -1157,7 +1191,14 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	appendSessionInit(init: { systemPrompt: string; task: string; tools: string[]; outputSchema?: unknown }): string {
+	appendSessionInit(init: {
+		systemPrompt: string;
+		task: string;
+		tools: string[];
+		outputSchema?: unknown;
+		spawns?: string;
+		readSummarize?: boolean;
+	}): string {
 		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
 		this.#recordEntry(entry);
 		return entry.id;
@@ -1528,15 +1569,83 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: { initialCwd?: string },
+		options?: { initialCwd?: string; suppressBreadcrumb?: boolean },
 	): Promise<SessionManager> {
 		const loaded = await loadEntriesFromFile(filePath, storage);
 		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
-		const cwd = header?.cwd ?? options?.initialCwd ?? getProjectDir();
-		const dir = sessionDir ?? path.dirname(path.resolve(filePath));
+		// Resume into the session's recorded cwd only when that directory still
+		// exists. A deleted project dir would make the constructor's #cwd — and the
+		// `setProjectDir` chdir interactive mode runs next — point at (and fail on)
+		// a missing path, so fall back to the launch cwd and anchor /new and /branch
+		// there too, keeping the resumed session where the user already is.
+		const recordedCwd = header?.cwd;
+		const recordedCwdUsable = !!recordedCwd && (await directoryExists(recordedCwd));
+		const cwd = recordedCwdUsable ? recordedCwd : (options?.initialCwd ?? getProjectDir());
+		const dir =
+			sessionDir ??
+			(recordedCwd && !recordedCwdUsable
+				? SessionManager.getDefaultSessionDir(cwd, undefined, storage)
+				: path.dirname(path.resolve(filePath)));
 		const manager = new SessionManager(cwd, dir, true, storage);
+		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
 		await manager.setSessionFile(filePath);
 		return manager;
+	}
+
+	/**
+	 * Lock-free peek for cold subagent revival: returns the recorded working
+	 * directory (session header) and the latest `session_init` contract (system
+	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
+	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
+	 * null when the file can't be read; `init` is null for files written before
+	 * `session_init` was recorded (no faithful contract to rebuild from).
+	 */
+	static async peekSessionInit(
+		filePath: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<{
+		cwd: string;
+		init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null;
+	} | null> {
+		let loaded: FileEntry[];
+		try {
+			loaded = await loadEntriesFromFile(filePath, storage);
+		} catch {
+			return null;
+		}
+		// A missing/empty file has no usable session — nothing to revive from.
+		if (loaded.length === 0) return null;
+		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		let init: {
+			systemPrompt: string;
+			task: string;
+			tools: string[];
+			outputSchema?: unknown;
+			spawns?: string;
+			readSummarize?: boolean;
+		} | null = null;
+		for (let index = loaded.length - 1; index >= 0; index--) {
+			const entry = loaded[index];
+			if (entry.type === "session_init") {
+				init = {
+					systemPrompt: entry.systemPrompt,
+					task: entry.task,
+					tools: entry.tools,
+					outputSchema: entry.outputSchema,
+					readSummarize: entry.readSummarize,
+					spawns: entry.spawns,
+				};
+				break;
+			}
+		}
+		return { cwd: header?.cwd ?? getProjectDir(), init };
 	}
 
 	/** Continue the most recent session, or create a new one if none exists. */
@@ -1551,6 +1660,9 @@ export class SessionManager {
 		let chosenSession: string | null | undefined;
 
 		if (breadcrumb) {
+			// Recover stale crumbs: a subagent open (pre-fix) may have pointed this
+			// terminal's breadcrumb at an artifact child; resume the parent instead.
+			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);
 			const breadcrumbCwd = path.resolve(breadcrumb.cwd);
 			if (breadcrumbCwd === resolvedCwd) {
 				chosenSession = breadcrumb.sessionFile;
@@ -1584,7 +1696,12 @@ export class SessionManager {
 					(newestInTargetDir === null || (newestIsBreadcrumb && !currentProjectAlreadyHasSession));
 				if (looksLikeMovedProject) {
 					logger.info("Re-rooting moved session", { from: breadcrumbCwd, to: resolvedCwd });
-					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage);
+					// Anchor at the gone breadcrumb cwd so the moveTo below relocates the
+					// session: open() now falls back to the launch cwd for a missing
+					// recorded cwd, which would no-op moveTo when it equals `cwd`.
+					const manager = await SessionManager.open(breadcrumb.sessionFile, undefined, storage, {
+						initialCwd: breadcrumbCwd,
+					});
 					await manager.moveTo(cwd, sessionDir);
 					return manager;
 				}

@@ -1,7 +1,6 @@
 Performs string replacements in files with fuzzy whitespace matching.
 
 <instruction>
-- Params MUST be `{ path, edits }`; `path` is required at the top level and applies to every replacement
 - You MUST use the smallest `old_text` that uniquely identifies the change
 - If `old_text` is not unique, you MUST expand it with more context or use `all: true` to replace all occurrences
 - You SHOULD prefer editing existing files over creating new ones

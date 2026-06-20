@@ -10,6 +10,7 @@
  * the server only checks a bearer token against an allow-list per request.
  */
 import { logger } from "@oh-my-pi/pi-utils";
+import { type Type, type } from "arktype";
 import type { AuthStorage } from "../auth-storage";
 import { parseBind } from "../utils/parse-bind";
 import { AuthBrokerRefresher, type AuthBrokerRefresherSchedule } from "./refresher";
@@ -86,15 +87,15 @@ function isAuthorized(req: Request, tokens: ReadonlySet<string>): boolean {
 }
 
 /**
- * Parse + validate a JSON request body against a Zod schema. Returns a
+ * Parse + validate a JSON request body against an ArkType schema. Returns a
  * `Response` (400) on parse/validation failure so handlers can early-return.
  * When `allowEmpty` is set, an empty request body is validated against `{}`.
  */
-async function parseBody<T>(
+async function parseBody<t>(
 	req: Request,
-	schema: { safeParse(input: unknown): { success: true; data: T } | { success: false; error: { message: string } } },
+	schema: Type<t>,
 	options: { allowEmpty?: boolean } = {},
-): Promise<{ ok: true; data: T } | { ok: false; response: Response }> {
+): Promise<{ ok: true; data: typeof schema.infer } | { ok: false; response: Response }> {
 	let raw: string;
 	try {
 		raw = await req.text();
@@ -110,11 +111,11 @@ async function parseBody<T>(
 	} catch (error) {
 		return { ok: false, response: json(400, { error: `Invalid JSON body: ${String(error)}` }) };
 	}
-	const result = schema.safeParse(parsed);
-	if (!result.success) {
-		return { ok: false, response: json(400, { error: result.error.message }) };
+	const result = schema(parsed);
+	if (result instanceof type.errors) {
+		return { ok: false, response: json(400, { error: result.summary }) };
 	}
-	return { ok: true, data: result.data };
+	return { ok: true, data: result };
 }
 
 const REFRESH_ROUTE = /^\/v1\/credential\/(\d+)\/refresh$/;

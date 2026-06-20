@@ -86,16 +86,16 @@ Side-channel artifacts:
 
 1. `EvalTool.execute()` in `packages/coding-agent/src/tools/eval.ts` receives `params.cells` already validated by the Zod schema — no string parsing step.
 2. For each cell, `execute()` maps `cell.language` to an `EvalLanguage` (`"py"` → `"python"`, `"js"` → `"js"`) and calls `resolveBackend(session, language)`:
-   - `python` is gated on `eval.py !== false` and `pythonBackend.isAvailable(session)`.
-   - `js` is gated on `eval.js !== false`.
+   - `python` is gated on `resolveEvalBackends(session).python` (the `eval.py` setting, overridden by the `PI_PY` env flag) and `pythonBackend.isAvailable(session)`.
+   - `js` is gated on `resolveEvalBackends(session).js` (the `eval.js` setting, overridden by the `PI_JS` env flag).
    - A disabled or unavailable requested backend throws `ToolError`; there is no auto-fallback or sniffing.
 3. The tool allocates an `OutputSink`, a `TailBuffer`, per-cell result objects, and a `sessionAbortController`. `session.trackEvalExecution?.(...)` can wrap the whole run for external cancellation tracking.
 4. It resolves the executor session id from `session.getEvalSessionId?.()`, falling back to `defaultEvalSessionId(session)`. Subagents inherit the parent's id so both sides share the same JS VM and Python kernel for each backend.
 5. Cells execute sequentially within one eval tool call. For each cell, `execute()`:
    - clamps `cell.timeout ?? 30` seconds through `clampTimeout("eval", ...)`
-   - builds a combined abort signal from the tool signal, the timeout, and the session abort controller
+   - wraps the clamped budget in an `IdleTimeout` and combines its signal with the tool signal and the session abort controller (`AbortSignal.any`). The per-cell `timeout` is a runtime-work budget, not a wall clock: `EVAL_TIMEOUT_PAUSE_OP`/`EVAL_TIMEOUT_RESUME_OP` status events pause and resume the idle timer so host-side `agent()`/`parallel()`/`completion()` calls do not spend it
    - marks the cell `running` and emits an update
-   - calls the backend's `execute()` with `cwd`, `sessionId`, `sessionFile`, `kernelOwnerId`, `idleTimeoutMs`, `reset` (defaults to `false`), the combined signal, and chunk/status callbacks
+   - calls the backend's `execute()` with `cwd`, `sessionId`, `sessionFile`, `kernelOwnerId`, `session`, `idleTimeoutMs`, `reset` (defaults to `false`), the combined signal, and chunk/status callbacks
 6. JS cells dispatch through `packages/coding-agent/src/eval/js/index.ts` into `executeJs()`; Python cells dispatch through `packages/coding-agent/src/eval/py/index.ts` into `executePython()`.
 7. Backend text chunks stream into the shared `OutputSink`; rich outputs are accumulated separately as JSON, images, markdown markers, and status events.
 8. After each cell:
@@ -128,24 +128,25 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
 - Top-level static `import ... from ...` and dynamic `import(...)` calls are routed through `rewriteImports()`, which sends them via `__omp_import__` so the specifier resolves against the session cwd. Dynamic-import call sites are swapped for a guarded shim (`typeof __omp_import__ === "function" ? __omp_import__ : (s, o) => import(s, o)`) rather than the bare helper identifier: functions handed to puppeteer (`tab.evaluate`, `page.evaluate`, ...) are serialized with `Function.prototype.toString()` and re-evaluated inside the browser page, where the worker-injected helper does not exist, so the shim falls back to native dynamic import there
 - Module cache is busted for **local** imports between cells so edits to source files are picked up without restarting the runtime. `__omp_import__` deletes `require.cache[absPath]` before re-importing whenever the original specifier is a filesystem path: relative (`./x`, `../x`, `.`, `..`), POSIX-absolute (`/...`), home-prefixed (`~/...`), or Windows drive-letter (`C:\...` / `C:/...`). Bare specifiers (`react`, `lodash/x`) and URL/scheme specifiers (`node:fs`, `file://...`, `https://...`) are left in cache so package identity stays stable across cells. The cache-bust only fires when the resolved target is an absolute path — unresolved bare-package fallbacks (`resolveImportSpecifier()` returning the original specifier) skip it.
 - The prelude installs globals:
-  - `display`, `print`
+  - `display`, `print`, and a `console` bridge
   - `read`, `write`, `append`, `sort`, `uniq`, `counter`, `diff`, `tree`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
   - `completion(prompt, opts?)` for oneshot, stateless model calls (see _Oneshot completion helper_ below)
   - `agent(prompt, opts?)` for a single subagent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
+  - `log(message)`, `phase(title)`, and `budget` (live token-budget view via async `budget.total()` / `budget.spent()` / `budget.remaining()` / `budget.hard()`)
 - JS helpers that touch the host/runtime boundary are async and `await`able; pure text helpers (`sort`, `uniq`, `counter`) return synchronously but may still be safely awaited.
 - JS helper options may be passed either positionally in the Python order or as a trailing options object. `null` and `undefined` skip positional slots:
   - `await read(path, offset?, limit?)` or `await read(path, { offset?, limit? })`
   - `await tree(path = ".", maxDepth?, showHidden?)` or `await tree(path, { maxDepth?, showHidden? })`
   - `sort(text, reverse?, unique?)`, `uniq(text, count?)`, `counter(items, limit?, reverse?)`
-  - `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema? })`
+  - `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema?, returnHandle? })`
   - `await parallel([() => agent("a"), () => agent("b")])`
   - `await pipeline(items, stage1, stage2)`
 - `display(value)` behavior:
   - plain objects/arrays become JSON outputs
   - `{ type: "image", data, mimeType }` becomes an image output
   - scalars become text
-- The VM exposes a restricted `process` subset plus `Buffer`, `fetch`, `Blob`, `File`, `Headers`, `Request`, `Response`, `fs`, `require`, and browser-style globals
+- The VM runs in the host worker's global scope: user code gets the worker's real `process` (intentionally not subsetted — subsetting it segfaulted alongside puppeteer/worker_threads), the injected `fs`, `require`, `createRequire`, and `webcrypto`, plus host globals like `Buffer`, `fetch`, `Blob`, `File`, `Headers`, `Request`, and `Response`
 - Concurrent runs on the same VM are not queued end-to-end. Synchronous JS still runs on the single event loop; awaited regions can interleave with sibling runs.
 
 ### Python runtime
@@ -192,12 +193,13 @@ Both runtimes expose `completion()` — a single stateless completion against a 
 Both runtimes expose `agent()` — a single subagent invocation routed through `packages/coding-agent/src/eval/agent-bridge.ts` into the same `runSubprocess(...)` path used by the `task` tool. It uses the current eval session's spawn policy and inherits the parent eval executor id, so parent and subagent code share JS/Python runtime state.
 
 - Signatures:
-  - JS: `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema? })`
-  - Python: `agent(prompt, *, agent_type="task", model=None, label=None, schema=None)`
+  - JS: `await agent(prompt, agentType?, model?, label?, schema?)` or `await agent(prompt, { agentType?, model?, label?, schema?, returnHandle? })`
+  - Python: `agent(prompt, *, agent_type="task", model=None, label=None, schema=None, return_handle=False)`
 - `agentType` / `agent_type` defaults to the bundled `task` agent and resolves through normal agent discovery, so project and user agents work.
 - `model` overrides the selected agent's model. Without it, normal per-agent settings and the agent frontmatter model apply.
 - Shared background is passed via files: write a `local://` file and reference it in the prompt. `label` controls the `agent://<id>` output label prefix.
 - `schema` passes a JSON Schema to the subagent structured-output path. When present, the helper parses the final JSON text and returns an object.
+- `returnHandle` / `return_handle` (default off) returns a DAG node dict — `{ text, output, handle: "agent://<id>", id, agent }`, plus a parsed `data` field when `schema` is set — instead of the bare output, so a downstream stage can reference the transcript by handle.
 - Spawn restrictions use `session.getSessionSpawns()` exactly like the `task` tool. Eval-driven subagent recursion is capped at depth 3.
 - JS and Python both expose `parallel(thunks)` and `pipeline(items, ...stages)`; both use a bounded async/threaded pool whose width tracks the `task.maxConcurrency` setting (the same ceiling the `task` tool uses; `0` = run every item at once), preserve item order, and propagate rejections. The width is fetched live from the host via the `__concurrency__` bridge, so the helpers no longer take a `concurrency` argument.
 - Errors surface as exceptions: unknown or disabled agent, disallowed spawn, recursion cap, subagent failure, or invalid structured output all fail the eval cell.
@@ -214,7 +216,7 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 
 - Filesystem
   - JS/Python prelude helpers can read, write, append, diff, and traverse filesystem paths under the session cwd or absolute paths.
-  - JS helper `read()` rejects protocol URIs (`://`) and directory paths; use `tool.read(...)` for internal URLs or reader-mode behavior.
+  - JS helper `read()` auto-delegates any non-`local://` scheme URI (`agent://`, `artifact://`, `https://`, ...) to `tool.read(...)` (honoring an `offset`/`limit` line selector), resolves `local://` under its mapped root, reads plain/absolute filesystem paths directly, and rejects directory paths.
   - Output may spill to an artifact file via `OutputSink`.
 - Network
   - Python backend speaks NDJSON to a local `python3` subprocess over stdin/stdout (no network).
@@ -257,8 +259,8 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Zod validation rejects malformed `cells` arrays before `execute()` runs (missing `language`/`code`, out-of-range `timeout`, empty `cells`).
 - Missing session without proxy executor throws `ToolError("Eval tool requires a session when not using proxy executor")`.
 - Disabled/unavailable backends throw `ToolError` from `resolveBackend()`:
-  - `eval.py = false` and a `py` cell is requested
-  - `eval.js = false` and a `js` cell is requested
+  - `eval.py = false` (or `PI_PY=0`) and a `py` cell is requested
+  - `eval.js = false` (or `PI_JS=0`) and a `js` cell is requested
   - Python kernel unavailable and a `py` cell is requested
 - JS runtime exceptions are converted into text output plus `exitCode: 1`; cancellations return `cancelled: true` and may append `Command timed out`.
 - Python execution errors from the kernel become text output and `exitCode: 1`; later cells are skipped.
@@ -278,7 +280,7 @@ A single tool call can mix Python and JS cells. Persistence is per language runt
 - Backend selection is strictly explicit per cell: `language` must be `"py"` or `"js"`. The previous `*** Cell` header parser, the `eval.lark` constrained grammar, and the sniffer-based fallback have all been removed.
 - `EvalTool.customFormat` no longer exists. Tool calls flow through the standard JSON schema; there is no Lark-constrained sampling path.
 - `tool.<name>()` exists in both JS and Python. Python calls route through a per-run loopback bridge keyed by the current cell id.
-- JS helper paths reject protocol URIs (`://`) in `resolveRegularFile()` for `read()`, and resolve other paths against the session cwd or absolute filesystem path. Use `tool.read(...)` or another tool explicitly for internal URLs.
+- `read()` delegates non-`local://` scheme URIs to `tool.read`, resolves `local://` under its injected root, and resolves plain paths against the session cwd or an absolute filesystem path; `resolveRegularFile()` rejects directory paths. `write()`/`append()` accept `local://` and plain paths but reject any other `scheme://` via `resolveHelperPath()` (`Protocol paths are not supported by write()`).
 - Python helper `output(...)` depends on `PI_ARTIFACTS_DIR` or `PI_SESSION_FILE`; it fails outside a session-backed run.
 - `display()` can produce text and structured outputs from the same value; the renderer prefers markdown over `text/plain` when both exist.
 - JS static imports are rewritten only at top level. Nested imports stay invalid and surface normal JS syntax/runtime errors.

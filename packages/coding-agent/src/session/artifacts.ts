@@ -8,6 +8,24 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 /**
+ * Sanitize a tool name for safe use as the middle segment of the artifact
+ * filename (`${id}.${toolType}.log`). Built-in tool names are fixed, but MCP,
+ * extension, and RPC-host tool names are arbitrary and may contain path
+ * separators (`/`, `\`) or traversal sequences (`..`) that would otherwise let
+ * a spilled artifact escape the artifacts directory. Collapse everything
+ * outside `[A-Za-z0-9_-]` to `_`, and cap the length so an arbitrarily long
+ * name cannot overflow the filesystem's filename limit (ENAMETOOLONG). Fall
+ * back to `tool` when nothing survives.
+ */
+function sanitizeToolType(toolType: string): string {
+	const sanitized = toolType
+		.replace(/[^A-Za-z0-9_-]+/g, "_")
+		.slice(0, 64)
+		.replace(/^_+|_+$/g, "");
+	return sanitized.length > 0 ? sanitized : "tool";
+}
+
+/**
  * Manages artifact storage for a session.
  *
  * Artifacts are stored with sequential IDs in the session's artifact directory.
@@ -83,7 +101,7 @@ export class ArtifactManager {
 	async allocatePath(toolType: string): Promise<{ id: string; path: string }> {
 		await this.#ensureDir();
 		const id = String(this.allocateId());
-		const filename = `${id}.${toolType}.log`;
+		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
 		return { id, path: path.join(this.#dir, filename) };
 	}
 

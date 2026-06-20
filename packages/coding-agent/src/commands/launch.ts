@@ -106,6 +106,9 @@ export default class Index extends Command {
 		"hide-thinking": Flags.boolean({
 			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
 		}),
+		advisor: Flags.boolean({
+			description: "Enable the advisor runtime (passively reviews each turn and injects notes)",
+		}),
 		hook: Flags.string({
 			description: "Load a hook/extension file (can be used multiple times)",
 			multiple: true,
@@ -132,6 +135,12 @@ export default class Index extends Command {
 		}),
 		"no-title": Flags.boolean({
 			description: "Disable title auto-generation",
+		}),
+		"print-thoughts": Flags.boolean({
+			description: "Include thinking blocks in print mode text output",
+		}),
+		"max-time": Flags.string({
+			description: "Stop the session after this many seconds",
 		}),
 		// `--auto-approve` / `--yolo`: declared here so oclif's auto-generated `--help` lists it.
 		// Runtime parsing happens in `cli/args.ts parseArgs` (line 176 in that file) — `runRootCommand`

@@ -10,7 +10,7 @@ import {
 	KeybindingsManager as TuiKeybindingsManager,
 } from "@oh-my-pi/pi-tui";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { JSONC, YAML } from "bun";
 
 /**
  * Application-level keybindings (coding agent specific).
@@ -31,6 +31,7 @@ interface AppKeybindings {
 	"app.tools.expand": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
+	"app.retry": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
 	"app.clipboard.pasteTextRaw": true;
@@ -130,6 +131,10 @@ export const KEYBINDINGS = {
 		// first so the default binding works there without remapping (#1903).
 		defaultKeys: ["ctrl+q", "ctrl+enter"],
 		description: "Send follow-up message",
+	},
+	"app.retry": {
+		defaultKeys: "alt+r",
+		description: "Retry last failed assistant turn",
 	},
 	"app.message.dequeue": {
 		defaultKeys: "alt+up",
@@ -238,6 +243,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	toggleThinking: "app.thinking.toggle",
 	externalEditor: "app.editor.external",
 	followUp: "app.message.followUp",
+	retry: "app.retry",
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
 	pasteTextRaw: "app.clipboard.pasteTextRaw",
@@ -375,7 +381,7 @@ function loadRawConfig(filePath: string): unknown {
 	try {
 		const content = fs.readFileSync(filePath, "utf-8");
 		if (filePath.endsWith(".json")) {
-			return JSON.parse(content);
+			return JSONC.parse(content);
 		}
 		if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) {
 			return YAML.parse(content);

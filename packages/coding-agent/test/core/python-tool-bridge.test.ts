@@ -6,6 +6,7 @@ import {
 	registerPyToolBridge,
 } from "@oh-my-pi/pi-coding-agent/eval/py/tool-bridge";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
 interface FakeCall {
 	id: string;
@@ -64,14 +65,14 @@ describe("Python tool bridge HTTP server", () => {
 				session: "test-session-1",
 				run: "run-1",
 				name: "read",
-				args: { path: "foo.ts", _i: "py prelude" },
+				args: { path: "foo.ts", [INTENT_FIELD]: "py prelude" },
 			});
 			const body = await res.json();
 			expect(res.status).toBe(200);
 			expect(body).toEqual({ ok: true, value: "file body" });
 			expect(calls).toHaveLength(1);
-			// `_i` survives the bridge round trip so transcript renderers have a label.
-			expect((calls[0]!.args as { _i?: string })._i).toBe("py prelude");
+			// `i` survives the bridge round trip so transcript renderers have a label.
+			expect((calls[0]!.args as Record<string, unknown>)[INTENT_FIELD]).toBe("py prelude");
 		} finally {
 			unregister();
 		}

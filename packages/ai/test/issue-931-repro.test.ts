@@ -46,7 +46,7 @@ function customResponsesModel(compat: OpenAICompat): Model<"openai-responses"> {
 			effortMap: compat.reasoningEffortMap,
 		},
 		compat,
-	} as Model<"openai-responses">;
+	} as unknown as Model<"openai-responses">;
 }
 
 describe("issue #931 — openai-responses reasoning effort mapping", () => {

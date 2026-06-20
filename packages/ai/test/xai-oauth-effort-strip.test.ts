@@ -10,8 +10,8 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 // returns undefined for them instead of tripping `requireSupportedEffort`
 // (the old user-visible "Compaction failed: Thinking effort high is not
 // supported by xai-oauth/grok-build. Supported efforts:" with an empty list),
-// and the wire-side `omitReasoningEffort` gate (providers/xai-responses.ts)
-// remains the single source of truth for the actual strip.
+// and the wire-side `omitReasoningEffort` gate (stream.ts) remains the single
+// source of truth for the actual strip.
 describe("effort-dial-less reasoner encoding (regression)", () => {
 	test("xai-oauth/grok-build reasons but carries no thinking config", () => {
 		const grokBuild = getBundledModel("xai-oauth", "grok-build");

@@ -62,6 +62,7 @@ async function seedFile(
 }
 
 const TS_SOURCE = "function x() {\n  if (y) {\n  }\n}\n";
+const ELISP_SOURCE = ["(ert-deftest ogent-zen-test ()", '  "Doc."', "  (should t))", ""].join("\n");
 
 describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 	it("resolves the inner `if` block (line 2) and replaces its full span", async () => {
@@ -97,6 +98,43 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 			await executeHashlineSingle(executeOptions(tempDir, input, session));
 
 			expect(await Bun.file(filePath).text()).toBe("function x() {\n}\n");
+		});
+	});
+
+	it("inserts after an Emacs Lisp top-level macro-style form", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { filePath, header } = await seedFile(tempDir, session, "ogent-zen-tests.el", ELISP_SOURCE);
+			const input = `${header}\nINS.BLK.POST 1:\n+\n+(ert-deftest ogent-zen-second-test ()\n+  (should-not nil))`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			expect(await Bun.file(filePath).text()).toBe(
+				[
+					"(ert-deftest ogent-zen-test ()",
+					'  "Doc."',
+					"  (should t))",
+					"",
+					"(ert-deftest ogent-zen-second-test ()",
+					"  (should-not nil))",
+					"",
+				].join("\n"),
+			);
+			expect(text).toContain("INS.BLK.POST 1 → resolved lines 1-3 (3 lines); body lands after line 3");
+		});
+	});
+	it("inserts after an extensionless .emacs top-level form", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { filePath, header } = await seedFile(tempDir, session, ".emacs", ELISP_SOURCE);
+			const input = `${header}\nINS.BLK.POST 1:\n+\n+(message "loaded")`;
+
+			await executeHashlineSingle(executeOptions(tempDir, input, session));
+
+			expect(await Bun.file(filePath).text()).toBe(
+				["(ert-deftest ogent-zen-test ()", '  "Doc."', "  (should t))", "", '(message "loaded")', ""].join("\n"),
+			);
 		});
 	});
 

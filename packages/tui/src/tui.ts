@@ -161,6 +161,10 @@ export interface Component {
 	 * Called when theme changes or when component needs to re-render from scratch.
 	 */
 	invalidate?(): void;
+	/**
+	 * Optional hook to set whether this component ignores tight layout mode.
+	 */
+	setIgnoreTight?(ignore: boolean): any;
 
 	/**
 	 * Optional teardown. Called when the component is permanently removed from
@@ -169,6 +173,12 @@ export interface Component {
 	 * their children; leaf components without resources may omit it.
 	 */
 	dispose?(): void;
+}
+
+/** Lets an overlay root delegate keyboard focus to components it owns. */
+export interface OverlayFocusOwner {
+	/** Returns true when `component` is a focus target inside this overlay. */
+	ownsOverlayFocusTarget(component: Component): boolean;
 }
 
 /**
@@ -219,6 +229,13 @@ export interface NativeScrollbackCommittedRows {
 
 function setNativeScrollbackCommittedRows(component: Component, rows: number): void {
 	(component as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
+}
+
+function isOverlayFocusTarget(owner: Component, component: Component | null): boolean {
+	if (component === owner) return true;
+	if (!component) return false;
+	const candidate = owner as Component & Partial<OverlayFocusOwner>;
+	return candidate.ownsOverlayFocusTarget?.(component) === true;
 }
 
 function getNativeScrollbackLiveRegionStart(component: Component): number | undefined {
@@ -370,13 +387,46 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
-	// TMUX/STY/ZELLIJ are the authoritative signals, but they can be stripped while
-	// TERM survives (`sudo` without -E, `su`, env-sanitizing launchers/ssh). Fall back to
-	// the TERM prefix like every sibling multiplexer check (terminal-capabilities.ts) so a
-	// resize never emits ED3 into a tmux/screen pane and wipes its scrollback history.
+	// TMUX/STY/ZELLIJ/CMUX workspace+surface ids are authoritative session
+	// signals. TERM can also survive when those are stripped (`sudo` without -E,
+	// `su`, env-sanitizing launchers/ssh), so keep the TERM prefix fallback aligned
+	// with sibling multiplexer checks (terminal-capabilities.ts). Misclassifying a
+	// multiplexer as a direct terminal lets resize/reset paths emit ED3 (`CSI 3 J`)
+	// and wipe pane scrollback. Do not use CMUX_SOCKET_PATH here: it is a CLI socket
+	// override and can be set outside a CMUX terminal.
 	if (Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ) return true;
+	if (Bun.env.CMUX_WORKSPACE_ID || Bun.env.CMUX_SURFACE_ID) return true;
 	const term = Bun.env.TERM?.toLowerCase() ?? "";
 	return term.startsWith("tmux") || term.startsWith("screen");
+}
+
+/**
+ * Terminals that re-report their size whenever the alternate screen buffer is
+ * toggled. The non-multiplexer resize fast path ({@link TUI.#beginResizeViewport})
+ * borrows the alternate screen for throwaway drag frames; on these terminals
+ * entering/leaving the alt buffer emits a fresh SIGWINCH (Warp reports a height
+ * one row different for the alt buffer), which re-enters the fast path — a
+ * self-sustaining resize loop that floods ED3 full repaints even though the
+ * geometry never actually changes. Routing them through the in-place
+ * (multiplexer) resize path never touches the alt buffer, breaking the loop.
+ *
+ * `PI_TUI_RESIZE_IN_PLACE=1|0` forces this on/off for any terminal.
+ */
+function reportsSizeOnAltScreenToggle(): boolean {
+	const override = Bun.env.PI_TUI_RESIZE_IN_PLACE;
+	if (override === "0" || override === "false") return false;
+	if (override === "1" || override === "true") return true;
+	return Bun.env.TERM_PROGRAM?.toLowerCase() === "warpterminal";
+}
+
+/**
+ * Resize should repaint the visible window in place — no alternate-screen
+ * borrow, no ED3 scrollback rewrap — for multiplexer panes and for terminals
+ * that loop on alt-screen toggles. The tradeoff is identical to a multiplexer:
+ * scrollback above the window keeps its old wrap instead of being re-flowed.
+ */
+function resizeRepaintsInPlace(): boolean {
+	return isMultiplexerSession() || reportsSizeOnAltScreenToggle();
 }
 
 /**
@@ -459,8 +509,22 @@ export class Container implements Component {
 	#memoChildLines: (readonly string[])[] = [];
 	#memoWidth = -1;
 
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		for (const child of this.children) {
+			child.setIgnoreTight?.(ignore);
+		}
+		this.invalidate();
+		return this;
+	}
+
 	addChild(component: Component): void {
 		this.children.push(component);
+		if (this.#ignoreTight) {
+			component.setIgnoreTight?.(true);
+		}
 		this.#memoLines = undefined;
 	}
 
@@ -593,6 +657,139 @@ interface PreparedLine {
 }
 
 const SGR_SEQUENCE = /\x1b\[[0-9;:]*m/g;
+
+// SGR coalescing. The renderer's component tree emits a styled span as
+// `<set-color>text<reset>`, so adjacent spans produce runs of byte-adjacent
+// SGR sequences (e.g. a `CSI 39 m` fg-reset immediately followed by the next
+// span's `CSI 38;2;r;g;b m`). Two byte-adjacent SGR sequences are semantically
+// identical to one SGR carrying both parameter lists (SGR params apply
+// left-to-right), so merging the run into a single `CSI … m` is
+// behavior-preserving: it drops the redundant `ESC[`/`m` framing and lets the
+// terminal dispatch one SGR instead of several. On a real transcript ~40% of
+// all SGR sequences are collapsible this way, which meaningfully cuts the
+// per-frame byte volume and SGR-dispatch count a slow (xterm.js/WebGL) terminal
+// must process. On by default; `PI_NO_SGR_COALESCE=1` disables it.
+const SGR_COALESCE_ENABLED = !$flag("PI_NO_SGR_COALESCE");
+const CC_ESC = 0x1b;
+const CC_BRACKET = 0x5b; // [
+const CC_M = 0x6d; // m
+const CC_SEMI = 0x3b; // ;
+const CC_COLON = 0x3a; // :
+// Max parameter tokens per emitted merged SGR. Kept well under xterm.js's
+// 32-param cap (and the tighter limits of some real terminals) so a long
+// adjacent run is split into several valid CSIs instead of overflowing one.
+const MERGE_TOKEN_CAP = 16;
+
+function isSgrParamByte(c: number): boolean {
+	return (c >= 0x30 && c <= 0x39) || c === CC_SEMI || c === CC_COLON;
+}
+
+// True when a parameter list ends mid extended-color spec in the ambiguous
+// semicolon form: `38/48/58;2` with fewer than three channel values, or
+// `38/48/58;5` with no palette index. Concatenating another list after such a
+// run would let the next code be absorbed as the missing channel/index (e.g.
+// `38;2;255;0` + `31` → `38;2;255;0;31`, where `31` becomes blue instead of a
+// standalone fg-red), changing the rendered color. The self-delimiting colon
+// form (`38:2::r:g:b`) is unambiguous — its tokens never equal a bare `38`, so
+// the scan treats it as a complete unit and merging stays safe.
+function endsWithIncompleteExtendedColor(params: string): boolean {
+	const t = params.split(";");
+	let i = 0;
+	while (i < t.length) {
+		const tok = t[i];
+		if (tok === "38" || tok === "48" || tok === "58") {
+			const mode = t[i + 1];
+			if (mode === undefined) return true; // introducer with no mode
+			if (mode === "2") {
+				if (i + 4 >= t.length) return true; // missing r/g/b
+				i += 5;
+				continue;
+			}
+			if (mode === "5") {
+				if (i + 2 >= t.length) return true; // missing index
+				i += 3;
+				continue;
+			}
+		}
+		i += 1;
+	}
+	return false;
+}
+
+/**
+ * Merge runs of byte-adjacent SGR sequences (`CSI [0-9;:]* m`) into one. Only
+ * CSI-SGR sequences are touched; text, cursor moves, OSC, hyperlinks and image
+ * payloads pass through verbatim. Returns the original reference when nothing
+ * merges, so SGR-light lines incur only a single `indexOf` scan.
+ */
+export function coalesceAdjacentSgr(line: string): string {
+	if (!SGR_COALESCE_ENABLED || line.indexOf("\x1b[") === -1) return line;
+	const n = line.length;
+	let out = "";
+	let copiedUpto = 0;
+	let i = 0;
+	while (i < n) {
+		if (line.charCodeAt(i) !== CC_ESC || line.charCodeAt(i + 1) !== CC_BRACKET) {
+			i++;
+			continue;
+		}
+		// Scan a candidate SGR sequence: ESC [ <params> m.
+		let j = i + 2;
+		while (j < n && isSgrParamByte(line.charCodeAt(j))) j++;
+		if (j >= n || line.charCodeAt(j) !== CC_M) {
+			// Not an SGR (e.g. cursor move); leave it in the pending region.
+			i = j;
+			continue;
+		}
+		// Collect the run of adjacent SGR sequences starting here.
+		const params: string[] = [line.slice(i + 2, j)];
+		let k = j + 1;
+		while (k < n && line.charCodeAt(k) === CC_ESC && line.charCodeAt(k + 1) === CC_BRACKET) {
+			let p = k + 2;
+			while (p < n && isSgrParamByte(line.charCodeAt(p))) p++;
+			if (p >= n || line.charCodeAt(p) !== CC_M) break;
+			params.push(line.slice(k + 2, p));
+			k = p + 1;
+		}
+		if (params.length > 1) {
+			out += line.slice(copiedUpto, i);
+			// Emit the merged run, but flush the current group before appending a
+			// list when (a) the previous list ended mid extended-color, so the
+			// next code cannot be absorbed as its missing channel/index, or (b)
+			// the token count would exceed MERGE_TOKEN_CAP. SGR params apply
+			// left-to-right regardless of how they are grouped across adjacent
+			// CSIs, so a capped/guarded split stays behavior-preserving — while a
+			// single unbounded merge would overflow a terminal's CSI parameter
+			// buffer (xterm.js caps at 32 and silently truncates the rest,
+			// corrupting colors). Empty params (`CSI m`) mean a full reset;
+			// normalize to `0` so the merged list stays unambiguous.
+			let group = "";
+			let groupTokens = 0;
+			let groupOpenSafe = true;
+			for (let q = 0; q < params.length; q++) {
+				const norm = params[q]!.length === 0 ? "0" : params[q]!;
+				let tk = 1;
+				for (let z = 0; z < norm.length; z++) {
+					const cc = norm.charCodeAt(z);
+					if (cc === CC_SEMI || cc === CC_COLON) tk++;
+				}
+				if (groupTokens > 0 && (!groupOpenSafe || groupTokens + tk > MERGE_TOKEN_CAP)) {
+					out += `\x1b[${group}m`;
+					group = "";
+					groupTokens = 0;
+				}
+				group += group.length === 0 ? norm : `;${norm}`;
+				groupTokens += tk;
+				groupOpenSafe = !endsWithIncompleteExtendedColor(norm);
+			}
+			if (group.length > 0) out += `\x1b[${group}m`;
+			copiedUpto = k;
+		}
+		i = k;
+	}
+	if (copiedUpto === 0) return line;
+	return out + line.slice(copiedUpto);
+}
 
 /** Compare two rows ignoring SGR styling (theme restyles keep alignment). */
 function rowsEquivalent(a: string, b: string): boolean {
@@ -808,11 +1005,6 @@ export class TUI extends Container {
 	// fast path (`#renderResizeViewport`) instead of an authoritative full
 	// paint, and no commit/window/diff state is advanced.
 	#resizeViewportActive = false;
-	// Set only by the resize callback's cheap-paint request. A concurrent
-	// caller-forced render (tool finalization, reset, image reconciliation) must
-	// not be downgraded to the throwaway viewport path just because a resize
-	// settle window is active.
-	#resizeViewportPaintPending = false;
 	// Quiet-window timer that ends the drag: its callback clears the flag and
 	// drives the one authoritative full paint. Reset on every resize event so it
 	// only fires once the drag stops. Cancelled on stop().
@@ -1138,6 +1330,14 @@ export class TUI extends Container {
 	}
 
 	setFocus(component: Component | null): void {
+		const topVisibleOverlay = this.#getTopmostVisibleOverlay();
+		if (topVisibleOverlay && !isOverlayFocusTarget(topVisibleOverlay.component, component)) {
+			const currentFocus = this.#focusedComponent;
+			component = isOverlayFocusTarget(topVisibleOverlay.component, currentFocus)
+				? currentFocus
+				: topVisibleOverlay.component;
+		}
+
 		const previousFocusedComponent = this.#focusedComponent;
 		// Clear focused flag on old component
 		if (isFocusable(previousFocusedComponent)) {
@@ -1164,6 +1364,7 @@ export class TUI extends Container {
 	 * Returns a handle to control the overlay's visibility.
 	 */
 	showOverlay(component: Component, options?: OverlayOptions): OverlayHandle {
+		component.setIgnoreTight?.(true);
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false };
 		this.overlayStack.push(entry);
 		// Only focus if overlay is actually visible
@@ -1180,8 +1381,8 @@ export class TUI extends Container {
 				const index = this.overlayStack.indexOf(entry);
 				if (index !== -1) {
 					this.overlayStack.splice(index, 1);
-					// Restore focus if this overlay had focus
-					if (this.#focusedComponent === component) {
+					// Restore focus if this overlay or one of its owned targets had focus
+					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
@@ -1197,8 +1398,8 @@ export class TUI extends Container {
 				entry.hidden = hidden;
 				// Update focus when hiding/showing
 				if (hidden) {
-					// If this overlay had focus, move focus to next visible or preFocus
-					if (this.#focusedComponent === component) {
+					// If this overlay or one of its owned targets had focus, move focus to next visible or preFocus
+					if (isOverlayFocusTarget(component, this.#focusedComponent)) {
 						const topVisible = this.#getTopmostVisibleOverlay();
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
@@ -1293,7 +1494,7 @@ export class TUI extends Container {
 				// `#resizeEventPending` is set first so the eventual render still
 				// classifies as a resize.
 				this.#resizeEventPending = true;
-				if (!isMultiplexerSession()) {
+				if (!resizeRepaintsInPlace()) {
 					// Enter the viewport fast path and (re)arm the settle timer, then
 					// request the cheap viewport-only paint. The authoritative full
 					// replay fires from the settle timer once the drag goes quiet.
@@ -1586,7 +1787,6 @@ export class TUI extends Container {
 		// Any non-component-scoped request makes the pending frame a full one.
 		this.#pendingRenderComponentsOnly = false;
 		if (force) {
-			this.#resizeViewportPaintPending = false;
 			// Forced repaints landing inside the multiplexer resize debounce
 			// (e.g. `#finishSixelProbe`, image-budget eviction, a programmatic
 			// `requestRender(true)`) would paint into a still-reflowing pane
@@ -2103,7 +2303,11 @@ export class TUI extends Container {
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 			let overlayLines = component.render(width);
 			if (overlayLines.length > maxHeight) {
-				overlayLines = overlayLines.slice(0, maxHeight);
+				const anchor = options?.anchor ?? "center";
+				overlayLines =
+					anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right"
+						? overlayLines.slice(overlayLines.length - maxHeight)
+						: overlayLines.slice(0, maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 			for (let i = 0; i < overlayLines.length; i++) {
@@ -2195,7 +2399,8 @@ export class TUI extends Container {
 
 	#terminalLine(line: string): string {
 		if (TERMINAL.isImageLine(line)) return line;
-		return line + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
+		const coalesced = coalesceAdjacentSgr(line);
+		return coalesced + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
 	}
 
 	/**
@@ -2260,16 +2465,30 @@ export class TUI extends Container {
 		// Strictly state-isolated: it never consumes #resizeEventPending nor
 		// advances any commit/window/diff field, so the authoritative full paint
 		// the settle timer queues reconciles as if these throwaway frames never
-		// ran. A visible overlay composites over the transcript and needs the
-		// whole window, so fall through to the normal forced paint when one is up
-		// (overlay resizes are not on the drag-cost hot path).
+		// ran. Two render sources reach here mid-drag and BOTH must stay on this
+		// path:
+		//   - the resize callback's own cheap paint after each SIGWINCH;
+		//   - an ordinary (non-forced) render from a live block that keeps
+		//     animating through the drag — a spinner tick, a streamed token, a
+		//     cursor blink — firing requestRender(false)/requestComponentRender.
+		//     #resizeEventPending is still set (the fast path never consumed it),
+		//     so without this branch the ordinary render falls through to the
+		//     geometry-rebuild full paint below, which LEAVES the borrowed
+		//     alternate screen to repaint the whole transcript on the normal
+		//     screen — then the next SIGWINCH re-enters the alt screen and paints
+		//     only the tail, so the block flashes in for one frame and vanishes.
+		// A forced render (tool finalization, reset, image reconciliation) must
+		// still preempt: it set #forceViewportRepaintOnNextRender via
+		// #prepareForcedRender and owns the next authoritative paint, so it falls
+		// through. A visible overlay composites over the transcript and needs the
+		// whole window, so it also falls through (overlay resizes are not on the
+		// drag-cost hot path).
 		if (
-			this.#resizeViewportPaintPending &&
 			this.#resizeViewportActive &&
+			!this.#forceViewportRepaintOnNextRender &&
 			this.#hasEverRendered &&
 			this.#getTopmostVisibleOverlay() === undefined
 		) {
-			this.#resizeViewportPaintPending = false;
 			this.#componentRenderTargets.clear();
 			this.#renderResizeViewport(width, height);
 			return;
@@ -2377,13 +2596,15 @@ export class TUI extends Container {
 			Math.min(frameLength, snapshotSafeEnd ?? byteStableBoundary),
 		);
 
-		// 4. Classify. A resize is an explicit user gesture: outside a
-		// multiplexer it erases and replays so history rewraps at the new
-		// geometry (the reader snapped to the bottom just dragged the window);
-		// inside one the pane reflows its own history, so repaint in place.
+		// 4. Classify. A resize is an explicit user gesture: normally the engine
+		// erases and replays so history rewraps at the new geometry (the reader
+		// snapped to the bottom just dragged the window). Multiplexer panes — and
+		// terminals that re-report size on alt-screen toggles — instead repaint in
+		// place, because an ED3 rewrap is unsafe (pane scrollback / alt-screen
+		// feedback loop), so committed history keeps its old wrap.
 		const firstPaint = !this.#hasEverRendered;
 		const replaceRequested = this.#clearScrollbackOnNextRender;
-		const geometryRebuild = geometryChanged && !isMultiplexerSession();
+		const geometryRebuild = geometryChanged && !resizeRepaintsInPlace();
 		const fullPaint = firstPaint || replaceRequested || geometryRebuild;
 		let windowTop: number;
 		let chunkTo: number;
@@ -2465,14 +2686,11 @@ export class TUI extends Container {
 		this.#logRedraw(intent, frameLength, height);
 
 		// Load newly-displayed image data once, before this frame's placements
-		// (and any emitter) reference it. `a=t` produces no display, so writing
-		// it ahead of the synchronized paint is artifact-free.
-		const imageTransmits = this.#imageBudget.takeTransmits();
-		if (imageTransmits.length > 0) {
-			let transmitBuffer = "";
-			for (const seq of imageTransmits) transmitBuffer += seq;
-			this.terminal.write(transmitBuffer);
-		}
+		// reference it. For full paints, the emitter may need to place the
+		// transmit after a destructive clear (ED2/ED3) but before row replay, so
+		// build the buffer here and let the emitter decide where it lands.
+		let imageTransmitBuffer = "";
+		for (const seq of this.#imageBudget.takeTransmits()) imageTransmitBuffer += seq;
 		// Purge graphics for images the budget demoted to text. Kitty keeps
 		// images in a store that text clears don't touch; demoted rows still
 		// visible re-render as text and the window diff repaints them.
@@ -2487,7 +2705,7 @@ export class TUI extends Container {
 
 		// 6. Emit.
 		if (intent.kind === "fullPaint") {
-			this.#emitFullPaint(frame, window, width, height, cursorPos, purgeSequence, {
+			this.#emitFullPaint(frame, window, width, height, cursorPos, purgeSequence, imageTransmitBuffer, {
 				clearScrollback: intent.clearScrollback,
 				chunkTo,
 				windowTop,
@@ -2499,12 +2717,15 @@ export class TUI extends Container {
 			if (!firstPaint && frameLength > height) this.#armPostFullPaintSettle();
 			return;
 		}
+		if (imageTransmitBuffer.length > 0) {
+			this.terminal.write(imageTransmitBuffer);
+		}
 		this.#emitUpdate(frame, window, width, height, cursorPos, purgeSequence, {
 			chunkTo,
 			windowTop,
 			prevWindowTop,
 			prevHardwareCursorRow,
-			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && isMultiplexerSession()),
+			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && resizeRepaintsInPlace()),
 		});
 		for (let i = this.#committedPrefix.length; i < chunkTo; i++) {
 			this.#committedPrefix.push(rawFrame[i] ?? "");
@@ -2853,6 +3074,7 @@ export class TUI extends Container {
 		height: number,
 		cursorPos: { row: number; col: number } | null,
 		purgeSequence: string,
+		imageTransmitBuffer: string,
 		options: { clearScrollback: boolean; chunkTo: number; windowTop: number },
 	): void {
 		this.#fullRedrawCount += 1;
@@ -2869,6 +3091,7 @@ export class TUI extends Container {
 			if (TERMINAL.supportsScreenToScrollback) buffer += "\x1b[22J";
 			buffer += "\x1b[2J\x1b[H";
 		}
+		if (imageTransmitBuffer.length > 0) buffer += imageTransmitBuffer;
 		// DECCARA fills optimize only the rows that stay visible; history-bound
 		// rows are written as full styled strings (their background must
 		// survive in scrollback, which DECCARA cannot reach).
@@ -2930,7 +3153,6 @@ export class TUI extends Container {
 
 	#requestResizeViewportPaint(): void {
 		if (this.#stopped) return;
-		this.#resizeViewportPaintPending = true;
 		this.#renderRequested = false;
 		this.#lastRenderAt = this.#renderScheduler.now();
 		this.#doRender();

@@ -13,7 +13,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatAge, formatDuration, prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../irc/bus";
@@ -49,18 +49,18 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 	return canSpawnAtDepth(maxDepth, taskDepth);
 }
 
-const ircSchema = z.object({
-	op: z.enum(["send", "wait", "inbox", "list"]).describe("irc operation"),
-	to: z.string().optional().describe('send: recipient agent id or "all"'),
-	message: z.string().optional().describe("send: message body"),
-	replyTo: z.string().optional().describe("send: message id being answered"),
-	await: z.boolean().optional().describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
-	from: z.string().optional().describe("wait: only accept a message from this agent id"),
-	timeoutMs: z.number().optional().describe("wait: timeout in milliseconds (0 waits indefinitely)"),
-	peek: z.boolean().optional().describe("inbox: list messages without consuming them"),
+const ircSchema = type({
+	op: type("'send' | 'wait' | 'inbox' | 'list'").describe("irc operation"),
+	"to?": type("string").describe('send: recipient agent id or "all"'),
+	"message?": type("string").describe("send: message body"),
+	"replyTo?": type("string").describe("send: message id being answered"),
+	"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
+	"from?": type("string").describe("wait: only accept a message from this agent id"),
+	"timeoutMs?": type("number").describe("wait: timeout in milliseconds (0 waits indefinitely)"),
+	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
 });
 
-type IrcParams = z.infer<typeof ircSchema>;
+type IrcParams = typeof ircSchema.infer;
 
 interface IrcPeerInfo {
 	id: string;
@@ -98,7 +98,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	readonly parameters = ircSchema;
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof ircSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof ircSchema.infer>[] = [
 		{
 			caption: "List peers",
 			call: { op: "list" },
@@ -182,7 +182,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		const bus = IrcBus.global();
 		const peers = registry
 			.list()
-			.filter(ref => ref.id !== senderId && ref.status !== "aborted")
+			.filter(ref => ref.id !== senderId && ref.status !== "aborted" && ref.kind !== "advisor")
 			.map(ref => ({
 				id: ref.id,
 				displayName: ref.displayName,

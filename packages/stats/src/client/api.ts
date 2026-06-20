@@ -1,65 +1,83 @@
 import type {
 	BehaviorDashboardStats,
 	CostDashboardStats,
-	DashboardStats,
+	FolderStats,
 	MessageStats,
 	ModelDashboardStats,
 	OverviewStats,
 	RequestDetails,
+	TimeRange,
 } from "./types";
 
 const API_BASE = "/api";
 
-export async function getStats(range = "24h"): Promise<DashboardStats> {
-	const res = await fetch(`${API_BASE}/stats?range=${encodeURIComponent(range)}`);
-	if (!res.ok) throw new Error("Failed to fetch stats");
-	return res.json() as Promise<DashboardStats>;
+export class ApiError extends Error {
+	status: number;
+	endpoint: string;
+
+	constructor(status: number, endpoint: string, message: string) {
+		super(message);
+		this.name = "ApiError";
+		this.status = status;
+		this.endpoint = endpoint;
+	}
 }
 
-export async function getOverviewStats(range = "24h"): Promise<OverviewStats> {
-	const res = await fetch(`${API_BASE}/stats/overview?range=${encodeURIComponent(range)}`);
-	if (!res.ok) throw new Error("Failed to fetch overview stats");
-	return res.json() as Promise<OverviewStats>;
+async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
+	const res = await fetch(endpoint, options);
+	if (!res.ok) {
+		throw new ApiError(res.status, endpoint, `HTTP error ${res.status} on ${endpoint}`);
+	}
+	return res.json() as Promise<T>;
 }
 
-export async function getModelDashboardStats(range = "24h"): Promise<ModelDashboardStats> {
-	const res = await fetch(`${API_BASE}/stats/model-dashboard?range=${encodeURIComponent(range)}`);
-	if (!res.ok) throw new Error("Failed to fetch model stats");
-	return res.json() as Promise<ModelDashboardStats>;
+export async function getOverviewStats(range: TimeRange = "24h", signal?: AbortSignal): Promise<OverviewStats> {
+	return fetchJson<OverviewStats>(`${API_BASE}/stats/overview?range=${encodeURIComponent(range)}`, {
+		signal,
+	});
 }
 
-export async function getCostDashboardStats(range = "24h"): Promise<CostDashboardStats> {
-	const res = await fetch(`${API_BASE}/stats/costs?range=${encodeURIComponent(range)}`);
-	if (!res.ok) throw new Error("Failed to fetch cost stats");
-	return res.json() as Promise<CostDashboardStats>;
+export async function getModelDashboardStats(
+	range: TimeRange = "24h",
+	signal?: AbortSignal,
+): Promise<ModelDashboardStats> {
+	return fetchJson<ModelDashboardStats>(`${API_BASE}/stats/model-dashboard?range=${encodeURIComponent(range)}`, {
+		signal,
+	});
 }
 
-export async function getRecentRequests(limit = 50): Promise<MessageStats[]> {
-	const res = await fetch(`${API_BASE}/stats/recent?limit=${limit}`);
-	if (!res.ok) throw new Error("Failed to fetch recent requests");
-	return res.json() as Promise<MessageStats[]>;
+export async function getCostDashboardStats(
+	range: TimeRange = "24h",
+	signal?: AbortSignal,
+): Promise<CostDashboardStats> {
+	return fetchJson<CostDashboardStats>(`${API_BASE}/stats/costs?range=${encodeURIComponent(range)}`, { signal });
 }
 
-export async function getRecentErrors(limit = 50): Promise<MessageStats[]> {
-	const res = await fetch(`${API_BASE}/stats/errors?limit=${limit}`);
-	if (!res.ok) throw new Error("Failed to fetch recent errors");
-	return res.json() as Promise<MessageStats[]>;
+export async function getRecentRequests(limit = 50, signal?: AbortSignal): Promise<MessageStats[]> {
+	return fetchJson<MessageStats[]>(`${API_BASE}/stats/recent?limit=${limit}`, { signal });
 }
 
-export async function getRequestDetails(id: number): Promise<RequestDetails> {
-	const res = await fetch(`${API_BASE}/request/${id}`);
-	if (!res.ok) throw new Error("Failed to fetch request details");
-	return res.json() as Promise<RequestDetails>;
+export async function getRecentErrors(limit = 50, signal?: AbortSignal): Promise<MessageStats[]> {
+	return fetchJson<MessageStats[]>(`${API_BASE}/stats/errors?limit=${limit}`, { signal });
 }
 
-export async function sync(): Promise<any> {
-	const res = await fetch(`${API_BASE}/sync`);
-	if (!res.ok) throw new Error("Failed to sync");
-	return res.json();
+export async function getRequestDetails(id: number, signal?: AbortSignal): Promise<RequestDetails> {
+	return fetchJson<RequestDetails>(`${API_BASE}/request/${id}`, { signal });
 }
 
-export async function getBehaviorDashboardStats(range = "24h"): Promise<BehaviorDashboardStats> {
-	const res = await fetch(`${API_BASE}/stats/behavior?range=${encodeURIComponent(range)}`);
-	if (!res.ok) throw new Error("Failed to fetch behavior stats");
-	return res.json() as Promise<BehaviorDashboardStats>;
+export async function sync(signal?: AbortSignal): Promise<{ processed: number; files: number; totalMessages: number }> {
+	return fetchJson<{ processed: number; files: number; totalMessages: number }>(`${API_BASE}/sync`, { signal });
+}
+
+export async function getBehaviorDashboardStats(
+	range: TimeRange = "24h",
+	signal?: AbortSignal,
+): Promise<BehaviorDashboardStats> {
+	return fetchJson<BehaviorDashboardStats>(`${API_BASE}/stats/behavior?range=${encodeURIComponent(range)}`, {
+		signal,
+	});
+}
+
+export async function getFolderStats(range: TimeRange = "24h", signal?: AbortSignal): Promise<FolderStats[]> {
+	return fetchJson<FolderStats[]>(`${API_BASE}/stats/folders?range=${encodeURIComponent(range)}`, { signal });
 }

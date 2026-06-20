@@ -7,11 +7,11 @@ import {
 	wrapTextWithAnsi as nativeWrapTextWithAnsi,
 	type SliceResult,
 } from "@oh-my-pi/pi-natives";
-import { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
+import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 
 export { Ellipsis } from "@oh-my-pi/pi-natives";
 
-export { getDefaultTabWidth, getIndentation } from "@oh-my-pi/pi-utils";
+export { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 
 export type TextSizingScale = 1 | 2 | 3;
 export type TextSizingVerticalAlign = "top" | "bottom" | "center";
@@ -74,35 +74,32 @@ export function encodeTextSized(text: string, options: TextSizingOptions = {}): 
 }
 
 export function sliceWithWidth(line: string, startCol: number, length: number, strict?: boolean | null): SliceResult {
-	return nativeSliceWithWidth(line, startCol, length, strict ?? null, getDefaultTabWidth());
+	return nativeSliceWithWidth(line, startCol, length, strict ?? null, DEFAULT_TAB_WIDTH);
 }
 
 export function truncateToWidth(
 	text: string,
 	maxWidth: number,
-	ellipsisKind?: Ellipsis | null,
+	ellipsisKind?: Ellipsis | null | "",
 	pad?: boolean | null,
 ): string {
-	// Guard nullish napi inputs: napi-rs 3 on the Windows prebuilt rejects
-	// `null` for `Option<u8>` (Ellipsis) / `Option<bool>` (pad) (issue #848),
-	// and `maxWidth` is a required `u32` that throws on `null`/`undefined`
-	// everywhere. Pass concrete defaults that mirror the Rust `unwrap_or`s.
-	const safeWidth = Number.isFinite(maxWidth) ? Math.max(0, Math.trunc(maxWidth)) : 0;
-	let resolvedEllipsis: Ellipsis | null | undefined | string = ellipsisKind;
-	if (typeof resolvedEllipsis === "string") {
-		resolvedEllipsis = resolvedEllipsis === "" ? Ellipsis.Omit : Ellipsis.Unicode;
+	maxWidth = Math.max(0, maxWidth | 0);
+	// Fast path: every UTF-16 unit is at most 3 cells wide, so a string whose
+	// `length * 3` already fits within `safeWidth` cannot need truncation.
+	if (!pad && text.length * 3 <= maxWidth) {
+		return text;
 	}
 	return nativeTruncateToWidth(
 		text,
-		safeWidth,
-		resolvedEllipsis ?? Ellipsis.Unicode,
+		maxWidth,
+		(ellipsisKind === "" ? Ellipsis.Omit : ellipsisKind) ?? Ellipsis.Unicode,
 		pad ?? false,
-		getDefaultTabWidth(),
+		DEFAULT_TAB_WIDTH,
 	);
 }
 
 export function wrapTextWithAnsi(text: string, width: number): string[] {
-	return nativeWrapTextWithAnsi(text, width, getDefaultTabWidth());
+	return nativeWrapTextWithAnsi(text, width, DEFAULT_TAB_WIDTH);
 }
 
 export function extractSegments(
@@ -112,24 +109,17 @@ export function extractSegments(
 	afterLen: number,
 	strictAfter: boolean,
 ): ExtractSegmentsResult {
-	return nativeExtractSegments(line, beforeEnd, afterStart, afterLen, strictAfter, getDefaultTabWidth());
+	return nativeExtractSegments(line, beforeEnd, afterStart, afterLen, strictAfter, DEFAULT_TAB_WIDTH);
 }
 
 // Pre-allocated space buffer for padding
 const SPACE_BUFFER = " ".repeat(512);
 
-/**
- * Tab width in columns for `file`, using `process.cwd()` as the project root for relative paths.
- */
-export function getIndentationNoescape(file?: string): number {
-	return getIndentation(file, process.cwd());
-}
-
 /*
- * Replace tabs with configured spacing for consistent rendering.
+ * Replace tabs with the fixed display tab width for consistent rendering.
  */
-export function replaceTabs(text: string, file?: string): string {
-	return text.replaceAll("\t", " ".repeat(getIndentation(file)));
+export function replaceTabs(text: string): string {
+	return text.replaceAll("\t", " ".repeat(DEFAULT_TAB_WIDTH));
 }
 
 /**
@@ -186,7 +176,7 @@ export function visibleWidth(str: string): number {
 		for (let tabIndex = str.indexOf(TAB); tabIndex !== -1; tabIndex = str.indexOf(TAB, tabIndex + 1)) {
 			tabCount++;
 		}
-		if (tabCount > 0) width += tabCount * getDefaultTabWidth();
+		if (tabCount > 0) width += tabCount * DEFAULT_TAB_WIDTH;
 		return width;
 	}
 
@@ -203,7 +193,7 @@ export function visibleWidth(str: string): number {
 		}
 	}
 	if (i === str.length) {
-		return tabCount === 0 ? str.length : str.length + tabCount * (getDefaultTabWidth() - 1);
+		return tabCount === 0 ? str.length : str.length + tabCount * (DEFAULT_TAB_WIDTH - 1);
 	}
 
 	if (tabCount === 0) {
@@ -224,7 +214,7 @@ export function visibleWidth(str: string): number {
 	// the native scanner that traps under Bun 1.3.x GC/N-API load). It strips
 	// CSI/OSC to zero cells and shares the native engine's UAX#11 width tables.
 	let width = Bun.stringWidth(str, STRING_WIDTH_OPTS);
-	if (tabCount > 0) width += tabCount * getDefaultTabWidth();
+	if (tabCount > 0) width += tabCount * DEFAULT_TAB_WIDTH;
 
 	// OSC 66: add back each stripped span as `scale * (explicit w ?? payload
 	// width)`. Matched rather than replaced to avoid reallocating the string.
@@ -481,4 +471,18 @@ export function applyBackgroundToLine(line: string, width: number, bgFn: (text: 
  */
 export function sliceByColumn(line: string, startCol: number, length: number, strict = false): string {
 	return sliceWithWidth(line, startCol, length, strict).text;
+}
+
+let globalTight = false;
+
+export function setTuiTight(tight: boolean): void {
+	globalTight = tight;
+}
+
+export function isTuiTight(): boolean {
+	return globalTight;
+}
+
+export function getPaddingX(basePadding: number): number {
+	return globalTight ? Math.max(0, basePadding - 1) : basePadding;
 }

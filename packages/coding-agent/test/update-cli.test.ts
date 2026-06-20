@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +10,7 @@ import {
 	buildMiseUpgradeArgs,
 	replaceBinaryForUpdate,
 	resolveUpdateMethodForTest,
+	sweepStaleBackups,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 
 const tempDirs: string[] = [];
@@ -179,5 +181,70 @@ describe("update-cli binary replacement", () => {
 		expect(await Bun.file(targetPath).text()).toBe("new binary");
 		expect(await Bun.file(tempPath).exists()).toBe(false);
 		expect(await Bun.file(backupPath).exists()).toBe(false);
+	});
+});
+
+describe("update-cli binary replacement on locked backups", () => {
+	it("treats an EPERM on backup cleanup as a successful, completed update", async () => {
+		// Regression: on Windows the binary moved aside during the swap is still
+		// the running process image, so unlinking it throws EPERM. That cleanup
+		// failure must not turn a verified swap into "Update failed" (issue #845).
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, "omp.exe");
+		const tempPath = `${targetPath}.new`;
+		const backupPath = `${targetPath}.1700000000000.4242.bak`;
+		await Bun.write(targetPath, "old binary");
+		await Bun.write(tempPath, "new binary");
+
+		const realUnlink = nodeFs.promises.unlink.bind(nodeFs.promises);
+		const spy = spyOn(nodeFs.promises, "unlink").mockImplementation(async (p: nodeFs.PathLike) => {
+			if (String(p) === backupPath) {
+				const err = new Error(`EPERM: operation not permitted, unlink '${p}'`) as NodeJS.ErrnoException;
+				err.code = "EPERM";
+				throw err;
+			}
+			return realUnlink(p);
+		});
+		try {
+			const result = await replaceBinaryForUpdate({
+				targetPath,
+				tempPath,
+				backupPath,
+				expectedVersion: "15.1.8",
+				verifyInstalledVersion: async () => ({ ok: true, actual: "15.1.8", path: targetPath }),
+			});
+			expect(result.ok).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
+
+		// New binary is installed and the temp consumed even though the locked
+		// backup survives; the next run's sweep reclaims it once it is unlocked.
+		expect(await Bun.file(targetPath).text()).toBe("new binary");
+		expect(await Bun.file(tempPath).exists()).toBe(false);
+		expect(await Bun.file(backupPath).text()).toBe("old binary");
+	});
+});
+
+describe("update-cli stale backup sweep", () => {
+	it("reclaims timestamped and legacy backups while leaving unrelated .bak files", async () => {
+		const dir = await makeTempDir();
+		const targetPath = path.join(dir, "omp.exe");
+		await Bun.write(targetPath, "current binary");
+		await Bun.write(`${targetPath}.bak`, "legacy backup");
+		await Bun.write(`${targetPath}.1700000000000.4242.bak`, "timestamped backup");
+		await Bun.write(`${targetPath}.1800000000000.99.bak`, "another backup");
+		// Must survive: foreign basename and a non-numeric middle segment.
+		await Bun.write(path.join(dir, "notes.bak"), "keep me");
+		await Bun.write(`${targetPath}.config.bak`, "keep me too");
+
+		await sweepStaleBackups(targetPath);
+
+		expect(await Bun.file(targetPath).exists()).toBe(true);
+		expect(await Bun.file(`${targetPath}.bak`).exists()).toBe(false);
+		expect(await Bun.file(`${targetPath}.1700000000000.4242.bak`).exists()).toBe(false);
+		expect(await Bun.file(`${targetPath}.1800000000000.99.bak`).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "notes.bak")).exists()).toBe(true);
+		expect(await Bun.file(`${targetPath}.config.bak`).exists()).toBe(true);
 	});
 });

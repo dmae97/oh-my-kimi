@@ -14,6 +14,7 @@ import {
 	sleepAllSessions,
 } from "@oh-my-pi/pi-mnemopi/core/beam/consolidate";
 import type { BeamMemoryState } from "@oh-my-pi/pi-mnemopi/core/beam/types";
+import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "@oh-my-pi/pi-mnemopi/core/entities";
 import { closeQuietly, openDatabase } from "@oh-my-pi/pi-mnemopi/db";
 
 function state(sessionId = "s1"): BeamMemoryState {
@@ -43,6 +44,7 @@ function state(sessionId = "s1"): BeamMemoryState {
 			importanceWeight: 0.2,
 			useCloud: false,
 			localLlmEnabled: false,
+			maxEpisodeChars: 100_000,
 		},
 	};
 }
@@ -161,6 +163,55 @@ describe("beam consolidation free functions", () => {
 		});
 		expect(getConsolidationLog(beam, 1)[0]?.items_consolidated).toBe(2);
 	});
+	it("sleep caps oversized episodes before extraction and embedding", () => {
+		const beam = trackedState();
+		beam.config.maxEpisodeChars = 512;
+		const transcript = "[role: user] progress output with noisy tool transcript ".repeat(40);
+		insertWorking(beam.db, "wm-big", "s1", transcript, "conversation");
+
+		const result = sleep(beam, false);
+		const row = beam.db
+			.query(
+				`SELECT content, length(content) AS chars, json_extract(metadata_json, '$.truncated') AS truncated,
+				 json_extract(metadata_json, '$.original_chars') AS original_chars,
+				 json_extract(metadata_json, '$.max_chars') AS max_chars
+				 FROM episodic_memory WHERE source = 'sleep_consolidation'`,
+			)
+			.get() as {
+			content: string;
+			chars: number;
+			truncated: number;
+			original_chars: number;
+			max_chars: number;
+		} | null;
+
+		expect(result.status).toBe("consolidated");
+		expect(row).not.toBeNull();
+		expect(row?.chars).toBeLessThanOrEqual(512);
+		expect(row?.content.includes("sleep_consolidation episode truncated")).toBe(true);
+		expect(row?.truncated).toBe(1);
+		expect(row?.original_chars).toBeGreaterThan(512);
+		expect(row?.max_chars).toBe(512);
+	});
+	it("sleep splits capped source groups without dropping row ids", () => {
+		const beam = trackedState();
+		beam.config.maxEpisodeChars = 100;
+		insertWorking(beam.db, "wm-one", "s1", `first ${"a".repeat(70)}`, "conversation");
+		insertWorking(beam.db, "wm-two", "s1", `second ${"b".repeat(70)}`, "conversation");
+		insertWorking(beam.db, "wm-three", "s1", `third ${"c".repeat(70)}`, "conversation");
+
+		const result = sleep(beam, false);
+		const rows = beam.db
+			.query("SELECT summary_of, length(content) AS chars FROM episodic_memory WHERE source = 'sleep_consolidation'")
+			.all() as { summary_of: string; chars: number }[];
+
+		expect(result.status).toBe("consolidated");
+		expect(result.items_consolidated).toBe(3);
+		expect(result.summaries_created).toBe(3);
+		expect(rows).toHaveLength(3);
+		expect(rows.every(row => row.chars <= 100)).toBe(true);
+		expect(rows.map(row => row.summary_of).sort()).toEqual(["wm-one", "wm-three", "wm-two"]);
+	});
 
 	it("sleepAllSessions consolidates eligible rows outside the caller session", () => {
 		const beam = trackedState("maintenance");
@@ -255,5 +306,25 @@ describe("beam consolidation free functions", () => {
 			count: number;
 		};
 		expect(facts.count).toBeGreaterThanOrEqual(4);
+	});
+
+	it("skips pattern fact extraction for oversized raw transcripts", () => {
+		const beam = trackedState();
+		const line = "progress boot done 615014ms downloading gapps its@66% priv-app files done 221MB version 1.2.3\n";
+		const text = line.repeat(Math.ceil((REGEX_EXTRACTION_MAX_INPUT_CHARS + 1) / line.length));
+		const counts = extractAndStoreFacts(beam, text, 7, "large-transcript");
+
+		expect(counts).toEqual({
+			metric: 0,
+			date: 0,
+			version: 0,
+			entity: 0,
+			sequence: 0,
+			timeline: 0,
+			negation: 0,
+			decision: 0,
+		});
+		const facts = beam.db.query("SELECT COUNT(*) AS count FROM memoria_facts").get() as { count: number };
+		expect(facts.count).toBe(0);
 	});
 });

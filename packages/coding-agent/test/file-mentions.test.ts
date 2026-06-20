@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { generateFileMentionMessages } from "@oh-my-pi/pi-coding-agent/utils/file-mentions";
+import { extractFileMentions, generateFileMentionMessages } from "@oh-my-pi/pi-coding-agent/utils/file-mentions";
 
 const tempDirs: string[] = [];
 
@@ -78,5 +78,23 @@ describe("generateFileMentionMessages path resolution", () => {
 		expect(message.files).toHaveLength(1);
 		expect(message.files[0]?.path).toBe("real.txt");
 		expect(message.files[0]?.content).toContain("present");
+	});
+
+	test("resolves quoted paths containing spaces", async () => {
+		const cwd = await createTempDir();
+		await fs.mkdir(path.join(cwd, "My Folder"), { recursive: true });
+		await Bun.write(path.join(cwd, "My Folder", "my file.png"), "image content");
+
+		const mentions = extractFileMentions("Please see @\"My Folder/my file.png\" and @'My Folder/my file.png'");
+		expect(mentions).toEqual(["My Folder/my file.png"]);
+
+		const messages = await generateFileMentionMessages(mentions, cwd);
+		expect(messages).toHaveLength(1);
+		const message = messages[0];
+		if (message?.role !== "fileMention") {
+			throw new Error("expected file mention message");
+		}
+		expect(message.files).toHaveLength(1);
+		expect(message.files[0]?.path).toBe("My Folder/my file.png");
 	});
 });

@@ -3,7 +3,7 @@ import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
 import { Input } from "@oh-my-pi/pi-tui/components/input";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { getIndentation } from "@oh-my-pi/pi-utils";
+import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 
 function renderedWidth(input: Input, width: number): number {
 	const [line] = input.render(width);
@@ -133,12 +133,14 @@ describe("Input component", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("inserts NumLock keypad digits from Kitty CSI-u input", () => {
+	it("inserts keypad digits from Kitty CSI-u input with or without NumLock modifier", () => {
 		setKittyProtocolActive(true);
 		const input = setupAtEnd("a");
 
+		input.handleInput("\x1b[57407u");
 		input.handleInput("\x1b[57407;129u");
-		expect(input.getValue()).toBe("a8");
+		input.handleInput("\x1b[57404u");
+		expect(input.getValue()).toBe("a885");
 
 		setKittyProtocolActive(false);
 	});
@@ -153,7 +155,7 @@ describe("Input component", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("normalizes tabs in buffered bracketed paste using configured indentation", () => {
+	it("normalizes tabs in buffered bracketed paste using the fixed display width", () => {
 		const input = setupAtEnd("");
 
 		input.handleInput("\x1b[200~a\t");
@@ -163,7 +165,22 @@ describe("Input component", () => {
 		expect(input.getValue()).toBe("");
 
 		input.handleInput("c\x1b[201~");
-		expect(input.getValue()).toBe(`a${" ".repeat(getIndentation())}bc`);
+		expect(input.getValue()).toBe(`a${" ".repeat(DEFAULT_TAB_WIDTH)}bc`);
+	});
+
+	it("decodes tmux re-encoded control bytes in bracketed paste without leaking tails or storing raw C0", () => {
+		// Regression: kitty+tmux (extended-keys-format=xterm) re-encodes the newline
+		// (Ctrl+J) inside a paste as ESC[27;5;106~. For a single-line input the newline
+		// is stripped, but the escape tail "[27;5;106~" must never leak in as text.
+		const input = setupAtEnd("");
+		input.handleInput("\x1b[200~ab\x1b[27;5;106~cd\x1b[201~");
+		expect(input.getValue()).toBe("abcd");
+
+		// A non-newline re-encoded control (Ctrl+A → 0x01) must be stripped, not stored
+		// as a raw control byte in the single-line value.
+		const input2 = setupAtEnd("");
+		input2.handleInput("\x1b[200~x\x1b[27;5;97~y\x1b[201~");
+		expect(input2.getValue()).toBe("xy");
 	});
 
 	it("never renders a line wider than the terminal width (wide chars)", () => {

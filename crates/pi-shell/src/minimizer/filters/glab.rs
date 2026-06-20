@@ -211,11 +211,11 @@ fn filter_release_list(input: &str) -> Option<String> {
 	// Append omission marker when there are more releases than shown.
 	let omitted = total.map_or(0, |t| t.saturating_sub(count));
 	if omitted > 0 {
-		let _ = writeln!(filtered, "… {omitted} releases omitted …");
+		let _ = writeln!(filtered, "[…{omitted} releases elided…]");
 	} else if has_more {
 		// Total not parsed from preamble but a 21st row was observed; signal
 		// truncation.
-		filtered.push_str("… releases omitted (showing first 20) …\n");
+		filtered.push_str("[…releases elided…]\n");
 	}
 
 	Some(filtered)
@@ -661,8 +661,8 @@ section_end:1711234600:build_script[0K
 		let out = filter(&ctx, &input, 0);
 
 		assert!(out.changed);
-		// Output must signal that releases were omitted.
-		assert!(out.text.contains("omitted"), "expected omission marker, got: {}", out.text);
+		// Output must signal that releases were elided.
+		assert!(out.text.contains("elided"), "expected omission marker, got: {}", out.text);
 		// First release present, 21st not shown verbatim in the list.
 		assert!(out.text.contains("Release 1"));
 		assert!(!out.text.contains("Release 21 ["));

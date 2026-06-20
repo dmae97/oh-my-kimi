@@ -2,7 +2,7 @@ Inspects an image file with a vision-capable model and returns compact text anal
 
 <instruction>
 - Use this for image understanding tasks (OCR, UI/screenshot debugging, scene/object questions)
-- Provide `path` to the local image file
+- Provide `path` as a local image file path, `Image #N` attachment label, or `attachment://N` URI
 - Write a specific `question`:
   - what to inspect
   - constraints (for example: "quote visible text verbatim", "only report confirmed findings")
@@ -17,7 +17,6 @@ Inspects an image file with a vision-capable model and returns compact text anal
 </output>
 
 <critical>
-- Parameters are strict: only `path` and `question` are allowed
 - If image submission is blocked by settings, the tool will fail with an actionable error
 - If configured model does not support image input, configure a vision-capable model role before retrying
 </critical>

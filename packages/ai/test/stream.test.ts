@@ -10,7 +10,7 @@ import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResult
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { $which } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -36,12 +36,10 @@ function hasBedrockCredentials(): boolean {
 }
 
 // Calculator tool definition (same as examples)
-const calculatorSchema = z.object({
-	a: z.number().describe("First number"),
-	b: z.number().describe("Second number"),
-	operation: z
-		.enum(["add", "subtract", "multiply", "divide"])
-		.describe("The operation to perform. One of 'add', 'subtract', 'multiply', 'divide'."),
+const calculatorSchema = type({
+	a: "number",
+	b: "number",
+	operation: "'add'|'subtract'|'multiply'|'divide'",
 });
 
 const calculatorTool: Tool<typeof calculatorSchema> = {

@@ -25,6 +25,7 @@ export class HookMessageComponent extends Container {
 
 		// Create box with purple background (used for default rendering)
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));
+		this.#box.setIgnoreTight(true);
 
 		this.#rebuild();
 	}

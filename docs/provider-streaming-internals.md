@@ -131,15 +131,15 @@ If provider stream throws or signals failure, each provider wrapper catches and 
 
 - `stopReason = "aborted"` when abort signal is set
 - otherwise `stopReason = "error"`
-- `errorMessage = formatErrorMessageWithRetryAfter(error)`
+- `errorMessage = finalizeErrorMessage(error, rawRequestDump)` (`packages/ai/src/utils/http-inspector.ts`), which wraps `formatErrorMessageWithRetryAfter()` and appends any captured HTTP-error body / raw-request dump (the `cursor` wrapper calls `formatErrorMessageWithRetryAfter()` directly)
 
 ## Malformed chunk / SSE parse failure behavior
 
-The OpenAI Completions/Responses paths delegate chunk/SSE framing to the `openai` SDK stream. Anthropic uses the in-repo `AnthropicMessagesClient` (`packages/ai/src/providers/anthropic-client.ts`); the Google paths and the Codex SSE fallback read SSE via `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
+The OpenAI Completions/Responses paths use the in-repo HTTP+SSE transport `postOpenAIStream()` (`packages/ai/src/utils/openai-http.ts`), which decodes frames with `readSseJson()` and replaced the `openai` SDK client. Anthropic uses the in-repo `AnthropicMessagesClient` (`packages/ai/src/providers/anthropic-client.ts`); the Google paths and the Codex SSE fallback read SSE via `readSseJson()` directly, and websocket Codex frames are normalized through the same event handler.
 
 Observed behavior in current implementation:
 
-- malformed SDK stream parsing surfaces as an exception or stream `error` event
+- malformed SSE framing or chunk JSON surfaces as an exception or stream `error` event
 - malformed Codex SSE JSON/framing throws from the local SSE reader
 - provider wrapper converts failures into unified terminal `error` events
 - no provider-specific resume/retry inside the stream function itself, except Codex websocket-to-SSE transport fallback before replay-unsafe output is emitted
@@ -208,7 +208,7 @@ Provider-specific (not fully abstracted):
 - [`../../ai/src/utils/event-stream.ts`](../packages/ai/src/utils/event-stream.ts) — generic stream queue + final-result resolution.
 - [`../../ai/src/utils/json-parse.ts`](../packages/ai/src/utils/json-parse.ts) — partial JSON parsing for streamed tool arguments.
 - [`../../ai/src/providers/anthropic.ts`](../packages/ai/src/providers/anthropic.ts) — Anthropic event translation and tool JSON delta accumulation.
-- [`../../ai/src/providers/openai-responses.ts`](../packages/ai/src/providers/openai-responses.ts), [`openai-responses-shared.ts`](../packages/ai/src/providers/openai-responses-shared.ts), [`openai-codex-responses.ts`](../packages/ai/src/providers/openai-codex-responses.ts), [`azure-openai-responses.ts`](../packages/ai/src/providers/azure-openai-responses.ts) — Responses-family event translation and status mapping.
+- [`../../ai/src/providers/openai-responses.ts`](../packages/ai/src/providers/openai-responses.ts), [`openai-shared.ts`](../packages/ai/src/providers/openai-shared.ts), [`openai-codex-responses.ts`](../packages/ai/src/providers/openai-codex-responses.ts), [`azure-openai-responses.ts`](../packages/ai/src/providers/azure-openai-responses.ts) — Responses-family event translation and status mapping.
 - [`../../ai/src/providers/google.ts`](../packages/ai/src/providers/google.ts), [`google-gemini-cli.ts`](../packages/ai/src/providers/google-gemini-cli.ts), [`google-vertex.ts`](../packages/ai/src/providers/google-vertex.ts) — Gemini stream chunk-to-block translation variants.
 - [`../../ai/src/providers/google-shared.ts`](../packages/ai/src/providers/google-shared.ts) — Gemini finish-reason mapping and shared conversion rules.
 - [`../../ai/src/providers/amazon-bedrock.ts`](../packages/ai/src/providers/amazon-bedrock.ts), [`openai-completions.ts`](../packages/ai/src/providers/openai-completions.ts), [`ollama.ts`](../packages/ai/src/providers/ollama.ts), [`cursor.ts`](../packages/ai/src/providers/cursor.ts), [`pi-native-client.ts`](../packages/ai/src/providers/pi-native-client.ts) — additional built-in stream adapters using the same event contract.

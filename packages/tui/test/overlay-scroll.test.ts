@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { type Component, CURSOR_MARKER, TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -120,6 +120,25 @@ async function settleResize(term: VirtualTerminal): Promise<void> {
 }
 
 describe("TUI overlays", () => {
+	let savedTerminalEnv: Record<string, string | undefined> = {};
+	beforeEach(() => {
+		// A resize on Warp takes the in-place path (no ED3), so neutralize the
+		// ambient terminal identity to keep the direct-terminal resize/scrollback
+		// assertions below deterministic on any dev machine.
+		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE"]) {
+			savedTerminalEnv[key] = Bun.env[key];
+			delete Bun.env[key];
+		}
+	});
+	afterEach(() => {
+		for (const key in savedTerminalEnv) {
+			const value = savedTerminalEnv[key];
+			if (value === undefined) delete Bun.env[key];
+			else Bun.env[key] = value;
+		}
+		savedTerminalEnv = {};
+	});
+
 	it("does not scroll the terminal when an overlay is shown with a large historical working area", async () => {
 		const term = new VirtualTerminal(80, 24);
 		const tui = new TUI(term);
@@ -181,6 +200,28 @@ describe("TUI overlays", () => {
 		expect(maxVisibleOverlayIndex()).toBeLessThan(10 - marginBottom);
 
 		tui.stop();
+	});
+
+	it("preserves bottom-anchored overlay actions when clamped", async () => {
+		const term = new VirtualTerminal(80, 5);
+		const tui = new TUI(term);
+
+		tui.addChild(new LineComponent("base-", 1));
+
+		try {
+			tui.start();
+			await flushRender(term);
+
+			tui.showOverlay(new LineComponent("ov-", 10), { anchor: "bottom-center", width: "100%", maxHeight: "100%" });
+			await flushRender(term);
+
+			const viewport = term.getViewport().join("\n");
+			expect(viewport).toContain("ov-5");
+			expect(viewport).toContain("ov-9");
+			expect(viewport).not.toContain("ov-0");
+		} finally {
+			tui.stop();
+		}
 	});
 
 	it("clears stale viewport content on launch", async () => {

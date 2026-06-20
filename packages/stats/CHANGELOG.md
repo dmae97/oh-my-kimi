@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [16.0.10] - 2026-06-18
+
+### Changed
+
+- Updated description of moderated content categories to use more inclusive terminology
+
+### Fixed
+
+- Wide data tables (Requests, Errors, Overview, Projects) overflowed the page horizontally at narrow-desktop widths (768-1023px): the `.stats-table-desktop-only` wrapper used for mobile-card tables lacked the `overflow-x: auto` containment that `.stats-table-container` already has. They now scroll within their own bounds instead of spilling the page body.
+
+## [16.0.5] - 2026-06-17
+
+### Added
+
+- New Projects view summarizing usage, cost, and reliability per project folder (backed by the existing `/api/stats/folders` endpoint).
+- System-aware light/dark theme toggle — follows the OS by default, and an explicit choice persists across reloads.
+
+### Changed
+
+- Redesigned the local stats dashboard with an OMP-themed product shell, dedicated per-section views, accessible loading/empty/error states, and flicker-free navigation between screens and time ranges.
+
+### Fixed
+
+- The 1h time-range chart rendered an empty/single-point line; it now buckets at 5-minute granularity for a real trend.
+
 ## [15.13.3] - 2026-06-15
 
 ### Changed

@@ -161,6 +161,7 @@ export async function fetchWithRetry(
 		defaultDelayMs,
 		prepareInit,
 		fetch: fetchImpl = fetch,
+		timeout = false,
 		...baseInit
 	} = options;
 	const signal = baseInit.signal as AbortSignal | undefined;
@@ -168,7 +169,7 @@ export async function fetchWithRetry(
 	for (let attempt = 0; ; attempt++) {
 		if (signal?.aborted) throw new Error("Request was aborted");
 		const requestUrl = typeof url === "function" ? url(attempt) : url;
-		const init = prepareInit ? mergeInit(baseInit, await prepareInit(attempt)) : baseInit;
+		const init = prepareInit ? mergeInit(baseInit, await prepareInit(attempt), timeout) : baseInit;
 
 		let response: Response;
 		try {
@@ -192,8 +193,8 @@ export async function fetchWithRetry(
 	}
 }
 
-function mergeInit(base: RequestInit, overlay: RequestInit): RequestInit {
-	const merged: RequestInit = { ...base, ...overlay };
+function mergeInit(base: RequestInit, overlay: RequestInit, timeout: number | false): RequestInit {
+	const merged = { ...base, ...overlay, timeout } as unknown as RequestInit;
 	if (base.headers || overlay.headers) {
 		const baseHeaders = new Headers(base.headers ?? undefined);
 		const overlayHeaders = new Headers(overlay.headers ?? undefined);

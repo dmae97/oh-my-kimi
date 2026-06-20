@@ -1,13 +1,16 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ModelSpec } from "../types";
 import { toPositiveNumber } from "../utils";
-import { ANTIGRAVITY_VARIANT_COLLAPSE_TABLE, collapseEffortVariants } from "../variant-collapse";
+import {
+	ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
+	collapseEffortVariants,
+	type VariantCollapseTable,
+} from "../variant-collapse";
 import { getAntigravityUserAgent } from "../wire/gemini-headers";
 
-const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = [
-	"https://daily-cloudcode-pa.googleapis.com",
-	"https://daily-cloudcode-pa.sandbox.googleapis.com",
-] as const;
+export const ANTIGRAVITY_PRIMARY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
+export const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const DEFAULT_ANTIGRAVITY_DISCOVERY_ENDPOINTS = [ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT] as const;
 const FETCH_AVAILABLE_MODELS_PATH = "/v1internal:fetchAvailableModels";
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -53,94 +56,78 @@ export interface AntigravityDiscoveryApiResponse {
 	models?: Record<string, AntigravityDiscoveryApiModel>;
 	agentModelSorts?: AntigravityDiscoveryAgentModelSort[];
 }
-const AntigravityDiscoveryApiModelSchema: z.ZodType<AntigravityDiscoveryApiModel> = z
-	.object({
-		displayName: z.preprocess(value => (typeof value === "string" ? value : undefined), z.string().optional()),
-		supportsImages: z.preprocess(value => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-		supportsThinking: z.preprocess(value => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-		thinkingBudget: z.preprocess(
-			value => (typeof value === "number" && Number.isFinite(value) ? value : undefined),
-			z.number().optional(),
-		),
-		recommended: z.preprocess(value => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-		maxTokens: z.preprocess(
-			value => (typeof value === "number" && Number.isFinite(value) ? value : undefined),
-			z.number().optional(),
-		),
-		maxOutputTokens: z.preprocess(
-			value => (typeof value === "number" && Number.isFinite(value) ? value : undefined),
-			z.number().optional(),
-		),
-		model: z.preprocess(value => (typeof value === "string" ? value : undefined), z.string().optional()),
-		apiProvider: z.preprocess(value => (typeof value === "string" ? value : undefined), z.string().optional()),
-		modelProvider: z.preprocess(value => (typeof value === "string" ? value : undefined), z.string().optional()),
-		isInternal: z.preprocess(value => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-		supportsVideo: z.preprocess(value => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-	})
-	.loose();
-const AntigravityDiscoveryAgentModelGroupSchema: z.ZodType<AntigravityDiscoveryAgentModelGroup> = z
-	.object({
-		modelIds: z.preprocess(
-			value =>
-				Array.isArray(value)
-					? value.filter((modelId): modelId is string => typeof modelId === "string")
-					: undefined,
-			z.array(z.string()).optional(),
-		),
-	})
-	.loose();
-const AntigravityDiscoveryAgentModelSortSchema: z.ZodType<AntigravityDiscoveryAgentModelSort> = z
-	.object({
-		groups: z.preprocess(
-			value => (Array.isArray(value) ? value : undefined),
-			z
-				.array(z.unknown())
-				.transform(groups =>
-					groups.flatMap(group => {
-						const parsedGroup = AntigravityDiscoveryAgentModelGroupSchema.safeParse(group);
-						return parsedGroup.success ? [parsedGroup.data] : [];
-					}),
-				)
-				.optional(),
-		),
-	})
-	.loose();
-const AntigravityDiscoveryApiResponseSchema: z.ZodType<AntigravityDiscoveryApiResponse> = z
-	.object({
-		models: z.preprocess(
-			value => (typeof value === "object" && value !== null ? value : undefined),
-			z
-				.record(z.string(), z.unknown())
-				.transform(models => {
-					const normalized: Record<string, AntigravityDiscoveryApiModel> = {};
-					for (const [modelId, modelValue] of Object.entries(models)) {
-						if (typeof modelValue !== "object" || modelValue === null) {
-							continue;
-						}
-						const parsedModel = AntigravityDiscoveryApiModelSchema.safeParse(modelValue);
-						if (parsedModel.success) {
-							normalized[modelId] = parsedModel.data;
-						}
-					}
-					return normalized;
-				})
-				.optional(),
-		),
-		agentModelSorts: z.preprocess(
-			value => (Array.isArray(value) ? value : undefined),
-			z
-				.array(z.unknown())
-				.transform(sorts =>
-					sorts.flatMap(sort => {
-						const parsedSort = AntigravityDiscoveryAgentModelSortSchema.safeParse(sort);
-						return parsedSort.success ? [parsedSort.data] : [];
-					}),
-				)
-				.optional(),
-		),
-	})
-	.loose();
+const AntigravityDiscoveryApiModelSchema = type({
+	"displayName?": type("unknown").pipe(value => (typeof value === "string" ? value : undefined)),
+	"supportsImages?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
+	"supportsThinking?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
+	"thinkingBudget?": type("unknown").pipe(value =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined,
+	),
+	"recommended?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
+	"maxTokens?": type("unknown").pipe(value =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined,
+	),
+	"maxOutputTokens?": type("unknown").pipe(value =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined,
+	),
+	"model?": type("unknown").pipe(value => (typeof value === "string" ? value : undefined)),
+	"apiProvider?": type("unknown").pipe(value => (typeof value === "string" ? value : undefined)),
+	"modelProvider?": type("unknown").pipe(value => (typeof value === "string" ? value : undefined)),
+	"isInternal?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
+	"supportsVideo?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
+});
 
+const AntigravityDiscoveryAgentModelGroupSchema = type({
+	"modelIds?": type("unknown").pipe(value =>
+		Array.isArray(value) ? value.filter((modelId): modelId is string => typeof modelId === "string") : undefined,
+	),
+});
+
+const AntigravityDiscoveryAgentModelSortSchema = type({
+	"groups?": type("unknown").pipe(value => {
+		if (!Array.isArray(value)) return undefined;
+		const result: AntigravityDiscoveryAgentModelGroup[] = [];
+		for (const group of value) {
+			const parsedGroup = AntigravityDiscoveryAgentModelGroupSchema(group);
+			if (!(parsedGroup instanceof type.errors)) {
+				result.push(parsedGroup);
+			}
+		}
+		return result;
+	}),
+});
+
+const AntigravityDiscoveryApiResponseSchema = type({
+	"models?": type("unknown").pipe(value => {
+		if (typeof value !== "object" || value === null) {
+			return undefined;
+		}
+		const normalized: Record<string, AntigravityDiscoveryApiModel> = {};
+		for (const [modelId, modelValue] of Object.entries(value)) {
+			if (typeof modelValue !== "object" || modelValue === null) {
+				continue;
+			}
+			const parsedModel = AntigravityDiscoveryApiModelSchema(modelValue);
+			if (!(parsedModel instanceof type.errors)) {
+				normalized[modelId] = parsedModel;
+			}
+		}
+		return normalized;
+	}),
+	"agentModelSorts?": type("unknown").pipe(value => {
+		if (!Array.isArray(value)) {
+			return undefined;
+		}
+		const result: AntigravityDiscoveryAgentModelSort[] = [];
+		for (const sort of value) {
+			const parsedSort = AntigravityDiscoveryAgentModelSortSchema(sort);
+			if (!(parsedSort instanceof type.errors)) {
+				result.push(parsedSort);
+			}
+		}
+		return result;
+	}),
+});
 /**
  * Options for fetching Antigravity discovery models.
  */
@@ -157,6 +144,12 @@ export interface FetchAntigravityDiscoveryModelsOptions {
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
 	fetcher?: typeof fetch;
+	/**
+	 * Hand collapse table to apply to the discovered list. Defaults to the
+	 * Antigravity (budget-transport) table; `googleGeminiCli` passes the
+	 * level-transport table so cloudcode-pa keeps `thinkingLevel`.
+	 */
+	collapseTable?: VariantCollapseTable;
 }
 
 /**
@@ -239,7 +232,7 @@ export async function fetchAntigravityDiscoveryModels(
 		// Collapse effort-tier variants at the source so runtime discovery,
 		// the gemini-cli re-provision, and the catalog generator all see
 		// logical ids only.
-		const collapsed = collapseEffortVariants(models, ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+		const collapsed = collapseEffortVariants(models, options.collapseTable ?? ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
 		collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 		return collapsed;
 	}
@@ -248,11 +241,11 @@ export async function fetchAntigravityDiscoveryModels(
 }
 
 function parseAntigravityDiscoveryResponse(value: unknown): AntigravityDiscoveryApiResponse | null {
-	const parsed = AntigravityDiscoveryApiResponseSchema.safeParse(value);
-	if (!parsed.success) {
+	const parsed = AntigravityDiscoveryApiResponseSchema(value);
+	if (parsed instanceof type.errors) {
 		return null;
 	}
-	return parsed.data;
+	return parsed;
 }
 
 function trimTrailingSlashes(value: string): string {

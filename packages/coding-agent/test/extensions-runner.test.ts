@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
@@ -600,6 +601,135 @@ describe("ExtensionRunner", () => {
 			expect(errors).toHaveLength(1);
 			expect(errors[0]?.event).toBe("after_provider_response");
 			expect(errors[0]?.error).toContain("response failed");
+		});
+	});
+
+	describe("session_stop", () => {
+		it("invokes handlers with completed main-session messages and returns continuation feedback", async () => {
+			const eventsPath = path.join(tempDir.path(), "session-stop-events.jsonl");
+			const extCode = `
+			import * as fs from "node:fs";
+
+			export default function(pi) {
+				pi.on("session_stop", async (event) => {
+					fs.appendFileSync(
+						${JSON.stringify(eventsPath)},
+						JSON.stringify({
+							type: event.type,
+							messages: event.messages,
+							turn_id: event.turn_id,
+							last_assistant_message: event.last_assistant_message,
+							session_id: event.session_id,
+							session_file: event.session_file,
+							stop_hook_active: event.stop_hook_active,
+						}) + "\\n",
+					);
+					return { continue: true, additionalContext: "Run one more pass." };
+				});
+			}
+		`;
+			await Bun.write(path.join(extensionsDir, "session-stop.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const completedMessage: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "main session finished" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 123,
+			};
+
+			const stopResult = await runner.emitSessionStop({
+				messages: [completedMessage],
+				turn_id: 2,
+				last_assistant_message: completedMessage,
+				session_id: "session-123",
+				session_file: "/tmp/session.jsonl",
+				stop_hook_active: false,
+			});
+
+			const events = (await Bun.file(eventsPath).text())
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(events).toEqual([
+				{
+					type: "session_stop",
+					messages: [completedMessage],
+					turn_id: 2,
+					last_assistant_message: completedMessage,
+					session_id: "session-123",
+					session_file: "/tmp/session.jsonl",
+					stop_hook_active: false,
+				},
+			]);
+			expect(stopResult).toEqual({ continue: true, additionalContext: "Run one more pass." });
+		});
+
+		it("continues to later handlers after empty continuation feedback", async () => {
+			await Bun.write(
+				path.join(extensionsDir, "session-stop-empty.ts"),
+				`
+				export default function(pi) {
+					pi.on("session_stop", async () => ({ continue: true }));
+					pi.on("session_stop", async () => ({ decision: "block", reason: "Continue from second handler." }));
+				}
+			`,
+			);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			const completedMessage: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "main session finished" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: 123,
+			};
+
+			await expect(
+				runner.emitSessionStop({
+					messages: [completedMessage],
+					turn_id: 0,
+					last_assistant_message: completedMessage,
+					session_id: "session-123",
+					session_file: "/tmp/session.jsonl",
+					stop_hook_active: false,
+				}),
+			).resolves.toEqual({ decision: "block", reason: "Continue from second handler." });
 		});
 	});
 
@@ -1219,6 +1349,54 @@ describe("ExtensionRunner", () => {
 
 			expect(runner.hasHandlers("tool_call")).toBe(true);
 			expect(runner.hasHandlers("agent_end")).toBe(false);
+		});
+	});
+
+	describe("zero-handler fast path", () => {
+		it("skips context allocation and handler machinery for an unsubscribed event type, but still fires when subscribed", async () => {
+			// The fast path in ExtensionRunner.emit is event-type agnostic; the hot
+			// streaming events (message_update / tool_execution_*) traverse the same
+			// path. `turn_start` stands in as a subscribed event with a trivial payload.
+			const extCode = `
+				export default function(pi) {
+					pi.on("turn_start", async () => {
+						throw new Error("turn_start handler ran");
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "turn-start-handler.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			// createContext is the per-event allocation the fast path defers; spying on
+			// it (call-through preserved) proves the slow path is entered only when a
+			// handler exists for the emitted event type.
+			const createContextSpy = vi.spyOn(runner, "createContext");
+			const errors: Array<{ event: string; error: string }> = [];
+			runner.onError(err => {
+				errors.push({ event: err.event, error: err.error });
+			});
+
+			// No extension subscribes to `agent_start`: no context allocation, and the
+			// handler-timeout machinery is never entered.
+			await runner.emit({ type: "agent_start" });
+			expect(createContextSpy).not.toHaveBeenCalled();
+			expect(errors).toHaveLength(0);
+
+			// `turn_start` has a handler: context is allocated once and the handler runs
+			// (its throw surfaces via onError, proving #runHandlerWithTimeout executed).
+			await runner.emit({ type: "turn_start", turnIndex: 0, timestamp: Date.now() });
+			expect(createContextSpy).toHaveBeenCalledTimes(1);
+			expect(errors).toHaveLength(1);
+			expect(errors[0]?.event).toBe("turn_start");
+			expect(errors[0]?.error).toContain("turn_start handler ran");
 		});
 	});
 

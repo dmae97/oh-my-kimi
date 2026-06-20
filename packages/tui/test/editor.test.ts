@@ -6,7 +6,6 @@ import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { setDefaultTabWidth } from "@oh-my-pi/pi-utils";
 import { defaultEditorTheme } from "./test-themes";
 
 describe("Editor component", () => {
@@ -419,13 +418,14 @@ describe("Editor component", () => {
 			expect(text).toBe("Hello äöü 😀");
 		});
 
-		it("inserts NumLock keypad digits instead of treating them as navigation", () => {
+		it("inserts keypad digits instead of treating them as navigation", () => {
 			const editor = new Editor(defaultEditorTheme);
 
 			editor.handleInput("a");
+			editor.handleInput("\x1b[57400u");
 			editor.handleInput("\x1b[57400;129u");
 
-			expect(editor.getText()).toBe("a1");
+			expect(editor.getText()).toBe("a11");
 		});
 
 		it("inserts a newline for Ctrl+Enter variants with NumLock or keypad Enter metadata", () => {
@@ -544,16 +544,10 @@ describe("Editor component", () => {
 			expect(text).toBe("Hällö Wörld! 😀 äöüÄÖÜß");
 		});
 
-		it("uses the configured tab width when loading text programmatically", () => {
+		it("expands tabs to the fixed display width when loading text programmatically", () => {
 			const editor = new Editor(defaultEditorTheme);
-
-			try {
-				setDefaultTabWidth(5);
-				editor.setText("foo\tbar");
-				expect(editor.getText()).toBe("foo     bar");
-			} finally {
-				setDefaultTabWidth(3);
-			}
+			editor.setText("foo\tbar");
+			expect(editor.getText()).toBe("foo   bar");
 		});
 
 		it("strips control characters from programmatically loaded text before render", () => {
@@ -1826,6 +1820,22 @@ describe("Editor component", () => {
 			// BEL (\x07) and NUL (\x00) must be removed; the newline must survive.
 			editor.handleInput("\x1b[200~a\x07b\x00c\ndef\x1b[201~");
 			expect(editor.getText()).toBe("abc\ndef");
+		});
+
+		it("decodes tmux xterm-format re-encoded control bytes in bracketed paste (kitty+tmux)", () => {
+			const editor = new Editor(defaultEditorTheme);
+			// tmux extended-keys-format=xterm (the default under kitty) re-encodes the
+			// newline (Ctrl+J) inside the paste as ESC[27;5;106~. It must land as a real
+			// newline, not leak the literal escape tail "[27;5;106~" into the buffer.
+			editor.handleInput("\x1b[200~line1\x1b[27;5;106~line2\x1b[201~");
+			expect(editor.getText()).toBe("line1\nline2");
+		});
+
+		it("decodes tmux csi-u-format re-encoded control bytes in bracketed paste", () => {
+			const editor = new Editor(defaultEditorTheme);
+			// tmux extended-keys-format=csi-u re-encodes the newline (Ctrl+J) as ESC[106;5u.
+			editor.handleInput("\x1b[200~line1\x1b[106;5uline2\x1b[201~");
+			expect(editor.getText()).toBe("line1\nline2");
 		});
 
 		it("undoes the last paste when a transient #undo trigger is executed", () => {

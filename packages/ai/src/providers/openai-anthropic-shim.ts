@@ -9,7 +9,7 @@
  */
 
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { ANTHROPIC_THINKING } from "../stream";
+import { ANTHROPIC_THINKING, mapAnthropicToolChoice } from "../stream";
 import type { Context, Model, ModelSpec, SimpleStreamOptions } from "../types";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { createProviderErrorMessage } from "./error-message";
@@ -72,7 +72,7 @@ export function streamOpenAIAnthropicShim(
 				} as ModelSpec<"anthropic-messages">);
 
 				const reasoningEffort = options?.reasoning;
-				const thinkingEnabled = !!reasoningEffort && model.reasoning;
+				const thinkingEnabled = !!reasoningEffort && model.reasoning && !options?.disableReasoning;
 				const thinkingBudget = reasoningEffort
 					? (options?.thinkingBudgets?.[reasoningEffort] ?? ANTHROPIC_THINKING[reasoningEffort])
 					: undefined;
@@ -95,6 +95,8 @@ export function streamOpenAIAnthropicShim(
 					fetch: options?.fetch,
 					thinkingEnabled,
 					thinkingBudgetTokens: thinkingBudget,
+					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
+					serviceTier: options?.serviceTier,
 				});
 
 				for await (const event of innerStream) {
@@ -128,6 +130,9 @@ export function streamOpenAIAnthropicShim(
 					onSseEvent: options?.onSseEvent,
 					fetch: options?.fetch,
 					reasoning: reasoningEffort,
+					toolChoice: options?.toolChoice,
+					serviceTier: options?.serviceTier,
+					disableReasoning: options?.disableReasoning,
 				});
 
 				for await (const event of innerStream) {

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [16.0.10] - 2026-06-18
+
+### Added
+
+- Added support for collab browser wrapper links whose web UI host differs from the relay host, so the connect screen joins the relay encoded in the URL fragment.
+
+## [16.0.5] - 2026-06-17
+
+### Fixed
+
+- Preserved assistant soft line breaks and Markdown paragraph/list indentation in the collab web transcript renderer so tree-shaped prose no longer collapses into one paragraph.
+- Changed collab web transcript wrapping to keep Korean/CJK words intact before falling back to emergency breaks for long URLs or identifiers.
+
+## [16.0.3] - 2026-06-16
+
+### Removed
+
+- Removed rendering support for the `render_mermaid` tool from the web tool registry
+
 ## [15.13.3] - 2026-06-15
 
 ### Fixed

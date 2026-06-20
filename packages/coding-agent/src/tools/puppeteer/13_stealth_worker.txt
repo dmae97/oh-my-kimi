@@ -50,7 +50,7 @@ const patchWorkerConstructor = (name, OriginalWorker) => {
 			}
 		},
 		apply(target, thisArg, args) {
-			return Reflect.apply(target, thisArg, args || []);
+			return Reflect_apply(target, thisArg, args || []);
 		},
 	};
 

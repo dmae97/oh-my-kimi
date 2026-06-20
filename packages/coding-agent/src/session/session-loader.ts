@@ -4,7 +4,7 @@ import { BlobStore, isBlobRef, resolveImageData, resolveImageDataUrl } from "./b
 import { buildSessionContext } from "./session-context";
 import type { FileEntry, SessionEntry, SessionHeader } from "./session-entries";
 import { migrateToCurrentVersion } from "./session-migrations";
-import { isImageBlock } from "./session-persistence";
+import { isImageBlock, isImageDataPayload } from "./session-persistence";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
 
 /** Exported for compaction.test.ts */
@@ -44,9 +44,19 @@ function hasImageUrl(value: unknown): value is { image_url: string } {
 	return typeof value === "object" && value !== null && "image_url" in value && typeof value.image_url === "string";
 }
 
-async function resolvePersistedImageUrlRefs(value: unknown, blobStore: BlobStore): Promise<void> {
+function shouldResolveImagePayload(value: unknown, key: string | undefined): value is { data: string } {
+	if (!isImageDataPayload(value) || !isBlobRef(value.data)) return false;
+	return (key === "content" && isImageBlock(value)) || key === "images";
+}
+
+async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, key?: string): Promise<void> {
+	if (shouldResolveImagePayload(value, key)) {
+		value.data = await resolveImageData(blobStore, value.data);
+		return;
+	}
+
 	if (Array.isArray(value)) {
-		await Promise.all(value.map(item => resolvePersistedImageUrlRefs(item, blobStore)));
+		await Promise.all(value.map(item => resolvePersistedBlobRefs(item, blobStore, key)));
 		return;
 	}
 
@@ -56,38 +66,15 @@ async function resolvePersistedImageUrlRefs(value: unknown, blobStore: BlobStore
 		value.image_url = await resolveImageDataUrl(blobStore, value.image_url);
 	}
 
-	await Promise.all(Object.values(value).map(item => resolvePersistedImageUrlRefs(item, blobStore)));
+	await Promise.all(
+		Object.entries(value).map(([childKey, item]) => resolvePersistedBlobRefs(item, blobStore, childKey)),
+	);
 }
 
 export async function resolveBlobRefsInEntries(entries: FileEntry[], blobStore: BlobStore): Promise<void> {
-	const promises: Promise<void>[] = [];
-
-	for (const entry of entries) {
-		if (entry.type === "session") continue;
-
-		let contentArray: unknown[] | undefined;
-		if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-			contentArray = entry.message.content;
-		} else if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-			contentArray = entry.content;
-		}
-
-		if (contentArray) {
-			for (const block of contentArray) {
-				if (isImageBlock(block) && isBlobRef(block.data)) {
-					promises.push(
-						resolveImageData(blobStore, block.data).then(resolved => {
-							block.data = resolved;
-						}),
-					);
-				}
-			}
-		}
-
-		promises.push(resolvePersistedImageUrlRefs(entry, blobStore));
-	}
-
-	await Promise.all(promises);
+	await Promise.all(
+		entries.filter(entry => entry.type !== "session").map(entry => resolvePersistedBlobRefs(entry, blobStore)),
+	);
 }
 
 /**

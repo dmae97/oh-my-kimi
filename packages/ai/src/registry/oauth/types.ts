@@ -9,6 +9,7 @@ export type OAuthCredentials = {
 	projectId?: string;
 	email?: string;
 	accountId?: string;
+	apiEndpoint?: string;
 };
 
 export type OAuthProvider = OAuthProviderUnion;
@@ -30,6 +31,12 @@ export interface OAuthProviderInfo {
 	id: OAuthProviderId;
 	name: string;
 	available: boolean;
+	/**
+	 * Provider id the login stores credentials under, when it differs from `id`
+	 * (e.g. `openai-codex-device` ⇒ `openai-codex`). Lets callers map a login
+	 * entry back to the model provider it authenticates.
+	 */
+	storeCredentialsAs?: string;
 }
 
 export interface OAuthController {

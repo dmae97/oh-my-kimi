@@ -44,6 +44,26 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
+function pythonCommandPrefixLength(trimmedText: string): 0 | 1 | 2 {
+	if (trimmedText.charCodeAt(0) !== 36 /* $ */) return 0;
+	if (trimmedText.charCodeAt(1) === 123 /* { */) return 0;
+
+	const prefixLength = trimmedText.charCodeAt(1) === 36 /* $ */ ? 2 : 1;
+	const next = trimmedText.charCodeAt(prefixLength);
+	if (Number.isNaN(next)) return prefixLength;
+	return next === 32 || next === 9 || next === 10 || next === 13 ? prefixLength : 0;
+}
+
+function parsePythonCommandInput(text: string): { code: string; isExcluded: boolean } | undefined {
+	const trimmed = text.trimStart();
+	const prefixLength = pythonCommandPrefixLength(trimmed);
+	if (prefixLength === 0) return undefined;
+	return {
+		code: trimmed.slice(prefixLength).trim(),
+		isExcluded: prefixLength === 2,
+	};
+}
+
 /** Wrap pasted text in `<attachment>` tags so the model treats it as one quoted block. */
 function wrapPasteInAttachmentBlock(content: string): string {
 	return `<attachment>\n${content}\n</attachment>`;
@@ -78,6 +98,7 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#focusedLeftTapListenerInstalled = false;
+	#btwBranchListenerInstalled = false;
 	// Tap counter for the double-← gesture; reset whenever a quiet gap
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
@@ -140,6 +161,16 @@ export class InputController {
 				if (!matchesKey(data, "left")) return undefined;
 				if (this.ctx.editor.getText().trim()) return undefined;
 				this.#handleFocusedLeftTap();
+				return { consume: true };
+			});
+		}
+		if (!this.#btwBranchListenerInstalled) {
+			this.#btwBranchListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!matchesKey(data, "b")) return undefined;
+				if (!this.ctx.canBranchBtw()) return undefined;
+				if (this.ctx.editor.getText().trim()) return undefined;
+				void this.ctx.handleBtwBranchKey();
 				return { consume: true };
 			});
 		}
@@ -304,6 +335,8 @@ export class InputController {
 		this.ctx.editor.onExpandTools = () => this.toggleToolOutputExpansion();
 		this.ctx.editor.setActionKeys("app.message.dequeue", this.ctx.keybindings.getKeys("app.message.dequeue"));
 		this.ctx.editor.onDequeue = () => this.handleDequeue();
+		this.ctx.editor.setActionKeys("app.retry", this.ctx.keybindings.getKeys("app.retry"));
+		this.ctx.editor.onRetry = () => void this.handleRetry();
 		this.ctx.editor.clearCustomKeyHandlers();
 		// Wire up extension shortcuts
 		this.registerExtensionShortcuts();
@@ -368,8 +401,8 @@ export class InputController {
 			const wasBashMode = this.ctx.isBashMode;
 			const wasPythonMode = this.ctx.isPythonMode;
 			const trimmed = text.trimStart();
-			this.ctx.isBashMode = text.trimStart().startsWith("!");
-			this.ctx.isPythonMode = trimmed.startsWith("$") && !trimmed.startsWith("${");
+			this.ctx.isBashMode = trimmed.startsWith("!");
+			this.ctx.isPythonMode = pythonCommandPrefixLength(trimmed) > 0;
 			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
 				this.ctx.updateEditorBorderColor();
 			}
@@ -537,7 +570,7 @@ export class InputController {
 					this.ctx.editor.setText("");
 					return;
 				}
-				if (text.startsWith("!") || text.startsWith("$")) {
+				if (text.startsWith("!") || parsePythonCommandInput(text)) {
 					this.ctx.showStatus("Local execution is host-only during a collab session");
 					this.ctx.editor.setText("");
 					return;
@@ -585,10 +618,11 @@ export class InputController {
 				}
 			}
 
-			// Handle python command ($ for normal, $$ for excluded from context)
-			if (text.startsWith("$")) {
-				const isExcluded = text.startsWith("$$");
-				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
+			// Handle python command (`$ <code>` for normal, `$$ <code>` for excluded from context).
+			// Shell-style variables such as `$HOME` are normal prose unless a space follows the sigil.
+			const pythonCommand = parsePythonCommandInput(text);
+			if (pythonCommand) {
+				const { code, isExcluded } = pythonCommand;
 				if (code) {
 					if (this.ctx.session.isEvalRunning) {
 						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
@@ -708,21 +742,25 @@ export class InputController {
 				// No input waiter: the main loop is between turns (post-turn
 				// epilogue, retry backoff, or a scheduled continue) with the agent
 				// momentarily idle. The editor already cleared itself on Enter, so
-				// falling through here would silently swallow the message. Queue it
-				// as a steer instead: the idle drain in #queueSteer delivers it
-				// immediately when the session is resumable, and a retry/continue
-				// run picks it up at loop start otherwise.
+				// falling through here would silently swallow the message. Submit a
+				// real prompt directly; if a background turn starts in the gap,
+				// `streamingBehavior: "steer"` preserves the typed-message queueing
+				// semantics instead of throwing AgentBusyError.
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
 				this.ctx.pendingImages = [];
 				this.ctx.pendingImageLinks = [];
 				try {
-					await this.ctx.withLocalSubmission(text, () => this.ctx.session.steer(text, images), {
-						imageCount: images?.length ?? 0,
-					});
+					await this.ctx.withLocalSubmission(
+						text,
+						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						{
+							imageCount: images?.length ?? 0,
+						},
+					);
 				} catch (error) {
 					// Don't lose the message: hand the text and images back to the
-					// editor so the user can retry (e.g. steer() rejecting an
+					// editor so the user can retry (e.g. prompt dispatch rejecting an
 					// extension command).
 					this.ctx.editor.setText(text);
 					if (images && images.length > 0) {
@@ -751,7 +789,7 @@ export class InputController {
 			}
 			return;
 		}
-		if (text.startsWith("/") || text.startsWith("!") || text.startsWith("$")) {
+		if (text.startsWith("/") || text.startsWith("!") || parsePythonCommandInput(text)) {
 			this.ctx.showStatus("Commands run in the main session — press ←← to return first");
 			return; // editor text not cleared: Editor does not auto-clear on submit
 		}
@@ -921,6 +959,22 @@ export class InputController {
 		return true;
 	}
 
+	async handleRetry(): Promise<void> {
+		if (this.ctx.collabGuest) {
+			this.ctx.showStatus("/retry is host-only during a collab session");
+			return;
+		}
+		const didRetry = await this.ctx.viewSession.retry();
+		if (didRetry) {
+			this.ctx.editor.setText("");
+			this.ctx.pendingImages = [];
+			this.ctx.pendingImageLinks = [];
+			this.ctx.editor.imageLinks = undefined;
+		} else {
+			this.ctx.showStatus("Nothing to retry");
+		}
+	}
+
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
 		let text = this.ctx.editor.getText().trim();
@@ -994,7 +1048,9 @@ export class InputController {
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		this.ctx.locallySubmittedUserSignatures.clear();
-		const { steering, followUp } = this.ctx.session.clearQueue();
+		// On Esc (abort) drop non-user internal steers so the post-abort drain can't
+		// auto-resume; plain Alt+Up dequeue preserves them for the continuing stream.
+		const { steering, followUp } = this.ctx.session.clearQueue({ forInterrupt: options?.abort });
 		// Messages typed while compacting live in `compactionQueuedMessages`, not the
 		// agent queue `clearQueue()` drains — but the pending bar shows the same
 		// "Alt+Up to edit" hint for them (ui-helpers `updatePendingMessagesDisplay`).
@@ -1473,7 +1529,6 @@ export class InputController {
 		for (const child of this.ctx.chatContainer.children) {
 			if (child instanceof AssistantMessageComponent) {
 				child.setHideThinkingBlock(this.ctx.hideThinkingBlock);
-				child.invalidate();
 			}
 		}
 
@@ -1481,6 +1536,14 @@ export class InputController {
 			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.hideThinkingBlock);
 			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 		}
+
+		// Every block now carries the new flag, but on ED3-risk terminals the
+		// blocks that scrolled past the live region are frozen snapshots in
+		// committed scrollback — a plain repaint replays them stale, so scrolling
+		// up still shows the old thinking expanded. resetDisplay() retires those
+		// snapshots (it invalidates every block) and forces a full clear + replay
+		// of the whole transcript, matching setToolsExpanded()'s redraw.
+		this.ctx.ui.resetDisplay();
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}

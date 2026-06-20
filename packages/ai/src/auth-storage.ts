@@ -21,6 +21,8 @@ import type { Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
+	UsageCostHistoryEntry,
+	UsageCostHistoryQuery,
 	UsageCredential,
 	UsageFetchContext,
 	UsageFetchParams,
@@ -44,6 +46,7 @@ import {
 	consumeCodexResetCredit,
 	listCodexResetCredits,
 } from "./usage/openai-codex-reset";
+import { opencodeGoUsageProvider } from "./usage/opencode-go";
 import { zaiUsageProvider } from "./usage/zai";
 
 const USAGE_RANKING_METRIC_EPSILON = 1e-9;
@@ -191,6 +194,7 @@ export type CompletionProbeCredential =
 			projectId?: string;
 			email?: string;
 			enterpriseUrl?: string;
+			apiEndpoint?: string;
 	  };
 
 /**
@@ -299,6 +303,10 @@ export interface AuthCredentialStore {
 	 * skipped — the broker host records into its own database instead.
 	 */
 	recordUsageSnapshots?(entries: UsageHistoryEntry[]): void;
+	/** Append observed request costs for providers without upstream usage APIs. */
+	recordUsageCosts?(entries: UsageCostHistoryEntry[]): void;
+	/** Read observed request costs, oldest first. */
+	listUsageCosts?(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[];
 	/** Read recorded usage-limit snapshots, oldest first. */
 	listUsageHistory?(query?: UsageHistoryQuery): UsageHistoryEntry[];
 	/**
@@ -490,6 +498,7 @@ const DEFAULT_USAGE_PROVIDERS: UsageProvider[] = [
 	googleGeminiCliUsageProvider,
 	claudeUsageProvider,
 	zaiUsageProvider,
+	opencodeGoUsageProvider,
 	githubCopilotUsageProvider,
 ];
 
@@ -638,6 +647,7 @@ export interface OAuthAccess {
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	apiEndpoint?: string;
 }
 
 export interface OAuthAccessFailure {
@@ -646,6 +656,7 @@ export interface OAuthAccessFailure {
 	email?: string;
 	projectId?: string;
 	enterpriseUrl?: string;
+	apiEndpoint?: string;
 	error: string;
 }
 
@@ -1341,6 +1352,19 @@ export class AuthStorage {
 		const sessionMap = this.#sessionLastCredential.get(provider) ?? new Map();
 		sessionMap.set(sessionId, { type, index });
 		this.#sessionLastCredential.set(provider, sessionMap);
+
+		try {
+			const credentialId = this.#getStoredCredentials(provider)[index]?.id;
+			if (credentialId !== undefined) {
+				const cacheKey = `session:sticky:${provider}:${sessionId}`;
+				const cacheValue = JSON.stringify({ type, index, credentialId });
+				// Expires in 30 days
+				const expiresAtSec = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+				this.#store.setCache(cacheKey, cacheValue, expiresAtSec);
+			}
+		} catch (err) {
+			logger.debug("Failed to write session sticky credential to persistent store cache", { err });
+		}
 	}
 
 	/** Retrieves the last credential used by a session. */
@@ -1349,17 +1373,59 @@ export class AuthStorage {
 		sessionId: string | undefined,
 	): { type: AuthCredential["type"]; index: number } | undefined {
 		if (!sessionId) return undefined;
-		return this.#sessionLastCredential.get(provider)?.get(sessionId);
+		let sessionMap = this.#sessionLastCredential.get(provider);
+		if (sessionMap?.has(sessionId)) {
+			return sessionMap.get(sessionId);
+		}
+		try {
+			const cacheKey = `session:sticky:${provider}:${sessionId}`;
+			const raw = this.#store.getCache(cacheKey);
+			if (raw) {
+				const val = JSON.parse(raw) as { type: AuthCredential["type"]; index: number; credentialId?: number };
+
+				if (val.credentialId !== undefined) {
+					const stored = this.#getStoredCredentials(provider);
+					const actualIndex = stored.findIndex(entry => entry.id === val.credentialId);
+					if (actualIndex === -1 || stored[actualIndex]?.credential.type !== val.type) {
+						this.#store.setCache(cacheKey, "", 0);
+						return undefined;
+					}
+					val.index = actualIndex;
+				} else {
+					// Fallback: drop unsafe index-only cache rows to prevent wrong-account routing
+					this.#store.setCache(cacheKey, "", 0);
+					return undefined;
+				}
+
+				if (!sessionMap) {
+					sessionMap = new Map();
+					this.#sessionLastCredential.set(provider, sessionMap);
+				}
+				const sessionVal = { type: val.type, index: val.index };
+				sessionMap.set(sessionId, sessionVal);
+				return sessionVal;
+			}
+		} catch (err) {
+			logger.debug("Failed to read session sticky credential from persistent store cache", { err });
+		}
+		return undefined;
 	}
 
 	/** Clears the last credential used by a session for a provider. */
 	#clearSessionCredential(provider: string, sessionId: string | undefined): void {
 		if (!sessionId) return;
 		const sessionMap = this.#sessionLastCredential.get(provider);
-		if (!sessionMap) return;
-		sessionMap.delete(sessionId);
-		if (sessionMap.size === 0) {
-			this.#sessionLastCredential.delete(provider);
+		if (sessionMap) {
+			sessionMap.delete(sessionId);
+			if (sessionMap.size === 0) {
+				this.#sessionLastCredential.delete(provider);
+			}
+		}
+		try {
+			const cacheKey = `session:sticky:${provider}:${sessionId}`;
+			this.#store.setCache(cacheKey, "", 0);
+		} catch (err) {
+			logger.debug("Failed to clear session sticky credential from persistent store cache", { err });
 		}
 	}
 
@@ -1512,17 +1578,6 @@ export class AuthStorage {
 		this.#resetProviderAssignments(provider);
 	}
 
-	async #upsertOAuthCredential(provider: string, credential: OAuthCredential): Promise<void> {
-		const stored = this.#store.upsertAuthCredentialRemote
-			? await this.#store.upsertAuthCredentialRemote(provider, credential)
-			: this.#store.upsertAuthCredentialForProvider(provider, credential);
-		this.#setStoredCredentials(
-			provider,
-			stored.map(record => ({ id: record.id, credential: record.credential })),
-		);
-		this.#resetProviderAssignments(provider);
-	}
-
 	/**
 	 * List stored credential rows, optionally filtered by provider.
 	 */
@@ -1547,6 +1602,17 @@ export class AuthStorage {
 			}
 		}
 		return rows;
+	}
+
+	async #upsertOAuthCredential(provider: string, credential: OAuthCredential): Promise<void> {
+		const stored = this.#store.upsertAuthCredentialRemote
+			? await this.#store.upsertAuthCredentialRemote(provider, credential)
+			: this.#store.upsertAuthCredentialForProvider(provider, credential);
+		this.#setStoredCredentials(
+			provider,
+			stored.map(entry => ({ id: entry.id, credential: entry.credential })),
+		);
+		this.#resetProviderAssignments(provider);
 	}
 
 	/**
@@ -1786,6 +1852,9 @@ export class AuthStorage {
 			return;
 		}
 		const newCredential: OAuthCredential = { type: "oauth", ...result };
+		// Use #upsertOAuthCredential to upsert the new credential.
+		// Any legacy api_key rows from older versions will be cleaned up so they do not
+		// shadow the new OAuth row, while preserving other active OAuth credentials.
 		await this.#upsertOAuthCredential(def.storeCredentialsAs ?? provider, newCredential);
 	}
 
@@ -1811,6 +1880,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1889,6 +1959,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1912,6 +1983,7 @@ export class AuthStorage {
 			projectId: credential.projectId,
 			email: credential.email,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -1925,6 +1997,7 @@ export class AuthStorage {
 			projectId: refreshed.projectId ?? credential.projectId,
 			email: refreshed.email ?? credential.email,
 			enterpriseUrl: refreshed.enterpriseUrl ?? credential.enterpriseUrl,
+			apiEndpoint: refreshed.apiEndpoint ?? credential.apiEndpoint,
 		};
 	}
 
@@ -1972,6 +2045,7 @@ export class AuthStorage {
 			projectId: next.projectId,
 			email: next.email,
 			enterpriseUrl: next.enterpriseUrl,
+			apiEndpoint: next.apiEndpoint,
 		});
 	}
 
@@ -1986,7 +2060,11 @@ export class AuthStorage {
 			typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
 				? AbortSignal.timeout(timeoutMs)
 				: undefined;
-		let params: UsageRequestDescriptor & { signal?: AbortSignal } = { ...request, signal: timeoutSignal };
+		let params: UsageFetchParams = {
+			...request,
+			accountKey: this.#buildUsageCacheIdentity(request.credential),
+			signal: timeoutSignal,
+		};
 
 		if (
 			request.credential.type === "oauth" &&
@@ -2009,8 +2087,10 @@ export class AuthStorage {
 					const refreshedCredential = this.#mergeRefreshedUsageCredential(request.credential, refreshed);
 					this.#persistRefreshedUsageCredential(request.provider, request.credential, refreshedCredential);
 					params = {
-						...params,
+						...request,
 						credential: refreshedCredential,
+						accountKey: this.#buildUsageCacheIdentity(refreshedCredential),
+						signal: timeoutSignal,
 					};
 				} catch (error) {
 					const errorMsg = String(error);
@@ -2068,6 +2148,7 @@ export class AuthStorage {
 			return await providerImpl.fetchUsage(params, {
 				fetch: this.#usageFetch,
 				logger: this.#usageLogger,
+				listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
 			});
 		} catch (error) {
 			logger.debug("AuthStorage usage fetch failed", {
@@ -2164,6 +2245,64 @@ export class AuthStorage {
 	 */
 	listUsageHistory(query?: UsageHistoryQuery): UsageHistoryEntry[] {
 		return this.#store.listUsageHistory?.(query) ?? [];
+	}
+
+	/** Record one observed provider request cost for later local usage aggregation. */
+	recordUsageCost(
+		provider: Provider,
+		costUsd: number,
+		options?: { sessionId?: string; recordedAt?: number; baseUrl?: string },
+	): boolean {
+		if (!Number.isFinite(costUsd) || costUsd <= 0) return false;
+		const record = this.#store.recordUsageCosts;
+		if (!record) return false;
+		const credential = this.#resolveObservedUsageCredential(provider, options?.sessionId);
+		if (!credential) return false;
+		const entry: UsageCostHistoryEntry = {
+			recordedAt: options?.recordedAt ?? Date.now(),
+			provider,
+			accountKey: this.#buildUsageCacheIdentity(credential),
+			costUsd,
+		};
+		try {
+			record.call(this.#store, [entry]);
+			const cacheKey = this.#buildUsageReportCacheKey({
+				provider,
+				credential,
+				baseUrl: options?.baseUrl,
+			});
+			const existing = this.#usageCache.getStale<UsageReport | null>(cacheKey);
+			this.#usageCache.set(cacheKey, { value: existing?.value ?? null, expiresAt: Date.now() - 1 });
+			return true;
+		} catch (error) {
+			this.#usageLogger?.debug("usage cost record failed", {
+				provider,
+				error: String(error),
+			});
+			return false;
+		}
+	}
+
+	#resolveObservedUsageCredential(provider: Provider, sessionId?: string): UsageCredential | undefined {
+		const entries = this.#getStoredCredentials(provider);
+		const sessionCredential = this.#getSessionCredential(provider, sessionId);
+		if (sessionCredential) {
+			const credential = entries[sessionCredential.index]?.credential;
+			if (credential) {
+				return credential.type === "api_key"
+					? { type: "api_key", apiKey: credential.key }
+					: this.#buildUsageCredential(credential);
+			}
+		}
+		if (entries.length === 1) {
+			const credential = entries[0]!.credential;
+			return credential.type === "api_key"
+				? { type: "api_key", apiKey: credential.key }
+				: this.#buildUsageCredential(credential);
+		}
+		const envKey = getEnvApiKey(provider);
+		if (envKey) return { type: "api_key", apiKey: envKey };
+		return undefined;
 	}
 
 	ingestUsageHeaders(
@@ -2574,7 +2713,11 @@ export class AuthStorage {
 		const timeoutMs = options?.timeoutMs ?? this.#usageRequestTimeoutMs;
 		const completionProbe = options?.completionProbe;
 		const completionTimeoutMs = options?.completionTimeoutMs ?? timeoutMs;
-		const ctx: UsageFetchContext = { fetch: this.#usageFetch, logger: this.#usageLogger };
+		const ctx: UsageFetchContext = {
+			fetch: this.#usageFetch,
+			logger: this.#usageLogger,
+			listUsageCosts: query => this.#store.listUsageCosts?.(query) ?? [],
+		};
 
 		const results: CredentialHealthResult[] = [];
 		for (const row of stored) {
@@ -2600,7 +2743,11 @@ export class AuthStorage {
 
 			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const probeSignal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-			let params: UsageFetchParams & { signal: AbortSignal } = { ...initialRequest, signal: probeSignal };
+			let params: UsageFetchParams & { signal: AbortSignal } = {
+				...initialRequest,
+				accountKey: this.#buildUsageCacheIdentity(initialRequest.credential),
+				signal: probeSignal,
+			};
 			let refreshError: string | undefined;
 
 			// Refresh expired OAuth before probing — without this an expired access
@@ -2630,7 +2777,11 @@ export class AuthStorage {
 							initialRequest.credential,
 							refreshedCredential,
 						);
-						params = { ...params, credential: refreshedCredential };
+						params = {
+							...params,
+							credential: refreshedCredential,
+							accountKey: this.#buildUsageCacheIdentity(refreshedCredential),
+						};
 					} catch (error) {
 						refreshError = `oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`;
 					}
@@ -2651,6 +2802,8 @@ export class AuthStorage {
 				base.reason = `no usage probe configured for provider ${row.provider}`;
 			} else if (providerImpl.supports && !providerImpl.supports(initialRequest)) {
 				base.reason = `usage probe does not support ${cred.type} credentials for ${row.provider}`;
+			} else if (providerImpl.validatesCredentials === false) {
+				base.reason = `usage probe for ${row.provider} does not validate credentials`;
 			} else {
 				try {
 					const report = await providerImpl.fetchUsage(params, ctx);
@@ -3392,6 +3545,7 @@ export class AuthStorage {
 				email: result.newCredentials.email ?? selection.credential.email,
 				projectId: result.newCredentials.projectId ?? selection.credential.projectId,
 				enterpriseUrl: result.newCredentials.enterpriseUrl ?? selection.credential.enterpriseUrl,
+				apiEndpoint: result.newCredentials.apiEndpoint ?? selection.credential.apiEndpoint,
 			};
 			this.#replaceCredentialAt(provider, selection.index, updated);
 			if ((checkUsage && !allowBlocked) || requiresProModel) {
@@ -3518,6 +3672,7 @@ export class AuthStorage {
 					return JSON.stringify({
 						token: oauthSelection.credential.access,
 						enterpriseUrl: oauthSelection.credential.enterpriseUrl,
+						apiEndpoint: oauthSelection.credential.apiEndpoint,
 					});
 				}
 				return oauthSelection.credential.access;
@@ -3615,6 +3770,7 @@ export class AuthStorage {
 			email: credential.email,
 			projectId: credential.projectId,
 			enterpriseUrl: credential.enterpriseUrl,
+			apiEndpoint: credential.apiEndpoint,
 		};
 	}
 
@@ -4075,6 +4231,7 @@ export class AuthStorage {
 				email: refreshed.email ?? target.credential.email,
 				projectId: refreshed.projectId ?? target.credential.projectId,
 				enterpriseUrl: refreshed.enterpriseUrl ?? target.credential.enterpriseUrl,
+				apiEndpoint: refreshed.apiEndpoint ?? target.credential.apiEndpoint,
 			};
 			this.#replaceCredentialAt(provider, index, updated);
 			return {
@@ -4405,6 +4562,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#upsertCacheStmt: Statement;
 	#deleteExpiredCacheStmt: Statement;
 	#insertUsageHistoryStmt: Statement;
+	#insertUsageCostStmt: Statement;
+	#listUsageCostsStmt: Statement;
 	#lastUsageHistoryStmt: Statement;
 	#listUsageHistoryStmt: Statement;
 	#updateUsageHistoryStmt: Statement;
@@ -4458,6 +4617,12 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 		this.#listUsageHistoryStmt = this.#db.prepare(
 			"SELECT recorded_at, provider, account_key, email, account_id, limit_id, label, window_label, used_fraction, status, resets_at FROM usage_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) ORDER BY recorded_at ASC",
+		);
+		this.#insertUsageCostStmt = this.#db.prepare(
+			"INSERT INTO usage_cost_history (recorded_at, provider, account_key, cost_usd) VALUES (?, ?, ?, ?)",
+		);
+		this.#listUsageCostsStmt = this.#db.prepare(
+			"SELECT recorded_at, provider, account_key, cost_usd FROM usage_cost_history WHERE recorded_at >= ? AND (? IS NULL OR provider = ?) AND (? IS NULL OR account_key = ?) ORDER BY recorded_at ASC",
 		);
 	}
 
@@ -4539,6 +4704,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				resets_at INTEGER
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_series ON usage_history(provider, account_key, limit_id, recorded_at);
+			CREATE TABLE IF NOT EXISTS usage_cost_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				recorded_at INTEGER NOT NULL,
+				provider TEXT NOT NULL,
+				account_key TEXT NOT NULL,
+				cost_usd REAL NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_usage_cost_history_lookup ON usage_cost_history(provider, account_key, recorded_at);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
 		`);
 
@@ -4569,25 +4742,47 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#authCredentialsTableExists(): boolean {
-		const row = this.#db
-			.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'auth_credentials'")
-			.get() as { present?: number } | undefined;
-		return row?.present === 1;
+		const stmt = this.#db.prepare(
+			"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'auth_credentials'",
+		);
+		try {
+			const row = stmt.get() as { present?: number } | undefined;
+			return row?.present === 1;
+		} finally {
+			stmt.finalize();
+		}
 	}
 
 	#readAuthSchemaVersion(): number | null {
-		const row = this.#db.prepare("SELECT version FROM auth_schema_version WHERE id = 1").get() as
-			| { version?: number }
-			| undefined;
-		return typeof row?.version === "number" ? row.version : null;
+		const stmt = this.#db.prepare("SELECT version FROM auth_schema_version WHERE id = 1");
+		try {
+			const row = stmt.get() as { version?: number } | undefined;
+			return typeof row?.version === "number" ? row.version : null;
+		} finally {
+			stmt.finalize();
+		}
 	}
 
 	#writeAuthSchemaVersion(version: number): void {
-		this.#db.prepare("INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, ?)").run(version);
+		const stmt = this.#db.prepare("INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, ?)");
+		try {
+			stmt.run(version);
+		} finally {
+			stmt.finalize();
+		}
 	}
 
 	#inferAuthSchemaVersion(): number {
-		const cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
+		const stmt = this.#db.prepare("PRAGMA table_info(auth_credentials)");
+		try {
+			const cols = stmt.all() as Array<{ name?: string }>;
+			return this.#inferAuthSchemaVersionFromColumns(cols);
+		} finally {
+			stmt.finalize();
+		}
+	}
+
+	#inferAuthSchemaVersionFromColumns(cols: Array<{ name?: string }>): number {
 		const hasDisabledCause = cols.some(column => column.name === "disabled_cause");
 		const hasIdentityKey = cols.some(column => column.name === "identity_key");
 		const hasAccountId = cols.some(column => column.name === "account_id");
@@ -4635,8 +4830,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	#migrateAuthSchemaV0ToV1(): void {
 		const migrate = this.#db.transaction(() => {
-			const v0Cols = this.#db.prepare("PRAGMA table_info(auth_credentials)").all() as Array<{ name?: string }>;
-			const hasDisabled = v0Cols.some(col => col.name === "disabled");
+			const stmt = this.#db.prepare("PRAGMA table_info(auth_credentials)");
+			let hasDisabled = false;
+			try {
+				const v0Cols = stmt.all() as Array<{ name?: string }>;
+				hasDisabled = v0Cols.some(col => col.name === "disabled");
+			} finally {
+				stmt.finalize();
+			}
 
 			this.#db.run("ALTER TABLE auth_credentials RENAME TO auth_credentials_v0");
 			this.#db.run(`
@@ -4712,21 +4913,29 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#backfillCredentialIdentityKeys(): void {
-		const rows = this.#db
-			.prepare(
-				"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE identity_key IS NULL ORDER BY id ASC",
-			)
-			.all() as AuthRow[];
+		const selectRowsStmt = this.#db.prepare(
+			"SELECT id, provider, credential_type, data, disabled_cause, identity_key FROM auth_credentials WHERE identity_key IS NULL ORDER BY id ASC",
+		);
+		let rows: AuthRow[];
+		try {
+			rows = selectRowsStmt.all() as AuthRow[];
+		} finally {
+			selectRowsStmt.finalize();
+		}
 		if (rows.length === 0) return;
 
 		let updateIdentity: Statement | null = null;
-		for (const row of rows) {
-			const identityKey = resolveRowCredentialIdentityKey(row.provider, row);
-			// Rows whose identity cannot be derived stay NULL; writing NULL over
-			// NULL would just burn a write transaction on every boot.
-			if (identityKey === null) continue;
-			updateIdentity ??= this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
-			updateIdentity.run(identityKey, row.id);
+		try {
+			for (const row of rows) {
+				const identityKey = resolveRowCredentialIdentityKey(row.provider, row);
+				// Rows whose identity cannot be derived stay NULL; writing NULL over
+				// NULL would just burn a write transaction on every boot.
+				if (identityKey === null) continue;
+				updateIdentity ??= this.#db.prepare("UPDATE auth_credentials SET identity_key = ? WHERE id = ?");
+				updateIdentity.run(identityKey, row.id);
+			}
+		} finally {
+			updateIdentity?.finalize();
 		}
 	}
 
@@ -4809,6 +5018,14 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				identityKey: resolveRowCredentialIdentityKey(providerName, row),
 			}));
 
+			if (item.type === "oauth") {
+				for (const row of existing) {
+					if (row.credential && row.credential.type === "api_key") {
+						this.#deleteStmt.run("replaced by oauth login", row.id);
+					}
+				}
+			}
+
 			let targetId: number | null = null;
 			for (const row of existing) {
 				if (!matchesReplacementCredential(providerName, row.credential, row.identityKey, item)) continue;
@@ -4846,21 +5063,30 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	/**
-	 * Hard-deletes disabled rows for a provider when an active row with the same identity exists.
-	 * This prevents unbounded accumulation of soft-deleted credentials while preserving
-	 * disabled rows that have no active replacement (safety net for recovery).
+	 * Hard-deletes disabled rows for a provider when an active replacement exists.
+	 * OAuth credentials match by identity key; API keys match by provider and type.
+	 * Disabled rows without an active same-type replacement remain recoverable.
 	 */
 	#purgeSupersededDisabledRows(provider: string, activeRows: StoredAuthCredential[]): void {
 		try {
+			let hasActiveApiKey = false;
 			const activeIdentityKeys = new Set<string>();
 			for (const row of activeRows) {
+				if (row.credential.type === "api_key") {
+					hasActiveApiKey = true;
+					continue;
+				}
 				const identityKey = resolveCredentialIdentityKey(provider, row.credential);
 				if (identityKey) activeIdentityKeys.add(identityKey);
 			}
-			if (activeIdentityKeys.size === 0) return;
+			if (!hasActiveApiKey && activeIdentityKeys.size === 0) return;
 
 			const disabledRows = this.#listDisabledByProviderStmt.all(provider) as AuthRow[];
 			for (const row of disabledRows) {
+				if (hasActiveApiKey && row.credential_type === "api_key") {
+					this.#hardDeleteStmt.run(row.id);
+					continue;
+				}
 				const identityKey = resolveRowCredentialIdentityKey(provider, row);
 				if (identityKey && activeIdentityKeys.has(identityKey)) {
 					this.#hardDeleteStmt.run(row.id);
@@ -4873,9 +5099,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 	updateAuthCredential(id: number, credential: AuthCredential): void {
 		try {
-			const providerRow = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?").get(id) as
-				| { provider?: string }
-				| undefined;
+			const providerStmt = this.#db.prepare("SELECT provider FROM auth_credentials WHERE id = ?");
+			let providerRow: { provider?: string } | undefined;
+			try {
+				providerRow = providerStmt.get(id) as { provider?: string } | undefined;
+			} finally {
+				providerStmt.finalize();
+			}
 			const provider = providerRow?.provider ?? "";
 			const serialized = serializeCredential(provider, credential);
 			if (!serialized) return;
@@ -5020,6 +5250,42 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			return [];
 		}
 	}
+	recordUsageCosts(entries: UsageCostHistoryEntry[]): void {
+		try {
+			for (const entry of entries) {
+				this.#insertUsageCostStmt.run(entry.recordedAt, entry.provider, entry.accountKey, entry.costUsd);
+			}
+		} catch {
+			// Cost history is best-effort; never break request persistence.
+		}
+	}
+
+	listUsageCosts(query?: UsageCostHistoryQuery): UsageCostHistoryEntry[] {
+		try {
+			const provider = query?.provider ?? null;
+			const accountKey = query?.accountKey ?? null;
+			const rows = this.#listUsageCostsStmt.all(
+				query?.sinceMs ?? 0,
+				provider,
+				provider,
+				accountKey,
+				accountKey,
+			) as Array<{
+				recorded_at: number;
+				provider: string;
+				account_key: string;
+				cost_usd: number;
+			}>;
+			return rows.map(row => ({
+				recordedAt: row.recorded_at,
+				provider: row.provider as Provider,
+				accountKey: row.account_key,
+				costUsd: row.cost_usd,
+			}));
+		} catch {
+			return [];
+		}
+	}
 
 	// ─── Convenience methods for CLI ────────────────────────────────────────
 
@@ -5108,6 +5374,8 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#lastUsageHistoryStmt.finalize();
 		this.#listUsageHistoryStmt.finalize();
 		this.#updateUsageHistoryStmt.finalize();
+		this.#insertUsageCostStmt.finalize();
+		this.#listUsageCostsStmt.finalize();
 		this.#db.close();
 	}
 }

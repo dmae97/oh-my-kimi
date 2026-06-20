@@ -14801,6 +14801,39 @@
 				}
 			}
 		},
+		"glm-5.2": {
+			"id": "glm-5.2",
+			"name": "GLM-5.2",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none",
+					"xhigh": "max"
+				}
+			}
+		},
 		"gpt-oss-120b": {
 			"id": "gpt-oss-120b",
 			"name": "GPT OSS 120B",
@@ -17694,7 +17727,7 @@
 			"name": "Claude Opus 4.5",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17717,6 +17750,7 @@
 					"high"
 				],
 				"effortRouting": {
+					"off": "claude-opus-4-5",
 					"minimal": "claude-opus-4-5-thinking",
 					"low": "claude-opus-4-5-thinking",
 					"medium": "claude-opus-4-5-thinking",
@@ -17730,7 +17764,7 @@
 			"name": "Claude Opus 4.6",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17742,8 +17776,9 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
+			"contextWindow": 250000,
 			"maxTokens": 64000,
+			"requestModelId": "claude-opus-4-6-thinking",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17751,22 +17786,15 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortRouting": {
-					"minimal": "claude-opus-4-6-thinking",
-					"low": "claude-opus-4-6-thinking",
-					"medium": "claude-opus-4-6-thinking",
-					"high": "claude-opus-4-6-thinking"
-				}
-			},
-			"requestModelId": "claude-opus-4-6-thinking"
+				]
+			}
 		},
 		"claude-sonnet-4-5": {
 			"id": "claude-sonnet-4-5",
 			"name": "Claude Sonnet 4.5",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17803,7 +17831,7 @@
 			"name": "Claude Sonnet 4.6",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17815,8 +17843,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 1000000,
-			"maxTokens": 128000,
+			"contextWindow": 250000,
+			"maxTokens": 64000,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17824,23 +17852,15 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortRouting": {
-					"off": "claude-sonnet-4-6",
-					"minimal": "claude-sonnet-4-6-thinking",
-					"low": "claude-sonnet-4-6-thinking",
-					"medium": "claude-sonnet-4-6-thinking",
-					"high": "claude-sonnet-4-6-thinking"
-				}
-			},
-			"requestModelId": "claude-sonnet-4-6"
+				]
+			}
 		},
 		"gemini-2.5-flash": {
 			"id": "gemini-2.5-flash",
 			"name": "Gemini 2.5 Flash",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17853,7 +17873,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 65536,
+			"maxTokens": 65535,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17871,12 +17891,41 @@
 				}
 			}
 		},
+		"gemini-2.5-flash-lite": {
+			"id": "gemini-2.5-flash-lite",
+			"name": "Gemini 2.5 Flash-Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
 		"gemini-2.5-pro": {
 			"id": "gemini-2.5-pro",
 			"name": "Gemini 2.5 Pro",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17906,7 +17955,7 @@
 			"name": "Gemini 3 Flash",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17921,22 +17970,36 @@
 			"contextWindow": 1048576,
 			"maxTokens": 65536,
 			"thinking": {
-				"mode": "google-level",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
 					"medium",
 					"high"
 				],
-				"requiresEffort": true
-			}
+				"effortBudgets": {
+					"minimal": 1000,
+					"low": 1000,
+					"medium": 4000,
+					"high": 10000
+				},
+				"effortRouting": {
+					"off": "gemini-3.5-flash-extra-low",
+					"minimal": "gemini-3.5-flash-extra-low",
+					"low": "gemini-3.5-flash-extra-low",
+					"medium": "gemini-3.5-flash-low",
+					"high": "gemini-3-flash-agent"
+				},
+				"suppressWhenOff": true
+			},
+			"requestModelId": "gemini-3.5-flash-extra-low"
 		},
 		"gemini-3-pro": {
 			"id": "gemini-3-pro",
 			"name": "Gemini 3 Pro",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17965,12 +18028,31 @@
 			},
 			"requestModelId": "gemini-3-pro-low"
 		},
-		"gemini-3.1-pro": {
-			"id": "gemini-3.1-pro",
-			"name": "Gemini 3.1 Pro Preview",
+		"gemini-3.1-flash-image": {
+			"id": "gemini-3.1-flash-image",
+			"name": "Gemini 3.1 Flash Image",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
+		},
+		"gemini-3.1-flash-lite": {
+			"id": "gemini-3.1-flash-lite",
+			"name": "Gemini 3.1 Flash Lite",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -17987,24 +18069,102 @@
 			"thinking": {
 				"mode": "google-level",
 				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
+		"gemini-3.1-pro": {
+			"id": "gemini-3.1-pro",
+			"name": "Gemini 3.1 Pro Preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 65535,
+			"requestModelId": "gemini-3.1-pro-low",
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
 					"low",
 					"high"
 				],
+				"effortBudgets": {
+					"low": 1001,
+					"high": 10001
+				},
 				"effortRouting": {
 					"off": "gemini-3.1-pro-low",
 					"low": "gemini-3.1-pro-low",
 					"high": "gemini-pro-agent"
 				},
 				"suppressWhenOff": true
+			}
+		},
+		"gemini-3.5-flash": {
+			"id": "gemini-3.5-flash",
+			"name": "Gemini 3.5 Flash",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
 			},
-			"requestModelId": "gemini-3.1-pro-low"
+			"contextWindow": 1048576,
+			"maxTokens": 65536,
+			"requestModelId": "gemini-3.5-flash-extra-low",
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"effortBudgets": {
+					"minimal": 1000,
+					"low": 1000,
+					"medium": 4000,
+					"high": 10000
+				},
+				"effortRouting": {
+					"off": "gemini-3.5-flash-extra-low",
+					"minimal": "gemini-3.5-flash-extra-low",
+					"low": "gemini-3.5-flash-extra-low",
+					"medium": "gemini-3.5-flash-low",
+					"high": "gemini-3-flash-agent"
+				},
+				"suppressWhenOff": true
+			}
 		},
 		"gpt-oss-120b": {
 			"id": "gpt-oss-120b",
 			"name": "GPT OSS 120B",
 			"api": "google-gemini-cli",
 			"provider": "google-antigravity",
-			"baseUrl": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
 			"reasoning": true,
 			"input": [
 				"text"
@@ -18015,8 +18175,9 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 114000,
+			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"requestModelId": "gpt-oss-120b-medium",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -18025,8 +18186,45 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"tab_flash_lite_preview": {
+			"id": "tab_flash_lite_preview",
+			"name": "tab_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
 			},
-			"requestModelId": "gpt-oss-120b-medium"
+			"contextWindow": 16384,
+			"maxTokens": 4096
+		},
+		"tab_jump_flash_lite_preview": {
+			"id": "tab_jump_flash_lite_preview",
+			"name": "tab_jump_flash_lite_preview",
+			"api": "google-gemini-cli",
+			"provider": "google-antigravity",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 16384,
+			"maxTokens": 4096
 		}
 	},
 	"google-gemini-cli": {
@@ -18078,7 +18276,11 @@
 					"high"
 				],
 				"effortRouting": {
-					"off": "gemini-2.5-flash"
+					"off": "gemini-2.5-flash",
+					"minimal": "gemini-2.5-flash-thinking",
+					"low": "gemini-2.5-flash-thinking",
+					"medium": "gemini-2.5-flash-thinking",
+					"high": "gemini-2.5-flash-thinking"
 				}
 			}
 		},
@@ -21970,6 +22172,25 @@
 			"contextWindow": 128000,
 			"maxTokens": 4000
 		},
+		"cohere/north-mini-code:free": {
+			"id": "cohere/north-mini-code:free",
+			"name": "North Mini Code (free)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 64000
+		},
 		"corethink:free": {
 			"id": "corethink:free",
 			"name": "CoreThink (free)",
@@ -22852,6 +23073,25 @@
 				"requiresEffort": true
 			}
 		},
+		"google/gemini-3-pro-image": {
+			"id": "google/gemini-3-pro-image",
+			"name": "Nano Banana Pro (Gemini 3 Pro Image)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 65536,
+			"maxTokens": 32768
+		},
 		"google/gemini-3-pro-image-preview": {
 			"id": "google/gemini-3-pro-image-preview",
 			"name": "Nano Banana Pro (Gemini 3 Pro Image Preview)",
@@ -22907,6 +23147,25 @@
 				],
 				"requiresEffort": true
 			}
+		},
+		"google/gemini-3.1-flash-image": {
+			"id": "google/gemini-3.1-flash-image",
+			"name": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000
 		},
 		"google/gemini-3.1-flash-image-preview": {
 			"id": "google/gemini-3.1-flash-image-preview",
@@ -23601,6 +23860,25 @@
 					"xhigh"
 				]
 			}
+		},
+		"kilo-auto/efficient": {
+			"id": "kilo-auto/efficient",
+			"name": "Auto Efficient",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
 		},
 		"kilo-auto/free": {
 			"id": "kilo-auto/free",
@@ -27695,6 +27973,7 @@
 				"supportsReasoningParams": true,
 				"reasoningEffortMap": {},
 				"supportsUsageInStreaming": true,
+				"enableGeminiThinkingLoopGuard": false,
 				"alwaysSendMaxTokens": false,
 				"disableReasoningOnForcedToolChoice": false,
 				"disableReasoningOnToolChoice": false,
@@ -27706,14 +27985,25 @@
 				"requiresThinkingAsText": false,
 				"requiresMistralToolIds": false,
 				"thinkingFormat": "openai",
+				"reasoningDisableMode": "lowest-effort",
+				"omitReasoningEffort": false,
+				"includeEncryptedReasoning": true,
+				"filterReasoningHistory": false,
 				"reasoningContentField": "reasoning_content",
 				"requiresReasoningContentForToolCalls": false,
+				"requiresReasoningContentForAllAssistantTurns": false,
 				"allowsSyntheticReasoningContentForToolCalls": true,
 				"requiresAssistantContentForToolCalls": false,
 				"isOpenRouterHost": false,
+				"wireModelIdMode": "raw",
 				"isVercelGatewayHost": false,
 				"supportsStrictMode": false,
-				"toolStrictMode": "mixed"
+				"toolStrictMode": "mixed",
+				"stripDeepseekSpecialTokens": false,
+				"reasoningDeltasMayBeCumulative": false,
+				"emptyLengthFinishIsContextError": false,
+				"usesOpenAIToolCallIdLimit": false,
+				"dropThinkingWhenReasoningEffort": false
 			}
 		},
 		"perplexity/sonar-pro-search": {
@@ -27735,6 +28025,25 @@
 			"contextWindow": null,
 			"maxTokens": null
 		},
+		"poolside/laguna-m.1": {
+			"id": "poolside/laguna-m.1",
+			"name": "Laguna M.1",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768
+		},
 		"poolside/laguna-m.1:free": {
 			"id": "poolside/laguna-m.1:free",
 			"name": "Laguna M.1 (free)",
@@ -27751,8 +28060,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 8192,
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -27763,6 +28072,25 @@
 					"xhigh"
 				]
 			}
+		},
+		"poolside/laguna-xs.2": {
+			"id": "poolside/laguna-xs.2",
+			"name": "Laguna XS.2",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"poolside/laguna-xs.2:free": {
 			"id": "poolside/laguna-xs.2:free",
@@ -27780,8 +28108,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 8192,
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -30791,6 +31119,25 @@
 				]
 			}
 		},
+		"z-ai/glm-5.2": {
+			"id": "z-ai/glm-5.2",
+			"name": "GLM 5.2 (new)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
+		},
 		"z-ai/glm-5v-turbo": {
 			"id": "z-ai/glm-5v-turbo",
 			"name": "GLM 5V Turbo",
@@ -30976,14 +31323,17 @@
 			"contextWindow": 196608,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31006,14 +31356,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31036,14 +31389,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31066,14 +31422,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31096,14 +31455,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 32000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31126,14 +31488,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31156,14 +31521,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31187,14 +31555,17 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
-				]
+					"high"
+				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				}
 			}
 		}
 	},
@@ -31218,14 +31589,17 @@
 			"contextWindow": 196608,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31248,14 +31622,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31278,14 +31655,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31308,14 +31688,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31338,14 +31721,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 32000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31368,14 +31754,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31398,14 +31787,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -31429,14 +31821,17 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
-				]
+					"high"
+				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				}
 			}
 		}
 	},
@@ -31730,7 +32125,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 512000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"compat": {
 				"supportsStore": false,
@@ -32039,7 +32434,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 512000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"compat": {
 				"supportsStore": false,
@@ -32875,6 +33270,171 @@
 					"high"
 				]
 			}
+		},
+		"kimi-k2.7-code-highspeed": {
+			"id": "kimi-k2.7-code-highspeed",
+			"name": "Kimi K2.7 Code HighSpeed",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
+		"moonshot-v1-128k": {
+			"id": "moonshot-v1-128k",
+			"name": "moonshot-v1-128k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
+		},
+		"moonshot-v1-128k-vision-preview": {
+			"id": "moonshot-v1-128k-vision-preview",
+			"name": "moonshot-v1-128k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
+		},
+		"moonshot-v1-32k": {
+			"id": "moonshot-v1-32k",
+			"name": "moonshot-v1-32k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 32768,
+			"maxTokens": null
+		},
+		"moonshot-v1-32k-vision-preview": {
+			"id": "moonshot-v1-32k-vision-preview",
+			"name": "moonshot-v1-32k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 32768,
+			"maxTokens": null
+		},
+		"moonshot-v1-8k": {
+			"id": "moonshot-v1-8k",
+			"name": "moonshot-v1-8k",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
+		},
+		"moonshot-v1-8k-vision-preview": {
+			"id": "moonshot-v1-8k-vision-preview",
+			"name": "moonshot-v1-8k-vision-preview",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
+		},
+		"moonshot-v1-auto": {
+			"id": "moonshot-v1-auto",
+			"name": "moonshot-v1-auto",
+			"api": "openai-completions",
+			"provider": "moonshot",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 131072,
+			"maxTokens": null
 		}
 	},
 	"nanogpt": {
@@ -35277,6 +35837,25 @@
 			"contextWindow": 128000,
 			"maxTokens": 4096
 		},
+		"cohere/north-mini-code": {
+			"id": "cohere/north-mini-code",
+			"name": "cohere/north-mini-code",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
+		},
 		"command-a-plus-05-2026": {
 			"id": "command-a-plus-05-2026",
 			"name": "command-a-plus-05-2026",
@@ -35299,6 +35878,44 @@
 		"command-a-reasoning-08-2025": {
 			"id": "command-a-reasoning-08-2025",
 			"name": "command-a-reasoning-08-2025",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
+		},
+		"crofai/greg-2-super": {
+			"id": "crofai/greg-2-super",
+			"name": "crofai/greg-2-super",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
+		},
+		"crofai/greg-2-ultra": {
+			"id": "crofai/greg-2-ultra",
+			"name": "crofai/greg-2-ultra",
 			"api": "openai-completions",
 			"provider": "nanogpt",
 			"baseUrl": "https://nano-gpt.com/api/v1",
@@ -41857,6 +42474,25 @@
 				]
 			}
 		},
+		"moonshotai/kimi-k2.7-code-highspeed": {
+			"id": "moonshotai/kimi-k2.7-code-highspeed",
+			"name": "moonshotai/kimi-k2.7-code-highspeed",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144
+		},
 		"moonshotai/kimi-latest": {
 			"id": "moonshotai/kimi-latest",
 			"name": "Kimi Latest",
@@ -44009,8 +44645,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"poolside/laguna-xs.2": {
 			"id": "poolside/laguna-xs.2",
@@ -44028,8 +44664,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
-			"maxTokens": null
+			"contextWindow": 262144,
+			"maxTokens": 32768
 		},
 		"qvq-max": {
 			"id": "qvq-max",
@@ -46960,6 +47596,25 @@
 				"toolStrictMode": "mixed"
 			}
 		},
+		"TEE/glm-5.2": {
+			"id": "TEE/glm-5.2",
+			"name": "TEE/glm-5.2",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072
+		},
 		"TEE/gpt-oss-120b": {
 			"id": "TEE/gpt-oss-120b",
 			"name": "TEE/gpt-oss-120b",
@@ -49459,6 +50114,38 @@
 					"high",
 					"xhigh"
 				]
+			}
+		},
+		"zai-org/glm-5.2": {
+			"id": "zai-org/glm-5.2",
+			"name": "zai-org/glm-5.2",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
 			}
 		},
 		"zai-org/glm-latest": {
@@ -52961,6 +53648,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 32000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -52989,6 +53677,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 163840,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53017,6 +53706,7 @@
 			},
 			"contextWindow": 163840,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53045,6 +53735,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 1048576,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53074,6 +53765,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 1048576,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53102,7 +53794,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"devstral-small-2:24b": {
 			"id": "devstral-small-2:24b",
@@ -53122,7 +53815,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"gemini-3-flash-preview": {
 			"id": "gemini-3-flash-preview",
@@ -53143,6 +53837,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53173,6 +53868,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53201,6 +53897,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53229,6 +53926,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53257,6 +53955,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53285,6 +53984,7 @@
 			},
 			"contextWindow": 202752,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53293,6 +53993,36 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"glm-5.2": {
+			"id": "glm-5.2",
+			"name": "GLM-5.2",
+			"api": "ollama-chat",
+			"provider": "ollama-cloud",
+			"baseUrl": "https://ollama.com",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 976000,
+			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
 			}
 		},
 		"gpt-oss:120b": {
@@ -53313,6 +54043,7 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53341,6 +54072,7 @@
 			},
 			"contextWindow": 131072,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53369,6 +54101,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53397,7 +54130,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"kimi-k2.5": {
 			"id": "kimi-k2.5",
@@ -53418,6 +54152,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53447,6 +54182,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53476,6 +54212,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 262144,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53504,6 +54241,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 128000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53533,6 +54271,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53562,6 +54301,7 @@
 			},
 			"contextWindow": 204800,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53591,6 +54331,7 @@
 			},
 			"contextWindow": 196608,
 			"maxTokens": 196608,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53621,6 +54362,7 @@
 			},
 			"contextWindow": 512000,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53649,7 +54391,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"ministral-3:3b": {
 			"id": "ministral-3:3b",
@@ -53669,7 +54412,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"ministral-3:8b": {
 			"id": "ministral-3:8b",
@@ -53689,7 +54433,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 128000
+			"maxTokens": 128000,
+			"omitMaxOutputTokens": true
 		},
 		"mistral-large-3:675b": {
 			"id": "mistral-large-3:675b",
@@ -53709,7 +54454,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144
+			"maxTokens": 262144,
+			"omitMaxOutputTokens": true
 		},
 		"nemotron-3-nano:30b": {
 			"id": "nemotron-3-nano:30b",
@@ -53729,6 +54475,7 @@
 			},
 			"contextWindow": 1048576,
 			"maxTokens": 131072,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53757,6 +54504,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53785,6 +54533,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 128000,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53812,7 +54561,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65536
+			"maxTokens": 65536,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3-coder:480b": {
 			"id": "qwen3-coder:480b",
@@ -53831,7 +54581,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65536
+			"maxTokens": 65536,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3-next:80b": {
 			"id": "qwen3-next:80b",
@@ -53851,6 +54602,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53880,6 +54632,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 32768,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53908,7 +54661,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 131072
+			"maxTokens": 131072,
+			"omitMaxOutputTokens": true
 		},
 		"qwen3.5:397b": {
 			"id": "qwen3.5:397b",
@@ -53929,6 +54683,7 @@
 			},
 			"contextWindow": 262144,
 			"maxTokens": 65536,
+			"omitMaxOutputTokens": true,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -53956,7 +54711,8 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 32768,
-			"maxTokens": 4096
+			"maxTokens": 4096,
+			"omitMaxOutputTokens": true
 		}
 	},
 	"openai": {
@@ -55939,6 +56695,38 @@
 				]
 			}
 		},
+		"glm-5.2": {
+			"id": "glm-5.2",
+			"name": "GLM-5.2",
+			"api": "openai-completions",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
+			}
+		},
 		"kimi-k2.5": {
 			"id": "kimi-k2.5",
 			"name": "Kimi K2.5",
@@ -56181,14 +56969,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 65536,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -57956,14 +58747,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -58253,7 +59047,7 @@
 		"~anthropic/claude-fable-latest": {
 			"id": "~anthropic/claude-fable-latest",
 			"name": "Claude Fable Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58282,7 +59076,7 @@
 		"~anthropic/claude-haiku-latest": {
 			"id": "~anthropic/claude-haiku-latest",
 			"name": "Claude Haiku Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58311,7 +59105,7 @@
 		"~anthropic/claude-opus-latest": {
 			"id": "~anthropic/claude-opus-latest",
 			"name": "Claude Opus Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58340,7 +59134,7 @@
 		"~anthropic/claude-sonnet-latest": {
 			"id": "~anthropic/claude-sonnet-latest",
 			"name": "Claude Sonnet Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58369,7 +59163,7 @@
 		"~google/gemini-flash-latest": {
 			"id": "~google/gemini-flash-latest",
 			"name": "Gemini Flash Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58398,7 +59192,7 @@
 		"~google/gemini-pro-latest": {
 			"id": "~google/gemini-pro-latest",
 			"name": "Gemini Pro Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58427,7 +59221,7 @@
 		"~moonshotai/kimi-latest": {
 			"id": "~moonshotai/kimi-latest",
 			"name": "Kimi Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58436,13 +59230,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.6799999999999999,
-				"output": 3.41,
-				"cacheRead": 0.33999999999999997,
+				"input": 0.67,
+				"output": 3.5,
+				"cacheRead": 0.19999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262142,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -58456,7 +59250,7 @@
 		"~openai/gpt-latest": {
 			"id": "~openai/gpt-latest",
 			"name": "GPT Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58485,7 +59279,7 @@
 		"~openai/gpt-mini-latest": {
 			"id": "~openai/gpt-mini-latest",
 			"name": "GPT Mini Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58514,7 +59308,7 @@
 		"ai21/jamba-large-1.7": {
 			"id": "ai21/jamba-large-1.7",
 			"name": "Jamba Large 1.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58533,7 +59327,7 @@
 		"alibaba/tongyi-deepresearch-30b-a3b": {
 			"id": "alibaba/tongyi-deepresearch-30b-a3b",
 			"name": "Tongyi DeepResearch 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58561,7 +59355,7 @@
 		"allenai/olmo-3.1-32b-instruct": {
 			"id": "allenai/olmo-3.1-32b-instruct",
 			"name": "Olmo 3.1 32B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58580,7 +59374,7 @@
 		"amazon/nova-2-lite-v1": {
 			"id": "amazon/nova-2-lite-v1",
 			"name": "Nova 2 Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58609,7 +59403,7 @@
 		"amazon/nova-lite-v1": {
 			"id": "amazon/nova-lite-v1",
 			"name": "Nova Lite 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58632,7 +59426,7 @@
 		"amazon/nova-micro-v1": {
 			"id": "amazon/nova-micro-v1",
 			"name": "Nova Micro 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58654,7 +59448,7 @@
 		"amazon/nova-premier-v1": {
 			"id": "amazon/nova-premier-v1",
 			"name": "Nova Premier 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58677,7 +59471,7 @@
 		"amazon/nova-pro-v1": {
 			"id": "amazon/nova-pro-v1",
 			"name": "Nova Pro 1.0",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58700,7 +59494,7 @@
 		"anthropic/claude-3-haiku": {
 			"id": "anthropic/claude-3-haiku",
 			"name": "Claude Haiku 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58720,7 +59514,7 @@
 		"anthropic/claude-3.5-haiku": {
 			"id": "anthropic/claude-3.5-haiku",
 			"name": "Claude 3.5 Haiku",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58740,7 +59534,7 @@
 		"anthropic/claude-3.5-sonnet": {
 			"id": "anthropic/claude-3.5-sonnet",
 			"name": "Claude Sonnet 3.5 v2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -58760,7 +59554,7 @@
 		"anthropic/claude-3.7-sonnet": {
 			"id": "anthropic/claude-3.7-sonnet",
 			"name": "Claude 3.7 Sonnet",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58789,7 +59583,7 @@
 		"anthropic/claude-3.7-sonnet:thinking": {
 			"id": "anthropic/claude-3.7-sonnet:thinking",
 			"name": "Claude 3.7 Sonnet (thinking)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58818,7 +59612,7 @@
 		"anthropic/claude-fable-5": {
 			"id": "anthropic/claude-fable-5",
 			"name": "Claude Fable 5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -58855,7 +59649,7 @@
 		"anthropic/claude-haiku-4.5": {
 			"id": "anthropic/claude-haiku-4.5",
 			"name": "Claude Haiku 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58884,7 +59678,7 @@
 		"anthropic/claude-opus-4": {
 			"id": "anthropic/claude-opus-4",
 			"name": "Claude Opus 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58913,7 +59707,7 @@
 		"anthropic/claude-opus-4.1": {
 			"id": "anthropic/claude-opus-4.1",
 			"name": "Claude Opus 4.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58942,7 +59736,7 @@
 		"anthropic/claude-opus-4.5": {
 			"id": "anthropic/claude-opus-4.5",
 			"name": "Claude Opus 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -58971,7 +59765,7 @@
 		"anthropic/claude-opus-4.6": {
 			"id": "anthropic/claude-opus-4.6",
 			"name": "Claude Opus 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59005,7 +59799,7 @@
 		"anthropic/claude-opus-4.6-fast": {
 			"id": "anthropic/claude-opus-4.6-fast",
 			"name": "Claude Opus 4.6 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59039,7 +59833,7 @@
 		"anthropic/claude-opus-4.7": {
 			"id": "anthropic/claude-opus-4.7",
 			"name": "Claude Opus 4.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59076,7 +59870,7 @@
 		"anthropic/claude-opus-4.7-fast": {
 			"id": "anthropic/claude-opus-4.7-fast",
 			"name": "Claude Opus 4.7 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59113,7 +59907,7 @@
 		"anthropic/claude-opus-4.8": {
 			"id": "anthropic/claude-opus-4.8",
 			"name": "Claude Opus 4.8",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59150,7 +59944,7 @@
 		"anthropic/claude-opus-4.8-fast": {
 			"id": "anthropic/claude-opus-4.8-fast",
 			"name": "Claude Opus 4.8 (Fast)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59187,7 +59981,7 @@
 		"anthropic/claude-sonnet-4": {
 			"id": "anthropic/claude-sonnet-4",
 			"name": "Claude Sonnet 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59216,7 +60010,7 @@
 		"anthropic/claude-sonnet-4.5": {
 			"id": "anthropic/claude-sonnet-4.5",
 			"name": "Claude Sonnet 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59245,7 +60039,7 @@
 		"anthropic/claude-sonnet-4.6": {
 			"id": "anthropic/claude-sonnet-4.6",
 			"name": "Claude Sonnet 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59274,7 +60068,7 @@
 		"arcee-ai/trinity-large-preview": {
 			"id": "arcee-ai/trinity-large-preview",
 			"name": "Trinity Large Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -59296,7 +60090,7 @@
 		"arcee-ai/trinity-large-preview:free": {
 			"id": "arcee-ai/trinity-large-preview:free",
 			"name": "Trinity Large Preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59318,7 +60112,7 @@
 		"arcee-ai/trinity-large-thinking": {
 			"id": "arcee-ai/trinity-large-thinking",
 			"name": "Trinity Large Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59347,7 +60141,7 @@
 		"arcee-ai/trinity-large-thinking:free": {
 			"id": "arcee-ai/trinity-large-thinking:free",
 			"name": "Trinity Large Thinking (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59376,7 +60170,7 @@
 		"arcee-ai/trinity-mini": {
 			"id": "arcee-ai/trinity-mini",
 			"name": "Trinity Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59404,7 +60198,7 @@
 		"arcee-ai/trinity-mini:free": {
 			"id": "arcee-ai/trinity-mini:free",
 			"name": "Trinity Mini (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59432,7 +60226,7 @@
 		"arcee-ai/virtuoso-large": {
 			"id": "arcee-ai/virtuoso-large",
 			"name": "Virtuoso Large",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59451,7 +60245,7 @@
 		"auto": {
 			"id": "auto",
 			"name": "Auto",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59480,7 +60274,7 @@
 		"baidu/cobuddy:free": {
 			"id": "baidu/cobuddy:free",
 			"name": "CoBuddy (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59511,7 +60305,7 @@
 		"baidu/ernie-4.5-21b-a3b": {
 			"id": "baidu/ernie-4.5-21b-a3b",
 			"name": "ERNIE 4.5 21B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59530,7 +60324,7 @@
 		"baidu/ernie-4.5-vl-28b-a3b": {
 			"id": "baidu/ernie-4.5-vl-28b-a3b",
 			"name": "ERNIE 4.5 VL 28B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59559,7 +60353,7 @@
 		"bytedance-seed/seed-1.6": {
 			"id": "bytedance-seed/seed-1.6",
 			"name": "Seed 1.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59588,7 +60382,7 @@
 		"bytedance-seed/seed-1.6-flash": {
 			"id": "bytedance-seed/seed-1.6-flash",
 			"name": "Seed 1.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59617,7 +60411,7 @@
 		"bytedance-seed/seed-2.0-lite": {
 			"id": "bytedance-seed/seed-2.0-lite",
 			"name": "Seed-2.0-Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59646,7 +60440,7 @@
 		"bytedance-seed/seed-2.0-mini": {
 			"id": "bytedance-seed/seed-2.0-mini",
 			"name": "Seed-2.0-Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -59675,7 +60469,7 @@
 		"cohere/command-r-08-2024": {
 			"id": "cohere/command-r-08-2024",
 			"name": "Command R (08-2024)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59694,7 +60488,7 @@
 		"cohere/command-r-plus-08-2024": {
 			"id": "cohere/command-r-plus-08-2024",
 			"name": "Command R+",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59710,10 +60504,38 @@
 			"contextWindow": 128000,
 			"maxTokens": 4000
 		},
+		"cohere/north-mini-code:free": {
+			"id": "cohere/north-mini-code:free",
+			"name": "North Mini Code (free)",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
 		"deepseek/deepseek-chat": {
 			"id": "deepseek/deepseek-chat",
 			"name": "DeepSeek V3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -59732,7 +60554,7 @@
 		"deepseek/deepseek-chat-v3-0324": {
 			"id": "deepseek/deepseek-chat-v3-0324",
 			"name": "DeepSeek V3 0324",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59766,7 +60588,7 @@
 		"deepseek/deepseek-chat-v3.1": {
 			"id": "deepseek/deepseek-chat-v3.1",
 			"name": "DeepSeek V3.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59800,7 +60622,7 @@
 		"deepseek/deepseek-r1": {
 			"id": "deepseek/deepseek-r1",
 			"name": "R1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59834,7 +60656,7 @@
 		"deepseek/deepseek-r1-0528": {
 			"id": "deepseek/deepseek-r1-0528",
 			"name": "R1 0528",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59868,7 +60690,7 @@
 		"deepseek/deepseek-v3.1-terminus": {
 			"id": "deepseek/deepseek-v3.1-terminus",
 			"name": "DeepSeek V3.1 Terminus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59902,7 +60724,7 @@
 		"deepseek/deepseek-v3.1-terminus:exacto": {
 			"id": "deepseek/deepseek-v3.1-terminus:exacto",
 			"name": "DeepSeek V3.1 Terminus (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59936,7 +60758,7 @@
 		"deepseek/deepseek-v3.2": {
 			"id": "deepseek/deepseek-v3.2",
 			"name": "DeepSeek V3.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -59970,7 +60792,7 @@
 		"deepseek/deepseek-v3.2-exp": {
 			"id": "deepseek/deepseek-v3.2-exp",
 			"name": "DeepSeek V3.2 Exp",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60004,7 +60826,7 @@
 		"deepseek/deepseek-v4-flash": {
 			"id": "deepseek/deepseek-v4-flash",
 			"name": "DeepSeek V4 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60038,7 +60860,7 @@
 		"deepseek/deepseek-v4-flash:free": {
 			"id": "deepseek/deepseek-v4-flash:free",
 			"name": "DeepSeek V4 Flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60072,7 +60894,7 @@
 		"deepseek/deepseek-v4-pro": {
 			"id": "deepseek/deepseek-v4-pro",
 			"name": "DeepSeek V4 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60106,7 +60928,7 @@
 		"essentialai/rnj-1-instruct": {
 			"id": "essentialai/rnj-1-instruct",
 			"name": "Rnj 1 Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60125,7 +60947,7 @@
 		"google/gemini-2.0-flash-001": {
 			"id": "google/gemini-2.0-flash-001",
 			"name": "Gemini 2.0 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60145,7 +60967,7 @@
 		"google/gemini-2.0-flash-lite-001": {
 			"id": "google/gemini-2.0-flash-lite-001",
 			"name": "Gemini 2.0 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60165,7 +60987,7 @@
 		"google/gemini-2.5-flash": {
 			"id": "google/gemini-2.5-flash",
 			"name": "Gemini 2.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60194,7 +61016,7 @@
 		"google/gemini-2.5-flash-lite": {
 			"id": "google/gemini-2.5-flash-lite",
 			"name": "Gemini 2.5 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60223,7 +61045,7 @@
 		"google/gemini-2.5-flash-lite-preview-09-2025": {
 			"id": "google/gemini-2.5-flash-lite-preview-09-2025",
 			"name": "Gemini 2.5 Flash Lite Preview 09-2025",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60252,7 +61074,7 @@
 		"google/gemini-2.5-flash-preview-09-2025": {
 			"id": "google/gemini-2.5-flash-preview-09-2025",
 			"name": "Gemini 2.5 Flash Preview 09-2025",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60281,7 +61103,7 @@
 		"google/gemini-2.5-pro": {
 			"id": "google/gemini-2.5-pro",
 			"name": "Gemini 2.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60311,7 +61133,7 @@
 		"google/gemini-2.5-pro-preview": {
 			"id": "google/gemini-2.5-pro-preview",
 			"name": "Gemini 2.5 Pro Preview 06-05",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60341,7 +61163,7 @@
 		"google/gemini-2.5-pro-preview-05-06": {
 			"id": "google/gemini-2.5-pro-preview-05-06",
 			"name": "Gemini 2.5 Pro Preview 05-06",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60371,7 +61193,7 @@
 		"google/gemini-3-flash-preview": {
 			"id": "google/gemini-3-flash-preview",
 			"name": "Gemini 3 Flash (Preview)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60386,7 +61208,7 @@
 				"cacheWrite": 0.08333333333333334
 			},
 			"contextWindow": 1048576,
-			"maxTokens": 65536,
+			"maxTokens": 65535,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -60398,10 +61220,38 @@
 				"requiresEffort": true
 			}
 		},
+		"google/gemini-3-pro-image": {
+			"id": "google/gemini-3-pro-image",
+			"name": "Nano Banana Pro (Gemini 3 Pro Image)",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 12,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0.375
+			},
+			"contextWindow": 65536,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
 		"google/gemini-3-pro-preview": {
 			"id": "google/gemini-3-pro-preview",
 			"name": "Gemini 3 Pro Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -60429,7 +61279,7 @@
 		"google/gemini-3.1-flash-lite": {
 			"id": "google/gemini-3.1-flash-lite",
 			"name": "Gemini 3.1 Flash Lite",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60459,7 +61309,7 @@
 		"google/gemini-3.1-flash-lite-preview": {
 			"id": "google/gemini-3.1-flash-lite-preview",
 			"name": "Gemini 3.1 Flash Lite Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60479,7 +61329,7 @@
 		"google/gemini-3.1-pro-preview": {
 			"id": "google/gemini-3.1-pro-preview",
 			"name": "Gemini 3.1 Pro (Preview)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60507,7 +61357,7 @@
 		"google/gemini-3.1-pro-preview-customtools": {
 			"id": "google/gemini-3.1-pro-preview-customtools",
 			"name": "Gemini 3.1 Pro (Preview Custom Tools)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60535,7 +61385,7 @@
 		"google/gemini-3.5-flash": {
 			"id": "google/gemini-3.5-flash",
 			"name": "Gemini 3.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60565,7 +61415,7 @@
 		"google/gemma-3-12b-it": {
 			"id": "google/gemma-3-12b-it",
 			"name": "Gemma 3 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60585,7 +61435,7 @@
 		"google/gemma-3-27b-it": {
 			"id": "google/gemma-3-27b-it",
 			"name": "Gemma 3 27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60605,7 +61455,7 @@
 		"google/gemma-3-27b-it:free": {
 			"id": "google/gemma-3-27b-it:free",
 			"name": "Gemma 3 27B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60625,7 +61475,7 @@
 		"google/gemma-4-26b-a4b-it": {
 			"id": "google/gemma-4-26b-a4b-it",
 			"name": "Gemma 4 26B A4B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60654,7 +61504,7 @@
 		"google/gemma-4-26b-a4b-it:free": {
 			"id": "google/gemma-4-26b-a4b-it:free",
 			"name": "Gemma 4 26B A4B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60683,7 +61533,7 @@
 		"google/gemma-4-31b-it": {
 			"id": "google/gemma-4-31b-it",
 			"name": "Gemma 4 31B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60712,7 +61562,7 @@
 		"google/gemma-4-31b-it:free": {
 			"id": "google/gemma-4-31b-it:free",
 			"name": "Gemma 4 31B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60727,7 +61577,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 32768,
+			"maxTokens": 8192,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -60741,7 +61591,7 @@
 		"ibm-granite/granite-4.1-8b": {
 			"id": "ibm-granite/granite-4.1-8b",
 			"name": "Granite 4.1 8B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60760,7 +61610,7 @@
 		"inception/mercury": {
 			"id": "inception/mercury",
 			"name": "Mercury",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60779,7 +61629,7 @@
 		"inception/mercury-2": {
 			"id": "inception/mercury-2",
 			"name": "Mercury 2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60807,7 +61657,7 @@
 		"inception/mercury-coder": {
 			"id": "inception/mercury-coder",
 			"name": "Mercury Coder",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60826,7 +61676,7 @@
 		"inclusionai/ling-2.6-1t": {
 			"id": "inclusionai/ling-2.6-1t",
 			"name": "Ling-2.6-1T",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60845,7 +61695,7 @@
 		"inclusionai/ling-2.6-1t:free": {
 			"id": "inclusionai/ling-2.6-1t:free",
 			"name": "Ling-2.6-1T (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60864,7 +61714,7 @@
 		"inclusionai/ling-2.6-flash": {
 			"id": "inclusionai/ling-2.6-flash",
 			"name": "Ling-2.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60883,7 +61733,7 @@
 		"inclusionai/ling-2.6-flash:free": {
 			"id": "inclusionai/ling-2.6-flash:free",
 			"name": "Ling-2.6-flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60902,7 +61752,7 @@
 		"inclusionai/ring-2.6-1t": {
 			"id": "inclusionai/ring-2.6-1t",
 			"name": "Ring-2.6-1T",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60930,7 +61780,7 @@
 		"inclusionai/ring-2.6-1t:free": {
 			"id": "inclusionai/ring-2.6-1t:free",
 			"name": "Ring-2.6-1T (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -60958,7 +61808,7 @@
 		"kwaipilot/kat-coder-pro": {
 			"id": "kwaipilot/kat-coder-pro",
 			"name": "KAT-Coder-Pro V1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -60977,7 +61827,7 @@
 		"kwaipilot/kat-coder-pro-v2": {
 			"id": "kwaipilot/kat-coder-pro-v2",
 			"name": "KAT-Coder-Pro V2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -60993,10 +61843,39 @@
 			"contextWindow": 256000,
 			"maxTokens": 80000
 		},
+		"liquid/lfm-2.5-1.2b-thinking:free": {
+			"id": "liquid/lfm-2.5-1.2b-thinking:free",
+			"name": "LFM2.5-1.2B-Thinking (free)",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 32768,
+			"maxTokens": null,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				],
+				"requiresEffort": true
+			}
+		},
 		"meituan/longcat-flash-chat": {
 			"id": "meituan/longcat-flash-chat",
 			"name": "LongCat Flash Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -61015,7 +61894,7 @@
 		"meta-llama/llama-3-8b-instruct": {
 			"id": "meta-llama/llama-3-8b-instruct",
 			"name": "Llama 3 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61034,7 +61913,7 @@
 		"meta-llama/llama-3.1-405b-instruct": {
 			"id": "meta-llama/llama-3.1-405b-instruct",
 			"name": "Llama 3.1 405B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61053,7 +61932,7 @@
 		"meta-llama/llama-3.1-70b-instruct": {
 			"id": "meta-llama/llama-3.1-70b-instruct",
 			"name": "Llama 3.1 70B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61072,7 +61951,7 @@
 		"meta-llama/llama-3.1-8b-instruct": {
 			"id": "meta-llama/llama-3.1-8b-instruct",
 			"name": "Llama 3.1 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61091,7 +61970,7 @@
 		"meta-llama/llama-3.3-70b-instruct": {
 			"id": "meta-llama/llama-3.3-70b-instruct",
 			"name": "Llama 3.3 70B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61110,7 +61989,7 @@
 		"meta-llama/llama-3.3-70b-instruct:free": {
 			"id": "meta-llama/llama-3.3-70b-instruct:free",
 			"name": "Llama 3.3 70B Instruct (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61129,7 +62008,7 @@
 		"meta-llama/llama-4-maverick": {
 			"id": "meta-llama/llama-4-maverick",
 			"name": "Llama 4 Maverick",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61149,7 +62028,7 @@
 		"meta-llama/llama-4-scout": {
 			"id": "meta-llama/llama-4-scout",
 			"name": "Llama 4 Scout",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61169,7 +62048,7 @@
 		"minimax/minimax-m1": {
 			"id": "minimax/minimax-m1",
 			"name": "MiniMax M1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61197,7 +62076,7 @@
 		"minimax/minimax-m2": {
 			"id": "minimax/minimax-m2",
 			"name": "MiniMax M2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61225,7 +62104,7 @@
 		"minimax/minimax-m2.1": {
 			"id": "minimax/minimax-m2.1",
 			"name": "MiniMax M2.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61253,7 +62132,7 @@
 		"minimax/minimax-m2.5": {
 			"id": "minimax/minimax-m2.5",
 			"name": "MiniMax M2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61281,7 +62160,7 @@
 		"minimax/minimax-m2.5:free": {
 			"id": "minimax/minimax-m2.5:free",
 			"name": "MiniMax M2.5 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61312,7 +62191,7 @@
 		"minimax/minimax-m2.7": {
 			"id": "minimax/minimax-m2.7",
 			"name": "MiniMax M2.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61340,7 +62219,7 @@
 		"minimax/minimax-m3": {
 			"id": "minimax/minimax-m3",
 			"name": "MiniMax-M3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61369,7 +62248,7 @@
 		"mistralai/codestral-2508": {
 			"id": "mistralai/codestral-2508",
 			"name": "Codestral 2508",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61388,7 +62267,7 @@
 		"mistralai/devstral-2512": {
 			"id": "mistralai/devstral-2512",
 			"name": "Devstral 2 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61407,7 +62286,7 @@
 		"mistralai/devstral-medium": {
 			"id": "mistralai/devstral-medium",
 			"name": "Devstral Medium",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61426,7 +62305,7 @@
 		"mistralai/devstral-small": {
 			"id": "mistralai/devstral-small",
 			"name": "Devstral Small 1.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61445,7 +62324,7 @@
 		"mistralai/ministral-14b-2512": {
 			"id": "mistralai/ministral-14b-2512",
 			"name": "Ministral 3 14B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61465,7 +62344,7 @@
 		"mistralai/ministral-3b-2512": {
 			"id": "mistralai/ministral-3b-2512",
 			"name": "Ministral 3 3B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61485,7 +62364,7 @@
 		"mistralai/ministral-8b-2512": {
 			"id": "mistralai/ministral-8b-2512",
 			"name": "Ministral 3 8B 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61505,7 +62384,7 @@
 		"mistralai/mistral-large": {
 			"id": "mistralai/mistral-large",
 			"name": "Mistral Large",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61524,7 +62403,7 @@
 		"mistralai/mistral-large-2407": {
 			"id": "mistralai/mistral-large-2407",
 			"name": "Mistral Large 2407",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61543,7 +62422,7 @@
 		"mistralai/mistral-large-2411": {
 			"id": "mistralai/mistral-large-2411",
 			"name": "Mistral Large 2411",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61562,7 +62441,7 @@
 		"mistralai/mistral-large-2512": {
 			"id": "mistralai/mistral-large-2512",
 			"name": "Mistral Large 3 2512",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61582,7 +62461,7 @@
 		"mistralai/mistral-medium-3": {
 			"id": "mistralai/mistral-medium-3",
 			"name": "Mistral Medium 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61602,7 +62481,7 @@
 		"mistralai/mistral-medium-3-5": {
 			"id": "mistralai/mistral-medium-3-5",
 			"name": "Mistral Medium 3.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61631,7 +62510,7 @@
 		"mistralai/mistral-medium-3.1": {
 			"id": "mistralai/mistral-medium-3.1",
 			"name": "Mistral Medium 3.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61651,7 +62530,7 @@
 		"mistralai/mistral-nemo": {
 			"id": "mistralai/mistral-nemo",
 			"name": "Mistral Nemo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61670,7 +62549,7 @@
 		"mistralai/mistral-saba": {
 			"id": "mistralai/mistral-saba",
 			"name": "Saba",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61689,7 +62568,7 @@
 		"mistralai/mistral-small-24b-instruct-2501": {
 			"id": "mistralai/mistral-small-24b-instruct-2501",
 			"name": "Mistral Small 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61708,7 +62587,7 @@
 		"mistralai/mistral-small-2603": {
 			"id": "mistralai/mistral-small-2603",
 			"name": "Mistral Small 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -61737,7 +62616,7 @@
 		"mistralai/mistral-small-3.1-24b-instruct": {
 			"id": "mistralai/mistral-small-3.1-24b-instruct",
 			"name": "Mistral Small 3.1 24B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61757,7 +62636,7 @@
 		"mistralai/mistral-small-3.1-24b-instruct:free": {
 			"id": "mistralai/mistral-small-3.1-24b-instruct:free",
 			"name": "Mistral Small 3.1 24B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61777,7 +62656,7 @@
 		"mistralai/mistral-small-3.2-24b-instruct": {
 			"id": "mistralai/mistral-small-3.2-24b-instruct",
 			"name": "Mistral Small 3.2 24B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61797,7 +62676,7 @@
 		"mistralai/mistral-small-creative": {
 			"id": "mistralai/mistral-small-creative",
 			"name": "Mistral Small Creative",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61816,7 +62695,7 @@
 		"mistralai/mixtral-8x22b-instruct": {
 			"id": "mistralai/mixtral-8x22b-instruct",
 			"name": "Mixtral 8x22B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61835,7 +62714,7 @@
 		"mistralai/mixtral-8x7b-instruct": {
 			"id": "mistralai/mixtral-8x7b-instruct",
 			"name": "Mixtral 8x7B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61854,7 +62733,7 @@
 		"mistralai/pixtral-large-2411": {
 			"id": "mistralai/pixtral-large-2411",
 			"name": "Pixtral Large 2411",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61874,7 +62753,7 @@
 		"mistralai/voxtral-small-24b-2507": {
 			"id": "mistralai/voxtral-small-24b-2507",
 			"name": "Voxtral Small 24B 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61893,7 +62772,7 @@
 		"moonshotai/kimi-k2": {
 			"id": "moonshotai/kimi-k2",
 			"name": "Kimi K2 0711",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61912,7 +62791,7 @@
 		"moonshotai/kimi-k2-0905": {
 			"id": "moonshotai/kimi-k2-0905",
 			"name": "Kimi K2 0905",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61931,7 +62810,7 @@
 		"moonshotai/kimi-k2-0905:exacto": {
 			"id": "moonshotai/kimi-k2-0905:exacto",
 			"name": "Kimi K2 0905 (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -61950,7 +62829,7 @@
 		"moonshotai/kimi-k2-thinking": {
 			"id": "moonshotai/kimi-k2-thinking",
 			"name": "Kimi K2 Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -61979,7 +62858,7 @@
 		"moonshotai/kimi-k2.5": {
 			"id": "moonshotai/kimi-k2.5",
 			"name": "Kimi K2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62008,7 +62887,7 @@
 		"moonshotai/kimi-k2.6": {
 			"id": "moonshotai/kimi-k2.6",
 			"name": "Kimi K2.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62017,13 +62896,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.6799999999999999,
-				"output": 3.41,
-				"cacheRead": 0.33999999999999997,
+				"input": 0.67,
+				"output": 3.5,
+				"cacheRead": 0.19999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262142,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -62037,7 +62916,7 @@
 		"moonshotai/kimi-k2.6:free": {
 			"id": "moonshotai/kimi-k2.6:free",
 			"name": "Kimi K2.6 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62066,7 +62945,7 @@
 		"moonshotai/kimi-k2.7-code": {
 			"id": "moonshotai/kimi-k2.7-code",
 			"name": "Kimi K2.7 Code",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62075,9 +62954,9 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.75,
-				"output": 3.5,
-				"cacheRead": 0.16,
+				"input": 0.612,
+				"output": 3.0690000000000004,
+				"cacheRead": 0.1296,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -62095,7 +62974,7 @@
 		"nex-agi/deepseek-v3.1-nex-n1": {
 			"id": "nex-agi/deepseek-v3.1-nex-n1",
 			"name": "DeepSeek V3.1 Nex N1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62114,7 +62993,7 @@
 		"nex-agi/nex-n2-pro:free": {
 			"id": "nex-agi/nex-n2-pro:free",
 			"name": "Nex-N2-Pro (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62143,7 +63022,7 @@
 		"nousresearch/deephermes-3-mistral-24b-preview": {
 			"id": "nousresearch/deephermes-3-mistral-24b-preview",
 			"name": "DeepHermes 3 Mistral 24B Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62171,7 +63050,7 @@
 		"nousresearch/hermes-4-70b": {
 			"id": "nousresearch/hermes-4-70b",
 			"name": "Hermes 4 70B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62199,7 +63078,7 @@
 		"nvidia/llama-3.1-nemotron-70b-instruct": {
 			"id": "nvidia/llama-3.1-nemotron-70b-instruct",
 			"name": "Llama 3.1 Nemotron 70b Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62218,7 +63097,7 @@
 		"nvidia/llama-3.3-nemotron-super-49b-v1.5": {
 			"id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
 			"name": "Llama 3.3 Nemotron Super 49B V1.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62246,7 +63125,7 @@
 		"nvidia/nemotron-3-nano-30b-a3b": {
 			"id": "nvidia/nemotron-3-nano-30b-a3b",
 			"name": "Nemotron 3 Nano 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62274,7 +63153,7 @@
 		"nvidia/nemotron-3-nano-30b-a3b:free": {
 			"id": "nvidia/nemotron-3-nano-30b-a3b:free",
 			"name": "Nemotron 3 Nano 30B A3B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62302,7 +63181,7 @@
 		"nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
 			"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 			"name": "Nemotron 3 Nano Omni (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62332,7 +63211,7 @@
 		"nvidia/nemotron-3-super-120b-a12b": {
 			"id": "nvidia/nemotron-3-super-120b-a12b",
 			"name": "Nemotron 3 Super",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62360,7 +63239,7 @@
 		"nvidia/nemotron-3-super-120b-a12b:free": {
 			"id": "nvidia/nemotron-3-super-120b-a12b:free",
 			"name": "Nemotron 3 Super (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62388,7 +63267,7 @@
 		"nvidia/nemotron-3-ultra-550b-a55b": {
 			"id": "nvidia/nemotron-3-ultra-550b-a55b",
 			"name": "Nemotron 3 Ultra 550B A55B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62397,8 +63276,8 @@
 			],
 			"cost": {
 				"input": 0.5,
-				"output": 2.5,
-				"cacheRead": 0.15,
+				"output": 2.2,
+				"cacheRead": 0.09999999999999999,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
@@ -62416,7 +63295,7 @@
 		"nvidia/nemotron-3-ultra-550b-a55b:free": {
 			"id": "nvidia/nemotron-3-ultra-550b-a55b:free",
 			"name": "Nemotron 3 Ultra (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -62444,7 +63323,7 @@
 		"nvidia/nemotron-nano-12b-v2-vl:free": {
 			"id": "nvidia/nemotron-nano-12b-v2-vl:free",
 			"name": "Nemotron Nano 12B 2 VL (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62473,7 +63352,7 @@
 		"nvidia/nemotron-nano-9b-v2": {
 			"id": "nvidia/nemotron-nano-9b-v2",
 			"name": "Nemotron Nano 9B V2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62501,7 +63380,7 @@
 		"nvidia/nemotron-nano-9b-v2:free": {
 			"id": "nvidia/nemotron-nano-9b-v2:free",
 			"name": "Nemotron Nano 9B V2 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62529,7 +63408,7 @@
 		"openai/gpt-3.5-turbo": {
 			"id": "openai/gpt-3.5-turbo",
 			"name": "GPT-3.5 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62548,7 +63427,7 @@
 		"openai/gpt-3.5-turbo-0613": {
 			"id": "openai/gpt-3.5-turbo-0613",
 			"name": "GPT-3.5 Turbo (older v0613)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62567,7 +63446,7 @@
 		"openai/gpt-3.5-turbo-16k": {
 			"id": "openai/gpt-3.5-turbo-16k",
 			"name": "GPT-3.5 Turbo 16k",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62586,7 +63465,7 @@
 		"openai/gpt-4": {
 			"id": "openai/gpt-4",
 			"name": "GPT-4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62605,7 +63484,7 @@
 		"openai/gpt-4-0314": {
 			"id": "openai/gpt-4-0314",
 			"name": "GPT-4 (older v0314)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62624,7 +63503,7 @@
 		"openai/gpt-4-1106-preview": {
 			"id": "openai/gpt-4-1106-preview",
 			"name": "GPT-4 Turbo (older v1106)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62643,7 +63522,7 @@
 		"openai/gpt-4-turbo": {
 			"id": "openai/gpt-4-turbo",
 			"name": "GPT-4 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62663,7 +63542,7 @@
 		"openai/gpt-4-turbo-preview": {
 			"id": "openai/gpt-4-turbo-preview",
 			"name": "GPT-4 Turbo Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62682,7 +63561,7 @@
 		"openai/gpt-4.1": {
 			"id": "openai/gpt-4.1",
 			"name": "GPT-4.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62702,7 +63581,7 @@
 		"openai/gpt-4.1-mini": {
 			"id": "openai/gpt-4.1-mini",
 			"name": "GPT-4.1 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62722,7 +63601,7 @@
 		"openai/gpt-4.1-nano": {
 			"id": "openai/gpt-4.1-nano",
 			"name": "GPT-4.1 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62742,7 +63621,7 @@
 		"openai/gpt-4o": {
 			"id": "openai/gpt-4o",
 			"name": "GPT-4o",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62762,7 +63641,7 @@
 		"openai/gpt-4o-2024-05-13": {
 			"id": "openai/gpt-4o-2024-05-13",
 			"name": "GPT-4o (2024-05-13)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62782,7 +63661,7 @@
 		"openai/gpt-4o-2024-08-06": {
 			"id": "openai/gpt-4o-2024-08-06",
 			"name": "GPT-4o (2024-08-06)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62802,7 +63681,7 @@
 		"openai/gpt-4o-2024-11-20": {
 			"id": "openai/gpt-4o-2024-11-20",
 			"name": "GPT-4o (2024-11-20)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62822,7 +63701,7 @@
 		"openai/gpt-4o-audio-preview": {
 			"id": "openai/gpt-4o-audio-preview",
 			"name": "GPT-4o Audio",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62841,7 +63720,7 @@
 		"openai/gpt-4o-mini": {
 			"id": "openai/gpt-4o-mini",
 			"name": "GPT-4o mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62861,7 +63740,7 @@
 		"openai/gpt-4o-mini-2024-07-18": {
 			"id": "openai/gpt-4o-mini-2024-07-18",
 			"name": "GPT-4o-mini (2024-07-18)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62881,7 +63760,7 @@
 		"openai/gpt-4o:extended": {
 			"id": "openai/gpt-4o:extended",
 			"name": "GPT-4o (extended)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -62901,7 +63780,7 @@
 		"openai/gpt-5": {
 			"id": "openai/gpt-5",
 			"name": "GPT-5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62930,7 +63809,7 @@
 		"openai/gpt-5-codex": {
 			"id": "openai/gpt-5-codex",
 			"name": "GPT-5 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62959,7 +63838,7 @@
 		"openai/gpt-5-image": {
 			"id": "openai/gpt-5-image",
 			"name": "GPT-5 Image",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -62988,7 +63867,7 @@
 		"openai/gpt-5-image-mini": {
 			"id": "openai/gpt-5-image-mini",
 			"name": "GPT-5 Image Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63017,7 +63896,7 @@
 		"openai/gpt-5-mini": {
 			"id": "openai/gpt-5-mini",
 			"name": "GPT-5 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63046,7 +63925,7 @@
 		"openai/gpt-5-nano": {
 			"id": "openai/gpt-5-nano",
 			"name": "GPT-5 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63075,7 +63954,7 @@
 		"openai/gpt-5-pro": {
 			"id": "openai/gpt-5-pro",
 			"name": "GPT-5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63104,7 +63983,7 @@
 		"openai/gpt-5.1": {
 			"id": "openai/gpt-5.1",
 			"name": "GPT-5.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63133,7 +64012,7 @@
 		"openai/gpt-5.1-chat": {
 			"id": "openai/gpt-5.1-chat",
 			"name": "GPT-5.1 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63153,7 +64032,7 @@
 		"openai/gpt-5.1-codex": {
 			"id": "openai/gpt-5.1-codex",
 			"name": "GPT-5.1 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63182,7 +64061,7 @@
 		"openai/gpt-5.1-codex-max": {
 			"id": "openai/gpt-5.1-codex-max",
 			"name": "GPT-5.1-Codex-Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63211,7 +64090,7 @@
 		"openai/gpt-5.1-codex-mini": {
 			"id": "openai/gpt-5.1-codex-mini",
 			"name": "GPT-5.1-Codex-Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63238,7 +64117,7 @@
 		"openai/gpt-5.2": {
 			"id": "openai/gpt-5.2",
 			"name": "GPT-5.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63267,7 +64146,7 @@
 		"openai/gpt-5.2-chat": {
 			"id": "openai/gpt-5.2-chat",
 			"name": "GPT-5.2 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63287,7 +64166,7 @@
 		"openai/gpt-5.2-codex": {
 			"id": "openai/gpt-5.2-codex",
 			"name": "GPT-5.2 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63316,7 +64195,7 @@
 		"openai/gpt-5.2-pro": {
 			"id": "openai/gpt-5.2-pro",
 			"name": "GPT-5.2 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63345,7 +64224,7 @@
 		"openai/gpt-5.3-chat": {
 			"id": "openai/gpt-5.3-chat",
 			"name": "GPT-5.3 Chat",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63365,7 +64244,7 @@
 		"openai/gpt-5.3-codex": {
 			"id": "openai/gpt-5.3-codex",
 			"name": "GPT-5.3 Codex",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63394,7 +64273,7 @@
 		"openai/gpt-5.4": {
 			"id": "openai/gpt-5.4",
 			"name": "GPT-5.4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63423,7 +64302,7 @@
 		"openai/gpt-5.4-mini": {
 			"id": "openai/gpt-5.4-mini",
 			"name": "GPT-5.4 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63452,7 +64331,7 @@
 		"openai/gpt-5.4-nano": {
 			"id": "openai/gpt-5.4-nano",
 			"name": "GPT-5.4 Nano",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63481,7 +64360,7 @@
 		"openai/gpt-5.4-pro": {
 			"id": "openai/gpt-5.4-pro",
 			"name": "GPT-5.4 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63510,7 +64389,7 @@
 		"openai/gpt-5.5": {
 			"id": "openai/gpt-5.5",
 			"name": "GPT-5.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63540,7 +64419,7 @@
 		"openai/gpt-5.5-pro": {
 			"id": "openai/gpt-5.5-pro",
 			"name": "GPT-5.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63570,7 +64449,7 @@
 		"openai/gpt-audio": {
 			"id": "openai/gpt-audio",
 			"name": "GPT Audio",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63589,7 +64468,7 @@
 		"openai/gpt-audio-mini": {
 			"id": "openai/gpt-audio-mini",
 			"name": "GPT Audio Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -63608,7 +64487,7 @@
 		"openai/gpt-chat-latest": {
 			"id": "openai/gpt-chat-latest",
 			"name": "GPT Chat Latest",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -63637,7 +64516,7 @@
 		"openai/gpt-oss-120b": {
 			"id": "openai/gpt-oss-120b",
 			"name": "GPT OSS 120B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63664,7 +64543,7 @@
 		"openai/gpt-oss-120b:exacto": {
 			"id": "openai/gpt-oss-120b:exacto",
 			"name": "gpt-oss-120b (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63691,7 +64570,7 @@
 		"openai/gpt-oss-120b:free": {
 			"id": "openai/gpt-oss-120b:free",
 			"name": "gpt-oss-120b (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63718,7 +64597,7 @@
 		"openai/gpt-oss-20b": {
 			"id": "openai/gpt-oss-20b",
 			"name": "GPT OSS 20B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63745,7 +64624,7 @@
 		"openai/gpt-oss-20b:free": {
 			"id": "openai/gpt-oss-20b:free",
 			"name": "gpt-oss-20b (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63759,7 +64638,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 8192,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -63772,7 +64651,7 @@
 		"openai/gpt-oss-safeguard-20b": {
 			"id": "openai/gpt-oss-safeguard-20b",
 			"name": "Safety GPT OSS 20B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63782,7 +64661,7 @@
 			"cost": {
 				"input": 0.075,
 				"output": 0.3,
-				"cacheRead": 0.037,
+				"cacheRead": 0.0375,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
@@ -63799,7 +64678,7 @@
 		"openai/o1": {
 			"id": "openai/o1",
 			"name": "o1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63829,7 +64708,7 @@
 		"openai/o3": {
 			"id": "openai/o3",
 			"name": "o3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63859,7 +64738,7 @@
 		"openai/o3-deep-research": {
 			"id": "openai/o3-deep-research",
 			"name": "o3 Deep Research",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63889,7 +64768,7 @@
 		"openai/o3-mini": {
 			"id": "openai/o3-mini",
 			"name": "o3-mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63918,7 +64797,7 @@
 		"openai/o3-mini-high": {
 			"id": "openai/o3-mini-high",
 			"name": "o3 Mini High",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -63937,7 +64816,7 @@
 		"openai/o3-pro": {
 			"id": "openai/o3-pro",
 			"name": "o3-pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63967,7 +64846,7 @@
 		"openai/o4-mini": {
 			"id": "openai/o4-mini",
 			"name": "o4-mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -63997,7 +64876,7 @@
 		"openai/o4-mini-deep-research": {
 			"id": "openai/o4-mini-deep-research",
 			"name": "o4 Mini Deep Research",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64027,7 +64906,7 @@
 		"openai/o4-mini-high": {
 			"id": "openai/o4-mini-high",
 			"name": "o4 Mini High",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64057,7 +64936,7 @@
 		"openrouter/aurora-alpha": {
 			"id": "openrouter/aurora-alpha",
 			"name": "Aurora Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64085,7 +64964,7 @@
 		"openrouter/auto": {
 			"id": "openrouter/auto",
 			"name": "Auto Router",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64114,7 +64993,7 @@
 		"openrouter/elephant-alpha": {
 			"id": "openrouter/elephant-alpha",
 			"name": "Elephant",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -64133,7 +65012,7 @@
 		"openrouter/free": {
 			"id": "openrouter/free",
 			"name": "Free Models Router",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64162,7 +65041,7 @@
 		"openrouter/healer-alpha": {
 			"id": "openrouter/healer-alpha",
 			"name": "Healer Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64191,7 +65070,7 @@
 		"openrouter/hunter-alpha": {
 			"id": "openrouter/hunter-alpha",
 			"name": "Hunter Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64219,7 +65098,7 @@
 		"openrouter/owl-alpha": {
 			"id": "openrouter/owl-alpha",
 			"name": "Owl Alpha",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64247,10 +65126,38 @@
 				"supportsToolChoice": false
 			}
 		},
+		"poolside/laguna-m.1": {
+			"id": "poolside/laguna-m.1",
+			"name": "Laguna M.1",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.19999999999999998,
+				"output": 0.39999999999999997,
+				"cacheRead": 0.09999999999999999,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
 		"poolside/laguna-m.1:free": {
 			"id": "poolside/laguna-m.1:free",
 			"name": "Laguna M.1 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64275,10 +65182,38 @@
 				]
 			}
 		},
+		"poolside/laguna-xs.2": {
+			"id": "poolside/laguna-xs.2",
+			"name": "Laguna XS.2",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.09999999999999999,
+				"output": 0.19999999999999998,
+				"cacheRead": 0.049999999999999996,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high"
+				]
+			}
+		},
 		"poolside/laguna-xs.2:free": {
 			"id": "poolside/laguna-xs.2:free",
 			"name": "Laguna XS.2 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -64306,7 +65241,7 @@
 		"prime-intellect/intellect-3": {
 			"id": "prime-intellect/intellect-3",
 			"name": "INTELLECT-3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64334,7 +65269,7 @@
 		"qwen/qwen-2.5-72b-instruct": {
 			"id": "qwen/qwen-2.5-72b-instruct",
 			"name": "Qwen2.5 72B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64353,7 +65288,7 @@
 		"qwen/qwen-2.5-7b-instruct": {
 			"id": "qwen/qwen-2.5-7b-instruct",
 			"name": "Qwen2.5 7B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64372,7 +65307,7 @@
 		"qwen/qwen-max": {
 			"id": "qwen/qwen-max",
 			"name": "Qwen-Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64391,7 +65326,7 @@
 		"qwen/qwen-plus": {
 			"id": "qwen/qwen-plus",
 			"name": "Qwen-Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64410,7 +65345,7 @@
 		"qwen/qwen-plus-2025-07-28": {
 			"id": "qwen/qwen-plus-2025-07-28",
 			"name": "Qwen Plus 0728",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64429,7 +65364,7 @@
 		"qwen/qwen-plus-2025-07-28:thinking": {
 			"id": "qwen/qwen-plus-2025-07-28:thinking",
 			"name": "Qwen Plus 0728 (thinking)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64457,7 +65392,7 @@
 		"qwen/qwen-turbo": {
 			"id": "qwen/qwen-turbo",
 			"name": "Qwen-Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64476,7 +65411,7 @@
 		"qwen/qwen-vl-max": {
 			"id": "qwen/qwen-vl-max",
 			"name": "Qwen VL Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64496,7 +65431,7 @@
 		"qwen/qwen3-14b": {
 			"id": "qwen/qwen3-14b",
 			"name": "Qwen3 14B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64524,7 +65459,7 @@
 		"qwen/qwen3-235b-a22b": {
 			"id": "qwen/qwen3-235b-a22b",
 			"name": "Qwen3 235B A22B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64552,7 +65487,7 @@
 		"qwen/qwen3-235b-a22b-2507": {
 			"id": "qwen/qwen3-235b-a22b-2507",
 			"name": "Qwen3 235B A22B Instruct 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64580,7 +65515,7 @@
 		"qwen/qwen3-235b-a22b-thinking-2507": {
 			"id": "qwen/qwen3-235b-a22b-thinking-2507",
 			"name": "Qwen3 235B A22B Thinking 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64609,7 +65544,7 @@
 		"qwen/qwen3-30b-a3b": {
 			"id": "qwen/qwen3-30b-a3b",
 			"name": "Qwen3 30B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64637,7 +65572,7 @@
 		"qwen/qwen3-30b-a3b-instruct-2507": {
 			"id": "qwen/qwen3-30b-a3b-instruct-2507",
 			"name": "Qwen3 30B A3B Instruct 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64656,7 +65591,7 @@
 		"qwen/qwen3-30b-a3b-thinking-2507": {
 			"id": "qwen/qwen3-30b-a3b-thinking-2507",
 			"name": "Qwen3 30B A3B Thinking 2507",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64685,7 +65620,7 @@
 		"qwen/qwen3-32b": {
 			"id": "qwen/qwen3-32b",
 			"name": "Qwen3-32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64713,7 +65648,7 @@
 		"qwen/qwen3-4b": {
 			"id": "qwen/qwen3-4b",
 			"name": "Qwen3 4B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64741,7 +65676,7 @@
 		"qwen/qwen3-4b:free": {
 			"id": "qwen/qwen3-4b:free",
 			"name": "Qwen3 4B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64769,7 +65704,7 @@
 		"qwen/qwen3-8b": {
 			"id": "qwen/qwen3-8b",
 			"name": "Qwen3 8B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64797,7 +65732,7 @@
 		"qwen/qwen3-coder": {
 			"id": "qwen/qwen3-coder",
 			"name": "Qwen3 Coder 480B A35B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64816,7 +65751,7 @@
 		"qwen/qwen3-coder-30b-a3b-instruct": {
 			"id": "qwen/qwen3-coder-30b-a3b-instruct",
 			"name": "Qwen3 Coder 30B A3B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64835,7 +65770,7 @@
 		"qwen/qwen3-coder-flash": {
 			"id": "qwen/qwen3-coder-flash",
 			"name": "Qwen3 Coder Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64854,7 +65789,7 @@
 		"qwen/qwen3-coder-next": {
 			"id": "qwen/qwen3-coder-next",
 			"name": "Qwen3 Coder Next",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64873,7 +65808,7 @@
 		"qwen/qwen3-coder-plus": {
 			"id": "qwen/qwen3-coder-plus",
 			"name": "Qwen3 Coder Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64892,7 +65827,7 @@
 		"qwen/qwen3-coder:exacto": {
 			"id": "qwen/qwen3-coder:exacto",
 			"name": "Qwen3 Coder 480B A35B (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64911,7 +65846,7 @@
 		"qwen/qwen3-coder:free": {
 			"id": "qwen/qwen3-coder:free",
 			"name": "Qwen3 Coder 480B A35B (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64930,7 +65865,7 @@
 		"qwen/qwen3-max": {
 			"id": "qwen/qwen3-max",
 			"name": "Qwen3 Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64949,7 +65884,7 @@
 		"qwen/qwen3-max-thinking": {
 			"id": "qwen/qwen3-max-thinking",
 			"name": "Qwen3 Max Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -64978,7 +65913,7 @@
 		"qwen/qwen3-next-80b-a3b-instruct": {
 			"id": "qwen/qwen3-next-80b-a3b-instruct",
 			"name": "Qwen3-Next-80B-A3B-Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -64997,7 +65932,7 @@
 		"qwen/qwen3-next-80b-a3b-instruct:free": {
 			"id": "qwen/qwen3-next-80b-a3b-instruct:free",
 			"name": "Qwen3 Next 80B A3B Instruct (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65016,7 +65951,7 @@
 		"qwen/qwen3-next-80b-a3b-thinking": {
 			"id": "qwen/qwen3-next-80b-a3b-thinking",
 			"name": "Qwen3 Next 80B A3B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65045,7 +65980,7 @@
 		"qwen/qwen3-vl-235b-a22b-instruct": {
 			"id": "qwen/qwen3-vl-235b-a22b-instruct",
 			"name": "Qwen3 VL 235B A22B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65065,7 +66000,7 @@
 		"qwen/qwen3-vl-235b-a22b-thinking": {
 			"id": "qwen/qwen3-vl-235b-a22b-thinking",
 			"name": "Qwen3 VL 235B A22B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65095,7 +66030,7 @@
 		"qwen/qwen3-vl-30b-a3b-instruct": {
 			"id": "qwen/qwen3-vl-30b-a3b-instruct",
 			"name": "Qwen3 VL 30B A3B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65115,7 +66050,7 @@
 		"qwen/qwen3-vl-30b-a3b-thinking": {
 			"id": "qwen/qwen3-vl-30b-a3b-thinking",
 			"name": "Qwen3 VL 30B A3B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65145,7 +66080,7 @@
 		"qwen/qwen3-vl-32b-instruct": {
 			"id": "qwen/qwen3-vl-32b-instruct",
 			"name": "Qwen3 VL 32B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65165,7 +66100,7 @@
 		"qwen/qwen3-vl-8b-instruct": {
 			"id": "qwen/qwen3-vl-8b-instruct",
 			"name": "Qwen3 VL 8B Instruct",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65185,7 +66120,7 @@
 		"qwen/qwen3-vl-8b-thinking": {
 			"id": "qwen/qwen3-vl-8b-thinking",
 			"name": "Qwen3 VL 8B Thinking",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65215,7 +66150,7 @@
 		"qwen/qwen3.5-122b-a10b": {
 			"id": "qwen/qwen3.5-122b-a10b",
 			"name": "Qwen3.5 122B-A10B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65244,7 +66179,7 @@
 		"qwen/qwen3.5-27b": {
 			"id": "qwen/qwen3.5-27b",
 			"name": "Qwen3.5-27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65273,7 +66208,7 @@
 		"qwen/qwen3.5-35b-a3b": {
 			"id": "qwen/qwen3.5-35b-a3b",
 			"name": "Qwen3.5-35B-A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65302,7 +66237,7 @@
 		"qwen/qwen3.5-397b-a17b": {
 			"id": "qwen/qwen3.5-397b-a17b",
 			"name": "Qwen3.5 397B A17B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65311,12 +66246,12 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.39,
-				"output": 2.34,
+				"input": 0.385,
+				"output": 2.4499999999999997,
 				"cacheRead": 0.195,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
+			"contextWindow": 256000,
 			"maxTokens": 65536,
 			"thinking": {
 				"mode": "effort",
@@ -65331,7 +66266,7 @@
 		"qwen/qwen3.5-9b": {
 			"id": "qwen/qwen3.5-9b",
 			"name": "Qwen3.5-9B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65360,7 +66295,7 @@
 		"qwen/qwen3.5-flash-02-23": {
 			"id": "qwen/qwen3.5-flash-02-23",
 			"name": "Qwen3.5-Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65389,7 +66324,7 @@
 		"qwen/qwen3.5-plus-02-15": {
 			"id": "qwen/qwen3.5-plus-02-15",
 			"name": "Qwen3.5 Plus 2026-02-15",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65418,7 +66353,7 @@
 		"qwen/qwen3.5-plus-20260420": {
 			"id": "qwen/qwen3.5-plus-20260420",
 			"name": "Qwen3.5 Plus 2026-04-20",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65447,7 +66382,7 @@
 		"qwen/qwen3.6-27b": {
 			"id": "qwen/qwen3.6-27b",
 			"name": "Qwen3.6 27B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65476,7 +66411,7 @@
 		"qwen/qwen3.6-35b-a3b": {
 			"id": "qwen/qwen3.6-35b-a3b",
 			"name": "Qwen3.6 35B A3B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65485,7 +66420,7 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.15,
+				"input": 0.14,
 				"output": 1,
 				"cacheRead": 0.049999999999999996,
 				"cacheWrite": 0
@@ -65505,7 +66440,7 @@
 		"qwen/qwen3.6-flash": {
 			"id": "qwen/qwen3.6-flash",
 			"name": "Qwen3.6 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65534,7 +66469,7 @@
 		"qwen/qwen3.6-max-preview": {
 			"id": "qwen/qwen3.6-max-preview",
 			"name": "Qwen3.6 Max Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65562,7 +66497,7 @@
 		"qwen/qwen3.6-plus": {
 			"id": "qwen/qwen3.6-plus",
 			"name": "Qwen3.6 Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65591,7 +66526,7 @@
 		"qwen/qwen3.6-plus-preview:free": {
 			"id": "qwen/qwen3.6-plus-preview:free",
 			"name": "Qwen3.6 Plus Preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65619,7 +66554,7 @@
 		"qwen/qwen3.6-plus:free": {
 			"id": "qwen/qwen3.6-plus:free",
 			"name": "Qwen3.6 Plus (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65648,7 +66583,7 @@
 		"qwen/qwen3.7-max": {
 			"id": "qwen/qwen3.7-max",
 			"name": "Qwen3.7 Max",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65676,7 +66611,7 @@
 		"qwen/qwen3.7-plus": {
 			"id": "qwen/qwen3.7-plus",
 			"name": "Qwen3.7 Plus",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65705,7 +66640,7 @@
 		"qwen/qwq-32b": {
 			"id": "qwen/qwq-32b",
 			"name": "QwQ 32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65733,7 +66668,7 @@
 		"reka/reka-edge": {
 			"id": "reka/reka-edge",
 			"name": "Reka Edge",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -65753,7 +66688,7 @@
 		"rekaai/reka-edge": {
 			"id": "rekaai/reka-edge",
 			"name": "Reka Edge",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -65773,7 +66708,7 @@
 		"relace/relace-search": {
 			"id": "relace/relace-search",
 			"name": "Relace Search",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65792,7 +66727,7 @@
 		"sao10k/l3-euryale-70b": {
 			"id": "sao10k/l3-euryale-70b",
 			"name": "Llama 3 Euryale 70B v2.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65811,7 +66746,7 @@
 		"sao10k/l3.1-euryale-70b": {
 			"id": "sao10k/l3.1-euryale-70b",
 			"name": "Llama 3.1 Euryale 70B v2.2",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65830,7 +66765,7 @@
 		"stepfun/step-3.5-flash": {
 			"id": "stepfun/step-3.5-flash",
 			"name": "Step 3.5 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65861,7 +66796,7 @@
 		"stepfun/step-3.5-flash:free": {
 			"id": "stepfun/step-3.5-flash:free",
 			"name": "Step 3.5 Flash (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -65892,7 +66827,7 @@
 		"stepfun/step-3.7-flash": {
 			"id": "stepfun/step-3.7-flash",
 			"name": "Step 3.7 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65924,7 +66859,7 @@
 		"tencent/hy3-preview": {
 			"id": "tencent/hy3-preview",
 			"name": "Hy3 Preview",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65932,13 +66867,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.063,
-				"output": 0.21,
-				"cacheRead": 0.020999999999999998,
+				"input": 0.06599999999999999,
+				"output": 0.26,
+				"cacheRead": 0.029,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 64000,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -65952,7 +66887,7 @@
 		"tencent/hy3-preview:free": {
 			"id": "tencent/hy3-preview:free",
 			"name": "Hy3 preview (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -65980,7 +66915,7 @@
 		"thedrummer/rocinante-12b": {
 			"id": "thedrummer/rocinante-12b",
 			"name": "Rocinante 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -65999,7 +66934,7 @@
 		"thedrummer/unslopnemo-12b": {
 			"id": "thedrummer/unslopnemo-12b",
 			"name": "UnslopNemo 12B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66018,7 +66953,7 @@
 		"tngtech/deepseek-r1t2-chimera": {
 			"id": "tngtech/deepseek-r1t2-chimera",
 			"name": "DeepSeek R1T2 Chimera",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66052,7 +66987,7 @@
 		"tngtech/tng-r1t-chimera": {
 			"id": "tngtech/tng-r1t-chimera",
 			"name": "R1T Chimera",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66080,7 +67015,7 @@
 		"upstage/solar-pro-3": {
 			"id": "upstage/solar-pro-3",
 			"name": "Solar Pro 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66108,7 +67043,7 @@
 		"upstage/solar-pro-3:free": {
 			"id": "upstage/solar-pro-3:free",
 			"name": "Solar Pro 3 (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66136,7 +67071,7 @@
 		"x-ai/grok-3": {
 			"id": "x-ai/grok-3",
 			"name": "Grok 3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66155,7 +67090,7 @@
 		"x-ai/grok-3-beta": {
 			"id": "x-ai/grok-3-beta",
 			"name": "Grok 3 Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66174,7 +67109,7 @@
 		"x-ai/grok-3-mini": {
 			"id": "x-ai/grok-3-mini",
 			"name": "Grok 3 Mini",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66202,7 +67137,7 @@
 		"x-ai/grok-3-mini-beta": {
 			"id": "x-ai/grok-3-mini-beta",
 			"name": "Grok 3 Mini Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66230,7 +67165,7 @@
 		"x-ai/grok-4": {
 			"id": "x-ai/grok-4",
 			"name": "Grok 4",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66259,7 +67194,7 @@
 		"x-ai/grok-4-fast": {
 			"id": "x-ai/grok-4-fast",
 			"name": "Grok 4 Fast",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66288,7 +67223,7 @@
 		"x-ai/grok-4.1-fast": {
 			"id": "x-ai/grok-4.1-fast",
 			"name": "Grok 4.1 Fast",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66317,7 +67252,7 @@
 		"x-ai/grok-4.20": {
 			"id": "x-ai/grok-4.20",
 			"name": "Grok 4.20",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66346,7 +67281,7 @@
 		"x-ai/grok-4.20-beta": {
 			"id": "x-ai/grok-4.20-beta",
 			"name": "Grok 4.20 Beta",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66375,7 +67310,7 @@
 		"x-ai/grok-4.3": {
 			"id": "x-ai/grok-4.3",
 			"name": "Grok 4.3",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66404,7 +67339,7 @@
 		"x-ai/grok-build-0.1": {
 			"id": "x-ai/grok-build-0.1",
 			"name": "Grok Build 0.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66433,7 +67368,7 @@
 		"x-ai/grok-code-fast-1": {
 			"id": "x-ai/grok-code-fast-1",
 			"name": "Grok Code Fast 1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66461,7 +67396,7 @@
 		"xiaomi/mimo-v2-flash": {
 			"id": "xiaomi/mimo-v2-flash",
 			"name": "MiMo-V2-Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66489,7 +67424,7 @@
 		"xiaomi/mimo-v2-omni": {
 			"id": "xiaomi/mimo-v2-omni",
 			"name": "MiMo V2 Omni",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66518,7 +67453,7 @@
 		"xiaomi/mimo-v2-pro": {
 			"id": "xiaomi/mimo-v2-pro",
 			"name": "MiMo-V2-Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66546,7 +67481,7 @@
 		"xiaomi/mimo-v2.5": {
 			"id": "xiaomi/mimo-v2.5",
 			"name": "MiMo-V2.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66575,7 +67510,7 @@
 		"xiaomi/mimo-v2.5-pro": {
 			"id": "xiaomi/mimo-v2.5-pro",
 			"name": "MiMo V2.5 Pro",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66603,7 +67538,7 @@
 		"z-ai/glm-4-32b": {
 			"id": "z-ai/glm-4-32b",
 			"name": "GLM 4 32B",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": false,
@@ -66622,7 +67557,7 @@
 		"z-ai/glm-4.5": {
 			"id": "z-ai/glm-4.5",
 			"name": "GLM 4.5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66650,7 +67585,7 @@
 		"z-ai/glm-4.5-air": {
 			"id": "z-ai/glm-4.5-air",
 			"name": "GLM 4.5 Air",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66658,13 +67593,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.125,
+				"input": 0.13,
 				"output": 0.85,
-				"cacheRead": 0.06,
+				"cacheRead": 0.024999999999999998,
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 131070,
+			"maxTokens": 98304,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -66678,7 +67613,7 @@
 		"z-ai/glm-4.5-air:free": {
 			"id": "z-ai/glm-4.5-air:free",
 			"name": "GLM 4.5 Air (free)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66706,7 +67641,7 @@
 		"z-ai/glm-4.5v": {
 			"id": "z-ai/glm-4.5v",
 			"name": "GLM 4.5V",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66735,7 +67670,7 @@
 		"z-ai/glm-4.6": {
 			"id": "z-ai/glm-4.6",
 			"name": "GLM 4.6",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66763,7 +67698,7 @@
 		"z-ai/glm-4.6:exacto": {
 			"id": "z-ai/glm-4.6:exacto",
 			"name": "GLM 4.6 (exacto)",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66791,7 +67726,7 @@
 		"z-ai/glm-4.6v": {
 			"id": "z-ai/glm-4.6v",
 			"name": "GLM 4.6V",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66820,7 +67755,7 @@
 		"z-ai/glm-4.7": {
 			"id": "z-ai/glm-4.7",
 			"name": "GLM 4.7",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66848,7 +67783,7 @@
 		"z-ai/glm-4.7-flash": {
 			"id": "z-ai/glm-4.7-flash",
 			"name": "GLM 4.7 Flash",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66876,7 +67811,7 @@
 		"z-ai/glm-5": {
 			"id": "z-ai/glm-5",
 			"name": "GLM 5",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"provider": "openrouter",
 			"reasoning": true,
@@ -66904,7 +67839,7 @@
 		"z-ai/glm-5-turbo": {
 			"id": "z-ai/glm-5-turbo",
 			"name": "GLM 5 Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -66923,7 +67858,7 @@
 		"z-ai/glm-5.1": {
 			"id": "z-ai/glm-5.1",
 			"name": "GLM 5.1",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": true,
@@ -66948,10 +67883,39 @@
 				]
 			}
 		},
+		"z-ai/glm-5.2": {
+			"id": "z-ai/glm-5.2",
+			"name": "GLM 5.2",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.2,
+				"output": 4.1,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
 		"z-ai/glm-5v-turbo": {
 			"id": "z-ai/glm-5v-turbo",
 			"name": "GLM 5V Turbo",
-			"api": "openai-completions",
+			"api": "openrouter",
 			"provider": "openrouter",
 			"baseUrl": "https://openrouter.ai/api/v1",
 			"reasoning": false,
@@ -67049,484 +68013,9 @@
 		}
 	},
 	"synthetic": {
-		"hf:deepseek-ai/DeepSeek-R1": {
-			"id": "hf:deepseek-ai/DeepSeek-R1",
-			"name": "DeepSeek R1",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:deepseek-ai/DeepSeek-R1-0528": {
-			"id": "hf:deepseek-ai/DeepSeek-R1-0528",
-			"name": "DeepSeek R1 (0528)",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 3,
-				"output": 8,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:deepseek-ai/DeepSeek-V3": {
-			"id": "hf:deepseek-ai/DeepSeek-V3",
-			"name": "DeepSeek V3",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 1.25,
-				"output": 1.25,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:deepseek-ai/DeepSeek-V3-0324": {
-			"id": "hf:deepseek-ai/DeepSeek-V3-0324",
-			"name": "DeepSeek V3 (0324)",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 1.2,
-				"output": 1.2,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000
-		},
-		"hf:deepseek-ai/DeepSeek-V3.1": {
-			"id": "hf:deepseek-ai/DeepSeek-V3.1",
-			"name": "DeepSeek V3.1",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.56,
-				"output": 1.68,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:deepseek-ai/DeepSeek-V3.1-Terminus": {
-			"id": "hf:deepseek-ai/DeepSeek-V3.1-Terminus",
-			"name": "DeepSeek V3.1 Terminus",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 1.2,
-				"output": 1.2,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 128000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:deepseek-ai/DeepSeek-V3.2": {
-			"id": "hf:deepseek-ai/DeepSeek-V3.2",
-			"name": "DeepSeek V3.2",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.27,
-				"output": 0.4,
-				"cacheRead": 0.27,
-				"cacheWrite": 0
-			},
-			"contextWindow": 162816,
-			"maxTokens": 8000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"effortMap": {
-					"minimal": "high",
-					"low": "high",
-					"medium": "high",
-					"high": "high",
-					"xhigh": "max"
-				}
-			}
-		},
-		"hf:meta-llama/Llama-3.1-405B-Instruct": {
-			"id": "hf:meta-llama/Llama-3.1-405B-Instruct",
-			"name": "Llama-3.1-405B-Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 3,
-				"output": 3,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 32768,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
-		"hf:meta-llama/Llama-3.1-70B-Instruct": {
-			"id": "hf:meta-llama/Llama-3.1-70B-Instruct",
-			"name": "Llama-3.1-70B-Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.9,
-				"output": 0.9,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 32768,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
-		"hf:meta-llama/Llama-3.1-8B-Instruct": {
-			"id": "hf:meta-llama/Llama-3.1-8B-Instruct",
-			"name": "Llama-3.1-8B-Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.2,
-				"output": 0.2,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 32768,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
-		"hf:meta-llama/Llama-3.3-70B-Instruct": {
-			"id": "hf:meta-llama/Llama-3.3-70B-Instruct",
-			"name": "Llama-3.3-70B-Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.9,
-				"output": 0.9,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 128000,
-			"maxTokens": 32768,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
-		"hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
-			"id": "hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-			"name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.22,
-				"output": 0.88,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 524000,
-			"maxTokens": 4096
-		},
-		"hf:meta-llama/Llama-4-Scout-17B-16E-Instruct": {
-			"id": "hf:meta-llama/Llama-4-Scout-17B-16E-Instruct",
-			"name": "Llama-4-Scout-17B-16E-Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.15,
-				"output": 0.6,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 328000,
-			"maxTokens": 4096
-		},
-		"hf:MiniMaxAI/MiniMax-M2": {
-			"id": "hf:MiniMaxAI/MiniMax-M2",
-			"name": "MiniMax-M2",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 196608,
-			"maxTokens": 131000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"low",
-					"medium",
-					"high"
-				],
-				"requiresEffort": true
-			}
-		},
-		"hf:MiniMaxAI/MiniMax-M2.1": {
-			"id": "hf:MiniMaxAI/MiniMax-M2.1",
-			"name": "MiniMax-M2.1",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 204800,
-			"maxTokens": 131072,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"low",
-					"medium",
-					"high"
-				],
-				"requiresEffort": true
-			}
-		},
-		"hf:MiniMaxAI/MiniMax-M2.5": {
-			"id": "hf:MiniMaxAI/MiniMax-M2.5",
-			"name": "MiniMax-M2.5",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.6,
-				"output": 3,
-				"cacheRead": 0.6,
-				"cacheWrite": 0
-			},
-			"contextWindow": 191488,
-			"maxTokens": 65536,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"low",
-					"medium",
-					"high"
-				],
-				"requiresEffort": true
-			}
-		},
 		"hf:MiniMaxAI/MiniMax-M3": {
 			"id": "hf:MiniMaxAI/MiniMax-M3",
-			"name": "MiniMax-M3",
+			"name": "MiniMaxAI/MiniMax-M3",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67554,88 +68043,9 @@
 				]
 			}
 		},
-		"hf:moonshotai/Kimi-K2-Instruct-0905": {
-			"id": "hf:moonshotai/Kimi-K2-Instruct-0905",
-			"name": "Kimi K2 0905",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 1.2,
-				"output": 1.2,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 32768
-		},
-		"hf:moonshotai/Kimi-K2-Thinking": {
-			"id": "hf:moonshotai/Kimi-K2-Thinking",
-			"name": "Kimi K2 Thinking",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 262144,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				],
-				"requiresEffort": true
-			}
-		},
-		"hf:moonshotai/Kimi-K2.5": {
-			"id": "hf:moonshotai/Kimi-K2.5",
-			"name": "Kimi K2.5",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 65536,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
 		"hf:moonshotai/Kimi-K2.6": {
 			"id": "hf:moonshotai/Kimi-K2.6",
-			"name": "Kimi K2.6",
+			"name": "moonshotai/Kimi-K2.6",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67663,39 +68073,9 @@
 				]
 			}
 		},
-		"hf:nvidia/Kimi-K2.5-NVFP4": {
-			"id": "hf:nvidia/Kimi-K2.5-NVFP4",
-			"name": "Kimi K2.5 (NVFP4)",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 65536,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
 		"hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4": {
 			"id": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
-			"name": "Nemotron 3 Super 120B",
+			"name": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67724,7 +68104,7 @@
 		},
 		"hf:openai/gpt-oss-120b": {
 			"id": "hf:openai/gpt-oss-120b",
-			"name": "GPT OSS 120B",
+			"name": "openai/gpt-oss-120b",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67738,7 +68118,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 128000,
+			"contextWindow": 131072,
 			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
@@ -67749,76 +68129,9 @@
 				]
 			}
 		},
-		"hf:Qwen/Qwen3-235B-A22B-Instruct-2507": {
-			"id": "hf:Qwen/Qwen3-235B-A22B-Instruct-2507",
-			"name": "Qwen 3 235B Instruct",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.2,
-				"output": 0.6,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 256000,
-			"maxTokens": 32000
-		},
-		"hf:Qwen/Qwen3-235B-A22B-Thinking-2507": {
-			"id": "hf:Qwen/Qwen3-235B-A22B-Thinking-2507",
-			"name": "Qwen3 235B A22B Thinking 2507",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.65,
-				"output": 3,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 256000,
-			"maxTokens": 32000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high"
-				],
-				"requiresEffort": true
-			}
-		},
-		"hf:Qwen/Qwen3-Coder-480B-A35B-Instruct": {
-			"id": "hf:Qwen/Qwen3-Coder-480B-A35B-Instruct",
-			"name": "Qwen 3 Coder 480B",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": false,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 2,
-				"output": 2,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 256000,
-			"maxTokens": 32000
-		},
 		"hf:Qwen/Qwen3.5-397B-A17B": {
 			"id": "hf:Qwen/Qwen3.5-397B-A17B",
-			"name": "Qwen3.5-97B-A17B",
+			"name": "Qwen/Qwen3.5-397B-A17B",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67864,38 +68177,9 @@
 			"contextWindow": 262144,
 			"maxTokens": 8192
 		},
-		"hf:zai-org/GLM-4.6": {
-			"id": "hf:zai-org/GLM-4.6",
-			"name": "GLM 4.6",
-			"api": "openai-completions",
-			"provider": "synthetic",
-			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
-			"input": [
-				"text"
-			],
-			"cost": {
-				"input": 0.55,
-				"output": 2.19,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 200000,
-			"maxTokens": 64000,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
 		"hf:zai-org/GLM-4.7": {
 			"id": "hf:zai-org/GLM-4.7",
-			"name": "GLM 4.7",
+			"name": "zai-org/GLM-4.7",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67909,7 +68193,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 200000,
+			"contextWindow": 202752,
 			"maxTokens": 64000,
 			"thinking": {
 				"mode": "effort",
@@ -67924,7 +68208,7 @@
 		},
 		"hf:zai-org/GLM-4.7-Flash": {
 			"id": "hf:zai-org/GLM-4.7-Flash",
-			"name": "GLM-4.7-Flash",
+			"name": "zai-org/GLM-4.7-Flash",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67951,9 +68235,9 @@
 				]
 			}
 		},
-		"hf:zai-org/GLM-5": {
-			"id": "hf:zai-org/GLM-5",
-			"name": "GLM-5",
+		"hf:zai-org/GLM-5.1": {
+			"id": "hf:zai-org/GLM-5.1",
+			"name": "zai-org/GLM-5.1",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
@@ -67980,34 +68264,24 @@
 				]
 			}
 		},
-		"hf:zai-org/GLM-5.1": {
-			"id": "hf:zai-org/GLM-5.1",
-			"name": "GLM 5.1",
+		"hf:zai-org/GLM-5.2": {
+			"id": "hf:zai-org/GLM-5.2",
+			"name": "zai-org/GLM-5.2",
 			"api": "openai-completions",
 			"provider": "synthetic",
 			"baseUrl": "https://api.synthetic.new/openai/v1",
-			"reasoning": true,
+			"reasoning": false,
 			"input": [
 				"text"
 			],
 			"cost": {
-				"input": 1,
-				"output": 3,
-				"cacheRead": 1,
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 196608,
-			"maxTokens": 65536,
-			"thinking": {
-				"mode": "effort",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
+			"contextWindow": 524288,
+			"maxTokens": 8192
 		},
 		"syn:large:text": {
 			"id": "syn:large:text",
@@ -68025,7 +68299,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 196608,
+			"contextWindow": 524288,
 			"maxTokens": 8192
 		},
 		"syn:large:vision": {
@@ -68791,8 +69065,8 @@
 				"text"
 			],
 			"cost": {
-				"input": 2.5,
-				"output": 7.5,
+				"input": 1.25,
+				"output": 3.75,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
@@ -68906,7 +69180,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -68915,7 +69189,11 @@
 					"medium",
 					"high",
 					"xhigh"
-				]
+				],
+				"requiresEffort": true
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-flash": {
@@ -68936,7 +69214,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -68946,11 +69224,14 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-glm-5.1": {
 			"id": "umans-glm-5.1",
-			"name": "GLM 5.1",
+			"name": "Umans GLM 5.1",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -68965,8 +69246,8 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 204800,
-			"maxTokens": 131072,
+			"contextWindow": 202752,
+			"maxTokens": 131071,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -68976,11 +69257,47 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
+			}
+		},
+		"umans-glm-5.2": {
+			"id": "umans-glm-5.2",
+			"name": "Umans GLM 5.2",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 405504,
+			"maxTokens": 131071,
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
 		"umans-kimi-k2.6": {
 			"id": "umans-kimi-k2.6",
-			"name": "Kimi K2.6",
+			"name": "Umans Kimi K2.6",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -68996,37 +69313,7 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
-			"thinking": {
-				"mode": "budget",
-				"efforts": [
-					"minimal",
-					"low",
-					"medium",
-					"high",
-					"xhigh"
-				]
-			}
-		},
-		"umans-kimi-k2.7": {
-			"id": "umans-kimi-k2.7",
-			"name": "Kimi K2.7 Code",
-			"api": "anthropic-messages",
-			"provider": "umans",
-			"baseUrl": "https://api.code.umans.ai",
-			"reasoning": true,
-			"input": [
-				"text",
-				"image"
-			],
-			"cost": {
-				"input": 0,
-				"output": 0,
-				"cacheRead": 0,
-				"cacheWrite": 0
-			},
-			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -69037,11 +69324,14 @@
 					"xhigh"
 				],
 				"requiresEffort": true
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		},
-		"umans-qwen3.6-35b-a3b": {
-			"id": "umans-qwen3.6-35b-a3b",
-			"name": "Qwen3.6 35B A3B",
+		"umans-kimi-k2.7": {
+			"id": "umans-kimi-k2.7",
+			"name": "Umans Kimi K2.7 Code",
 			"api": "anthropic-messages",
 			"provider": "umans",
 			"baseUrl": "https://api.code.umans.ai",
@@ -69057,7 +69347,41 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 262144,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"requiresEffort": true
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
+			}
+		},
+		"umans-qwen3.6-35b-a3b": {
+			"id": "umans-qwen3.6-35b-a3b",
+			"name": "Umans Qwen3.6 35B A3B",
+			"api": "anthropic-messages",
+			"provider": "umans",
+			"baseUrl": "https://api.code.umans.ai",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -69067,6 +69391,9 @@
 					"high",
 					"xhigh"
 				]
+			},
+			"compat": {
+				"escapeBuiltinToolNames": true
 			}
 		}
 	},
@@ -69769,6 +70096,28 @@
 			},
 			"contextWindow": 200000,
 			"maxTokens": 131072,
+			"compat": {
+				"supportsUsageInStreaming": false
+			}
+		},
+		"e2ee-glm-5-2-p": {
+			"id": "e2ee-glm-5-2-p",
+			"name": "e2ee-glm-5-2-p",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 524288,
+			"maxTokens": null,
 			"compat": {
 				"supportsUsageInStreaming": false
 			}
@@ -70528,6 +70877,36 @@
 			},
 			"contextWindow": 256000,
 			"maxTokens": 65536,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"kimi-k2-7-code": {
+			"id": "kimi-k2-7-code",
+			"name": "Kimi K2.7 Code",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.9,
+				"output": 4.3,
+				"cacheRead": 0.2,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 32768,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -71956,6 +72335,35 @@
 					"xhigh"
 				]
 			}
+		},
+		"zai-org-glm-5-2": {
+			"id": "zai-org-glm-5-2",
+			"name": "GLM 5.2",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
 		}
 	},
 	"vercel-ai-gateway": {
@@ -72288,7 +72696,8 @@
 				"supportsForcedToolChoice": true,
 				"supportsSamplingParams": true,
 				"requiresToolResultId": false,
-				"replayUnsignedThinking": false
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
 			}
 		},
 		"alibaba/qwen3-max-preview": {
@@ -74045,14 +74454,17 @@
 			"contextWindow": 205000,
 			"maxTokens": 205000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74075,14 +74487,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74105,14 +74520,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131072,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74135,14 +74553,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74166,14 +74587,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74196,14 +74620,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74226,14 +74653,17 @@
 			"contextWindow": 204800,
 			"maxTokens": 131100,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
+					"high"
 				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				},
 				"requiresEffort": true
 			}
 		},
@@ -74257,14 +74687,17 @@
 			"contextWindow": 1000000,
 			"maxTokens": 1000000,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-adaptive",
 				"efforts": [
-					"minimal",
 					"low",
 					"medium",
-					"high",
-					"xhigh"
-				]
+					"high"
+				],
+				"effortMap": {
+					"low": "adaptive",
+					"medium": "adaptive",
+					"high": "adaptive"
+				}
 			}
 		},
 		"mistral/codestral": {
@@ -74442,13 +74875,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 0.02,
-				"output": 0.04,
+				"input": 0.15,
+				"output": 0.15,
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 131072,
-			"maxTokens": 131072
+			"contextWindow": 128000,
+			"maxTokens": 128000
 		},
 		"mistral/mistral-small": {
 			"id": "mistral/mistral-small",
@@ -74705,6 +75138,36 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 256000,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code-highspeed": {
+			"id": "moonshotai/kimi-k2.7-code-highspeed",
+			"name": "Kimi K2.7 Code High Speed",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
 			"maxTokens": 32768,
 			"thinking": {
 				"mode": "budget",
@@ -75988,7 +76451,7 @@
 			"cost": {
 				"input": 0.09,
 				"output": 0.3,
-				"cacheRead": 0,
+				"cacheRead": 0.02,
 				"cacheWrite": 0.02
 			},
 			"contextWindow": 262114,
@@ -77011,6 +77474,35 @@
 			},
 			"contextWindow": 202800,
 			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"zai/glm-5.2": {
+			"id": "zai/glm-5.2",
+			"name": "GLM 5.2",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.5,
+				"output": 4.5,
+				"cacheRead": 0.3,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -78048,7 +78540,10 @@
 			"compat": {
 				"reasoningEffortMap": {
 					"minimal": "low"
-				}
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true
 			}
 		},
 		"grok-4.20-0309-reasoning": {
@@ -78074,6 +78569,9 @@
 				"reasoningEffortMap": {
 					"minimal": "low"
 				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true,
 				"supportsReasoningEffort": false
 			}
 		},
@@ -78095,11 +78593,6 @@
 			},
 			"contextWindow": 2000000,
 			"maxTokens": 2000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				}
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -78112,6 +78605,14 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
 			}
 		},
 		"grok-4.3": {
@@ -78133,11 +78634,6 @@
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 1000000,
-			"compat": {
-				"reasoningEffortMap": {
-					"minimal": "low"
-				}
-			},
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -78150,6 +78646,14 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			},
+			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": false
 			}
 		},
 		"grok-build": {
@@ -78160,7 +78664,8 @@
 			"baseUrl": "https://api.x.ai/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -78171,6 +78676,38 @@
 			"contextWindow": 512000,
 			"maxTokens": 512000,
 			"compat": {
+				"reasoningEffortMap": {
+					"minimal": "low"
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true,
+				"supportsReasoningEffort": false
+			}
+		},
+		"grok-build-0.1": {
+			"id": "grok-build-0.1",
+			"name": "Grok Build 0.1",
+			"api": "openai-responses",
+			"provider": "xai-oauth",
+			"baseUrl": "https://api.x.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 256000,
+			"maxTokens": 256000,
+			"compat": {
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true,
 				"reasoningEffortMap": {
 					"minimal": "low"
 				},
@@ -78198,7 +78735,10 @@
 			"compat": {
 				"reasoningEffortMap": {
 					"minimal": "low"
-				}
+				},
+				"includeEncryptedReasoning": false,
+				"filterReasoningHistory": true,
+				"omitReasoningEffort": true
 			}
 		}
 	},
@@ -80552,6 +81092,25 @@
 				"requiresEffort": true
 			}
 		},
+		"google/gemini-embedding-2": {
+			"id": "google/gemini-embedding-2",
+			"name": "Gemini Embedding 2",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.2,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
+		},
 		"google/gemma-3-12b-it": {
 			"id": "google/gemma-3-12b-it",
 			"name": "Gemma 3 12B",
@@ -81377,6 +81936,36 @@
 				"input": 0,
 				"output": 0,
 				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 262144,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			}
+		},
+		"moonshotai/kimi-k2.7-code-highspeed": {
+			"id": "moonshotai/kimi-k2.7-code-highspeed",
+			"name": "Kimi K2.7 Code HighSpeed",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
@@ -82437,6 +83026,25 @@
 					"high"
 				]
 			}
+		},
+		"qwen/qwen3-vl-embedding": {
+			"id": "qwen/qwen3-vl-embedding",
+			"name": "Qwen3 VL Embedding",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.1,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 8192,
+			"maxTokens": null
 		},
 		"qwen/qwen3-vl-plus": {
 			"id": "qwen/qwen3-vl-plus",
@@ -83959,6 +84567,44 @@
 				]
 			}
 		},
+		"z-ai/glm-5.2": {
+			"id": "z-ai/glm-5.2",
+			"name": "GLM 5.2",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 131072
+		},
+		"z-ai/glm-5.2-free": {
+			"id": "z-ai/glm-5.2-free",
+			"name": "GLM 5.2 (Free)",
+			"api": "openai-completions",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 131072
+		},
 		"z-ai/glm-5v-turbo": {
 			"id": "z-ai/glm-5v-turbo",
 			"name": "GLM 5V Turbo",
@@ -84186,8 +84832,16 @@
 					"minimal",
 					"low",
 					"medium",
-					"high"
-				]
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none",
+					"low": "high",
+					"medium": "high",
+					"high": "high",
+					"xhigh": "max"
+				}
 			}
 		},
 		"glm-5v-turbo": {

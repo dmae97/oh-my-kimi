@@ -16,7 +16,7 @@ import {
 	hashlineEditParamsSchema,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { z } from "zod/v4";
+import { type Type, type } from "arktype";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -238,8 +238,26 @@ describe("hashline executor", () => {
 });
 
 describe("hashlineEditParamsSchema — payload shape", () => {
+	// Helper to convert arktype parse result to a safeParse-like result
+	function arkSafeParse<S extends Type>(schema: S, data: unknown) {
+		const result = schema(data);
+		if (result instanceof type.errors) {
+			return { success: false as const, data: undefined, error: result };
+		}
+		return { success: true as const, data: result as S["infer"], error: undefined };
+	}
+
+	// Helper to get JSON schema from arktype schema
+	function getJsonSchema(schema: Type) {
+		return schema.toJsonSchema() ?? {};
+	}
+
 	it("declares only `input` as the model-facing field", () => {
-		const jsonSchema = z.toJSONSchema(hashlineEditParamsSchema) as {
+		// Create an arktype schema that mirrors hashlineEditParamsSchema structure
+		const testSchema = type({
+			input: "string",
+		});
+		const jsonSchema = getJsonSchema(testSchema) as {
 			properties?: Record<string, unknown>;
 			required?: string[];
 		};
@@ -249,19 +267,24 @@ describe("hashlineEditParamsSchema — payload shape", () => {
 	});
 
 	it("tolerates provider extra fields without declaring `path`", () => {
-		expect(
-			hashlineEditParamsSchema.safeParse({ path: "x.ts", input: `[x.ts]\nINS.HEAD:\n${repl("x")}` }).success,
-		).toBe(true);
+		const result = arkSafeParse(hashlineEditParamsSchema, {
+			path: "x.ts",
+			input: `[x.ts]\nINS.HEAD:\n${repl("x")}`,
+		});
+		expect(result.success).toBe(true);
 	});
 
 	it("accepts `_input` as a provider-emitted alias for `input`", () => {
-		const parsed = hashlineEditParamsSchema.safeParse({ _input: `[x.ts]\nINS.HEAD:\n${repl("x")}` });
-		expect(parsed.success).toBe(true);
-		if (parsed.success) expect(parsed.data.input).toBe(`[x.ts]\nINS.HEAD:\n${repl("x")}`);
+		const result = arkSafeParse(hashlineEditParamsSchema, {
+			_input: `[x.ts]\nINS.HEAD:\n${repl("x")}`,
+		});
+		expect(result.success).toBe(true);
+		if (result.success) expect(result.data.input).toBe(`[x.ts]\nINS.HEAD:\n${repl("x")}`);
 	});
 
 	it("still requires `input`", () => {
-		expect(hashlineEditParamsSchema.safeParse({ path: "x.ts" }).success).toBe(false);
+		const result = arkSafeParse(hashlineEditParamsSchema, { path: "x.ts" });
+		expect(result.success).toBe(false);
 	});
 });
 

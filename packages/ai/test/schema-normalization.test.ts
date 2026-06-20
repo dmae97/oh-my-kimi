@@ -8,6 +8,7 @@ import {
 	normalizeSchemaForCCA,
 	normalizeSchemaForGoogle,
 	normalizeSchemaForMCP,
+	normalizeSchemaForMoonshot,
 	sanitizeSchemaForOpenAIResponses,
 	sanitizeSchemaForStrictMode,
 	schemaNeedsDraft202012Upgrade,
@@ -516,6 +517,45 @@ describe("sanitizeSchemaForOpenAIResponses", () => {
 		expect(sanitizeSchemaForOpenAIResponses({ type: ["object", "null"] })).toEqual({
 			type: ["object", "null"],
 			properties: {},
+		});
+	});
+
+	it("strips regex lookaround patterns unsupported by OpenAI Responses", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				fileKey: { type: "string", pattern: "^(?!undefined$|null$)" },
+				ending: { type: "string", pattern: "(?<=/)node$" },
+				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
+				literal: { type: "string", pattern: "\\(?!literal" },
+				patternOnly: { pattern: "^(?!bad$)" },
+				"^(?!property-name)": { type: "string" },
+			},
+			patternProperties: {
+				"^(?!secret_)": { type: "string" },
+				"(?<=/)node$": { type: "string" },
+				"^x-": { type: "object" },
+				"\\(?!literal": { type: "string" },
+			},
+			propertyNames: { pattern: "^(?!invalid$)" },
+		};
+
+		expect(sanitizeSchemaForOpenAIResponses(schema)).toEqual({
+			type: "object",
+			properties: {
+				fileKey: { type: "string" },
+				ending: { type: "string" },
+				slug: { type: "string", pattern: "^[a-z0-9_-]+$" },
+				literal: { type: "string", pattern: "\\(?!literal" },
+				patternOnly: true,
+				"^(?!property-name)": { type: "string" },
+			},
+			patternProperties: {
+				".*": { anyOf: [{ type: "string" }, { type: "string" }] },
+				"^x-": { type: "object", properties: {} },
+				"\\(?!literal": { type: "string" },
+			},
+			propertyNames: true,
 		});
 	});
 
@@ -1045,5 +1085,179 @@ describe("DAG-shared subtree normalization", () => {
 		};
 		expect(result.properties.x).toEqual({ type: "number" });
 		expect(result.properties.y).toEqual({ type: "number" });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// normalizeSchemaForMoonshot (Moonshot Flavored JSON Schema)
+// ---------------------------------------------------------------------------
+
+const MFJS_FORBIDDEN_KEYWORDS = new Set([
+	"const",
+	"oneOf",
+	"allOf",
+	"nullable",
+	"prefixItems",
+	"minItems",
+	"maxItems",
+	"minLength",
+	"maxLength",
+	"pattern",
+	"format",
+	"minimum",
+	"maximum",
+	"exclusiveMinimum",
+	"exclusiveMaximum",
+	"multipleOf",
+	"uniqueItems",
+	"title",
+	"$schema",
+	"$comment",
+]);
+
+/** Walk schema-keyword positions only and fail on any keyword MFJS rejects. */
+function assertMfjsValid(node: unknown, path = "$"): void {
+	if (Array.isArray(node)) {
+		for (const [i, entry] of node.entries()) assertMfjsValid(entry, `${path}[${i}]`);
+		return;
+	}
+	if (typeof node !== "object" || node === null) return;
+	const obj = node as Record<string, unknown>;
+	for (const key of Object.keys(obj)) {
+		if (MFJS_FORBIDDEN_KEYWORDS.has(key)) throw new Error(`MFJS-forbidden keyword '${key}' at ${path}`);
+	}
+	if ("type" in obj && typeof obj.type !== "string") {
+		throw new Error(`MFJS requires a scalar string 'type' at ${path}, got ${JSON.stringify(obj.type)}`);
+	}
+	if (Array.isArray(obj.enum)) {
+		for (const value of obj.enum) {
+			if (typeof value !== "string" && typeof value !== "number") {
+				throw new Error(`MFJS enum admits only string/number at ${path}, got ${JSON.stringify(value)}`);
+			}
+		}
+	}
+	const props = obj.properties;
+	if (props && typeof props === "object" && !Array.isArray(props)) {
+		for (const [key, value] of Object.entries(props)) assertMfjsValid(value, `${path}.properties.${key}`);
+	}
+	if (Array.isArray(obj.anyOf)) {
+		for (const [i, entry] of obj.anyOf.entries()) assertMfjsValid(entry, `${path}.anyOf[${i}]`);
+	}
+	if (obj.items !== undefined) assertMfjsValid(obj.items, `${path}.items`);
+	if (obj.additionalProperties && typeof obj.additionalProperties === "object") {
+		assertMfjsValid(obj.additionalProperties, `${path}.additionalProperties`);
+	}
+}
+
+describe("normalizeSchemaForMoonshot", () => {
+	it("collapses an anyOf of bare consts into a typed enum", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			anyOf: [
+				{ const: "pr_checkout", description: "github operation" },
+				{ const: "pr_create", description: "github operation" },
+			],
+			description: "github operation",
+		}) as Record<string, unknown>;
+		expect(normalized).toEqual({
+			type: "string",
+			enum: ["pr_checkout", "pr_create"],
+			description: "github operation",
+		});
+	});
+
+	it("infers a scalar type for a bare enum so MFJS sees a typed node", () => {
+		const normalized = normalizeSchemaForMoonshot({ enum: ["capabilities", "definition"] });
+		expect(normalized).toEqual({ type: "string", enum: ["capabilities", "definition"] });
+	});
+
+	it("strips array/string validators, spilling the human-meaningful ones into description", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			type: "array",
+			description: "globs",
+			minItems: 1,
+			maxItems: 10,
+			items: { type: "string", maxLength: 256, pattern: "^x" },
+		}) as Record<string, unknown>;
+		expect(normalized.minItems).toBeUndefined();
+		expect(normalized.maxItems).toBeUndefined();
+		expect(String(normalized.description)).toContain("minItems");
+		const items = normalized.items as Record<string, unknown>;
+		expect(items.type).toBe("string");
+		expect(items.maxLength).toBeUndefined();
+		expect(items.pattern).toBeUndefined();
+	});
+
+	it("keeps additionalProperties (boolean and schema), type:null branches, and default", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			type: "object",
+			properties: {
+				env: { type: "object", additionalProperties: { type: "string" } },
+				extra: { type: "object", additionalProperties: true },
+				skip: { anyOf: [{ type: "number" }, { type: "null" }] },
+				limit: { type: "integer", default: 10 },
+			},
+		}) as Record<string, unknown>;
+		const props = normalized.properties as Record<string, Record<string, unknown>>;
+		expect(props.env.additionalProperties).toEqual({ type: "string" });
+		expect(props.extra.additionalProperties).toBe(true);
+		expect(props.skip.anyOf).toEqual([{ type: "number" }, { type: "null" }]);
+		expect(props.limit).toEqual({ type: "integer", default: 10 });
+	});
+
+	it("folds oneOf into anyOf (the only MFJS combinator)", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+			description: "query",
+		}) as Record<string, unknown>;
+		expect(normalized.oneOf).toBeUndefined();
+		expect(normalized.anyOf).toEqual([{ type: "string" }, { type: "array", items: { type: "string" } }]);
+	});
+
+	it("merges oneOf onto an existing anyOf rather than discarding either", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			anyOf: [{ type: "boolean" }],
+			oneOf: [{ type: "string" }],
+		}) as Record<string, unknown>;
+		expect(normalized.oneOf).toBeUndefined();
+		expect(normalized.anyOf).toEqual([{ type: "boolean" }, { type: "string" }]);
+	});
+
+	it("reduces a type array to a scalar and strips the nullable keyword", () => {
+		expect(normalizeSchemaForMoonshot({ type: ["string", "null"] })).toEqual({ type: "string" });
+		expect(normalizeSchemaForMoonshot({ type: "string", nullable: true })).toEqual({ type: "string" });
+	});
+
+	it("produces an MFJS-valid schema for the union of built-in tool shapes", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			type: "object",
+			properties: {
+				op: {
+					anyOf: [
+						{ const: "pr_checkout", description: "github operation" },
+						{ const: "pr_create", description: "github operation" },
+					],
+					description: "github operation",
+				},
+				action: { enum: ["capabilities", "definition", "references"] },
+				paths: { type: "array", description: "globs", minItems: 1, items: { type: "string" } },
+				role: { type: "string", maxLength: 256 },
+				skip: { anyOf: [{ type: "number" }, { type: "null" }] },
+				env: { type: "object", additionalProperties: { type: "string" } },
+				extra: { type: "object", additionalProperties: true },
+			},
+			required: ["op"],
+			additionalProperties: false,
+		});
+		expect(() => assertMfjsValid(normalized)).not.toThrow();
+		const props = (normalized as Record<string, Record<string, Record<string, unknown>>>).properties;
+		expect(props.op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
+		expect(props.action.type).toBe("string");
+	});
+	it("drops an enum that const-collapses to non-scalar values, keeping the inferred type", () => {
+		const normalized = normalizeSchemaForMoonshot({
+			anyOf: [{ const: true }, { const: false }],
+		}) as Record<string, unknown>;
+		expect(normalized.enum).toBeUndefined();
+		expect(normalized.type).toBe("boolean");
 	});
 });

@@ -155,7 +155,7 @@ export declare function __ompInstallTokioRuntime(): void
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV16_0_1(): void
+export declare function __piNativesV16_1_7(): void
 
 /**
  * Apply conservative pre-execution rewrites to a bash command.
@@ -754,8 +754,6 @@ export interface GrepOptions {
   hidden?: boolean
   /** Respect .gitignore files (default: true). */
   gitignore?: boolean
-  /** Enable shared filesystem scan cache (default: false). */
-  cache?: boolean
   /** Maximum number of matches to return. */
   maxCount?: number
   /** Skip first N matches. */

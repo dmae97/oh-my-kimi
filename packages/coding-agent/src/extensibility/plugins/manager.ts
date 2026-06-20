@@ -205,6 +205,17 @@ export class PluginManager {
 		}
 	}
 
+	#collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
+		const installedNames = new Set<string>();
+		for (const name of Object.keys(deps)) {
+			installedNames.add(name);
+		}
+		for (const name of Object.keys(config.plugins)) {
+			installedNames.add(name);
+		}
+		return installedNames;
+	}
+
 	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
 		if (!actualName) {
 			return null;
@@ -237,11 +248,29 @@ export class PluginManager {
 	}
 
 	async #rollbackFailedInstall(
-		actualName: string,
+		actualName: string | undefined,
 		packageJsonBefore: string,
+		bunLockBefore: string | null,
 		snapshot: PluginPackageSnapshot | null,
 	): Promise<void> {
 		await Bun.write(getPluginsPackageJson(), packageJsonBefore);
+
+		// Restore (or remove) bun's lockfile. Without this, a `bun install` +
+		// `bun update` pair that successfully rewrote `bun.lock` would leave the
+		// rejected commit pinned even when validation rolls everything else back.
+		const bunLockPath = path.join(getPluginsDir(), "bun.lock");
+		if (bunLockBefore === null) {
+			await fs.promises.rm(bunLockPath, { force: true });
+		} else {
+			await Bun.write(bunLockPath, bunLockBefore);
+		}
+
+		// `actualName` may be undefined when the install failed before the dep
+		// key was resolved — package.json + bun.lock restoration above is the
+		// complete rollback in that case.
+		if (!actualName) {
+			return;
+		}
 		const packagePath = path.join(getPluginsNodeModules(), actualName);
 		await fs.promises.rm(packagePath, { recursive: true, force: true });
 		if (!snapshot) {
@@ -332,6 +361,19 @@ export class PluginManager {
 		}
 		const pkgJsonPath = getPluginsPackageJson();
 		const packageJsonBefore = await Bun.file(pkgJsonPath).text();
+		// Snapshot bun's lockfile so the rollback path can restore the pin. Every
+		// step below — `bun install`, `bun update`, feature/extension validation,
+		// runtime-config save — must either complete entirely or leave the
+		// lockfile pointing at its pre-install state. Absent before install means
+		// "remove on rollback".
+		const bunLockPath = path.join(getPluginsDir(), "bun.lock");
+		let bunLockBefore: string | null;
+		try {
+			bunLockBefore = await Bun.file(bunLockPath).text();
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+			bunLockBefore = null;
+		}
 		const depsBefore = await this.#readDeps(pkgJsonPath);
 		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
 		const existingActualName = gitSource
@@ -339,24 +381,26 @@ export class PluginManager {
 			: extractPackageName(spec.packageName);
 		const packageSnapshot = await this.#snapshotInstalledPackage(existingActualName);
 
+		// `actualName` is hoisted so the rollback handler can clean up the right
+		// node_modules entry even if a step between `bun install` and the final
+		// validation throws.
+		let actualName: string | undefined;
 		try {
-			// Run npm install
-			const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
+			// Step 1: write the spec into plugins/package.json + node_modules.
+			const installProc = Bun.spawn(["bun", "install", packageInstallSpec], {
 				cwd: getPluginsDir(),
 				stdin: "ignore",
 				stdout: "pipe",
 				stderr: "pipe",
 				windowsHide: true,
 			});
-
-			const exitCode = await proc.exited;
-			if (exitCode !== 0) {
-				const stderr = await new Response(proc.stderr).text();
-				throw new Error(`npm install failed: ${stderr}`);
+			const installExit = await installProc.exited;
+			if (installExit !== 0) {
+				const stderr = await new Response(installProc.stderr).text();
+				throw new Error(`bun install failed: ${stderr}`);
 			}
 			// Resolve actual package name. npm specs encode the name (strip version);
 			// git specs do not, so diff plugins/package.json deps to find the new entry.
-			let actualName: string;
 			if (gitSource) {
 				const depsAfter = await this.#readDeps(pkgJsonPath);
 				let resolved: string | undefined;
@@ -382,8 +426,32 @@ export class PluginManager {
 			} else {
 				actualName = extractPackageName(spec.packageName);
 			}
-			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 
+			// Step 2: refresh the git lockfile pin when re-installing an existing
+			// git plugin. `bun install <spec>` is a no-op when the spec matches the
+			// lockfile entry — it never re-resolves the remote ref — so re-running
+			// `omp plugin install github:owner/repo` would silently keep the user on
+			// the original resolved commit even after upstream moved (#3063).
+			// `bun update <name>` re-resolves the ref against the remote and
+			// rewrites the pin; SHA-pinned refs stay put because the commit can't
+			// move. First-time installs skip this — the initial `bun install` already
+			// fetched HEAD. Rollback is handled by the outer catch.
+			if (gitSource && existingActualName) {
+				const updateProc = Bun.spawn(["bun", "update", actualName], {
+					cwd: getPluginsDir(),
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+					windowsHide: true,
+				});
+				const updateExit = await updateProc.exited;
+				if (updateExit !== 0) {
+					const stderr = await new Response(updateProc.stderr).text();
+					throw new Error(`bun update ${actualName} failed: ${stderr}`);
+				}
+			}
+
+			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 			let pkg: { name: string; version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
 				pkg = await Bun.file(pkgPath).json();
@@ -430,18 +498,7 @@ export class PluginManager {
 				enabled: true,
 			};
 
-			try {
-				await this.#validateInstalledExtensions(installedPlugin);
-			} catch (err) {
-				try {
-					await this.#rollbackFailedInstall(actualName, packageJsonBefore, packageSnapshot);
-				} catch (rollbackErr) {
-					const message = err instanceof Error ? err.message : String(err);
-					const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-					throw new Error(`${message}\nRollback failed: ${rollbackMessage}`);
-				}
-				throw err;
-			}
+			await this.#validateInstalledExtensions(installedPlugin);
 
 			// Update runtime config
 			const config = await this.#ensureConfigLoaded();
@@ -453,6 +510,20 @@ export class PluginManager {
 			await this.#saveRuntimeConfig();
 
 			return installedPlugin;
+		} catch (err) {
+			try {
+				await this.#rollbackFailedInstall(
+					actualName ?? existingActualName,
+					packageJsonBefore,
+					bunLockBefore,
+					packageSnapshot,
+				);
+			} catch (rollbackErr) {
+				const message = err instanceof Error ? err.message : String(err);
+				const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+				throw new Error(`${message}\nRollback failed: ${rollbackMessage}`);
+			}
+			throw err;
 		} finally {
 			await this.#cleanupSnapshot(packageSnapshot);
 		}
@@ -490,21 +561,22 @@ export class PluginManager {
 	 */
 	async list(): Promise<InstalledPlugin[]> {
 		const pkgJsonPath = getPluginsPackageJson();
-		let pkg: { dependencies?: Record<string, string> };
+		let deps: Record<string, string> = {};
 		try {
-			pkg = await Bun.file(pkgJsonPath).json();
+			const pkg: { dependencies?: Record<string, string> } = await Bun.file(pkgJsonPath).json();
+			deps = pkg.dependencies ?? {};
 		} catch (err) {
-			if (isEnoent(err)) return [];
-			throw err;
+			if (!isEnoent(err)) throw err;
 		}
 
-		const deps = pkg.dependencies || {};
 		const projectOverrides = await this.#loadProjectOverrides();
 		const config = await this.#ensureConfigLoaded();
 		const plugins: InstalledPlugin[] = [];
+		const installedNames = this.#collectInstalledNames(deps, config);
 
-		for (const [name] of Object.entries(deps)) {
-			const pluginPkgPath = path.join(getPluginsNodeModules(), name, "package.json");
+		for (const name of installedNames) {
+			const pluginPath = path.join(getPluginsNodeModules(), name);
+			const pluginPkgPath = path.join(pluginPath, "package.json");
 			let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
 				pluginPkg = await Bun.file(pluginPkgPath).json();
@@ -521,14 +593,13 @@ export class PluginManager {
 				enabled: true,
 			};
 
-			// Apply project overrides
 			const isDisabledInProject = projectOverrides.disabled?.includes(name) ?? false;
 			const projectFeatures = projectOverrides.features?.[name];
 
 			plugins.push({
 				name,
 				version: pluginPkg.version,
-				path: path.join(getPluginsNodeModules(), name),
+				path: pluginPath,
 				manifest,
 				enabledFeatures: projectFeatures ?? runtimeState.enabledFeatures,
 				enabled: runtimeState.enabled && !isDisabledInProject,
@@ -744,15 +815,14 @@ export class PluginManager {
 			message: hasNodeModules ? "Found" : "Missing (run npm install in plugins dir)",
 		});
 
-		if (!hasPkgJson) {
-			return checks;
-		}
 		const deps = pkg.dependencies || {};
 		const config = await this.#ensureConfigLoaded();
+		const installedNames = this.#collectInstalledNames(deps, config);
 
-		for (const [name] of Object.entries(deps)) {
+		for (const name of installedNames) {
 			const pluginPath = path.join(nodeModulesPath, name);
 			const pluginPkgPath = path.join(pluginPath, "package.json");
+			const fromDependencies = name in deps;
 
 			let pluginPkg: { version: string; description?: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
@@ -760,13 +830,23 @@ export class PluginManager {
 			} catch (err) {
 				if (isEnoent(err)) {
 					if (!fs.existsSync(pluginPath)) {
-						const fixed = options.fix ? await this.#fixMissingPlugin() : false;
-						checks.push({
-							name: `plugin:${name}`,
-							status: "error",
-							message: "Missing from node_modules",
-							fixed,
-						});
+						if (fromDependencies) {
+							const fixed = options.fix ? await this.#fixMissingPlugin() : false;
+							checks.push({
+								name: `plugin:${name}`,
+								status: "error",
+								message: "Missing from node_modules",
+								fixed,
+							});
+						} else {
+							const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
+							checks.push({
+								name: `orphan:${name}`,
+								status: "warning",
+								message: "Plugin in config but not installed",
+								fixed,
+							});
+						}
 					} else {
 						checks.push({
 							name: `plugin:${name}`,
@@ -841,19 +921,6 @@ export class PluginManager {
 						});
 					}
 				}
-			}
-		}
-
-		// Check for orphaned runtime config entries
-		for (const name of Object.keys(config.plugins)) {
-			if (!(name in deps)) {
-				const fixed = options.fix ? await this.#removeOrphanedConfig(name) : false;
-				checks.push({
-					name: `orphan:${name}`,
-					status: "warning",
-					message: "Plugin in config but not installed",
-					fixed,
-				});
 			}
 		}
 

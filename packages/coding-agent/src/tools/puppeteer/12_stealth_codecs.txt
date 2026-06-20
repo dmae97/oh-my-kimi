@@ -19,7 +19,7 @@ Object_defineProperty(HTMLMediaElement.prototype, "canPlayType", {
 	value: new Window_Proxy(originalCanPlayType, {
 		apply(target, ctx, args) {
 			if (!args || !args.length) {
-				return target.apply(ctx, args);
+				return Reflect_apply(target, ctx, args);
 			}
 			const { mime, codecs } = parseInput(args[0]);
 			if (mime === "video/mp4" && codecs.includes("avc1.42E01E")) {
@@ -31,7 +31,7 @@ Object_defineProperty(HTMLMediaElement.prototype, "canPlayType", {
 			if (mime === "audio/aac" && !codecs.length) {
 				return "probably";
 			}
-			return target.apply(ctx, args);
+				return Reflect_apply(target, ctx, args);
 		},
 	}),
 	writable: true,

@@ -7,11 +7,16 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { Api, Model, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
-import { resolveModelOverrideWithAuthFallback } from "../config/model-resolver";
+import {
+	formatModelSelectorValue,
+	formatModelStringWithRouting,
+	resolveModelOverride,
+	resolveModelOverrideWithAuthFallback,
+} from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
@@ -120,10 +125,78 @@ function normalizeModelPatterns(value: string | string[] | undefined): string[] 
 		.filter(Boolean);
 }
 
+const SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX = "subagent:";
+
+interface SubagentRetryFallbackCandidate {
+	model: Model<Api>;
+	selector: string;
+}
+
+function resolveSubagentRetryFallbackCandidates(
+	modelPatterns: string[],
+	modelRegistry: ModelRegistry,
+	settings: Settings,
+): SubagentRetryFallbackCandidate[] {
+	const candidates: SubagentRetryFallbackCandidate[] = [];
+	const seen = new Set<string>();
+	for (const pattern of modelPatterns) {
+		const resolved = resolveModelOverride([pattern], modelRegistry, settings);
+		if (!resolved.model) continue;
+		const selector = resolved.explicitThinkingLevel
+			? formatModelSelectorValue(formatModelStringWithRouting(resolved.model), resolved.thinkingLevel)
+			: formatModelStringWithRouting(resolved.model);
+		if (seen.has(selector)) continue;
+		seen.add(selector);
+		candidates.push({ model: resolved.model, selector });
+	}
+	return candidates;
+}
+
+function installSubagentRetryFallbackChain(args: {
+	settings: Settings;
+	id: string;
+	candidates: SubagentRetryFallbackCandidate[];
+	model: Model<Api> | undefined;
+	authFallbackUsed: boolean;
+}): string | undefined {
+	const { settings, id, candidates, model, authFallbackUsed } = args;
+	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
+
+	const selectedIndex = candidates.findIndex(
+		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
+	);
+	if (selectedIndex < 0) return undefined;
+	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
+	if (fallbackSelectors.length === 0) return undefined;
+
+	const role = `${SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
+	const modelRoles: Record<string, string> = {};
+	const existingRoles = settings.getModelRoles();
+	for (const existingRole in existingRoles) {
+		const selector = existingRoles[existingRole];
+		if (selector) {
+			modelRoles[existingRole] = selector;
+		}
+	}
+	modelRoles[role] = candidates[selectedIndex].selector;
+	settings.override("modelRoles", modelRoles);
+	const fallbackChains: Record<string, string[]> = {
+		[role]: fallbackSelectors,
+	};
+	const existingFallbackChains = settings.get("retry.fallbackChains");
+	for (const existingRole in existingFallbackChains) {
+		if (existingRole !== role) {
+			fallbackChains[existingRole] = existingFallbackChains[existingRole];
+		}
+	}
+	settings.override("retry.fallbackChains", fallbackChains);
+	return role;
+}
+
 function renderIrcPeerRoster(selfId: string): string {
 	const peers = AgentRegistry.global()
 		.list()
-		.filter(ref => ref.id !== selfId && ref.status !== "aborted");
+		.filter(ref => ref.id !== selfId && ref.status !== "aborted" && ref.kind !== "advisor");
 	if (peers.length === 0) return "- (no other agents)";
 	const lines = peers.map(
 		peer =>
@@ -229,6 +302,16 @@ export interface ExecutorOptions {
 	enableLsp?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
+	/**
+	 * Epochs (ms, `Date.now()`) bracketing the concurrency-semaphore wait:
+	 * `invokedAt` is stamped at the spawn boundary before `acquire()`,
+	 * `acquiredAt` immediately after. {@link runSubprocess} reports true queue
+	 * wait (`acquiredAt - invokedAt`) and pre-run setup (`startTime - acquiredAt`)
+	 * separately in the launch-timing debug log. Undefined for callers that
+	 * bypass the semaphore path.
+	 */
+	invokedAt?: number;
+	acquiredAt?: number;
 	sessionFile?: string | null;
 	persistArtifacts?: boolean;
 	artifactsDir?: string;
@@ -278,6 +361,12 @@ export interface ExecutorOptions {
 	parentTelemetry?: AgentTelemetryConfig;
 	/** Skills to autoload via sendCustomMessage before the first prompt */
 	autoloadSkills?: Skill[];
+	/**
+	 * Registry id of the spawning agent, recorded as this subagent's parent.
+	 * Forwarded verbatim to the SDK; the executor never derives it (the spawner
+	 * passes its own `getAgentId()`).
+	 */
+	parentAgentId?: string;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -437,6 +526,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
+	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
 
 	if (hasYield) {
 		const lastYield = yieldItems[yieldItems.length - 1];
@@ -474,12 +564,16 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 						const errorMessage = err instanceof Error ? err.message : String(err);
 						rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
 					}
-					exitCode = 0;
-					stderr = overridden
-						? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
-						: schemaError
-							? `invalid output schema: ${schemaError}`
-							: "";
+					if (!hadFailureBeforeYield) {
+						exitCode = 0;
+						stderr = overridden
+							? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
+							: schemaError
+								? `invalid output schema: ${schemaError}`
+								: "";
+					} else if (!stderr) {
+						stderr = "Subagent failed after yielding a result.";
+					}
 				}
 			}
 		}
@@ -1222,6 +1316,16 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 					popLoopPhase();
 				}
 			}
+			if (event.type === "retry_fallback_applied") {
+				progress.resolvedModel = event.to;
+				scheduleProgress(true);
+				return;
+			}
+			if (event.type === "retry_fallback_succeeded") {
+				progress.resolvedModel = event.model;
+				scheduleProgress(true);
+				return;
+			}
 		});
 
 	const captureSalvage = (session: AgentSession): void => {
@@ -1604,6 +1708,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 	} = options;
 	const startTime = Date.now();
+	// Set by the session's onFirstChatDispatch hook the first time the agent
+	// loop dispatches a chat request to the provider — the launch-complete boundary.
+	let firstChatDispatchAt: number | undefined;
 
 	// Check if already aborted
 	if (signal?.aborted) {
@@ -1774,6 +1881,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				abortSignal.removeEventListener("abort", onAbort);
 			}
 		};
+		// Launch-latency phase marks (performance.now()); read by the debug log
+		// emitted before this closure returns. Left undefined when setup throws
+		// before reaching the phase, which itself localizes the cost.
+		const perfStart = performance.now();
+		let resolvedAt: number | undefined;
+		let sessionOpenedAt: number | undefined;
+		let sessionCreatedAt: number | undefined;
+		let readyAt: number | undefined;
 
 		try {
 			checkAbort();
@@ -1817,25 +1932,45 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					resolvedModel: model.id,
 				});
 			}
+			const retryFallbackRole = installSubagentRetryFallbackChain({
+				settings: subagentSettings,
+				id,
+				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
+				model,
+				authFallbackUsed,
+			});
+			if (retryFallbackRole) {
+				logger.debug("Configured subagent runtime model fallback chain", {
+					role: retryFallbackRole,
+					requested: modelPatterns,
+				});
+			}
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
 			if (model) {
 				progress.resolvedModel = explicitThinkingLevel
-					? `${model.provider}/${model.id}:${resolvedThinkingLevel}`
-					: `${model.provider}/${model.id}`;
+					? formatModelSelectorValue(formatModelStringWithRouting(model), resolvedThinkingLevel)
+					: formatModelStringWithRouting(model);
 			}
 			const effectiveThinkingLevel = explicitThinkingLevel
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
+			resolvedAt = performance.now();
 
 			const effectiveCwd = worktree ?? cwd;
 			const sessionManager = sessionFile
-				? await awaitAbortable(SessionManager.open(sessionFile, undefined, undefined, { initialCwd: effectiveCwd }))
+				? await awaitAbortable(
+						SessionManager.open(sessionFile, undefined, undefined, {
+							initialCwd: effectiveCwd,
+							suppressBreadcrumb: true,
+						}),
+					)
 				: SessionManager.inMemory(effectiveCwd);
 			if (options.parentArtifactManager) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
 			}
+			sessionOpenedAt = performance.now();
 
 			const mcpProxyTools = options.mcpManager ? createMCPProxyTools(options.mcpManager) : [];
 			const enableMCP = !options.mcpManager;
@@ -1920,6 +2055,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				parentHindsightSessionState: options.parentHindsightSessionState,
 				parentMnemopiSessionState: options.parentMnemopiSessionState,
 				parentTaskPrefix: id,
+				parentAgentId: options.parentAgentId,
 				agentId: id,
 				agentDisplayName: subagentDisplayName,
 				enableLsp: lspEnabled,
@@ -1930,6 +2066,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				localProtocolOptions: options.localProtocolOptions,
 				telemetry: subagentTelemetry,
 				parentEvalSessionId: options.parentEvalSessionId,
+				onFirstChatDispatch: () => {
+					firstChatDispatchAt ??= performance.now();
+				},
 			});
 
 			const sessionPromise = createAgentSession(buildSubagentSessionOptions(sessionManager));
@@ -1943,6 +2082,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				void sessionPromise.then(created => created.session.dispose()).catch(() => {});
 				throw err;
 			}
+			sessionCreatedAt = performance.now();
 
 			monitor.setActiveSession(session);
 			installRegistryStatusSync(session);
@@ -1952,7 +2092,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// (createAgentSession → agent.replaceMessages). Isolated runs are not
 				// resumable (worktree is merged + cleaned) and never get a reviver.
 				reviveSession = async () => {
-					const reopened = await SessionManager.open(sessionFile);
+					const reopened = await SessionManager.open(sessionFile, undefined, undefined, {
+						suppressBreadcrumb: true,
+					});
 					if (options.parentArtifactManager) {
 						reopened.adoptArtifactManager(options.parentArtifactManager);
 					}
@@ -1988,6 +2130,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				systemPrompt: session.agent.state.systemPrompt.join("\n\n"),
 				task,
 				tools: session.getActiveToolNames(),
+				spawns: spawnsEnv,
+				readSummarize: agent.readSummarize,
 				outputSchema,
 			});
 
@@ -2005,8 +2149,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				void session.abort();
 			}
 
+			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			const extensionRunner = session.extensionRunner;
-			const pendingExtensionMessages: Promise<unknown>[] = [];
 			if (extensionRunner) {
 				extensionRunner.initialize(
 					{
@@ -2084,6 +2228,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 			}
 
+			readyAt = performance.now();
 			const outcome = await driveSessionToYield(session, monitor, task);
 			exitCode = outcome.exitCode;
 			error = outcome.error;
@@ -2148,6 +2293,35 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 		}
 
+		// Launch-latency breakdown (subagent invocation → first chat dispatch).
+		// Phase deltas are performance.now() spans; the semaphore brackets use the
+		// Date.now epochs captured by the spawn site (invokedAt before acquire,
+		// acquiredAt after) so queue wait and pre-run setup are reported apart.
+		const span = (from: number | undefined, to: number | undefined): number | undefined =>
+			from !== undefined && to !== undefined ? Math.round(to - from) : undefined;
+		const queueMs =
+			options.invokedAt !== undefined && options.acquiredAt !== undefined
+				? Math.round(options.acquiredAt - options.invokedAt)
+				: undefined;
+		const preRunMs = options.acquiredAt !== undefined ? Math.round(startTime - options.acquiredAt) : undefined;
+		const setupToFirstChatMs = span(perfStart, firstChatDispatchAt);
+		const invokeToFirstChatMs =
+			options.invokedAt !== undefined && setupToFirstChatMs !== undefined
+				? Math.round(startTime - options.invokedAt) + setupToFirstChatMs
+				: undefined;
+		logger.debug("subagent launch timing", {
+			id,
+			agent: agent.name,
+			queueMs,
+			preRunMs,
+			resolveMs: span(perfStart, resolvedAt),
+			sessionOpenMs: span(resolvedAt, sessionOpenedAt),
+			createSessionMs: span(sessionOpenedAt, sessionCreatedAt),
+			readyMs: span(sessionCreatedAt, readyAt),
+			promptToFirstChatMs: span(readyAt, firstChatDispatchAt),
+			setupToFirstChatMs,
+			invokeToFirstChatMs,
+		});
 		return {
 			exitCode,
 			error,

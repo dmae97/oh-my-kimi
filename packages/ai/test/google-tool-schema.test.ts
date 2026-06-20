@@ -278,7 +278,7 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		expect(claudeDeclaration.parameters).toEqual({
 			type: "object",
 			properties: {
-				value: { enum: ["A", "B"] },
+				value: { enum: ["A", "B"], type: "string" },
 			},
 			required: [],
 		});
@@ -288,7 +288,11 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 		).toEqual(normalizeSchemaForGoogle((parameters as { properties: { value: unknown } }).properties.value));
 	});
 
-	it("falls back to minimal object schema when non-null unresolved unions remain for CCA Claude", () => {
+	it("unions same-type enum branches losslessly for CCA Claude instead of falling back", () => {
+		// With a `type` now inferred onto each bare-enum branch, an anyOf of two
+		// same-type enums is no longer an "unresolved union": the branches collapse
+		// by unioning their members (A,B,C,D) rather than falling back to the
+		// minimal object schema, so no allowed value is silently dropped.
 		const parameters = {
 			type: "object",
 			properties: {
@@ -308,8 +312,39 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 
 		expect(claudeDeclaration.parameters).toEqual({
 			type: "object",
-			properties: {},
+			properties: {
+				value: { type: "string", enum: ["A", "B", "C", "D"] },
+			},
+			required: ["value"],
 		});
+	});
+
+	it("broadens a mixed enum/unconstrained same-type union without narrowing for CCA Claude", () => {
+		// Regression: once each branch carries an inferred `type`, an `enum` branch
+		// and an unconstrained branch of the same type look collapsible. The
+		// unconstrained branch is broader, so the collapse must keep it (any string)
+		// and never narrow to the enum branch's members.
+		const parameters = {
+			type: "object",
+			properties: {
+				value: {
+					anyOf: [{ enum: ["A"] }, { type: "string" }],
+				},
+			},
+			required: ["value"],
+		} as TJsonSchema;
+		const tools: Tool[] = [{ name: "test_tool", description: "Test tool", parameters }];
+		const claudeModel = createModel("claude-sonnet-4-5");
+
+		const claudeDeclaration = convertTools(tools, claudeModel)?.[0]?.functionDeclarations[0] as Record<
+			string,
+			unknown
+		>;
+
+		const value = (claudeDeclaration.parameters as { properties: { value: Record<string, unknown> } }).properties
+			.value;
+		expect(value).toEqual({ type: "string" });
+		expect(value).not.toHaveProperty("enum");
 	});
 
 	it("falls back when CCA schema meta-validation catches malformed keywords", () => {
@@ -372,6 +407,63 @@ describe("Cloud Code Assist Claude tool schema conversion", () => {
 				},
 			},
 		});
+	});
+
+	it("infers type:string for a bare string-literal enum under properties (Vertex rejects type-less enums)", () => {
+		// Regression: ArkType emits string-literal unions (e.g. the lsp tool's
+		// `action`) as a bare `{ enum: [...] }` with no `type`. Vertex / Cloud
+		// Code Assist reject that with HTTP 500 "parameters.action schema didn't
+		// specify the schema type field". Both Google paths must infer the type.
+		const schema = {
+			type: "object",
+			properties: {
+				action: {
+					enum: ["definition", "references", "code_actions", "type_definition"],
+				},
+			},
+			required: ["action"],
+		} as unknown;
+
+		const expected = {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: ["definition", "references", "code_actions", "type_definition"],
+				},
+			},
+			required: ["action"],
+		};
+
+		expect(normalizeSchemaForGoogle(schema)).toEqual(expected);
+		expect(normalizeSchemaForCCA(schema)).toEqual(expected);
+	});
+
+	it("infers enum type through convertTools for both claude (parameters) and gemini (parametersJsonSchema)", () => {
+		const parameters = {
+			type: "object",
+			properties: {
+				action: { enum: ["definition", "references", "code_actions"] },
+			},
+			required: ["action"],
+		} as unknown as TJsonSchema;
+		const tools: Tool[] = [{ name: "lsp", description: "LSP tool", parameters }];
+
+		const claudeDeclaration = convertTools(tools, createModel("claude-sonnet-4-5"))?.[0]
+			?.functionDeclarations[0] as Record<string, unknown>;
+		expect((claudeDeclaration.parameters as { properties: { action: unknown } }).properties.action).toEqual({
+			type: "string",
+			enum: ["definition", "references", "code_actions"],
+		});
+
+		const geminiDeclaration = convertTools(tools, createModel("gemini-2.5-pro"))?.[0]
+			?.functionDeclarations[0] as Record<string, unknown>;
+		expect((geminiDeclaration.parametersJsonSchema as { properties: { action: unknown } }).properties.action).toEqual(
+			{
+				type: "string",
+				enum: ["definition", "references", "code_actions"],
+			},
+		);
 	});
 });
 

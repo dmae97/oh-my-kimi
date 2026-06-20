@@ -97,16 +97,38 @@ function visible(term: VirtualTerminal): string[] {
 	return term.getViewport().map(line => line.trimEnd());
 }
 
-const TMUX_ENV: Record<string, string | undefined> = { TMUX: "1", STY: undefined, ZELLIJ: undefined };
+const MULTIPLEXER_ENV_KEYS = [
+	"TMUX",
+	"STY",
+	"ZELLIJ",
+	"CMUX_WORKSPACE_ID",
+	"CMUX_SURFACE_ID",
+	"CMUX_PANEL_ID",
+	"CMUX_TAB_ID",
+	"CMUX_SOCKET_PATH",
+];
+const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = Object.fromEntries(
+	MULTIPLEXER_ENV_KEYS.map(key => [key, undefined]),
+);
+const TMUX_ENV: Record<string, string | undefined> = { ...NO_MULTIPLEXER_ENV, TMUX: "1" };
+const CMUX_ENV_CASES: Array<[string, Record<string, string | undefined>]> = [
+	["CMUX_WORKSPACE_ID", { ...NO_MULTIPLEXER_ENV, TERM: "dumb", CMUX_WORKSPACE_ID: "workspace:cmux-2088" }],
+	["CMUX_SURFACE_ID", { ...NO_MULTIPLEXER_ENV, TERM: "dumb", CMUX_SURFACE_ID: "surface:cmux-2088" }],
+];
+const CMUX_SOCKET_ONLY_ENV: Record<string, string | undefined> = {
+	...NO_MULTIPLEXER_ENV,
+	TERM: "xterm-256color",
+	CMUX_SOCKET_PATH: "/tmp/cmux.sock",
+};
 // Pin TERM to a non-multiplexer value: `isMultiplexerSession()` falls back to
 // the TERM prefix, so leaving the host's TERM (which may be `tmux-*`/`screen-*`
 // under CI-in-tmux) would misclassify this "direct terminal" case.
-const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
-	TMUX: undefined,
-	STY: undefined,
-	ZELLIJ: undefined,
-	TERM: "xterm-256color",
-};
+NO_MULTIPLEXER_ENV.TERM = "xterm-256color";
+// Resize classification also keys off TERM_PROGRAM (Warp takes the in-place
+// path) and PI_TUI_RESIZE_IN_PLACE, so neutralize them to keep this
+// direct-terminal case deterministic.
+NO_MULTIPLEXER_ENV.TERM_PROGRAM = undefined;
+NO_MULTIPLEXER_ENV.PI_TUI_RESIZE_IN_PLACE = undefined;
 
 describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	let monotonicNow = 0;
@@ -335,15 +357,14 @@ describe("issue #2088: tmux pane-resize race produces viewport flash", () => {
 	});
 });
 
-// Regression for tmux auto-detection: `isMultiplexerSession()` gates the
+// Regression for multiplexer auto-detection: `isMultiplexerSession()` gates the
 // renderer's resize behavior. It previously checked only TMUX/STY/ZELLIJ, while
-// every sibling multiplexer check (terminal-capabilities.ts) also falls back to
-// the TERM prefix. When TMUX is stripped but TERM survives (`sudo` without -E,
-// `su`, env-sanitizing launchers/ssh), the engine misclassified tmux as a direct
-// terminal and emitted ED3 (CSI 3 J) on resize — which wipes tmux pane history
-// (verified against tmux 3.6a: a 20-line pane drops to its 6 on-screen rows
-// after ED3), so scrollback only reappeared after a full rerender.
-describe("multiplexer detection: TERM prefix gates ED3 when TMUX is stripped", () => {
+// sibling checks also fall back to TERM prefixes and CMUX exposes its own session
+// env markers. When a multiplexer was missed, the engine misclassified the pane
+// as a direct terminal and emitted ED3 (CSI 3 J) on resize — which wipes pane
+// history (verified against tmux 3.6a: a 20-line pane drops to its 6 on-screen
+// rows after ED3), so scrollback only reappeared after a full rerender.
+describe("multiplexer detection gates ED3 on resize", () => {
 	let monotonicNow = 0;
 
 	beforeEach(() => {
@@ -364,8 +385,8 @@ describe("multiplexer detection: TERM prefix gates ED3 when TMUX is stripped", (
 	// tmux/screen panes whose authoritative env signal was stripped but whose
 	// TERM still names the multiplexer — the case previously misclassified.
 	const strippedMuxTerms: Array<[string, Record<string, string | undefined>]> = [
-		["tmux-256color", { TERM: "tmux-256color", TMUX: undefined, STY: undefined, ZELLIJ: undefined }],
-		["screen-256color", { TERM: "screen-256color", TMUX: undefined, STY: undefined, ZELLIJ: undefined }],
+		["tmux-256color", { ...NO_MULTIPLEXER_ENV, TERM: "tmux-256color" }],
+		["screen-256color", { ...NO_MULTIPLEXER_ENV, TERM: "screen-256color" }],
 	];
 
 	for (const [label, env] of strippedMuxTerms) {
@@ -405,6 +426,59 @@ describe("multiplexer detection: TERM prefix gates ED3 when TMUX is stripped", (
 		});
 	}
 
+	for (const [label, env] of CMUX_ENV_CASES) {
+		it(`debounces resize and emits no ED3 when ${label} marks CMUX with TERM=dumb`, async () => {
+			await withEnvPatch(env, async () => {
+				const term = new VirtualTerminal(40, 10, 1000);
+				const tui = new TUI(term);
+				tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+				try {
+					tui.start();
+					await settle(term);
+
+					const baselineRedraws = tui.fullRedraws;
+					const writes = captureWrites(term);
+
+					term.resize(80, 10);
+					await Bun.sleep(10);
+					expect(writes.length).toBe(0);
+					expect(tui.fullRedraws).toBe(baselineRedraws);
+
+					await Bun.sleep(DEBOUNCE_SETTLE_WAIT_MS);
+					await settle(term);
+					const out = writes.join("");
+					expect(out.length).toBeGreaterThan(0);
+					expect(out).not.toContain(ED3);
+					expect(tui.fullRedraws - baselineRedraws).toBe(1);
+					expect(visible(term)).toEqual(Array.from({ length: 10 }, (_v, i) => `line-${i + 10}`));
+				} finally {
+					tui.stop();
+				}
+			});
+		});
+	}
+
+	it("does not treat CMUX_SOCKET_PATH alone as a multiplexer session marker", async () => {
+		await withEnvPatch(CMUX_SOCKET_ONLY_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(Array.from({ length: 20 }, (_v, i) => `line-${i}`)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const writes = captureWrites(term);
+				term.resize(80, 10);
+				await settleResize(term);
+				const out = writes.join("");
+				expect(out).toContain(ED3);
+			} finally {
+				tui.stop();
+			}
+		});
+	});
 	it("still clears native scrollback (ED3) on a genuine direct-terminal resize", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);

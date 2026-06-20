@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { Text } from "@oh-my-pi/pi-tui";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -36,23 +36,20 @@ import type {
 
 const EXPERIMENT_TOOL_NAMES = ["init_experiment", "run_experiment", "log_experiment", "update_notes"];
 
-const logExperimentSchema = z.object({
-	metric: z.number().describe("primary metric value"),
-	status: z.enum(["keep", "discard", "crash", "checks_failed"] as const).describe("run outcome"),
-	description: z.string().describe("short run description"),
-	metrics: z.record(z.string(), z.number()).describe("secondary metrics").optional(),
-	asi: z.object({}).passthrough().describe("free-form structured metadata").optional(),
-	commit: z.string().describe("override recorded commit hash").optional(),
-	justification: z.string().describe("required when keeping a scope-deviating run").optional(),
-	flag_runs: z
-		.array(
-			z.object({
-				run_id: z.number().describe("run id to flag"),
-				reason: z.string().describe("why this run is suspect"),
-			}),
-		)
-		.describe("flag earlier runs as suspect")
-		.optional(),
+const logExperimentSchema = type({
+	metric: type("number").describe("primary metric value"),
+	status: type("'keep'|'discard'|'crash'|'checks_failed'").describe("run outcome"),
+	description: type("string").describe("short run description"),
+	"metrics?": type({ "[string]": "number" }).describe("secondary metrics"),
+	"asi?": type({ "[string]": "unknown" }).describe("free-form structured metadata"),
+	"commit?": type("string").describe("override recorded commit hash"),
+	"justification?": type("string").describe("required when keeping a scope-deviating run"),
+	"flag_runs?": type({
+		run_id: type("number.integer").describe("run id to flag"),
+		reason: type("string").describe("why this run is suspect"),
+	})
+		.array()
+		.describe("flag earlier runs as suspect"),
 });
 
 export function createLogExperimentTool(

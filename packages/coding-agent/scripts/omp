@@ -1,5 +1,5 @@
 #!/bin/sh
-# Dev launcher for the omp CLI, installed by `bun run install:dev`.
+# Dev launcher for the omp CLI, installed by `bun run setup`.
 #
 # Problem it solves: Bun reads `bunfig.toml` from the *current working
 # directory* at startup and evaluates its `preload` entries before running the

@@ -5,6 +5,7 @@ import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
+import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
 
 /**
  * Max lines of a turn-ending provider error rendered inline in the transcript.
@@ -14,6 +15,59 @@ import { canonicalizeMessage } from "../../utils/thinking-display";
  * the persisted session.
  */
 const MAX_TRANSCRIPT_ERROR_LINES = 8;
+
+/**
+ * A GFM table delimiter row (`| --- | :--: |`, with or without bounding pipes).
+ * The header row alone does not render a table — this delimiter is what makes
+ * Markdown lay one out, and a streaming table re-aligns its columns as rows
+ * arrive. Requires at least one column pipe so a bare thematic break (`---`)
+ * does not match.
+ */
+const MARKDOWN_TABLE_DELIMITER = /^ {0,3}\|?(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*:?-*:?[ \t]*$/;
+
+/** Opening or closing fence of a code block: ≥3 backticks/tildes plus info string. */
+const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * Whether `text` currently contains reflowing Markdown whose layout is not yet
+ * permanent: an open ` ```mermaid ` fence (the diagram reshapes as source
+ * arrives) or a GFM table (columns re-align as rows arrive). Used by
+ * {@link AssistantMessageComponent.isTranscriptBlockCommitStable}.
+ *
+ * Fence-aware: a mermaid block is detected by its opener, and table delimiters
+ * inside ordinary fenced code (shell pipes, ASCII separators, doc examples) are
+ * ignored so a long streamed code block is never held out of native scrollback.
+ * A delimiter counts only directly under a pipe-bearing header row, outside any
+ * code fence.
+ */
+function detectLiveReflowingMarkdown(text: string): boolean {
+	let fence: string | null = null;
+	let prevLine = "";
+	for (const line of text.split("\n")) {
+		const fenceMatch = CODE_FENCE_LINE.exec(line);
+		if (fence !== null) {
+			// Inside a code block: only a bare matching closing fence ends it.
+			if (
+				fenceMatch &&
+				fenceMatch[2]!.trim() === "" &&
+				fenceMatch[1]![0] === fence[0] &&
+				fenceMatch[1]!.length >= fence.length
+			) {
+				fence = null;
+			}
+			continue;
+		}
+		if (fenceMatch) {
+			if (/^mermaid\b/.test(fenceMatch[2]!.trim())) return true;
+			fence = fenceMatch[1]!;
+			prevLine = "";
+			continue;
+		}
+		if (prevLine.includes("|") && MARKDOWN_TABLE_DELIMITER.test(line)) return true;
+		prevLine = line;
+	}
+	return false;
+}
 
 /**
  * Frames for the streaming "thinking" pulse rendered in place of a hidden
@@ -29,11 +83,21 @@ const THINKING_DOTS_FRAME_MS = 320;
  */
 export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
+	#markerSlot: Container;
 	#lastMessage?: AssistantMessage;
 	#toolImagesByCallId = new Map<string, ImageContent[]>();
 	#convertedKittyImages = new Map<string, ImageContent>();
 	#kittyConversionsInFlight = new Set<string>();
 	#transcriptBlockFinalized: boolean;
+	/**
+	 * True while a non-finalized text item carries reflowing Markdown — a
+	 * ` ```mermaid ` fence or a GFM table — whose layout re-flows every frame as
+	 * source arrives (a diagram reshaping, a table re-aligning its columns), so
+	 * no prefix is byte-stable until the message finalizes. See
+	 * {@link isTranscriptBlockCommitStable}. Recomputed in {@link updateContent}
+	 * ahead of the fast-path return, so it tracks every stream tick.
+	 */
+	#hasLiveReflowingMarkdown = false;
 	/**
 	 * When true, the turn-ending `Error: …` line for `stopReason === "error"` is
 	 * suppressed because the same error is currently shown in the pinned banner
@@ -75,6 +139,11 @@ export class AssistantMessageComponent extends Container {
 		super();
 		this.#transcriptBlockFinalized = message !== undefined;
 
+		// Slim cache-invalidation divider, populated above the content when this
+		// turn's request lost the prompt cache (see setCacheInvalidation).
+		this.#markerSlot = new Container();
+		this.addChild(this.#markerSlot);
+
 		// Container for text/thinking content
 		this.#contentContainer = new Container();
 		this.addChild(this.#contentContainer);
@@ -82,6 +151,20 @@ export class AssistantMessageComponent extends Container {
 		if (message) {
 			this.updateContent(message);
 		}
+	}
+
+	/**
+	 * Show or clear the slim cache-invalidation divider above this turn. Set at
+	 * `message_end` (live) or during rebuild, once the turn's usage is known and
+	 * compared against the previous turn's cache footprint. Bumps the transcript
+	 * block version so the change repaints even after content finalized.
+	 */
+	setCacheInvalidation(info: CacheInvalidation | undefined): void {
+		this.#markerSlot.clear();
+		if (info) {
+			this.#markerSlot.addChild(new CacheInvalidationMarkerComponent(info));
+		}
+		this.#blockVersion++;
 	}
 
 	override invalidate(): void {
@@ -169,6 +252,21 @@ export class AssistantMessageComponent extends Container {
 
 	isTranscriptBlockFinalized(): boolean {
 		return this.#transcriptBlockFinalized;
+	}
+
+	/**
+	 * Whether this still-live block's scrolled-off rows may be committed to
+	 * immutable native scrollback (the {@link TranscriptContainer} durable-
+	 * snapshot path). Reflowing Markdown — a streaming mermaid diagram or a GFM
+	 * table — re-lays-out its body as source arrives (the diagram reshapes, the
+	 * table re-aligns its columns), so committing an intermediate layout strands
+	 * a stale fragment in native scrollback that only a full repaint (Ctrl+L) can
+	 * clear. While such content is still streaming the block therefore stays
+	 * wholly in the repaintable live region and commits once, at its final
+	 * layout, when the turn finalizes.
+	 */
+	isTranscriptBlockCommitStable(): boolean {
+		return this.#transcriptBlockFinalized || !this.#hasLiveReflowingMarkdown;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -396,6 +494,15 @@ export class AssistantMessageComponent extends Container {
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
+
+		// Streaming reflowing Markdown (a mermaid diagram reshaping, a GFM table
+		// re-aligning columns) re-lays-out its body each frame; see
+		// isTranscriptBlockCommitStable. Detect it from raw text — a Markdown
+		// parser only resolves these once the closing fence / delimiter row
+		// arrives, but the stale native-scrollback commits happen mid-stream.
+		this.#hasLiveReflowingMarkdown = message.content.some(
+			content => content.type === "text" && detectLiveReflowingMarkdown(content.text),
+		);
 
 		// Fast path: reuse Markdown children when shape is stable during streaming
 		if (this.#tryFastPathUpdate(message)) return;

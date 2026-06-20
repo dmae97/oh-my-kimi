@@ -46,6 +46,10 @@ function usageLimitError(): Error & { status: number } {
 	});
 }
 
+function googleResourceExhaustedMessage(): string {
+	return "Google API error (429): Resource exhausted. Please try again later.";
+}
+
 function model(): Model<Api> {
 	return {
 		id: "test-model",
@@ -344,6 +348,50 @@ describe("streamSimple resolver auth retry", () => {
 
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
 		expect(keys).toEqual(["old-key", "new-key"]);
+	});
+
+	it("rotates on the exact Google Resource exhausted 429 error before content", async () => {
+		const keys: unknown[] = [];
+		const retryContexts: ApiKeyResolveContext[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (options?.apiKey === "next-key") {
+						ok(stream);
+						return;
+					}
+					stream.push({ type: "start", partial: assistant() });
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: assistantError(googleResourceExhaustedMessage(), 429),
+					});
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: async ctx => {
+				if (ctx.error !== undefined) retryContexts.push(ctx);
+				return ctx.error === undefined ? "old-key" : ctx.lastChance ? "next-key" : "old-key";
+			},
+		});
+		for await (const _event of stream) {
+			// drain
+		}
+
+		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+		expect(keys).toEqual(["old-key", "next-key"]);
+		expect(retryContexts.map(ctx => ({ lastChance: ctx.lastChance, hasError: ctx.error !== undefined }))).toEqual([
+			{ lastChance: false, hasError: true },
+			{ lastChance: true, hasError: true },
+		]);
+		expect((retryContexts[1]?.error as Error).message).toContain("Resource exhausted");
 	});
 
 	it("surfaces the original error when the resolver declines every retry", async () => {

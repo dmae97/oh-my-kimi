@@ -7,6 +7,7 @@ This document describes how the coding-agent resolves configuration today: which
 Primary implementation:
 
 - `packages/coding-agent/src/config.ts`
+- `packages/coding-agent/src/config/config-file.ts` (re-exported from `config.ts`)
 - `packages/coding-agent/src/config/settings.ts`
 - `packages/coding-agent/src/config/settings-schema.ts`
 - `packages/coding-agent/src/discovery/builtin.ts`
@@ -116,7 +117,7 @@ Use this when project config should be inherited from ancestor directories (mono
 
 ---
 
-## 3) File config wrapper (`ConfigFile<T>` in `src/config.ts`)
+## 3) File config wrapper (`ConfigFile<T>` in `src/config/config-file.ts`, re-exported from `src/config.ts`)
 
 `ConfigFile<T>` is the schema-validated loader for single config files.
 

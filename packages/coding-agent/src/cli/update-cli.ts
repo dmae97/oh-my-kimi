@@ -371,12 +371,63 @@ async function unlinkIfExists(filePath: string): Promise<void> {
 }
 
 /**
+ * Remove a backup binary without letting the removal abort a completed update.
+ *
+ * On Windows the executable that was just moved aside is still mapped as the
+ * running process image, so unlinking it fails with EPERM/EACCES until this
+ * process exits (issue #845). The replacement and verification already
+ * succeeded by the time we get here, so every error is swallowed; the leftover
+ * is reclaimed by {@link sweepStaleBackups} on the next update once it is no
+ * longer in use. Returns whether the file is gone.
+ */
+async function removeBackupBestEffort(filePath: string): Promise<boolean> {
+	try {
+		await fs.promises.unlink(filePath);
+		return true;
+	} catch (err) {
+		return isEnoent(err);
+	}
+}
+
+/**
+ * Best-effort removal of binary-update backups left by earlier runs.
+ *
+ * Each self-update moves the previous executable to `<binary>.<timestamp>.<pid>.bak`
+ * before swapping the new one in. On Windows that backup cannot be deleted
+ * while the updating process is alive, so it is left for a later run to reclaim
+ * once its owning process has exited. Also matches the legacy fixed
+ * `<binary>.bak` name produced before backups were timestamped, so users
+ * upgrading from a buggy release get the orphaned file cleaned up.
+ */
+export async function sweepStaleBackups(targetPath: string): Promise<void> {
+	const dir = path.dirname(targetPath);
+	const base = path.basename(targetPath);
+	let entries: string[];
+	try {
+		entries = await fs.promises.readdir(dir);
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (!entry.startsWith(`${base}.`) || !entry.endsWith(".bak")) continue;
+		// Legacy "<base>.bak" → empty middle; new "<base>.<timestamp>.<pid>.bak"
+		// → dot-separated numeric run. Anything else is an unrelated *.bak file.
+		const middle = entry.slice(base.length + 1, entry.length - ".bak".length);
+		if (middle.length > 0 && !/^\d+(\.\d+)*$/.test(middle)) continue;
+		await removeBackupBestEffort(path.join(dir, entry));
+	}
+}
+
+/**
  * Atomically replace the installed binary and roll back if version verification fails.
  */
 export async function replaceBinaryForUpdate(options: BinaryReplacementOptions): Promise<InstalledVersionVerification> {
 	let backupReady = false;
 	try {
-		await unlinkIfExists(options.backupPath);
+		// `backupPath` is unique per attempt (see updateViaBinaryAt), so this rename
+		// never has to overwrite — or unlink — a possibly-locked leftover from an
+		// earlier run. Renaming the running executable itself is permitted on
+		// Windows; only deleting its still-mapped image is not.
 		await fs.promises.rename(options.targetPath, options.backupPath);
 		backupReady = true;
 		await fs.promises.rename(options.tempPath, options.targetPath);
@@ -389,7 +440,10 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 		}
 
 		backupReady = false;
-		await unlinkIfExists(options.backupPath);
+		// Swap done and verified. On Windows the backup is still the running
+		// process image and cannot be unlinked until this process exits, so a
+		// failure here must NOT fail an otherwise-successful update.
+		await removeBackupBestEffort(options.backupPath);
 		return verification;
 	} catch (err) {
 		if (backupReady) {
@@ -517,7 +571,11 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 	const url = `https://github.com/${REPO}/releases/download/${tag}/${binaryName}`;
 
 	const tempPath = `${targetPath}.new`;
-	const backupPath = `${targetPath}.bak`;
+	// Unique per attempt: a stale backup from an earlier update may still be
+	// locked (it is the previous process image on Windows), and a fixed name
+	// would force the move-aside rename to overwrite it. pid + timestamp keeps
+	// two forced updates in the same millisecond from colliding.
+	const backupPath = `${targetPath}.${Date.now()}.${process.pid}.bak`;
 	console.log(chalk.dim(`Downloading ${binaryName}…`));
 
 	const response = await fetch(url, { redirect: "follow" });
@@ -535,6 +593,8 @@ async function updateViaBinaryAt(targetPath: string, expectedVersion: string): P
 		expectedVersion,
 		verifyInstalledVersion,
 	});
+	// Reclaim backups from earlier updates whose owning process has since exited.
+	await sweepStaleBackups(targetPath);
 	printVerifiedVersion(expectedVersion);
 	console.log(chalk.dim(`Restart ${APP_NAME} to use the new version`));
 }

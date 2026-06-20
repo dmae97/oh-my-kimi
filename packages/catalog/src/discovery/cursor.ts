@@ -1,6 +1,6 @@
 import * as http2 from "node:http2";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { getBundledModels } from "../models";
 import { toModelSpec } from "../provider-models/bundled-references";
 import type { Model, ModelSpec } from "../types";
@@ -13,27 +13,34 @@ const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
 
-const OptionalDisplayNameSchema = z.string().optional().catch(undefined);
-const CursorAliasesSchema = z
-	.array(z.unknown())
-	.optional()
-	.catch([])
-	.transform(aliases => (aliases ?? []).filter((alias: unknown): alias is string => typeof alias === "string"));
-
-const CursorModelDetailsSchema = z.object({
-	modelId: z.string(),
-	displayName: OptionalDisplayNameSchema,
-	displayNameShort: OptionalDisplayNameSchema,
-	displayModelId: OptionalDisplayNameSchema,
-	aliases: CursorAliasesSchema,
-	thinkingDetails: z.unknown().optional(),
+const OptionalDisplayNameSchema = type("unknown").pipe(raw => (typeof raw === "string" ? raw : undefined));
+const CursorAliasesSchema = type("unknown").pipe(raw => {
+	if (Array.isArray(raw)) {
+		return raw.filter((alias: unknown): alias is string => typeof alias === "string");
+	}
+	return [];
 });
 
-const CursorDecodedResponseSchema = z.object({
-	models: z.array(z.unknown()).optional().catch([]),
+const CursorModelDetailsSchema = type({
+	modelId: "string",
+	displayName: OptionalDisplayNameSchema.default(undefined),
+	displayNameShort: OptionalDisplayNameSchema.default(undefined),
+	displayModelId: OptionalDisplayNameSchema.default(undefined),
+	aliases: CursorAliasesSchema.default(() => []),
+	"thinkingDetails?": "unknown",
 });
 
-type CursorModelDetailsValue = z.infer<typeof CursorModelDetailsSchema>;
+const CursorModelsInnerSchema = type("unknown[]");
+const ResilientCursorModelsSchema = type("unknown").pipe(raw => {
+	const out = CursorModelsInnerSchema(raw);
+	return out instanceof type.errors ? [] : out;
+});
+
+const CursorDecodedResponseSchema = type({
+	models: ResilientCursorModelsSchema.default(() => []),
+});
+
+type CursorModelDetailsValue = typeof CursorModelDetailsSchema.infer;
 
 /**
  * Options for fetching dynamic Cursor models from `GetUsableModels`.
@@ -74,13 +81,13 @@ export async function fetchCursorUsableModels(
 			return null;
 		}
 		const decoded = decodeGetUsableModelsResponse(responseBuffer);
-		const parsedDecoded = CursorDecodedResponseSchema.safeParse(decoded);
-		if (!parsedDecoded.success) {
+		const parsedDecoded = CursorDecodedResponseSchema(decoded);
+		if (parsedDecoded instanceof type.errors) {
 			return null;
 		}
 
 		const references = createCursorReferenceMap();
-		return normalizeCursorModels(parsedDecoded.data.models, options.baseUrl, references);
+		return normalizeCursorModels(parsedDecoded.models, options.baseUrl, references);
 	} catch {
 		return null;
 	}
@@ -254,12 +261,12 @@ function normalizeCursorModel(
 	baseUrlOverride: string | undefined,
 	references: Map<string, ModelSpec<"cursor-agent">>,
 ): ModelSpec<"cursor-agent"> | null {
-	const parsedModel = CursorModelDetailsSchema.safeParse(model);
-	if (!parsedModel.success) {
+	const parsedModel = CursorModelDetailsSchema(model);
+	if (parsedModel instanceof type.errors) {
 		return null;
 	}
 
-	const details = parsedModel.data;
+	const details = parsedModel;
 	const id = details.modelId.trim();
 	if (!id) {
 		return null;

@@ -1,32 +1,32 @@
 /**
  * Contract: tool schema token estimation reflects the wire JSON Schema.
  *
- * Tools authored with Zod must be counted by the JSON Schema providers
- * actually receive — not by stringifying the Zod instance's enumerable
- * internals (`def` tree), which massively overcounts.
+ * Tools authored with arktype must be counted by the JSON Schema providers
+ * actually receive — not by stringifying the arktype instance's enumerable
+ * internals, which massively overcounts.
  */
 import { describe, expect, it } from "bun:test";
-import { zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import {
 	type ContextBreakdown,
 	estimateToolSchemaTokens,
 	renderContextUsage,
 } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 describe("estimateToolSchemaTokens", () => {
-	it("counts Zod tool schemas by their wire JSON Schema, not Zod internals", () => {
-		const parameters = z.object({
-			query: z.string().describe("search query"),
-			limit: z.number().optional(),
+	it("counts arktype tool schemas by their wire JSON Schema, not arktype internals", () => {
+		const parameters = type({
+			"query /** search query */": "string",
+			"limit?": "number",
 		});
-		const zodEstimate = estimateToolSchemaTokens([
+		const arktypeEstimate = estimateToolSchemaTokens([
 			{ name: "web_search", description: "Searches the web.", parameters } as never,
 		]);
 		const wireEstimate = estimateToolSchemaTokens([
-			{ name: "web_search", description: "Searches the web.", parameters: zodToWireSchema(parameters) } as never,
+			{ name: "web_search", description: "Searches the web.", parameters: arkToWireSchema(parameters) } as never,
 		]);
-		expect(zodEstimate).toBe(wireEstimate);
+		expect(arktypeEstimate).toBe(wireEstimate);
 	});
 });
 

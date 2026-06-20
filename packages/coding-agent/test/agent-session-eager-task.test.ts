@@ -12,7 +12,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type ObservedPromptCall = {
@@ -105,7 +105,7 @@ describe("AgentSession eager task prelude", () => {
 			name: "task",
 			label: "Task",
 			description: "Mock task tool",
-			parameters: z.object({}),
+			parameters: type({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 			...(taskWireName !== undefined ? { customWireName: taskWireName } : {}),
 		};
@@ -113,7 +113,7 @@ describe("AgentSession eager task prelude", () => {
 			name: "bash",
 			label: "Bash",
 			description: "Mock bash tool",
-			parameters: z.object({}),
+			parameters: type({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 		};
 		const todoEnabled = settings.get("todo.enabled") === true;
@@ -139,7 +139,7 @@ describe("AgentSession eager task prelude", () => {
 				messages: [],
 			},
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context, options) => {
 				const lastMessage = context.messages.at(-1);
 				if (!lastMessage) {

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $which, APP_NAME, getToolsDir, logger, ptree, TempDir } from "@oh-my-pi/pi-utils";
+import { extractArchive } from "./zip";
 
 const TOOLS_DIR = getToolsDir();
 const TOOL_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -220,17 +221,7 @@ async function downloadTool(tool: ToolName, signal?: AbortSignal): Promise<strin
 		}
 
 		try {
-			const archive = new Bun.Archive(await Bun.file(archivePath).arrayBuffer());
-			const files = await archive.files();
-			const extractRoot = path.resolve(tmp.path());
-
-			for (const [filePath, file] of files) {
-				const outputPath = path.resolve(extractRoot, filePath);
-				if (!outputPath.startsWith(extractRoot + path.sep)) {
-					throw new Error(`Archive entry escapes extraction dir: ${filePath}`);
-				}
-				await Bun.write(outputPath, file);
-			}
+			await extractArchive(archivePath, tmp.path());
 		} catch (err) {
 			throw new Error(`Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`);
 		}

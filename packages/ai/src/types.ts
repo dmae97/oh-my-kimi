@@ -20,6 +20,7 @@ import type {
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@oh-my-pi/pi-catalog/types";
+import type { Type } from "arktype";
 import type { ZodType, z } from "zod/v4";
 import type { ApiKey } from "./auth-retry";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
@@ -57,6 +58,7 @@ export interface ApiOptionsMap {
 	"bedrock-converse-stream": BedrockOptions;
 	"openai-completions": OpenAICompletionsOptions;
 	"openai-responses": OpenAIResponsesOptions;
+	openrouter: OpenAIResponsesOptions | OpenAICompletionsOptions;
 	"openai-codex-responses": OpenAICodexResponsesOptions;
 	"azure-openai-responses": AzureOpenAIResponsesOptions;
 	"google-generative-ai": GoogleOptions;
@@ -235,6 +237,13 @@ export interface StreamOptions {
 	 */
 	metadata?: Record<string, unknown>;
 	/**
+	 * Config options for the thinking/response loop guard.
+	 */
+	loopGuard?: {
+		enabled?: boolean;
+		checkAssistantContent?: boolean;
+	};
+	/**
 	 * Advisory token budget for a full agentic loop. Anthropic encodes this as
 	 * `output_config.task_budget` with the `task-budgets-2026-03-13` beta header.
 	 */
@@ -374,6 +383,8 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	 * or the catalog entry already names the variant).
 	 */
 	openrouterVariant?: string;
+	/** Antigravity endpoint routing mode: "auto" (default with failover), "production", "sandbox". */
+	antigravityEndpointMode?: "auto" | "production" | "sandbox";
 }
 
 // Generic StreamFunction with typed options
@@ -476,12 +487,19 @@ export interface DeveloperMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+export interface ContextSnapshot {
+	promptTokens: number; // authoritative provider prompt/input tokens
+	nonMessageTokens: number; // estimated non-message total at send time
+	lastMessageTimestamp?: number;
+}
+
 export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | RedactedThinkingContent | ToolCall)[];
 	api: Api;
 	provider: Provider;
 	model: string;
+	contextSnapshot?: ContextSnapshot;
 	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
 	/**
 	 * Name of the upstream provider an aggregator routed this request to, as
@@ -572,20 +590,26 @@ export interface CursorExecHandlers {
 
 /**
  * Plain JSON Schema document used by extension-authored tools (legacy TypeBox
- * emits this shape). Distinguished from Zod at runtime via {@link isZodSchema}.
+ * emits this shape). Distinguished from arktype at runtime.
  */
 export type TJsonSchema = Record<string, unknown>;
 
 /**
  * Schema type accepted by the {@link Tool} interface.
  *
- * Canonical authoring uses Zod. Extension compat may supply a JSON Schema
- * object (including TypeBox static schema objects).
+ * Canonical authoring uses Zod or ArkType. Extension compat may supply a JSON
+ * Schema object (including TypeBox static schema objects).
  */
-export type TSchema = ZodType | TJsonSchema;
+export type TSchema = ZodType | Type | TJsonSchema;
 
 /** Resolve parameter types for tool execution / handlers. */
-export type Static<S> = S extends ZodType ? z.infer<S> : S extends { static: infer T } ? T : unknown;
+export type Static<S> = S extends ZodType
+	? z.infer<S>
+	: S extends Type
+		? S["infer"]
+		: S extends { static: infer T }
+			? T
+			: unknown;
 
 export interface ToolCallExample<TArgs = Record<string, unknown>> {
 	caption?: string;
@@ -632,9 +656,9 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	 * Illustrative calls/notes; the AI layer renders them into an `<examples>`
 	 * block in the model's native tool-call syntax and appends to the wire
 	 * description. Author `call`/`bad`/`good` as plain argument objects WITHOUT
-	 * `_i` — when intent tracing injects `_i` into the schema, the renderer adds
-	 * a placeholder `_i` automatically. Type each tool's `examples` against its
-	 * own schema (e.g. `readonly ToolExample<z.input<typeof schema>>[]`).
+	 * `i` — when intent tracing injects `i` into the schema, the renderer adds
+	 * a placeholder `i` automatically. Type each tool's `examples` against its
+	 * own schema (e.g. `readonly ToolExample<typeof schema["type"]>[]`).
 	 */
 	examples?: readonly ToolExample[];
 }

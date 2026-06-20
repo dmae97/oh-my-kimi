@@ -5,7 +5,7 @@ import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedGoalSystemPrompt from "../prompts/goals/guided-goal-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
-import { toReasoningEffort } from "../thinking";
+import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const RESPOND_TOOL_NAME = "respond";
 
@@ -66,9 +66,17 @@ export async function runGuidedGoalTurn(
 	options: GuidedGoalTurnOptions,
 ): Promise<GuidedGoalTurnResult> {
 	const plan = session.resolveRoleModelWithThinking("plan");
-	const resolved = plan.model ? plan : session.resolveRoleModelWithThinking("slow");
+	const slow = plan.model ? plan : session.resolveRoleModelWithThinking("slow");
+	const resolved = slow.model
+		? slow
+		: {
+				model: session.model,
+				thinkingLevel: session.thinkingLevel,
+				explicitThinkingLevel: false,
+				warning: undefined,
+			};
 	if (!resolved.model) {
-		throw new Error("No plan or slow model is available for /guided-goal.");
+		throw new Error("No plan, slow, or current session model is available for /guided-goal.");
 	}
 
 	const apiKey = await session.modelRegistry.getApiKey(resolved.model, session.sessionId);
@@ -95,6 +103,7 @@ export async function runGuidedGoalTurn(
 			apiKey: session.modelRegistry.resolver(resolved.model, session.sessionId),
 			signal: options.signal,
 			reasoning: toReasoningEffort(resolved.thinkingLevel),
+			disableReasoning: shouldDisableReasoning(resolved.thinkingLevel),
 			toolChoice: { type: "tool", name: RESPOND_TOOL_NAME },
 		},
 		{ telemetry: resolveTelemetry(session.agent.telemetry, session.sessionId), oneshotKind: "guided_goal_setup" },

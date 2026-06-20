@@ -1,16 +1,21 @@
 import { expect } from "bun:test";
-import type * as z from "zod/v4";
+import { type as arkType, type Type } from "arktype";
 
-function formatIssues(error: z.ZodError): string {
-	return error.issues.map(issue => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("\n");
+function formatIssues(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
 }
 
-export function expectAcpStructure(schema: z.ZodType, value: unknown): void {
-	const result = schema.safeParse(value);
-	expect(result.success, result.success ? undefined : formatIssues(result.error)).toBe(true);
+export function expectAcpStructure(schema: Type, value: unknown): void {
+	const result = schema(value);
+	const isValid = !(result instanceof arkType.errors);
+	expect(isValid, isValid ? undefined : formatIssues(result)).toBe(true);
 }
 
-export function expectAcpStructureRejects(schema: z.ZodType, value: unknown): void {
-	const result = schema.safeParse(value);
-	expect(result.success).toBe(false);
+export function expectAcpStructureRejects(schema: Type, value: unknown): void {
+	const result = schema(value);
+	const isValid = !(result instanceof arkType.errors);
+	expect(isValid).toBe(false);
 }

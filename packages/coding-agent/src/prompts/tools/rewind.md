@@ -3,7 +3,7 @@ End an active checkpoint. Rewind context to it, replacing intermediate explorati
 Call immediately after `checkpoint`-started investigative work.
 
 Requirements:
-- `report` is REQUIRED and MUST be concise, factual, and actionable.
+- `report` MUST be concise, factual, and actionable.
 - Include key findings, decisions, and any unresolved risks.
 - AVOID raw scratch logs unless essential.
 - You MUST call this before yielding if a checkpoint is active.

@@ -10,6 +10,7 @@
  */
 
 import { logger } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
@@ -263,11 +264,10 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// client signals a cache identity outside the body — see the
 	// `resolvePromptCacheKey` call further down.
 
-	const parsed = openaiResponsesRequestSchema.safeParse(body);
-	if (!parsed.success) {
-		throw new Error(`openai-responses: ${parsed.error.message}`);
+	const data = openaiResponsesRequestSchema(body);
+	if (data instanceof type.errors) {
+		throw new Error(`openai-responses: ${data.summary}`);
 	}
-	const data = parsed.data;
 
 	const now = Date.now();
 	const messages: Message[] = [];
@@ -360,7 +360,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 			if (effectiveType === "custom_tool_call") {
 				const call = item as { id?: string; call_id: string; name: string; input: string };
 				// Custom tools carry a raw input string. We stash it in `arguments.input`
-				// matching pi-ai's openai-responses-shared convention, and tag the call
+				// matching pi-ai's openai-shared convention, and tag the call
 				// with `customWireName` so encoders re-emit it as `custom_tool_call`.
 				const toolCall: ToolCall = {
 					type: "toolCall",

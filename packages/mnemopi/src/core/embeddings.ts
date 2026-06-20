@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { type ApiKey, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, getOpenRouterHeaders, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	$env,
@@ -11,7 +11,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
-import packageJson from "../../package.json" with { type: "json" };
+import { ensureFastembedModelSidecars } from "./fastembed-model-cache";
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -31,19 +31,19 @@ export interface EmbeddingProvider {
 	available?(): boolean | Promise<boolean>;
 }
 
-type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
+export type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
 
-interface LocalEmbeddingModel {
+export interface LocalEmbeddingModel {
 	embed(texts: string[], batchSize?: number): EmbeddingOutput;
 	queryEmbed?(query: string): Promise<number[]>;
 }
 
-type LocalModelInitOptions = {
+export type LocalModelInitOptions = {
 	model: StandardEmbeddingModel;
 	cacheDir?: string;
 	showDownloadProgress?: boolean;
 };
-type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
+export type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
 const QUERY_CACHE_MAX = 512;
 
@@ -63,7 +63,20 @@ let nextProviderId = 1;
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
-	return FlagEmbedding.init(options);
+	try {
+		return await FlagEmbedding.init(options);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		if (
+			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
+				message,
+			)
+		) {
+			throw error;
+		}
+		if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
+		return FlagEmbedding.init(options);
+	}
 }
 
 function activeEmbeddingOptions() {
@@ -268,10 +281,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		const response = await withAuth(apiKey, async key => {
 			const headers: Record<string, string> = {
 				"Content-Type": "application/json",
-				"User-Agent": `Oh-My-Pi/${packageJson.version}`,
-				"HTTP-Referer": "https://omp.sh/",
-				"X-OpenRouter-Title": "Oh-My-Pi",
-				"X-OpenRouter-Categories": "cli-agent",
+				...getOpenRouterHeaders(),
 			};
 			if (key !== "") {
 				headers.Authorization = `Bearer ${key}`;
@@ -327,6 +337,16 @@ export function setLocalModelInitializerForTests(initializer: LocalModelInitiali
 	localModelPromise = null;
 	queryCache.clear();
 }
+
+/**
+ * Override the function used to construct the local fastembed model the next
+ * time `embed()` is called. Lets a host (e.g. the agent CLI) keep
+ * `onnxruntime-node` out of its own address space by routing every fastembed
+ * load + inference through a dedicated subprocess. Same wipe semantics as the
+ * `*ForTests` form: clears the cached model promise and the query cache so
+ * subsequent embeds run through the new initializer immediately.
+ */
+export const setLocalModelInitializer = setLocalModelInitializerForTests;
 
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;

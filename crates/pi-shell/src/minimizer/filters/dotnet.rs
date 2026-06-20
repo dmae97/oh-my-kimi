@@ -184,9 +184,9 @@ fn compact_format_json(input: &str) -> Option<String> {
 		out.push('\n');
 	}
 	if rows.len() > 40 {
-		out.push_str("… ");
+		out.push_str("[…");
 		out.push_str(&(rows.len() - 40).to_string());
-		out.push_str(" more diagnostics\n");
+		out.push_str(" diagnostics elided…]\n");
 	}
 	Some(out)
 }

@@ -116,6 +116,16 @@ function completeMcpToolCall(h: Harness, args: Record<string, Uint8Array> | unde
 	);
 }
 
+function pushTextDelta(h: Harness, text: string): void {
+	processInteractionUpdate(
+		{ message: { case: "textDelta", value: { text } } },
+		h.output,
+		h.stream,
+		h.state,
+		h.usageState,
+	);
+}
+
 describe("mergeCursorMcpToolCallArgs", () => {
 	it("returns streamed args unchanged when completion is undefined", () => {
 		const streamed = { tasks: [{ assignment: "do" }], context: "ctx" };
@@ -157,6 +167,31 @@ describe("mergeCursorMcpToolCallArgs", () => {
 
 	it("returns an empty object when both sides are absent", () => {
 		expect(mergeCursorMcpToolCallArgs(undefined, undefined)).toEqual({});
+	});
+});
+
+describe("processInteractionUpdate content block ordering", () => {
+	it("opens a new text block after a completed tool call", () => {
+		const h = newHarness();
+
+		pushTextDelta(h, "before ");
+		startMcpToolCall(h, "bash");
+		completeMcpToolCall(h, undefined);
+		pushTextDelta(h, "after");
+
+		expect(h.output.content.map(block => block.type)).toEqual(["text", "toolCall", "text"]);
+		expect(h.output.content[0]).toMatchObject({ type: "text", text: "before " });
+		expect(h.output.content[1]).toMatchObject({ type: "toolCall", name: "bash" });
+		expect(h.output.content[2]).toMatchObject({ type: "text", text: "after" });
+		expect(h.captured.map(event => event.type)).toEqual([
+			"text_start",
+			"text_delta",
+			"text_end",
+			"toolcall_start",
+			"toolcall_end",
+			"text_start",
+			"text_delta",
+		]);
 	});
 });
 

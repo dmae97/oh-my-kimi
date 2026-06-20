@@ -106,7 +106,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
  */
 export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	appearance: ["Theme", "Status Line", "Display", "Images"],
-	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor"],
+	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Vision"],
 	interaction: [
 		"Input",
 		"Approvals",
@@ -117,6 +117,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Startup & Updates",
 		"Power (macOS)",
 		"Agent",
+		"Git",
 	],
 	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
 	memory: ["General", "Auto-Learn", "Mnemopi", "Hindsight"],
@@ -341,44 +342,38 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// macOS power assertions (caffeinate flags). No-op on other platforms.
-	"power.preventIdleSleep": {
-		type: "boolean",
-		default: true,
+	"power.sleepPrevention": {
+		type: "enum",
+		values: ["off", "idle", "display", "system"] as const,
+		default: "idle",
 		ui: {
 			tab: "interaction",
 			group: "Power (macOS)",
-			label: "Prevent Idle Sleep",
-			description: "Keep the system awake while a session is open (caffeinate -i)",
-		},
-	},
-	"power.preventSystemSleep": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Prevent System Sleep on AC",
-			description: "Block all system sleep while on AC power (caffeinate -s)",
-		},
-	},
-	"power.declareUserActive": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Declare User Active",
-			description: "Keep the display lit and treat the user as active (caffeinate -u)",
-		},
-	},
-	"power.preventDisplaySleep": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "interaction",
-			group: "Power (macOS)",
-			label: "Prevent Display Sleep",
-			description: "Keep the display from idle-sleeping while a session is open (caffeinate -d)",
+			label: "Sleep Prevention",
+			description:
+				"Prevent macOS sleep during active sessions. Each level is cumulative — it adds the flags of all lower levels.",
+			options: [
+				{
+					value: "off",
+					label: "Off",
+					description: "Do not prevent any sleep",
+				},
+				{
+					value: "idle",
+					label: "Prevent Idle Sleep",
+					description: "Keep the system awake while a session is open (caffeinate -i)",
+				},
+				{
+					value: "display",
+					label: "Prevent Display Sleep",
+					description: "Also keep the display from idle-sleeping (caffeinate -i -d)",
+				},
+				{
+					value: "system",
+					label: "Prevent System Sleep",
+					description: "Also block all system sleep on AC and declare the user active (caffeinate -i -d -s -u)",
+				},
+			],
 		},
 	},
 	"advisor.enabled": {
@@ -400,6 +395,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Advisor",
 			label: "Advisor for Subagents",
 			description: "Also enable the advisor on spawned task/eval subagents.",
+			condition: "advisorEnabled",
 		},
 	},
 	"advisor.syncBacklog": {
@@ -412,9 +408,40 @@ export const SETTINGS_SCHEMA = {
 			label: "Advisor Sync Backlog",
 			description:
 				"Pause the main agent for up to 30 seconds if the advisor falls behind by this many turns. Off disables catch-up delays.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.immuneTurns": {
+		type: "number",
+		default: 1,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Advisor Immune Turns",
+			description:
+				"After an advisor concern or blocker interrupts, route further concerns/blockers non-interruptingly for this many primary turns.",
+			options: [
+				{ value: "0", label: "0 turns", description: "Allow every concern/blocker to interrupt." },
+				{ value: "1", label: "1 turn", description: "Default." },
+				{ value: "2", label: "2 turns" },
+				{ value: "3", label: "3 turns" },
+				{ value: "4", label: "4 turns" },
+				{ value: "5", label: "5 turns" },
+			],
+			condition: "advisorEnabled",
 		},
 	},
 	shellPath: { type: "string", default: undefined },
+	"git.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Git",
+			label: "Enable Git Integration",
+			description: "Show git branch, status, and PR information in the TUI and watch repository metadata.",
+		},
+	},
 
 	extensions: { type: "array", default: EMPTY_STRING_ARRAY },
 
@@ -712,6 +739,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"images.describeForTextModels": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Vision",
+			label: "Describe Images for Text Models",
+			description:
+				"When an image is attached to a model without vision support, save it under local:// and inject a description from a vision-capable model instead of dropping it",
+		},
+	},
+
 	"tui.maxInlineImageColumns": {
 		type: "number",
 		default: 100,
@@ -757,10 +796,15 @@ export const SETTINGS_SCHEMA = {
 				"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
 		},
 	},
-	// Display rendering
-	"display.tabWidth": {
-		type: "number",
-		default: 3,
+	"tui.tight": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Tight Layout",
+			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
+		},
 	},
 
 	"display.shimmer": {
@@ -802,6 +846,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.cacheMissMarker": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Cache Miss Marker",
+			description: "Show a divider above an assistant turn whose request lost (missed) the prompt cache",
+		},
+	},
+
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
@@ -820,7 +875,7 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: [...THINKING_EFFORTS, AUTO_THINKING],
+		values: [...THINKING_EFFORTS, AUTO_THINKING, "max"],
 		default: "high",
 		ui: {
 			tab: "model",
@@ -845,14 +900,37 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	repeatToolDescriptions: {
+	"model.loopGuard.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Loop Guard",
+			description: "Enable automatic stream loop detection for Gemini and DeepSeek models",
+		},
+	},
+
+	"model.loopGuard.checkAssistantContent": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Loop Guard Scan Prose",
+			description: "Apply loop guard to assistant prose messages in addition to thinking logs",
+		},
+	},
+
+	inlineToolDescriptors: {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "model",
 			group: "Prompt",
-			label: "Repeat Tool Descriptions",
-			description: "Render full tool descriptions in the system prompt instead of a tool name list",
+			label: "Inline Tool Descriptors",
+			description:
+				"Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once",
 		},
 	},
 
@@ -1284,6 +1362,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"startup.showSplash": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Show Startup Splash",
+			description:
+				"Show the full animated setup splash on normal interactive startup without rerunning setup. Quiet Startup still suppresses it.",
+		},
+	},
+
 	"startup.setupWizard": {
 		type: "boolean",
 		default: true,
@@ -1433,6 +1523,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"collab.webUrl": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "interaction",
+			group: "Collab",
+			label: "Web UI URL",
+			description:
+				"Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only",
+		},
+	},
+
 	"collab.displayName": {
 		type: "string",
 		default: "",
@@ -1505,7 +1607,7 @@ export const SETTINGS_SCHEMA = {
 	// Context promotion
 	"contextPromotion.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "context",
 			group: "General",
@@ -1769,6 +1871,7 @@ export const SETTINGS_SCHEMA = {
 			"qwen3",
 			"gemini",
 			"gemma",
+			"minimax",
 		] as const,
 		default: "auto",
 		ui: {
@@ -1791,10 +1894,11 @@ export const SETTINGS_SCHEMA = {
 				{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
 				{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
 				{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
-				{ value: "pi", label: "Pi", description: "Use the Pi owned dialect." },
+				{ value: "pi", label: "Pi", description: "Use the Pi owned dialect (compact sigil-delimited tool calls)." },
 				{ value: "qwen3", label: "Qwen3", description: "Use the Qwen3 owned dialect." },
 				{ value: "gemini", label: "Gemini", description: "Use the Gemini owned dialect." },
 				{ value: "gemma", label: "Gemma", description: "Use the Gemma owned dialect." },
+				{ value: "minimax", label: "MiniMax", description: "Use the MiniMax owned dialect." },
 			],
 		},
 	},
@@ -2658,7 +2762,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Read Summaries",
 			label: "Read Summary Unfold Ceiling",
 			description:
-				"Hard ceiling on summary size while BFS-unfolding. An unfold that would exceed this is reverted and unfolding stops.",
+				"Hard ceiling on summary size while BFS-unfolding. An unfold whose revealed lines would exceed this is skipped (that span stays folded) and unfolding continues with the remaining spans.",
 		},
 	},
 
@@ -3069,17 +3173,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Optional tools
-
-	"renderMermaid.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Render Mermaid",
-			description: "Enable the render_mermaid tool for Mermaid-to-ASCII rendering",
-		},
-	},
 
 	"debug.enabled": {
 		type: "boolean",
@@ -3866,6 +3959,34 @@ export const SETTINGS_SCHEMA = {
 			group: "Services",
 			label: "Excluded Web Search Providers",
 			description: "Providers that web_search should never use, even as fallbacks",
+		},
+	},
+	"providers.antigravityEndpoint": {
+		type: "enum",
+		values: ["auto", "production", "sandbox"] as const,
+		default: "auto",
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Antigravity Endpoint Mode",
+			description: "Endpoint routing strategy for google-antigravity providers (chat, search, image, discovery)",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Try production endpoint, fail over to sandbox on 5xx/429",
+				},
+				{
+					value: "production",
+					label: "Production Only",
+					description: "Force production endpoint only",
+				},
+				{
+					value: "sandbox",
+					label: "Sandbox Only",
+					description: "Force sandbox endpoint only",
+				},
+			],
 		},
 	},
 	"providers.image": {

@@ -1,6 +1,7 @@
-import { untilAborted } from "@oh-my-pi/pi-utils";
-import type { Markit, StreamInfo } from "markit-ai";
+import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import type { Markit, StreamInfo } from "../markit";
 import { ToolAbortError } from "../tools/tool-errors";
+import { loadEmbeddedMupdfWasm } from "./mupdf-wasm-embed";
 
 export interface MarkitConversionResult {
 	content: string;
@@ -8,8 +9,56 @@ export interface MarkitConversionResult {
 	error?: string;
 }
 
+export interface MarkitFileConversionOptions {
+	/**
+	 * Directory the PDF converter writes extracted images/diagrams into. When
+	 * set, each embedded image is rendered to `<id>.png` and referenced by path
+	 * in the markdown; when unset, markit emits an `<!-- image: <id> ... -->`
+	 * placeholder comment instead.
+	 */
+	imageDir?: string;
+}
+
+interface MuPdfWasmModuleConfig {
+	print?: (...values: unknown[]) => void;
+	printErr?: (...values: unknown[]) => void;
+	wasmBinary?: Uint8Array;
+}
+
+function logMuPdfWasmOutput(stream: "stdout" | "stderr", values: unknown[]): void {
+	const message = values.length === 1 && typeof values[0] === "string" ? values[0] : values.map(String).join(" ");
+	logger.debug("mupdf wasm output", { stream, message });
+}
+
+// `$libmupdf_wasm_Module` is declared globally (as `any`) by the mupdf package.
+// Install print hooks before the WASM module initializes so its stdout/stderr
+// route to the file logger instead of corrupting the TUI.
+function installMuPdfWasmLogger(): void {
+	const moduleConfig: MuPdfWasmModuleConfig = globalThis.$libmupdf_wasm_Module ?? {};
+	moduleConfig.print = (...values: unknown[]) => logMuPdfWasmOutput("stdout", values);
+	moduleConfig.printErr = (...values: unknown[]) => logMuPdfWasmOutput("stderr", values);
+	globalThis.$libmupdf_wasm_Module = moduleConfig;
+}
+
+// Hand the WASM module its bytes directly when the compiled binary embedded them
+// (scripts/embed-mupdf-wasm.ts); a single-file binary has no node_modules for
+// mupdf to read `mupdf-wasm.wasm` from. Source/npm builds get undefined here and
+// mupdf loads its own wasm. Must run before the mupdf module evaluates.
+function installEmbeddedMupdfWasm(): void {
+	const wasmBinary = loadEmbeddedMupdfWasm();
+	if (!wasmBinary) return;
+	const moduleConfig: MuPdfWasmModuleConfig = globalThis.$libmupdf_wasm_Module ?? {};
+	moduleConfig.wasmBinary = wasmBinary;
+	globalThis.$libmupdf_wasm_Module = moduleConfig;
+}
+
+installMuPdfWasmLogger();
+
 let markit: () => Markit | Promise<Markit> = async () => {
-	const promise = import("markit-ai").then(({ Markit }) => {
+	// Lazy: keep the document engine (mammoth/mupdf) off the startup
+	// import graph — it loads only when a document is first converted.
+	installEmbeddedMupdfWasm();
+	const promise = import("../markit").then(({ Markit }) => {
 		const instance = new Markit();
 		markit = () => instance;
 		return instance;
@@ -54,9 +103,14 @@ function finalizeConversion(markdown?: string): MarkitConversionResult {
 	return { content: "", ok: false, error: "Conversion produced no output" };
 }
 
-export async function convertFileWithMarkit(filePath: string, signal?: AbortSignal): Promise<MarkitConversionResult> {
+export async function convertFileWithMarkit(
+	filePath: string,
+	signal?: AbortSignal,
+	options?: MarkitFileConversionOptions,
+): Promise<MarkitConversionResult> {
+	const extra = options?.imageDir ? { imageDir: options.imageDir } : undefined;
 	try {
-		const result = await runMarkitConversion(markit => markit.convertFile(filePath), signal);
+		const result = await runMarkitConversion(markit => markit.convertFile(filePath, extra), signal);
 		return finalizeConversion(result.markdown);
 	} catch (error) {
 		if (error instanceof ToolAbortError) {

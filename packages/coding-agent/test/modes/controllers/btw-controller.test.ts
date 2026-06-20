@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import { BtwPanelComponent } from "@oh-my-pi/pi-coding-agent/modes/components/btw-panel";
 import { BtwController } from "@oh-my-pi/pi-coding-agent/modes/controllers/btw-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -48,17 +49,41 @@ function makeFakeSession(
 }
 
 function makeCtx(session: InteractiveModeContext["session"], btwContainer = new Container()): InteractiveModeContext {
+	let leafId: string | null = "leaf-1";
 	return {
 		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
 		btwContainer,
 		session,
+		sessionManager: { getLeafId: () => leafId } as unknown as InteractiveModeContext["sessionManager"],
 		showStatus: vi.fn(),
 		showError: vi.fn(),
-	} as unknown as InteractiveModeContext;
+		handleBtwBranch: vi.fn(async () => {}),
+		setTestLeafId(nextLeafId: string | null) {
+			leafId = nextLeafId;
+		},
+	} as unknown as InteractiveModeContext & { setTestLeafId(nextLeafId: string | null): void };
 }
 
 beforeAll(async () => {
 	await initTheme();
+});
+async function drainBtwRequest(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+describe("BtwPanelComponent", () => {
+	it("is branchable only after a complete non-empty answer", () => {
+		const ui = { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI;
+		const panel = new BtwPanelComponent({ question: "Question?", tui: ui });
+
+		expect(panel.isBranchable()).toBe(false);
+		panel.setAnswer("   ");
+		panel.markComplete();
+		expect(panel.isBranchable()).toBe(false);
+		panel.setAnswer("Answer");
+		expect(panel.isBranchable()).toBe(true);
+	});
 });
 
 describe("BtwController", () => {
@@ -87,10 +112,8 @@ describe("BtwController", () => {
 
 	it("replaces a previous request by aborting it before issuing the next runEphemeralTurn", async () => {
 		const signals: AbortSignal[] = [];
-		let firstRelease!: () => void;
-		const firstPromise = new Promise<RunEphemeralTurnResult>(resolve => {
-			firstRelease = () => resolve({ replyText: "first", assistantMessage: createAssistantMessage("first") });
-		});
+		const first = Promise.withResolvers<RunEphemeralTurnResult>();
+		const firstPromise = first.promise;
 		const runEphemeralTurn = vi
 			.fn<(args: RunEphemeralTurnArgs) => Promise<RunEphemeralTurnResult>>()
 			.mockImplementationOnce(async args => {
@@ -116,11 +139,11 @@ describe("BtwController", () => {
 		expect(signals[1]?.aborted).toBe(false);
 		expect(btwContainer.children).toHaveLength(1);
 		// Allow the orphaned first request to finish to keep the test clean.
-		firstRelease();
+		first.resolve({ replyText: "first", assistantMessage: createAssistantMessage("first") });
 	});
 
 	it("clears the panel when the active request is dismissed via Escape", async () => {
-		const runEphemeralTurn = vi.fn(async () => new Promise<RunEphemeralTurnResult>(() => {}));
+		const runEphemeralTurn = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
 		const btwContainer = new Container();
 		const ctx = makeCtx(makeFakeSession(runEphemeralTurn), btwContainer);
 		const controller = new BtwController(ctx);
@@ -157,5 +180,230 @@ describe("BtwController", () => {
 		await controller.start("Anything?");
 		expect(runEphemeralTurn).not.toHaveBeenCalled();
 		expect(ctx.showError).toHaveBeenCalled();
+	});
+
+	it("does not allow branch while /btw is still running", async () => {
+		const runEphemeralTurn = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("does not allow branch when the completed answer has no originating leaf", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn)) as InteractiveModeContext & {
+			setTestLeafId(nextLeafId: string | null): void;
+		};
+		ctx.setTestLeafId(null);
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("allows branch after a complete non-empty reply", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(controller.canBranch()).toBe(true);
+	});
+
+	it("does not allow branch after a complete empty reply", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({
+			replyText: "   ",
+			assistantMessage: createAssistantMessage("   "),
+		}));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(controller.canBranch()).toBe(false);
+	});
+
+	it("does not allow branch after aborted or errored requests", async () => {
+		const abortedRun = vi.fn(async () => Promise.withResolvers<RunEphemeralTurnResult>().promise);
+		const abortedController = new BtwController(makeCtx(makeFakeSession(abortedRun)));
+		await abortedController.start("Question?");
+		expect(abortedController.handleEscape()).toBe(true);
+		expect(abortedController.canBranch()).toBe(false);
+
+		const erroredRun = vi.fn(async () => {
+			throw new Error("boom");
+		});
+		const erroredController = new BtwController(makeCtx(makeFakeSession(erroredRun)));
+		await erroredController.start("Question?");
+		await drainBtwRequest();
+		expect(erroredController.canBranch()).toBe(false);
+	});
+
+	it("handleBranch returns false and does not call the context when not branchable", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "", assistantMessage: createAssistantMessage("") }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).not.toHaveBeenCalled();
+	});
+
+	it("handleBranch calls the context with the question and full assistant message when branchable", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", assistantMessage);
+	});
+
+	it("branches the sanitized reply text while preserving non-text assistant content", async () => {
+		const assistantMessage: AssistantMessage = {
+			...createAssistantMessage("raw repeated repeated repeated"),
+			content: [
+				{
+					type: "thinking",
+					thinking: "Keep this reasoning.",
+					thinkingSignature: "signed-for-ephemeral-prompt",
+					itemId: "item-1",
+				},
+				{ type: "redactedThinking", data: "encrypted-ephemeral-thinking" },
+				{ type: "text", text: "raw repeated repeated repeated" },
+				{ type: "text", text: "raw duplicate tail" },
+			],
+		};
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "sanitized", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", {
+			...assistantMessage,
+			content: [
+				{ type: "thinking", thinking: "Keep this reasoning." },
+				{ type: "text", text: "sanitized" },
+			],
+		});
+	});
+
+	it("branches the sanitized reply text without native replay payload metadata", async () => {
+		const providerPayload = {
+			type: "openaiResponsesHistory" as const,
+			provider: "openai-codex",
+			dt: true,
+			items: [{ type: "reasoning", encrypted_content: "raw-ephemeral-output" }],
+		};
+		const assistantMessage: AssistantMessage = {
+			...createAssistantMessage("raw ephemeral output"),
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5-codex",
+			content: [
+				{ type: "thinking", thinking: "reasoning", thinkingSignature: "native-signature", itemId: "rs_1" },
+				{ type: "text", text: "raw ephemeral output" },
+			],
+			providerPayload,
+		};
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "sanitized", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		expect(await controller.handleBranch()).toBe(true);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledWith("Question?", {
+			...assistantMessage,
+			content: [
+				{ type: "thinking", thinking: "reasoning" },
+				{ type: "text", text: "sanitized" },
+			],
+			providerPayload: undefined,
+		});
+	});
+
+	it("ignores duplicate branch requests while branch promotion is in flight", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn));
+		const branchStarted = Promise.withResolvers<void>();
+		const releaseBranch = Promise.withResolvers<void>();
+		ctx.handleBtwBranch = vi.fn(async () => {
+			branchStarted.resolve();
+			await releaseBranch.promise;
+		});
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+
+		const firstBranch = controller.handleBranch();
+		await branchStarted.promise;
+
+		expect(controller.canBranch()).toBe(false);
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).toHaveBeenCalledTimes(1);
+
+		releaseBranch.resolve();
+		expect(await firstBranch).toBe(true);
+	});
+
+	it("does not branch a completed answer after the session leaf changes", async () => {
+		const assistantMessage = createAssistantMessage("Answer");
+		const runEphemeralTurn = vi.fn(async () => ({ replyText: "Answer", assistantMessage }));
+		const ctx = makeCtx(makeFakeSession(runEphemeralTurn)) as InteractiveModeContext & {
+			setTestLeafId(nextLeafId: string | null): void;
+		};
+		const controller = new BtwController(ctx);
+
+		await controller.start("Question?");
+		await drainBtwRequest();
+		expect(controller.canBranch()).toBe(true);
+
+		ctx.setTestLeafId("leaf-2");
+
+		expect(controller.canBranch()).toBe(false);
+		expect(await controller.handleBranch()).toBe(false);
+		expect(ctx.handleBtwBranch).not.toHaveBeenCalled();
+	});
+
+	it("clears stored branch state on escape and dispose", async () => {
+		const runEphemeralTurn = vi.fn(async () => ({
+			replyText: "Answer",
+			assistantMessage: createAssistantMessage("Answer"),
+		}));
+		const escapeController = new BtwController(makeCtx(makeFakeSession(runEphemeralTurn)));
+		await escapeController.start("Question?");
+		await drainBtwRequest();
+		expect(escapeController.canBranch()).toBe(true);
+		expect(escapeController.handleEscape()).toBe(true);
+		expect(escapeController.canBranch()).toBe(false);
+
+		const disposeController = new BtwController(makeCtx(makeFakeSession(runEphemeralTurn)));
+		await disposeController.start("Question?");
+		await drainBtwRequest();
+		expect(disposeController.canBranch()).toBe(true);
+		disposeController.dispose();
+		expect(disposeController.canBranch()).toBe(false);
 	});
 });

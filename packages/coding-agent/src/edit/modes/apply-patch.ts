@@ -8,16 +8,16 @@
  * the `patch` mode.
  */
 
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { parseApplyPatch, parseApplyPatchStreaming } from "../apply-patch/parser";
 import { ApplyPatchError } from "../diff";
 import type { PatchEditEntry } from "./patch";
 
-export const applyPatchSchema = z.object({
-	input: z.string().describe("apply_patch envelope"),
+export const applyPatchSchema = type({
+	input: "string",
 });
 
-export type ApplyPatchParams = z.infer<typeof applyPatchSchema>;
+export type ApplyPatchParams = typeof applyPatchSchema.infer;
 
 export type ApplyPatchEntry = PatchEditEntry & { path: string };
 

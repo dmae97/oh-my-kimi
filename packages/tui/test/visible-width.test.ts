@@ -12,12 +12,12 @@
  */
 import { describe, expect, it } from "bun:test";
 import { visibleWidth as nativeVisibleWidth } from "@oh-my-pi/pi-natives";
-import { getDefaultTabWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { DEFAULT_TAB_WIDTH, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
 const ESC = "\x1b";
 const ST = "\x1b\\";
 const BEL = "\x07";
-const TAB = getDefaultTabWidth();
+const TAB = DEFAULT_TAB_WIDTH;
 
 describe("visibleWidth — parity with the native width engine", () => {
 	const corpus: [string, string][] = [

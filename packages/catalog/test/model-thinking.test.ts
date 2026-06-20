@@ -178,6 +178,45 @@ describe("model thinking derivation", () => {
 		});
 	});
 
+	it("maps GLM-5.2 reasoning effort per host dialect", () => {
+		const zai = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/paas/v4",
+		});
+		const fireworks = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const openRouter = createModel({
+			id: "z-ai/glm-5.2",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+
+		// Z.ai dialect: the model only does none/high/max, so the lower tiers
+		// collapse and the top `xhigh` tier reaches `max`.
+		expect(zai.thinking?.effortMap).toEqual({
+			minimal: "none",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max",
+		});
+		// Fireworks keeps its distinct lower tiers and the `minimal -> none` quirk;
+		// only the top `xhigh` UI tier remaps onto the genuine `max` budget.
+		expect(getSupportedEfforts(fireworks)).toContain(Effort.XHigh);
+		expect(fireworks.thinking?.effortMap).toEqual({ minimal: "none", xhigh: "max" });
+		// OpenRouter rejects `max` and treats `xhigh` as its max tier: expose the
+		// `xhigh` tier and pass it through unmapped.
+		expect(getSupportedEfforts(openRouter)).toContain(Effort.XHigh);
+		expect(openRouter.thinking?.effortMap).toBeUndefined();
+	});
+
 	it("encodes the Gemini 3 Pro effort gap and mandatory reasoning in metadata", () => {
 		const model = createModel({
 			id: "gemini-3-pro-preview",
@@ -284,12 +323,33 @@ describe("model thinking derivation", () => {
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 		});
+		const minimaxM2 = createModel({ id: "MiniMax-M2.7", api: "anthropic-messages", provider: "minimax" });
+		const minimaxM3 = createModel({ id: "MiniMax-M3", api: "anthropic-messages", provider: "minimax" });
 
 		expect(opus45.thinking?.mode).toBe("anthropic-budget-effort");
 		expect(opus46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(sonnet46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(mythosBedrock.thinking?.mode).toBe("anthropic-adaptive");
-
+		expect(minimaxM2.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortMap: {
+				low: "adaptive",
+				medium: "adaptive",
+				high: "adaptive",
+			},
+			requiresEffort: true,
+		});
+		expect(minimaxM3.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortMap: {
+				low: "adaptive",
+				medium: "adaptive",
+				high: "adaptive",
+			},
+		});
+		expect(mapEffortToAnthropicAdaptiveEffort(minimaxM3, Effort.High)).toBe("adaptive");
 		// Opus 4.6 has no real xhigh level — the baked 4-tier map aliases XHigh to "max".
 		expect(opus46.thinking?.effortMap).toEqual({ minimal: "low", xhigh: "max" });
 		expect(mapEffortToAnthropicAdaptiveEffort(opus46, Effort.XHigh)).toBe("max");
@@ -475,6 +535,49 @@ describe("model thinking runtime helpers", () => {
 		expect(() => requireSupportedEffort(model, Effort.XHigh)).toThrow(
 			/Supported efforts: minimal, low, medium, high/,
 		);
+	});
+
+	it("maps GLM-5.2 xhigh to Z.AI provider-native max", () => {
+		const model = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "zhipu-coding-plan",
+			baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+			compat: { thinkingFormat: "zai" },
+		});
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+			effortMap: {
+				minimal: "none",
+				low: "high",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			},
+		});
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+	});
+
+	it("maps Ollama Cloud GLM-5.2 xhigh to max and hides unsupported lower efforts", () => {
+		const model = createModel({
+			id: "glm-5.2",
+			api: "ollama-chat",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com",
+		});
+
+		expect(model.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.High, Effort.XHigh],
+			effortMap: {
+				xhigh: "max",
+			},
+		});
+		expect(requireSupportedEffort(model, Effort.High)).toBe(Effort.High);
+		expect(requireSupportedEffort(model, Effort.XHigh)).toBe(Effort.XHigh);
+		expect(() => requireSupportedEffort(model, Effort.Medium)).toThrow(/Supported efforts: high, xhigh/);
 	});
 
 	it("derives binary-thinking fallback from resolved compat when catalog compat is partial", () => {

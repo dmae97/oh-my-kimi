@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { Api, FetchImpl, ModelSpec, Provider } from "../types";
 
 const MODELS_PATH = "/models";
@@ -32,28 +32,23 @@ export interface OpenAICompatibleModelsEnvelope {
 	[key: string]: unknown;
 }
 
-const openAICompatibleModelRecordSchema = z
-	.object({
-		id: z.string().min(1),
-		name: z.string().optional().nullable(),
-		object: z.unknown().optional(),
-		owned_by: z.unknown().optional(),
-	})
-	.loose();
+const openAICompatibleModelRecordSchema = type({
+	id: "string >= 1",
+	"name?": "string | null",
+	"object?": "unknown",
+	"owned_by?": "unknown",
+});
 
-const openAICompatibleModelsEnvelopeSchema = z
-	.object({
-		data: z.unknown().optional(),
-		models: z.unknown().optional(),
-		result: z.unknown().optional(),
-		items: z.unknown().optional(),
-	})
-	.loose();
+const openAICompatibleModelsEnvelopeSchema = type({
+	"data?": "unknown",
+	"models?": "unknown",
+	"result?": "unknown",
+	"items?": "unknown",
+});
 
-const openAICompatibleModelsPayloadSchema = z.union([z.array(z.unknown()), openAICompatibleModelsEnvelopeSchema]);
+const openAICompatibleModelsPayloadSchema = type("unknown[]").or(openAICompatibleModelsEnvelopeSchema);
 
-type ParsedOpenAICompatibleModelRecord = z.infer<typeof openAICompatibleModelRecordSchema>;
-
+type ParsedOpenAICompatibleModelRecord = typeof openAICompatibleModelRecordSchema.infer;
 /**
  * Context passed to custom OpenAI-compatible model mappers.
  */
@@ -196,22 +191,17 @@ function extractModelEntries(payload: unknown): ParsedOpenAICompatibleModelRecor
 }
 
 function extractModelEntriesFromNode(node: unknown): ParsedOpenAICompatibleModelRecord[] | null {
-	const parsedPayload = openAICompatibleModelsPayloadSchema.safeParse(node);
-	if (!parsedPayload.success) {
+	const parsedPayload = openAICompatibleModelsPayloadSchema(node);
+	if (parsedPayload instanceof type.errors) {
 		return null;
 	}
-	if (Array.isArray(parsedPayload.data)) {
-		const parsedEntries = parsedPayload.data
-			.map(entry => openAICompatibleModelRecordSchema.safeParse(entry))
-			.flatMap(entry => (entry.success ? [entry.data] : []));
+	if (Array.isArray(parsedPayload)) {
+		const parsedEntries = parsedPayload
+			.map(entry => openAICompatibleModelRecordSchema(entry))
+			.flatMap(entry => (entry instanceof type.errors ? [] : [entry]));
 		return parsedEntries;
 	}
-	for (const candidate of [
-		parsedPayload.data.data,
-		parsedPayload.data.models,
-		parsedPayload.data.result,
-		parsedPayload.data.items,
-	]) {
+	for (const candidate of [parsedPayload.data, parsedPayload.models, parsedPayload.result, parsedPayload.items]) {
 		if (candidate === undefined) {
 			continue;
 		}

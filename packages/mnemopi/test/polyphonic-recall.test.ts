@@ -32,6 +32,7 @@ function makeBeam(): BeamMemoryState {
 			importanceWeight: 0.2,
 			useCloud: false,
 			localLlmEnabled: false,
+			maxEpisodeChars: 100_000,
 		},
 	};
 }

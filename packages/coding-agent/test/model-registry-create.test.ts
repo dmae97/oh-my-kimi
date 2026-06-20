@@ -69,4 +69,23 @@ describe("ModelRegistry.create() factory (F6)", () => {
 		const mtime2 = fs.statSync(yml).mtimeMs;
 		expect(mtime2).toBe(mtime1);
 	});
+
+	test("ConfigFile migrates legacy models.json containing comments", async () => {
+		const yml = path.join(tempDir.path(), "models.yml");
+		const json = path.join(tempDir.path(), "models.json");
+		await Bun.write(
+			json,
+			`{
+				// Custom models comment
+				"providers": {
+					/* Block comment */
+				}
+			}`,
+		);
+
+		const cf = new ConfigFile("models", ModelsConfigSchema, yml);
+		const result = cf.tryLoad();
+		expect(result.status).toBe("ok");
+		expect(fs.existsSync(yml)).toBe(true);
+	});
 });

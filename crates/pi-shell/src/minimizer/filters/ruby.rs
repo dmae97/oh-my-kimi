@@ -75,7 +75,7 @@ fn filter_rspec(input: &str, exit_code: i32) -> String {
 
 	let mut out = String::new();
 	// Each rendered failure block is buffered separately so the total can be
-	// capped at MAX_RENDERED_FAILURES with a `+N more failures` marker. The
+	// capped at MAX_RENDERED_FAILURES with a `[…N failures elided…]` marker. The
 	// buffered blocks are rendered into `out` the moment the `Failures:` section
 	// ends — at the summary line or the `Failed examples:` boundary — so real
 	// rspec ordering (`Failures:` details, then summary, then `Failed examples:`)
@@ -139,8 +139,8 @@ fn filter_rspec(input: &str, exit_code: i32) -> String {
 }
 
 /// Render the buffered `Failures:` detail blocks into `out`, capped at
-/// `MAX_RENDERED_FAILURES` with a `+N more failures` marker. Runs at most once
-/// — guarded by `rendered` — so the section is emitted exactly where the
+/// `MAX_RENDERED_FAILURES` with a `[…N failures elided…]` marker. Runs at most
+/// once — guarded by `rendered` — so the section is emitted exactly where the
 /// `Failures:` block ends (the summary line or `Failed examples:` boundary),
 /// preserving real rspec section ordering.
 fn render_rspec_blocks(out: &mut String, blocks: &mut Vec<String>, rendered: &mut bool) {
@@ -157,14 +157,14 @@ fn render_rspec_blocks(out: &mut String, blocks: &mut Vec<String>, rendered: &mu
 		out.push_str(block);
 	}
 	if total > MAX_RENDERED_FAILURES {
-		push_line(out, &format!("+{} more failures", total - MAX_RENDERED_FAILURES));
+		push_line(out, &format!("[…{} failures elided…]", total - MAX_RENDERED_FAILURES));
 	}
 	blocks.clear();
 }
 
 /// Cap on rendered failure blocks in non-JSON rspec output. rtk uses the same
 /// limit (`MAX_RSPEC_FAILURES = 5`) — failure blocks carry full context, so a
-/// handful is enough before collapsing to a `+N more failures` marker.
+/// handful is enough before collapsing to a `[…N failures elided…]` marker.
 const MAX_RENDERED_FAILURES: usize = 5;
 
 fn flush_rspec_block(blocks: &mut Vec<String>, current: &mut String) {
@@ -896,7 +896,7 @@ mod tests {
 		assert!(out.contains("Example number 1 fails"));
 		assert!(out.contains("Example number 5 fails"));
 		assert!(!out.contains("Example number 6 fails"));
-		assert!(out.contains("+2 more failures"));
+		assert!(out.contains("[…2 failures elided…]"));
 		assert!(out.contains("7 examples, 7 failures"));
 	}
 

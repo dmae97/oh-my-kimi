@@ -6,6 +6,8 @@ describe("minimax bundled catalog", () => {
 		const providers = [
 			{ id: "minimax", models: modelsJson.minimax },
 			{ id: "minimax-cn", models: modelsJson["minimax-cn"] },
+			{ id: "minimax-code", models: modelsJson["minimax-code"] },
+			{ id: "minimax-code-cn", models: modelsJson["minimax-code-cn"] },
 		];
 
 		for (const provider of providers) {

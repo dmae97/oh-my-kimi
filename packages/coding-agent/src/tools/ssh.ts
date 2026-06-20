@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { SSHHost } from "../capability/ssh";
 import { sshCapability } from "../capability/ssh";
 import { loadCapability } from "../discovery";
@@ -23,11 +23,11 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
 
-const sshSchema = z.object({
-	host: z.string().describe("ssh host"),
-	command: z.string().describe("remote command"),
-	cwd: z.string().optional().describe("remote working directory"),
-	timeout: z.number().optional().describe("timeout in seconds").default(60),
+const sshSchema = type({
+	host: type("string").describe("ssh host"),
+	command: type("string").describe("remote command"),
+	"cwd?": type("string").describe("remote working directory"),
+	"timeout?": type("number").describe("timeout in seconds"),
 });
 
 export interface SSHToolDetails {
@@ -118,7 +118,7 @@ async function loadHosts(session: ToolSession): Promise<{
 	return { hostNames, hostsByName };
 }
 
-type SshToolParams = z.infer<typeof sshSchema>;
+type SshToolParams = typeof sshSchema.infer;
 
 export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";
@@ -136,7 +136,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof sshSchema>>[] = [
+	readonly examples: readonly ToolExample<SshToolParams>[] = [
 		{
 			caption: "List files: Linux (on server1 (10.0.0.1) | linux/bash)",
 			call: { host: "server1", command: "ls -la /home/user" },

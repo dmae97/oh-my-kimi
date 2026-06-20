@@ -126,6 +126,10 @@ export function episodicRecallLimit(env: Env = process.env): number {
 	return envInt("MNEMOPI_EP_LIMIT", 50000, env);
 }
 
+export function maxEpisodeChars(env: Env = process.env): number {
+	return Math.max(1, envInt("MNEMOPI_MAX_EPISODE_CHARS", 100000, env));
+}
+
 export function sleepBatchSize(env: Env = process.env): number {
 	return envInt("MNEMOPI_SLEEP_BATCH", 5000, env);
 }

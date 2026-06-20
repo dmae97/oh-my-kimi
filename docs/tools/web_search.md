@@ -72,13 +72,13 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 2. `executeSearch()` chooses a provider list:
    - if `params.provider` is set and not `"auto"`, it loads that provider with `getSearchProvider()`; if `isExplicitlyAvailable()` returns true, the list is `[that provider]`, otherwise it falls back to `resolveProviderChain(authStorage, "auto")`.
    - otherwise it calls `resolveProviderChain()` with the module-global preferred provider from `packages/coding-agent/src/web/search/provider.ts`.
-3. `resolveProviderChain()` lazily loads each provider module on demand and returns only available providers. If a preferred provider is set, it is tried first (gated by `isExplicitlyAvailable()`), then the static `SEARCH_PROVIDER_ORDER` excluding that provider, each gated by `isAvailable()`.
+3. `resolveProviderChain()` lazily loads each provider module on demand and returns only available providers. If a preferred provider is set, it is tried first (gated by `isExplicitlyAvailable()`), then the static `SEARCH_PROVIDER_ORDER` excluding that provider, each gated by `isAvailable()`. Providers in the excluded set (`setExcludedSearchProviders()`) are skipped entirely, including as the preferred candidate.
 4. If no providers are available, `executeSearch()` returns `Error: No web search provider configured.` with `details.response.provider = "none"`.
 5. For each provider in order, `executeSearch()` calls `provider.search()` with:
    - `query`,
    - `limit`, `recency`, `temperature`, `maxOutputTokens`, `numSearchResults`,
    - `systemPrompt` from `packages/coding-agent/src/prompts/system/web-search.md`.
-6. On the first successful `SearchResponse`, `formatForLLM()` renders answer/sources/citations/related/search-queries into one text block and returns it with `details.response`.
+6. A `SearchResponse` with no renderable content (`hasRenderableSearchContent()` returns false) is rejected as a `SearchProviderError` (status `204`) so the loop advances to the next provider. On the first response that has renderable content, `formatForLLM()` renders answer/sources/citations/related/search-queries into one text block and returns it with `details.response`.
 7. If a provider throws, `executeSearch()` records the error and tries the next provider. There is no provider-level parallel fan-out; fallback is sequential.
 8. After all candidates fail, `formatProviderError()` normalizes each error:
    - Anthropic `404` becomes `Anthropic web search returned 404 (model or endpoint not found).`
@@ -90,7 +90,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - **Provider selection**
   - **Forced provider**: internal callers may pass `provider`; unavailable forced providers fall back to the auto chain instead of hard-failing (`packages/coding-agent/src/web/search/index.ts`). This field is not in the model-facing schema.
   - **Preferred provider**: `setPreferredSearchProvider()` sets a module-global default used by `resolveProviderChain()`. `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/modes/controllers/selector-controller.ts` wire this from settings.
-  - **Auto chain order**: `tavily`, `perplexity`, `brave`, `jina`, `kimi`, `anthropic`, `gemini`, `codex`, `zai`, `exa`, `parallel`, `kagi`, `synthetic`, `searxng` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`).
+  - **Excluded providers**: `setExcludedSearchProviders()` records providers `resolveProviderChain()` must never return, including as fallbacks. Wired from the `providers.webSearchExclude` setting (`providers.webSearch` drives the preferred provider) in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/modes/interactive-mode.ts`, and `packages/coding-agent/src/modes/controllers/selector-controller.ts`.
+  - **Auto chain order**: `perplexity`, `gemini`, `anthropic`, `codex`, `zai`, `exa`, `jina`, `kagi`, `tavily`, `brave`, `kimi`, `parallel`, `synthetic`, `searxng` (`SEARCH_PROVIDER_ORDER` in `packages/coding-agent/src/web/search/types.ts`).
 - **Provider adapters**
   - **Tavily** — `packages/coding-agent/src/web/search/providers/tavily.ts`
     - Availability: API key from env or `agent.db` via `findCredential()`.
@@ -137,7 +138,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - `limit` and `num_search_results` are collapsed together before dispatch.
     - Output may include `answer`, `sources`, `citations`, `searchQueries`, `usage`, `model`.
   - **Codex** — `packages/coding-agent/src/web/search/providers/codex.ts`
-    - Availability: non-expired OAuth credential for `openai-codex` in `agent.db`.
+    - Availability: OAuth credential for `openai-codex` in `agent.db` (`hasOAuth()`; expiry is not checked here — refresh is lazy in `searchCodex`).
     - Querying: SSE POST to `https://chatgpt.com/backend-api/codex/responses` with `tool_choice: { type: "web_search" }` and `search_context_size: "high"` by default.
     - Ignores `recency`, `max_tokens`, and `temperature` in this tool path.
     - `limit` and `num_search_results` are collapsed together before dispatch.

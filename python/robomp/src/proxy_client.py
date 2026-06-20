@@ -282,6 +282,15 @@ class GitHubProxyClient:
         )
         return tuple(str(lbl) for lbl in (data.get("labels") if isinstance(data, dict) else None) or [])
 
+    async def remove_issue_label(self, repo: str, number: int, label: str) -> None:
+        if not label:
+            return
+        await self._request(
+            "POST",
+            "/gh/v1/remove_issue_label",
+            json_body={"repo": repo, "number": number, "label": label},
+        )
+
     async def submit_pr_review(
         self,
         *,

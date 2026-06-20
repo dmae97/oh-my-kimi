@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
@@ -55,21 +56,70 @@ function messageFingerprint(msg: AgentMessage): string {
 			}
 		}
 	} else if (role === "assistant") {
+		const assistantMsg = msg as AssistantMessage;
+		const usageExt = assistantMsg.usage as unknown as { promptTokensDetails?: unknown };
+		const usageTotal = assistantMsg.usage?.totalTokens ?? 0;
+		const promptBuckets = usageExt?.promptTokensDetails ? 1 : 0;
+		const stopReason = assistantMsg.stopReason ?? "";
+
+		let signatureLen = 0;
+		let redactedLen = 0;
+		const msgExt = assistantMsg as unknown as {
+			thinkingSignature?: string;
+			textSignature?: string;
+			thoughtSignature?: string;
+			redactedThinking?: { data?: string };
+		};
+		const thinkingSignature = msgExt.thinkingSignature;
+		if (typeof thinkingSignature === "string") {
+			signatureLen += thinkingSignature.length;
+		}
+		const textSignature = msgExt.textSignature;
+		if (typeof textSignature === "string") {
+			signatureLen += textSignature.length;
+		}
+		const thoughtSignature = msgExt.thoughtSignature;
+		if (typeof thoughtSignature === "string") {
+			signatureLen += thoughtSignature.length;
+		}
+		const redactedData = msgExt.redactedThinking?.data;
+		if (typeof redactedData === "string") {
+			redactedLen += redactedData.length;
+		}
+
 		const content = (msg as { content?: unknown }).content;
 		if (Array.isArray(content)) {
 			blocks = content.length;
 			for (const block of content) {
 				if (!block || typeof block !== "object") continue;
-				const b = block as { type?: string; text?: string; thinking?: string; name?: string; arguments?: unknown };
+				const b = block as {
+					type?: string;
+					text?: string;
+					thinking?: string;
+					thinkingSignature?: string;
+					signature?: string;
+					textSignature?: string;
+					thoughtSignature?: string;
+					data?: string;
+					name?: string;
+					arguments?: unknown;
+				};
 				if (b.type === "text" && typeof b.text === "string") textLen += b.text.length;
-				else if (b.type === "thinking" && typeof b.thinking === "string") textLen += b.thinking.length;
-				else if (b.type === "toolCall") {
+				else if (b.type === "thinking") {
+					if (typeof b.thinking === "string") textLen += b.thinking.length;
+					if (typeof b.thinkingSignature === "string") signatureLen += b.thinkingSignature.length;
+					if (typeof b.signature === "string") signatureLen += b.signature.length;
+					if (typeof b.textSignature === "string") signatureLen += b.textSignature.length;
+					if (typeof b.thoughtSignature === "string") signatureLen += b.thoughtSignature.length;
+				} else if (b.type === "redactedThinking" && typeof b.data === "string") {
+					redactedLen += b.data.length;
+				} else if (b.type === "toolCall") {
 					if (typeof b.name === "string") textLen += b.name.length;
-					// Argument bytes vary; a length proxy is enough to detect in-place edits.
 					textLen += b.arguments === undefined ? 0 : JSON.stringify(b.arguments).length;
 				}
 			}
 		}
+		return `${role}:${ts}:${textLen}:${blocks}:${images}:${signatureLen}:${redactedLen}:${usageTotal}:${promptBuckets}:${stopReason}`;
 	} else if (role === "toolResult" || role === "hookMessage") {
 		const content = (msg as { content?: unknown }).content;
 		if (typeof content === "string") {
@@ -95,14 +145,30 @@ interface ContextUsageMemo {
 	length: number;
 	lastFingerprint: string | undefined;
 	modelContextWindow: number;
-	usedTokens: number | null;
+	contextUsageRevision: number;
+	usedTokens: number;
 	contextWindow: number;
+	systemPromptRef: readonly string[] | undefined;
+	toolsRef: readonly any[] | undefined;
+	skillsRef: readonly any[] | undefined;
 }
 
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
+const STATUS_USAGE_START_DELAY_MS = 0;
+const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
 
 function hasContextSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("context_pct") || segments.includes("context_total");
+}
+function hasGitSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("git");
+}
+
+function hasPrSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("pr");
+}
+function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return hasGitSegment(segments) || hasPrSegment(segments);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -117,6 +183,7 @@ export class StatusLineComponent implements Component {
 	#cachedBranchCwd: string | undefined = undefined;
 	#gitWatcher: fs.FSWatcher | null = null;
 	#onBranchChange: (() => void) | null = null;
+	#disposed = false;
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
@@ -147,6 +214,7 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
+	#usageStartTimer: Timer | null = null;
 	// Context-usage memo. The status line redraws on every agent event, so the
 	// hot path must not recompute context tokens unless an input changed.
 	// `getContextUsage()` anchors on the last assistant's real prompt-token
@@ -166,6 +234,15 @@ export class StatusLineComponent implements Component {
 			transparent: settings.get("statusLine.transparent"),
 		};
 	}
+	#gitEnabled(): boolean {
+		return settings.get("git.enabled");
+	}
+	#hasGitBackedSegment(): boolean {
+		const effectiveSettings = this.#resolveSettings();
+		return (
+			hasGitBackedSegment(effectiveSettings.leftSegments) || hasGitBackedSegment(effectiveSettings.rightSegments)
+		);
+	}
 
 	/**
 	 * Re-point the status line at another session (focus proxy). Invalidate: model/context/usage all derive
@@ -183,6 +260,7 @@ export class StatusLineComponent implements Component {
 	updateSettings(settings: StatusLineSettings): void {
 		this.#settings = settings;
 		this.#effectiveSettings = undefined;
+		if (this.#onBranchChange) this.#setupGitWatcher();
 	}
 
 	getEffectiveSettingsForTest(): EffectiveStatusLineSettings {
@@ -241,6 +319,11 @@ export class StatusLineComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
+		if (!this.#gitEnabled() || !this.#hasGitBackedSegment()) {
+			this.#invalidateGitCaches();
+			return;
+		}
+
 		const repository = git.repo.resolveSync(getProjectDir());
 		if (!repository) return;
 
@@ -250,6 +333,7 @@ export class StatusLineComponent implements Component {
 
 		try {
 			this.#gitWatcher = fs.watch(watchPath, () => {
+				if (this.#disposed) return;
 				this.#invalidateGitCaches();
 				if (this.#onBranchChange) {
 					this.#onBranchChange();
@@ -261,16 +345,26 @@ export class StatusLineComponent implements Component {
 	}
 
 	dispose(): void {
+		this.#disposed = true;
+		this.#onBranchChange = null;
+		this.#clearUsageStartTimer();
 		if (this.#gitWatcher) {
 			this.#gitWatcher.close();
 			this.#gitWatcher = null;
 		}
 	}
 
+	#clearUsageStartTimer(): void {
+		if (!this.#usageStartTimer) return;
+		clearTimeout(this.#usageStartTimer);
+		this.#usageStartTimer = null;
+	}
+
 	invalidate(): void {
 		this.#invalidateGitCaches();
 	}
 	#invalidateSessionCaches(): void {
+		this.#clearUsageStartTimer();
 		this.#cachedUsage = null;
 		this.#usageFetchedAt = 0;
 		this.#usageInFlight = false;
@@ -286,6 +380,8 @@ export class StatusLineComponent implements Component {
 		this.#cachedPrContext = undefined;
 	}
 	#getCurrentBranch(): string | null {
+		if (!this.#gitEnabled()) return null;
+
 		const cwd = getProjectDir();
 		if (this.#cachedBranch !== undefined && this.#cachedBranchCwd === cwd) {
 			return this.#cachedBranch;
@@ -310,6 +406,7 @@ export class StatusLineComponent implements Component {
 			this.#defaultBranch = "main";
 			(async () => {
 				const resolved = await git.branch.default(getProjectDir());
+				if (this.#disposed) return;
 				if (resolved) {
 					this.#defaultBranch = resolved;
 					if (this.#onBranchChange) {
@@ -322,6 +419,7 @@ export class StatusLineComponent implements Component {
 	}
 
 	#getGitStatus(): { staged: number; unstaged: number; untracked: number } | null {
+		if (!this.#gitEnabled()) return null;
 		if (this.#gitStatusInFlight || Date.now() - this.#gitStatusLastFetch < 1000) {
 			return this.#cachedGitStatus;
 		}
@@ -343,6 +441,8 @@ export class StatusLineComponent implements Component {
 	}
 
 	#lookupPr(): { number: number; url: string } | null {
+		if (!this.#gitEnabled()) return null;
+
 		const branch = this.#getCurrentBranch();
 		const currentContext = branch ? createPrCacheContext(branch, this.#cachedBranchRepoId ?? null) : null;
 
@@ -376,6 +476,7 @@ export class StatusLineComponent implements Component {
 			try {
 				// Requires `gh repo set-default` to be configured; fails gracefully if not
 				const result = await $`gh pr view --json number,url`.quiet().nothrow();
+				if (this.#disposed) return;
 				if (result.exitCode !== 0) {
 					setCachedPr(null);
 					return;
@@ -387,10 +488,11 @@ export class StatusLineComponent implements Component {
 					setCachedPr(null);
 				}
 			} catch {
+				if (this.#disposed) return;
 				setCachedPr(null);
 			} finally {
 				this.#prLookupInFlight = false;
-				if (this.#onBranchChange) {
+				if (!this.#disposed && this.#onBranchChange) {
 					this.#onBranchChange();
 				}
 			}
@@ -430,36 +532,71 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Background-refresh the Anthropic OAuth quota report. Guarded by a 5-min
-	 * TTL on both success (cache lifetime) and error (backoff). Exposed
-	 * (non-private) so unit tests can verify the backoff invariant.
+	 * Startup redraws only arm a short-delayed task; timeout releases the render
+	 * cadence while a late successful fetch can still refresh the cached segment.
 	 */
 	refreshUsageInBackground(): void {
 		const now = Date.now();
-		if (this.#usageInFlight) return;
+		if (this.#usageInFlight || this.#usageStartTimer) return;
 		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
 		const session = this.session;
-		const fetcher = (session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports;
+		const fetcher = (session as { fetchUsageReports?: (signal?: AbortSignal) => Promise<unknown> }).fetchUsageReports;
 		if (typeof fetcher !== "function") return;
 		this.#usageInFlight = true;
-		void fetcher
-			.call(session)
+		this.#usageStartTimer = setTimeout(() => {
+			this.#usageStartTimer = null;
+			void this.#runUsageRefresh(session, fetcher);
+		}, STATUS_USAGE_START_DELAY_MS);
+	}
+
+	async #runUsageRefresh(session: AgentSession, fetcher: (signal?: AbortSignal) => Promise<unknown>): Promise<void> {
+		if (this.#disposed || this.session !== session) {
+			this.#usageInFlight = false;
+			return;
+		}
+		const signal = AbortSignal.timeout(STATUS_USAGE_REFRESH_TIMEOUT_MS);
+		let reportsPromise: Promise<unknown> | undefined;
+		try {
+			reportsPromise = fetcher.call(session, signal);
+			this.#applyUsageRefreshReports(session, await this.#raceUsageRefreshWithSignal(reportsPromise, signal));
+		} catch {
+			if (this.session !== session) return;
+			this.#usageFetchedAt = Date.now();
+			if (signal.aborted && reportsPromise) {
+				this.#observeLateUsageRefresh(session, reportsPromise);
+			}
+		} finally {
+			if (this.session === session) this.#usageInFlight = false;
+		}
+	}
+
+	#applyUsageRefreshReports(session: AgentSession, reports: unknown): void {
+		if (this.#disposed || this.session !== session) return;
+		this.#cachedUsage = this.#normalizeUsageReports(reports);
+		this.#usageFetchedAt = Date.now();
+	}
+
+	#observeLateUsageRefresh(session: AgentSession, reportsPromise: Promise<unknown>): void {
+		void reportsPromise
 			.then(reports => {
-				if (this.session !== session) return;
-				this.#cachedUsage = this.#normalizeUsageReports(reports);
-				this.#usageFetchedAt = Date.now();
+				this.#applyUsageRefreshReports(session, reports);
 			})
 			.catch(() => {
-				if (this.session !== session) return;
-				// Backoff on error: stamp the fetch time so the 5-min TTL guard
-				// also acts as an error budget. Without this, every render
-				// kicks off another fetch (gated only by #usageInFlight),
-				// which hammers the endpoint during a network outage / 5xx.
+				if (this.#disposed || this.session !== session) return;
 				this.#usageFetchedAt = Date.now();
-			})
-			.finally(() => {
-				if (this.session === session) this.#usageInFlight = false;
 			});
+	}
+
+	async #raceUsageRefreshWithSignal(promise: Promise<unknown>, signal: AbortSignal): Promise<unknown> {
+		if (signal.aborted) throw signal.reason;
+		const aborted = Promise.withResolvers<never>();
+		const onAbort = () => aborted.reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await Promise.race([promise, aborted.promise]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
 	}
 
 	#normalizeUsageReports(reports: unknown): {
@@ -515,11 +652,19 @@ export class StatusLineComponent implements Component {
 	 * (right after compaction, before the next response). Exposed (non-private)
 	 * for unit tests and the collab host's state broadcast.
 	 */
-	getCachedContextBreakdown(): { usedTokens: number | null; contextWindow: number } {
+	getCachedContextBreakdown(): { usedTokens: number; contextWindow: number } {
 		const messages = this.session.messages ?? EMPTY_MESSAGES;
 		const modelContextWindow = this.session.model?.contextWindow ?? 0;
 		const length = messages.length;
 		const lastFingerprint = length > 0 ? messageFingerprint(messages[length - 1]!) : undefined;
+		// Bumps when the in-flight pending snapshot is set/cleared. Without it a
+		// value computed mid-turn (estimate of the active tail) would survive after
+		// the turn ends/aborts, since clearing the snapshot touches no message.
+		const contextUsageRevision = this.session.contextUsageRevision ?? 0;
+
+		const systemPrompt = this.session.systemPrompt;
+		const tools = this.session.agent?.state?.tools;
+		const skills = this.session.skills;
 
 		const cache = this.#contextUsageCache;
 		if (
@@ -527,21 +672,29 @@ export class StatusLineComponent implements Component {
 			cache.messagesRef === messages &&
 			cache.length === length &&
 			cache.lastFingerprint === lastFingerprint &&
-			cache.modelContextWindow === modelContextWindow
+			cache.modelContextWindow === modelContextWindow &&
+			cache.contextUsageRevision === contextUsageRevision &&
+			cache.systemPromptRef === systemPrompt &&
+			cache.toolsRef === tools &&
+			cache.skillsRef === skills
 		) {
 			return { usedTokens: cache.usedTokens, contextWindow: cache.contextWindow };
 		}
 
 		const usage = this.session.getContextUsage();
-		const usedTokens = usage?.tokens ?? null;
+		const usedTokens = usage?.tokens ?? 0;
 		const contextWindow = usage?.contextWindow ?? modelContextWindow;
 		this.#contextUsageCache = {
 			messagesRef: messages,
 			length,
 			lastFingerprint,
 			modelContextWindow,
+			contextUsageRevision,
 			usedTokens,
 			contextWindow,
+			systemPromptRef: systemPrompt,
+			toolsRef: tools,
+			skillsRef: skills,
 		};
 		return { usedTokens, contextWindow };
 	}
@@ -550,6 +703,8 @@ export class StatusLineComponent implements Component {
 		width: number,
 		segmentOptions: StatusLineSettings["segmentOptions"],
 		includeContext: boolean,
+		includeGit: boolean,
+		includePr: boolean,
 	): SegmentContext {
 		const state = this.session.state;
 
@@ -575,8 +730,7 @@ export class StatusLineComponent implements Component {
 		if (includeContext) {
 			const breakdown = this.getCachedContextBreakdown();
 			contextWindow = breakdown.contextWindow || contextWindow;
-			contextPercent =
-				breakdown.usedTokens === null ? null : contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
+			contextPercent = contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
 		}
 
 		// Collab guest: context comes from the host's state frames — the local
@@ -586,6 +740,10 @@ export class StatusLineComponent implements Component {
 			contextWindow = collabState.contextUsage.contextWindow || contextWindow;
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
+
+		const gitBranch = includeGit || includePr ? this.#getCurrentBranch() : null;
+		const gitStatus = includeGit ? this.#getGitStatus() : null;
+		const gitPr = includePr ? this.#lookupPr() : null;
 
 		return {
 			session: this.session,
@@ -603,9 +761,9 @@ export class StatusLineComponent implements Component {
 			subagentCount: this.#subagentCount,
 			sessionStartTime: this.#sessionStartTime,
 			git: {
-				branch: this.#getCurrentBranch(),
-				status: this.#getGitStatus(),
-				pr: this.#lookupPr(),
+				branch: gitBranch,
+				status: gitStatus,
+				pr: gitPr,
 			},
 			usage: this.#cachedUsage,
 		};
@@ -656,7 +814,19 @@ export class StatusLineComponent implements Component {
 		const effectiveSettings = this.#resolveSettings();
 		const includeContext =
 			hasContextSegment(effectiveSettings.leftSegments) || hasContextSegment(effectiveSettings.rightSegments);
-		const ctx = this.#buildSegmentContext(width, effectiveSettings.segmentOptions, includeContext);
+		const gitEnabled = this.#gitEnabled();
+		const includeGit =
+			gitEnabled &&
+			(hasGitSegment(effectiveSettings.leftSegments) || hasGitSegment(effectiveSettings.rightSegments));
+		const includePr =
+			gitEnabled && (hasPrSegment(effectiveSettings.leftSegments) || hasPrSegment(effectiveSettings.rightSegments));
+		const ctx = this.#buildSegmentContext(
+			width,
+			effectiveSettings.segmentOptions,
+			includeContext,
+			includeGit,
+			includePr,
+		);
 		const separatorDef = getSeparator(effectiveSettings.separator ?? "powerline-thin", theme);
 
 		// `transparent` reuses the empty-string sentinel (`\x1b[49m`) so the bar

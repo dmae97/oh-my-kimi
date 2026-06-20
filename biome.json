@@ -9,7 +9,7 @@
 		"enabled": true,
 		"includes": ["**"],
 		"rules": {
-			"recommended": true,
+			"preset": "recommended",
 			"a11y": "off",
 			"correctness": {
 				"noUnusedImports": "error",
@@ -60,7 +60,6 @@
 			"!**/vendor/**/*",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
-			"!**/docs-index.generated.ts",
 			"!**/agent_pb.ts",
 			"!.worktrees/**/*",
 			"!.wt/**/*"

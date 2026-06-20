@@ -65,7 +65,7 @@ async function deleteHostInfoFromDisk(hostName: string): Promise<void> {
 	}
 }
 
-async function validateKeyPermissions(keyPath?: string): Promise<void> {
+async function validateKeyPermissions(keyPath?: string, platform: SshPlatform = process.platform): Promise<void> {
 	if (!keyPath) return;
 	let stats: fs.Stats;
 	try {
@@ -79,6 +79,7 @@ async function validateKeyPermissions(keyPath?: string): Promise<void> {
 	if (!stats.isFile()) {
 		throw new Error(`SSH key is not a file: ${keyPath}`);
 	}
+	if (platform === "win32") return;
 	const mode = stats.mode & 0o777;
 	if ((mode & 0o077) !== 0) {
 		throw new Error(`SSH key permissions must be 600 or stricter: ${keyPath}`);
@@ -402,7 +403,7 @@ export async function buildRemoteCommand(
 	command: string,
 	options?: SSHArgsOptions,
 ): Promise<string[]> {
-	await validateKeyPermissions(host.keyPath);
+	await validateKeyPermissions(host.keyPath, options?.platform);
 	return [...buildCommonArgs(host, options), buildSshTarget(host.username, host.host), command];
 }
 

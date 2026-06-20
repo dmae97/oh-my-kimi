@@ -208,15 +208,28 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.maxTokens = copilotLimits.maxTokens;
 	}
 
-	// GLM Coding Plan (zai): GLM-5.2 is the selectable 1M served id; pin it
-	// so endpoint discovery or older bundled fallbacks cannot regress to 200k.
-	if (model.provider === "zai" && model.id === "glm-5.2") {
+	if (model.provider === "ollama-cloud") {
+		model.omitMaxOutputTokens = true;
+	}
+
+	// GLM Coding Plan: GLM-5.2 is the selectable 1M served id; pin it so
+	// endpoint discovery or older bundled fallbacks cannot regress to 200k.
+	if ((model.provider === "zai" || model.provider === "zhipu-coding-plan") && model.id === "glm-5.2") {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 131_072;
 	}
 	// MiniMax-M3: 512K is the standard pricing tier boundary, not the
-	// model ceiling. Pin the long-context providers to the documented 1M tier.
-	if ((model.provider === "minimax" || model.provider === "minimax-cn") && model.id === "MiniMax-M3") {
+	// model ceiling. Pin every long-context provider that serves the model
+	// (anthropic-messages `minimax`/`minimax-cn` and the openai-completions
+	// MiniMax Coding/Token Plan endpoints `minimax-code`/`minimax-code-cn`)
+	// to the documented 1M tier.
+	if (
+		model.id === "MiniMax-M3" &&
+		(model.provider === "minimax" ||
+			model.provider === "minimax-cn" ||
+			model.provider === "minimax-code" ||
+			model.provider === "minimax-code-cn")
+	) {
 		model.contextWindow = 1_000_000;
 	}
 

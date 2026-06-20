@@ -560,9 +560,10 @@ describe("truncateMiddle", () => {
 		expect(result.content).not.toContain("elided");
 	});
 
-	test("formatMiddleElisionMarker pluralises and formats bytes", () => {
-		expect(formatMiddleElisionMarker(1, 100)).toBe("[… 1 line elided (100B) …]");
-		expect(formatMiddleElisionMarker(123, 4096)).toBe("[… 123 lines elided (4.0KB) …]");
+	test("formatMiddleElisionMarker uses lines, falling back to bytes for <=1 line", () => {
+		expect(formatMiddleElisionMarker(0, 512)).toBe("[…512B elided…]");
+		expect(formatMiddleElisionMarker(1, 100)).toBe("[…100B elided…]");
+		expect(formatMiddleElisionMarker(123, 4096)).toBe("[…123ln elided…]");
 	});
 });
 

@@ -509,6 +509,19 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return _gh_error_response(exc)
         return JSONResponse({"labels": list(applied)})
 
+    @app.post("/gh/v1/remove_issue_label")
+    async def remove_issue_label(request: Request) -> JSONResponse:
+        data = await _json_body(request)
+        repo = _require_str(data.get("repo"), "repo")
+        number = _require_int(data.get("number"), "number")
+        label = _require_str(data.get("label"), "label")
+        github: GitHubClient = request.app.state.github
+        try:
+            await github.remove_issue_label(repo, number, label)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse({"ok": True})
+
     @app.post("/gh/v1/submit_pr_review")
     async def submit_pr_review(request: Request) -> JSONResponse:
         data = await _json_body(request)

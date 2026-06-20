@@ -23,6 +23,7 @@
  * massage shapes the LLM almost got right.
  */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { type Type, type } from "arktype";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
@@ -32,7 +33,8 @@ import {
 	type JsonSchemaValidationIssue,
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
-import { isZodSchema, zodToWireSchema } from "./schema/wire";
+import { stamp } from "./schema/stamps";
+import { arkToWireSchema, isArkSchema, isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -411,6 +413,47 @@ function tryHealMalformedJson(value: string): unknown | undefined {
 	return undefined;
 }
 
+const MAX_NESTED_JSON_STRING_PARSE_DEPTH = 3;
+
+function acceptParsedJsonForTypes(
+	parsed: unknown,
+	source: string,
+	expectedTypes: string[],
+	depth: number,
+): { value: unknown; changed: boolean } {
+	if (parsed === null && source.trim() === "null") {
+		return { value: null, changed: true };
+	}
+	if (matchesExpectedType(parsed, expectedTypes)) {
+		return { value: parsed, changed: true };
+	}
+	if (typeof parsed === "string" && !expectedTypes.includes("string") && depth < MAX_NESTED_JSON_STRING_PARSE_DEPTH) {
+		return tryParseJsonForTypes(parsed, expectedTypes, depth + 1);
+	}
+	return { value: source, changed: false };
+}
+
+function looksLikeJsonContainerString(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	const trimmed = value.trimStart();
+	if (trimmed.startsWith("{")) {
+		const body = trimmed.slice(1);
+		return body.trimStart().startsWith('"') || body.includes(":") || body.trimStart().startsWith("}");
+	}
+	if (!trimmed.startsWith("[")) return false;
+	const firstItem = trimmed.slice(1).trimStart();
+	return (
+		firstItem.startsWith("{") ||
+		firstItem.startsWith("[") ||
+		firstItem.startsWith('"') ||
+		firstItem.startsWith("]") ||
+		firstItem.startsWith("true") ||
+		firstItem.startsWith("false") ||
+		firstItem.startsWith("null") ||
+		/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\s*(?:,|\]|$))/.test(firstItem)
+	);
+}
+
 /**
  * Attempts to parse a string as JSON if it looks like a JSON literal and
  * the parsed result matches one of the expected types.
@@ -424,7 +467,7 @@ function tryHealMalformedJson(value: string): unknown | undefined {
  * matches an expected type. This prevents false positives like parsing
  * the string `"123"` when the schema actually wants a string.
  */
-function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: unknown; changed: boolean } {
+function tryParseJsonForTypes(value: string, expectedTypes: string[], depth = 0): { value: unknown; changed: boolean } {
 	const trimmed = value.trim();
 	if (!trimmed) return { value, changed: false };
 
@@ -434,28 +477,20 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 	}
 
 	// Quick syntactic checks to avoid unnecessary parse attempts
-	const looksJsonObject = trimmed.startsWith("{");
-	const looksJsonArray = trimmed.startsWith("[");
+	const looksJsonObject = trimmed.startsWith("{") && looksLikeJsonContainerString(trimmed);
+	const looksJsonArray = trimmed.startsWith("[") && looksLikeJsonContainerString(trimmed);
+	const looksJsonString = trimmed.startsWith('"') && !expectedTypes.includes("string");
 	const looksJsonLiteral =
 		trimmed === "true" || trimmed === "false" || trimmed === "null" || JSON_NUMBER_PATTERN.test(trimmed);
 
-	if (!looksJsonObject && !looksJsonArray && !looksJsonLiteral) {
+	if (!looksJsonObject && !looksJsonArray && !looksJsonString && !looksJsonLiteral) {
 		return { value, changed: false };
 	}
 
 	try {
 		const parsed = JSON.parse(trimmed) as unknown;
-		// If the string was "null", we parsed it to actual null.
-		// Accept this even if null isn't in expectedTypes — the LLM meant "no value".
-		// normalizeOptionalNullsForSchema will strip it from optional fields, and
-		// the validator will correctly error on required fields.
-		if (parsed === null && trimmed === "null") {
-			return { value: null, changed: true };
-		}
-		// For non-null values, only accept if the parsed type matches what the schema expects
-		if (matchesExpectedType(parsed, expectedTypes)) {
-			return { value: parsed, changed: true };
-		}
+		const accepted = acceptParsedJsonForTypes(parsed, trimmed, expectedTypes, depth);
+		if (accepted.changed) return accepted;
 	} catch {
 		if (looksJsonObject || looksJsonArray) {
 			// Try escaping raw control chars inside string literals (LLMs sometimes
@@ -464,20 +499,21 @@ function tryParseJsonForTypes(value: string, expectedTypes: string[]): { value: 
 			if (escapedControls !== trimmed) {
 				try {
 					const parsed = JSON.parse(escapedControls) as unknown;
-					if (matchesExpectedType(parsed, expectedTypes)) {
-						return { value: parsed, changed: true };
-					}
+					const accepted = acceptParsedJsonForTypes(parsed, escapedControls, expectedTypes, depth);
+					if (accepted.changed) return accepted;
 				} catch {}
 			}
 			// Try extracting a valid JSON prefix (handles trailing junk after balanced container)
 			const leading = tryParseLeadingJsonContainer(trimmed);
-			if (leading !== undefined && matchesExpectedType(leading, expectedTypes)) {
-				return { value: leading, changed: true };
+			if (leading !== undefined) {
+				const accepted = acceptParsedJsonForTypes(leading, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 			// Try healing single-character bracket errors near the end of the string
 			const healed = tryHealMalformedJson(trimmed);
-			if (healed !== undefined && matchesExpectedType(healed, expectedTypes)) {
-				return { value: healed, changed: true };
+			if (healed !== undefined) {
+				const accepted = acceptParsedJsonForTypes(healed, trimmed, expectedTypes, depth);
+				if (accepted.changed) return accepted;
 			}
 		}
 		return { value, changed: false };
@@ -728,10 +764,13 @@ function normalizeOptionalNullsForSchema(
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
 		const isNullish = currentValue === null || currentValue === "null";
+		const isInvalidEmptyString =
+			currentValue === "" && !required.has(key) && !branchMatchesSchema(propertySchema, currentValue);
 
-		// Strip null and the string "null" from optional fields.
-		// The LLM sometimes outputs string "null" to mean "no value".
-		if (isNullish && !required.has(key)) {
+		// Strip null/string "null" from optional fields, and strip empty
+		// strings only when the property schema would reject the explicit value.
+		// LLMs sometimes output these placeholders to mean "no value".
+		if ((isNullish || isInvalidEmptyString) && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
@@ -1065,14 +1104,22 @@ function coerceArgsFromIssues(args: unknown, issues: FlatIssue[]): { value: unkn
 
 		const currentValue = getValueAtPointer(nextArgs, issue.instancePath);
 		const result = tryCoerceForExpectedTypes(currentValue, issue.expectedTypes);
-		const coercedValue = result.changed
-			? result.value
-			: issue.expectedTypes.includes("array") &&
-					!issue.unionBranch &&
-					currentValue !== undefined &&
-					!Array.isArray(currentValue)
-				? [currentValue]
-				: undefined;
+		let coercedValue = result.changed ? result.value : undefined;
+		if (
+			coercedValue === undefined &&
+			issue.expectedTypes.includes("array") &&
+			!issue.unionBranch &&
+			currentValue !== undefined &&
+			!Array.isArray(currentValue)
+		) {
+			const objectCoercion =
+				typeof currentValue === "string"
+					? tryParseJsonForTypes(currentValue, ["object"])
+					: { value: currentValue, changed: false };
+			if (objectCoercion.changed || !looksLikeJsonContainerString(currentValue)) {
+				coercedValue = [objectCoercion.changed ? objectCoercion.value : currentValue];
+			}
+		}
 		if (coercedValue === undefined) continue;
 
 		if (!owned) {
@@ -1097,26 +1144,30 @@ type ValidationContext =
 			json: Record<string, unknown>;
 	  }
 	| {
+			kind: "arktype";
+			ark: Type;
+			json: Record<string, unknown>;
+	  }
+	| {
 			kind: "json";
 			json: Record<string, unknown>;
 	  };
 
 /**
  * Cache the validation context derived from a tool's parameters schema.
- * Keyed by the parameters object identity, which is stable across tool
- * registrations.
+ * Keyed by the parameters object identity (stable across tool registrations),
+ * via {@link stamp} so callable ArkType schemas — and any frozen host — degrade
+ * to recompute-on-call instead of throwing on assignment.
  */
 const kValidationContext = Symbol("ai.validationContext");
-type ParamsWithValidationContext = object & { [kValidationContext]?: ValidationContext };
 function getValidationContext(tool: Tool): ValidationContext {
-	const params = tool.parameters as ParamsWithValidationContext;
-	const existing = params[kValidationContext];
-	if (existing) return existing;
-	const ctx: ValidationContext = isZodSchema(params)
-		? { kind: "zod", zod: params, json: zodToWireSchema(params) }
-		: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> };
-	params[kValidationContext] = ctx;
-	return ctx;
+	return stamp(tool.parameters as object, kValidationContext, params =>
+		isArkSchema(params)
+			? { kind: "arktype", ark: params, json: arkToWireSchema(params) }
+			: isZodSchema(params)
+				? { kind: "zod", zod: params, json: zodToWireSchema(params) }
+				: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> },
+	);
 }
 
 type ContextValidationResult =
@@ -1169,6 +1220,24 @@ function validateContext(ctx: ValidationContext, value: unknown): ContextValidat
 		};
 	}
 
+	if (ctx.kind === "arktype") {
+		const out = ctx.ark(value);
+		if (!(out instanceof type.errors)) {
+			return { success: true, value: preserveUnknownRootFields(value, out) };
+		}
+		// A `.narrow()`/cross-field failure can have ArkType reject while the wire
+		// JSON (its predicate dropped by the toJsonSchema fallback) accepts — then
+		// there are no json issues to coerce and we fall through to the formatted
+		// error built from ArkType's own messages.
+		const jr = validateJsonSchemaValue(ctx.json, value);
+		const flatIssues = jr.success ? [] : flattenJsonSchemaIssues(jr.issues);
+		return {
+			success: false,
+			flatIssues,
+			messages: out.map(e => `  - ${formatIssuePath(e.path)}: ${e.message}`),
+		};
+	}
+
 	const result = validateJsonSchemaValue(ctx.json, value);
 	if (result.success) return { success: true, value };
 	return {
@@ -1215,18 +1284,32 @@ function truncateArgsForError(value: unknown): unknown {
 /**
  * Validates tool call arguments against the tool's schema (Zod or plain JSON
  * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
- * containers, null-for-optional, null-for-default) before declaring failure.
+ * containers, null/invalid-empty-string-for-optional, null-for-default) before
+ * declaring failure.
  *
  * @throws Error with a formatted message when validation cannot be reconciled.
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
+	if (originalArgs && typeof originalArgs === "object" && "__parseError" in originalArgs) {
+		const parseError = originalArgs.__parseError;
+		const rawJson = String(originalArgs.__rawJson ?? "");
+		const maxLen = 512;
+		const truncatedRawJson =
+			rawJson.length <= maxLen
+				? rawJson
+				: `${rawJson.slice(0, maxLen)}… [truncated ${rawJson.length - maxLen} chars]`;
+		throw new Error(
+			`Validation failed for tool "${toolCall.name}": Tool call arguments are not valid JSON.\nParse Error: ${parseError}\nRaw JSON:\n${truncatedRawJson}`,
+		);
+	}
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 
-	// Always normalize first — strip null and string "null" from optional
-	// fields and substitute defaults. Handles LLM outputting string "null"
-	// to mean "no value" even when validation would otherwise pass.
+	// Always normalize first — strip null/string "null" from optional fields,
+	// strip optional empty strings only when their property schema rejects the
+	// explicit value, and substitute defaults. Handles LLM outputting
+	// placeholders for "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
 	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);

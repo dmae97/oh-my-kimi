@@ -1,7 +1,8 @@
 import type { ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type { z } from "zod/v4";
+import type { Type } from "arktype";
+import type * as zod from "zod/v4";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -582,10 +583,12 @@ export interface HookAPI {
 
 	/** File logger for error/warning/debug messages */
 	logger: typeof PiLogger;
-	/** Injected zod-backed typebox shim (legacy/compat — prefer `zod`). */
+	/** Injected zod-backed typebox shim (legacy/compat — prefer `arktype`). */
 	typebox: typeof TypeBox;
-	/** Injected zod module for Zod-authored hooks. */
-	zod: typeof z;
+	/** Injected arktype module for arktype-authored hooks. */
+	arktype: typeof Type;
+	/** Injected zod/v4 module for canonical hook validation. */
+	zod: typeof zod;
 	/** Injected pi-coding-agent exports */
 	pi: typeof PiCodingAgent;
 }

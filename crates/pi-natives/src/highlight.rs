@@ -182,6 +182,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["r"], "R"),
 	(&["scala"], "Scala"),
 	(&["clj", "clojure"], "Clojure"),
+	(&["el", "elisp", "emacs-lisp", "emacslisp"], "Lisp"),
 	(&["ex", "exs", "elixir"], "Ruby"),
 	(&["erl", "erlang"], "Erlang"),
 	(&["hs", "haskell"], "Haskell"),

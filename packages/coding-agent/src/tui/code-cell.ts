@@ -33,6 +33,8 @@ export interface CodeCellOptions {
 	codeTail?: boolean;
 	expanded?: boolean;
 	width: number;
+	codeStartLine?: number;
+	codeLineNumbers?: Array<number | null>;
 }
 
 function getState(status?: CodeCellOptions["status"]): State | undefined {
@@ -99,7 +101,17 @@ function collapseCarriageReturns(line: string): string {
 	return idx < 0 ? line : line.slice(idx + 1);
 }
 export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[] {
-	const { code, language, output, expanded = false, outputMaxLines = 6, codeMaxLines = 12, width } = options;
+	const {
+		code,
+		language,
+		output,
+		expanded = false,
+		outputMaxLines = 6,
+		codeMaxLines = 12,
+		width,
+		codeStartLine,
+		codeLineNumbers,
+	} = options;
 	const { title, meta } = formatHeader(options, theme);
 	const state = getState(options.status);
 
@@ -111,16 +123,45 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	const startIndex = tail ? rawCodeLines.length - maxCodeLines : 0;
 	const visibleCode = rawCodeLines.slice(startIndex, startIndex + maxCodeLines).join("\n");
 	const codeLines = highlightCode(visibleCode, language);
+
+	let visibleLineNumbers: Array<number | null> | undefined;
+	let lineNumberWidth = 0;
+	if (codeLineNumbers) {
+		visibleLineNumbers = codeLineNumbers.slice(startIndex, startIndex + maxCodeLines);
+	} else if (codeStartLine !== undefined) {
+		visibleLineNumbers = Array.from({ length: maxCodeLines }, (_, i) => codeStartLine + startIndex + i);
+	}
+
+	if (visibleLineNumbers) {
+		const validLineNums = visibleLineNumbers.filter((n): n is number => n !== null && n !== undefined);
+		const maxVal = validLineNums.length > 0 ? Math.max(...validLineNums) : 0;
+		if (maxVal > 0) {
+			lineNumberWidth = Math.max(2, String(maxVal).length);
+		}
+	}
+
+	if (lineNumberWidth > 0 && visibleLineNumbers) {
+		for (let i = 0; i < codeLines.length; i++) {
+			const lineNum = visibleLineNumbers[i];
+			const gutter =
+				lineNum !== null && lineNum !== undefined
+					? String(lineNum).padStart(lineNumberWidth, " ")
+					: " ".repeat(lineNumberWidth);
+			codeLines[i] = theme.fg("dim", `${gutter} `) + codeLines[i];
+		}
+	}
+
 	if (hiddenCodeLines > 0) {
 		const hint = formatExpandHint(theme, expanded, hiddenCodeLines > 0);
+		const gutterPad = lineNumberWidth > 0 ? " ".repeat(lineNumberWidth + 1) : "";
 		if (tail) {
 			// Earlier rows scrolled above the live tail window — mark them on top so
 			// the newest streamed line stays pinned to the bottom of the box.
 			const earlier = `… ${hiddenCodeLines} earlier line${hiddenCodeLines === 1 ? "" : "s"}${hint ? ` ${hint}` : ""}`;
-			codeLines.unshift(theme.fg("dim", earlier));
+			codeLines.unshift(theme.fg("dim", gutterPad + earlier));
 		} else {
 			const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;
-			codeLines.push(theme.fg("dim", moreLine));
+			codeLines.push(theme.fg("dim", gutterPad + moreLine));
 		}
 	}
 

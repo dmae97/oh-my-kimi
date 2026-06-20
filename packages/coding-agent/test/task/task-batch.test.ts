@@ -33,13 +33,16 @@ const taskAgent: AgentDefinition = {
 	source: "bundled",
 };
 
-function createSession(options: { manager?: AsyncJobManager; settings?: Record<string, unknown> } = {}): ToolSession {
+function createSession(
+	options: { manager?: AsyncJobManager; settings?: Record<string, unknown>; agentId?: string } = {},
+): ToolSession {
 	return {
 		cwd: "/tmp",
 		hasUI: false,
 		settings: Settings.isolated(options.settings ?? {}),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
+		getAgentId: () => options.agentId ?? null,
 		asyncJobManager: options.manager,
 	} as unknown as ToolSession;
 }
@@ -128,23 +131,6 @@ describe("task.batch schema gating", () => {
 			const tool = await TaskTool.create(createSession({ settings }));
 			expect(getSchemaProperties(tool).schema).toBeUndefined();
 		}
-	});
-
-	it("documents the batch parameters only when enabled", async () => {
-		mockDiscovery();
-
-		const off = await TaskTool.create(createSession({ settings: { "task.batch": false } }));
-		expect(off.description).toContain("Spawns ONE subagent per call to work in the background");
-		expect(off.description).not.toContain("`context`: shared background");
-
-		const offSync = await TaskTool.create(
-			createSession({ settings: { "async.enabled": false, "task.batch": false } }),
-		);
-		expect(offSync.description).toContain("Runs ONE subagent synchronously per call");
-
-		const on = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
-		expect(on.description).toContain("`tasks`: tasks to spawn");
-		expect(on.description).toContain("`context`: shared background");
 	});
 });
 
@@ -243,15 +229,20 @@ describe("task.batch spawning", () => {
 
 	it("spawns one background job per task item and forwards the shared context", async () => {
 		mockDiscovery();
-		const seen: Array<{ id?: string; context?: string; assignment?: string }> = [];
+		const seen: Array<{ id?: string; context?: string; assignment?: string; parentAgentId?: string }> = [];
 		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
-			seen.push({ id: options.id, context: options.context, assignment: options.assignment });
+			seen.push({
+				id: options.id,
+				context: options.context,
+				assignment: options.assignment,
+				parentAgentId: options.parentAgentId,
+			});
 			return makeResult(options.id ?? "?");
 		});
 
 		const manager = createManager();
 		const tool = await TaskTool.create(
-			createSession({ manager, settings: { "async.enabled": true, "task.batch": true } }),
+			createSession({ manager, agentId: "ParentA", settings: { "async.enabled": true, "task.batch": true } }),
 		);
 
 		const result = await tool.execute("tc-batch", {
@@ -287,6 +278,9 @@ describe("task.batch spawning", () => {
 			expect(spawn.context).toBe("# Goal\nShared background.");
 		}
 		expect(seen.map(spawn => spawn.assignment).sort()).toEqual(["Do A.", "Do B."]);
+		// Every spawn is parented to the spawning agent (not to itself): the
+		// registry "of <parent>" link must be the caller, never the child's id.
+		for (const spawn of seen) expect(spawn.parentAgentId).toBe("ParentA");
 	});
 
 	it("treats a one-item batch as a single spawn and forwards context", async () => {

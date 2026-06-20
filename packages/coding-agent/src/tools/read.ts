@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -8,12 +9,13 @@ import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { LRUCache } from "lru-cache/raw";
-import { z } from "zod/v4";
 import {
 	canonicalSnapshotKey,
 	getFileSnapshotStore,
 	recordFileSnapshot,
+	recordSeenLines,
 	recordSeenLinesFromBody,
 	SNAPSHOT_MAX_BYTES,
 } from "../edit/file-snapshot-store";
@@ -46,8 +48,8 @@ import {
 	webpExclusionForModel,
 } from "../utils/image-loading";
 import { convertFileWithMarkit } from "../utils/markit";
+import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
-import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "./archive-reader";
 import {
 	type ConflictEntry,
 	type ConflictScope,
@@ -273,7 +275,7 @@ function formatMergedBraceLine(
 	shouldAddHashLines: boolean,
 	shouldAddLineNumbers: boolean,
 ): { model: string; display: string } {
-	const merged = `${headText.trimEnd()} .. ${tailText.trim()}`;
+	const merged = `${headText.trimEnd()} … ${tailText.trim()}`;
 	if (shouldAddHashLines) {
 		return { model: `${startLine}-${endLine}:${merged}`, display: merged };
 	}
@@ -288,6 +290,20 @@ function countTextLines(text: string): number {
 	return text.split("\n").length;
 }
 
+function contiguousLineNumbers(startLine: number, count: number): number[] {
+	const lines: number[] = [];
+	for (let offset = 0; offset < count; offset++) lines.push(startLine + offset);
+	return lines;
+}
+
+function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
+	const lines: number[] = [];
+	for (const entry of entries) {
+		if (entry.kind === "line") lines.push(entry.lineNumber);
+	}
+	return lines;
+}
+
 /** Inclusive line range describing one elided span in a structural summary. */
 interface ElidedRange {
 	start: number;
@@ -299,7 +315,7 @@ const FOOTER_RANGE_SAMPLES = 2;
 
 /**
  * Footer appended to summarized reads telling the model how to recover the
- * elided body. Without this hint, agents either ignore the `...`/`{ .. }`
+ * elided body. Without this hint, agents either ignore the `…`/`{ … }`
  * markers or burn a turn guessing the right selector (see issue #1046). The
  * footer demonstrates the multi-range selector syntax with concrete sample
  * ranges drawn from the actual elision so the model re-reads only what it
@@ -311,7 +327,6 @@ function formatSummaryElisionFooter(
 	elidedLines: number,
 ): string {
 	if (elidedRanges.length === 0) return "";
-	const lineWord = elidedLines === 1 ? "line" : "lines";
 	const sampleCount = Math.min(elidedRanges.length, FOOTER_RANGE_SAMPLES);
 	const selector = elidedRanges
 		.slice(0, sampleCount)
@@ -319,7 +334,7 @@ function formatSummaryElisionFooter(
 		.join(",");
 	const example = `${readPath}:${selector}`;
 	const tail = elidedRanges.length > sampleCount ? `, e.g. ${example}` : ` with ${example}`;
-	return `[${elidedLines} ${lineWord} elided; re-read needed ranges${tail}]`;
+	return `[…${elidedLines}ln elided; re-read needed ranges${tail}]`;
 }
 const READ_CHUNK_SIZE = 8 * 1024;
 
@@ -646,18 +661,40 @@ function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: 
 	const notice = `[Path '${suffixResolution.from}' not found; resolved to '${suffixResolution.to}' via suffix match]`;
 	return text ? `${notice}\n${text}` : notice;
 }
+const PDF_IMAGE_PLACEHOLDER_RE = /<!--\s*image:\s*([^\s<>]+)(.*?)-->/g;
+const PDF_IMAGE_MEMBER_RE = /^(.*\.pdf):(.*)$/i;
+const PDF_IMAGE_MEMBER_EXTENSION_RE = /\.png$/i;
 
-const readSchema = z
-	.object({
-		path: z
-			.string()
-			.describe(
-				'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
-			),
-	})
-	.strict();
+function pdfImageMemberPath(pdfPath: string, imageId: string): string {
+	const member = PDF_IMAGE_MEMBER_EXTENSION_RE.test(imageId) ? imageId : `${imageId}.png`;
+	return `${pdfPath}:${member}`;
+}
 
-export type ReadToolInput = z.infer<typeof readSchema>;
+function rewritePdfImagePlaceholders(markdown: string, pdfPath: string): string {
+	return markdown.replace(PDF_IMAGE_PLACEHOLDER_RE, (_match: string, imageId: string, metadataText: string) => {
+		const metadata = metadataText.trim();
+		const suffix = metadata.length > 0 ? ` (${metadata})` : "";
+		return `Image ${imageId}${suffix}: read \`${pdfImageMemberPath(pdfPath, imageId)}\``;
+	});
+}
+
+function splitPdfImageMemberReadPath(readPath: string): { pdfPath: string; member: string } | null {
+	const match = PDF_IMAGE_MEMBER_RE.exec(readPath);
+	if (!match) return null;
+	const pdfPath = match[1];
+	const member = match[2];
+	if (pdfPath === undefined || member === undefined) return null;
+	if (member.length !== 0 && !PDF_IMAGE_MEMBER_EXTENSION_RE.test(member)) return null;
+	return { pdfPath, member };
+}
+
+const readSchema = type({
+	path: type("string").describe(
+		'Local path, internal URI (e.g. "omp://", "issue://123", "pr://123"), or URL; append :<sel> for line ranges or raw mode (e.g. "src/foo.ts:50-100")',
+	),
+});
+
+export type ReadToolInput = typeof readSchema.infer;
 
 export interface ReadToolDetails {
 	kind?: "file" | "url";
@@ -674,7 +711,11 @@ export interface ReadToolDetails {
 	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
-	displayContent?: { text: string; startLine: number };
+	displayContent?: {
+		text: string;
+		startLine: number;
+		lineNumbers?: Array<number | null>;
+	};
 	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `⚠ N` badge). */
 	conflictCount?: number;
@@ -964,6 +1005,113 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		return null;
 	}
 
+	#pdfImageCacheDir(absolutePdfPath: string): string {
+		const artifactsDir = this.session.getArtifactsDir?.();
+		let root = artifactsDir ?? undefined;
+		if (root === undefined) {
+			const sessionFile = this.session.getSessionFile();
+			root = sessionFile?.endsWith(".jsonl")
+				? sessionFile.slice(0, -6)
+				: path.join(os.tmpdir(), "omp-read-pdf-images");
+		}
+		const basename = path.basename(absolutePdfPath).replace(/[^A-Za-z0-9._-]/g, "_");
+		return path.join(root, "read-pdf-images", `${basename}-${Bun.hash(absolutePdfPath).toString(36)}`);
+	}
+
+	async #listPdfImageMembers(imageDir: string): Promise<string[]> {
+		try {
+			const entries = await fs.readdir(imageDir, { withFileTypes: true });
+			const members: string[] = [];
+			for (const entry of entries) {
+				if (entry.isFile() && PDF_IMAGE_MEMBER_EXTENSION_RE.test(entry.name)) members.push(entry.name);
+			}
+			return members.sort();
+		} catch (error) {
+			if (isNotFoundError(error)) return [];
+			throw error;
+		}
+	}
+
+	async #ensurePdfImageCache(absolutePdfPath: string, signal?: AbortSignal): Promise<string> {
+		const imageDir = this.#pdfImageCacheDir(absolutePdfPath);
+		const markerPath = path.join(imageDir, ".extracted");
+		try {
+			await fs.stat(markerPath);
+			return imageDir;
+		} catch (error) {
+			if (!isNotFoundError(error)) throw error;
+		}
+
+		await fs.rm(imageDir, { recursive: true, force: true });
+		await fs.mkdir(imageDir, { recursive: true });
+		const result = await convertFileWithMarkit(absolutePdfPath, signal, { imageDir });
+		if (!result.ok) {
+			await fs.rm(imageDir, { recursive: true, force: true });
+			throw new ToolError(`Cannot extract images from PDF: ${result.error ?? "conversion failed"}`);
+		}
+		await Bun.write(markerPath, "ok");
+		return imageDir;
+	}
+
+	async #readPdfImageMember(
+		absolutePdfPath: string,
+		pdfDisplayPath: string,
+		member: string,
+		suffixResolution: { from: string; to: string } | undefined,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ReadToolDetails>> {
+		const imageDir = await this.#ensurePdfImageCache(absolutePdfPath, signal);
+		const members = await this.#listPdfImageMembers(imageDir);
+		if (member.length === 0) {
+			const text =
+				members.length === 0
+					? "No extractable PDF image members found."
+					: `Extractable PDF image members:\n${members
+							.map(imageMember => `- read \`${pdfDisplayPath}:${imageMember}\``)
+							.join("\n")}`;
+			return toolResult<ReadToolDetails>({ resolvedPath: absolutePdfPath, suffixResolution })
+				.text(prependSuffixResolutionNotice(text, suffixResolution))
+				.sourcePath(absolutePdfPath)
+				.done();
+		}
+
+		if (!members.includes(member)) {
+			const available = members.length === 0 ? "(none)" : members.join(", ");
+			throw new ToolError(`PDF image member '${member}' not found. Available members: ${available}`);
+		}
+
+		const imagePath = path.join(imageDir, member);
+		const imageStat = await Bun.file(imagePath).stat();
+		if (imageStat.size > MAX_IMAGE_SIZE) {
+			const sizeStr = formatBytes(imageStat.size);
+			const maxStr = formatBytes(MAX_IMAGE_SIZE);
+			throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
+		}
+		const metadata = await readImageMetadata(imagePath);
+		const mimeType = metadata?.mimeType;
+		if (!mimeType) throw new ToolError(`PDF image member '${member}' is not a supported image.`);
+		const imageInput = await loadImageInput({
+			path: `${pdfDisplayPath}:${member}`,
+			cwd: this.session.cwd,
+			autoResize: this.#autoResizeImages,
+			maxBytes: MAX_IMAGE_SIZE,
+			resolvedPath: imagePath,
+			detectedMimeType: mimeType,
+			excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
+		});
+		if (!imageInput) {
+			throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
+		}
+		const textNote = prependSuffixResolutionNotice(imageInput.textNote, suffixResolution);
+		return toolResult<ReadToolDetails>({ resolvedPath: absolutePdfPath, suffixResolution })
+			.content([
+				{ type: "text", text: textNote },
+				{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
+			])
+			.sourcePath(imageInput.resolvedPath)
+			.done();
+	}
+
 	#buildInMemoryTextResult(
 		text: string,
 		offset: number | undefined,
@@ -1041,8 +1189,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					)
 				: undefined;
 		let emittedHashlineHeader = false;
+		let seenLines: number[] | undefined;
 		const formatText = (content: string, startNum: number): string => {
-			details.displayContent = { text: content, startLine: startNum };
+			const lineCount = countTextLines(content);
+			details.displayContent = {
+				text: content,
+				startLine: startNum,
+				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
+			};
+			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, countTextLines(content));
 			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
@@ -1053,7 +1208,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			details.displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startNum,
+				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 			};
+			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
@@ -1121,6 +1278,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					: formatLineEntries(buildLineEntries(endLine), startLineDisplay);
 		}
 
+		if (hashContext?.tag && options.sourcePath && seenLines) {
+			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
+		}
 		resultBuilder.text(outputText);
 		if (truncationInfo) {
 			resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
@@ -1165,6 +1325,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				: undefined;
 		let emittedHashlineHeader = false;
 
+		let seenLines: number[] | undefined;
 		const resultBuilder = toolResult(details);
 		if (options.sourcePath) resultBuilder.sourcePath(options.sourcePath);
 		if (options.sourceUrl) resultBuilder.sourceUrl(options.sourceUrl);
@@ -1190,11 +1351,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
 		} else if (visibleSpans.length > 0) {
 			const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
+			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const firstLine = entries.find(entry => entry.kind === "line");
 			if (firstLine?.kind === "line") {
 				details.displayContent = {
 					text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 					startLine: firstLine.lineNumber,
+					lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 				};
 			}
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
@@ -1208,6 +1371,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 		const finalText =
 			notices.length > 0 ? (outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n")) : outputText;
+		if (hashContext?.tag && options.sourcePath && seenLines) {
+			recordSeenLines(this.session, options.sourcePath, hashContext.tag, seenLines);
+		}
 		resultBuilder.text(finalText);
 		return resultBuilder.done();
 	}
@@ -1229,7 +1395,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): Promise<{
 		outputText: string;
 		columnTruncated: number;
-		displayContent?: { text: string; startLine: number };
+		displayContent?: { text: string; startLine: number; lineNumbers?: Array<number | null> };
 		bridgeResult?: AgentToolResult<ReadToolDetails>;
 	}> {
 		const rawSelector = isRawSelector(parsed);
@@ -1266,7 +1432,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const displayLineByNumber = new Map<number, string>();
 		const fullLines = rawSelector ? undefined : await readBracketContextFullLines(absolutePath, fileSize);
 		let columnTruncated = 0;
-		let displayContent: { text: string; startLine: number } | undefined;
+		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
 		for (const range of ranges) {
 			const rangeStart = range.startLine - 1; // 0-indexed
@@ -1349,6 +1515,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : (visibleSpans[0]?.startLine ?? 1),
+				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 			};
 			outputText = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 		} else {
@@ -1736,8 +1903,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let elidedLines = 0;
 		for (const unit of units) {
 			if (unit.kind === "elided") {
-				modelParts.push("...");
-				displayParts.push("...");
+				modelParts.push("…");
+				displayParts.push("…");
 				elidedRanges.push({ start: unit.startLine, end: unit.endLine });
 				elidedLines += unit.endLine - unit.startLine + 1;
 				continue;
@@ -1865,6 +2032,30 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const sqlitePath = await this.#resolveSqliteReadPath(readPath, suffixCache, signal);
 		if (sqlitePath) {
 			return this.#readSqlite(sqlitePath, signal);
+		}
+
+		const pdfImageMemberPath = splitPdfImageMemberReadPath(readPath);
+		if (pdfImageMemberPath) {
+			let absolutePdfPath = resolveReadPath(pdfImageMemberPath.pdfPath, this.session.cwd);
+			let suffixResolution: { from: string; to: string } | undefined;
+			try {
+				const stat = await Bun.file(absolutePdfPath).stat();
+				if (stat.isDirectory())
+					throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' is a directory, not a PDF file`);
+			} catch (error) {
+				if (!isNotFoundError(error) || isRemoteMountPath(absolutePdfPath)) throw error;
+				const suffixMatch = await this.#findSuffixMatchCached(suffixCache, pdfImageMemberPath.pdfPath, signal);
+				if (!suffixMatch) throw new ToolError(`Path '${pdfImageMemberPath.pdfPath}' not found`);
+				absolutePdfPath = suffixMatch.absolutePath;
+				suffixResolution = { from: pdfImageMemberPath.pdfPath, to: suffixMatch.displayPath };
+			}
+			return this.#readPdfImageMember(
+				absolutePdfPath,
+				pdfImageMemberPath.pdfPath,
+				pdfImageMemberPath.member,
+				suffixResolution,
+				signal,
+			);
 		}
 
 		const localTarget = splitPathAndSel(readPath);
@@ -2018,20 +2209,22 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			// Convert document via markit.
 			const result = await convertFileWithMarkit(absolutePath, signal);
 			if (result.ok) {
+				const renderedContent =
+					ext === ".pdf" ? rewritePdfImagePlaceholders(result.content, localReadPath) : result.content;
 				// Route the converted markdown through the in-memory text builder
 				// so line-range selectors (`file.pdf:50-100`, `:5-16,40-80`) and
 				// raw mode apply against the converted output. Without this,
 				// `file.pdf:50-100` silently returned the head of the document
 				// because only `truncateHead` was being applied.
 				if (isMultiRange(parsed) && parsed.kind === "lines") {
-					return this.#buildInMemoryMultiRangeResult(result.content, parsed.ranges, {
+					return this.#buildInMemoryMultiRangeResult(renderedContent, parsed.ranges, {
 						details: { resolvedPath: absolutePath },
 						sourcePath: absolutePath,
 						entityLabel: "document",
 					});
 				}
 				const { offset, limit } = selToOffsetLimit(parsed);
-				return this.#buildInMemoryTextResult(result.content, offset, limit, {
+				return this.#buildInMemoryTextResult(renderedContent, offset, limit, {
 					details: { resolvedPath: absolutePath },
 					sourcePath: absolutePath,
 					entityLabel: "document",
@@ -2266,10 +2459,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
-					let capturedDisplayContent: { text: string; startLine: number } | undefined;
+					let capturedDisplayContent:
+						| { text: string; startLine: number; lineNumbers?: Array<number | null> }
+						| undefined;
 					let emittedHashlineHeader = false;
 					const formatText = (text: string, startNum: number): string => {
-						capturedDisplayContent = { text, startLine: startNum };
+						const lineCount = countTextLines(text);
+						capturedDisplayContent = {
+							text,
+							startLine: startNum,
+							lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
+						};
 						const formatted = formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
 						emittedHashlineHeader = true;
@@ -2296,6 +2496,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						capturedDisplayContent = {
 							text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
 							startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startLineDisplay,
+							lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
 						};
 						const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
@@ -2902,6 +3103,8 @@ export const readToolRenderer = {
 								status: "complete",
 								output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
 								expanded,
+								codeStartLine: details?.displayContent?.startLine,
+								codeLineNumbers: details?.displayContent?.lineNumbers,
 								width,
 							},
 							uiTheme,

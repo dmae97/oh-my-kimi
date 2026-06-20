@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import {
 	capDetails,
@@ -15,12 +15,12 @@ import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
 import { commitTypeSchema, detailSchema } from "./schemas.js";
 
-const proposeCommitSchema = z.object({
+const proposeCommitSchema = type({
 	type: commitTypeSchema,
-	scope: z.union([z.string(), z.null()]),
-	summary: z.string(),
-	details: z.array(detailSchema),
-	issue_refs: z.array(z.string()),
+	scope: type("string").or("null"),
+	summary: "string",
+	details: detailSchema.array(),
+	issue_refs: "string[]",
 });
 
 interface ProposalResponse {

@@ -39,7 +39,6 @@ import type { LoadedConfig } from "./config";
 
 ## Exceptions
 
-- Timer handles: `ReturnType<typeof setTimeout>` / `setInterval`.
 - Generic type utilities where the function is a type parameter.
 
 Concrete function? Export a concrete type.

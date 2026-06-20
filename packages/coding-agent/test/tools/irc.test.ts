@@ -434,6 +434,24 @@ describe("IRC", () => {
 			expect(text).toContain("Parked agents are revived automatically");
 		});
 
+		it("op=list hides advisor-kind refs from the peer roster", async () => {
+			const sub = makeFakeSession();
+			registry.register({ id: "0-Worker", displayName: "task", kind: "sub", session: sub.session });
+			registry.register({
+				id: "0-Main/advisor",
+				displayName: "advisor",
+				kind: "advisor",
+				session: null,
+				status: "parked",
+			});
+
+			const tool = new IrcTool(makeToolSession(registry, "0-Main"));
+			const result = await tool.execute("call-1", { op: "list" });
+			const peerIds = result.details?.peers?.map(peer => peer.id) ?? [];
+			expect(peerIds).toContain("0-Worker");
+			expect(peerIds).not.toContain("0-Main/advisor");
+		});
+
 		it("op=send returns receipts immediately without waiting for a reply", async () => {
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
@@ -582,7 +600,9 @@ describe("IRC", () => {
 			});
 			expect(outcome).toBe("woken");
 			expect(promptSpy).toHaveBeenCalledTimes(1);
-			const prompted = promptSpy.mock.calls[0]?.[0] as unknown as CustomMessage;
+			// The idle wake routes through #wakeForIrc, which batches records into one prompt —
+			// even a lone incoming message is delivered as a one-element array.
+			const prompted = (promptSpy.mock.calls[0]?.[0] as unknown as CustomMessage[])[0];
 			expect(prompted).toMatchObject({ role: "custom", customType: "irc:incoming" });
 			expect(prompted.details).toMatchObject({ id: "msg-1", from: "0-Peer", message: "wake up" });
 

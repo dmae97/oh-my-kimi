@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { CommitAgentState } from "../../../commit/agentic/state";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
@@ -87,7 +87,7 @@ function truncateDiffContent(diff: string): { content: string; truncated: boolea
 	const truncatedCount = lines.length - KEEP_HEAD_LINES - KEEP_TAIL_LINES;
 
 	return {
-		content: [...head, `\n... (truncated ${truncatedCount} lines) ...\n`, ...tail].join("\n"),
+		content: [...head, `\n[…${truncatedCount}ln elided…]\n`, ...tail].join("\n"),
 		truncated: true,
 	};
 }
@@ -117,7 +117,7 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 			}
 			content = truncated;
 			if (content.length > remaining) {
-				content = `${content.slice(0, remaining)}\n... (diff truncated due to size) ...`;
+				content = `${content.slice(0, remaining)}\n[…${content.length - remaining}ch elided…]`;
 				if (!truncatedFiles.includes(file)) {
 					truncatedFiles.push(file);
 				}
@@ -131,9 +131,9 @@ function processDiffs(files: string[], diffs: Map<string, string>): { result: st
 	return { result: parts.join("\n\n"), truncatedFiles };
 }
 
-const gitFileDiffSchema = z.object({
-	files: z.array(z.string().describe("file to diff")).min(1).max(10),
-	staged: z.boolean().describe("use staged changes (default true)").optional(),
+const gitFileDiffSchema = type({
+	files: type("string").describe("file to diff").array().atLeastLength(1).atMostLength(10),
+	"staged?": type("boolean").describe("use staged changes (default true)"),
 });
 
 export function createGitFileDiffTool(cwd: string, state: CommitAgentState): CustomTool<typeof gitFileDiffSchema> {

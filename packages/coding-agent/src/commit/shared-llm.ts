@@ -1,36 +1,29 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { validateToolCall } from "@oh-my-pi/pi-ai";
-import { z } from "zod/v4";
+import { type as t, validateToolCall } from "@oh-my-pi/pi-ai";
 import type { ChangelogCategory, ConventionalAnalysis } from "./types";
 import { extractTextContent, extractToolCall, normalizeAnalysis, parseJsonPayload } from "./utils";
 
-const changelogCategoryLiteral = z.enum([
-	"Added",
-	"Changed",
-	"Fixed",
-	"Deprecated",
-	"Removed",
-	"Security",
-	"Breaking Changes",
-]);
+const changelogCategoryLiteral = t(
+	"'Added' | 'Changed' | 'Fixed' | 'Deprecated' | 'Removed' | 'Security' | 'Breaking Changes'",
+);
 
 /**
- * Shared Zod schema for the `create_conventional_analysis` tool used by
+ * Shared arktype schema for the `create_conventional_analysis` tool used by
  * both the single-pass analysis call and the map-reduce reduce phase. Schemas
  * are identical across phases — only the surrounding tool `description`
  * differs to reflect the input the phase is summarizing.
  */
-export const conventionalAnalysisParameters = z.object({
-	type: z.enum(["feat", "fix", "refactor", "docs", "test", "chore", "style", "perf", "build", "ci", "revert"]),
-	scope: z.union([z.string(), z.null()]),
-	details: z.array(
-		z.object({
-			text: z.string(),
-			changelog_category: changelogCategoryLiteral.optional(),
-			user_visible: z.boolean().optional(),
-		}),
-	),
-	issue_refs: z.array(z.string()),
+const detailItem = t({
+	text: "string",
+	"changelog_category?": changelogCategoryLiteral,
+	"user_visible?": "boolean",
+});
+
+export const conventionalAnalysisParameters = t({
+	type: "'feat' | 'fix' | 'refactor' | 'docs' | 'test' | 'chore' | 'style' | 'perf' | 'build' | 'ci' | 'revert'",
+	scope: t("string").or("null"),
+	details: detailItem.array(),
+	issue_refs: "string[]",
 });
 
 export interface ConventionalAnalysisTool {
@@ -68,7 +61,7 @@ export function parseConventionalAnalysisResponse(
 ): ConventionalAnalysis {
 	const toolCall = extractToolCall(message, tool.name);
 	if (toolCall) {
-		const parsed = validateToolCall([tool], toolCall) as z.infer<typeof conventionalAnalysisParameters>;
+		const parsed = validateToolCall([tool], toolCall) as any;
 		return normalizeAnalysis(parsed);
 	}
 	const text = extractTextContent(message);

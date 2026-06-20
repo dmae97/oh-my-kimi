@@ -4,7 +4,7 @@
  * Provides a normalized schema to represent multiple limit windows, model tiers,
  * and shared quotas across providers.
  */
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { FetchImpl, Provider } from "./types";
 export type UsageUnit = "percent" | "tokens" | "requests" | "usd" | "minutes" | "bytes" | "unknown";
 
@@ -134,62 +134,80 @@ export interface UsageHistoryQuery {
 	/** Inclusive lower bound on {@link UsageHistoryEntry.recordedAt} (epoch ms). */
 	sinceMs?: number;
 }
+/** One observed provider request cost, attributed to the credential that made it. */
+export interface UsageCostHistoryEntry {
+	/** Epoch ms the request completed. */
+	recordedAt: number;
+	provider: Provider;
+	/** Stable credential identity key (account/email/project/secret derived). */
+	accountKey: string;
+	/** Estimated request cost in USD. */
+	costUsd: number;
+}
+
+/** Filter for reading observed request costs. */
+export interface UsageCostHistoryQuery {
+	provider?: string;
+	accountKey?: string;
+	/** Inclusive lower bound on {@link UsageCostHistoryEntry.recordedAt} (epoch ms). */
+	sinceMs?: number;
+}
 
 // ─── Zod schemas (wire-shape validation for the broker `/v1/usage` endpoint) ─
 
-export const usageUnitSchema = z.enum(["percent", "tokens", "requests", "usd", "minutes", "bytes", "unknown"]);
-export const usageStatusSchema = z.enum(["ok", "warning", "exhausted", "unknown"]);
+export const usageUnitSchema = type("'percent' | 'tokens' | 'requests' | 'usd' | 'minutes' | 'bytes' | 'unknown'");
+export const usageStatusSchema = type("'ok' | 'warning' | 'exhausted' | 'unknown'");
 
-export const usageWindowSchema = z.object({
-	id: z.string(),
-	label: z.string(),
-	durationMs: z.number().optional(),
-	resetsAt: z.number().optional(),
+export const usageWindowSchema = type({
+	id: "string",
+	label: "string",
+	"durationMs?": "number",
+	"resetsAt?": "number",
 });
 
-export const usageAmountSchema = z.object({
-	used: z.number().optional(),
-	limit: z.number().optional(),
-	remaining: z.number().optional(),
-	usedFraction: z.number().optional(),
-	remainingFraction: z.number().optional(),
+export const usageAmountSchema = type({
+	"used?": "number",
+	"limit?": "number",
+	"remaining?": "number",
+	"usedFraction?": "number",
+	"remainingFraction?": "number",
 	unit: usageUnitSchema,
 });
 
-export const usageScopeSchema = z.object({
-	provider: z.string(),
-	accountId: z.string().optional(),
-	projectId: z.string().optional(),
-	orgId: z.string().optional(),
-	modelId: z.string().optional(),
-	tier: z.string().optional(),
-	windowId: z.string().optional(),
-	shared: z.boolean().optional(),
+export const usageScopeSchema = type({
+	provider: "string",
+	"accountId?": "string",
+	"projectId?": "string",
+	"orgId?": "string",
+	"modelId?": "string",
+	"tier?": "string",
+	"windowId?": "string",
+	"shared?": "boolean",
 });
 
-export const usageLimitSchema = z.object({
-	id: z.string(),
-	label: z.string(),
+export const usageLimitSchema = type({
+	id: "string",
+	label: "string",
 	scope: usageScopeSchema,
-	window: usageWindowSchema.optional(),
+	"window?": usageWindowSchema,
 	amount: usageAmountSchema,
-	status: usageStatusSchema.optional(),
-	notes: z.array(z.string()).optional(),
+	"status?": usageStatusSchema,
+	"notes?": "string[]",
 });
 
-export const usageResetCreditsSchema = z.object({
-	availableCount: z.number(),
+export const usageResetCreditsSchema = type({
+	availableCount: "number",
 });
 
-export const usageReportSchema = z.object({
-	provider: z.string(),
-	fetchedAt: z.number(),
-	limits: z.array(usageLimitSchema),
-	resetCredits: usageResetCreditsSchema.optional(),
-	metadata: z.record(z.string(), z.unknown()).optional(),
+export const usageReportSchema = type({
+	provider: "string",
+	fetchedAt: "number",
+	limits: usageLimitSchema.array(),
+	"resetCredits?": usageResetCreditsSchema,
+	"metadata?": { "[string]": "unknown" },
 	// `raw` is provider-specific and may be anything; the broker strips it before
 	// sending the report over the wire, so accept-but-ignore here.
-	raw: z.unknown().optional(),
+	"raw?": "unknown",
 });
 
 /** Optional logger for usage fetchers. */
@@ -210,12 +228,15 @@ export interface UsageCredential {
 	email?: string;
 	enterpriseUrl?: string;
 	metadata?: Record<string, unknown>;
+	apiEndpoint?: string;
 }
 
 /** Parameters provided to a usage fetcher. */
 export interface UsageFetchParams {
 	provider: Provider;
 	credential: UsageCredential;
+	/** Stable credential identity key derived by the auth storage layer. */
+	accountKey?: string;
 	baseUrl?: string;
 	signal?: AbortSignal;
 }
@@ -225,6 +246,8 @@ export interface UsageFetchContext {
 	fetch: FetchImpl;
 	logger?: UsageLogger;
 	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	/** Observed request-cost history for providers without upstream usage APIs. */
+	listUsageCosts?: (query?: UsageCostHistoryQuery) => UsageCostHistoryEntry[];
 }
 
 /** Provider implementation for fetching usage information. */
@@ -234,6 +257,8 @@ export interface UsageProvider {
 	/** Parse provider rate-limit response headers (lowercased keys) into a usage report, if supported. */
 	parseRateLimitHeaders?(headers: Record<string, string>, now?: number): UsageReport | null;
 	supports?(params: UsageFetchParams): boolean;
+	/** True when fetchUsage contacts upstream and can authenticate the credential for health checks. */
+	validatesCredentials?: boolean;
 }
 
 /** Request context used when ranking usage for a specific model. */

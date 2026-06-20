@@ -19,6 +19,21 @@ function makeAnthropicModel(id: string): Model<"anthropic-messages"> {
 	});
 }
 
+function makeMiniMaxAnthropicModel(id: string): Model<"anthropic-messages"> {
+	return buildModel({
+		id,
+		name: id,
+		api: "anthropic-messages",
+		provider: "minimax",
+		baseUrl: "https://api.minimax.io/anthropic",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	});
+}
+
 /** Adaptive-thinking model (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5). */
 function adaptiveModel(id: string): Model<"anthropic-messages"> {
 	const base = makeAnthropicModel(id);
@@ -101,5 +116,45 @@ describe("Anthropic adaptive-only thinking disable", () => {
 			thinkingEnabled: false,
 		});
 		expect(payload.thinking?.type).toBe("disabled");
+	});
+});
+
+describe("MiniMax Anthropic adaptive thinking", () => {
+	it("serializes MiniMax adaptive reasoning without Anthropic output_config effort", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
+			reasoning: Effort.High,
+			thinkingEnabled: true,
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
+
+	it("maps direct MiniMax effort options to the adaptive tag only", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
+			effort: "low",
+			thinkingEnabled: true,
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
+
+	it("serializes MiniMax M3 thinking-off requests without the Claude effort pin", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M3"), {
+			thinkingEnabled: false,
+		});
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config?.effort).toBeUndefined();
+	});
+	it("maps every MiniMax M2 reasoning tier to the documented adaptive tag", async () => {
+		const payload = await capturePayload(makeMiniMaxAnthropicModel("MiniMax-M2.7"), {
+			reasoning: Effort.Low,
+			thinkingEnabled: true,
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config?.effort).toBeUndefined();
 	});
 });

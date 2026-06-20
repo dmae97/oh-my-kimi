@@ -102,7 +102,7 @@ const HASHLINE_LINE_PREFIX = /^[ *]?(\d+)(?:-(\d+))?:/;
 /**
  * The 1-indexed file lines a hashline-formatted body actually displayed.
  * Single `NN:` rows contribute that line; a collapsed summary `NN-MM:` row
- * (a `{ .. }` brace pair) contributes only its boundary lines `NN` and `MM` —
+ * (a `{ … }` brace pair) contributes only its boundary lines `NN` and `MM` —
  * the elided interior was never shown, so editing inside it must be rejected.
  */
 export function parseSeenLinesFromHashlineBody(body: string): number[] {
@@ -114,6 +114,17 @@ export function parseSeenLinesFromHashlineBody(body: string): number[] {
 		if (match[2] !== undefined) seen.push(Number(match[2]));
 	}
 	return seen;
+}
+
+/** Merge explicit 1-indexed displayed lines into a recorded hashline snapshot. */
+export function recordSeenLines(
+	session: FileSnapshotStoreOwner,
+	absolutePath: string,
+	tag: string,
+	lines: readonly number[],
+): void {
+	if (lines.length === 0) return;
+	getFileSnapshotStore(session).recordSeenLines(canonicalSnapshotKey(absolutePath), tag, lines);
 }
 
 /**
@@ -128,7 +139,5 @@ export function recordSeenLinesFromBody(
 	tag: string,
 	body: string,
 ): void {
-	const seen = parseSeenLinesFromHashlineBody(body);
-	if (seen.length === 0) return;
-	getFileSnapshotStore(session).recordSeenLines(canonicalSnapshotKey(absolutePath), tag, seen);
+	recordSeenLines(session, absolutePath, tag, parseSeenLinesFromHashlineBody(body));
 }

@@ -1,5 +1,5 @@
 import { encodeSixel } from "@oh-my-pi/pi-natives";
-import { $env, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless } from "@oh-my-pi/pi-utils";
 import {
 	detectKittyUnicodePlaceholdersSupport,
 	getKittyGraphics,
@@ -97,7 +97,7 @@ export class TerminalInfo {
 	}
 
 	sendNotification(message: string | TerminalNotification): void {
-		if (isNotificationSuppressed()) return;
+		if (isNotificationSuppressed() || isTerminalHeadless()) return;
 		process.stdout.write(this.formatNotification(message));
 	}
 }
@@ -544,7 +544,7 @@ export function encodeKitty(
 		imageId?: number;
 	} = {},
 ): string {
-	const params: string[] = ["a=T", "f=100", "q=2"];
+	const params: string[] = ["a=T", "f=100", "q=2", "C=1"];
 	if (options.columns) params.push(`c=${options.columns}`);
 	if (options.rows) params.push(`r=${options.rows}`);
 	if (options.imageId) params.push(`i=${options.imageId}`);
@@ -563,10 +563,12 @@ export function encodeKittyTransmit(base64Data: string, imageId: number): string
 }
 
 /**
- * Display a previously transmitted image (`a=p`) at the cursor. Carrying a
- * stable `placementId` (`p=`) means re-emitting the sequence on a repaint
- * *replaces* the existing placement (moving/resizing it without flicker) rather
- * than stacking a duplicate.
+ * Display a previously transmitted image (`a=p`) at the cursor. `C=1` keeps
+ * the terminal cursor anchored at the placement origin so the renderer's
+ * explicit cursor movement remains the only row accounting. Carrying a stable
+ * `placementId` (`p=`) means re-emitting the sequence on a repaint *replaces*
+ * the existing placement (moving/resizing it without flicker) rather than
+ * stacking a duplicate.
  */
 export function encodeKittyPlacement(options: {
 	imageId: number;
@@ -574,7 +576,7 @@ export function encodeKittyPlacement(options: {
 	columns?: number;
 	rows?: number;
 }): string {
-	const params: string[] = ["a=p", "q=2", `i=${options.imageId}`];
+	const params: string[] = ["a=p", "q=2", "C=1", `i=${options.imageId}`];
 	if (options.placementId) params.push(`p=${options.placementId}`);
 	if (options.columns) params.push(`c=${options.columns}`);
 	if (options.rows) params.push(`r=${options.rows}`);

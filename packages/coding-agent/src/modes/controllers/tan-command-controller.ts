@@ -122,6 +122,7 @@ export class TanCommandController {
 							agentId: cloneId,
 							agentDisplayName: "tan",
 							parentTaskPrefix: cloneId,
+							parentAgentId: ownerId,
 							agentRegistry,
 							disableExtensionDiscovery: true,
 						});

@@ -3,6 +3,7 @@ import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } fro
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyWorkerEnvOverlay } from "../tiny/title-client";
+import { safeSend } from "../utils/ipc";
 import type { SttProgressEvent, SttWorkerInbound, SttWorkerOutbound } from "./asr-protocol";
 import type { SttModelKey } from "./models";
 
@@ -181,13 +182,7 @@ export function createSttSubprocess(): SpawnedSubprocess {
 function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			try {
-				proc.send(message);
-			} catch (error) {
-				logger.debug("stt: send to subprocess failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			safeSend(proc, message, "stt");
 		},
 		onMessage(handler) {
 			inbound.add(handler);
@@ -314,6 +309,12 @@ export class SttClient {
 		const worker = this.#ensureWorker();
 		const id = String(++this.#nextRequestId);
 		const { promise, resolve, reject } = Promise.withResolvers<string>();
+		// `stop()` is normally the only awaiter of `promise`, but with model loading
+		// now deferred to the stream, a load failure (or early worker error) can
+		// reject it before the caller stops — attach a benign handler so that never
+		// surfaces as an unhandled rejection. stop()/await still observes the
+		// rejection through the original promise.
+		void promise.catch(() => {});
 		const signal = options.signal;
 		let settled = false;
 		const onAbort = (): void => handle.cancel();

@@ -7,7 +7,8 @@
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
+import * as zodModule from "zod/v4";
 import { toolCapability } from "../../capability/tool";
 import { type CustomTool, loadCapability } from "../../discovery";
 import type { ExecOptions } from "../../exec/exec";
@@ -108,7 +109,8 @@ export class CustomToolLoader {
 			hasUI: false,
 			logger,
 			typebox,
-			zod: z,
+			arktype: type,
+			zod: zodModule,
 			pi,
 			pushPendingAction: action => {
 				if (!pushPendingAction) {

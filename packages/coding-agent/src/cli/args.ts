@@ -28,11 +28,13 @@ export interface Args {
 	smol?: string;
 	slow?: string;
 	plan?: string;
+	maxTime?: number;
 	apiKey?: string;
 	systemPrompt?: string;
 	appendSystemPrompt?: string;
 	thinking?: Effort;
 	hideThinking?: boolean;
+	advisor?: boolean;
 	continue?: boolean;
 	resume?: string | true;
 	help?: boolean;
@@ -54,6 +56,7 @@ export interface Args {
 	noExtensions?: boolean;
 	pluginDirs?: string[];
 	print?: boolean;
+	printThoughts?: boolean;
 	export?: string;
 	noSkills?: boolean;
 	skills?: string[];
@@ -194,8 +197,12 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.noPty = true;
 		} else if (arg === "--hide-thinking") {
 			result.hideThinking = true;
+		} else if (arg === "--advisor") {
+			result.advisor = true;
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
+		} else if (arg === "--print-thoughts") {
+			result.printThoughts = true;
 		} else if (arg === "--no-extensions") {
 			result.noExtensions = true;
 		} else if (arg === "--no-skills") {
@@ -207,7 +214,13 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		} else if (arg === "--auto-approve" || arg === "--yolo") {
 			result.autoApprove = true;
 		} else if (arg.startsWith("@")) {
-			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
+			let filePath = arg.slice(1);
+			if (filePath.startsWith('"') && filePath.endsWith('"') && filePath.length > 1) {
+				filePath = filePath.slice(1, -1);
+			} else if (filePath.startsWith("'") && filePath.endsWith("'") && filePath.length > 1) {
+				filePath = filePath.slice(1, -1);
+			}
+			result.fileArgs.push(filePath);
 		} else if (!arg.startsWith("-") || arg === "-") {
 			// Plain positional or lone `-` (stdin marker) — pass through as a
 			// message rather than flagging it.
@@ -280,6 +293,7 @@ export function getExtraHelpText(): string {
   MISTRAL_API_KEY            - Mistral models
   ZAI_API_KEY                - z.ai models (ZhipuAI/GLM)
   UMANS_AI_CODING_PLAN_API_KEY - Umans AI Coding Plan models
+  UMANS_WEBSEARCH_PROVIDER    - Umans gateway web search backend (native or exa)
   MINIMAX_API_KEY            - MiniMax models
   OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
   CURSOR_ACCESS_TOKEN        - Cursor AI models

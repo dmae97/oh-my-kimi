@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { Text } from "@oh-my-pi/pi-tui/components/text";
 import {
 	encodeKittyVirtualPlacement,
 	getKittyGraphics,
@@ -129,6 +130,12 @@ describe("ImageBudget", () => {
 		expect(budget.acquireId()).not.toBe(budget.acquireId());
 	});
 
+	it("initializes separate budgets with different starting IDs", () => {
+		const budget1 = new ImageBudget();
+		const budget2 = new ImageBudget();
+		expect(budget1.acquireId()).not.toBe(budget2.acquireId());
+	});
+
 	it("setCap(0) clears a previously applied demotion threshold", () => {
 		const budget = new ImageBudget(2, () => {});
 		pass(budget, 3);
@@ -247,6 +254,59 @@ describe("Image budget integration", () => {
 		expect([...budget.takeTransmits()]).toEqual([]);
 	});
 
+	it("moves back up before multi-row direct Kitty placements and restores the cursor below them", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: "k" },
+			{ widthPx: 40, heightPx: 40 },
+		);
+
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+
+		const last = lines.at(-1) ?? "";
+		expect(lines).toHaveLength(4);
+		expect(lines.slice(0, -1)).toEqual(["\x1b[0m", "\x1b[0m", "\x1b[0m"]);
+		expect(last.startsWith("\x1b7\x1b[3A")).toBe(true);
+		expect(last.endsWith("\x1b8")).toBe(true);
+		expect(last).toContain("\x1b_Ga=p");
+		expect(last).toContain("C=1");
+		expect(last).toContain(`i=${id}`);
+		expect(last).toContain("c=4");
+		expect(last).toContain("r=4");
+	});
+
+	it("does not move the cursor around single-row direct Kitty placements", () => {
+		const budget = new ImageBudget(3, () => {});
+		const id = budget.acquireId("k");
+		const image = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: t => t },
+			{ maxWidthCells: 4, maxHeightCells: 1, budget, imageKey: "k" },
+		);
+
+		budget.beginPass();
+		const lines = image.render(20);
+		budget.endPass();
+
+		const last = lines.at(-1) ?? "";
+		expect(lines).toHaveLength(1);
+		expect(last.startsWith("\x1b_Ga=p")).toBe(true);
+		expect(last).toContain("C=1");
+		expect(last).toContain(`i=${id}`);
+		expect(last).toContain("r=1");
+		expect(last.endsWith("\x1b\\")).toBe(true);
+		expect(last).not.toContain("\x1b[0A");
+		expect(last).not.toContain("\x1b[0B");
+		expect(last).not.toMatch(/\x1b\[\d+[AB]/);
+	});
+
 	it("renders an over-budget image as its text fallback instead of graphics", () => {
 		const budget = new ImageBudget(1, () => {});
 		const older = new Image(
@@ -317,7 +377,7 @@ describe("Image budget + Unicode placeholders", () => {
 		expect(lines.every(l => l.includes(KITTY_PLACEHOLDER))).toBe(true);
 		expect(lines.join("")).not.toContain("\x1b[1A");
 		// The image id is encoded in the cell foreground color (low 24 bits).
-		expect(lines[0]).toContain(`38;2;0;0;${id}`);
+		expect(lines[0]).toContain(`38;2;${(id >> 16) & 0xff};${(id >> 8) & 0xff};${id & 0xff}m`);
 		// Render lines never carry the base64 — data goes via the one-time transmit.
 		expect(lines.join("")).not.toContain(BASE64_ONE_PIXEL_PNG);
 		const transmits = [...budget.takeTransmits()];
@@ -352,6 +412,7 @@ describe("Image budget + Unicode placeholders", () => {
 
 describe("TUI inline-image budget", () => {
 	const originalProtocol = TERMINAL.imageProtocol;
+	const originalTerminalId = terminal.id;
 	let originalCellDims: CellDimensions;
 	let monotonicNow = 0;
 
@@ -359,6 +420,10 @@ describe("TUI inline-image budget", () => {
 		originalCellDims = { ...getCellDimensions() };
 		setCellDimensions({ widthPx: 10, heightPx: 10 });
 		terminal.imageProtocol = ImageProtocol.Kitty;
+		// Pin a non-Ghostty id by default so the Ghostty one-shot image re-submit
+		// (which re-sends `a=t` data) never fires in the generic budget tests; the
+		// dedicated Ghostty tests opt in by setting `terminal.id = "ghostty"`.
+		terminal.id = "xterm";
 		monotonicNow = 0;
 		// Advance one full 30fps frame (>1000/30ms) per tick so the render
 		// throttle computes a zero delay and every requestRender flushes inline.
@@ -372,6 +437,7 @@ describe("TUI inline-image budget", () => {
 		vi.restoreAllMocks();
 		setCellDimensions(originalCellDims);
 		terminal.imageProtocol = originalProtocol;
+		terminal.id = originalTerminalId;
 	});
 
 	async function settle(term: VirtualTerminal): Promise<void> {
@@ -392,6 +458,46 @@ describe("TUI inline-image budget", () => {
 			{ maxWidthCells: 4, maxHeightCells: 4, budget, imageKey: key },
 		);
 	}
+
+	it("renders following text below a multi-row direct Kitty placement", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		tui.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: t => t },
+				{ maxWidthCells: 4, maxHeightCells: 4, budget: tui.imageBudget, imageKey: "direct" },
+				{ widthPx: 40, heightPx: 40 },
+			),
+		);
+		tui.addChild(new Text("after-image", 0, 0));
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).toContain("\x1b7\x1b[3A");
+			expect(output).toContain("C=1");
+			expect(output).toContain("\x1b8");
+			const viewport = term.getViewport().map(line => line.trimEnd());
+			expect(viewport.slice(0, 5)).toEqual(["", "", "", "", "after-image"]);
+			expect(viewport.slice(0, 4).some(line => line.includes("after-image"))).toBe(false);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
 
 	it("purges demoted image graphics and repaints the fallback without a destructive replay", async () => {
 		const term = new VirtualTerminal(40, 12);
@@ -532,7 +638,7 @@ describe("kitty transmit / placement encoding", () => {
 
 	it("encodeKittyPlacement displays a transmitted image by id with a stable placement id", () => {
 		const seq = encodeKittyPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 });
-		expect(seq).toBe("\x1b_Ga=p,q=2,i=9,p=9,c=3,r=2\x1b\\");
+		expect(seq).toBe("\x1b_Ga=p,q=2,C=1,i=9,p=9,c=3,r=2\x1b\\");
 		expect(seq).not.toContain(BASE64_ONE_PIXEL_PNG);
 	});
 });

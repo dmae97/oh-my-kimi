@@ -2,6 +2,49 @@
 
 ## [Unreleased]
 
+## [16.1.3] - 2026-06-19
+
+### Changed
+
+- Expanded the `TempDir` Windows retry window from 4×10ms to 40×25ms (1s total) to accommodate SQLite WAL/SHM file handle release delays
+
+### Fixed
+
+- Made EPIPE rejections from IPC `send()` to worker subprocesses (`syscall: "send"`) non-fatal: the global `unhandledRejection` handler now logs and continues instead of terminating the session when an optional subsystem's pipe breaks. A broken optional subsystem (TTS/STT/tiny-title/MCP) can no longer crash the whole agent session mid-task. ([#2997](https://github.com/can1357/oh-my-pi/issues/2997))
+
+## [16.1.2] - 2026-06-19
+
+### Added
+
+- Added `directoryExists(dir)` to `dirs`: resolves whether a path is an existing directory, returning `false` on any stat failure (ENOENT, permission, non-directory). Lets callers check a directory is safe to `chdir` into before `setProjectDir` throws.
+
+### Removed
+
+- Removed the public `createAbortableStream` API from `@oh-my-pi/pi-utils`. Consumers should use the lighter, direct-reader `abortableSource` async generator inside `@oh-my-pi/pi-utils/stream` to avoid the extra ReadableStream wrapper layer and per-chunk enqueue overhead.
+
+## [16.0.11] - 2026-06-19
+
+### Removed
+
+- Removed `getIndentation`, `setDefaultTabWidth`, and `getDefaultTabWidth` helpers
+
+## [16.0.8] - 2026-06-18
+
+### Changed
+
+- Mermaid diagrams are now rendered to ASCII by a first-party vendored renderer (`src/vendor/mermaid-ascii`, derived from the MIT-licensed `beautiful-mermaid`, ASCII pipeline only) with terminal display width measured via `Bun.stringWidth` (grapheme-aware, correct for wide/East-Asian glyphs and emoji). Inline label formatting (HTML formatting tags and markdown emphasis) is now reduced to plain text instead of printed raw.
+
+### Removed
+
+- Removed the external `beautiful-mermaid` dependency (and its transitive `elkjs`, ~3.13MB) in favor of the vendored ASCII renderer.
+
+## [16.0.3] - 2026-06-16
+
+### Added
+
+- Added `escapeXmlText` utility to escape XML-significant characters `&`, `<`, and `>` in element body text
+- Added `isTerminalHeadless()` / `setTerminalHeadless()` to centrally suppress real-terminal side effects (stdout escape/frame writes, stdin raw mode, CSI/OSC capability probes, SIGWINCH, window-title changes, emergency restore) under the test runtime. Defaults on when `bun test` sets `NODE_ENV=test`; terminal-contract tests opt out via `setTerminalHeadless(false)`
+
 ## [15.13.3] - 2026-06-15
 
 ### Added

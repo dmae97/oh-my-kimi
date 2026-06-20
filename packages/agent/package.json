@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "@oh-my-pi/pi-agent-core",
-	"version": "16.0.1",
+	"version": "16.1.7",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"homepage": "https://omp.sh",
 	"author": "Can Boluk",
@@ -39,6 +39,7 @@
 		"@oh-my-pi/pi-catalog": "catalog:",
 		"@oh-my-pi/pi-natives": "catalog:",
 		"@oh-my-pi/pi-utils": "catalog:",
+		"@oh-my-pi/pi-wire": "catalog:",
 		"@oh-my-pi/snapcompact": "catalog:",
 		"@opentelemetry/api": "catalog:"
 	},

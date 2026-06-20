@@ -120,7 +120,7 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.truncated).toBe(true);
 		expect(tree.totalLines).toBeLessThanOrEqual(120);
 		expect(renderedLines.length).toBeLessThanOrEqual(120);
-		expect(tree.rendered).toContain("lines elided beyond depth/cap");
+		expect(tree.rendered).toContain("ln elided…]");
 	});
 
 	it("can keep root entries uncapped while truncating child directories", async () => {

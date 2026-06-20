@@ -9,7 +9,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { dereferenceJsonSchema } from "./dereference";
 import { upgradeJsonSchemaTo202012 } from "./draft";
-import { areJsonValuesEqual, mergePropertySchemas } from "./equality";
+import { areJsonValuesEqual, mergeCompatibleEnumSchemas, mergePropertySchemas } from "./equality";
 import {
 	ALL_CCA_TYPE_SPECIFIC_KEYS,
 	CLOUD_CODE_ASSIST_SHARED_SCHEMA_KEYS,
@@ -46,6 +46,9 @@ export interface NormalizeSchemaOptions {
 	collapseMixedTypeCombiners: boolean;
 	stripResidualCombinersFixpoint: boolean;
 	extractNullableFromUnions: boolean;
+	inferTypeForBareEnum: boolean;
+	foldOneOfIntoAnyOf: boolean;
+	dropNonScalarEnum: boolean;
 	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
 	validateAndFallback?: { fallback: unknown };
 }
@@ -82,6 +85,13 @@ function isGoogleUnsupportedSchemaField(key: string): boolean {
 
 function isMcpUnsupportedSchemaField(key: string): boolean {
 	return key === "$schema";
+}
+
+function isMoonshotUnsupportedSchemaField(key: string): boolean {
+	// `default` is an MFJS Meta Data field (kept); everything else here is a
+	// validation/decorative keyword or tuple form MFJS rejects.
+	if (key === "default") return false;
+	return Object.hasOwn(NON_STRUCTURAL_SCHEMA_KEYS, key) || key === "prefixItems";
 }
 
 function isDefaultLiftableToDescriptionField(key: string): boolean {
@@ -337,6 +347,20 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		}
 	}
 
+	if (
+		options.inferTypeForBareEnum &&
+		!result.type &&
+		!Array.isArray(result.anyOf) &&
+		!Array.isArray(result.oneOf) &&
+		Array.isArray(result.enum) &&
+		result.enum.length > 0
+	) {
+		const enumTypes = (result.enum as unknown[]).map(inferJsonSchemaTypeFromValue);
+		if (enumTypes.every((t): t is string => typeof t === "string") && new Set(enumTypes).size === 1) {
+			result.type = enumTypes[0];
+		}
+	}
+
 	if (options.collapseNullFields && result.type === "null") {
 		delete result.type;
 		if (!options.stripNullableKeyword) result.nullable = true;
@@ -371,7 +395,26 @@ function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaWal
 		if (options.collapseMixedTypeCombiners) current = collapseMixedTypeCombinerVariants(current, combiner);
 		if (options.collapseSameTypeCombiners) current = collapseSameTypeCombinerVariants(current, combiner);
 	}
+	if (options.foldOneOfIntoAnyOf) current = foldOneOfIntoAnyOf(current);
+	if (options.dropNonScalarEnum) current = dropNonScalarEnumForMfjs(current);
 	return current;
+}
+
+/** MFJS recognizes only `anyOf`; fold any residual `oneOf` into it (merging when both are present). */
+function foldOneOfIntoAnyOf(schema: JsonObject): JsonObject {
+	if (!Array.isArray(schema.oneOf)) return schema;
+	const rest = copySchemaWithout(schema, "oneOf");
+	const existing = Array.isArray(rest.anyOf) ? (rest.anyOf as unknown[]) : [];
+	rest.anyOf = [...existing, ...(schema.oneOf as unknown[])];
+	return rest;
+}
+
+/** MFJS `enum` admits only string/number literals; drop an enum carrying other types, keeping the inferred `type`. */
+function dropNonScalarEnumForMfjs(schema: JsonObject): JsonObject {
+	if (!Array.isArray(schema.enum)) return schema;
+	const allScalar = (schema.enum as unknown[]).every(v => typeof v === "string" || typeof v === "number");
+	if (allScalar) return schema;
+	return copySchemaWithout(schema, "enum");
 }
 
 /** Copy all keys from a schema except the specified combiner key. */
@@ -557,18 +600,48 @@ function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" 
 	const variantsRaw = schema[combiner];
 	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) return schema;
 	let commonType: string | undefined;
-	let firstEntry: JsonObject | undefined;
+	const variants: JsonObject[] = [];
 	for (const entry of variantsRaw) {
 		if (!isJsonObject(entry) || typeof entry.type !== "string") return schema;
-		if (commonType === undefined) {
-			commonType = entry.type;
-			firstEntry = entry;
-		} else if (entry.type !== commonType) return schema;
+		if (commonType === undefined) commonType = entry.type;
+		else if (entry.type !== commonType) return schema;
+		variants.push(entry);
 	}
+	const firstEntry = variants[0];
 	if (!firstEntry) return schema;
+
+	// Same-type collapse otherwise keeps only the first variant's keys, silently
+	// dropping the other branches' `enum` members (e.g. an anyOf of two string
+	// enums collapsing to just the first).
+	const enumVariantCount = variants.reduce((n, variant) => n + (Array.isArray(variant.enum) ? 1 : 0), 0);
+
+	let collapsed: JsonObject;
+	if (enumVariantCount === variants.length) {
+		// Every branch is an `enum` schema: fold them with
+		// `mergeCompatibleEnumSchemas`, which unions the members only when the
+		// branches agree on `type` and every non-`enum` field, returning null
+		// otherwise. Bail to the untouched schema on any disagreement so the
+		// residual-combiner fallback handles it instead of mislabeling.
+		let merged: JsonObject | null = firstEntry;
+		for (let i = 1; i < variants.length && merged !== null; i++) {
+			merged = mergeCompatibleEnumSchemas(merged, variants[i]);
+		}
+		if (merged === null) return schema;
+		collapsed = merged;
+	} else if (enumVariantCount > 0) {
+		// Mixed branches: at least one is unconstrained by `enum` and is therefore
+		// broader. Collapse onto the first such branch so the result keeps its
+		// (broader) keys — never narrowing to an enum branch's members or leaking
+		// its metadata (description/default).
+		collapsed = variants.find(variant => !Array.isArray(variant.enum)) ?? firstEntry;
+	} else {
+		// No `enum` branches: keep the original first-wins behavior.
+		collapsed = firstEntry;
+	}
+
 	const nextSchema = copySchemaWithout(schema, combiner);
-	for (const key in firstEntry) {
-		if (Object.hasOwn(firstEntry, key) && !outHasOwn(nextSchema, key)) nextSchema[key] = firstEntry[key];
+	for (const key in collapsed) {
+		if (Object.hasOwn(collapsed, key) && !outHasOwn(nextSchema, key)) nextSchema[key] = collapsed[key];
 	}
 	return nextSchema;
 }
@@ -842,6 +915,9 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 		collapseMixedTypeCombiners: false,
 		stripResidualCombinersFixpoint: false,
 		extractNullableFromUnions: false,
+		inferTypeForBareEnum: true,
+		dropNonScalarEnum: false,
+		foldOneOfIntoAnyOf: false,
 	});
 }
 
@@ -860,6 +936,9 @@ export function normalizeSchemaForCCA(value: unknown): unknown {
 		collapseMixedTypeCombiners: true,
 		stripResidualCombinersFixpoint: true,
 		extractNullableFromUnions: true,
+		inferTypeForBareEnum: true,
+		dropNonScalarEnum: false,
+		foldOneOfIntoAnyOf: false,
 		rejectResidualIncompatibilities: ["type-array", "type-null", "nullable", "combiners"],
 		validateAndFallback: { fallback: CLOUD_CODE_ASSIST_CLAUDE_FALLBACK_SCHEMA },
 	});
@@ -871,6 +950,7 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
 		normalizeFieldNames: false,
 		collapseNullFields: false,
 		normalizeTypeArrayToNullable: false,
+		foldOneOfIntoAnyOf: false,
 		stripNullableKeyword: true,
 		autoPropertyOrdering: false,
 		ensureObjectProperties: false,
@@ -880,6 +960,56 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
 		collapseMixedTypeCombiners: false,
 		stripResidualCombinersFixpoint: false,
 		extractNullableFromUnions: false,
+		inferTypeForBareEnum: false,
+		dropNonScalarEnum: false,
+	});
+}
+
+/**
+ * Moonshot Flavored JSON Schema (MFJS) — the stricter subset Moonshot/Kimi
+ * native hosts (api.moonshot.ai, api.kimi.com) validate
+ * `tools.function.parameters` against. It rejects standard JSON Schema
+ * constructs that OpenAI-compatible hosts accept, returning HTTP 400
+ * `tools.function.parameters is not a valid moonshot flavored json schema`.
+ * Differences this normalizer reconciles:
+ *
+ *  - `const` (incl. `anyOf`/`oneOf` whose every branch is a bare `const`) is
+ *    rejected; collapse to `enum` with an inferred scalar `type`.
+ *  - `oneOf` is not an MFJS combinator (only `anyOf` is); residual `oneOf` is
+ *    folded into `anyOf`.
+ *  - `type` must be a scalar string; `type: [...]` arrays are reduced to a
+ *    single scalar (the `null` branch is dropped — `nullable` is unsupported).
+ *  - Enum-bearing nodes get an inferred `type` (the idiomatic MFJS form; a bare
+ *    `enum` is valid too) so `anyOf` branches always carry a `type`.
+ *  - Validation/decorative keywords (`minItems`, `maxItems`, `maxLength`,
+ *    `pattern`, `format`, `title`, …) and tuple `prefixItems` are rejected and
+ *    stripped, spilling human-meaningful ones into the sibling `description`.
+ *    `default` and `description` are MFJS Meta Data fields and are preserved.
+ *  - `additionalProperties` (boolean or schema) and `type: "null"` (incl.
+ *    inside `anyOf`) are kept.
+ *
+ * Out of scope (absent from the built-in tool surface, spec-ambiguous to
+ * rewrite blindly): `allOf` intersection merging, external/recursive `$ref`,
+ * and the depth-10 limit.
+ */
+export function normalizeSchemaForMoonshot(value: unknown): unknown {
+	return normalizeSchema(value, {
+		unsupportedFields: isMoonshotUnsupportedSchemaField,
+		normalizeFieldNames: false,
+		collapseNullFields: false,
+		normalizeTypeArrayToNullable: true,
+		stripNullableKeyword: true,
+		autoPropertyOrdering: false,
+		ensureObjectProperties: false,
+		liftStrippedToDescription: { format: "spill" },
+		mergeObjectCombiners: false,
+		collapseSameTypeCombiners: false,
+		collapseMixedTypeCombiners: false,
+		stripResidualCombinersFixpoint: false,
+		extractNullableFromUnions: false,
+		inferTypeForBareEnum: true,
+		dropNonScalarEnum: true,
+		foldOneOfIntoAnyOf: true,
 	});
 }
 
@@ -936,8 +1066,25 @@ export function sanitizeSchemaForOpenAIResponses(schema: JsonObject): JsonObject
  * `normalizeSchemaFor*` dispatcher naming used elsewhere in this module.
  */
 export const normalizeSchemaForOpenAIResponses: (schema: JsonObject) => JsonObject = sanitizeSchemaForOpenAIResponses;
+const OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS = new Set(["=", "!", "<=", "<!"]);
+const OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK = ".*";
 
-function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, JsonObject>): unknown {
+function hasOpenAIUnsupportedRegexLookaround(pattern: string): boolean {
+	let groupStart = pattern.indexOf("(?");
+	while (groupStart !== -1) {
+		let escapes = 0;
+		for (let i = groupStart - 1; i >= 0 && pattern[i] === "\\"; i--) escapes++;
+		if (escapes % 2 === 0) {
+			const operator =
+				pattern[groupStart + 2] === "<" ? pattern.slice(groupStart + 2, groupStart + 4) : pattern[groupStart + 2];
+			if (OPENAI_UNSUPPORTED_REGEX_LOOKAROUNDS.has(operator)) return true;
+		}
+		groupStart = pattern.indexOf("(?", groupStart + 2);
+	}
+	return false;
+}
+
+function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonObject, unknown>): unknown {
 	if (!isJsonObject(value)) return value;
 
 	// `{}` (empty JSON Schema) ≡ `true` (JSON Schema draft 2020-12 §4.3.1).
@@ -973,11 +1120,21 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 			changed = true;
 			continue;
 		}
+		if (
+			key === "pattern" &&
+			typeof value.pattern === "string" &&
+			hasOpenAIUnsupportedRegexLookaround(value.pattern)
+		) {
+			changed = true;
+			continue;
+		}
 
 		const child = value[key];
 		let next: unknown = child;
-		if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
-			next = normalizeOpenAIResponsesSchemaMap(child, cache);
+		if (key === "patternProperties" && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, true);
+		} else if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isJsonObject(child)) {
+			next = normalizeOpenAIResponsesSchemaMap(child, cache, false);
 		} else if (OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
 			next = normalizeOpenAIResponsesSchemaArray(child, cache);
 		} else if (OPENAI_RESPONSES_SCHEMA_VALUE_KEYS.has(key) && isJsonObject(child)) {
@@ -1008,7 +1165,7 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 	// the seeded partial and set `changed = true` for that node, so a node
 	// that finishes with `changed === false` is provably non-cyclic and
 	// referentially equal to its input.
-	const result = changed ? output : value;
+	const result = changed ? (isJsonObjectEmpty(output) ? true : output) : value;
 	cache.set(value, result);
 	return result;
 }
@@ -1022,7 +1179,7 @@ function declaresObjectType(type: unknown): boolean {
 	return false;
 }
 
-function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, JsonObject>): unknown[] {
+function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<JsonObject, unknown>): unknown[] {
 	let changed = false;
 	const output = value.map(item => {
 		const next = normalizeOpenAIResponsesSchemaNode(item, cache);
@@ -1032,7 +1189,11 @@ function normalizeOpenAIResponsesSchemaArray(value: unknown[], cache: WeakMap<Js
 	return changed ? output : value;
 }
 
-function normalizeOpenAIResponsesSchemaMap(schemaMap: JsonObject, cache: WeakMap<JsonObject, JsonObject>): JsonObject {
+function normalizeOpenAIResponsesSchemaMap(
+	schemaMap: JsonObject,
+	cache: WeakMap<JsonObject, unknown>,
+	stripUnsupportedRegexKeys: boolean,
+): JsonObject {
 	let changed = false;
 	const output: JsonObject = {};
 	for (const key in schemaMap) {
@@ -1040,9 +1201,27 @@ function normalizeOpenAIResponsesSchemaMap(schemaMap: JsonObject, cache: WeakMap
 		const child = schemaMap[key];
 		const next = normalizeOpenAIResponsesSchemaNode(child, cache);
 		if (next !== child) changed = true;
+		if (stripUnsupportedRegexKeys && hasOpenAIUnsupportedRegexLookaround(key)) {
+			changed = true;
+			appendOpenAIResponsesFallbackPatternProperty(output, next);
+			continue;
+		}
 		output[key] = next;
 	}
 	return changed ? output : schemaMap;
+}
+
+function appendOpenAIResponsesFallbackPatternProperty(output: JsonObject, schema: unknown): void {
+	const existing = output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK];
+	if (existing === undefined) {
+		output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK] = schema;
+		return;
+	}
+	if (isJsonObject(existing) && Array.isArray(existing.anyOf) && Object.keys(existing).length === 1) {
+		existing.anyOf = [...existing.anyOf, schema];
+		return;
+	}
+	output[OPENAI_RESPONSES_PATTERN_PROPERTIES_FALLBACK] = { anyOf: [existing, schema] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,6 +1314,17 @@ function inferStrictPrimitiveTypeFromEnumOrConst(node: Record<string, unknown>):
 const kStrictSchema = Symbol("pi.schema.strict");
 
 /**
+ * A boolean schema (`true`/`false`) or the empty object schema `{}`: an
+ * unconstrained branch with no declared type. Strict providers (OpenAI/Codex)
+ * reject these, and `enforceStrictSchema` would otherwise wave a non-object
+ * branch through as `strict: true`, so they disqualify a schema from strict mode
+ * wherever they sit in a combinator or `items`/`prefixItems` position.
+ */
+function isUnrepresentableStrictBranch(value: unknown): boolean {
+	return typeof value === "boolean" || (isJsonObject(value) && isJsonObjectEmpty(value));
+}
+
+/**
  * Detect schemas that strict mode *cannot* represent.
  *
  * Strict mode requires closed object shapes — every property is declared in
@@ -1142,6 +1332,11 @@ const kStrictSchema = Symbol("pi.schema.strict");
  *  - `patternProperties` (open keyset matched by regex),
  *  - `additionalProperties: true` or `additionalProperties: <schema>` (open
  *    keyset with optional further constraint).
+ *  - boolean schemas (`true`/`false`) inside `anyOf`/`oneOf`/`allOf`/`items`/
+ *    `prefixItems` — strict providers (OpenAI/Codex) reject the unconstrained
+ *    branch, and `enforceStrictSchema` would otherwise wave the non-object
+ *    branch through as `strict: true` (the `T | undefined` → `anyOf: [<T>, {}]`
+ *    → `[<T>, true]` encoding is the canonical offender).
  *
  * This check recurses into every place a child schema may live (properties,
  * items/prefixItems, combinator branches, $defs) so a single offender deep
@@ -1168,18 +1363,23 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		const properties = schema.properties;
 		for (const k in properties) {
 			const propertySchema = properties[k];
+			if (isUnrepresentableStrictBranch(propertySchema)) return true;
 			if (isJsonObject(propertySchema) && hasUnrepresentableStrictObjectMap(propertySchema, epoch)) {
 				return true;
 			}
 		}
 	}
 
+	if (isUnrepresentableStrictBranch(schema.items)) {
+		return true;
+	}
 	if (isJsonObject(schema.items)) {
 		if (hasUnrepresentableStrictObjectMap(schema.items, epoch)) {
 			return true;
 		}
 	} else if (Array.isArray(schema.items)) {
 		for (const itemSchema of schema.items) {
+			if (isUnrepresentableStrictBranch(itemSchema)) return true;
 			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
@@ -1187,6 +1387,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 	}
 	if (Array.isArray(schema.prefixItems)) {
 		for (const itemSchema of schema.prefixItems) {
+			if (isUnrepresentableStrictBranch(itemSchema)) return true;
 			if (isJsonObject(itemSchema) && hasUnrepresentableStrictObjectMap(itemSchema, epoch)) {
 				return true;
 			}
@@ -1197,6 +1398,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		const variants = schema[key];
 		if (!Array.isArray(variants)) continue;
 		for (const variant of variants) {
+			if (isUnrepresentableStrictBranch(variant)) return true;
 			if (isJsonObject(variant) && hasUnrepresentableStrictObjectMap(variant, epoch)) {
 				return true;
 			}
@@ -1208,6 +1410,7 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 		if (!isJsonObject(defs)) continue;
 		for (const k in defs) {
 			const defSchema = defs[k];
+			if (isUnrepresentableStrictBranch(defSchema)) return true;
 			if (isJsonObject(defSchema) && hasUnrepresentableStrictObjectMap(defSchema, epoch)) {
 				return true;
 			}

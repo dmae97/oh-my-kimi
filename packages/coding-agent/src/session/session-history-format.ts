@@ -7,8 +7,8 @@
  * as one-liners. No system prompt, no tool catalog, no config sections.
  */
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type {
 	BashExecutionMessage,
 	BranchSummaryMessage,
@@ -26,6 +26,8 @@ export interface HistoryFormatOptions {
 	includeThinking?: boolean;
 	/** Render tool intent comment before tool call lines. */
 	includeToolIntent?: boolean;
+	/** Render watched-session roles as inline `**agent**:` / `**user**:` labels (collapsing consecutive same-role messages) instead of `## ` headings, so a primary transcript embedded inside an advisor turn stays visually distinct. */
+	watchedRoles?: boolean;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -43,6 +45,7 @@ const PRIMARY_ARG_KEYS = [
 	"query",
 	"prompt",
 	"assignment",
+	"note",
 	"message",
 	"op",
 	"name",
@@ -72,8 +75,16 @@ function lineCount(text: string): number {
 }
 
 /** Pick the most informative scalar argument of a tool call. */
-function primaryArg(args: Record<string, unknown> | undefined): string {
+function primaryArg(name: string, args: Record<string, unknown> | undefined): string {
 	if (!args || typeof args !== "object") return "";
+	// Advisor note is the most informative summary; preserve severity too.
+	if (name === "advise") {
+		const note = typeof args.note === "string" ? args.note : "";
+		const severity = typeof args.severity === "string" ? args.severity : "";
+		if (note && severity) return oneLine(`${severity}: ${note}`);
+		if (note) return oneLine(note);
+		if (severity) return oneLine(severity);
+	}
 	for (const key of PRIMARY_ARG_KEYS) {
 		const value = args[key];
 		if (typeof value === "string" && value.length > 0) return oneLine(value);
@@ -91,7 +102,7 @@ function primaryArg(args: Record<string, unknown> | undefined): string {
 		rest[key] = value;
 		restCount++;
 	}
-	if (restCount === 0) return "";
+	if (restCount === 0) return "{}";
 	try {
 		return oneLine(JSON.stringify(rest));
 	} catch {
@@ -106,7 +117,7 @@ function toolCallLine(
 	result: ToolResultMessage | undefined,
 	includeToolIntent?: boolean,
 ): string {
-	const head = `→ ${name}(${primaryArg(args)})`;
+	const head = `→ ${name}(${primaryArg(name, args)})`;
 	let base: string;
 	if (!result) {
 		base = `${head} ⇒ pending`;
@@ -125,7 +136,7 @@ function toolCallLine(
 	const intent = includeToolIntent ? args?.[INTENT_FIELD] : undefined;
 	if (typeof intent === "string" && intent.trim()) {
 		const formattedIntent = oneLine(intent, 80);
-		return `# ${formattedIntent}\n${base}`;
+		return `// ${formattedIntent}\n${base}`;
 	}
 	return base;
 }
@@ -191,6 +202,11 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 		}
 	}
 	const consumed = new Set<string>();
+	// In watched mode, consecutive same-role messages collapse under one label
+	// (the watched agent emits one assistant message per tool call, so otherwise
+	// every call repeats `**agent**:`). Cleared whenever a
+	// non-role-labeled line is emitted so the next turn re-labels.
+	let lastWatchedLabel: string | undefined;
 
 	for (const msg of typed) {
 		switch (msg.role) {
@@ -198,7 +214,17 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 			case "developer": {
 				const text = contentToText(msg.content);
 				if (!text.trim()) break;
-				lines.push(`## ${msg.role}`, "", text, "");
+				if (opts?.watchedRoles) {
+					const label = `**${msg.role}**:`;
+					if (lastWatchedLabel === label) {
+						lines.push(text, "");
+					} else {
+						lines.push(label, text, "");
+						lastWatchedLabel = label;
+					}
+				} else {
+					lines.push(`## ${msg.role}`, "", text, "");
+				}
 				break;
 			}
 			case "assistant": {
@@ -217,45 +243,62 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 					// redactedThinking elided entirely (no readable text)
 				}
 				if (body.length === 0) break;
-				lines.push("## assistant", "", ...body, "");
+				if (opts?.watchedRoles) {
+					const label = "**agent**:";
+					if (lastWatchedLabel === label) {
+						lines.push(...body, "");
+					} else {
+						lines.push(label, ...body, "");
+						lastWatchedLabel = label;
+					}
+				} else {
+					lines.push("## assistant", "", ...body, "");
+				}
 				break;
 			}
 			case "toolResult": {
 				// Normally consumed by its toolCall; orphans (e.g. truncated history) get their own line.
 				if (consumed.has(msg.toolCallId)) break;
 				lines.push(toolCallLine(msg.toolName, undefined, msg, opts?.includeToolIntent), "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "bashExecution": {
 				const bashMsg = msg as BashExecutionMessage;
 				if (bashMsg.excludeFromContext) break;
 				lines.push(executionLine("bash", bashMsg.command, bashMsg), "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "pythonExecution": {
 				const pythonMsg = msg as PythonExecutionMessage;
 				if (pythonMsg.excludeFromContext) break;
 				lines.push(executionLine("python", pythonMsg.code, pythonMsg), "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "custom":
 			case "hookMessage": {
 				lines.push(customOneLiner(msg as CustomMessage | HookMessage), "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "branchSummary": {
 				const branchMsg = msg as BranchSummaryMessage;
 				lines.push(`[branch] from ${branchMsg.fromId}: ${oneLine(branchMsg.summary)}`, "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "compactionSummary": {
 				const compactMsg = msg as CompactionSummaryMessage;
 				lines.push(`[compaction] ${oneLine(compactMsg.summary)}`, "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 			case "fileMention": {
 				const fileMsg = msg as FileMentionMessage;
 				lines.push(`[file-mention] ${oneLine(fileMsg.files.map(f => f.path).join(", "))}`, "");
+				lastWatchedLabel = undefined;
 				break;
 			}
 		}

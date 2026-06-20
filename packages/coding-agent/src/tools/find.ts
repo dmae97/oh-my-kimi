@@ -6,7 +6,7 @@ import * as natives from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { formatGroupedPaths, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
@@ -36,23 +36,22 @@ import {
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-const findSchema = z
-	.object({
-		paths: z.array(z.string().describe("glob including search path")).min(1).describe("globs including search paths"),
-		hidden: z.boolean().default(true).describe("include hidden files").optional(),
-		gitignore: z.boolean().default(true).describe("respect gitignore").optional(),
-		limit: z.number().default(200).describe("max results (clamped to 1-200)").optional(),
-		timeout: z.number().min(0.5).max(60).default(5).describe("timeout in seconds (0.5–60)").optional(),
-	})
-	.strict();
+const findSchema = type({
+	paths: type("string")
+		.describe("glob including search path")
+		.array()
+		.atLeastLength(1)
+		.describe("globs including search paths"),
+	"hidden?": type("boolean").describe("include hidden files"),
+	"gitignore?": type("boolean").describe("respect gitignore"),
+	"limit?": type("number").describe("max results"),
+});
 
-export type FindToolInput = z.infer<typeof findSchema>;
+export type FindToolInput = typeof findSchema.infer;
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
-const MIN_GLOB_TIMEOUT_MS = 500;
-const MAX_GLOB_TIMEOUT_MS = 60_000;
 
 export interface FindToolDetails {
 	truncation?: TruncationResult;
@@ -108,7 +107,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly description: string;
 	readonly parameters = findSchema;
 
-	readonly examples: readonly ToolExample<z.input<typeof findSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof findSchema.infer>[] = [
 		{
 			caption: "Find files",
 			call: { paths: ["src/**/*.ts"] },
@@ -125,10 +124,6 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			caption: "Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
 			call: { paths: ["**/tests"] },
 		},
-		{
-			caption: "Long-running search on a slow volume",
-			call: { paths: ["/Volumes/Storage/**/*.py"], timeout: 30 },
-		},
 	];
 	readonly strict = true;
 
@@ -144,12 +139,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 	async execute(
 		_toolCallId: string,
-		params: z.infer<typeof findSchema>,
+		params: typeof findSchema.infer,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<FindToolDetails>> {
-		const { paths, limit, hidden, gitignore, timeout } = params;
+		const { paths, limit, hidden, gitignore } = params;
 
 		return untilAborted(signal, async () => {
 			const formatScopePath = (targetPath: string): string => formatPathRelativeToCwd(targetPath, this.session.cwd);
@@ -230,8 +225,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const effectiveLimit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(requestedLimit)));
 			const includeHidden = hidden ?? true;
 			const useGitignore = gitignore ?? true;
-			const requestedTimeoutMs = timeout != null ? Math.round(timeout * 1000) : DEFAULT_GLOB_TIMEOUT_MS;
-			const timeoutMs = Math.min(MAX_GLOB_TIMEOUT_MS, Math.max(MIN_GLOB_TIMEOUT_MS, requestedTimeoutMs));
+			const timeoutMs = DEFAULT_GLOB_TIMEOUT_MS;
 			const timeoutSignal = AbortSignal.timeout(timeoutMs);
 			const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 			const formatMatchPath = (matchPath: string, base: string, fileType?: natives.FileType): string => {
@@ -441,7 +435,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				partial.sort((a, b) => b.m - a.m);
 				const sortedPaths = partial.map(entry => entry.p);
 				const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — increase timeout or narrow pattern`;
+				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — narrow the pattern instead of retrying blindly`;
 				return buildResult(sortedPaths, { notice, forceTruncated: true });
 			}
 

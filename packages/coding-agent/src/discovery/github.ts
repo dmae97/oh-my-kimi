@@ -11,7 +11,7 @@
  *
  * Capabilities:
  * - context-files: copilot-instructions.md in .github/ and ~/.copilot/; AGENTS.md in each COPILOT_CUSTOM_INSTRUCTIONS_DIRS
- * - instructions: *.instructions.md under .github/instructions/ (project) and <dir>/.github/instructions/ for each custom dir (applyTo frontmatter)
+ * - rules: *.instructions.md under .github/instructions/ and <dir>/.github/instructions/ for each custom dir (applyTo frontmatter)
  * - prompts: *.prompt.md in .github/prompts/ (VS Code Copilot prompt files)
  * - skills: <name>/SKILL.md in .github/skills/ (GitHub Agent Skills layout)
  */
@@ -22,10 +22,12 @@ import { type ContextFile, contextFileCapability } from "../capability/context-f
 import { readFile } from "../capability/fs";
 import { type Instruction, instructionCapability } from "../capability/instruction";
 import { type Prompt, promptCapability } from "../capability/prompt";
+import { type Rule, ruleCapability } from "../capability/rule";
 import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
 
 import {
+	buildRuleFromMarkdown,
 	calculateDepth,
 	createSourceMeta,
 	getProjectPath,
@@ -153,6 +155,85 @@ function transformInstruction(name: string, content: string, filePath: string, s
 }
 
 // =============================================================================
+// Rules
+// =============================================================================
+
+async function loadRules(ctx: LoadContext): Promise<LoadResult<Rule>> {
+	const items: Rule[] = [];
+	const warnings: string[] = [];
+
+	const load = async (dir: string, level: "user" | "project") => {
+		const applyToWarnings: string[] = [];
+		const result = await loadFilesFromDir<Rule>(ctx, dir, PROVIDER_ID, level, {
+			extensions: ["md"],
+			transform: (name, content, filePath, source) =>
+				transformInstructionRule(name, content, filePath, source, applyToWarnings),
+			recursive: true,
+		});
+		items.push(...result.items);
+		if (result.warnings) warnings.push(...result.warnings);
+		warnings.push(...applyToWarnings);
+	};
+
+	const instructionsDir = getProjectPath(ctx, "github", "instructions");
+	if (instructionsDir) {
+		await load(instructionsDir, "project");
+	}
+
+	for (const dir of copilotCustomInstructionDirs()) {
+		await load(path.join(dir, ".github", "instructions"), "user");
+	}
+
+	return { items, warnings };
+}
+
+function transformInstructionRule(
+	name: string,
+	content: string,
+	filePath: string,
+	source: SourceMeta,
+	warnings: string[],
+): Rule | null {
+	if (!name.endsWith(".instructions.md")) {
+		return null;
+	}
+
+	const { frontmatter } = parseFrontmatter(content, { source: filePath });
+	const applyToGlobs = normalizeApplyToGlobs(frontmatter.applyTo);
+	if (!applyToGlobs) {
+		warnings.push(`Missing applyTo in ${filePath}; loaded without GitHub glob scoping.`);
+	}
+
+	const rule = buildRuleFromMarkdown(name, content, filePath, source, {
+		stripNamePattern: /\.instructions\.md$/,
+	});
+	if (applyToGlobs?.some(isAlwaysApplyGlob)) {
+		return { ...rule, alwaysApply: true, globs: undefined };
+	}
+
+	const description = rule.description ?? describeInstructionRule(applyToGlobs);
+	return { ...rule, alwaysApply: false, globs: applyToGlobs, description };
+}
+
+function normalizeApplyToGlobs(value: unknown): string[] | undefined {
+	// GitHub documents applyTo as a single comma-separated string (e.g.
+	// "**/*.ts,**/*.tsx"); also tolerate a YAML array of such strings.
+	const raw = Array.isArray(value) ? value : [value];
+	const globs = raw.flatMap(item => (typeof item === "string" ? parseCSV(item) : []));
+	return globs.length > 0 ? globs : undefined;
+}
+
+function isAlwaysApplyGlob(glob: string): boolean {
+	// GitHub treats "*", "**", and "**/*" as matching every file.
+	return glob === "*" || glob === "**" || glob === "**/*";
+}
+
+function describeInstructionRule(globs: string[] | undefined): string {
+	if (!globs) return "GitHub Copilot instructions without applyTo metadata";
+	return `GitHub Copilot instructions for ${globs.join(", ")}`;
+}
+
+// =============================================================================
 // Prompts
 // =============================================================================
 
@@ -232,6 +313,13 @@ registerProvider(instructionCapability.id, {
 	load: loadInstructions,
 });
 
+registerProvider<Rule>(ruleCapability.id, {
+	id: PROVIDER_ID,
+	displayName: DISPLAY_NAME,
+	description: "Load *.instructions.md from .github/instructions/ as Copilot-scoped rules",
+	priority: PRIORITY,
+	load: loadRules,
+});
 registerProvider<Skill>(skillCapability.id, {
 	id: PROVIDER_ID,
 	displayName: DISPLAY_NAME,

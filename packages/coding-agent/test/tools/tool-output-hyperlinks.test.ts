@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -77,8 +78,8 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 				.render(200)
 				.join("\n");
 
-			expect(extractLinkUris(textRender)).toContain(`file://${textPath}`);
-			expect(extractLinkUris(imgRender)).toContain(`file://${imgPath}`);
+			expect(extractLinkUris(textRender)).toContain(url.pathToFileURL(path.resolve(textPath)).href);
+			expect(extractLinkUris(imgRender)).toContain(url.pathToFileURL(path.resolve(imgPath)).href);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -101,7 +102,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 				)
 				.render(200)
 				.join("\n");
-			expect(extractLinkUris(rendered)).toContain(`file://${filePath}`);
+			expect(extractLinkUris(rendered)).toContain(url.pathToFileURL(path.resolve(filePath)).href);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -113,13 +114,16 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 		// Scoped search: scope dir (`searchPath`) is below cwd, and the grouped
 		// display paths are cwd-relative. Resolving against searchPath would double
 		// the `src` prefix (`/proj/src/src/...`).
+		const projectRoot = path.resolve("/tmp/omp-project");
+		const srcRoot = path.join(projectRoot, "src");
+		const interactiveModePath = path.join(srcRoot, "interactive-mode.ts");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
 				matchCount: 1,
 				fileCount: 1,
-				cwd: "/tmp/omp-project",
-				searchPath: "/tmp/omp-project/src",
+				cwd: projectRoot,
+				searchPath: srcRoot,
 				scopePath: "src",
 				displayContent: ["# src/", "## interactive-mode.ts#abcd", "*12│const needle = true;"].join("\n"),
 			},
@@ -128,15 +132,21 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 			.renderResult(result as never, { expanded: true, isPartial: false }, theme, { pattern: "needle" })
 			.render(240)
 			.join("\n");
+		const interactiveModeUri = url.pathToFileURL(path.resolve(interactiveModePath)).href;
+		const interactiveModeLineUri = new URL(interactiveModeUri);
+		interactiveModeLineUri.searchParams.set("line", "12");
 		const uris = extractLinkUris(rendered);
-		expect(uris).toContain("file:///tmp/omp-project/src/interactive-mode.ts");
-		expect(uris).toContain("file:///tmp/omp-project/src/interactive-mode.ts?line=12");
+		expect(uris).toContain(interactiveModeUri);
+		expect(uris).toContain(interactiveModeLineUri.href);
 		expect(uris.some(uri => uri.includes("/src/src/"))).toBe(false);
 	});
 
 	it("resolves scoped ast-grep links against cwd, not the (sub)scope path", async () => {
 		settings.override("tui.hyperlinks", "always");
 		const theme = (await getThemeByName("dark"))!;
+		const projectRoot = path.resolve("/tmp/omp-project");
+		const srcRoot = path.join(projectRoot, "src");
+		const interactiveModePath = path.join(srcRoot, "interactive-mode.ts");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
@@ -144,8 +154,8 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 				fileCount: 1,
 				filesSearched: 1,
 				limitReached: false,
-				cwd: "/tmp/omp-project",
-				searchPath: "/tmp/omp-project/src",
+				cwd: projectRoot,
+				searchPath: srcRoot,
 				scopePath: "src",
 				displayContent: ["# src/", "## interactive-mode.ts", "  *12│const needle = true;"].join("\n"),
 			},
@@ -154,19 +164,21 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 			.renderResult(result as never, { expanded: true, isPartial: false }, theme, { pat: "needle" })
 			.render(240)
 			.join("\n");
+		const interactiveModeUri = url.pathToFileURL(path.resolve(interactiveModePath)).href;
 		const uris = extractLinkUris(rendered);
-		expect(uris).toContain("file:///tmp/omp-project/src/interactive-mode.ts");
+		expect(uris).toContain(interactiveModeUri);
 		expect(uris.some(uri => uri.includes("/src/src/"))).toBe(false);
 	});
 
 	it("links the edit header to the absolute details.path even when the arg path is relative", async () => {
 		settings.override("tui.hyperlinks", "always");
 		const theme = (await getThemeByName("dark"))!;
+		const editPath = path.resolve("/tmp/omp-project/src/a.ts");
 		const rendered = editToolRenderer
 			.renderResult(
 				{
 					content: [{ type: "text", text: "Updated src/a.ts" }],
-					details: { diff: "+1|// x", op: "update", path: "/tmp/omp-project/src/a.ts" },
+					details: { diff: "+1|// x", op: "update", path: editPath },
 				},
 				{ expanded: false, isPartial: false, renderContext: { editMode: "hashline" } },
 				theme,
@@ -174,9 +186,11 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 			)
 			.render(200)
 			.join("\n");
+		const editUri = url.pathToFileURL(path.resolve(editPath)).href;
+		const rootAnchoredArgUri = url.pathToFileURL(path.resolve("/src/a.ts")).href;
 		const uris = extractLinkUris(rendered);
-		expect(uris).toContain("file:///tmp/omp-project/src/a.ts");
-		// A relative arg path must not leak into a root-anchored `file:///src/a.ts`.
-		expect(uris).not.toContain("file:///src/a.ts");
+		expect(uris).toContain(editUri);
+		// A relative arg path must not leak into a root-anchored file URI.
+		expect(uris).not.toContain(rootAnchoredArgUri);
 	});
 });

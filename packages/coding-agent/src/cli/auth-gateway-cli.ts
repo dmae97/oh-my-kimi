@@ -17,18 +17,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	type Api,
-	AuthBrokerClient,
 	AuthStorage,
 	type CompletionProbe,
 	type CompletionProbeInput,
 	type CredentialCompletionResult,
 	completeSimple,
-	DEFAULT_AUTH_GATEWAY_BIND,
 	type Model,
-	RemoteAuthCredentialStore,
-	type SnapshotResponse,
-	startAuthGateway,
 } from "@oh-my-pi/pi-ai";
+import { AuthBrokerClient, RemoteAuthCredentialStore, type SnapshotResponse } from "@oh-my-pi/pi-ai/auth-broker";
+import { DEFAULT_AUTH_GATEWAY_BIND, startAuthGateway } from "@oh-my-pi/pi-ai/auth-gateway";
 import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";

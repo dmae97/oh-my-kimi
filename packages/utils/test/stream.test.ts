@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { createAbortableStream } from "@oh-my-pi/pi-utils";
 import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 import {
 	parseJsonlLenient,
@@ -64,26 +63,59 @@ describe("readLines", () => {
 	});
 });
 
-describe("createAbortableStream", () => {
-	it("cancels the source stream when the abort signal fires", async () => {
+describe("abortableSource (via readLines)", () => {
+	it("cancels the source and stops yielding when aborted mid-stream", async () => {
 		let cancelReason: unknown;
+		let cancelled = false;
 		const controller = new AbortController();
 		const readable = new ReadableStream<Uint8Array>({
 			start(streamController) {
+				// One complete line, then leave the stream open so the next read blocks.
 				streamController.enqueue(encoder.encode("alpha\n"));
 			},
 			cancel(reason) {
+				cancelled = true;
 				cancelReason = reason;
 			},
 		});
-		const reader = createAbortableStream(readable, controller.signal).getReader();
 
-		const first = await reader.read();
+		const dec = new TextDecoder();
+		const iter = readLines(readable, controller.signal)[Symbol.asyncIterator]();
+
+		const first = await iter.next();
 		expect(first.done).toBe(false);
-		controller.abort("timeout");
-		await reader.read().catch(() => undefined);
+		expect(dec.decode(first.value as Uint8Array)).toBe("alpha");
 
+		controller.abort("timeout");
+		const next = await iter.next();
+
+		expect(next.done).toBe(true);
+		expect(cancelled).toBe(true);
 		expect(cancelReason).toBe("timeout");
+	});
+
+	it("cancels the source when the consumer breaks early", async () => {
+		let cancelled = false;
+		const readable = new ReadableStream<Uint8Array>({
+			start(streamController) {
+				streamController.enqueue(encoder.encode("alpha\n"));
+				streamController.enqueue(encoder.encode("beta\n"));
+				// Stays open: only a `break` (not EOF) should trigger cancel.
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+
+		const dec = new TextDecoder();
+		const lines: string[] = [];
+		for await (const line of readLines(readable)) {
+			lines.push(dec.decode(line));
+			break;
+		}
+
+		expect(lines).toEqual(["alpha"]);
+		expect(cancelled).toBe(true);
 	});
 });
 

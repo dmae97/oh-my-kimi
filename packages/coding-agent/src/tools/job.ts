@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { AsyncJob, AsyncJobManager } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
@@ -23,13 +23,13 @@ import {
 } from "./render-utils";
 import { ToolError } from "./tool-errors";
 
-const jobSchema = z.object({
-	poll: z.array(z.string()).optional().describe("job ids to wait for; omit to wait on all running jobs"),
-	cancel: z.array(z.string()).optional().describe("job ids to cancel"),
-	list: z.boolean().optional().describe("snapshot all jobs"),
+const jobSchema = type({
+	"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
+	"cancel?": type("string[]").describe("job ids to cancel"),
+	"list?": type("boolean").describe("snapshot all jobs"),
 });
 
-type JobParams = z.infer<typeof jobSchema>;
+type JobParams = typeof jobSchema.infer;
 
 const WAIT_DURATION_MS: Record<string, number> = {
 	"5s": 5_000,

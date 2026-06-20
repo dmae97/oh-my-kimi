@@ -77,6 +77,23 @@ export function stripReadSelector(path: string): string {
 }
 
 /**
+ * A real filesystem path never contains a `scheme://` URL. Tool-call paths that
+ * do — `conflict://1`, `artifact://3`, `local://ctx.md`, `history://…`,
+ * `issue://12`, `https://…`, and the tolerated `file.ts:conflict://1` prefix
+ * form — are session-scoped or remote resources, not files the post-compaction
+ * agent can re-ground on. Keep them out of the `<files>` summary.
+ */
+const URL_SCHEME_RE = /[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * Whether `path` references a `scheme://` URL (internal URI or web URL) rather
+ * than a filesystem path that belongs in the compaction `<files>` summary.
+ */
+export function isUrlSchemePath(path: string): boolean {
+	return URL_SCHEME_RE.test(path);
+}
+
+/**
  * Extract file operations from tool calls in an assistant message.
  */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
@@ -93,6 +110,10 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
 
 		const path = typeof args.path === "string" ? args.path : undefined;
 		if (!path) continue;
+
+		// Internal URIs (conflict://, artifact://, local://, history://, …) and
+		// web URLs are not re-groundable files — keep them out of `<files>`.
+		if (isUrlSchemePath(path)) continue;
 
 		switch (block.name) {
 			case "read":
@@ -113,8 +134,11 @@ export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOp
  * Returns readFiles (files only read, not modified) and modifiedFiles.
  */
 export function computeFileLists(fileOps: FileOperations): { readFiles: string[]; modifiedFiles: string[] } {
-	const modified = new Set([...fileOps.edited, ...fileOps.written]);
-	const readOnly = [...fileOps.read].filter(f => !modified.has(f)).sort();
+	// Drop any `scheme://` URLs (e.g. legacy `conflict://`/`artifact://` entries
+	// rehydrated straight into `fileOps` from a pre-fix compaction summary) — only
+	// real files belong in `<files>`. New tool-call scans are already filtered.
+	const modified = new Set([...fileOps.edited, ...fileOps.written].filter(f => !isUrlSchemePath(f)));
+	const readOnly = [...fileOps.read].filter(f => !isUrlSchemePath(f) && !modified.has(f)).sort();
 	const modifiedFiles = [...modified].sort();
 	return { readFiles: readOnly, modifiedFiles };
 }
@@ -149,7 +173,7 @@ export function formatFileOperations(
 	const all = [...mode.keys()].sort();
 	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
 	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
-		files += `\n… (${all.length - FILE_OPERATION_SUMMARY_LIMIT} more files omitted)`;
+		files += `\n[…${all.length - FILE_OPERATION_SUMMARY_LIMIT} files elided…]`;
 	}
 	return prompt.render(fileOperationsTemplate, { files });
 }

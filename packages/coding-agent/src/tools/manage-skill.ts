@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import {
 	deleteManagedSkill,
 	getManagedSkillsDir,
@@ -11,29 +11,25 @@ import { isNameClaimedByAuthoredSkill } from "../extensibility/skills";
 import manageSkillDescription from "../prompts/tools/manage-skill.md" with { type: "text" };
 import type { ToolSession } from ".";
 
-const manageSkillSchema = z
-	.object({
-		action: z.enum(["create", "update", "delete"]),
-		name: z.string().describe("kebab-case skill name"),
-		description: z
-			.string()
-			.describe("one-line description of when to use the skill (required for create/update)")
-			.optional(),
-		body: z
-			.string()
-			.describe("the SKILL.md body in markdown, no frontmatter (required for create/update)")
-			.optional(),
-	})
-	// Enforce the action/field contract at validation time rather than only in
-	// execute. Kept as a cross-field refine (not a discriminated union) so the
-	// wire schema stays a single root object — strict structured-output mode and
-	// the Anthropic tool-schema builder both require that.
-	.refine(p => p.action === "delete" || (p.description !== undefined && p.body !== undefined), {
-		message: '"create" and "update" require both "description" and "body".',
-		path: ["description"],
-	});
+const manageSkillSchema = type({
+	action: "'create' | 'update' | 'delete'",
+	name: type("string").describe("kebab-case skill name"),
+	"description?": type("string").describe(
+		"one-line description of when to use the skill (required for create/update)",
+	),
+	"body?": type("string").describe("the SKILL.md body in markdown, no frontmatter (required for create/update)"),
+}).narrow(
+	(p, ctx) =>
+		p.action === "delete" ||
+		(p.description !== undefined && p.body !== undefined) ||
+		// Enforce the action/field contract at validation time rather than only in
+		// execute. Kept as a cross-field narrow (not a discriminated union) so the
+		// wire schema stays a single root object — strict structured-output mode and
+		// the Anthropic tool-schema builder both require that.
+		ctx.mustBe('used with both "description" and "body" for "create" and "update"'),
+);
 
-export type ManageSkillParams = z.infer<typeof manageSkillSchema>;
+export type ManageSkillParams = typeof manageSkillSchema.infer;
 
 /**
  * Direct create/update/delete of isolated managed skills. Gated behind

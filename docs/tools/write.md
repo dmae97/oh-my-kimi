@@ -6,8 +6,9 @@
 - Entry: `packages/coding-agent/src/tools/write.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/write.md`
 - Key collaborators:
-  - `packages/coding-agent/src/tools/archive-reader.ts` — parse `archive.ext:entry` selectors.
+  - `packages/coding-agent/src/utils/zip.ts` — the unified ZIP/tar wrapper: parse `archive.ext:entry` selectors and rewrite the archive whole.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite paths and perform row insert/update/delete.
+  - `packages/coding-agent/src/tools/conflict-detect.ts` — parse `conflict://` URIs and splice recorded merge-conflict regions.
   - `packages/coding-agent/src/lsp/index.ts` — format-on-write and diagnostics writethrough.
   - `packages/coding-agent/src/tools/auto-generated-guard.ts` — block overwriting generated files.
   - `packages/coding-agent/src/tools/fs-cache-invalidation.ts` — invalidate shared FS scan caches after writes.
@@ -55,10 +56,10 @@ Single-shot result.
 1. `WriteTool.execute()` in `packages/coding-agent/src/tools/write.ts` strips pasted `[PATH#HASH]` headers and `LINE:` hashline prefixes from `content` when the session is in hashline display mode.
 2. If `path` is an internal URL whose handler exposes `write`, the tool delegates directly to `handler.write(...)` and returns.
 3. `conflict://...` paths are handled next by the merge-conflict resolver. Scope reads such as `conflict://<id>/ours` are rejected as read-only; writable conflict URIs must omit the scope.
-4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/tools/archive-reader.ts`, checks candidate archive files on disk, and falls back to the longest matching archive suffix even when the archive file does not exist yet.
+4. It calls `#resolveArchiveWritePath()` next. That uses `parseArchivePathCandidates()` from `packages/coding-agent/src/utils/zip.ts`, checks candidate archive files on disk (longest match first), and falls back to the shortest candidate archive path even when the archive file does not exist yet.
 5. Archive writes call `enforcePlanModeWrite(..., { op: exists ? "update" : "create" })`, then `#writeArchiveEntry()`.
    - The parent directory of the archive file is created with `fs.mkdir(..., { recursive: true })`.
-   - `.zip` archives are read with `fflate.unzipSync()`, the target entry is replaced in an in-memory map, and the archive is rewritten with `fflate.zipSync()` + `Bun.write()`.
+   - `.zip` archives are read with `unzip()`, the target entry is replaced in an in-memory map, and the archive is reframed with `zip()` + `Bun.write()` (both from `packages/coding-agent/src/utils/zip.ts`, over `node:zlib`).
    - `.tar`, `.tar.gz`, and `.tgz` archives are read with `Bun.Archive`, existing entries are copied into an object map, the target entry is replaced, and `Bun.Archive.write()` rewrites the archive.
    - `invalidateFsScanAfterWrite()` runs on the archive file path.
 6. If the path is not treated as an archive, `execute()` calls `#resolveSqliteWritePath()`. That uses `parseSqlitePathCandidates()` and `isSqliteFile()` from `packages/coding-agent/src/tools/sqlite-reader.ts`. Existing non-SQLite files suppress the SQLite path interpretation.
@@ -146,7 +147,7 @@ content: ""
   - May chmod a shebang file executable after a successful plain-file write.
 - Subprocesses / native bindings
   - Uses Bun SQLite bindings via `bun:sqlite`.
-  - Uses Bun archive APIs and lazily imports `fflate` for ZIP reads/writes.
+  - Uses `Bun.Archive` for tar; ZIP read/write is framed in `packages/coding-agent/src/utils/zip.ts` over the `node:zlib` DEFLATE codec.
   - May talk to configured LSP servers through `packages/coding-agent/src/lsp/index.ts`.
 - Session state (transcript, memory, jobs, checkpoints, registries)
   - Invalidates shared filesystem scan cache entries through `invalidateFsScanAfterWrite()`.

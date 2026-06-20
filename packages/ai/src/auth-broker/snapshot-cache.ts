@@ -10,7 +10,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { SnapshotResponse } from "./types";
-import { snapshotResponseSchema } from "./wire-schemas";
 
 const MAGIC = new Uint8Array([0x4f, 0x4d, 0x50, 0x53]); // "OMPS"
 const VERSION = 1;
@@ -39,6 +38,25 @@ export interface WriteAuthBrokerSnapshotCacheOptions {
 	snapshot: SnapshotResponse;
 }
 
+/**
+ * Cheap structural guard for a decrypted cache payload. The bytes are already
+ * AES-256-GCM authenticated, so this only rejects shape/version drift (a cache
+ * written by a different omp build, or a buggy write) — not tampering. A
+ * mismatch returns null so the caller refetches a fresh snapshot.
+ */
+function isSnapshotResponseShape(v: unknown): v is SnapshotResponse {
+	if (typeof v !== "object" || v === null) return false;
+	const o = v as Record<string, unknown>;
+	return (
+		typeof o.generation === "number" &&
+		typeof o.generatedAt === "number" &&
+		typeof o.serverNowMs === "number" &&
+		typeof o.refresher === "object" &&
+		o.refresher !== null &&
+		Array.isArray(o.credentials)
+	);
+}
+
 export async function readAuthBrokerSnapshotCache(
 	opts: ReadAuthBrokerSnapshotCacheOptions,
 ): Promise<SnapshotResponse | null> {
@@ -55,12 +73,11 @@ export async function readAuthBrokerSnapshotCache(
 		const plaintext = await decryptCachePayload(data, opts.token, opts.url);
 		if (!plaintext) return null;
 		const parsed: unknown = JSON.parse(TEXT_DECODER.decode(plaintext));
-		const result = snapshotResponseSchema.safeParse(parsed);
-		if (!result.success) {
+		if (!isSnapshotResponseShape(parsed)) {
 			logger.debug("auth-broker snapshot cache schema invalid", { path: opts.path });
 			return null;
 		}
-		const snapshot = result.data;
+		const snapshot = parsed;
 		const now = opts.now?.() ?? Date.now();
 		if (now - snapshot.generatedAt > opts.ttlMs) return null;
 		return snapshot;

@@ -3,7 +3,7 @@ import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { AssistantMessage, Context, Message, TextContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { createUserMessage } from "./helpers";
 
 function identityConverter(messages: AgentMessage[]): Message[] {
@@ -20,7 +20,7 @@ function wireText(message: Message): string {
 describe("agentLoop with owned in-band tool calls", () => {
 	it("executes <tool_call> text, strips native tools from the wire, and re-encodes history as text", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
-		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+		const toolSchema = type({ msg: "string" });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -102,9 +102,82 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(wireText(internalResult!)).toBe("echoed:hello world");
 	});
 
+	it("prunes native tool descriptions from the wire when pruneToolDescriptions is set", async () => {
+		const toolSchema = type({ msg: type("string").describe("the message to echo") });
+		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo a message back",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+			},
+		};
+		const captured: Context[] = [];
+		const mock = createMockModel({
+			responses: [
+				context => {
+					captured.push(context);
+					return { content: ["done"] };
+				},
+			],
+		});
+		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			pruneToolDescriptions: true,
+		};
+		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
+
+		const wireTools = captured[0]?.tools;
+		expect(wireTools).toHaveLength(1);
+		expect(wireTools?.[0].name).toBe("echo");
+		// Native tool calling: spec ships with no description text (top-level or nested).
+		expect(wireTools?.[0].description).toBe("");
+		expect(JSON.stringify(wireTools?.[0].parameters)).not.toContain("the message to echo");
+	});
+
+	it("keeps in-band tool descriptions for owned dialects even when pruneToolDescriptions is set", async () => {
+		const toolSchema = type({ msg: "string" });
+		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo a message back",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return { content: [{ type: "text", text: `echoed:${params.msg}` }], details: params };
+			},
+		};
+		const captured: Context[] = [];
+		const mock = createMockModel({
+			responses: [
+				context => {
+					captured.push(context);
+					return { content: ["done"] };
+				},
+			],
+		});
+		const context: AgentContext = { systemPrompt: ["BASE PROMPT"], messages: [], tools: [echoTool] };
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			dialect: "glm",
+			pruneToolDescriptions: true,
+		};
+		await agentLoop([createUserMessage("say hi")], context, config, undefined, mock.stream).result();
+
+		// Owned dialect carries the catalog in the prompt as text and sends no native
+		// tools, so pruning must not strip its descriptions.
+		expect(captured[0]?.tools).toBeUndefined();
+		const promptSection = (captured[0]?.systemPrompt ?? []).join("\n");
+		expect(promptSection).toContain("<tools>");
+		expect(promptSection).toContain("Echo a message back");
+	});
+
 	it("executes Hermes/Qwen JSON tool calls when that dialect is selected", async () => {
 		const echoArgs: Array<{ msg: string }> = [];
-		const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+		const toolSchema = type({ msg: "string" });
 		const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 			name: "echo",
 			label: "Echo",
@@ -146,12 +219,12 @@ describe("agentLoop with owned in-band tool calls", () => {
 		expect(resultsText).toContain("echoed:hi");
 	});
 
-	it("uses PI_DIALECT when config.dialect is unset", async () => {
+	it("uses PI_DIALECT=minimax when config.dialect is unset", async () => {
 		const before = Bun.env.PI_DIALECT;
-		Bun.env.PI_DIALECT = "hermes";
+		Bun.env.PI_DIALECT = "minimax";
 		try {
 			const echoArgs: Array<{ msg: string }> = [];
-			const toolSchema = z.object({ msg: z.string().describe("message to echo") });
+			const toolSchema = type({ msg: "string" });
 			const echoTool: AgentTool<typeof toolSchema, { msg: string }> = {
 				name: "echo",
 				label: "Echo",
@@ -168,7 +241,11 @@ describe("agentLoop with owned in-band tool calls", () => {
 				responses: [
 					context => {
 						captured.push(context);
-						return { content: ['<tool_call>\n{"name":"echo","arguments":{"msg":"from env"}}\n</tool_call>'] };
+						return {
+							content: [
+								'<minimax:tool_call>\n<invoke name="echo"><parameter name="msg">from env</parameter></invoke>\n</minimax:tool_call>',
+							],
+						};
 					},
 					context => {
 						captured.push(context);
@@ -184,7 +261,7 @@ describe("agentLoop with owned in-band tool calls", () => {
 
 			expect(echoArgs).toEqual([{ msg: "from env" }]);
 			expect(captured[0].tools).toBeUndefined();
-			expect((captured[0].systemPrompt ?? []).join("\n")).toContain('"name":"function_name","arguments"');
+			expect((captured[0].systemPrompt ?? []).join("\n")).toContain("<minimax:tool_call>");
 		} finally {
 			if (before === undefined) delete Bun.env.PI_DIALECT;
 			else Bun.env.PI_DIALECT = before;

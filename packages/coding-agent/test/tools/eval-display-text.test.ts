@@ -176,7 +176,7 @@ describe("EvalTool display() text surfacing", () => {
 		});
 
 		const text = result.content.map(c => (c.type === "text" ? c.text : "")).join("\n");
-		expect(text).toContain("chars truncated");
+		expect(text).toContain("ch elided");
 		expect(text.length).toBeLessThan(20000);
 	});
 });

@@ -7,7 +7,7 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/read.md`
 - Key collaborators:
   - `packages/coding-agent/src/tools/path-utils.ts` — split `path` from trailing selectors; normalize local paths.
-  - `packages/coding-agent/src/tools/archive-reader.ts` — detect `archive.ext:inner/path`, index archives, list/read entries.
+  - `packages/coding-agent/src/utils/zip.ts` — the unified ZIP/tar wrapper: detect `archive.ext:inner/path`, index archives, list/read entries.
   - `packages/coding-agent/src/tools/sqlite-reader.ts` — detect SQLite targets, parse selectors, render tables.
   - `packages/coding-agent/src/tools/fetch.ts` — URL parsing, fetch/render pipeline, URL cache/artifacts.
   - `packages/coding-agent/src/internal-urls/router.ts` — resolve `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.
@@ -68,7 +68,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 2. It tries URL handling first via `parseReadUrlTarget()` from `packages/coding-agent/src/tools/fetch.ts`.
    - Plain URL reads call `executeReadUrl()`.
    - URL reads with line selectors load or refresh the URL cache with `loadReadUrlCacheEntry()` and paginate the cached text locally with `#buildInMemoryTextResult()`.
-3. If not a web URL, it checks `session.internalRouter.canHandle(...)`.
+3. If not a web URL, it checks `InternalUrlRouter.instance().canHandle(...)`.
    - Internal URLs are resolved with `internalRouter.resolve()`.
    - `agent://` query extraction (`/path` or `?q=`) bypasses pagination and returns the extracted content directly.
    - Other internal resources are paginated in-memory by `#buildInMemoryTextResult()`.
@@ -97,7 +97,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 ### Local text files
 - No selector: if summarization is enabled and the file is small enough, `#trySummarize()` calls `summarizeCode()`.
   - Guards: file size `<= 2 MiB` (`MAX_SUMMARY_BYTES`), line count `<= 20_000` (`MAX_SUMMARY_LINES`).
-  - Summary output keeps selected declarations and replaces elided spans with `...` or merged brace-pair lines containing `..`. When at least one span is elided, the text content ends with a footer like `[NN lines elided; re-read needed ranges, e.g. <path>:5-16,40-80]` using concrete ranges from the actual elisions.
+  - Summary output keeps selected declarations and replaces elided spans with `…` or merged brace-pair lines containing `{ … }`. When at least one span is elided, the text content ends with a footer like `[…NNln elided; re-read needed ranges, e.g. <path>:5-16,40-80]` using concrete ranges from the actual elisions.
   - When an elided block sits between matching brace lines, `#renderSummary()` may merge them into one anchored line rather than emitting separate opener/closer lines.
 - Explicit selector or summarization miss: streamed text read.
   - Default open-ended limit is `min(session setting read.defaultLimit, DEFAULT_MAX_LINES)`.
@@ -123,7 +123,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - Syntax: `archive.ext`, `archive.ext:path/inside`, `archive.ext:path/inside:50-60`.
 - `openArchive()` branches by format:
   - tar/tgz reads the whole archive into memory (capped at `MAX_TAR_ARCHIVE_BYTES = 256 MiB`) and indexes it with `new Bun.Archive(bytes)`
-  - zip is indexed via ranged central-directory reads (`readZipEntries()`); entries are inflated on demand with `fflate.inflateSync()`, with declared member sizes capped at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB`
+  - zip is indexed via ranged central-directory reads (`readZipEntries()`); members are inflated on demand with raw DEFLATE (`node:zlib`), and the read tool caps individual extraction at `MAX_ARCHIVE_MEMBER_BYTES = 64 MiB` in `ArchiveReader.readFile()`
 - Archive paths normalize `/`, drop `.` segments, and reject `..`.
 - Directory reads list immediate children; files show `name` plus ` (size)` when size > 0.
 - Directory listing default limit is `500` entries in `#readArchiveDirectory()`.
@@ -170,8 +170,8 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 
 ### Documents
 - `CONVERTIBLE_EXTENSIONS` in `packages/coding-agent/src/tools/read.ts` covers `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`, `.rtf`, `.epub`.
-- `convertFileWithMarkit()` converts the file to text/markdown.
-- Converted output is then head-truncated with normal shared limits; there is no line selector support inside the source document before conversion.
+- `convertFileWithMarkit()` converts the file to text/markdown; line-range and `:raw` selectors then apply to the converted output (`file.pdf:50-100`, `:5-16,40-80`).
+- For PDFs, embedded images are surfaced as browsable handles. markit emits a `<!-- image: <id> (page N, WxHpt) -->` region for each embedded image; `read.ts` rewrites it into a `read <pdf>:<id>.png` hint (as inline code, so spaces/parens in the path can't break markdown). Reading that handle (`doc.pdf:p11-img0.png`) extracts the image — passing markit an `imageDir` that lands in a session-artifact cache (`<artifacts>/pdf-assets/<key>/`, keyed by size+mtime, converted once per file) — and returns it through the normal image-loading path. `doc.pdf:` lists the extractable members; an unknown member errors with the available list. Requested members are matched against extracted basenames, so `..`/separators cannot escape the cache.
 - Conversion failures return a text block like `[Cannot read .pdf file: ...]`.
 
 ### Jupyter notebooks
@@ -195,7 +195,7 @@ URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts
 - Unsupported/undecodable image formats throw a `ToolError`.
 
 ### Internal URLs
-- `read` does not resolve these itself; it delegates to `session.internalRouter.resolve()`.
+- `read` does not resolve these itself; it delegates to `InternalUrlRouter.instance().resolve()`.
 - Registered protocols are outside this file, but the router in `packages/coding-agent/src/internal-urls/router.ts` is built for `agent://`, `artifact://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `omp://`, `pr://`, `rule://`, `skill://`, and `vault://`.
 - `#handleInternalUrl()` behavior:
   - parses the URL with `parseInternalUrl()` so colons inside the host segment are legal
@@ -242,11 +242,11 @@ Notes: ...
   - URL mode performs HTTP fetches, binary refetches, and alternate-endpoint probes.
 - Subprocesses / native bindings
   - Uses Bun SQLite for `.db`/`.sqlite*`.
-  - Uses `Bun.Archive` for tar/tgz and `fflate` for zip.
+  - Uses `Bun.Archive` for tar/tgz; ZIP is framed in `packages/coding-agent/src/utils/zip.ts` over the `node:zlib` DEFLATE codec.
   - URL HTML rendering can delegate into site handlers and HTML-to-text backends from `packages/coding-agent/src/tools/fetch.ts`.
 - Session state
   - Records whole-file snapshots of local text reads into `session.fileSnapshotStore` for later stale-anchor recovery.
-  - Uses `session.internalRouter` for internal URLs.
+  - Passes session `cwd`, `settings`, and `localProtocolOptions` into the process-global `InternalUrlRouter.instance().resolve()` for internal URLs.
   - Uses `session.allocateOutputArtifact()` for cached/truncated URL output.
 - Background work / cancellation
   - Only the deterministic disk reads are non-abortable: plain-file line/range reads (`streamLinesFromFile`, multi-range) and directory listings (`#readDirectory`) are called with `undefined` instead of the `AbortSignal`, so an interrupt mid-read can't surface a misleading "Operation aborted" on a read that would have finished instantly. Every other branch keeps the signal and its helpers call `throwIfAborted(signal)` to stop promptly: URL/internal-URL reads (network), archive, sqlite, document conversion, image decode, structural summary, conflict scan, and the suffix-glob path resolution.

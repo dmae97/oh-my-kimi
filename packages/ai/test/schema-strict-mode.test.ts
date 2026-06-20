@@ -1020,3 +1020,48 @@ describe("Zod root extras preserved through normalize", () => {
 		expect(result.schema).toBeNull();
 	});
 });
+
+describe("adaptSchemaForStrict — unrepresentable open branches fall back to non-strict", () => {
+	it("falls back when a property schema is an open `true` (z.unknown())", () => {
+		// `z.unknown()` normalizes to `meta: true` (issue #1179); strict providers
+		// reject a typeless property, so the schema must downgrade to non-strict
+		// rather than emit `strict: true` with a `true` property.
+		const wire = toolWireSchema({
+			name: "t",
+			description: "d",
+			parameters: z.object({ a: z.string(), meta: z.unknown() }),
+		} as Tool);
+		expect((wire.properties as Record<string, unknown>).meta).toBe(true);
+		expect(adaptSchemaForStrict(wire, true).strict).toBe(false);
+	});
+
+	it("falls back when a combiner branch is a boolean schema", () => {
+		const schema: Record<string, unknown> = {
+			type: "object",
+			properties: { a: { anyOf: [true, { type: "string" }] } },
+			required: ["a"],
+			additionalProperties: false,
+		};
+		expect(adaptSchemaForStrict(schema, true).strict).toBe(false);
+	});
+
+	it("falls back when an array `items` schema is unconstrained", () => {
+		const schema: Record<string, unknown> = {
+			type: "object",
+			properties: { xs: { type: "array", items: true } },
+			required: ["xs"],
+			additionalProperties: false,
+		};
+		expect(adaptSchemaForStrict(schema, true).strict).toBe(false);
+	});
+
+	it("still enforces strict for fully-typed schemas (no false positives)", () => {
+		const schema: Record<string, unknown> = {
+			type: "object",
+			properties: { a: { type: "string" }, b: { type: "number" } },
+			required: ["a", "b"],
+			additionalProperties: false,
+		};
+		expect(adaptSchemaForStrict(schema, true).strict).toBe(true);
+	});
+});

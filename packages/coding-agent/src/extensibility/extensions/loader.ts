@@ -8,8 +8,10 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Model, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import type { KeyId } from "@oh-my-pi/pi-tui";
 import { hasFsCode, isEacces, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { Type } from "arktype";
+import * as zodModule from "zod/v4";
 import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
+import { type Hook, hookCapability } from "../../capability/hook";
 import { loadCapability } from "../../discovery";
 import { getExtensionNameFromPath } from "../../discovery/helpers";
 import type { ExecOptions } from "../../exec/exec";
@@ -122,7 +124,8 @@ export class ExtensionRuntime implements IExtensionRuntime {
 class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	readonly logger = logger;
 	readonly typebox = TypeBox;
-	readonly zod = z;
+	readonly arktype = Type;
+	readonly zod = zodModule;
 	readonly flagValues = new Map<string, boolean | string>();
 	readonly pendingProviderRegistrations: Array<{
 		name: string;
@@ -479,8 +482,8 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 /**
  * Discover absolute paths of extensions to load, without importing or
  * binding factories. Hot path on session startup — the scan walks native
- * `.omp`/`.pi` extension capabilities, the installed-plugin tree, and any
- * configured paths.
+ * `.omp`/`.pi` extension capabilities, JS/TS hook factories, the
+ * installed-plugin tree, and any configured paths.
  *
  * Subagents reuse the parent's collected paths via the SDK's
  * `preloadedExtensionPaths` option, then call {@link loadExtensions} themselves
@@ -492,11 +495,12 @@ async function discoverExtensionsInDir(dir: string): Promise<string[]> {
 export async function discoverExtensionPaths(
 	configuredPaths: string[],
 	cwd: string,
-	disabledExtensionIds: string[] = [],
+	disabledExtensionIds?: string[],
 ): Promise<string[]> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
-	const disabled = new Set(disabledExtensionIds);
+	const disabled = new Set(disabledExtensionIds ?? []);
+	const loadOptions = disabledExtensionIds ? { cwd, disabledExtensions: disabledExtensionIds } : { cwd };
 
 	const isDisabledName = (name: string): boolean => disabled.has(`extension-module:${name}`);
 
@@ -516,17 +520,27 @@ export async function discoverExtensionPaths(
 	};
 
 	// 1. Discover extension modules via capability API (native .omp/.pi only)
-	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, { cwd });
+	const discovered = await loadCapability<ExtensionModule>(extensionModuleCapability.id, loadOptions);
 	for (const ext of discovered.items) {
 		if (ext._source.provider !== "native") continue;
-		if (isDisabledName(ext.name)) continue;
 		addPath(ext.path);
 	}
 
-	// 2. Discover extension entry points from installed plugins
+	// 2. Discover JS/TS hook factories from hookCapability and bind them through
+	// the extension runner, which owns the current runtime event bus. Hook
+	// capability loading already applies hook-specific disabled ids; do not also
+	// filter them through extension-module names.
+	const hooks = await loadCapability<Hook>(hookCapability.id, loadOptions);
+	for (const hookPath of hooks.items
+		.map(hook => hook.path)
+		.filter(hookPath => isExtensionFile(path.basename(hookPath)))) {
+		addPath(hookPath);
+	}
+
+	// 3. Discover extension entry points from installed plugins
 	addPaths(await getAllPluginExtensionPaths(cwd));
 
-	// 3. Explicitly configured paths
+	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
 
@@ -566,7 +580,7 @@ export async function discoverAndLoadExtensions(
 	configuredPaths: string[],
 	cwd: string,
 	eventBus?: EventBus,
-	disabledExtensionIds: string[] = [],
+	disabledExtensionIds?: string[],
 ): Promise<LoadExtensionsResult> {
 	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds);
 	return loadExtensions(paths, cwd, eventBus);

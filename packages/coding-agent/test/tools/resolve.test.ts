@@ -4,9 +4,8 @@ import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
 
-function createSession(handler?: (input: unknown) => Promise<unknown>): ToolSession {
+function createSession(handler?: (input: unknown) => Promise<unknown>, clearPendingInvokers?: () => void): ToolSession {
 	return {
 		cwd: "/tmp",
 		hasUI: false,
@@ -14,6 +13,7 @@ function createSession(handler?: (input: unknown) => Promise<unknown>): ToolSess
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
 		peekQueueInvoker: handler ? () => handler : () => undefined,
+		clearPendingInvokers,
 	};
 }
 
@@ -21,22 +21,41 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
 	return result.content.find(part => part.type === "text")?.text ?? "";
 }
 
+function getRequiredFields(schema: { json?: { required?: Array<{ key: string }> } }): string[] {
+	const required: string[] = [];
+	if (schema.json?.required && Array.isArray(schema.json.required)) {
+		required.push(...schema.json.required.map(item => item.key));
+	}
+	return required.sort();
+}
+
 describe("ResolveTool", () => {
 	it("requires action and reason in schema", () => {
 		const tool = new ResolveTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as { required?: string[] };
-		expect(wire.required).toEqual(["action", "reason"]);
+		const required = getRequiredFields(tool.parameters as { json?: { required?: Array<{ key: string }> } });
+		expect(required).toEqual(["action", "reason"]);
 	});
 
-	it("errors when there is no pending action", async () => {
-		const tool = new ResolveTool(createSession());
+	it("errors and clears stale pending markers when apply has no invoker", async () => {
+		let clearRuns = 0;
+		const tool = new ResolveTool(
+			createSession(undefined, () => {
+				clearRuns++;
+			}),
+		);
 		await expect(tool.execute("call-none", { action: "apply", reason: "looks correct" })).rejects.toThrow(
 			"No pending action to resolve. Nothing to apply or discard.",
 		);
+		expect(clearRuns).toBe(1);
 	});
 
-	it("treats discard with no pending action as a successful cancellation, not an error", async () => {
-		const tool = new ResolveTool(createSession());
+	it("treats discard with no pending action as a successful cancellation and clears stale markers", async () => {
+		let clearRuns = 0;
+		const tool = new ResolveTool(
+			createSession(undefined, () => {
+				clearRuns++;
+			}),
+		);
 		const result = await tool.execute("call-discard-none", {
 			action: "discard",
 			reason: "Abandoning the staged edit.",
@@ -44,6 +63,7 @@ describe("ResolveTool", () => {
 		expect(result.isError ?? false).toBe(false);
 		expect(getText(result)).toContain("Nothing to discard");
 		expect(result.details).toMatchObject({ action: "discard", reason: "Abandoning the staged edit." });
+		expect(clearRuns).toBe(1);
 	});
 
 	it("discards pending action and clears store", async () => {
@@ -140,7 +160,7 @@ it("renders a highlighted apply summary", async () => {
 	expect(rendered).toContain("All replacements are correct");
 	expect(rendered).not.toContain("Applied 2 replacements in 1 file.");
 	expect(rendered).not.toContain("Decision");
-	expect(rendered).not.toContain("┌");
+	expect(rendered).not.toContain(uiTheme.boxRound.topLeft);
 });
 
 it("keeps the inverse block color across the full line (no mid-line fg reset)", async () => {

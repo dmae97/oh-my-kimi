@@ -1,6 +1,6 @@
 import type { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { FetchImpl, Model, ToolChoice } from "@oh-my-pi/pi-ai";
+import type { FetchImpl, ImageContent, Model, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { Rule } from "../capability/rule";
@@ -55,7 +55,6 @@ import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
-import { RenderMermaidTool } from "./render-mermaid";
 import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
@@ -94,7 +93,6 @@ export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
-export * from "./render-mermaid";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
@@ -113,6 +111,13 @@ export type ContextFileEntry = {
 	path: string;
 	content: string;
 	depth?: number;
+};
+
+/** Image attachment handle exposed to tools for user-facing labels such as `Image #1`. */
+export type ImageAttachmentEntry = {
+	label: string;
+	uri: string;
+	image: ImageContent;
 };
 
 export type {
@@ -307,6 +312,12 @@ export interface ToolSession {
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Peek the most-recently registered non-forcing pending preview invoker. The `resolve`
+	 *  tool dispatches to it so a staged preview resolves WITHOUT forcing tool_choice — the
+	 *  agent-loop's SoftToolRequirement lifecycle owns reminder injection and escalation. */
+	peekPendingInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Clear stale pending preview markers when `resolve` cannot dispatch them. */
+	clearPendingInvokers?(): void;
 	/** Peek the long-lived "standing" resolve handler registered by a mode (e.g. plan mode).
 	 *  Consulted by the `resolve` tool as a fallback when no queue invoker is in flight,
 	 *  letting modes accept `resolve` invocations without forcing the tool choice every turn. */
@@ -355,6 +366,8 @@ export interface ToolSession {
 	/** Get the active OpenTelemetry config so subagent dispatch can forward
 	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
+	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
+	getImageAttachments?: () => ImageAttachmentEntry[];
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -420,7 +433,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
-	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
@@ -563,7 +575,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
-		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");
 		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.

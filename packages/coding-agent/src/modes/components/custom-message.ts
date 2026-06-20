@@ -22,6 +22,7 @@ export class CustomMessageComponent extends Container {
 
 		// Create box with custom background (used for default rendering)
 		this.#box = new Box(1, 1, t => theme.bg("customMessageBg", t));
+		this.#box.setIgnoreTight(true);
 
 		this.#rebuild();
 	}
@@ -45,12 +46,15 @@ export class CustomMessageComponent extends Container {
 		}
 		this.removeChild(this.#box);
 
+		// The transcript dispatch routes both `custom` and legacy `hookMessage` roles here:
+		// tag hooks with the hook glyph, other injected messages with a neutral package.
+		const isHook = (this.message.role as string) === "hookMessage";
 		const custom = renderFramedMessage({
 			message: this.message,
 			box: this.#box,
 			expanded: this.#expanded,
 			customRenderer: this.customRenderer,
-			// Extension messages render full content; no collapse-on-fold behaviour.
+			icon: isHook ? theme.icon.extensionHook : theme.icon.package,
 		});
 
 		if (custom) {

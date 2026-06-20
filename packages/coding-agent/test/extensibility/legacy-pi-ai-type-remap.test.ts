@@ -124,6 +124,68 @@ describe("legacy pi package root remaps (issue #1474)", () => {
 		expect(loaded.loadedVersion).toMatch(/^\d+\.\d+\.\d+/);
 	});
 
+	it("preserves legacy defineTool root imports and usable coding tools", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-legacy-coding-tools-"));
+		tempRoots.push(dir);
+		await fs.writeFile(path.join(dir, "sample.txt"), "legacy read body", "utf8");
+		const entry = path.join(dir, "index.ts");
+		await fs.writeFile(
+			entry,
+			[
+				'import { dirname } from "node:path";',
+				'import { fileURLToPath } from "node:url";',
+				'import { createCodingTools, defineTool, Type } from "@earendil-works/pi-coding-agent";',
+				"const definition = {",
+				'\tname: "legacy_define_tool",',
+				'\tlabel: "Legacy Define Tool",',
+				'\tdescription: "legacy helper probe",',
+				"\tparameters: Type.Object({}),",
+				'\texecute: async () => ({ content: [{ type: "text", text: "ok" }] }),',
+				"};",
+				"const cwd = dirname(fileURLToPath(import.meta.url));",
+				"const codingTools = createCodingTools(cwd);",
+				"const readTool = codingTools.find(tool => tool.name === 'read');",
+				"export const tool = defineTool(definition);",
+				"export const sameReference = tool === definition;",
+				"export const codingToolNames = codingTools.map(tool => tool.name);",
+				"export const readResult = await readTool?.execute('legacy-read', { path: 'sample.txt' });",
+			].join("\n"),
+			"utf8",
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			tool: { name: string; parameters: { safeParse: (input: unknown) => { success: boolean } } };
+			sameReference: boolean;
+			codingToolNames: string[];
+			readResult: { content: Array<{ type: string; text?: string }> };
+		};
+
+		expect(loaded.sameReference).toBe(true);
+		expect(loaded.tool.name).toBe("legacy_define_tool");
+		expect(loaded.codingToolNames).toEqual(["read", "bash", "edit", "write"]);
+		expect(loaded.readResult.content[0]?.text).toContain("legacy read body");
+	});
+
+	it("preserves legacy frontmatter helper root imports", async () => {
+		const entry = await writeFixtureExtension(
+			[
+				'import { parseFrontmatter, stripFrontmatter } from "@earendil-works/pi-coding-agent";',
+				"const content = ['---', 'name: demo', '---', '# Body'].join('\\n');",
+				"export const parsed = parseFrontmatter(content);",
+				"export const stripped = stripFrontmatter(content);",
+			].join("\n"),
+		);
+
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			parsed: { frontmatter: { name?: string }; body: string };
+			stripped: string;
+		};
+
+		expect(loaded.parsed.frontmatter.name).toBe("demo");
+		expect(loaded.parsed.body).toBe("# Body");
+		expect(loaded.stripped).toBe("# Body");
+	});
+
 	it("falls back to legacy-scoped subpath peers for direct plugin imports", async () => {
 		const realResolveSync = Bun.resolveSync.bind(Bun);
 		vi.spyOn(Bun, "resolveSync").mockImplementation((specifier: string, from: string) => {

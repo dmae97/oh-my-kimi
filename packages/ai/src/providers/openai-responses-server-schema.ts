@@ -1,14 +1,14 @@
 /**
- * Zod schemas for the OpenAI Responses API request shape we accept on the
+ * ArkType schemas for the OpenAI Responses API request shape we accept on the
  * gateway. Mirrors https://platform.openai.com/docs/api-reference/responses.
  *
  * Unsupported / opaque controls (background/include/metadata/prompt/…) are
- * accepted as `z.unknown().optional()` so we silently ignore rather than 400.
+ * accepted as `"unknown"` optional so we silently ignore rather than 400.
  * Real clients (codex, openai-python, llm-git) routinely send these and a 400
  * is a worse outcome than dropping them on the floor.
  */
 
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type {
 	EasyInputMessage,
 	ResponseCreateParams,
@@ -22,142 +22,131 @@ import type {
 
 // ─── Input content blocks ───────────────────────────────────────────────────
 
-const inputTextSchema = z.object({
-	type: z.literal("input_text"),
-	text: z.string(),
+const inputTextSchema = type({
+	type: "'input_text'",
+	text: "string",
 });
 
-const plainTextSchema = z.object({
-	type: z.literal("text"),
-	text: z.string(),
+const plainTextSchema = type({
+	type: "'text'",
+	text: "string",
 });
 
-const inputImageBlockSchema = z
-	.object({
-		type: z.literal("input_image"),
-		detail: z.enum(["auto", "low", "high"]).optional(),
-		image_url: z.string().optional(),
-		file_id: z.string().optional(),
-	})
-	.refine(v => typeof v.image_url === "string" || typeof v.file_id === "string", {
-		message: "input_image requires at least one of `image_url` or `file_id`",
-	});
-
-const inputFileBlockSchema = z.object({
-	type: z.literal("input_file"),
-	file_id: z.string().optional(),
-	filename: z.string().optional(),
-	file_data: z.string().optional(),
+const inputImageBlockSchema = type({
+	type: "'input_image'",
+	"detail?": "'auto' | 'low' | 'high'",
+	"image_url?": "string",
+	"file_id?": "string",
+}).narrow((v, ctx) => {
+	return (
+		typeof v.image_url === "string" ||
+		typeof v.file_id === "string" ||
+		ctx.mustBe("at least one of `image_url` or `file_id` for input_image")
+	);
 });
 
-const outputTextSchema = z.object({
-	type: z.literal("output_text"),
-	text: z.string(),
+const inputFileBlockSchema = type({
+	type: "'input_file'",
+	"file_id?": "string",
+	"filename?": "string",
+	"file_data?": "string",
 });
 
-const outputRefusalSchema = z.object({
-	type: z.literal("refusal"),
-	refusal: z.string(),
+const outputTextSchema = type({
+	type: "'output_text'",
+	text: "string",
 });
 
-const summaryTextSchema = z.object({
-	type: z.literal("summary_text"),
-	text: z.string(),
+const outputRefusalSchema = type({
+	type: "'refusal'",
+	refusal: "string",
 });
 
-const reasoningTextSchema = z.object({
-	type: z.literal("reasoning_text"),
-	text: z.string(),
+const summaryTextSchema = type({
+	type: "'summary_text'",
+	text: "string",
 });
 
-const inputContentBlockSchema = z.union([
-	inputTextSchema,
-	plainTextSchema,
-	inputImageBlockSchema,
-	inputFileBlockSchema,
-]);
-const outputContentBlockSchema = z.union([outputTextSchema, plainTextSchema, outputRefusalSchema]);
+const reasoningTextSchema = type({
+	type: "'reasoning_text'",
+	text: "string",
+});
+
+const inputContentBlockSchema = inputTextSchema.or(plainTextSchema).or(inputImageBlockSchema).or(inputFileBlockSchema);
+
+const outputContentBlockSchema = outputTextSchema.or(plainTextSchema).or(outputRefusalSchema);
 
 // ─── Input items ────────────────────────────────────────────────────────────
 
-const userMessageItemSchema = z.object({
-	type: z.literal("message").optional(),
-	role: z.union([z.literal("user"), z.literal("developer")]),
-	content: z.union([z.string(), z.array(inputContentBlockSchema)]).optional(),
+const userMessageItemSchema = type({
+	"type?": "'message'",
+	role: "'user' | 'developer'",
+	"content?": type("string").or(inputContentBlockSchema.array()),
 });
 
-const systemMessageItemSchema = z.object({
-	type: z.literal("message").optional(),
-	role: z.literal("system"),
-	content: z.union([z.string(), z.array(inputContentBlockSchema)]).optional(),
+const systemMessageItemSchema = type({
+	"type?": "'message'",
+	role: "'system'",
+	"content?": type("string").or(inputContentBlockSchema.array()),
 });
 
-const assistantMessageItemSchema = z.object({
-	type: z.literal("message").optional(),
-	role: z.literal("assistant"),
-	content: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
+const assistantMessageItemSchema = type({
+	"type?": "'message'",
+	role: "'assistant'",
+	"content?": type("string").or(outputContentBlockSchema.array()),
 });
 
-const reasoningItemSchema = z
-	.object({
-		type: z.literal("reasoning"),
-		id: z.string().optional(),
-		summary: z.array(summaryTextSchema).optional(),
-		content: z.array(reasoningTextSchema).optional(),
-	})
-	// Loose: unknown keys like `encrypted_content` must survive the parse —
-	// the outbound encoder replays them verbatim (buildReasoningItem spreads
-	// the persisted item to preserve encrypted reasoning round-trips).
-	.loose();
-
-const functionCallItemSchema = z.object({
-	type: z.literal("function_call"),
-	id: z.string().optional(),
-	call_id: z.string().min(1),
-	name: z.string().min(1),
-	arguments: z.string().optional(),
+const reasoningItemSchema = type({
+	type: "'reasoning'",
+	"id?": "string",
+	"summary?": summaryTextSchema.array(),
+	"content?": reasoningTextSchema.array(),
 });
 
-const functionCallOutputItemSchema = z.object({
-	type: z.literal("function_call_output"),
-	call_id: z.string().min(1),
+const functionCallItemSchema = type({
+	type: "'function_call'",
+	"id?": "string",
+	call_id: "string >= 1",
+	name: "string >= 1",
+	"arguments?": "string",
+});
+
+const functionCallOutputItemSchema = type({
+	type: "'function_call_output'",
+	call_id: "string >= 1",
 	// Codex CLI replays multimodal tool results in array form (text + refusal).
-	output: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
+	"output?": type("string").or(outputContentBlockSchema.array()),
 });
 
-const customToolCallItemSchema = z.object({
-	type: z.literal("custom_tool_call"),
-	id: z.string().optional(),
-	call_id: z.string().min(1),
-	name: z.string().min(1),
+const customToolCallItemSchema = type({
+	type: "'custom_tool_call'",
+	"id?": "string",
+	call_id: "string >= 1",
+	name: "string >= 1",
 	// Raw input string — NOT JSON.stringified. apply_patch flow streams a
 	// freeform body and reading it as JSON would corrupt it.
-	input: z.string(),
+	input: "string",
 });
 
-const customToolCallOutputItemSchema = z.object({
-	type: z.literal("custom_tool_call_output"),
-	call_id: z.string().min(1),
-	output: z.string(),
+const customToolCallOutputItemSchema = type({
+	type: "'custom_tool_call_output'",
+	call_id: "string >= 1",
+	output: "string",
 });
 
 /**
- * An input item is one of the union members below. The convenience shape
- * `{role, content}` (no `type`) is mapped to "message" before validation in
- * the walker — schemas here only handle the canonical {type, ...} forms.
+ * Direct mapping to standard types.
  */
-export const inputItemSchema = z.union([
-	userMessageItemSchema,
-	systemMessageItemSchema,
-	assistantMessageItemSchema,
-	reasoningItemSchema,
-	functionCallItemSchema,
-	functionCallOutputItemSchema,
-	customToolCallItemSchema,
-	customToolCallOutputItemSchema,
+export const inputItemSchema = userMessageItemSchema
+	.or(systemMessageItemSchema)
+	.or(assistantMessageItemSchema)
+	.or(reasoningItemSchema)
+	.or(functionCallItemSchema)
+	.or(functionCallOutputItemSchema)
+	.or(customToolCallItemSchema)
+	.or(customToolCallOutputItemSchema)
 	// Tolerated but not bridged (file_search_call, web_search_call, …).
-	z.object({ type: z.string() }).loose(),
-]);
+	.or(type({ type: "string" }));
 
 // Variant types alias the canonical SDK union members so the walker can
 // narrow them cleanly. The convenience "message" shape (no `type` field) maps
@@ -170,117 +159,111 @@ export type OpenAIResponsesFunctionCallItem = ResponseFunctionToolCall;
 export type OpenAIResponsesFunctionCallOutputItem = ResponseInputItem.FunctionCallOutput;
 
 /** Inferred shape of the custom tool call input item (no canonical SDK alias). */
-export type OpenAIResponsesCustomToolCallItem = z.infer<typeof customToolCallItemSchema>;
-export type OpenAIResponsesCustomToolCallOutputItem = z.infer<typeof customToolCallOutputItemSchema>;
-export type OpenAIResponsesInputImageBlock = z.infer<typeof inputImageBlockSchema>;
-export type OpenAIResponsesInputFileBlock = z.infer<typeof inputFileBlockSchema>;
-export type OpenAIResponsesOutputRefusalBlock = z.infer<typeof outputRefusalSchema>;
+export type OpenAIResponsesCustomToolCallItem = typeof customToolCallItemSchema.infer;
+export type OpenAIResponsesCustomToolCallOutputItem = typeof customToolCallOutputItemSchema.infer;
+export type OpenAIResponsesInputImageBlock = typeof inputImageBlockSchema.infer;
+export type OpenAIResponsesInputFileBlock = typeof inputFileBlockSchema.infer;
+export type OpenAIResponsesOutputRefusalBlock = typeof outputRefusalSchema.infer;
 
 // ─── Tools ──────────────────────────────────────────────────────────────────
 
-export const toolSchema = z.object({
-	type: z.literal("function"),
-	name: z.string().min(1),
-	description: z.string().optional(),
-	parameters: z.record(z.string(), z.unknown()).optional(),
-	strict: z.boolean().optional(),
+export const toolSchema = type({
+	type: "'function'",
+	name: "string >= 1",
+	"description?": "string",
+	"parameters?": type({ "[string]": "unknown" }),
+	"strict?": "boolean",
 });
 
 // Built-in / hosted tool entries (web_search_preview, file_search, …) — accepted
 // but skipped by the walker.
-const builtinToolSchema = z
-	.object({
-		type: z.string(),
-	})
-	.loose();
+const builtinToolSchema = type({
+	type: "string",
+});
 
 // ─── Tool choice ────────────────────────────────────────────────────────────
 
-const hostedToolType = z.enum([
-	"web_search_preview",
-	"file_search",
-	"computer_use_preview",
-	"code_interpreter",
-	"image_generation",
-	"mcp",
-]);
+const hostedToolType = type(
+	"'web_search_preview' | 'file_search' | 'computer_use_preview' | 'code_interpreter' | 'image_generation' | 'mcp'",
+);
 
-const allowedToolEntrySchema = z.object({
-	type: z.string(),
-	name: z.string().optional(),
+const allowedToolEntrySchema = type({
+	type: "string",
+	"name?": "string",
 });
 
-export const toolChoiceSchema = z.union([
-	z.literal("auto"),
-	z.literal("none"),
-	z.literal("required"),
-	z.object({
-		type: z.literal("function"),
-		name: z.string().min(1),
-	}),
-	// Codex apply_patch flow.
-	z.object({
-		type: z.literal("custom"),
-		name: z.string().min(1),
-	}),
-	// Hosted-tool selection (no extra fields).
-	z.object({
-		type: hostedToolType,
-	}),
-	// `allowed_tools` — walker treats as auto.
-	z.object({
-		type: z.literal("allowed_tools"),
-		mode: z.enum(["auto", "required"]),
-		tools: z.array(allowedToolEntrySchema),
-	}),
-]);
+export const toolChoiceSchema = type("'auto' | 'none' | 'required'")
+	.or(
+		type({
+			type: "'function'",
+			name: "string >= 1",
+		}),
+	)
+	.or(
+		type({
+			type: "'custom'",
+			name: "string >= 1",
+		}),
+	)
+	.or(
+		type({
+			type: hostedToolType,
+		}),
+	)
+	.or(
+		type({
+			type: "'allowed_tools'",
+			mode: "'auto' | 'required'",
+			tools: allowedToolEntrySchema.array(),
+		}),
+	);
 
 // ─── Reasoning config ───────────────────────────────────────────────────────
 
-export const reasoningConfigSchema = z.object({
-	effort: z.string().optional(),
+export const reasoningConfigSchema = type({
+	"effort?": "string",
 	// `none` maps to hideThinkingSummary; auto/concise/detailed mean "show
 	// summary". pi-ai has no per-level plumbing for the latter — walker logs
 	// once and treats them as default.
-	summary: z.enum(["auto", "concise", "detailed", "none"]).optional(),
+	"summary?": "'auto' | 'concise' | 'detailed' | 'none'",
 });
 
 // ─── Stop ───────────────────────────────────────────────────────────────────
 
-export const stopSchema = z.union([z.string(), z.array(z.string()), z.null()]);
+export const stopSchema = type("string | string[] | null");
 
 // ─── Top-level request ──────────────────────────────────────────────────────
 
-export const openaiResponsesRequestSchema = z.object({
-	model: z.string().min(1),
-	input: z.union([z.string(), z.array(inputItemSchema)]).optional(),
-	instructions: z.union([z.string(), z.null()]).optional(),
-	tools: z.array(z.union([toolSchema, builtinToolSchema])).optional(),
-	tool_choice: toolChoiceSchema.optional(),
-	max_output_tokens: z.number().optional(),
-	temperature: z.number().optional(),
-	top_p: z.number().optional(),
-	stop: stopSchema.optional(),
-	stream: z.boolean().optional(),
-	reasoning: reasoningConfigSchema.optional(),
-	store: z.boolean().optional(),
-	previous_response_id: z.string().optional(),
-	parallel_tool_calls: z.boolean().optional(),
-	prompt_cache_key: z.string().optional(),
-	metadata: z.unknown().optional(),
-	user: z.string().optional(),
-	service_tier: z.string().optional(),
-	presence_penalty: z.number().optional(),
-	frequency_penalty: z.number().optional(),
+export const openaiResponsesRequestSchema = type({
+	model: "string >= 1",
+	"input?": type("string").or(inputItemSchema.array()),
+	"instructions?": "string | null",
+	"tools?": toolSchema.or(builtinToolSchema).array(),
+	"tool_choice?": toolChoiceSchema,
+	"max_output_tokens?": "number",
+	"temperature?": "number",
+	"top_p?": "number",
+	"stop?": stopSchema,
+	"stream?": "boolean",
+	"reasoning?": reasoningConfigSchema,
+	"store?": "boolean",
+	"previous_response_id?": "string",
+	"parallel_tool_calls?": "boolean",
+	"prompt_cache_key?": "string",
+	"metadata?": "unknown",
+	"user?": "string",
+	"service_tier?": "string",
+	"presence_penalty?": "number",
+	"frequency_penalty?": "number",
 	// Accepted-but-ignored: include `reasoning.encrypted_content` is the canonical
 	// way to request reasoning replay — silently accept and drop.
-	background: z.unknown().optional(),
-	include: z.unknown().optional(),
-	prompt: z.unknown().optional(),
-	safety_identifier: z.unknown().optional(),
-	text: z.unknown().optional(),
-	top_logprobs: z.unknown().optional(),
-	truncation: z.unknown().optional(),
+	"background?": "unknown",
+	"include?": "unknown",
+	"prompt?": "unknown",
+	"safety_identifier?": "unknown",
+	"text?": "unknown",
+	"top_logprobs?": "unknown",
+	"truncation?": "unknown",
 });
 
 /**

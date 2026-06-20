@@ -36,12 +36,15 @@ interface Fake {
 	usageCalls: () => number;
 	/** Swap the value the next `getContextUsage()` query returns. */
 	setUsage: (usage: ContextUsage | undefined) => void;
+	/** Bump the in-flight pending revision the next `getCachedContextBreakdown()` reads. */
+	setRevision: (n: number) => void;
 }
 
 function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?: ContextUsage | undefined }): Fake {
 	const contextWindow = opts.contextWindow ?? 200_000;
 	let usage: ContextUsage | undefined = "usage" in opts ? opts.usage : { tokens: 1234, contextWindow, percent: 0.6 };
 	let calls = 0;
+	let revision = 0;
 	const session = {
 		messages: opts.messages,
 		systemPrompt: ["You are a helpful assistant."],
@@ -65,12 +68,18 @@ function makeSession(opts: { messages: unknown[]; contextWindow?: number; usage?
 			calls++;
 			return usage;
 		},
+		get contextUsageRevision() {
+			return revision;
+		},
 	} as unknown as AgentSession;
 	return {
 		session,
 		usageCalls: () => calls,
 		setUsage: next => {
 			usage = next;
+		},
+		setRevision: (n: number) => {
+			revision = n;
 		},
 	};
 }
@@ -155,20 +164,38 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(usageCalls()).toBe(2);
 	});
 
-	it("propagates an unknown (null) token count, e.g. right after compaction", () => {
+	it("re-queries when only the in-flight pending revision changes (no message change)", () => {
+		const fake = makeSession({
+			messages: [userMessage("hi")],
+			usage: { tokens: 190_000, contextWindow: 272_000, percent: 69.9 },
+		});
+		const comp = new StatusLineComponent(fake.session);
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(190_000);
+
+		// Turn ends/aborts: the message list and last-message fingerprint are
+		// unchanged, but clearing the pending snapshot recalibrates usage to the
+		// real provider anchor. The memo must not keep serving the stale estimate.
+		fake.setUsage({ tokens: 117_000, contextWindow: 272_000, percent: 43.0 });
+		fake.setRevision(1);
+
+		expect(comp.getCachedContextBreakdown().usedTokens).toBe(117_000);
+		expect(fake.usageCalls()).toBe(2);
+	});
+
+	it("propagates a speculative/numeric token count, e.g. right after compaction", () => {
 		const { session } = makeSession({
 			messages: [userMessage("compaction summary")],
-			usage: { tokens: null, contextWindow: 272_000, percent: null },
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
 		});
 		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
-		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.usedTokens).toBe(1234);
 		expect(breakdown.contextWindow).toBe(272_000);
 	});
 
-	it("falls back to the model window with null tokens when usage is unavailable", () => {
+	it("falls back to the model window with 0 tokens when usage is unavailable", () => {
 		const { session } = makeSession({ messages: [userMessage("hi")], usage: undefined, contextWindow: 128_000 });
 		const breakdown = new StatusLineComponent(session).getCachedContextBreakdown();
-		expect(breakdown.usedTokens).toBeNull();
+		expect(breakdown.usedTokens).toBe(0);
 		expect(breakdown.contextWindow).toBe(128_000);
 	});
 
@@ -205,10 +232,10 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(plain).toContain("1.8%/272K");
 	});
 
-	it("renders ? for the percent while the token count is unknown (post-compaction)", () => {
+	it("renders speculative percent instead of ? after compaction", () => {
 		const { session } = makeSession({
 			messages: [userMessage("compaction summary")],
-			usage: { tokens: null, contextWindow: 272_000, percent: null },
+			usage: { tokens: 1234, contextWindow: 272_000, percent: 0.45 },
 		});
 		const comp = new StatusLineComponent(session);
 		comp.updateSettings({
@@ -219,6 +246,6 @@ describe("StatusLineComponent context breakdown", () => {
 		});
 
 		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
-		expect(plain).toContain("?/272K");
+		expect(plain).toContain("0.5%/272K");
 	});
 });

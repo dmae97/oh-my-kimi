@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "bun:test";
 import { completeSimple, getEnvApiKey, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { ollamaCloudModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/ollama";
 import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
 
@@ -109,6 +110,40 @@ describe("ollama-cloud provider support", () => {
 		expect(qwen?.name).toBe("Qwen 3 32B");
 		expect(qwen?.input).toEqual(["text", "image"]);
 		expect(fetchMock).toHaveBeenCalledWith("https://ollama.com/api/tags", expect.objectContaining({ method: "GET" }));
+	});
+
+	test("discovers GLM-5.2 with Ollama Cloud high/max reasoning efforts", async () => {
+		const fetchMock: FetchImpl = vi.fn(async (input, _init) => {
+			const url = String(input);
+			if (url === "https://ollama.com/api/tags") {
+				return new Response(JSON.stringify({ models: [{ name: "glm-5.2" }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "https://ollama.com/api/show") {
+				return new Response(
+					JSON.stringify({
+						capabilities: ["completion", "thinking"],
+						model_info: { "glm.context_length": 1000000 },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		});
+
+		const options = ollamaCloudModelManagerOptions({ apiKey: "cloud-test-key", fetch: fetchMock });
+		const models = await options.fetchDynamicModels?.();
+		const model = models?.find(candidate => candidate.id === "glm-5.2");
+		const built = model ? buildModel(model) : undefined;
+
+		expect(model?.reasoning).toBe(true);
+		expect(built?.thinking).toEqual({
+			mode: "effort",
+			efforts: [Effort.High, Effort.XHigh],
+			effortMap: { xhigh: "max" },
+		});
 	});
 
 	test("tolerates individual /api/show failures during model discovery", async () => {
@@ -230,6 +265,42 @@ describe("ollama-cloud provider support", () => {
 			{ type: "thinking", thinking: "Need to think." },
 			{ type: "text", text: "Hello world" },
 		]);
+	});
+
+	test("sends max for GLM-5.2 xhigh reasoning on Ollama Cloud", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		const fetchMock: FetchImpl = vi.fn(async (_input, init) => {
+			requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+			return createNdjsonResponse([
+				{ model: "glm-5.2", message: { role: "assistant", content: "ok" }, done: false },
+				{ model: "glm-5.2", done: true, done_reason: "stop", prompt_eval_count: 1, eval_count: 1 },
+			]);
+		});
+		const model: Model<"ollama-chat"> = buildModel({
+			id: "glm-5.2",
+			name: "GLM-5.2",
+			api: "ollama-chat",
+			provider: "ollama-cloud",
+			baseUrl: "https://ollama.com",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.XHigh], effortMap: { [Effort.XHigh]: "max" } },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+		});
+
+		await stream(
+			model,
+			{ messages: [{ role: "user", content: "hello", timestamp: Date.now() }] },
+			{
+				apiKey: "cloud-test-key",
+				fetch: fetchMock,
+				reasoning: Effort.XHigh,
+			},
+		).result();
+
+		expect(requestBody?.think).toBe("max");
 	});
 
 	test("supports ollama-cloud through streamSimple option mapping", async () => {

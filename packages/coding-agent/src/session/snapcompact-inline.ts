@@ -14,8 +14,8 @@
  * estimate (`estimateInlineSavings`) so the two can never disagree.
  */
 
+import { countTokens } from "@oh-my-pi/pi-agent-core";
 import type { Context, ImageContent, Model, TextContent, ToolResultMessage, UserMessage } from "@oh-my-pi/pi-ai";
-import { countTokens } from "@oh-my-pi/pi-natives";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import contextFramesNote from "../prompts/system/snapcompact-context-frames-note.md" with { type: "text" };
 import contextStub from "../prompts/system/snapcompact-context-stub.md" with { type: "text" };
@@ -46,8 +46,8 @@ export type SnapcompactSavingsSink = (
 // Per-provider image-count budgets live in @oh-my-pi/snapcompact
 // (`providerImageBudget`): snapcompact frames are 1568px (<2000px) so
 // dimension/size limits never bind; only COUNT does. Once the budget is
-// spent (e.g. OpenRouter's hard 8-image cap, already consumed by archive
-// frames), tool results ship verbatim as text.
+// spent by already-attached archive/system-prompt images, tool results ship
+// verbatim as text.
 const MAX_SYSTEM_PROMPT_FRAMES = 6;
 /** Tool results under this many tokens are never rasterized — the swap can't
  *  save enough to justify trading crisp text for an image. */

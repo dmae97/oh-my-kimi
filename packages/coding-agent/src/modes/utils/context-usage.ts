@@ -1,8 +1,8 @@
+import { countTokens } from "@oh-my-pi/pi-agent-core";
 import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import { effectiveReserveTokens, estimateTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { countTokens } from "@oh-my-pi/pi-natives";
+import type { Tool as AiTool, Model } from "@oh-my-pi/pi-ai";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import type { Skill } from "../../extensibility/skills";
 import type { AgentSession } from "../../session/agent-session";
@@ -61,8 +61,12 @@ export function estimateToolSchemaTokens(
 	for (const tool of tools) {
 		fragments.push(tool.name, tool.description);
 		try {
-			const params = tool.parameters;
-			fragments.push(JSON.stringify((isZodSchema(params) ? zodToWireSchema(params) : params) ?? {}));
+			const wireTool: AiTool = {
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters as AiTool["parameters"],
+			};
+			fragments.push(JSON.stringify(toolWireSchema(wireTool) ?? {}));
 		} catch {
 			// Schema may contain functions or cycles; ignore.
 		}
@@ -94,7 +98,7 @@ export function computeNonMessageTokens(session: AgentSession): number {
  * the status-line fast path intentionally uses the equivalent collapsed total
  * in `computeNonMessageTokens`.
  */
-function computeNonMessageBreakdown(session: AgentSession): {
+export function computeNonMessageBreakdown(session: AgentSession): {
 	skillsTokens: number;
 	toolsTokens: number;
 	systemContextTokens: number;
@@ -119,21 +123,36 @@ export function computeContextBreakdown(
 	const model = session.model;
 	const contextWindow = model?.contextWindow ?? 0;
 
-	let messagesTokens = 0;
-	const convo = session.messages;
-	if (convo) {
-		for (const message of convo) {
-			messagesTokens += estimateTokens(message);
-		}
-	}
+	const breakdown = typeof session.getContextBreakdown === "function" ? session.getContextBreakdown() : undefined;
 
-	// The rendered system prompt already contains the skill descriptions and the
-	// markdown tool descriptions. To present a non-overlapping breakdown:
-	//   System prompt = total system prompt text - skills section (tool descriptions stay)
-	//   Tools         = JSON tool schema sent separately on the wire
-	//   Skills        = the skill list embedded in the system prompt
-	//   Messages      = conversation messages
-	const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(session);
+	let messagesTokens = 0;
+	let skillsTokens = 0;
+	let toolsTokens = 0;
+	let systemContextTokens = 0;
+	let systemPromptTokens = 0;
+	let usedTokens = 0;
+
+	if (breakdown) {
+		messagesTokens = breakdown.messagesTokens;
+		skillsTokens = breakdown.skillsTokens;
+		toolsTokens = breakdown.systemToolsTokens;
+		systemContextTokens = breakdown.systemContextTokens;
+		systemPromptTokens = breakdown.systemPromptTokens;
+		usedTokens = breakdown.usedTokens;
+	} else {
+		const convo = session.messages;
+		if (convo) {
+			for (const message of convo) {
+				messagesTokens += estimateTokens(message);
+			}
+		}
+		const nonMessage = computeNonMessageBreakdown(session);
+		skillsTokens = nonMessage.skillsTokens;
+		toolsTokens = nonMessage.toolsTokens;
+		systemContextTokens = nonMessage.systemContextTokens;
+		systemPromptTokens = nonMessage.systemPromptTokens;
+		usedTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens + messagesTokens;
+	}
 
 	const categories: CategoryInfo[] = [
 		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },
@@ -154,8 +173,6 @@ export function computeContextBreakdown(
 			glyph: CELL_FILLED_MESSAGES,
 		},
 	];
-
-	const usedTokens = categories.reduce((sum, c) => sum + c.tokens, 0);
 
 	let autoCompactBufferTokens = 0;
 	if (contextWindow > 0) {

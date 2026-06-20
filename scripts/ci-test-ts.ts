@@ -39,11 +39,17 @@ const validModes = new Set<Mode>([
 	"coding-agent-heavy",
 ]);
 
-const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number }> = {
+// `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
+// separate `bun --smol test` child process. A fresh process per chunk resets Bun's
+// heap and reaps any dangling spawned children between groups, keeping peak RSS
+// under the CI runner's OOM ceiling (a single 170–370-file invocation gets
+// SIGKILLed at 137). The singleton/global-state bucket is left whole: its suites
+// co-locate in one process to exercise process-wide state, so they must not split.
+const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1 },
-	ui: { label: "UI/TUI bucket", parallel: 1 },
-	runtime: { label: "runtime/session bucket", parallel: 1 },
-	native: { label: "native/tooling/browser/unit bucket", parallel: 1 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 10 },
+	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
+	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
 };
 
 // Smaller workspace packages stay separate from native/TUI/integration suites so
@@ -130,7 +136,6 @@ const codingAgentSingletonContentMarkers = [
 	"Settings.instance",
 	"resetSettingsForTest",
 	"setAgentDir(",
-	"setDefaultTabWidth(",
 	"vi.useFakeTimers(",
 	"vi.useRealTimers(",
 	"vi.stubEnv(",
@@ -262,18 +267,26 @@ async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> 
 	return codingAgentTestPartitionPromise;
 }
 
-async function codingAgentTestCommand(bucket: CodingAgentBucket): Promise<TestCommand> {
+async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition();
 	const testFiles = partition[bucket];
 	if (testFiles.length === 0) {
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
 	const plan = codingAgentBucketPlans[bucket];
-	return {
-		label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel})`,
-		cwd: "packages/coding-agent",
-		command: ["bun", "--smol", "test", `--parallel=${plan.parallel}`, "--only-failures", ...testFiles],
-	};
+	const chunkSize = plan.chunkSize ?? testFiles.length;
+	const chunkCount = Math.ceil(testFiles.length / chunkSize);
+	const commands: TestCommand[] = [];
+	for (let i = 0; i < testFiles.length; i += chunkSize) {
+		const chunk = testFiles.slice(i, i + chunkSize);
+		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
+		commands.push({
+			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
+			cwd: "packages/coding-agent",
+			command: ["bun", "--smol", "test", `--parallel=${plan.parallel}`, "--only-failures", ...chunk],
+		});
+	}
+	return commands;
 }
 
 async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
@@ -290,19 +303,19 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "native":
 			return nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, true));
 		case "coding-agent-singleton":
-			return [await codingAgentTestCommand("singleton")];
+			return await codingAgentTestCommands("singleton");
 		case "coding-agent-ui":
-			return [await codingAgentTestCommand("ui")];
+			return await codingAgentTestCommands("ui");
 		case "coding-agent-runtime":
-			return [await codingAgentTestCommand("runtime")];
+			return await codingAgentTestCommands("runtime");
 		case "coding-agent-native":
-			return [await codingAgentTestCommand("native")];
+			return await codingAgentTestCommands("native");
 		case "coding-agent-heavy":
 			return [
-				await codingAgentTestCommand("singleton"),
-				await codingAgentTestCommand("ui"),
-				await codingAgentTestCommand("runtime"),
-				await codingAgentTestCommand("native"),
+				...(await codingAgentTestCommands("singleton")),
+				...(await codingAgentTestCommands("ui")),
+				...(await codingAgentTestCommands("runtime")),
+				...(await codingAgentTestCommands("native")),
 			];
 		case "all":
 			return [

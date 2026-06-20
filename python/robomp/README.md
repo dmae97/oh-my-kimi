@@ -162,8 +162,8 @@ The integration test spawns a real `omp --mode rpc` against an
 - **One PR per issue.** Follow-up events push amendments to the same
   `farm/<hex>/<slug>` branch.
 - **No PR without a recorded repro.** Persona prompt requires
-  `repro_record`; `mark_unable_to_reproduce` closes the loop when
-  reproduction genuinely fails.
+  `repro_record`; `mark_unable_to_reproduce` asks for missing details,
+  marks the row `needs_info`, and resumes the same session on the next reply.
 - **Crash recovery.** On startup, `db.reset_stuck_running()` flips
   `running` rows back to `queued`. Existing `<session_dir>/*.jsonl`
   triggers `--continue`. Drain bounded by

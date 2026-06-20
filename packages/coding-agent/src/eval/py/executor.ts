@@ -632,7 +632,7 @@ async function executePerCall(code: string, cwd: string, options: PythonExecutor
 	}
 	const kernel = await startKernel(cwd, options);
 	try {
-		return await executeWithKernel(kernel, code, { ...options, cwd: undefined });
+		return await executeWithKernel(kernel, code, { ...options, cwd });
 	} finally {
 		await kernel.shutdown().catch(() => undefined);
 	}
@@ -682,7 +682,7 @@ async function executeOnSession(code: string, cwd: string, options: PythonExecut
 			throw new PythonExecutionCancelledError(false);
 		}
 	}
-	const runOptions = { ...options, cwd: undefined };
+	const runOptions = { ...options, cwd };
 	try {
 		return await executeWithKernel(session.kernel, code, runOptions);
 	} catch (err) {

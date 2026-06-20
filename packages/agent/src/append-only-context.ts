@@ -32,9 +32,11 @@ export interface StablePrefixSnapshot {
 
 /** Options threaded through `build()` so the snapshot reflects loop-time settings. */
 export interface BuildOptions {
-	/** Inject the `_i` intent field into tool schemas (must match agent-loop's normalizeTools). */
+	/** Inject the `i` intent field into tool schemas (must match agent-loop's normalizeTools). */
 	intentTracing: boolean;
 	exampleDialect?: Dialect;
+	/** Strip tool descriptions from the provider-bound specs (must match normalizeTools). */
+	pruneToolDescriptions?: boolean;
 }
 
 /**
@@ -270,7 +272,8 @@ export class AppendOnlyContextManager {
 
 function takeSnapshot(context: AgentContext, options: BuildOptions): StablePrefixSnapshot {
 	const systemPrompt = [...context.systemPrompt];
-	const tools = normalizeTools(context.tools, options.intentTracing, options.exampleDialect) ?? [];
+	const tools =
+		normalizeTools(context.tools, options.intentTracing, options.exampleDialect, options.pruneToolDescriptions) ?? [];
 	return {
 		systemPrompt,
 		tools,
@@ -291,6 +294,7 @@ function computeFingerprint(systemPrompt: string[], tools: Tool[], options: Buil
 		})),
 		i: options.intentTracing,
 		ex: options.exampleDialect,
+		pd: options.pruneToolDescriptions,
 	});
 	let hash = 0;
 	for (let i = 0; i < payload.length; i++) {

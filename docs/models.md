@@ -9,7 +9,7 @@ Primary implementation files:
 - `src/config/model-registry.ts` — loads built-in + custom models, provider overrides, runtime discovery, auth integration
 - `src/config/model-resolver.ts` — parses model patterns and selects initial/smol/slow models
 - `src/config/settings-schema.ts` — model-related settings (`modelRoles`, provider transport preferences)
-- `src/session/auth-storage.ts` — API key + OAuth resolution order
+- `src/session/auth-storage.ts` — re-exports `AuthStorage` from `@oh-my-pi/pi-ai` (`packages/ai/src/auth-storage.ts`); API key + OAuth resolution order
 - `packages/catalog/src/models.ts` and `packages/catalog/src/types.ts` — built-in providers/models (`getBundledModels` / `getBundledProviders`) and `Model`/`compat` types
 
 ## Config file location and legacy behavior
@@ -98,6 +98,7 @@ providers:
 - `azure-openai-responses`
 - `anthropic-messages`
 - `google-generative-ai`
+- `google-gemini-cli`
 - `google-vertex`
 
 ### Allowed auth/discovery values
@@ -122,6 +123,7 @@ Must define at least one of:
 
 - `baseUrl`
 - `apiKey`
+- `auth: none`
 - `headers`
 - `compat`
 - `disableStrictTools`
@@ -155,7 +157,7 @@ Successful command outputs are cached for the process lifetime so the command is
 
 ModelRegistry pipeline (on refresh):
 
-1. Load built-in providers/models from `@oh-my-pi/pi-ai`.
+1. Load built-in providers/models from `@oh-my-pi/pi-catalog` (`getBundledProviders` / `getBundledModels`).
 2. Load `models.yml` custom config.
 3. Apply provider overrides (`baseUrl`, `headers`, `disableStrictTools`) to built-in models.
 4. Apply `modelOverrides` (per provider + model id).
@@ -167,7 +169,7 @@ ModelRegistry pipeline (on refresh):
 ### Provider-model cache and static fingerprint
 
 Cached per-provider model lists are persisted in the model-cache SQLite
-database (current schema version 5) with a `static_fingerprint` column that
+database (current schema version 6) with a `static_fingerprint` column that
 hashes the static catalog slice merged into the row. When `resolveProviderModels`
 skips the network fetch and the fingerprint of the in-memory static
 catalog matches the cached one, the cached rows are returned verbatim —
@@ -245,7 +247,7 @@ Provider defaults vs per-model overrides:
 
 - Provider `headers` are baseline.
 - Model `headers` override provider header keys.
-- `modelOverrides` can override model metadata (`name`, `reasoning`, `thinking`, `input`, `cost`, `premiumMultiplier`, `contextWindow`, `maxTokens`, `headers`, `compat`, `contextPromotionTarget`).
+- `modelOverrides` can override model metadata (`name`, `reasoning`, `thinking`, `input`, `supportsTools`, `cost`, `premiumMultiplier`, `contextWindow`, `maxTokens`, `omitMaxOutputTokens`, `headers`, `compat`, `contextPromotionTarget`).
 - `compat` is deep-merged for nested routing blocks (`openRouterRouting`, `vercelGatewayRouting`, `extraBody`).
 
 ## Runtime discovery integration
@@ -287,6 +289,17 @@ If `lm-studio` is not explicitly configured, registry adds an implicit discovera
 Runtime discovery fetches models (`GET /models`) and synthesizes model entries with local defaults.
 
 This path also works for local OpenAI-compatible servers that are not LM Studio. For example, if oMLX is bound to Ollama's usual port, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover it through the existing `/v1/models` flow. Running oMLX and Ollama side by side requires assigning a different port to one of them. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
+
+### LiteLLM provider discovery
+
+When `litellm` is active (for example through `LITELLM_API_KEY` or stored auth), runtime discovery uses the LiteLLM proxy:
+
+- provider: `litellm`
+- api: `openai-completions`
+- base URL: explicit provider `baseUrl` / `models.yml` config, otherwise `LITELLM_BASE_URL`, otherwise `http://localhost:4000/v1`
+- auth mode: `LITELLM_API_KEY` or stored LiteLLM auth when the proxy requires a key
+
+Runtime discovery fetches models (`GET /models`) from the proxy and enriches bare LiteLLM model ids against bundled reference metadata when available.
 
 ### Explicit provider discovery
 
@@ -527,6 +540,8 @@ The built-in model policy currently links OpenAI `codex-spark` variants to `gpt-
 
 The `compat` block on a provider or model overrides the URL-based auto-detection in `packages/catalog/src/compat/openai.ts` (`buildOpenAICompat`). It is validated by `OpenAICompatSchema` in `packages/coding-agent/src/config/models-config-schema.ts` and consumed by every `openai-completions` transport (`packages/ai/src/providers/openai-completions.ts`). The canonical type is `OpenAICompat` in `packages/catalog/src/types.ts`.
 
+Endpoint-specific exceptions that interact with these fields are cataloged in [Provider endpoint constraints](./provider-endpoint-constraints.md).
+
 `models.yml` accepts the following keys (all optional; unset falls back to URL detection):
 
 Request shaping:
@@ -537,6 +552,7 @@ Request shaping:
 - `supportsUsageInStreaming` — send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: `true`.
 - `maxTokensField` — `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
 - `supportsToolChoice` — emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. Set `false` for endpoints that 400 on `tool_choice` (e.g. DeepSeek when reasoning is on).
+- `supportsForcedToolChoice` — accept a forced `tool_choice` that requires a specific tool. Default: `true`. When `false`, a forced selector is downgraded to `auto` so the tool stays available for endpoints that reject forced tool calls (e.g. some thinking-required OpenAI-compatible models).
 - `disableReasoningOnForcedToolChoice` — drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
 - `disableReasoningOnToolChoice` — drop reasoning fields whenever any `tool_choice` is sent. Default: auto (DeepSeek reasoning models).
 - `alwaysSendMaxTokens` — always send a max-token field when the caller did not provide one. Default: auto (Kimi-family models derive TPM limits from `max_tokens`).
@@ -576,7 +592,7 @@ Provider-level `compat` is the baseline; per-model `compat` is deep-merged on to
 
 ### Anthropic compatibility (`anthropic-messages`)
 
-For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a top-level provider field (see below) plus two Anthropic-side flags in the same `compat` slot — `requiresToolResultId` (non-standard `id` alias on `tool_result` blocks for Z.AI-style proxies) and `replayUnsignedThinking` (replay unsigned thinking blocks as native thinking instead of demoting them to text); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, `supportsMidConversationSystem`, `supportsForcedToolChoice`, `supportsSamplingParams`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
+For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a top-level provider field (see below) plus two Anthropic-side flags in the same `compat` slot — `requiresToolResultId` (non-standard `id` alias on `tool_result` blocks for Z.AI-style proxies) and `replayUnsignedThinking` (replay unsigned thinking blocks as native thinking instead of demoting them to text); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, `supportsMidConversationSystem`, `supportsForcedToolChoice`, `supportsSamplingParams`, `escapeBuiltinToolNames`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
 
 ### Strict tool schemas (`disableStrictTools`)
 

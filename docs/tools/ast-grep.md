@@ -30,7 +30,7 @@ Pattern grammar and language support exposed to the model:
 - Metavariable names must be uppercase and must stand for whole AST nodes, not partial tokens or string fragments.
 - Reusing the same metavariable requires identical code at each occurrence.
 - Patterns must parse as one valid AST node for the inferred target language.
-- Supported canonical languages come from `SupportLang::all_langs()` in `crates/pi-ast/src/language/mod.rs`: `astro`, `bash`, `c`, `cmake`, `cpp`, `csharp`, `dart`, `clojure`, `css`, `diff`, `dockerfile`, `elixir`, `erlang`, `go`, `graphql`, `haskell`, `hcl`, `html`, `ini`, `java`, `javascript`, `json`, `just`, `julia`, `kotlin`, `lua`, `make`, `markdown`, `nix`, `objc`, `ocaml`, `odin`, `perl`, `php`, `powershell`, `protobuf`, `python`, `r`, `regex`, `ruby`, `rust`, `scala`, `solidity`, `sql`, `starlark`, `svelte`, `swift`, `toml`, `tlaplus`, `tsx`, `typescript`, `verilog`, `vue`, `xml`, `yaml`, `zig`.
+- Supported canonical languages come from `SupportLang::all_langs()` in `crates/pi-ast/src/language/mod.rs`: `astro`, `bash`, `c`, `cmake`, `cpp`, `csharp`, `dart`, `clojure`, `css`, `diff`, `dockerfile`, `emacs-lisp`, `elixir`, `erlang`, `go`, `graphql`, `haskell`, `hcl`, `html`, `ini`, `java`, `javascript`, `json`, `just`, `julia`, `kotlin`, `lua`, `make`, `markdown`, `nix`, `objc`, `ocaml`, `odin`, `perl`, `php`, `powershell`, `protobuf`, `python`, `r`, `regex`, `ruby`, `rust`, `scala`, `solidity`, `sql`, `starlark`, `svelte`, `swift`, `toml`, `tlaplus`, `tsx`, `typescript`, `verilog`, `vue`, `xml`, `yaml`, `zig`.
 
 ## Outputs
 - Single-shot tool result.
@@ -38,19 +38,19 @@ Pattern grammar and language support exposed to the model:
   - grouped by file for directory/multi-file searches,
   - match lines rendered under `[PATH#HASH]` as `*LINE:text` in hashline mode or `*LINE|text` otherwise,
   - continuation lines for multi-line matches rendered with a leading space,
-  - optional `meta: NAME=value` lines when ast-grep captured metavariables.
+  - an optional `meta: NAME=value, …` line per match when ast-grep captured metavariables.
 - If no matches are found, text is `No matches found` or `No matches found. Parse issues mean the query may be mis-scoped; narrow paths before concluding absence.` plus formatted parse issues.
 - If the wrapper truncates visible results, the text ends with `Result limit reached; narrow paths or increase limit.`
 - `details` includes counts and metadata, not full match payloads:
   - `matchCount`, `fileCount`, `filesSearched`, `limitReached`
-  - optional `parseErrors`, `scopePath`, `files`, `fileMatches`, `displayContent`, `meta`
+  - optional `parseErrors`, `parseErrorsTotal`, `scopePath`, `searchPath`, `cwd`, `files`, `fileMatches`, `displayContent`, `meta`
 - Native ranges (`byteStart`, `byteEnd`, `startLine`, `startColumn`, `endLine`, `endColumn`) exist only inside the native result; the wrapper does not emit them directly to the model.
 
 ## Flow
-1. `AstGrepTool.execute()` validates `pat`, normalizes `skip`, and normalizes each `paths` entry in `packages/coding-agent/src/tools/ast-grep.ts`.
-2. Internal URLs are resolved through `session.internalRouter`; entries without `sourcePath` fail, and internal-URL globs fail early.
+1. `AstGrepTool.execute()` validates `pat`, normalizes `skip`, then delegates path resolution to `resolveToolSearchScope()` in `packages/coding-agent/src/tools/path-utils.ts`, which normalizes and rejects empty `paths` entries.
+2. Internal URLs are resolved through the shared `InternalUrlRouter.instance()`; entries without `sourcePath` fail, and internal-URL globs fail early.
 3. For multiple path inputs, `partitionExistingPaths()` drops missing bases only when at least one surviving base remains; if all bases are missing the call fails.
-4. `parseSearchPath()` splits a single path into `basePath` plus optional `glob`. `resolveExplicitSearchPaths()` collapses multiple inputs into a common base plus a brace-union glob, or separate `targets` when the only common base is a filesystem root.
+4. `parseSearchPathPreferringLiteral()` splits a single path into `basePath` plus optional `glob`. `resolveExplicitSearchPaths()` collapses multiple inputs into a common base plus a brace-union glob, or separate `targets` when the common ancestor is not itself one of the requested paths.
 5. The wrapper stats the resolved base path to decide whether output should be grouped as a directory result.
 6. Execution dispatches to either:
    - one native `astGrep(...)` call for a single resolved base, or
@@ -87,20 +87,17 @@ Pattern grammar and language support exposed to the model:
   - Single-target calls rely on the native default limit of 50 in `crates/pi-natives/src/ast.rs`.
   - Multi-target calls fetch `skip + 50 + 1` matches per target, then re-page after global sort.
 - Native `limit` is clamped to at least `1`; omitted `offset` defaults to `0` in `crates/pi-natives/src/ast.rs`.
-- Parse issues are rendered with at most `PARSE_ERRORS_LIMIT = 20` lines in `packages/coding-agent/src/tools/render-utils.ts`; `details.parseErrors` itself is only deduplicated, not capped.
+- Parse issues are rendered with at most `PARSE_ERRORS_LIMIT = 20` lines in `packages/coding-agent/src/tools/render-utils.ts`; `capParseErrors()` also caps `details.parseErrors` to those 20 unique entries, with `details.parseErrorsTotal` holding the pre-cap deduplicated total.
 - Directory scans use `include_hidden: true`, `use_gitignore: true`, and skip `node_modules` unless the glob text explicitly mentions `node_modules` in `crates/pi-natives/src/ast.rs`.
 - No hard file-count cap is applied by the wrapper or native `ast_grep`; candidate count is whatever the resolved path/glob expands to after gitignore filtering.
 - Multi-path union deduplicates identical path inputs before resolution in `resolveExplicitSearchPaths()`.
 
 ## Errors
-- TS wrapper throws `ToolError` for empty patterns, invalid `skip`, empty path entries, unsupported internal-URL globs, internal URLs without `sourcePath`, and missing paths.
+- TS wrapper throws `ToolError` for empty patterns, invalid `skip`, empty path entries, external (`http`/`https`/`ftp`/`file`/`ws`/`wss`) URLs, unsupported internal-URL globs, internal URLs without `sourcePath`, and missing paths.
 - Native code returns hard errors for:
-  - unsupported explicit `lang`,
-  - inability to infer language for a candidate when `lang` is not supplied,
-  - invalid AST pattern compilation for every relevant language,
   - unreadable search roots or bad glob compilation,
   - cancellation (`Aborted: Signal`) or timeout (`Aborted: Timeout`).
-- File-level parse failures and many per-language pattern compile failures are non-fatal: they are accumulated in `parseErrors` and surfaced alongside successful matches.
+- File-level parse failures and per-language pattern compile failures are non-fatal: they are accumulated in `parseErrors` and surfaced alongside successful matches; a file whose language has no compilable pattern is skipped.
 - `no matches` is not an error, even when parse issues were recorded.
 
 ## Notes

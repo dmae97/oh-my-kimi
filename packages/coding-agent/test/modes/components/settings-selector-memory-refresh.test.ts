@@ -7,14 +7,37 @@ beforeAll(async () => {
 	await initTheme();
 });
 
+let geometryStub: { restore(): void } | undefined;
+
 beforeEach(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
+	geometryStub = stubStdoutGeometry(120);
 });
 
 afterEach(() => {
 	resetSettingsForTest();
+	geometryStub?.restore();
+	geometryStub = undefined;
 });
+
+function stubStdoutGeometry(cols: number): { restore(): void } {
+	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+	const colsDesc = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+	const rows = 40;
+	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => rows });
+	Object.defineProperty(process.stdout, "columns", { configurable: true, get: () => cols });
+	const restoreOne = (key: "rows" | "columns", desc: PropertyDescriptor | undefined) => {
+		if (desc) Object.defineProperty(process.stdout, key, desc);
+		else Object.defineProperty(process.stdout, key, { configurable: true, value: undefined, writable: true });
+	};
+	return {
+		restore() {
+			restoreOne("rows", rowsDesc);
+			restoreOne("columns", colsDesc);
+		},
+	};
+}
 
 function createSelector(onCancel: () => void = () => {}): SettingsSelectorComponent {
 	return new SettingsSelectorComponent(

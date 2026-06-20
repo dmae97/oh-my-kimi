@@ -61,7 +61,7 @@ You are in an active checkpoint. You MUST call rewind with your investigation fi
 - The tool is registered as discoverable in `packages/coding-agent/src/tools/index.ts`.
 - Only one active checkpoint is allowed per top-level session.
 - Checkpoint state is not persisted as a dedicated session entry. If the process exits, a resumed session can reload the conversation history, but not the live `#checkpointState` guard.
-- Session persistence still applies to the ordinary checkpoint tool call message. Global session persistence truncation is `MAX_PERSIST_CHARS = 500_000` in `packages/coding-agent/src/session/session-manager.ts`.
+- Session persistence still applies to the ordinary checkpoint tool call message. Global session persistence truncation is `MAX_PERSIST_CHARS = 500_000` in `packages/coding-agent/src/session/session-persistence.ts`.
 
 ## Errors
 - `ToolError("Checkpoint not available in subagents.")` — thrown for subagent sessions.

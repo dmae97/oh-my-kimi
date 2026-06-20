@@ -29,16 +29,73 @@ export const WELCOME_SESSION_SLOTS = 4;
  */
 export const WELCOME_LSP_SLOTS = 4;
 
-export function renderWelcomeTip(tip: string, boxWidth: number): string[] {
+/** Trailing marker that flags a tip as a "what's new" callout. Stripped before
+ *  wrapping (with any preceding whitespace) and replaced by {@link NEW_TAG_TEXT}
+ *  painted as a shimmering rainbow. Non-global so `.test` stays stateless. */
+const NEW_TIP_MARKER = /\s*\[NEW\]\s*$/;
+
+/** Visible text rendered in place of {@link NEW_TIP_MARKER}. */
+const NEW_TAG_TEXT = "NEW!";
+
+/** Milliseconds for one full hue rotation of the rainbow "NEW!" tag. */
+const NEW_GLOW_PERIOD_MS = 1500;
+
+/** Selection weight for "[NEW]" tips; ordinary tips weigh 1, so a freshly added
+ *  affordance surfaces this many times as often. */
+const NEW_TIP_WEIGHT = 4;
+
+/** Per-tip selection weights, parallel to {@link TIPS}. */
+const TIP_WEIGHTS: readonly number[] = TIPS.map(tip => (NEW_TIP_MARKER.test(tip) ? NEW_TIP_WEIGHT : 1));
+const TIP_WEIGHT_TOTAL = TIP_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+
+/** Pick a tip at random, biased toward "[NEW]" tips by {@link NEW_TIP_WEIGHT}.
+ *  Returns "" when no tips are embedded. */
+function pickWeightedTip(): string {
+	if (TIPS.length === 0) return "";
+	let r = Math.random() * TIP_WEIGHT_TOTAL;
+	for (let i = 0; i < TIPS.length; i++) {
+		r -= TIP_WEIGHTS[i] ?? 1;
+		if (r < 0) return TIPS[i] ?? "";
+	}
+	return TIPS[TIPS.length - 1] ?? "";
+}
+
+type ColorEncoding = "ansi-16m" | "ansi-256";
+
+/** Paint each glyph of {@link NEW_TAG_TEXT} on a moving HSL rainbow. `phase`
+ *  rotates the hue offset cyclically; successive renders with increasing phase
+ *  shimmer, while a fixed phase yields a still rainbow. */
+function renderNewTag(phase: number, encoding: ColorEncoding): string {
+	const bold = "\x1b[1m";
+	const reset = "\x1b[0m";
+	const wrapped = ((phase % 1) + 1) % 1;
+	const chars = [...NEW_TAG_TEXT];
+	let out = bold;
+	let prev = "";
+	for (let i = 0; i < chars.length; i++) {
+		const hue = Math.round(((i / chars.length + wrapped) % 1) * 360);
+		const color = Bun.color(`hsl(${hue}, 95%, 60%)`, encoding) ?? "";
+		if (color !== prev) {
+			out += color;
+			prev = color;
+		}
+		out += chars[i];
+	}
+	return out + reset;
+}
+export function renderWelcomeTip(tip: string, boxWidth: number, phase = 0): string[] {
 	const label = "Tip: ";
 	const labelWidth = visibleWidth(label);
 	const bodyBudget = boxWidth - 1 - labelWidth; // 1 = leading indent
 	if (bodyBudget < 8) return [];
 
-	const wrappedBody = wrapTextWithAnsi(replaceTabs(tip), bodyBudget);
+	const isNew = NEW_TIP_MARKER.test(tip);
+	const body = isNew ? tip.replace(NEW_TIP_MARKER, "") : tip;
+
+	const wrappedBody = wrapTextWithAnsi(replaceTabs(body), bodyBudget);
 	if (wrappedBody.length === 0) return [];
 
-	const encoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
+	const encoding: ColorEncoding = TERMINAL.trueColor ? "ansi-16m" : "ansi-256";
 	const purple = Bun.color("#b48cff", encoding) ?? "";
 	const lightBlue = Bun.color("#9ccfff", encoding) ?? "";
 	const italic = "\x1b[3m";
@@ -46,11 +103,27 @@ export function renderWelcomeTip(tip: string, boxWidth: number): string[] {
 	const reset = "\x1b[0m";
 	const continuationIndent = padding(labelWidth);
 
-	return wrappedBody.map((body, index) =>
+	const lines = wrappedBody.map((line, index) =>
 		index === 0
-			? ` ${italic}${purple}${label}${dim}${lightBlue}${body}${reset}`
-			: ` ${italic}${continuationIndent}${dim}${lightBlue}${body}${reset}`,
+			? ` ${italic}${purple}${label}${dim}${lightBlue}${line}${reset}`
+			: ` ${italic}${continuationIndent}${dim}${lightBlue}${line}${reset}`,
 	);
+
+	if (isNew) {
+		// Append the rainbow tag to the final body line when it fits within the
+		// box; otherwise drop it onto its own indented continuation line so the
+		// styled glyphs never overflow or reflow the wrapped body.
+		const tag = renderNewTag(phase, encoding);
+		const tagWidth = 1 + visibleWidth(NEW_TAG_TEXT); // 1 = space separator
+		const lastLine = lines[lines.length - 1];
+		if (lastLine !== undefined && visibleWidth(lastLine) + tagWidth <= boxWidth) {
+			lines[lines.length - 1] = `${lastLine} ${tag}`;
+		} else {
+			lines.push(` ${continuationIndent}${tag}`);
+		}
+	}
+
+	return lines;
 }
 
 export interface RecentSession {
@@ -69,7 +142,7 @@ export interface LspServerInfo {
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
-	#animTimer: ReturnType<typeof setInterval> | null = null;
+	#animTimer: Timer | null = null;
 	#selectedTip: string | undefined;
 	// Render cache: the welcome box is the first transcript-area component, so
 	// returning a stable array reference keeps the whole frame prefix stable.
@@ -89,7 +162,7 @@ export class WelcomeComponent implements Component {
 			if (theme.getSymbolPreset() === "unicode" && Math.random() < 0.1) {
 				this.#selectedTip = "Please use nerdfont 😭.";
 			} else {
-				this.#selectedTip = TIPS.length > 0 ? TIPS[Math.floor(Math.random() * TIPS.length)] : "";
+				this.#selectedTip = pickWeightedTip();
 			}
 		}
 		return this.#selectedTip || undefined;
@@ -308,7 +381,7 @@ export class WelcomeComponent implements Component {
 		}
 		// Bottom border
 		if (showRightColumn) {
-			lines.push(bl + h.repeat(leftCol) + theme.fg("dim", theme.boxSharp.teeUp) + h.repeat(rightCol) + br);
+			lines.push(bl + h.repeat(leftCol) + theme.fg("dim", theme.boxRound.teeUp) + h.repeat(rightCol) + br);
 		} else {
 			lines.push(bl + h.repeat(leftCol) + br);
 		}
@@ -327,7 +400,12 @@ export class WelcomeComponent implements Component {
 	#renderTip(boxWidth: number): string[] {
 		const tip = this.tip;
 		if (!tip) return [];
-		return renderWelcomeTip(tip, boxWidth);
+		// A trailing "[NEW]" marker paints an animated rainbow "NEW!" tag. Derive
+		// its hue phase from wall-clock time so it shimmers across the welcome
+		// intro's re-render frames, then settles into a still rainbow once the box
+		// caches its resting frame. Non-"[NEW]" tips ignore the phase entirely.
+		const phase = NEW_TIP_MARKER.test(tip) ? performance.now() / NEW_GLOW_PERIOD_MS : 0;
+		return renderWelcomeTip(tip, boxWidth, phase);
 	}
 
 	/** Center text within a given width */

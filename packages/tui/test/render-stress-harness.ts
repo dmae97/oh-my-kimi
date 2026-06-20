@@ -22,6 +22,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui/utils";
+import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -4039,6 +4040,10 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 			});
 			Object.defineProperty(process, "kill", { value: () => true, configurable: true });
 
+			// Exercises the real ProcessTerminal stdin/stdout pipeline; opt out of
+			// the test-default headless suppression inside the try so the finally
+			// below always restores the prior value, even on a start()/render throw.
+			let previousHeadless = false;
 			const term = new ProcessTerminal();
 			const scheduler = new StressRenderScheduler();
 			const tui = new TUI(term, true, { renderScheduler: scheduler });
@@ -4048,6 +4053,7 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 			tui.addChild(component);
 
 			try {
+				previousHeadless = setTerminalHeadless(false);
 				tui.start();
 				await scheduler.drain(drainTarget);
 
@@ -4082,6 +4088,7 @@ export async function runNoReflowResizeNotificationRegression(): Promise<void> {
 				restoreOwnProperty(process.stdin, "pause", stdinPause);
 				restoreOwnProperty(process.stdout, "write", stdoutWrite);
 				restoreOwnProperty(process, "kill", processKill);
+				setTerminalHeadless(previousHeadless);
 			}
 		});
 	});

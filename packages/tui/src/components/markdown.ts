@@ -1,14 +1,19 @@
 import { LRUCache } from "lru-cache/raw";
-import { Marked, marked, type Token, Tokenizer, type Tokens } from "marked";
+import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { latexToBlock } from "../latex-block";
+import { inlineMathSpanEnd, isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
 import type { SymbolTheme } from "../symbols";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import {
 	applyBackgroundToLine,
+	Ellipsis,
 	encodeTextSized,
+	getPaddingX,
 	getSegmenter,
 	padding,
 	replaceTabs,
+	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils";
@@ -24,6 +29,167 @@ const OSC66_LINE_PREFIX = "\x1b]66;";
 
 function isOsc66Line(line: string): boolean {
 	return line.includes(OSC66_LINE_PREFIX);
+}
+
+function normalizeHtmlEntitiesForTerminal(raw: string): string {
+	return raw.replace(/&nbsp;/gi, " ");
+}
+
+interface HtmlListState {
+	type: "ol" | "ul";
+	next: number;
+}
+
+interface HtmlNormalizationState {
+	lists: HtmlListState[];
+	openItems: boolean[];
+	itemHasContent: boolean[];
+}
+
+function createHtmlNormalizationState(): HtmlNormalizationState {
+	return { lists: [], openItems: [], itemHasContent: [] };
+}
+
+const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li)\b(?:\s[^>]*)?\s*\/?>/gi;
+
+function htmlTagName(tag: string): string {
+	const match = /^<\/?\s*([A-Za-z][A-Za-z0-9:-]*)/.exec(tag);
+	return match ? match[1].toLowerCase() : "";
+}
+
+function htmlOlStart(tag: string): number {
+	const match = /\bstart\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i.exec(tag);
+	if (!match) return 1;
+	return Number(match[1] ?? match[2] ?? match[3]);
+}
+
+function appendHtmlLineBreak(output: string, force: boolean = false): string {
+	const trimmed = output.replace(/[ \t]+$/u, "");
+	return !force && trimmed.endsWith("\n") ? trimmed : `${trimmed}\n`;
+}
+
+function htmlListIndent(state: HtmlNormalizationState): string {
+	return "  ".repeat(Math.max(0, state.lists.length - 1));
+}
+
+function appendHtmlListBreak(output: string, state: HtmlNormalizationState): string {
+	const indent = htmlListIndent(state);
+	return output.endsWith(`${indent}\n`) ? output : appendHtmlLineBreak(output);
+}
+
+function markCurrentHtmlItemContent(state: HtmlNormalizationState, text: string): void {
+	if (text.trim() !== "" && state.itemHasContent.length > 0) {
+		state.itemHasContent[state.itemHasContent.length - 1] = true;
+	}
+}
+
+function isAtEmptyHtmlListItem(state: HtmlNormalizationState): boolean {
+	const itemIndex = state.itemHasContent.length - 1;
+	return state.openItems[itemIndex] === true && state.itemHasContent[itemIndex] !== true;
+}
+
+function normalizeHtmlForTerminal(raw: string, state: HtmlNormalizationState = createHtmlNormalizationState()): string {
+	let output = "";
+	let lastIndex = 0;
+
+	for (const match of raw.matchAll(HTML_TAG_REGEX)) {
+		const tag = match[0];
+		const index = match.index ?? 0;
+		const textBeforeTag = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex, index));
+		// HTML formatting whitespace between block/list tags (e.g. the newlines and
+		// indentation in pretty-printed `<ul>\n  <li>…`) is not rendered content;
+		// appending it literally would leak source indentation before bullets and
+		// blank rows between items. Every tag handled here is block-level, so a
+		// whitespace-only slice is always insignificant formatting and is dropped.
+		if (textBeforeTag.trim() !== "") {
+			output += textBeforeTag;
+			markCurrentHtmlItemContent(state, textBeforeTag);
+		}
+		lastIndex = index + tag.length;
+
+		const name = htmlTagName(tag);
+		const isClosing = /^<\//.test(tag);
+		const isSelfClosing = /\/\s*>$/.test(tag);
+
+		switch (name) {
+			case "br":
+				output = appendHtmlLineBreak(output, true);
+				break;
+			case "p":
+				if (isClosing) {
+					output = appendHtmlLineBreak(output);
+				} else if (output.trim() !== "" && !output.endsWith("\n") && !isAtEmptyHtmlListItem(state)) {
+					output = appendHtmlLineBreak(output);
+				}
+				break;
+			case "ol":
+				if (isClosing) {
+					state.lists.pop();
+					state.openItems.pop();
+					state.itemHasContent.pop();
+				} else if (!isSelfClosing) {
+					if (state.openItems.length > 0 && state.openItems[state.openItems.length - 1]) {
+						output = appendHtmlListBreak(output, state);
+					}
+					state.lists.push({ type: "ol", next: htmlOlStart(tag) });
+					state.openItems.push(false);
+					state.itemHasContent.push(false);
+				}
+				break;
+			case "ul":
+				if (isClosing) {
+					state.lists.pop();
+					state.openItems.pop();
+					state.itemHasContent.pop();
+				} else if (!isSelfClosing) {
+					if (state.openItems.length > 0 && state.openItems[state.openItems.length - 1]) {
+						output = appendHtmlListBreak(output, state);
+					}
+					state.lists.push({ type: "ul", next: 1 });
+					state.openItems.push(false);
+					state.itemHasContent.push(false);
+				}
+				break;
+			case "li": {
+				if (isClosing) {
+					output = appendHtmlLineBreak(output);
+					break;
+				}
+				if (state.openItems.length > 0) {
+					const itemOpenIndex = state.openItems.length - 1;
+					if (state.openItems[itemOpenIndex]) output = appendHtmlListBreak(output, state);
+					state.openItems[itemOpenIndex] = true;
+					state.itemHasContent[itemOpenIndex] = false;
+				} else if (output.trim() !== "" && !output.endsWith("\n")) {
+					output = appendHtmlLineBreak(output);
+				}
+				const list = state.lists[state.lists.length - 1];
+				const indent = htmlListIndent(state);
+				if (list?.type === "ol") {
+					output += `${indent}${list.next}. `;
+					list.next++;
+				} else {
+					output += `${indent}• `;
+				}
+				break;
+			}
+			default:
+				output += tag;
+				break;
+		}
+	}
+
+	const remainingText = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex));
+	markCurrentHtmlItemContent(state, remainingText);
+	return output + remainingText;
+}
+
+function splitTerminalLines(text: string): string[] {
+	const lines = text.split("\n");
+	while (lines.length > 1 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines;
 }
 
 class StrictStrikethroughTokenizer extends Tokenizer {
@@ -47,6 +213,176 @@ const markdownParser = new Marked();
 markdownParser.setOptions({
 	tokenizer: new StrictStrikethroughTokenizer(),
 });
+
+// Math spans (`$$…$$`, `\[…\]`, `$…$`, `\(…\)`) are tokenized as a dedicated
+// `math` inline token before markdown's escape/emphasis/link rules run, so
+// backslash commands (`\frac`, `\alpha`) and intraword underscores (`x_i`)
+// survive intact instead of being mangled or split. The `$…$` form uses
+// pandoc's anti-currency heuristic (`inlineMathSpanEnd`) so "$5 and $10" is
+// never math. Inline extensions run before marked's escape tokenizer, so
+// `\(…\)` becomes math while a genuinely escaped `\$` is left to `escape` and
+// renders as a literal dollar.
+const CUSTOM_HR_START_REGEX = /(?:^|\n) {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+const CUSTOM_HR_TOKENIZER_REGEX = /^ {0,3}([-*_─━═=–—])[ \t]*(?:\1[ \t]*){2,}(?:\n+|$)/;
+
+function getHrChar(char: string, hrChar: string): string {
+	const isAscii = hrChar === "-";
+	switch (char) {
+		case "=":
+			return "=";
+		case "═":
+			return isAscii ? "=" : "═";
+		case "━":
+			return isAscii ? "-" : "━";
+		case "─":
+			return isAscii ? "-" : "─";
+		case "–":
+			return isAscii ? "-" : "–";
+		case "—":
+			return isAscii ? "-" : "—";
+		default:
+			return hrChar;
+	}
+}
+
+const customHrExtension: TokenizerAndRendererExtension = {
+	name: "customHr",
+	level: "block",
+	start(src) {
+		const match = CUSTOM_HR_START_REGEX.exec(src);
+		if (!match) return undefined;
+		let idx = match.index;
+		if (src[idx] === "\n") {
+			idx += 1;
+		}
+		return idx;
+	},
+	tokenizer(src) {
+		const match = CUSTOM_HR_TOKENIZER_REGEX.exec(src);
+		if (match) {
+			return {
+				type: "hr",
+				raw: match[0],
+			};
+		}
+		return undefined;
+	},
+	renderer() {
+		return "";
+	},
+};
+
+const mathExtension: TokenizerAndRendererExtension = {
+	name: "math",
+	level: "inline",
+	start(src) {
+		const m = /\$|\\\(|\\\[/.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src) {
+		if (src.startsWith("$$")) {
+			const end = src.indexOf("$$", 2);
+			if (end !== -1 && src.slice(2, end).trim().length > 0) {
+				return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			}
+			return undefined;
+		}
+		if (src.startsWith("\\[")) {
+			const end = src.indexOf("\\]", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: true };
+			return undefined;
+		}
+		if (src.startsWith("\\(")) {
+			const end = src.indexOf("\\)", 2);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 2), text: src.slice(2, end), display: false };
+			return undefined;
+		}
+		if (src.charCodeAt(0) === 0x24 /* $ */) {
+			const end = inlineMathSpanEnd(src, 0);
+			if (end !== -1) return { type: "math", raw: src.slice(0, end + 1), text: src.slice(1, end), display: false };
+		}
+		return undefined;
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+
+// Display math blocks: opening `$$` / `\[` and closing `$$` / `\]` each alone on
+// their own line (≤3 leading spaces). Matched at the block level — before
+// paragraph/list parsing — so a multi-line equation (e.g. a matrix with `\\`
+// row breaks) renders across several lines instead of being collapsed onto one,
+// and blank lines inside the block don't split it. The own-line requirement
+// keeps inline `$$…$$` inside prose for the inline tokenizer above.
+const MATH_BLOCK_DOLLAR = /^ {0,3}\$\$[ \t]*\n([\s\S]+?)\n {0,3}\$\$[ \t]*(?:\n|$)/;
+const MATH_BLOCK_BRACKET = /^ {0,3}\\\[[ \t]*\n([\s\S]+?)\n {0,3}\\\][ \t]*(?:\n|$)/;
+const MATH_BLOCK_START = /(?:^|\n) {0,3}(?:\$\$|\\\[)[ \t]*\n/;
+const mathBlockExtension: TokenizerAndRendererExtension = {
+	name: "mathBlock",
+	level: "block",
+	start(src) {
+		const m = MATH_BLOCK_START.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src) {
+		const m = MATH_BLOCK_DOLLAR.exec(src) ?? MATH_BLOCK_BRACKET.exec(src);
+		if (!m || m[1].trim().length === 0) return undefined;
+		return { type: "math", raw: m[0], text: m[1], display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+
+// Bare (delimiter-less) display-math environments: `\begin{<mathenv>}…\end{…}`
+// written without `$$`/`\[` fences (common in raw model output). Captured at the
+// block level as a whole unit — including any immediately preceding `lhs =`
+// line — so marked never splits it on inline `\\` row breaks. Restricted to math
+// environments (isBareMathEnvironment), and the `≤3 leading spaces` + "block
+// starts at offset 0" guards keep fenced/indented `\begin{cases}` code blocks
+// for marked's own code rules.
+const BARE_ENV_BEGIN = /(?:^|\n)[ \t]{0,3}\\begin\{([A-Za-z]+\*?)\}/;
+function bareMathEnvBlock(src: string): readonly [number, number] | null {
+	const bm = BARE_ENV_BEGIN.exec(src);
+	if (!bm || !isBareMathEnvironment(bm[1])) return null;
+	const beginLineStart = bm.index === 0 ? 0 : bm.index + 1; // skip the matched leading `\n`
+	const endToken = `\\end{${bm[1]}}`;
+	const endAt = src.indexOf(endToken, bm.index);
+	if (endAt === -1) return null;
+	// The `\end` must close before any blank line (i.e. within the same block).
+	if (/\n[ \t]*\n/.test(src.slice(beginLineStart, endAt))) return null;
+	let blockEnd = endAt + endToken.length;
+	while (src[blockEnd] === " " || src[blockEnd] === "\t") blockEnd++;
+	if (src[blockEnd] === "\n") blockEnd++;
+	// Pull in one immediately-preceding `lhs =`/open-delimiter line (e.g. `f(x) =`).
+	let start = beginLineStart;
+	if (start > 0 && src[start - 1] === "\n") {
+		const prevStart = src.lastIndexOf("\n", start - 2) + 1;
+		const prevLine = src.slice(prevStart, start - 1);
+		if (/[=([{]\s*$/.test(prevLine)) start = prevStart;
+	}
+	return [start, blockEnd];
+}
+const mathEnvBlockExtension: TokenizerAndRendererExtension = {
+	name: "mathEnvBlock",
+	level: "block",
+	start(src) {
+		const r = bareMathEnvBlock(src);
+		return r ? r[0] : undefined;
+	},
+	tokenizer(src) {
+		const r = bareMathEnvBlock(src);
+		if (r?.[0] !== 0) return undefined; // only consume when the block starts at offset 0
+		const raw = src.slice(0, r[1]);
+		const text = raw.replace(/\n[ \t]*$/, "");
+		if (text.trim().length === 0) return undefined;
+		return { type: "math", raw, text, display: true };
+	},
+	renderer(token) {
+		return (token as { text?: string }).text ?? "";
+	},
+};
+markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnvBlockExtension, mathExtension] });
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
@@ -74,16 +410,14 @@ export function clearRenderCache(): void {
 }
 
 // Stable numeric IDs for structural theme/style objects (no ID field on type).
-// Symbol-keyed so the id travels with the object and is invisible to consumers.
-const kObjectId = Symbol("markdown.objectId");
-type WithObjectId = object & { [kObjectId]?: number };
+// WeakMap-keyed so the ID matches strict object identity and doesn't get copied by spread/cloning.
+const themeObjectIds = new WeakMap<object, number>();
 let nextObjectId = 0;
 function objectId(o: object): number {
-	const tagged = o as WithObjectId;
-	let id = tagged[kObjectId];
+	let id = themeObjectIds.get(o);
 	if (id === undefined) {
 		id = nextObjectId++;
-		tagged[kObjectId] = id;
+		themeObjectIds.set(o, id);
 	}
 	return id;
 }
@@ -131,7 +465,7 @@ export interface MarkdownTheme {
 	 * Resolve a mermaid ASCII rendering by fenced block source text.
 	 * Return null to fall back to fenced code rendering.
 	 */
-	resolveMermaidAscii?: (source: string) => string | null;
+	resolveMermaidAscii?: (source: string, maxWidth?: number) => string | null;
 	symbols: SymbolTheme;
 }
 
@@ -186,9 +520,46 @@ function encodeTextSizedHeading(text: string, scale: 1 | 2 | 3): string {
 	return out;
 }
 
+const MATH_NEWLINES = /\n+/g;
+
+/** True for the custom inline `math` token produced by the math extension. */
+function isMathToken(token: Token): token is Token & { text: string; display: boolean } {
+	return (token as { type: string }).type === "math";
+}
+
+/** Convert a `math` token's LaTeX to single-line Unicode for inline rendering. */
+function renderMathToken(text: string): string {
+	return latexToUnicode(text).replace(MATH_NEWLINES, " ");
+}
+
+/**
+ * When a paragraph's only meaningful content is a single display math token
+ * (`$$…$$` / `\[…\]`), return it so the paragraph can be stacked multi-line
+ * instead of flattened inline. Models routinely write display math on one line,
+ * which marked captures as an inline `display:true` math token inside a
+ * paragraph; without this it would flatten through `renderMathToken`.
+ */
+function soleDisplayMath(tokens?: Token[]): (Token & { text: string }) | null {
+	if (!tokens) return null;
+	let math: (Token & { text: string; display: boolean }) | null = null;
+	for (const token of tokens) {
+		if (isMathToken(token) && token.display) {
+			if (math) return null;
+			math = token;
+		} else if (!(token.type === "text" && typeof token.text === "string" && token.text.trim() === "")) {
+			return null;
+		}
+	}
+	return math;
+}
+
 function plainInlineTokens(tokens: Token[]): string {
 	let result = "";
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += renderMathToken(token.text);
+			continue;
+		}
 		switch (token.type) {
 			case "text":
 				result += token.tokens && token.tokens.length > 0 ? plainInlineTokens(token.tokens) : token.text;
@@ -314,6 +685,14 @@ export class Markdown implements Component {
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
 
+	#ignoreTight = false;
+
+	setIgnoreTight(ignore: boolean): this {
+		this.#ignoreTight = ignore;
+		this.invalidate();
+		return this;
+	}
+
 	constructor(
 		text: string,
 		paddingX: number,
@@ -438,7 +817,8 @@ export class Markdown implements Component {
 		}
 
 		// Calculate available width for content (subtract horizontal padding)
-		const contentWidth = Math.max(1, width - this.#paddingX * 2);
+		const paddingX = this.#ignoreTight ? this.#paddingX : getPaddingX(this.#paddingX);
+		const contentWidth = Math.max(1, width - paddingX * 2);
 
 		// Don't render anything if there's no actual text
 		if (!this.#text || this.#text.trim() === "") {
@@ -467,7 +847,7 @@ export class Markdown implements Component {
 		if (!this.transientRenderCache) {
 			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
 			const headingProbe = this.#theme.heading("");
-			cacheKey = `${normalizedText}\x00${width}\x00${this.#paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			cacheKey = `${normalizedText}\x00${width}\x00${paddingX}\x00${this.#paddingY}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
@@ -504,8 +884,8 @@ export class Markdown implements Component {
 		}
 
 		// Add margins and background to each wrapped line
-		const leftMargin = padding(this.#paddingX);
-		const rightMargin = padding(this.#paddingX);
+		const leftMargin = padding(paddingX);
+		const rightMargin = padding(paddingX);
 		const bgFn = this.#defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 
@@ -658,6 +1038,14 @@ export class Markdown implements Component {
 	#renderToken(token: Token, width: number, nextTokenType?: string, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
 
+		// Display math block (own-line `$$…$$` / `\[…\]`): stack `\frac` vertically
+		// and keep `\\` row breaks, so fractions and matrices span multiple lines.
+		if (isMathToken(token)) {
+			for (const mathLine of latexToBlock(token.text)) lines.push(this.#applyDefaultStyle(mathLine));
+			if (nextTokenType && nextTokenType !== "space") lines.push("");
+			return lines;
+		}
+
 		switch (token.type) {
 			case "heading": {
 				const headingLevel = token.depth;
@@ -692,6 +1080,12 @@ export class Markdown implements Component {
 			}
 
 			case "paragraph": {
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					for (const mathLine of latexToBlock(displayMath.text)) lines.push(this.#applyDefaultStyle(mathLine));
+					if (nextTokenType && nextTokenType !== "list" && nextTokenType !== "space") lines.push("");
+					break;
+				}
 				const paragraphText = this.#renderInlineTokens(token.tokens || [], styleContext);
 				lines.push(paragraphText);
 				// Don't add spacing if next token is space or list
@@ -702,13 +1096,18 @@ export class Markdown implements Component {
 			}
 
 			case "code": {
-				// Handle mermaid diagrams with ASCII rendering when available
+				// Mermaid diagrams render as ASCII art when the theme supplies a
+				// resolver. The art is preformatted, so clip each row to the content
+				// width: the later wrap pass would otherwise fragment the box-drawing
+				// canvas. truncateToWidth is ANSI- and wide-char-aware, and the
+				// resolver already re-fits over-wide horizontal graphs top-down.
 				if (token.lang === "mermaid" && this.#theme.resolveMermaidAscii) {
-					const ascii = this.#theme.resolveMermaidAscii(token.text);
-
+					const ascii = this.#theme.resolveMermaidAscii(token.text, width);
 					if (ascii) {
-						for (const asciiLine of Bun.stripANSI(ascii).split("\n")) {
-							lines.push(asciiLine);
+						for (const asciiLine of ascii.split("\n")) {
+							lines.push(
+								visibleWidth(asciiLine) > width ? truncateToWidth(asciiLine, width, Ellipsis.Omit) : asciiLine,
+							);
 						}
 						if (nextTokenType && nextTokenType !== "space") {
 							lines.push("");
@@ -799,17 +1198,25 @@ export class Markdown implements Component {
 				break;
 			}
 
-			case "hr":
-				lines.push(this.#theme.hr(this.#theme.symbols.hrChar.repeat(Math.min(width, 80))));
+			case "hr": {
+				const raw = "raw" in token && typeof token.raw === "string" ? token.raw.trim() : "";
+				const char = raw[0] || "";
+				const fillChar = getHrChar(char, this.#theme.symbols.hrChar);
+				lines.push(this.#theme.hr(fillChar.repeat(Math.min(width, 80))));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after horizontal rules (unless space token follows)
 				}
 				break;
+			}
 
 			case "html":
-				// Render HTML as plain text (escaped for terminal)
 				if ("raw" in token && typeof token.raw === "string") {
-					lines.push(this.#applyDefaultStyle(token.raw.trim()));
+					const cleaned = normalizeHtmlForTerminal(token.raw);
+					const blockLines = splitTerminalLines(cleaned);
+					for (const line of blockLines) {
+						const trimmed = line.trimEnd();
+						lines.push(trimmed.trim() === "" ? "" : this.#applyDefaultStyle(trimmed));
+					}
 				}
 				break;
 
@@ -834,27 +1241,45 @@ export class Markdown implements Component {
 		const { applyText, stylePrefix } = resolvedStyleContext;
 		const applyTextWithNewlines = (text: string): string => {
 			const segments: string[] = text.split("\n");
-			return segments.map((segment: string) => applyText(segment)).join("\n");
+			return segments.map((segment: string) => (segment === "" ? "" : applyText(segment))).join("\n");
 		};
 		const swatchGlyph = this.#theme.symbols.colorSwatch || DEFAULT_COLOR_SWATCH_GLYPH;
+		let trimLeadingWhitespace = false;
+		const htmlState = createHtmlNormalizationState();
+		const markHtmlItemWhenContent = (text: string): void => {
+			markCurrentHtmlItemContent(htmlState, text);
+		};
 
 		for (const token of tokens) {
+			if (isMathToken(token)) {
+				markHtmlItemWhenContent(token.text);
+				result += applyTextWithNewlines(renderMathToken(token.text));
+				continue;
+			}
 			switch (token.type) {
-				case "text":
+				case "text": {
+					const rawText = trimLeadingWhitespace ? token.text.replace(/^\s+/, "") : token.text;
+					const text = normalizeHtmlEntitiesForTerminal(rawText);
+					trimLeadingWhitespace = false;
+					markHtmlItemWhenContent(text);
+					if (token.tokens) markHtmlItemWhenContent(plainInlineTokens(token.tokens));
 					// Text tokens in list items can have nested tokens for inline formatting
 					if (token.tokens && token.tokens.length > 0) {
 						result += this.#renderInlineTokens(token.tokens, resolvedStyleContext);
 					} else {
-						result += renderTextWithSwatches(token.text, applyTextWithNewlines, swatchGlyph);
+						result += renderTextWithSwatches(text, applyTextWithNewlines, swatchGlyph);
 					}
 					break;
+				}
 
 				case "paragraph":
 					// Paragraph tokens contain nested inline tokens
+					markHtmlItemWhenContent(plainInlineTokens(token.tokens || []));
 					result += this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					break;
 
 				case "strong": {
+					markHtmlItemWhenContent(plainInlineTokens(token.tokens || []));
 					const boldContent = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					result += this.#theme.bold(boldContent) + stylePrefix;
 					break;
@@ -862,16 +1287,19 @@ export class Markdown implements Component {
 
 				case "em": {
 					const italicContent = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
+					markHtmlItemWhenContent(plainInlineTokens(token.tokens || []));
 					result += this.#theme.italic(italicContent) + stylePrefix;
 					break;
 				}
 
 				case "codespan": {
+					markHtmlItemWhenContent(token.text);
 					result += codespanSwatch(token.text, swatchGlyph) + this.#theme.code(token.text) + stylePrefix;
 					break;
 				}
 
 				case "link": {
+					markHtmlItemWhenContent(token.text);
 					const linkText = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLinkText = this.#theme.link(this.#theme.underline(linkText));
 					const clickableLinkText = formatHyperlink(styledLinkText, token.href);
@@ -891,25 +1319,36 @@ export class Markdown implements Component {
 
 				case "br":
 					result += "\n";
+					trimLeadingWhitespace = true;
 					break;
 
 				case "del": {
 					const delContent = this.#renderInlineTokens(token.tokens || [], resolvedStyleContext);
+					markHtmlItemWhenContent(plainInlineTokens(token.tokens || []));
 					result += this.#theme.strikethrough(delContent) + stylePrefix;
 					break;
 				}
 
 				case "html":
-					// Render inline HTML as plain text
 					if ("raw" in token && typeof token.raw === "string") {
-						result += applyTextWithNewlines(token.raw);
+						const cleaned = normalizeHtmlForTerminal(token.raw, htmlState);
+						result += applyTextWithNewlines(cleaned);
+						if (cleaned.endsWith("\n")) {
+							trimLeadingWhitespace = true;
+						} else if (cleaned.length > 0) {
+							trimLeadingWhitespace = false;
+						}
 					}
 					break;
 
 				default:
 					// Handle any other inline token types as plain text
 					if ("text" in token && typeof token.text === "string") {
-						result += applyTextWithNewlines(token.text);
+						const rawText = trimLeadingWhitespace ? token.text.replace(/^\s+/, "") : token.text;
+						const text = normalizeHtmlEntitiesForTerminal(rawText);
+						trimLeadingWhitespace = false;
+						markHtmlItemWhenContent(text);
+						result += applyTextWithNewlines(text);
 					}
 			}
 		}
@@ -996,16 +1435,29 @@ export class Markdown implements Component {
 					lines.push({ text: nestedLine, nested: true });
 				}
 			} else if (token.type === "text") {
-				// Text content (may have inline tokens)
-				const text =
-					token.tokens && token.tokens.length > 0
-						? this.#renderInlineTokens(token.tokens, styleContext)
-						: token.text || "";
-				lines.push({ text, nested: false });
+				// Text content (may have inline tokens, or a sole display-math token)
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+					for (const mathLine of latexToBlock(displayMath.text))
+						lines.push({ text: apply(mathLine), nested: false });
+				} else {
+					const text =
+						token.tokens && token.tokens.length > 0
+							? this.#renderInlineTokens(token.tokens, styleContext)
+							: token.text || "";
+					lines.push({ text, nested: false });
+				}
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
-				const text = this.#renderInlineTokens(token.tokens || [], styleContext);
-				lines.push({ text, nested: false });
+				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+				const displayMath = soleDisplayMath(token.tokens);
+				if (displayMath) {
+					for (const mathLine of latexToBlock(displayMath.text))
+						lines.push({ text: apply(mathLine), nested: false });
+				} else {
+					lines.push({ text: this.#renderInlineTokens(token.tokens || [], styleContext), nested: false });
+				}
 			} else if (token.type === "code") {
 				// Code block in list item
 				const codeIndent = padding(this.#codeBlockIndent);
@@ -1022,6 +1474,10 @@ export class Markdown implements Component {
 					}
 				}
 				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
+			} else if (isMathToken(token)) {
+				// Display math block inside a list item: stack fractions / matrix rows.
+				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));
+				for (const mathLine of latexToBlock(token.text)) lines.push({ text: apply(mathLine), nested: false });
 			} else {
 				// Other token types - try to render as inline
 				const text = this.#renderInlineTokens([token], styleContext);
@@ -1049,6 +1505,10 @@ export class Markdown implements Component {
 		return Math.min(longest, maxWidth);
 	}
 
+	#terminalLineWidths(text: string): number[] {
+		return splitTerminalLines(text).map(line => visibleWidth(line));
+	}
+
 	/**
 	 * Wrap a table cell to fit into a column.
 	 *
@@ -1056,7 +1516,8 @@ export class Markdown implements Component {
 	 * consistently with the rest of the renderer.
 	 */
 	#wrapCellText(text: string, maxWidth: number): string[] {
-		return wrapTextWithAnsi(text, Math.max(1, maxWidth));
+		const cellWidth = Math.max(1, maxWidth);
+		return splitTerminalLines(text).flatMap(line => wrapTextWithAnsi(line, cellWidth));
 	}
 
 	/**
@@ -1096,13 +1557,15 @@ export class Markdown implements Component {
 		const minWordWidths: number[] = [];
 		for (let i = 0; i < numCols; i++) {
 			const headerText = this.#renderInlineTokens(token.header[i].tokens || [], styleContext);
-			naturalWidths[i] = visibleWidth(headerText);
+			const headerLineWidths = this.#terminalLineWidths(headerText);
+			naturalWidths[i] = Math.max(...headerLineWidths, 0);
 			minWordWidths[i] = Math.max(1, this.#getLongestWordWidth(headerText, maxUnbrokenWordWidth));
 		}
 		for (const row of token.rows) {
 			for (let i = 0; i < row.length; i++) {
 				const cellText = this.#renderInlineTokens(row[i].tokens || [], styleContext);
-				naturalWidths[i] = Math.max(naturalWidths[i] || 0, visibleWidth(cellText));
+				const cellLineWidths = this.#terminalLineWidths(cellText);
+				naturalWidths[i] = Math.max(naturalWidths[i] || 0, ...cellLineWidths);
 				minWordWidths[i] = Math.max(
 					minWordWidths[i] || 1,
 					this.#getLongestWordWidth(cellText, maxUnbrokenWordWidth),
@@ -1249,10 +1712,14 @@ export class Markdown implements Component {
 export function renderInlineMarkdown(text: string, mdTheme: MarkdownTheme, baseColor?: (t: string) => string): string {
 	// Guard against undefined/null during streaming — partial JSON can leave fields unpopulated.
 	if (typeof text !== "string") return (baseColor ?? (t => t))(text != null ? String(text) : "");
-	const tokens = marked.lexer(text);
+	const tokens = markdownParser.lexer(text);
 	const applyText = baseColor ?? ((t: string) => t);
 	let result = "";
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += applyText(renderMathToken(token.text));
+			continue;
+		}
 		if (token.type === "paragraph" && token.tokens) {
 			result += renderInlineTokens(token.tokens, mdTheme, applyText);
 		} else if (token.type === "list") {
@@ -1274,6 +1741,10 @@ function renderInlineTokens(tokens: Token[], mdTheme: MarkdownTheme, applyText: 
 	let result = "";
 	const styleReset = applyText("");
 	for (const token of tokens) {
+		if (isMathToken(token)) {
+			result += applyText(renderMathToken(token.text));
+			continue;
+		}
 		switch (token.type) {
 			case "text":
 				if (token.tokens && token.tokens.length > 0) {

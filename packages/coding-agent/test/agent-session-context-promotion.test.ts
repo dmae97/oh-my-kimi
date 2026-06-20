@@ -416,6 +416,38 @@ describe("AgentSession context promotion", () => {
 		expect(session.providerSessionState.size).toBe(1);
 	});
 
+	it("does not promote by default", async () => {
+		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
+		if (!sparkModel) {
+			throw new Error("Expected codex spark model to exist");
+		}
+
+		const agent = new Agent({
+			initialState: {
+				model: sparkModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry,
+		});
+
+		const overflowMessage = createOverflowMessage(sparkModel);
+		session.agent.emitExternalEvent({ type: "message_end", message: overflowMessage });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [overflowMessage] });
+
+		await settle();
+
+		expect(session.model?.provider).toBe(sparkModel.provider);
+		expect(session.model?.id).toBe(sparkModel.id);
+	});
+
 	it("promotes to a larger-context model on response.incomplete (length stop)", async () => {
 		const sparkModel = modelRegistry.find("openai-codex", "gpt-5.3-codex-spark");
 		const codexModel = modelRegistry.find("openai-codex", "gpt-5.5");

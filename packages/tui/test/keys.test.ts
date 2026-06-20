@@ -57,10 +57,23 @@ describe("matchesKey", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("keeps NumLock keypad digits as text instead of navigation keys", () => {
+	it("keeps keypad digits as text with or without NumLock modifier", () => {
 		setKittyProtocolActive(true);
-		expect(matchesKey("\x1b[57400;129u", "1")).toBe(true);
-		expect(matchesKey("\x1b[57400;129u", "end")).toBe(false);
+		for (const data of ["\x1b[57400u", "\x1b[57400;129u"]) {
+			expect(matchesKey(data, "1")).toBe(true);
+			expect(matchesKey(data, "end")).toBe(false);
+		}
+		expect(matchesKey("\x1b[57404u", "5")).toBe(true);
+		expect(matchesKey("\x1b[57404u", "clear")).toBe(false);
+		setKittyProtocolActive(false);
+	});
+
+	it("defers CSI-u/modifyOtherKeys named keys to native normalization", () => {
+		// Regression: the keypad text fast path must not short-circuit canonical
+		// named keys that decode to a printable codepoint (space, shifted letters).
+		setKittyProtocolActive(true);
+		expect(matchesKey("\x1b[32u", "space")).toBe(true);
+		expect(matchesKey("\x1b[97:65;2u", "shift+a")).toBe(true);
 		setKittyProtocolActive(false);
 	});
 
@@ -124,9 +137,21 @@ describe("parseKey", () => {
 		setKittyProtocolActive(false);
 	});
 
-	it("parses NumLock keypad digits as digits", () => {
+	it("parses keypad digits as digits with or without NumLock modifier", () => {
 		setKittyProtocolActive(true);
+		expect(parseKey("\x1b[57400u")).toBe("1");
 		expect(parseKey("\x1b[57400;129u")).toBe("1");
+		expect(parseKey("\x1b[57404u")).toBe("5");
+		setKittyProtocolActive(false);
+	});
+
+	it("normalizes CSI-u/modifyOtherKeys named keys instead of returning raw printables", () => {
+		// Regression: space/backspace encoded via CSI-u or modifyOtherKeys must
+		// resolve to their canonical identifiers, not literal " "/DEL bytes.
+		setKittyProtocolActive(true);
+		expect(parseKey("\x1b[32u")).toBe("space");
+		expect(parseKey("\x1b[27;1;32~")).toBe("space");
+		expect(parseKey("\x1b[27;1;127~")).toBe("backspace");
 		setKittyProtocolActive(false);
 	});
 
@@ -153,8 +178,10 @@ describe("parseKey", () => {
 });
 
 describe("extractPrintableText", () => {
-	it("extracts NumLock keypad digits from Kitty CSI-u sequences", () => {
+	it("extracts keypad digits from Kitty CSI-u sequences", () => {
+		expect(extractPrintableText("\x1b[57407u")).toBe("8");
 		expect(extractPrintableText("\x1b[57407;129u")).toBe("8");
+		expect(extractPrintableText("\x1b[57404u")).toBe("5");
 	});
 
 	it("extracts keypad operators from Kitty CSI-u sequences", () => {
@@ -164,6 +191,10 @@ describe("extractPrintableText", () => {
 
 	it("does not treat modified NumLock keypad navigation keys as text", () => {
 		expect(extractPrintableText("\x1b[57400;133u")).toBeUndefined();
+	});
+
+	it("does not extract DEL from modifyOtherKeys sequences as text", () => {
+		expect(extractPrintableText("\x1b[27;1;127~")).toBeUndefined();
 	});
 
 	it("ignores unsupported modifiers on Kitty CSI-u text", () => {

@@ -149,3 +149,59 @@ describe("ollama tool forcing", () => {
 		expect(requestBody?.tools?.map(tool => tool.function.name)).toEqual(["write"]);
 	});
 });
+
+describe("ollama reasoning effort backfill (buildModel)", () => {
+	const staleOllamaSpec = <TApi extends "openai-responses" | "openai-completions">(
+		api: TApi,
+		compat?: ModelSpec<TApi>["compat"],
+	): ModelSpec<TApi> =>
+		({
+			id: "gemma4:e4b",
+			name: "gemma4:e4b",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+			thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+			compat,
+		}) as ModelSpec<TApi>;
+
+	test("stamps the effort map on a stale ollama responses spec lacking compat", () => {
+		// A cache row or hand-written config written before the remap existed:
+		// reasoning-capable, `minimal` offered, but no reasoningEffortMap. The
+		// builder must backfill it so the wire never sends raw `minimal`/`xhigh`.
+		const model = buildModel(staleOllamaSpec("openai-responses"));
+		expect(model.compat.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
+		// xhigh drops out of thinking.effortMap — it is not an offered effort.
+		expect(model.thinking?.effortMap).toEqual({ minimal: "low" });
+	});
+
+	test("backfills openai-completions ollama specs too", () => {
+		const model = buildModel(staleOllamaSpec("openai-completions"));
+		expect(model.compat.reasoningEffortMap).toMatchObject({ minimal: "low", xhigh: "max" });
+	});
+
+	test("explicit overrides win while missing ollama defaults stay", () => {
+		const model = buildModel(staleOllamaSpec("openai-responses", { reasoningEffortMap: { minimal: "medium" } }));
+		expect(model.compat.reasoningEffortMap).toEqual({ minimal: "medium", xhigh: "max" });
+	});
+
+	test("leaves non-ollama providers untouched", () => {
+		const model = buildModel({ ...staleOllamaSpec("openai-responses"), provider: "custom" });
+		expect(model.compat.reasoningEffortMap).toEqual({});
+	});
+
+	test("merges the ollama defaults into the whenThinking variant", () => {
+		const model = buildModel(
+			staleOllamaSpec("openai-completions", { whenThinking: { reasoningEffortMap: { minimal: "medium" } } }),
+		);
+		// The thinking-engaged variant must keep the xhigh default; otherwise a
+		// partial whenThinking override would re-leak raw `minimal`/`xhigh`.
+		expect(model.compat.whenThinking?.reasoningEffortMap).toEqual({ minimal: "medium", xhigh: "max" });
+		expect(model.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "max" });
+	});
+});

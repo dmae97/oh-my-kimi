@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import {
 	type FileDiagnosticsResult,
 	flushLspWritethroughBatch,
@@ -1631,23 +1631,20 @@ export async function computePatchDiff(
 	}
 }
 
-export const patchEditEntrySchema = z
-	.object({
-		op: z.enum(["create", "delete", "update"]).optional().describe("operation (default update)"),
-		rename: z.string().describe("new path for move").optional(),
-		diff: z.string().describe("diff hunks or full content for create").optional(),
-	})
-	.strict();
+export const patchEditEntrySchema = type({
+	"op?": "'create' | 'delete' | 'update'",
+	"rename?": "string",
+	"diff?": "string",
+});
 
-export const patchEditSchema = z
-	.object({
-		path: z.string().describe("file path"),
-		edits: z.array(patchEditEntrySchema).min(1).describe("patch operations"),
-	})
-	.strict();
+export type PatchEditEntry = typeof patchEditEntrySchema.infer;
 
-export type PatchEditEntry = z.infer<typeof patchEditEntrySchema>;
-export type PatchParams = z.infer<typeof patchEditSchema>;
+export const patchEditSchema = type({
+	path: "string",
+	edits: patchEditEntrySchema.array(),
+});
+
+export type PatchParams = typeof patchEditSchema.infer;
 
 export interface ExecutePatchSingleOptions {
 	session: ToolSession;

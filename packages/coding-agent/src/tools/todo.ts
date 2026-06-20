@@ -3,8 +3,8 @@ import type { ToolExample } from "@oh-my-pi/pi-ai";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import chalk from "chalk";
-import { z } from "zod/v4";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import todoDescription from "../prompts/tools/todo.md" with { type: "text" };
@@ -44,30 +44,27 @@ export interface TodoToolDetails {
 // Schema
 // =============================================================================
 
-const TodoOp = z
-	.enum(["init", "start", "done", "rm", "drop", "append", "view"] as const)
-	.describe("operation to apply");
+const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"').describe("operation to apply");
 
-const InitListEntry = z.object({
-	phase: z.string().describe("phase name"),
-	items: z.array(z.string().describe("task content")).min(1).describe("tasks for this phase"),
+const InitListEntry = type({
+	phase: type("string").describe("phase name"),
+	items: type("string").describe("task content").array().atLeastLength(1).describe("tasks for this phase"),
 });
 
-const TodoOpEntry = z.object({
+const TodoOpEntry = type({
 	op: TodoOp,
-	list: z.array(InitListEntry).optional().describe("phased task list (init)"),
-	task: z.string().optional().describe("task content"),
-	phase: z.string().optional().describe("phase name"),
-	items: z.array(z.string().describe("task content")).min(1).optional().describe("tasks to append"),
+	"list?": InitListEntry.array().describe("phased task list (init)"),
+	"task?": type("string").describe("task content"),
+	"phase?": type("string").describe("phase name"),
+	"items?": type("string").describe("task content").array().atLeastLength(1).describe("tasks to append"),
 });
 
-const todoSchema = z
-	.object({
-		ops: z.array(TodoOpEntry).min(1).describe("ordered todo operations"),
-	})
-	.describe("apply ordered todo operations");
+const todoSchema = type({
+	ops: TodoOpEntry.array().atLeastLength(1).describe("ordered todo operations"),
+}).describe("apply ordered todo operations");
 
-type TodoParams = z.infer<typeof todoSchema>;
+type TodoParams = TodoSchema;
+type TodoSchema = typeof todoSchema.infer;
 type TodoOpEntryValue = TodoParams["ops"][number];
 
 // =============================================================================
@@ -565,7 +562,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 
-	readonly examples: readonly ToolExample<z.input<typeof todoSchema>>[] = [
+	readonly examples: readonly ToolExample<typeof todoSchema.infer>[] = [
 		{
 			caption: "Initial setup (multi-phase)",
 			call: {

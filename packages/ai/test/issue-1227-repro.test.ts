@@ -20,7 +20,7 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import type { AssistantMessage, Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function abortedSignal(): AbortSignal {
 	const controller = new AbortController();
@@ -78,7 +78,7 @@ function assistantWithToolCall(): AssistantMessage {
 const echoTool: Tool = {
 	name: "echo",
 	description: "Echo input",
-	parameters: z.object({ text: z.string() }),
+	parameters: type({ text: "string" }),
 };
 
 describe("issue #1227 — /btw fails on LiteLLM→Bedrock with tool history", () => {

@@ -7,12 +7,14 @@ import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v6 invalidates rows
-// that may contain the retired unknown-limit sentinels (222222/8888); v5
-// invalidated rows predating effort-tier variant collapsing (raw
-// `-low`/`-high`/`-thinking` member ids); v4 dropped the pre-efforts
-// ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 6;
+// the model manager rebuilds via `buildModel` on load. v7 invalidates rows
+// predating the Antigravity Gemini budget-mode migration (cached specs still
+// carrying `thinking.mode: "google-level"` and the old 3.5-flash effort
+// routing); v6 invalidates rows that may contain the retired unknown-limit
+// sentinels (222222/8888); v5 invalidated rows predating effort-tier variant
+// collapsing (raw `-low`/`-high`/`-thinking` member ids); v4 dropped the
+// pre-efforts ThinkingConfig shape.
+const CACHE_SCHEMA_VERSION = 7;
 
 interface CacheRow {
 	provider_id: string;
@@ -44,14 +46,7 @@ interface CacheEntry<TApi extends Api = Api> {
 let sharedDb: Database | null = null;
 let sharedDbPath: string | null = null;
 
-function getDb(dbPath?: string): Database {
-	const resolvedPath = dbPath ?? getModelDbPath();
-	if (sharedDb && sharedDbPath === resolvedPath) {
-		return sharedDb;
-	}
-	if (sharedDb) {
-		sharedDb.close();
-	}
+function openDb(resolvedPath: string): Database {
 	const db = new Database(resolvedPath, { create: true });
 	// Install the busy handler BEFORE any lock-taking statement. See
 	// https://github.com/can1357/oh-my-pi/issues/2421.
@@ -68,16 +63,42 @@ function getDb(dbPath?: string): Database {
 		)
 	`);
 	migrateCacheSchema(db);
+	return db;
+}
 
+function getSharedDb(): Database {
+	const resolvedPath = getModelDbPath();
+	if (sharedDb && sharedDbPath === resolvedPath) {
+		return sharedDb;
+	}
+	if (sharedDb) {
+		sharedDb.close();
+	}
+	const db = openDb(resolvedPath);
 	sharedDb = db;
 	sharedDbPath = resolvedPath;
 	return db;
 }
 
+function withModelCacheDb<T>(dbPath: string | undefined, useDb: (db: Database) => T): T {
+	if (!dbPath) return useDb(getSharedDb());
+	const db = openDb(dbPath);
+	try {
+		return useDb(db);
+	} finally {
+		db.close();
+	}
+}
+
 function migrateCacheSchema(db: Database): void {
-	const columns = db.prepare("PRAGMA table_info(model_cache)").all() as TableInfoRow[];
-	if (!columns.some(column => column.name === "static_fingerprint")) {
-		db.run("ALTER TABLE model_cache ADD COLUMN static_fingerprint TEXT NOT NULL DEFAULT ''");
+	const stmt = db.prepare("PRAGMA table_info(model_cache)");
+	try {
+		const columns = stmt.all() as TableInfoRow[];
+		if (!columns.some(column => column.name === "static_fingerprint")) {
+			db.run("ALTER TABLE model_cache ADD COLUMN static_fingerprint TEXT NOT NULL DEFAULT ''");
+		}
+	} finally {
+		stmt.finalize();
 	}
 	db.run("UPDATE model_cache SET version = ? WHERE version = 2", [CACHE_SCHEMA_VERSION]);
 }
@@ -89,21 +110,27 @@ export function readModelCache<TApi extends Api>(
 	dbPath?: string,
 ): CacheEntry<TApi> | null {
 	try {
-		const db = getDb(dbPath);
-		const row = db.query<CacheRow, [string]>("SELECT * FROM model_cache WHERE provider_id = ?").get(providerId);
-		if (!row || row.version !== CACHE_SCHEMA_VERSION) {
-			return null;
-		}
-		const models = JSON.parse(row.models) as ModelSpec<TApi>[];
-		const ageMs = now() - row.updated_at;
-		const fresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= ttlMs;
-		return {
-			models,
-			fresh,
-			authoritative: row.authoritative === 1,
-			updatedAt: row.updated_at,
-			staticFingerprint: row.static_fingerprint ?? "",
-		};
+		return withModelCacheDb(dbPath, db => {
+			const stmt = db.query<CacheRow, [string]>("SELECT * FROM model_cache WHERE provider_id = ?");
+			try {
+				const row = stmt.get(providerId);
+				if (!row || row.version !== CACHE_SCHEMA_VERSION) {
+					return null;
+				}
+				const models = JSON.parse(row.models) as ModelSpec<TApi>[];
+				const ageMs = now() - row.updated_at;
+				const fresh = Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= ttlMs;
+				return {
+					models,
+					fresh,
+					authoritative: row.authoritative === 1,
+					updatedAt: row.updated_at,
+					staticFingerprint: row.static_fingerprint ?? "",
+				};
+			} finally {
+				stmt.finalize();
+			}
+		});
 	} catch {
 		return null;
 	}
@@ -118,19 +145,20 @@ export function writeModelCache<TApi extends Api>(
 	dbPath?: string,
 ): void {
 	try {
-		const db = getDb(dbPath);
-		db.run(
-			`INSERT OR REPLACE INTO model_cache (provider_id, version, updated_at, authoritative, static_fingerprint, models)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			[
-				providerId,
-				CACHE_SCHEMA_VERSION,
-				updatedAt,
-				authoritative ? 1 : 0,
-				staticFingerprint,
-				JSON.stringify(models.map(model => ({ ...model, compat: model.compatConfig, compatConfig: undefined }))),
-			],
-		);
+		withModelCacheDb(dbPath, db => {
+			db.run(
+				`INSERT OR REPLACE INTO model_cache (provider_id, version, updated_at, authoritative, static_fingerprint, models)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				[
+					providerId,
+					CACHE_SCHEMA_VERSION,
+					updatedAt,
+					authoritative ? 1 : 0,
+					staticFingerprint,
+					JSON.stringify(models.map(model => ({ ...model, compat: model.compatConfig, compatConfig: undefined }))),
+				],
+			);
+		});
 	} catch {
 		// Cache writes are best-effort; failures should not break model resolution.
 	}

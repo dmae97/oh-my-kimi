@@ -52,6 +52,7 @@ export interface GeminiSearchParams extends GeminiToolParams {
 	authStorage: AuthStorage;
 	sessionId?: string;
 	fetch?: FetchImpl;
+	antigravityEndpointMode?: "auto" | "production" | "sandbox";
 }
 
 export function buildGeminiRequestTools(params: GeminiToolParams): Array<Record<string, Record<string, unknown>>> {
@@ -163,6 +164,7 @@ async function callGeminiSearch(
 	toolParams: GeminiToolParams,
 	fetchImpl: FetchImpl | undefined,
 	signal: AbortSignal | undefined,
+	mode?: "auto" | "production" | "sandbox",
 ): Promise<{
 	answer: string;
 	sources: SearchSource[];
@@ -171,7 +173,19 @@ async function callGeminiSearch(
 	model: string;
 	usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
 }> {
-	const endpoints = auth.isAntigravity ? ANTIGRAVITY_ENDPOINT_FALLBACKS : [DEFAULT_ENDPOINT];
+	let endpoints: string[];
+	if (auth.isAntigravity) {
+		const m = mode ?? "auto";
+		if (m === "sandbox") {
+			endpoints = [ANTIGRAVITY_SANDBOX_ENDPOINT];
+		} else if (m === "production") {
+			endpoints = [ANTIGRAVITY_DAILY_ENDPOINT];
+		} else {
+			endpoints = [...ANTIGRAVITY_ENDPOINT_FALLBACKS];
+		}
+	} else {
+		endpoints = [DEFAULT_ENDPOINT];
+	}
 	const headers = auth.isAntigravity ? { "User-Agent": getAntigravityUserAgent() } : getGeminiCliHeaders();
 
 	const requestMetadata = auth.isAntigravity
@@ -187,12 +201,7 @@ async function callGeminiSearch(
 
 	const normalizedSystemPrompt = systemPrompt?.toWellFormed();
 	const systemInstructionParts: Array<{ text: string }> = [
-		...(auth.isAntigravity
-			? [
-					{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION },
-					{ text: `Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]` },
-				]
-			: []),
+		...(auth.isAntigravity ? [{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION }] : []),
 		...(normalizedSystemPrompt ? [{ text: normalizedSystemPrompt }] : []),
 	];
 
@@ -238,16 +247,45 @@ async function callGeminiSearch(
 		body: JSON.stringify(requestBody),
 		signal: withHardTimeout(signal),
 	});
-	const urlFor = (attempt: number) =>
-		`${endpoints[Math.min(attempt, endpoints.length - 1)]}/v1internal:streamGenerateContent?alt=sse`;
 
-	const response = await fetchWithRetry(urlFor, {
-		...buildInit(),
-		fetch: fetchImpl,
-		maxAttempts: MAX_RETRIES + 1,
-		defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
-		maxDelayMs: RATE_LIMIT_BUDGET_MS,
-	});
+	let response: Response | undefined;
+
+	for (let i = 0; i < endpoints.length; i++) {
+		const endpoint = endpoints[i];
+		const isLastEndpoint = i === endpoints.length - 1;
+		try {
+			response = await fetchWithRetry(() => `${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
+				...buildInit(),
+				fetch: fetchImpl,
+				maxAttempts: isLastEndpoint ? MAX_RETRIES + 1 : 1,
+				defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+				maxDelayMs: RATE_LIMIT_BUDGET_MS,
+			});
+
+			if (response.ok) {
+				break;
+			}
+
+			if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
+				if (!isLastEndpoint) {
+					continue;
+				}
+			}
+			break;
+		} catch (error) {
+			if (isLastEndpoint) {
+				throw error;
+			}
+		}
+	}
+
+	if (!response?.ok) {
+		const errorText = response ? await response.text() : "Network error";
+		const status = response?.status ?? 502;
+		const classified = classifyProviderHttpError("gemini", status, errorText);
+		if (classified) throw classified;
+		throw new SearchProviderError("gemini", `Gemini Cloud Code API error (${status}): ${errorText}`, status);
+	}
 
 	if (!response.ok) {
 		const errorText = await response.text();
@@ -410,7 +448,6 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 			// re-resolved access may omit projectId, in which case the seed's
 			// project is still the right tenant for the credential. The
 			// `fetchWithRetry` transport backoff stays INSIDE this attempt — auth
-			// retry wraps transport retry.
 			callGeminiSearch(
 				{
 					accessToken: access.accessToken,
@@ -428,6 +465,7 @@ export async function searchGemini(params: GeminiSearchParams): Promise<SearchRe
 				},
 				params.fetch,
 				params.signal,
+				params.antigravityEndpointMode,
 			),
 		{ sessionId: params.sessionId, signal: params.signal, seed: seed.access },
 	);

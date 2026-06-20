@@ -745,9 +745,9 @@ fn compact_table(input: &str, visible_rows: usize) -> String {
 		out.push_str(line.trim_end());
 		out.push('\n');
 	}
-	out.push_str("… ");
+	out.push_str("[…");
 	out.push_str(&(lines.len() - 1 - visible_rows).to_string());
-	out.push_str(" more rows\n");
+	out.push_str(" rows elided…]\n");
 	out
 }
 
@@ -908,7 +908,7 @@ mod tests {
 		let out = filter(&compose_ctx, &input, 0).text;
 		assert!(out.contains("20 rows"));
 		assert!(out.contains("svc-0"));
-		assert!(out.contains("… 8 more rows"));
+		assert!(out.contains("[…8 rows elided…]"));
 	}
 
 	#[test]
@@ -988,7 +988,7 @@ mod tests {
 		assert!(out.contains("api-1  | request 0 complete"));
 		assert!(out.contains("api-1  | WARN cache miss"));
 		assert!(out.contains("worker | failed to process job"));
-		assert!(out.contains("omitted"));
+		assert!(out.contains("elided"));
 	}
 
 	#[test]
@@ -1000,7 +1000,7 @@ mod tests {
 		}
 		let out = compact_table(&input, 10);
 		assert!(out.contains("25 rows"));
-		assert!(out.contains("… 15 more rows"));
+		assert!(out.contains("[…15 rows elided…]"));
 	}
 
 	fn ctx<'a>(
@@ -1071,7 +1071,7 @@ mod tests {
 
 		assert!(out.contains("25 rows"), "docker --format table output should still compact: {out}");
 		assert!(
-			out.contains("… 13 more rows"),
+			out.contains("[…13 rows elided…]"),
 			"docker --format table should keep table omission: {out}"
 		);
 	}
@@ -1390,7 +1390,7 @@ mod tests {
 		}
 		let out = filter(&kubectl_ctx, &input, 0).text;
 		assert!(
-			out.contains("lines omitted") || out.contains("lines truncated"),
+			out.contains("ln elided…]"),
 			"kubectl apply output should be head/tail condensed: {out}"
 		);
 	}

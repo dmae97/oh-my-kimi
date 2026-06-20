@@ -1,6 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs";
-import { $env, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
+import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
@@ -249,7 +249,7 @@ export function emergencyTerminalRestore(): void {
 				altScreenActive = false;
 			}
 			terminal.showCursor();
-		} else if (terminalEverStarted) {
+		} else if (terminalEverStarted && !isTerminalHeadless()) {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
@@ -375,6 +375,20 @@ function parseOsc99KeyValues(section: string): Map<string, string> {
 	}
 	return values;
 }
+const XTERM_SCROLL_TO_BOTTOM_MODES = [1010, 1011] as const;
+
+function isXtermScrollToBottomMode(mode: number): boolean {
+	return mode === 1010 || mode === 1011;
+}
+
+function isPrivateModeSet(status: string): boolean {
+	return status === "1" || status === "3";
+}
+
+function isPrivateModeSupported(status: string): boolean {
+	return status !== "0" && status !== "4";
+}
+
 /**
  * Real terminal using process.stdin/stdout
  */
@@ -390,6 +404,10 @@ export class ProcessTerminal implements Terminal {
 	#stdinBuffer?: StdinBuffer;
 	#stdinDataHandler?: (data: string) => void;
 	#dead = false;
+	// Captured at construction and re-read at start(): when true, every real
+	// terminal side effect (writes, probes, raw mode, SIGWINCH, timers) is
+	// suppressed. Defaults on under `bun test` — see isTerminalHeadless().
+	#headless = isTerminalHeadless();
 	#writeLogPath = $env.PI_TUI_WRITE_LOG || "";
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
@@ -397,6 +415,7 @@ export class ProcessTerminal implements Terminal {
 	};
 
 	#windowsVTInputRestore?: () => void;
+	#xtermScrollToBottomRestoreModes = new Set<number>();
 	#appearanceCallbacks: Array<(appearance: TerminalAppearance) => void> = [];
 	#appearance: TerminalAppearance | undefined;
 	#osc11Pending = false;
@@ -418,7 +437,7 @@ export class ProcessTerminal implements Terminal {
 	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
-	#progressTimer?: ReturnType<typeof setInterval>;
+	#progressTimer?: Timer;
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
@@ -443,6 +462,13 @@ export class ProcessTerminal implements Terminal {
 	start(onInput: (data: string) => void, onResize: () => void): void {
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
+
+		// Headless (tests): suppress every real-terminal side effect. Skip raw
+		// mode, stdin listeners, capability probes, SIGWINCH, and emergency-restore
+		// ownership; #safeWrite is also a no-op, so frame paints and teardown
+		// escapes never reach the developer's terminal during `bun test`.
+		this.#headless = isTerminalHeadless();
+		if (this.#headless) return;
 
 		// Register for emergency cleanup
 		activeTerminal = this;
@@ -518,13 +544,17 @@ export class ProcessTerminal implements Terminal {
 		// Probe DEC private-mode support via DECRQM. 2026 (synchronized output)
 		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
 		// only after the terminal confirms support; 2031 (appearance change
-		// notifications) stops the OSC 11 poll once confirmed, since push
-		// notifications make polling redundant. Each probe rides the shared DA1
-		// sentinel FIFO, so a terminal that ignores DECRQM still resolves (as
-		// unsupported) when the DA1 reply arrives.
+		// notifications) stops the OSC 11 poll once confirmed. Xterm ?1010/?1011
+		// are disabled while OMP owns the TTY so typing in the editor does not
+		// force a reader scrolled into native history back to the tail. Each probe
+		// rides the shared DA1 sentinel, so terminals that ignore DECRQM resolve as
+		// unsupported when the DA1 reply arrives.
 		this.#queryPrivateMode(2026);
 		this.#queryPrivateMode(2048);
 		this.#queryPrivateMode(2031);
+		for (const mode of XTERM_SCROLL_TO_BOTTOM_MODES) {
+			this.#queryPrivateMode(mode);
+		}
 	}
 
 	/**
@@ -709,11 +739,10 @@ export class ProcessTerminal implements Terminal {
 			// DECRPM private-mode report. Resolves the matching probe by mode; the
 			// owner stays in the FIFO and is drained by its DA1 sentinel (a no-op
 			// once resolved). Per DECRPM, status 0 = unrecognized, 1/2 =
-			// set/reset, 3 = permanently set, and 4 = permanently reset. Only
-			// settable or permanently-set modes are useful for features we enable.
+			// set/reset, 3 = permanently set, and 4 = permanently reset.
 			const decrpmMatch = sequence.match(decrpmResponsePattern);
 			if (decrpmMatch) {
-				this.#resolvePrivateMode(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2] !== "0" && decrpmMatch[2] !== "4");
+				this.#handlePrivateModeReport(parseInt(decrpmMatch[1]!, 10), decrpmMatch[2]!);
 				return;
 			}
 
@@ -1021,6 +1050,13 @@ export class ProcessTerminal implements Terminal {
 		this.#safeWrite(`\x1b[?${mode}$p\x1b[c`);
 	}
 
+	#handlePrivateModeReport(mode: number, status: string): void {
+		this.#resolvePrivateMode(mode, isPrivateModeSupported(status));
+		if (isXtermScrollToBottomMode(mode) && isPrivateModeSet(status)) {
+			this.#disableXtermScrollToBottomMode(mode);
+		}
+	}
+
 	/**
 	 * Record DECRQM support for a private mode (idempotent — first result wins)
 	 * and notify subscribers. Enables DEC 2048 in-band resize when 2048 resolves
@@ -1040,6 +1076,12 @@ export class ProcessTerminal implements Terminal {
 		}
 		if (mode === 2048 && supported) this.#enableInBandResize();
 		if (mode === 2031 && supported) this.#stopOsc11Poll();
+	}
+
+	#disableXtermScrollToBottomMode(mode: number): void {
+		if (this.#xtermScrollToBottomRestoreModes.has(mode) || this.#dead) return;
+		this.#xtermScrollToBottomRestoreModes.add(mode);
+		this.#safeWrite(`\x1b[?${mode}l`);
 	}
 
 	/**
@@ -1103,6 +1145,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+		if (this.#headless) return;
 		if (this.#kittyProtocolActive) {
 			// Disable Kitty keyboard protocol first so any late key releases
 			// do not generate new Kitty escape sequences.
@@ -1145,6 +1188,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	stop(): void {
+		if (this.#headless) return;
 		// Unregister from emergency cleanup
 		if (activeTerminal === this) {
 			activeTerminal = null;
@@ -1170,7 +1214,12 @@ export class ProcessTerminal implements Terminal {
 		// Disable Mode 2031 appearance change notifications
 		this.#safeWrite("\x1b[?2031l");
 
-		// Disable DEC 2048 in-band resize notifications if we enabled them.
+		// Restore xterm scroll-to-bottom modes that were set before startup.
+		for (const mode of this.#xtermScrollToBottomRestoreModes) {
+			this.#safeWrite(`\x1b[?${mode}h`);
+		}
+		this.#xtermScrollToBottomRestoreModes.clear();
+
 		if (this.#inBandResizeActive) {
 			this.#safeWrite("\x1b[?2048l");
 			this.#inBandResizeActive = false;
@@ -1193,6 +1242,7 @@ export class ProcessTerminal implements Terminal {
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
+		this.#xtermScrollToBottomRestoreModes.clear();
 		this.#reportedColumns = undefined;
 		this.#reportedRows = undefined;
 
@@ -1266,6 +1316,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	#safeWrite(data: string): void {
+		if (this.#headless) return;
 		if (this.#dead) return;
 		// Skip control sequences when stdout isn't a TTY (piped output, tests, log
 		// files). They serve no purpose there and would surface as visible noise.
@@ -1348,6 +1399,7 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	setProgress(active: boolean): void {
+		if (this.#headless) return;
 		if (active) {
 			this.#safeWrite(TERMINAL_PROGRESS_ACTIVE_SEQUENCE);
 			if (!this.#progressTimer) {

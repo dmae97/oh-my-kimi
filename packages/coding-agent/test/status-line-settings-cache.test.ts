@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +7,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { StatusLineComponent, type StatusLineSettings } from "@oh-my-pi/pi-coding-agent/modes/components/status-line";
 import { STATUS_LINE_PRESETS } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/presets";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { setProjectDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -195,5 +196,61 @@ describe("StatusLineComponent effective settings cache", () => {
 		const nextEffective = component.getEffectiveSettingsForTest();
 		expect(nextEffective).not.toBe(effective);
 		expect(component.getEffectiveSettingsForTest()).toBe(nextEffective);
+	});
+	it("skips git probes when git integration is disabled", async () => {
+		const headSpy = spyOn(git.head, "resolveSync").mockReturnValue(null);
+		const statusSpy = spyOn(git.status, "summary").mockResolvedValue({ staged: 0, unstaged: 0, untracked: 0 });
+		const repoSpy = spyOn(git.repo, "resolveSync").mockReturnValue(null);
+		try {
+			Settings.instance.override("git.enabled", false);
+			const component = makeComponent({
+				preset: "custom",
+				leftSegments: ["git", "pr"],
+				rightSegments: [],
+				sessionAccent: false,
+			});
+
+			component.watchBranch(() => {
+				throw new Error("git watcher should not fire while git integration is disabled");
+			});
+			component.getTopBorder(100);
+			await Promise.resolve();
+
+			expect(repoSpy).not.toHaveBeenCalled();
+			expect(headSpy).not.toHaveBeenCalled();
+			expect(statusSpy).not.toHaveBeenCalled();
+		} finally {
+			repoSpy.mockRestore();
+			statusSpy.mockRestore();
+			headSpy.mockRestore();
+		}
+	});
+
+	it("skips git probes when no git-backed segment is visible", async () => {
+		const headSpy = spyOn(git.head, "resolveSync").mockReturnValue(null);
+		const statusSpy = spyOn(git.status, "summary").mockResolvedValue({ staged: 0, unstaged: 0, untracked: 0 });
+		const repoSpy = spyOn(git.repo, "resolveSync").mockReturnValue(null);
+		try {
+			const component = makeComponent({
+				preset: "custom",
+				leftSegments: ["pi"],
+				rightSegments: ["session_name"],
+				sessionAccent: false,
+			});
+
+			component.watchBranch(() => {
+				throw new Error("git watcher should not fire when no git-backed segment is visible");
+			});
+			component.getTopBorder(100);
+			await Promise.resolve();
+
+			expect(repoSpy).not.toHaveBeenCalled();
+			expect(headSpy).not.toHaveBeenCalled();
+			expect(statusSpy).not.toHaveBeenCalled();
+		} finally {
+			repoSpy.mockRestore();
+			statusSpy.mockRestore();
+			headSpy.mockRestore();
+		}
 	});
 });

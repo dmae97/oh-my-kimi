@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Effort } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -117,6 +118,19 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(session.model?.provider).toBe("runtime-provider");
 		expect(session.model?.id).toBe("runtime-reasoning-model");
 		expect(session.thinkingLevel).toBe("off");
+	});
+
+	test("normalizes max default thinking level from settings", async () => {
+		const settings = Settings.isolated({ defaultThinkingLevel: "max" });
+
+		const { session } = await createAgentSession({
+			...(await buildSessionOptions("runtime-provider/runtime-reasoning-model")),
+			settings,
+		});
+
+		expect(session.model?.provider).toBe("runtime-provider");
+		expect(session.model?.id).toBe("runtime-reasoning-model");
+		expect(session.thinkingLevel).toBe(Effort.XHigh);
 	});
 
 	test("selects the settings default model without synchronously validating auth", async () => {
@@ -283,7 +297,46 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("restores role model from extension provider after startup resume", async () => {
+	test("prefers Codex OAuth over plain OpenAI for the shared startup default", async () => {
+		const openaiDefault = getBundledModel("openai", "gpt-5.5");
+		const codexDefault = getBundledModel("openai-codex", "gpt-5.5");
+		if (!openaiDefault || !codexDefault) {
+			throw new Error("Expected bundled OpenAI and Codex GPT-5.5 defaults");
+		}
+
+		const authStorage = await AuthStorage.create(path.join(tempDir, "codex-fallback-auth.db"));
+		authStoragesToClose.push(authStorage);
+		authStorage.setRuntimeApiKey("openai", "sk-or-v1-invalid-openai-key");
+		authStorage.setRuntimeApiKey("openai-codex", "codex-oauth-token");
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings: Settings.isolated({ enabledModels: ["openai/gpt-5.5", "openai-codex/gpt-5.5"] }),
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("openai-codex");
+			expect(session.model?.id).toBe(codexDefault.id);
+			expect(session.model?.id).toBe(openaiDefault.id);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("restores role model max selector from extension provider after startup resume", async () => {
 		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) {
 			throw new Error("Expected bundled anthropic default model");
@@ -312,7 +365,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 					id: "smol-model",
 					parentId: "default-model",
 					timestamp,
-					model: "runtime-provider/runtime-model",
+					model: "runtime-provider/runtime-reasoning-model:max",
 					role: "smol",
 				},
 			]
@@ -341,7 +394,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
-			expect(session.model?.id).toBe("runtime-model");
+			expect(session.model?.id).toBe("runtime-reasoning-model");
+			expect(session.thinkingLevel).toBe(Effort.XHigh);
 		} finally {
 			await session.dispose();
 			authStorage.close();

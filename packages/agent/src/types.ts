@@ -1,5 +1,5 @@
 import type {
-	ApiKeyResolveContext,
+	ApiKey,
 	AssistantMessage,
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
@@ -37,6 +37,43 @@ export type StreamFn = (
 export type AsideMessage = AgentMessage | (() => AgentMessage | null);
 
 /**
+ * A soft tool requirement: the host wants `toolName` called before the loop
+ * runs other tools or yields, but WITHOUT paying the forced-`toolChoice` cost
+ * up front (changing `tool_choice` invalidates the provider message cache).
+ * Returned from {@link AgentLoopConfig.getToolChoice} in place of a hard
+ * {@link ToolChoice}: the loop injects `reminder` once when a new `id` becomes
+ * active, runs with `toolChoice` unchanged, and escalates to a one-turn forced
+ * choice only if the model fails to call `toolName`. Auto-clears when the host
+ * stops returning it or `toolName` is no longer an active tool.
+ */
+export interface SoftToolRequirement {
+	/** Discriminates a soft requirement from a hard {@link ToolChoice}. */
+	soft: true;
+	/**
+	 * Stable id of the *current* requirement. The loop injects `reminder` when
+	 * this id first becomes active and again whenever it changes (e.g. one
+	 * stacked preview resolves and the next becomes the head), but never
+	 * re-injects for an unchanged id across turns.
+	 */
+	id: string;
+	/** Tool that must be called before the loop runs other tools or yields. */
+	toolName: string;
+	/** Host-owned reminder messages, injected once per `id` activation. */
+	reminder: AgentMessage[];
+}
+
+/**
+ * A per-turn tool-choice directive: either a hard provider {@link ToolChoice}
+ * (applied verbatim) or a {@link SoftToolRequirement} (remind-then-escalate).
+ */
+export type ToolChoiceDirective = ToolChoice | SoftToolRequirement;
+
+/** True when a {@link ToolChoiceDirective} is a soft requirement, not a hard choice. */
+export function isSoftToolRequirement(directive: ToolChoiceDirective | undefined): directive is SoftToolRequirement {
+	return typeof directive === "object" && directive !== null && (directive as SoftToolRequirement).soft === true;
+}
+
+/**
  * Configuration for the agent loop.
  */
 export interface AgentLoopConfig extends SimpleStreamOptions {
@@ -54,6 +91,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Used by providers that support session-based caching (e.g., OpenAI Codex).
 	 */
 	sessionId?: string;
+
+	/** Absolute wall-clock deadline in Unix epoch milliseconds. */
+	deadline?: number;
 
 	/**
 	 * Optional resolver called per LLM request to produce request metadata.
@@ -117,12 +157,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	transformProviderContext?: (context: Context, model: Model) => Context;
 
 	/**
-	 * Resolves an API key dynamically for each LLM call.
+	 * Resolves the API key or resolver for the current model before each LLM call.
 	 *
-	 * Useful for short-lived OAuth tokens (e.g., GitHub Copilot) that may expire
-	 * during long-running tool execution phases.
+	 * Returning an ApiKeyResolver lets the stream retry policy refresh or rotate
+	 * the model-scoped credential after auth/usage-limit errors.
 	 */
-	getApiKey?: (provider: string, ctx?: ApiKeyResolveContext) => Promise<string | undefined> | string | undefined;
+	getApiKey?: (model: Model) => Promise<ApiKey | undefined> | ApiKey | undefined;
 
 	/**
 	 * Returns steering messages to inject into the conversation mid-run.
@@ -201,6 +241,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	intentTracing?: boolean;
 	/**
+	 * Strip tool descriptions (top-level + nested schema annotations) from the
+	 * provider-bound tool specs. Use when the full catalog is rendered into the
+	 * system prompt instead, so descriptions are not duplicated on the wire.
+	 */
+	pruneToolDescriptions?: boolean;
+	/**
 	 * Owned tool calling dialect.
 	 *
 	 * Undefined keeps provider-native tool calling. A dialect value sends no
@@ -227,7 +273,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * When set, the loop reads messages from the append-only log (stable
 	 * byte prefix) and caches system prompt + tools. Tools exclude per-turn
-	 * `_i` intent fields.
+	 * `i` intent fields.
 	 */
 	appendOnlyContext?: AppendOnlyContextManager;
 
@@ -243,10 +289,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	onHarmonyLeak?: (event: HarmonyAuditEvent) => void | Promise<void>;
 
 	/**
-	 * Dynamic tool choice override, resolved per LLM call.
-	 * When set and returns a value, overrides the static `toolChoice`.
+	 * Dynamic tool-choice directive, resolved once per turn. Returns a hard
+	 * {@link ToolChoice} (applied verbatim, overriding the static `toolChoice`),
+	 * a {@link SoftToolRequirement} (the loop reminds-then-escalates instead of
+	 * forcing `tool_choice` immediately, so a model that complies with the
+	 * reminder pays no message-cache invalidation), or `undefined` to fall back
+	 * to the static `toolChoice`.
 	 */
-	getToolChoice?: () => ToolChoice | undefined;
+	getToolChoice?: () => ToolChoiceDirective | undefined;
 
 	/**
 	 * Dynamic reasoning effort override, resolved per LLM call.
@@ -289,6 +339,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * backlog so advice produced during the wait is injected as an aside).
 	 */
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void;
+
+	/**
+	 * Called once an assistant message is finalized from the model stream, before
+	 * it is appended to the context, emitted as `message_end`, or its tool calls
+	 * are validated and dispatched. The hook may mutate the message in place —
+	 * both its text content and its tool-call arguments — and those edits are seen
+	 * by the transcript, the UI, and tool execution alike (single source of truth).
+	 *
+	 * Used for inline macro expansion: rewriting `@[[runtime.name(args)]]` tokens
+	 * to host-computed values before anything downstream consumes the message.
+	 * Runs at most once per assistant message; must not throw (a throw would abort
+	 * the turn).
+	 */
+	transformAssistantMessage?: (message: AssistantMessage, signal?: AbortSignal) => Promise<void> | void;
 
 	/**
 	 * Called after a tool finishes executing, before `tool_execution_end` and the
@@ -520,11 +584,11 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	interruptible?: boolean;
 	/**
-	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
-	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
-	 * - `"optional"`: `_i` is injected as an optional/nullable field.
-	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo, …).
-	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
+	 * Controls how the INTENT_FIELD (`i`) is handled for this tool.
+	 * - `"require"` (default): `i` is injected and required in the parameter schema.
+	 * - `"optional"`: `i` is injected as an optional/nullable field.
+	 * - `"omit"`: `i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo, …).
+	 * - function: `i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
 

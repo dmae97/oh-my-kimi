@@ -1,0 +1,29 @@
+diff --git a/node_modules/@ark/schema/.bun-tag-de36d37c69a0e3d4 b/.bun-tag-de36d37c69a0e3d4
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/out/constraint.js b/out/constraint.js
+index 80bd4ac7cb93deafa34af1595d320368c7cf1b90..4c7d64865edd612ed75698e0420d3435bc408d82 100644
+--- a/out/constraint.js
++++ b/out/constraint.js
+@@ -51,8 +51,10 @@ export const constraintKeyParser = (kind) => (schema, ctx) => {
+         }
+         const nodes = schema.map(schema => ctx.$.node(kind, schema));
+         // predicate order must be preserved to ensure inputs are narrowed
+-        // and checked in the correct order
+-        if (kind === "predicate")
++        // and checked in the correct order; required/optional preserve authored
++        // key order too so tool wire schemas stream in declaration order rather
++        // than alphabetized-by-hash order (oh-my-pi patch)
++        if (kind === "predicate" || kind === "required" || kind === "optional")
+             return nodes;
+         return nodes.sort((l, r) => (l.hash < r.hash ? -1 : 1));
+     }
+@@ -107,7 +109,7 @@ export const flattenConstraints = (inner) => {
+         .sort((l, r) => l.precedence < r.precedence ? -1
+         : l.precedence > r.precedence ? 1
+             // preserve order for predicates
+-            : l.kind === "predicate" && r.kind === "predicate" ? 0
++            : (l.kind === "predicate" && r.kind === "predicate") || (l.kind === r.kind && (l.kind === "required" || l.kind === "optional")) ? 0
+                 : l.hash < r.hash ? -1
+                     : 1);
+     return result;

@@ -31,7 +31,7 @@ import type {
 import { normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
@@ -78,6 +78,13 @@ const AUTHENTICATED_API_KEY_SENTINEL = "<authenticated>";
 function resolveBearerToken(options: BedrockOptions): string | undefined {
 	const apiKey = options.apiKey === AUTHENTICATED_API_KEY_SENTINEL ? undefined : options.apiKey;
 	return options.bearerToken || apiKey || $env.AWS_BEARER_TOKEN_BEDROCK;
+}
+
+function inferRegionFromBedrockArn(modelId: string): string | undefined {
+	const parts = modelId.split(":", 6);
+	if (parts[0] !== "arn" || parts[2] !== "bedrock") return undefined;
+	const region = parts[3];
+	return region || undefined;
 }
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
@@ -206,7 +213,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		const blocks = output.content as Block[];
 		let rawRequestDump: RawHttpRequestDump | undefined;
-		const region = options.region || $env.AWS_REGION || $env.AWS_DEFAULT_REGION || "us-east-1";
+		const region =
+			options.region ||
+			inferRegionFromBedrockArn(model.id) ||
+			$env.AWS_REGION ||
+			$env.AWS_DEFAULT_REGION ||
+			"us-east-1";
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
@@ -290,23 +302,23 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			// timer, otherwise a Bedrock/proxy that accepts the POST and never
 			// sends headers would hang forever.
 			const firstEventTimeoutMs = options.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs();
-			const preResponseWatchdog =
-				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
-					? AbortSignal.timeout(firstEventTimeoutMs)
-					: undefined;
-			const fetchSignal = preResponseWatchdog
-				? options.signal
-					? AbortSignal.any([options.signal, preResponseWatchdog])
-					: preResponseWatchdog
-				: options.signal;
-			const response = await fetchWithRetry(url, {
-				method: "POST",
-				headers: requestHeaders,
-				body,
-				signal: fetchSignal,
-				fetch: options.fetch,
-				timeout: false,
-			});
+			// Clear the pre-response timer the instant headers arrive (below): an
+			// absolute `AbortSignal.timeout` would keep aborting the actively
+			// streaming body, not just a stalled time-to-first-byte (issue #2422).
+			const watchdog = armPreResponseTimeout(options.signal, firstEventTimeoutMs);
+			let response: Response;
+			try {
+				response = await fetchWithRetry(url, {
+					method: "POST",
+					headers: requestHeaders,
+					body,
+					signal: watchdog.signal,
+					fetch: options.fetch,
+					timeout: false,
+				});
+			} finally {
+				watchdog.clear();
+			}
 
 			if (!response.ok) {
 				if (!bearerToken && (response.status === 401 || response.status === 403)) {

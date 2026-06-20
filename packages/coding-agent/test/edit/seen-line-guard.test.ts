@@ -22,6 +22,17 @@ function createSession(cwd: string): ToolSession {
 	} as ToolSession;
 }
 
+function createBridgeSession(cwd: string, content: string): ToolSession {
+	const bridge = {
+		capabilities: { readTextFile: true },
+		readTextFile: async () => content,
+	};
+	return {
+		...createSession(cwd),
+		getClientBridge: () => bridge,
+	} as ToolSession;
+}
+
 function execOptions(input: string, session: ToolSession): ExecuteHashlineSingleOptions {
 	return {
 		session,
@@ -94,7 +105,7 @@ describe("read → edit seen-line guard", () => {
 
 		await expect(
 			executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 12.=12:\n+EDITED`, session)),
-		).rejects.toThrow(/were not shown in the read\/search output/);
+		).rejects.toThrow(/never displayed \(it showed/);
 		// The reject left the file untouched.
 		expect(await Bun.file(file).text()).toBe(CONTENT);
 	});
@@ -109,6 +120,53 @@ describe("read → edit seen-line guard", () => {
 
 		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nSWAP 2.=2:\n+EDITED`, session));
 		expect(await Bun.file(file).text()).toContain("EDITED");
+	});
+
+	it("merges displayed lines from ACP bridge range reads into existing provenance", async () => {
+		const file = path.join(tmpDir, "notes.txt");
+		await Bun.write(file, CONTENT);
+		const session = createBridgeSession(tmpDir, CONTENT);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), CONTENT, [12]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:1-3` });
+		expect(tagFromOutput(resultText(read))).toBe(tag);
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(2)).toBe(true);
+		await executeHashlineSingle(execOptions(`[notes.txt#${tag}]\nINS.POST 2:\n+EDITED`, session));
+		expect(await Bun.file(file).text()).toContain("line 2\nEDITED");
+	});
+
+	it("merges displayed lines from ACP bridge multi-range reads into existing provenance", async () => {
+		const file = path.join(tmpDir, "src/main.c");
+		const lines = Array.from({ length: 1300 }, (_, i) => `\tline_${i + 1}();`);
+		lines[1121] = "\tconfigure_gpio();";
+		lines[1287] = "\tbeep_3k8hz_on();";
+		lines[1289] = "\tk_sleep(K_MSEC(300));";
+		lines[1290] = "\tbeep_3k8hz_off();";
+		const content = `${lines.join("\n")}\n`;
+		await Bun.write(file, content);
+		const session = createBridgeSession(tmpDir, content);
+		const store = getFileSnapshotStore(session);
+		const tag = store.record(canonicalSnapshotKey(file), content, [1288, 1289, 1290, 1291]);
+
+		const read = await new ReadTool(session).execute("r1", { path: `${file}:1118-1126,1284-1292` });
+		const text = resultText(read);
+		expect(tagFromOutput(text)).toBe(tag);
+		expect(text).toContain("1122:\tconfigure_gpio();");
+
+		const seen = store.byHash(canonicalSnapshotKey(file), tag)?.seenLines;
+		expect(seen?.has(1122)).toBe(true);
+		await executeHashlineSingle(
+			execOptions(
+				`[src/main.c#${tag}]\nINS.POST 1122:\n+\tbeep_3k8hz_on();\n+\tk_sleep(K_MSEC(300));\n+\tbeep_3k8hz_off();\nDEL 1288.=1291`,
+				session,
+			),
+		);
+		const edited = await Bun.file(file).text();
+		expect(edited).toContain("\tconfigure_gpio();\n\tbeep_3k8hz_on();\n\tk_sleep(K_MSEC(300));\n\tbeep_3k8hz_off();");
+		expect(edited).not.toContain("\tbeep_3k8hz_on();\n\tline_1289();\n\tk_sleep(K_MSEC(300));");
 	});
 });
 
@@ -168,7 +226,7 @@ describe("search → edit seen-line guard", () => {
 		const tag = tagFromOutput(resultText(search));
 
 		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(
-			/were not shown in the read\/search output/,
+			/never displayed \(it showed/,
 		);
 		expect(await Bun.file(file).text()).toBe(`${lines.join("\n")}\n`);
 	});

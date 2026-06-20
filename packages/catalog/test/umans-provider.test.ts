@@ -19,6 +19,9 @@ interface BundledModel {
 		defaultLevel?: string;
 		requiresEffort?: boolean;
 	};
+	compat?: {
+		escapeBuiltinToolNames?: boolean;
+	};
 }
 
 describe("umans provider catalog", () => {
@@ -33,6 +36,7 @@ describe("umans provider catalog", () => {
 						capabilities: {
 							context_window: 262_144,
 							max_completion_tokens: 262_144,
+							recommended_max_tokens: 32_768,
 							supports_vision: true,
 							supports_tools: true,
 							reasoning: { supported: true, can_disable: true, default_level: "medium" },
@@ -43,6 +47,7 @@ describe("umans provider catalog", () => {
 						capabilities: {
 							context_window: 262_144,
 							max_completion_tokens: 262_144,
+							recommended_max_tokens: 32_768,
 							supports_vision: true,
 							supports_tools: true,
 							reasoning: { supported: true, can_disable: false, default_level: "medium" },
@@ -71,14 +76,17 @@ describe("umans provider catalog", () => {
 			reasoning: true,
 			input: ["text", "image"],
 			contextWindow: 262_144,
-			maxTokens: 262_144,
+			maxTokens: 32_768,
 			thinking: { defaultLevel: "medium" },
+			compat: { escapeBuiltinToolNames: true },
 		});
 		const mandatoryReasoningModel = models?.find(item => item.id === "umans-kimi-k2.7");
 		expect(mandatoryReasoningModel).toMatchObject({
 			id: "umans-kimi-k2.7",
 			reasoning: true,
+			maxTokens: 32_768,
 			thinking: { defaultLevel: "medium", requiresEffort: true },
+			compat: { escapeBuiltinToolNames: true },
 		});
 	});
 
@@ -137,7 +145,8 @@ describe("umans provider catalog", () => {
 			reasoning: true,
 			input: ["text", "image"],
 			contextWindow: 262_144,
-			maxTokens: 262_144,
+			maxTokens: 32_768,
+			compat: { escapeBuiltinToolNames: true },
 		});
 	});
 
@@ -146,6 +155,8 @@ describe("umans provider catalog", () => {
 		const model = providers.umans?.["umans-kimi-k2.7"];
 
 		expect(model).toBeDefined();
+		expect(model.maxTokens).toBe(32_768);
+		expect(model.compat?.escapeBuiltinToolNames).toBe(true);
 		expect(model.thinking).toMatchObject({
 			requiresEffort: true,
 		});

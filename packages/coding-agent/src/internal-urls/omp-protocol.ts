@@ -8,7 +8,7 @@
  * - omp://<file>.md - Reads a specific documentation file
  */
 import * as path from "node:path";
-import { EMBEDDED_DOC_FILENAMES, EMBEDDED_DOCS } from "./docs-index.generated";
+import { getDocFilenames, getEmbeddedDoc } from "./docs-index";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
 /**
@@ -34,16 +34,17 @@ export class OmpProtocolHandler implements ProtocolHandler {
 	}
 
 	async complete(): Promise<UrlCompletion[]> {
-		return EMBEDDED_DOC_FILENAMES.map(value => ({ value }));
+		return getDocFilenames().map(value => ({ value }));
 	}
 
 	async #listDocs(url: InternalUrl): Promise<InternalResource> {
-		if (EMBEDDED_DOC_FILENAMES.length === 0) {
+		const filenames = getDocFilenames();
+		if (filenames.length === 0) {
 			throw new Error("No documentation files found");
 		}
 
-		const listing = EMBEDDED_DOC_FILENAMES.map(f => `- [${f}](omp://${f})`).join("\n");
-		const content = `# Documentation\n\n${EMBEDDED_DOC_FILENAMES.length} files available:\n\n${listing}\n`;
+		const listing = filenames.map(f => `- [${f}](omp://${f})`).join("\n");
+		const content = `# Documentation\n\n${filenames.length} files available:\n\n${listing}\n`;
 
 		return {
 			url: url.href,
@@ -70,12 +71,12 @@ export class OmpProtocolHandler implements ProtocolHandler {
 			return this.#listDocs(url);
 		}
 
-		const content = EMBEDDED_DOCS[docPath];
+		const content = await getEmbeddedDoc(docPath);
 		if (content === undefined) {
 			const lookup = docPath.replace(/\.md$/, "");
-			const suggestions = EMBEDDED_DOC_FILENAMES.filter(
-				f => f.includes(lookup) || lookup.includes(f.replace(/\.md$/, "")),
-			).slice(0, 5);
+			const suggestions = getDocFilenames()
+				.filter(f => f.includes(lookup) || lookup.includes(f.replace(/\.md$/, "")))
+				.slice(0, 5);
 			const suffix =
 				suggestions.length > 0
 					? `\nDid you mean: ${suggestions.join(", ")}`

@@ -41,7 +41,6 @@ const READ_ONLY_TOOL_NAMES: Record<string, true> = {
 	read: true,
 	recall: true,
 	reflect: true,
-	render_mermaid: true,
 	report_finding: true,
 	resolve: true,
 	retain: true,

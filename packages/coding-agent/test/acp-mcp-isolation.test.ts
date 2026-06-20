@@ -13,23 +13,20 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAcpSessionFactory } from "@oh-my-pi/pi-coding-agent/main";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 	it("forces enableMCP=false even when baseOptions opts in", async () => {
-		const tempDir = path.join(os.tmpdir(), `pi-acp-mcp-isolation-${Snowflake.next()}`);
-		fs.mkdirSync(tempDir, { recursive: true });
-		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const tempDir = TempDir.createSync("@pi-acp-mcp-isolation-");
+		let authStorage: AuthStorage | undefined;
 		try {
+			authStorage = await AuthStorage.create(tempDir.join("auth.db"));
 			const modelRegistry = new ModelRegistry(authStorage);
 			const settings = Settings.isolated({});
 			const fakeSession = {} as AgentSession;
@@ -56,7 +53,7 @@ describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 			const factory = createAcpSessionFactory({
 				baseOptions: { enableMCP: true } as CreateAgentSessionOptions,
 				settings,
-				sessionDir: path.join(tempDir, "sessions"),
+				sessionDir: tempDir.join("sessions"),
 				authStorage,
 				modelRegistry,
 				parsedArgs: {},
@@ -64,13 +61,17 @@ describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 				createSession,
 			});
 
-			const result = await factory(tempDir);
+			const result = await factory(tempDir.path());
 			expect(result).toBe(fakeSession);
 			expect(captured).toHaveLength(1);
 			expect(captured[0].enableMCP).toBe(false);
 		} finally {
-			authStorage.close();
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			try {
+				authStorage?.close();
+			} finally {
+				await Bun.sleep(0);
+				await tempDir.remove();
+			}
 		}
 	});
 });

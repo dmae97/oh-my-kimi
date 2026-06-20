@@ -4,6 +4,7 @@
  * Both providers use the same authorization-code flow shape; only the client
  * credentials, scopes, endpoint constants, and project-discovery logic differ.
  */
+import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../../utils/google-validation";
 import { OAuthCallbackFlow } from "./callback-server";
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -38,7 +39,11 @@ export class GoogleOAuthFlow extends OAuthCallbackFlow {
 	private readonly config: GoogleOAuthFlowConfig;
 
 	constructor(ctrl: OAuthController, config: GoogleOAuthFlowConfig) {
-		super(ctrl, config.callbackPort, config.callbackPath);
+		super(ctrl, {
+			preferredPort: config.callbackPort,
+			callbackPath: config.callbackPath,
+			callbackHostname: "127.0.0.1",
+		});
 		this.config = config;
 	}
 
@@ -89,7 +94,14 @@ export class GoogleOAuthFlow extends OAuthCallbackFlow {
 
 		this.ctrl.onProgress?.("Getting user info...");
 		const email = await getUserEmail(tokenData.access_token);
-		const projectId = await this.config.discoverProject(tokenData.access_token, this.ctrl.onProgress);
+		let projectId: string;
+		try {
+			projectId = await this.config.discoverProject(tokenData.access_token, this.ctrl.onProgress);
+		} catch (err) {
+			const validationUrl = extractGoogleValidationUrl(err instanceof Error ? err.message : String(err));
+			if (!validationUrl) throw err;
+			throw new Error(formatGoogleValidationRequiredMessage(validationUrl, "sign in again", email));
+		}
 
 		return {
 			refresh: tokenData.refresh_token,

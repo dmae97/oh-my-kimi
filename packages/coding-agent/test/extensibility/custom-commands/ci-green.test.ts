@@ -3,8 +3,10 @@ import * as piCodingAgent from "@oh-my-pi/pi-coding-agent";
 import { GreenCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/ci-green";
 import type { CustomCommandAPI } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/types";
 import type { HookCommandContext } from "@oh-my-pi/pi-coding-agent/extensibility/hooks/types";
+import type * as TypeBox from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import { z } from "zod/v4";
+import * as arktype from "arktype";
+import * as zod from "zod/v4";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -19,8 +21,9 @@ function createApi(): CustomCommandAPI {
 			code: 0,
 			killed: false,
 		}),
-		typebox: {} as unknown as typeof import("@oh-my-pi/pi-coding-agent/extensibility/typebox"),
-		zod: z,
+		typebox: {} as unknown as typeof TypeBox,
+		arktype,
+		zod,
 		pi: piCodingAgent,
 	};
 }

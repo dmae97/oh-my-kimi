@@ -151,4 +151,62 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		expect(session.getActiveToolNames()).not.toContain("search_tool_bm25");
 		expect(session.isMCPDiscoveryEnabled()).toBe(false);
 	}, 40_000);
+
+	it("disconnects the owned MCP manager when a top-level session disposes", async () => {
+		writeMcpConfig();
+		const { session, mcpManager } = await createAgentSession({
+			...baseOptions(),
+			toolNames: ["read", "edit", "bash"],
+		});
+		expect(mcpManager).toBeDefined();
+		if (!mcpManager) throw new Error("expected owning session to create an MCPManager");
+		try {
+			// Let the deferred connect FINISH first, so a later disconnectAll can
+			// only originate from dispose() itself — not the mid-connect disposal
+			// path (covered by the test above). Genuine integration wait: discovery
+			// connects a real subprocess fire-and-forget with no awaitable signal,
+			// and fake timers cannot drive a child process; poll the live session
+			// with a generous ceiling, exiting the instant discovery flips on.
+			const deadline = Date.now() + 30_000;
+			while (!session.isMCPDiscoveryEnabled() && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
+			expect(session.isMCPDiscoveryEnabled()).toBe(true);
+			expect(mcpManager.getConnectedServers()).toContain("many");
+
+			const disconnectSpy = spyOn(mcpManager, "disconnectAll");
+			await session.dispose();
+			expect(disconnectSpy).toHaveBeenCalled();
+		} finally {
+			// dispose() already tore it down; this is idempotent belt-and-braces.
+			await mcpManager.disconnectAll();
+		}
+	}, 40_000);
+
+	it("does not disconnect a reused parent MCP manager when a child session disposes", async () => {
+		writeMcpConfig();
+		const parent = await createAgentSession({
+			...baseOptions(),
+			toolNames: ["read", "edit", "bash"],
+		});
+		expect(parent.mcpManager).toBeDefined();
+		if (!parent.mcpManager) throw new Error("expected parent session to create an MCPManager");
+		const parentManager = parent.mcpManager;
+		try {
+			// A subagent-style session reuses the parent's manager via
+			// `mcpManager` and therefore does NOT own it.
+			const child = await createAgentSession({
+				...baseOptions(),
+				hasUI: false,
+				toolNames: ["read"],
+				mcpManager: parentManager,
+			});
+			const disconnectSpy = spyOn(parentManager, "disconnectAll");
+			await child.session.dispose();
+			expect(disconnectSpy).not.toHaveBeenCalled();
+		} finally {
+			await parent.session.dispose();
+			await parentManager.disconnectAll();
+		}
+	}, 40_000);
 });

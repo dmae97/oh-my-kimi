@@ -26,7 +26,7 @@
 
 ## Inputs
 
-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ id?, description?, assignment, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
+The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ id?, description?, role?, assignment, isolated? }` (`isolated` only when `task.isolation.mode` is not `none`):
 
 - **Batch shape** (`task.batch` on): `{ agent, context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `isolated` is per item.
 - **Flat shape** (`task.batch` off): `{ agent, ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each assignment references; subagents share the parent's `local://` root.
@@ -38,6 +38,7 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work 
 | `tasks` | `array` | Yes (batch) | One task item per subagent. Provided ids must be unique within the call (case-insensitive). Rejected when `task.batch` is off. |
 | `id` | `string` | No | Stable agent id, schema max length 48. Defaults to a generated AdjectiveNoun name. Uniquified per session by `AgentOutputManager`. Item field in batch shape, top-level in flat shape. |
 | `description` | `string` | No | UI label only; the subagent never sees it. Item field in batch shape, top-level in flat shape. |
+| `role` | `string` | No | Specialist role/expertise the subagent embodies; schema max length 256 (`ROLE_INPUT_MAX`). The full trimmed text feeds the subagent's system-prompt identity (`role` preamble field); a one-line normalized form (`oneLineLabel`, `ROLE_LABEL_MAX = 80`) becomes its registry/roster display name, falling back to the agent type name when omitted. Item field in batch shape, top-level in flat shape. |
 | `assignment` | `string` | Yes | The work — complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
 | `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.mode` is not `none`; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
 
@@ -87,7 +88,7 @@ Artifacts and side channels:
 9. If `isolated`, it requires a git repo (`getRepoRoot(...)` / `captureBaseline(...)`), maps `task.isolation.mode` to a backend-kind hint (`parseIsolationMode`), and materializes the workspace via the natives PAL (`ensureIsolation` → `isoResolve`/`isoStart`), walking the candidate list when a backend is unavailable.
 10. Artifacts dir comes from the parent session file when available, otherwise a temp dir. When the session is executing an approved plan, the plan reference is handed to the subagent.
 11. Non-isolated spawns call `runSubprocess(...)` directly with parent cwd; isolated spawns run inside the isolation workspace, then commit to a branch (`mergeMode === "branch"`) or capture a patch, and always clean up the workspace.
-12. `runSubprocess(...)` creates a child agent session with an isolated settings snapshot (forcing `async.enabled = false` and `bash.autoBackground.enabled = false` — subagents are internally synchronous), child `agentId` equal to the allocated id, child internal URL router/`AgentOutputManager`, output schema, the shared `context` (batch calls) in the system prompt's `CONTEXT` section, and the IRC peer roster in the system prompt.
+12. `runSubprocess(...)` creates a child agent session with an isolated settings snapshot (forcing `async.enabled = false` and `bash.autoBackground.enabled = false` — subagents are internally synchronous), child `agentId` equal to the allocated id, child internal URL router/`AgentOutputManager`, output schema, the shared `context` (batch calls) in the system prompt's `CONTEXT` section, the per-spawn `role` (when given, via `resolveSubagentDisplayName`) as the subagent's system-prompt persona and registry/roster display name, and the IRC peer roster in the system prompt.
 13. Child tool availability: explicit `agent.tools` if provided; auto-add `task` when the agent has `spawns` and depth allows; strip `task` at `task.maxRecursionDepth`; ensure `irc` is present in explicit tool lists; expand `exec` to `eval` + `bash`; strip parent-owned `todo`.
 14. The child must finish through the hidden `yield` tool; up to 3 reminder prompts, the last forcing `toolChoice = yield` when supported. `finalizeSubprocessOutput(...)` reconciles raw text, `yield` payloads, structured schemas, `report_finding` data, and abort states.
 15. End-of-run lifecycle (keep-alive, in `runSubprocess`'s finalizer):

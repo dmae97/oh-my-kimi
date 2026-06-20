@@ -11,9 +11,9 @@ import {
 } from "@oh-my-pi/pi-natives";
 import type { EditorTheme, MarkdownTheme, SelectListTheme, SettingsListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
-import { z } from "zod/v4";
 // Embed theme JSON files at build time
 import darkThemeJson from "./dark.json" with { type: "json" };
 import { defaultThemes } from "./defaults";
@@ -111,6 +111,7 @@ export type SymbolKey =
 	| "icon.agents"
 	| "icon.job"
 	| "icon.cache"
+	| "icon.cacheMiss"
 	| "icon.input"
 	| "icon.output"
 	| "icon.host"
@@ -310,6 +311,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.agents": "👥",
 	"icon.job": "⚙",
 	"icon.cache": "💾",
+	"icon.cacheMiss": "⊘",
 	"icon.input": "⤵",
 	"icon.output": "⤴",
 	"icon.host": "🖥",
@@ -579,6 +581,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.job": "\uf013",
 	// pick:  | alt:  
 	"icon.cache": "\uf1c0",
+	// pick:  (fa-ban) | alt: ⊘
+	"icon.cacheMiss": "\uf05e",
 	// pick:  | alt:  →
 	"icon.input": "\uf090",
 	// pick:  | alt:  →
@@ -810,6 +814,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.agents": "AG",
 	"icon.job": "bg",
 	"icon.cache": "cache",
+	"icon.cacheMiss": "!",
 	"icon.input": "in:",
 	"icon.output": "out:",
 	"icon.host": "host",
@@ -972,125 +977,117 @@ function normalizeSpinnerFramesOverride(
 // Types & Schema
 // ============================================================================
 
-const colorValueSchema = z.union([
-	z.string(), // hex "#ff0000", var ref "primary", or empty ""
-	z.number().int().min(0).max(255), // 256-color index
-]);
+type ColorValue = string | number;
 
-type ColorValue = z.infer<typeof colorValueSchema>;
-
-const THEME_COLOR_KEYS = [
-	"accent",
-	"border",
-	"borderAccent",
-	"borderMuted",
-	"success",
-	"error",
-	"warning",
-	"muted",
-	"dim",
-	"text",
-	"thinkingText",
-	"selectedBg",
-	"userMessageBg",
-	"userMessageText",
-	"customMessageBg",
-	"customMessageText",
-	"customMessageLabel",
-	"toolPendingBg",
-	"toolSuccessBg",
-	"toolErrorBg",
-	"toolTitle",
-	"toolOutput",
-	"mdHeading",
-	"mdLink",
-	"mdLinkUrl",
-	"mdCode",
-	"mdCodeBlock",
-	"mdCodeBlockBorder",
-	"mdQuote",
-	"mdQuoteBorder",
-	"mdHr",
-	"mdListBullet",
-	"toolDiffAdded",
-	"toolDiffRemoved",
-	"toolDiffContext",
-	"syntaxComment",
-	"syntaxKeyword",
-	"syntaxFunction",
-	"syntaxVariable",
-	"syntaxString",
-	"syntaxNumber",
-	"syntaxType",
-	"syntaxOperator",
-	"syntaxPunctuation",
-	"thinkingOff",
-	"thinkingMinimal",
-	"thinkingLow",
-	"thinkingMedium",
-	"thinkingHigh",
-	"thinkingXhigh",
-	"bashMode",
-	"pythonMode",
-	"statusLineBg",
-	"statusLineSep",
-	"statusLineModel",
-	"statusLinePath",
-	"statusLineGitClean",
-	"statusLineGitDirty",
-	"statusLineContext",
-	"statusLineSpend",
-	"statusLineStaged",
-	"statusLineDirty",
-	"statusLineUntracked",
-	"statusLineOutput",
-	"statusLineCost",
-	"statusLineSubagents",
-] as const;
-
-const themeColorsSchema = z.object(
-	Object.fromEntries(THEME_COLOR_KEYS.map(key => [key, colorValueSchema])) as unknown as {
-		[K in (typeof THEME_COLOR_KEYS)[number]]: typeof colorValueSchema;
-	},
-);
-
-const spinnerFramesArraySchema = z.array(z.string().min(1)).min(1);
-const spinnerFramesSchema = z.union([
-	spinnerFramesArraySchema,
-	z
-		.object({
-			status: spinnerFramesArraySchema.optional(),
-			activity: spinnerFramesArraySchema.optional(),
-		})
-		.refine(value => value.status !== undefined || value.activity !== undefined, {
-			message: "spinnerFrames object must define `status` and/or `activity`",
-		}),
-]);
-
-const symbolPresetSchema = z.enum(["unicode", "nerd", "ascii"]);
-
-const themeJsonSchema = z.object({
-	$schema: z.string().optional(),
-	name: z.string(),
-	vars: z.record(z.string(), colorValueSchema).optional(),
+const themeColorsSchema = type({
+	accent: "string | number",
+	border: "string | number",
+	borderAccent: "string | number",
+	borderMuted: "string | number",
+	success: "string | number",
+	error: "string | number",
+	warning: "string | number",
+	muted: "string | number",
+	dim: "string | number",
+	text: "string | number",
+	thinkingText: "string | number",
+	selectedBg: "string | number",
+	userMessageBg: "string | number",
+	userMessageText: "string | number",
+	customMessageBg: "string | number",
+	customMessageText: "string | number",
+	customMessageLabel: "string | number",
+	toolPendingBg: "string | number",
+	toolSuccessBg: "string | number",
+	toolErrorBg: "string | number",
+	toolTitle: "string | number",
+	toolOutput: "string | number",
+	mdHeading: "string | number",
+	mdLink: "string | number",
+	mdLinkUrl: "string | number",
+	mdCode: "string | number",
+	mdCodeBlock: "string | number",
+	mdCodeBlockBorder: "string | number",
+	mdQuote: "string | number",
+	mdQuoteBorder: "string | number",
+	mdHr: "string | number",
+	mdListBullet: "string | number",
+	toolDiffAdded: "string | number",
+	toolDiffRemoved: "string | number",
+	toolDiffContext: "string | number",
+	syntaxComment: "string | number",
+	syntaxKeyword: "string | number",
+	syntaxFunction: "string | number",
+	syntaxVariable: "string | number",
+	syntaxString: "string | number",
+	syntaxNumber: "string | number",
+	syntaxType: "string | number",
+	syntaxOperator: "string | number",
+	syntaxPunctuation: "string | number",
+	thinkingOff: "string | number",
+	thinkingMinimal: "string | number",
+	thinkingLow: "string | number",
+	thinkingMedium: "string | number",
+	thinkingHigh: "string | number",
+	thinkingXhigh: "string | number",
+	bashMode: "string | number",
+	pythonMode: "string | number",
+	statusLineBg: "string | number",
+	statusLineSep: "string | number",
+	statusLineModel: "string | number",
+	statusLinePath: "string | number",
+	statusLineGitClean: "string | number",
+	statusLineGitDirty: "string | number",
+	statusLineContext: "string | number",
+	statusLineSpend: "string | number",
+	statusLineStaged: "string | number",
+	statusLineDirty: "string | number",
+	statusLineUntracked: "string | number",
+	statusLineOutput: "string | number",
+	statusLineCost: "string | number",
+	statusLineSubagents: "string | number",
+});
+const spinnerFramesSchema = type("unknown").narrow((value): value is SpinnerFramesOverride => {
+	if (Array.isArray(value)) {
+		return value.length >= 1 && value.every(item => typeof item === "string");
+	}
+	if (value && typeof value === "object") {
+		const obj = value as Record<string, unknown>;
+		const status = obj.status;
+		const activity = obj.activity;
+		if (status === undefined && activity === undefined) return false;
+		if (status !== undefined) {
+			if (!Array.isArray(status) || status.length < 1 || !status.every(item => typeof item === "string")) {
+				return false;
+			}
+		}
+		if (activity !== undefined) {
+			if (!Array.isArray(activity) || activity.length < 1 || !activity.every(item => typeof item === "string")) {
+				return false;
+			}
+		}
+		return true;
+	}
+	return false;
+});
+const themeJsonSchema = type({
+	"$schema?": "string",
+	name: "string",
+	"vars?": "Record<string, string | number>",
 	colors: themeColorsSchema,
-	export: z
-		.object({
-			pageBg: colorValueSchema.optional(),
-			cardBg: colorValueSchema.optional(),
-			infoBg: colorValueSchema.optional(),
-		})
-		.optional(),
-	symbols: z
-		.object({
-			preset: symbolPresetSchema.optional(),
-			overrides: z.record(z.string(), z.string()).optional(),
-			spinnerFrames: spinnerFramesSchema.optional(),
-		})
-		.optional(),
+	"export?": {
+		"pageBg?": "string | number",
+		"cardBg?": "string | number",
+		"infoBg?": "string | number",
+	},
+	"symbols?": {
+		"preset?": "'unicode' | 'nerd' | 'ascii'",
+		"overrides?": "Record<string, string>",
+		"spinnerFrames?": spinnerFramesSchema,
+	},
 });
 
-type ThemeJson = z.infer<typeof themeJsonSchema>;
+type ThemeJson = typeof themeJsonSchema.infer;
 
 export type ThemeColor =
 	| "accent"
@@ -1719,6 +1716,14 @@ export class Theme {
 			bottomRight: this.#symbols["boxRound.bottomRight"],
 			horizontal: this.#symbols["boxRound.horizontal"],
 			vertical: this.#symbols["boxRound.vertical"],
+			// Junctions have no rounded Unicode variant, so a rounded box reuses the
+			// sharp tee/cross glyphs. Sourcing them from the boxSharp.* tokens keeps a
+			// theme's `boxSharp.tee*` overrides effective for rounded-box dividers.
+			cross: this.#symbols["boxSharp.cross"],
+			teeDown: this.#symbols["boxSharp.teeDown"],
+			teeUp: this.#symbols["boxSharp.teeUp"],
+			teeRight: this.#symbols["boxSharp.teeRight"],
+			teeLeft: this.#symbols["boxSharp.teeLeft"],
 		};
 	}
 
@@ -1778,6 +1783,7 @@ export class Theme {
 			agents: this.#symbols["icon.agents"],
 			job: this.#symbols["icon.job"],
 			cache: this.#symbols["icon.cache"],
+			cacheMiss: this.#symbols["icon.cacheMiss"],
 			input: this.#symbols["icon.input"],
 			output: this.#symbols["icon.output"],
 			host: this.#symbols["icon.host"],
@@ -1952,37 +1958,30 @@ async function loadThemeJson(name: string): Promise<ThemeJson> {
 	} catch (error) {
 		throw new Error(`Failed to parse theme ${name}: ${error}`);
 	}
-	const parsed = themeJsonSchema.safeParse(json);
-	if (!parsed.success) {
-		const missingColors: string[] = [];
-		const otherErrors: string[] = [];
-
-		for (const issue of parsed.error.issues) {
-			const parts = issue.path;
-			const colorKey = parts.length === 2 && parts[0] === "colors" && typeof parts[1] === "string" ? parts[1] : null;
-
-			if (colorKey && issue.code === "invalid_type" && (issue as { received?: unknown }).received === undefined) {
-				missingColors.push(colorKey);
-			} else {
-				const pathStr = parts.length === 0 ? "/" : `/${parts.map(String).join("/")}`;
-				otherErrors.push(`  - ${pathStr}: ${issue.message}`);
-			}
+	let parsed: ThemeJson;
+	try {
+		parsed = themeJsonSchema(json) as ThemeJson;
+		if (parsed instanceof type.errors) {
+			throw new Error(parsed.summary);
 		}
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		// Extract color key information if available
+		const missingColorMatch = errorMessage.match(/missing keys: (.+)/i);
+		const missingColors: string[] = missingColorMatch ? missingColorMatch[1].split(",").map(s => s.trim()) : [];
 
-		let errorMessage = `Invalid theme "${name}":\n`;
+		let fullErrorMessage = `Invalid theme "${name}":\n`;
 		if (missingColors.length > 0) {
-			errorMessage += `\nMissing required color tokens:\n`;
-			errorMessage += missingColors.map(c => `  - ${c}`).join("\n");
-			errorMessage += `\n\nPlease add these colors to your theme's "colors" object.`;
-			errorMessage += `\nSee the built-in themes (dark.json, light.json) for reference values.`;
+			fullErrorMessage += `\nMissing required color tokens:\n`;
+			fullErrorMessage += missingColors.map(c => `  - ${c}`).join("\n");
+			fullErrorMessage += `\n\nPlease add these colors to your theme's "colors" object.`;
+			fullErrorMessage += `\nSee the built-in themes (dark.json, light.json) for reference values.`;
 		}
-		if (otherErrors.length > 0) {
-			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
-		}
+		fullErrorMessage += `\n\nValidation error:\n  - ${errorMessage}`;
 
-		throw new Error(errorMessage);
+		throw new Error(fullErrorMessage);
 	}
-	return parsed.data;
+	return parsed;
 }
 
 interface CreateThemeOptions {
@@ -2302,8 +2301,13 @@ export function getColorBlindMode(): boolean {
 	return currentColorBlindMode;
 }
 
-export function onThemeChange(callback: () => void): void {
+export function onThemeChange(callback: () => void): () => void {
 	onThemeChangeCallback = callback;
+	return () => {
+		if (onThemeChangeCallback === callback) {
+			onThemeChangeCallback = undefined;
+		}
+	};
 }
 
 /**
@@ -2739,6 +2743,35 @@ export function highlightCode(code: string, lang?: string, highlightTheme: Theme
 }
 
 export function getSymbolTheme(): SymbolTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). Fall back to the ASCII preset so the returned symbols are
+	// usable instead of crashing. See #2998.
+	if (typeof theme === "undefined") {
+		const box = {
+			topLeft: "+",
+			topRight: "+",
+			bottomLeft: "+",
+			bottomRight: "+",
+			horizontal: "-",
+			vertical: "|",
+			cross: "+",
+			teeDown: "+",
+			teeUp: "+",
+			teeLeft: "+",
+			teeRight: "+",
+		};
+		return {
+			cursor: ">",
+			inputCursor: "|",
+			boxRound: box,
+			boxSharp: box,
+			table: box,
+			quoteBorder: "|",
+			hrChar: "-",
+			colorSwatch: "[]",
+			spinnerFrames: ["-", "\\", "|", "/"],
+		};
+	}
 	const preset = theme.getSymbolPreset();
 
 	return {
@@ -2761,6 +2794,18 @@ export function getMarkdownTheme(): MarkdownTheme {
 	if (cachedMarkdownTheme !== undefined && cachedMarkdownThemeRef === theme) {
 		return cachedMarkdownTheme;
 	}
+	// Mermaid ASCII diagrams render with the active palette so they read as
+	// content rather than raw monochrome. Roles mirror the SVG renderer's
+	// mapping; `text`/`muted`/`border`/`borderMuted`/`accent` exist in every theme.
+	const mermaidColorMode = theme.getColorMode() === "truecolor" ? "truecolor" : "ansi256";
+	const mermaidTheme = {
+		fg: theme.getColorHex("text"),
+		border: theme.getColorHex("border"),
+		line: theme.getColorHex("muted"),
+		arrow: theme.getColorHex("accent"),
+		corner: theme.getColorHex("muted"),
+		junction: theme.getColorHex("borderMuted"),
+	};
 	const markdownTheme: MarkdownTheme = {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
@@ -2777,7 +2822,8 @@ export function getMarkdownTheme(): MarkdownTheme {
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		symbols: getSymbolTheme(),
-		resolveMermaidAscii,
+		resolveMermaidAscii: (source, maxWidth) =>
+			resolveMermaidAscii(source, { maxWidth, theme: mermaidTheme, colorMode: mermaidColorMode }),
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
 			const highlighted = highlightCached(code, validLang, theme);
@@ -2791,6 +2837,19 @@ export function getMarkdownTheme(): MarkdownTheme {
 }
 
 export function getSelectListTheme(): SelectListTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			selectedPrefix: (text: string) => text,
+			selectedText: (text: string) => text,
+			description: (text: string) => text,
+			scrollInfo: (text: string) => text,
+			noMatch: (text: string) => text,
+			symbols: getSymbolTheme(),
+			hovered: (text: string) => text,
+		};
+	}
 	return {
 		selectedPrefix: (text: string) => theme.fg("accent", text),
 		selectedText: (text: string) => theme.fg("accent", text),
@@ -2803,6 +2862,16 @@ export function getSelectListTheme(): SelectListTheme {
 }
 
 export function getEditorTheme(): EditorTheme {
+	// Guard against `theme` being undefined (pre-init or cross-module-instance
+	// plugin calls). See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			borderColor: (text: string) => text,
+			selectList: getSelectListTheme(),
+			symbols: getSymbolTheme(),
+			hintStyle: (text: string) => text,
+		};
+	}
 	return {
 		borderColor: (text: string) => theme.fg("borderMuted", text),
 		selectList: getSelectListTheme(),
@@ -2812,6 +2881,23 @@ export function getEditorTheme(): EditorTheme {
 }
 
 export function getSettingsListTheme(): SettingsListTheme {
+	// Plugins (e.g. pi-rtk-optimizer) may call this before `initTheme()` assigns
+	// the global `theme`, or from a separate module instance under npm-global
+	// installs where the live binding was never initialized. Fall back to plain
+	// text so the call returns a usable (unstyled) theme instead of crashing with
+	// "undefined is not an object (evaluating 'theme.fg')". See #2998.
+	if (typeof theme === "undefined") {
+		return {
+			label: (text: string) => text,
+			value: (text: string) => text,
+			description: (text: string) => text,
+			cursor: "> ",
+			hint: (text: string) => text,
+			heading: (text: string) => text,
+			section: (text: string) => text,
+			hovered: (text: string) => text,
+		};
+	}
 	return {
 		label: (text: string, selected: boolean, changed: boolean) =>
 			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : text,

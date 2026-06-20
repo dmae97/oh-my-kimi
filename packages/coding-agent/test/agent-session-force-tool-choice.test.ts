@@ -10,7 +10,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 let tempDir: TempDir;
 let authStorage: AuthStorage | undefined;
@@ -27,18 +27,20 @@ beforeEach(async () => {
 	const settings = Settings.isolated({ "compaction.enabled": false });
 	const sessionManager = SessionManager.inMemory(tempDir.path());
 
+	const emptyObjectSchema = type("object");
+
 	const bashTool: AgentTool = {
 		name: "bash",
 		label: "Bash",
 		description: "Mock bash tool",
-		parameters: z.object({}),
+		parameters: emptyObjectSchema,
 		execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 	};
 	const writeTool: AgentTool = {
 		name: "write",
 		label: "Write",
 		description: "Mock write tool",
-		parameters: z.object({}),
+		parameters: emptyObjectSchema,
 		execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 	};
 
@@ -76,9 +78,9 @@ afterEach(async () => {
 it("forces specific tool, then transitions to none, then clears", () => {
 	session.setForcedToolChoice("write");
 
-	const first = session.nextToolChoice();
-	const second = session.nextToolChoice();
-	const third = session.nextToolChoice();
+	const first = session.nextToolChoiceDirective();
+	const second = session.nextToolChoiceDirective();
+	const third = session.nextToolChoiceDirective();
 
 	expect(first).toEqual({ type: "tool", name: "write" });
 	// After the forced call, "none" prevents the loop from making more tool calls
@@ -91,11 +93,11 @@ it("requeues a forced choice whose tool is filtered out before dequeue", async (
 	session.setForcedToolChoice("write");
 
 	await session.setActiveToolsByName(["bash"]);
-	expect(session.nextToolChoice()).toBeUndefined();
+	expect(session.nextToolChoiceDirective()).toBeUndefined();
 	expect(session.toolChoiceQueue.hasInFlight).toBe(false);
 
 	await session.setActiveToolsByName(["bash", "write"]);
-	expect(session.nextToolChoice()).toEqual({ type: "tool", name: "write" });
+	expect(session.nextToolChoiceDirective()).toEqual({ type: "tool", name: "write" });
 	session.toolChoiceQueue.clear();
 });
 

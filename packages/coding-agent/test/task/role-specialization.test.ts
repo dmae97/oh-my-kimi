@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import subagentSystemPromptTemplate from "../../src/prompts/system/subagent-system-prompt.md" with { type: "text" };
 
 // Contract: a per-spawn `role` gives a subagent a tailored identity. The role
@@ -86,35 +87,35 @@ describe("subagent system prompt role preamble", () => {
 
 describe("task schema accepts role", () => {
 	it("keeps role on the flat single-spawn shape", () => {
-		const parsed = taskSchema.safeParse({ agent: "task", assignment: "x", role: "Rust specialist" });
-		expect(parsed.success).toBe(true);
-		if (parsed.success) {
-			expect(parsed.data.role).toBe("Rust specialist");
+		const parsed = taskSchema({ agent: "task", assignment: "x", role: "Rust specialist" });
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.role).toBe("Rust specialist");
 		}
 	});
 
 	it("keeps role on batch task items", () => {
 		const batch = getTaskSchema({ isolationEnabled: false, batchEnabled: true });
-		const parsed = batch.safeParse({
+		const parsed = batch({
 			agent: "task",
 			context: "ctx",
 			tasks: [{ assignment: "x", role: "DB migration specialist" }],
 		});
-		expect(parsed.success).toBe(true);
-		if (parsed.success && "tasks" in parsed.data) {
-			const tasks = parsed.data.tasks as Array<{ role?: string }>;
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors) && "tasks" in parsed) {
+			const tasks = parsed.tasks as Array<{ role?: string }>;
 			expect(tasks[0]?.role).toBe("DB migration specialist");
 		}
 	});
 
 	it("rejects a role longer than the schema bound", () => {
-		const parsed = taskSchema.safeParse({ agent: "task", assignment: "x", role: "x".repeat(ROLE_INPUT_MAX + 1) });
-		expect(parsed.success).toBe(false);
+		const parsed = taskSchema({ agent: "task", assignment: "x", role: "x".repeat(ROLE_INPUT_MAX + 1) });
+		expect(parsed instanceof type.errors).toBe(true);
 	});
 
 	it("accepts a role at the schema bound", () => {
-		const parsed = taskSchema.safeParse({ agent: "task", assignment: "x", role: "x".repeat(ROLE_INPUT_MAX) });
-		expect(parsed.success).toBe(true);
+		const parsed = taskSchema({ agent: "task", assignment: "x", role: "x".repeat(ROLE_INPUT_MAX) });
+		expect(parsed instanceof type.errors).toBe(false);
 	});
 });
 

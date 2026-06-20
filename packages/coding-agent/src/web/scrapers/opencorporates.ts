@@ -216,7 +216,7 @@ export const handleOpenCorporates: SpecialHandler = async (
 					md += "\n";
 				}
 				if (inactiveOfficers.length > 10) {
-					md += `\n*...and ${inactiveOfficers.length - 10} more former officers*\n`;
+					md += `\n[…${inactiveOfficers.length - 10} former officers elided…]\n`;
 				}
 				md += "\n";
 			}

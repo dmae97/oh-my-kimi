@@ -13,7 +13,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import eagerTodoPrompt from "../src/prompts/system/eager-todo.md" with { type: "text" };
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -119,7 +119,7 @@ describe("AgentSession eager todo enforcement", () => {
 			name: "bash",
 			label: "Bash",
 			description: "Mock bash tool",
-			parameters: z.object({}),
+			parameters: type({}),
 			execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 		};
 
@@ -132,7 +132,7 @@ describe("AgentSession eager todo enforcement", () => {
 				messages: [],
 			},
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context, options) => {
 				streamCallCount++;
 				const lastMessage = context.messages.at(-1);

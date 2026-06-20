@@ -22,6 +22,7 @@ type ConfigurableEditorAction = Extract<
 	| "app.editor.external"
 	| "app.history.search"
 	| "app.message.dequeue"
+	| "app.retry"
 	| "app.clipboard.pasteImage"
 	| "app.clipboard.pasteTextRaw"
 	| "app.clipboard.copyPrompt"
@@ -43,6 +44,7 @@ const DEFAULT_ACTION_KEYS: Record<ConfigurableEditorAction, KeyId[]> = {
 	"app.editor.external": ["ctrl+g"],
 	"app.history.search": ["ctrl+r"],
 	"app.message.dequeue": ["alt+up"],
+	"app.retry": ["alt+r"],
 	"app.clipboard.pasteImage": ["ctrl+v"],
 	"app.clipboard.pasteTextRaw": ["ctrl+shift+v", "alt+shift+v"],
 	"app.clipboard.copyPrompt": ["alt+shift+c"],
@@ -62,13 +64,33 @@ const BRACKETED_IMAGE_PATH_REGEX = /\.(?:png|jpe?g|gif|webp)$/i;
 const BRACKETED_IMAGE_PATH_BOUNDARY_REGEX = /\.(?:png|jpe?g|gif|webp)(?=$|["']?\s)/gi;
 const SHELL_ESCAPED_PATH_CHAR_REGEX = /\\([\\\s'"()[\]{}&;<>|?*!$`])/g;
 
-/** Plain spaces from one auto-repeat run that trigger the space-hold push-to-talk STT gesture.
- *  Holding the space bar makes the terminal emit a burst of spaces; once more than this many land
- *  in the editor we treat it as "space held", track them back out, and start recording. */
-export const SPACE_HOLD_THRESHOLD = 5;
+/** Max gap (ms) between two spaces for the later one to count as OS key auto-repeat rather than a
+ *  deliberate press. OS auto-repeat is fast; a deliberate tap (even a fast one) is slower. */
+export const SPACE_REPEAT_MAX_GAP_MS = 120;
+/** Two consecutive inter-space gaps are "mechanical" (machine-driven auto-repeat) when both are
+ *  within {@link SPACE_REPEAT_MAX_GAP_MS} and differ by no more than this — an absolute jitter floor
+ *  or, for slower repeat rates, {@link SPACE_REPEAT_JITTER_RATIO} of the smaller gap. OS key-repeat
+ *  is metronomic; a human smashing the bar is fast but irregular, so its deltas never stay this
+ *  steady. */
+export const SPACE_REPEAT_JITTER_MS = 18;
+export const SPACE_REPEAT_JITTER_RATIO = 0.35;
+/** Consecutive mechanical (fast + steady) deltas that confirm the space bar is held and start
+ *  recording. Needs a sustained metronomic cadence, so jittery smashing and deliberate taps never
+ *  reach it. */
+export const SPACE_HOLD_MECHANICAL_RUN = 2;
 /** Idle gap (ms) after the last repeated space that counts as the space bar being released, ending
  *  the push-to-talk recording. Must comfortably exceed the OS key-repeat interval. */
 export const SPACE_HOLD_RELEASE_MS = 250;
+
+/** Whether two consecutive inter-space gaps look machine-driven: both within the auto-repeat band
+ *  and steady enough (small absolute or proportional difference). OS key-repeat is metronomic, so
+ *  its successive deltas match closely; human smashing is fast but irregular and deliberate taps are
+ *  too slow, so neither passes. */
+function gapsAreMechanical(gap: number, prevGap: number): boolean {
+	if (gap > SPACE_REPEAT_MAX_GAP_MS || prevGap > SPACE_REPEAT_MAX_GAP_MS) return false;
+	const tolerance = Math.max(SPACE_REPEAT_JITTER_MS, Math.min(gap, prevGap) * SPACE_REPEAT_JITTER_RATIO);
+	return Math.abs(gap - prevGap) <= tolerance;
+}
 
 function isPastedPathSeparator(char: string | undefined): boolean {
 	return char === undefined || char === " " || char === "\t" || char === "\r" || char === "\n";
@@ -155,7 +177,7 @@ export class CustomEditor extends Editor {
 	/** Per-render scratch flag: did any layout line in this render contain a magic
 	 *  keyword that should shimmer? Reset by {@link #scheduleShimmerIfNeeded} each
 	 *  time a frame is queued. */
-	#shimmerTimer: ReturnType<typeof setTimeout> | undefined;
+	#shimmerTimer: Timer | undefined;
 	/** Repaint hook the host wires once at construction. Called from the shimmer
 	 *  timer to request the next animation frame. Undefined when nobody is
 	 *  listening (tests, headless callers); the timer chain still self-cleans. */
@@ -248,6 +270,8 @@ export class CustomEditor extends Editor {
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
 	onDequeue?: () => void;
+	/** Called when the configured retry shortcut is pressed. */
+	onRetry?: () => void;
 	/** Called when Caps Lock is pressed. */
 	onCapsLock?: () => void;
 	/** Called when left-arrow is pressed while the editor is empty (cursor necessarily at start). */
@@ -266,8 +290,14 @@ export class CustomEditor extends Editor {
 	/** Custom key handlers from extensions and non-built-in app actions. */
 	#customKeyHandlers = new Map<KeyId, () => void>();
 	#customMatchKeys = new Map<string, () => void>();
-	/** Consecutive plain spaces inserted in the current run; any other key resets it. */
+	/** Spaces actually inserted in the current run; tracked back out when a hold is recognized. */
 	#spaceRunInserted = 0;
+	/** Consecutive "mechanical" deltas (fast + steady); a sustained run of these confirms a held bar. */
+	#mechanicalRun = 0;
+	/** Inter-space gap (ms) of the previous space pair, compared against the next to judge steadiness. */
+	#prevSpaceGap: number | undefined;
+	/** Monotonic timestamp (ms) of the last space, to measure the gap to the next one. */
+	#lastSpaceAt = Number.NEGATIVE_INFINITY;
 	/** True while a recognized space-hold push-to-talk recording is in progress. */
 	#spaceHoldActive = false;
 	/** Idle timer that fires `onSpaceHoldEnd` once repeated spaces stop arriving. */
@@ -334,9 +364,12 @@ export class CustomEditor extends Editor {
 	}
 
 	/** Drive the space-hold push-to-talk state machine. Returns true when the gesture consumed the
-	 *  input so it must not reach normal editing. Holding the space bar makes the terminal emit a
-	 *  burst of auto-repeat spaces; once more than {@link SPACE_HOLD_THRESHOLD} of them land we treat
-	 *  it as a hold, delete the spam, and start recording until the repeats stop. */
+	 *  input so it must not reach normal editing. A held space bar emits OS auto-repeat: a *steady*
+	 *  stream of spaces at a fixed fast interval. We watch the inter-space deltas and only recognize a
+	 *  hold once {@link SPACE_HOLD_MECHANICAL_RUN} consecutive deltas are "mechanical" — both
+	 *  auto-repeat-fast and near-identical (see {@link gapsAreMechanical}). Smashing the bar is fast
+	 *  but jittery and deliberate taps are too slow, so neither escalates and both keep typing real
+	 *  spaces; the few spaces typed before a real hold is recognized are tracked back out. */
 	#handleSpaceHold(data: string, canonical: string | undefined): boolean {
 		const isSpace = canonical === "space";
 		if (this.#spaceHoldActive) {
@@ -350,19 +383,38 @@ export class CustomEditor extends Editor {
 			return false;
 		}
 		if (!isSpace) {
-			this.#spaceRunInserted = 0;
+			this.#resetSpaceRun();
 			return false;
 		}
 		if (!this.#spaceHoldGestureEnabled()) return false;
-		// A short tap should still type a normal space, so insert optimistically and count the run.
-		super.handleInput(data);
-		this.#spaceRunInserted++;
-		if (this.#spaceRunInserted > SPACE_HOLD_THRESHOLD) {
+		const now = performance.now();
+		const gap = now - this.#lastSpaceAt;
+		const prevGap = this.#prevSpaceGap;
+		this.#lastSpaceAt = now;
+		this.#prevSpaceGap = gap;
+		if (prevGap === undefined || !gapsAreMechanical(gap, prevGap)) {
+			// First space, a deliberate tap, or jittery smashing: not a steady machine cadence yet, so
+			// type a real space and reset the mechanical run.
+			this.#mechanicalRun = 0;
+			super.handleInput(data);
+			this.#spaceRunInserted++;
+			return true;
+		}
+		// Steady fast repeat: swallow it. Once the cadence has held for SPACE_HOLD_MECHANICAL_RUN
+		// deltas it's a held bar — track back the few pre-burst spaces already typed and start.
+		if (++this.#mechanicalRun >= SPACE_HOLD_MECHANICAL_RUN) {
 			this.deleteBeforeCursor(this.#spaceRunInserted);
-			this.#spaceRunInserted = 0;
+			this.#resetSpaceRun();
 			this.#beginSpaceHold();
 		}
 		return true;
+	}
+
+	#resetSpaceRun(): void {
+		this.#spaceRunInserted = 0;
+		this.#mechanicalRun = 0;
+		this.#prevSpaceGap = undefined;
+		this.#lastSpaceAt = Number.NEGATIVE_INFINITY;
 	}
 
 	#beginSpaceHold(): void {
@@ -383,7 +435,7 @@ export class CustomEditor extends Editor {
 	#endSpaceHold(): void {
 		if (!this.#spaceHoldActive) return;
 		this.#spaceHoldActive = false;
-		this.#spaceRunInserted = 0;
+		this.#resetSpaceRun();
 		if (this.#spaceHoldTimer) {
 			clearTimeout(this.#spaceHoldTimer);
 			this.#spaceHoldTimer = undefined;
@@ -537,6 +589,20 @@ export class CustomEditor extends Editor {
 			// Intercept configured copy-prompt shortcut
 			if (this.#matchesAction(canonical, "app.clipboard.copyPrompt") && this.onCopyPrompt) {
 				this.onCopyPrompt();
+				return;
+			}
+
+			// Intercept configured retry shortcut. Later user/custom handlers keep
+			// precedence so adding the default Alt+R binding does not steal existing
+			// shortcuts such as app.plan.toggle or extension commands; copy-prompt is
+			// checked above for the same reason.
+			if (this.#matchesAction(canonical, "app.retry") && this.onRetry) {
+				const customHandler = this.#customMatchKeys.get(canonical);
+				if (customHandler) {
+					customHandler();
+					return;
+				}
+				this.onRetry();
 				return;
 			}
 

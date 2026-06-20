@@ -117,4 +117,20 @@ describe("AgentSession magic keyword settings", () => {
 		expect(session.thinkingLevel).toBe(Effort.Low);
 		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Low);
 	});
+
+	it("queues the magic-keyword notice before the user message", async () => {
+		const created = await createMagicKeywordSession(root);
+		session = created.session;
+		authStorage = created.authStorage;
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("ultrathink do the thing");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ role?: string; customType?: string }>;
+		const noticeIdx = promptMessages.findIndex(m => m.customType === "ultrathink-notice");
+		const userIdx = promptMessages.findIndex(m => m.role === "user");
+		expect(noticeIdx).toBeGreaterThanOrEqual(0);
+		expect(userIdx).toBeGreaterThanOrEqual(0);
+		expect(noticeIdx).toBeLessThan(userIdx);
+	});
 });

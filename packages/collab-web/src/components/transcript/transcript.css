@@ -224,9 +224,13 @@
 
 /* ---- markdown ---- */
 
+/* Match the TUI's word-boundary wrapping: keep Korean/CJK words intact when
+ * possible, but still emergency-break long URLs or identifiers before they
+ * overflow the transcript. */
 .tr-md {
 	line-height: 1.55;
-	word-break: break-word;
+	overflow-wrap: break-word;
+	word-break: keep-all;
 }
 
 .tr-md > :first-child {
@@ -239,6 +243,11 @@
 
 .tr-md p {
 	margin: 6px 0;
+}
+
+.tr-md p,
+.tr-md li {
+	white-space: pre-wrap;
 }
 
 .tr-md h1,
@@ -278,6 +287,11 @@
 
 .tr-md li {
 	margin: 2px 0;
+}
+
+.tr-md li > ul,
+.tr-md li > ol {
+	white-space: normal;
 }
 
 .tr-md li > p {
@@ -322,11 +336,15 @@
 	font-size: 12.5px;
 }
 
+/* Table cells need `anywhere` so long URLs/identifiers contribute a shrinkable
+ * intrinsic width instead of expanding under the transcript's clipped overflow. */
 .tr-md th,
 .tr-md td {
 	padding: 3px 8px;
 	border: 1px solid var(--border);
+	overflow-wrap: anywhere;
 	text-align: left;
+	word-break: keep-all;
 }
 
 .tr-md th {

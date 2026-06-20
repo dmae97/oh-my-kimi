@@ -1,5 +1,6 @@
 import { fetchWithRetry } from "@oh-my-pi/pi-utils";
 import { Effort } from "../effort";
+import { isGlm52ReasoningEffortModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import type { FetchImpl, ThinkingConfig } from "../types";
 import { createBundledReferenceMap, createReferenceResolver } from "./bundled-references";
@@ -21,6 +22,11 @@ type OllamaShowResponse = {
 };
 
 const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
+const OLLAMA_CLOUD_GLM_52_THINKING: ThinkingConfig = {
+	mode: "effort",
+	efforts: [Effort.High, Effort.XHigh],
+	effortMap: { [Effort.XHigh]: "max" },
+};
 
 function trimTrailingSlash(value: string): string {
 	return value.endsWith("/") ? value.slice(0, -1) : value;
@@ -56,9 +62,12 @@ function getContextWindow(modelInfo: Record<string, unknown> | undefined): numbe
 	}
 }
 
-function getThinkingConfig(capabilities: string[] | undefined): ThinkingConfig | undefined {
+function getThinkingConfig(modelId: string, capabilities: string[] | undefined): ThinkingConfig | undefined {
 	if (!capabilities?.includes("thinking")) {
 		return undefined;
+	}
+	if (isGlm52ReasoningEffortModelId(modelId)) {
+		return OLLAMA_CLOUD_GLM_52_THINKING;
 	}
 	return { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] };
 }
@@ -128,7 +137,7 @@ export function ollamaCloudModelManagerOptions(
 					// different catalog; keep the historical safe fallback instead.
 					const contextWindow = discoveredContextWindow ?? 128000;
 					const reasoning = capabilities ? capabilities.includes("thinking") : (reference?.reasoning ?? false);
-					const thinking = capabilities ? getThinkingConfig(capabilities) : reference?.thinking;
+					const thinking = capabilities ? getThinkingConfig(id, capabilities) : reference?.thinking;
 					const input = capabilities
 						? capabilities.includes("vision")
 							? (["text", "image"] as Array<"text" | "image">)
@@ -150,6 +159,7 @@ export function ollamaCloudModelManagerOptions(
 							discoveredContextWindow !== null && discoveredContextWindow !== undefined
 								? (providerReference?.maxTokens ?? Math.min(contextWindow, 8192))
 								: Math.min(contextWindow, 8192),
+						omitMaxOutputTokens: true,
 					};
 				}),
 			);

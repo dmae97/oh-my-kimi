@@ -201,7 +201,6 @@ describe("createTools", () => {
 				"search.enabled": false,
 				"astGrep.enabled": false,
 				"astEdit.enabled": false,
-				"renderMermaid.enabled": false,
 				"bash.enabled": false,
 				"web_search.enabled": false,
 				"browser.enabled": false,
@@ -216,7 +215,6 @@ describe("createTools", () => {
 		expect(names).not.toContain("search");
 		expect(names).not.toContain("ast_grep");
 		expect(names).not.toContain("ast_edit");
-		expect(names).not.toContain("render_mermaid");
 		expect(names).not.toContain("web_search");
 		expect(names).not.toContain("browser");
 		expect(names).not.toContain("inspect_image");

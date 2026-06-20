@@ -124,9 +124,28 @@ export class WorkerCore {
 			active.pendingTools.clear();
 		}
 		this.#runs.clear();
+		this.#runtime?.dispose?.();
 		this.#runtime = null;
 		this.#transport.send({ type: "closed" });
 		this.#unsubscribe();
 		this.#transport.close();
+	}
+
+	dispose(): void {
+		for (const active of this.#runs.values()) {
+			for (const pending of active.pendingTools.values()) {
+				pending.reject(new ToolError("JS worker closed"));
+			}
+			active.pendingTools.clear();
+		}
+		this.#runs.clear();
+		this.#runtime?.dispose?.();
+		this.#runtime = null;
+		this.#unsubscribe();
+		try {
+			this.#transport.close();
+		} catch {
+			// Ignore
+		}
 	}
 }

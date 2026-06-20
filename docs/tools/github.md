@@ -66,7 +66,7 @@ The tool returns a single text result built by `buildTextResult()` in `packages/
 5. Read-style ops (`repo_view`, `search_*`) fetch JSON and format Markdown-like text summaries. Single-issue and single-PR views were moved out of the tool and now resolve through the `issue://` / `pr://` internal URL schemes, which share the same SQLite cache.
 6. PR diffs moved out of the tool. `pr://<N>/diff` lists changed files, `pr://<N>/diff/<i>` slices a single file, and `pr://<N>/diff/all` returns the full unified diff — see `docs/tools/read.md`. All three variants share one `gh pr diff` invocation through the `pr-diff` cache row.
 7. `pr_checkout` resolves PR metadata first, then enters `git.withRepoLock()` before any git mutation so parallel checkout calls for the same primary repo do not race on shared `.git` state.
-8. `pr_push` reads PR head metadata back from git branch config, derives a refspec, then pushes with `git.push()`.
+8. `pr_push` reads PR head metadata back from git branch config, derives a refspec, pushes with `git.push()`, then invalidates the cached `pr://` rows for the pushed PR via `invalidateAllForNumber()` so the next `pr://` read reflects the push.
 9. `pr_create` shells out once, then best-effort re-reads the created PR for a richer summary.
 10. `run_watch` chooses either run mode (`run` supplied) or commit mode (`run` omitted), polls GitHub Actions APIs every 3 seconds for the first minute and every 15 seconds after that, emits streaming updates, and may save a full failed-log artifact before returning.
 11. Final text goes through `toolResult().text(...)`; if `session.allocateOutputArtifact()` returns a slot, failed-log text is persisted with `Bun.write()`.
@@ -110,11 +110,11 @@ Branches:
 | Optional fields | `repo`, `pr`, `force` |
 | `gh` command | For each requested PR: `gh pr view [<pr>] [--repo <repo>] --json <GH_PR_CHECKOUT_FIELDS>`; cross-repo PRs may also call `gh repo view <headRepository> --json <GH_REPO_CLONE_FIELDS>`. |
 | Batching | Yes. `pr` may be `string[]`; each PR is resolved in parallel, but git mutations are serialized per primary repo by `git.withRepoLock()`. |
-| Output | Single PR: checkout/worktree summary plus `details.repo`, `details.branch`, `details.worktreePath`, `details.remote`, `details.remoteBranch`, `details.checkouts`. Batched: `# <n> Pull Request Worktrees (...)` plus one section per PR and aggregated `details.checkouts`. |
+| Output | Single PR: checkout/worktree summary plus `details.repo`, `details.branch`, `details.worktreePath`, `details.remote`, `details.remoteBranch`, `details.checkouts`. Batched: `# <n> Pull Request Worktrees (...)` plus one section per PR and aggregated `details.checkouts`. On partial failure the header becomes `# <n>/<total> Pull Request Worktrees checked out (<k> failed)` with a trailing `## Failed` list. |
 
 Worktree and metadata behavior:
 - Local branch name is always `pr-<number>`.
-- Worktree path is `path.join(getWorktreesDir(), encodeRepoPathForFilesystem(primaryRepoRoot), localBranch)`, where `getWorktreesDir()` is `~/.omp/wt`; effective path is `~/.omp/wt/<encoded-primary-repo-root>/pr-<number>`.
+- Worktree path is `getWorktreeDir("<number>-<repo-hash>")` = `path.join(getWorktreesDir(), "<number>-<repo-hash>")`, where `getWorktreesDir()` is `~/.omp/wt`, `<number>` is the PR number, and `<repo-hash>` is `hashPath(primaryRepoRoot)` (a 7-hex digest of the primary repo root); effective path is `~/.omp/wt/<number>-<repo-hash>`. `resolveAvailableWorktreePath()` appends a `-2`/`-3`… suffix when that path is already registered with git or present on disk.
 - Existing worktree detection is by branch ref `refs/heads/pr-<number>` from `git.worktree.list()`.
 - New worktree creation calls `git.worktree.add(repoRoot, finalWorktreePath, localBranch, { signal })` after verifying the path is neither already registered nor already present on disk.
 - For same-repo PRs, remote is `origin`. For cross-repo PRs, the tool resolves a clone URL for the head repo, reuses an existing remote with the same URL when possible, or creates `fork-<owner>` / `fork-<owner>-<n>`.
@@ -223,7 +223,7 @@ Watch flow:
 ## Side Effects
 - Filesystem
   - `pr_create` may create a temp dir under `os.tmpdir()` named `gh-pr-body-*`, write `body.md`, then remove the dir in `finally`.
-  - `pr_checkout` may create directories under `~/.omp/wt/<encoded-primary-repo-root>/` and add git worktrees there.
+  - `pr_checkout` may create worktree directories named `<pr-number>-<repo-hash>` directly under `~/.omp/wt/` and add git worktrees there.
   - `run_watch` may write a session artifact with full failed-job logs.
 - Network
   - Every op shells out to `gh`, which then talks to GitHub APIs except `pr_push`.
@@ -252,7 +252,7 @@ Watch flow:
 - PR review comments page size: `100` (`REVIEW_COMMENTS_PAGE_SIZE`).
 - Actions jobs page size: `100` (`RUN_JOBS_PAGE_SIZE`).
 - Search and tail numeric inputs are floored with `Math.floor()`, clamped to the max, and rejected when non-finite or `<= 0`.
-- `pr_checkout` batch fan-out is unbounded in tool code; all requested PRs are launched with `Promise.all()`.
+- `pr_checkout` batch fan-out is unbounded in tool code; all requested PRs are launched with `Promise.allSettled()` so individual failures surface as a partial result instead of aborting the batch.
 
 ## Errors
 - Tool creation is skipped entirely when `gh` is not installed.

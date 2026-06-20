@@ -28,4 +28,4 @@ the classification calls for code. Drive the todo list to completion:
    - `invalid` / `duplicate` → one brief comment, then stop.
 
 3. If `bug` and you cannot reproduce after a real attempt, call
-   `mark_unable_to_reproduce`. You NEVER guess at fixes.
+   `mark_unable_to_reproduce` with the exact reporter details needed. You NEVER guess at fixes.

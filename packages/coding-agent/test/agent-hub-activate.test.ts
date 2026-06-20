@@ -4,6 +4,7 @@
  * focus failure keeps the hub open and surfaces the error as a notice.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
@@ -16,6 +17,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const AGENT_ID = "Worker";
+const TEST_CWD = path.resolve("agent-hub-cwd");
 
 function makeHub(focusAgent: (id: string) => Promise<void>) {
 	const agents = new AgentRegistry();
@@ -89,9 +91,10 @@ describe("Agent hub Enter activation", () => {
 
 	it("lists persisted subagent session files after restart", async () => {
 		using tempDir = TempDir.createSync("@omp-agent-hub-persisted-");
-		const sessionFile = `${tempDir.path()}/main.jsonl`;
+		const sessionFile = path.join(tempDir.path(), "main.jsonl");
+		const workerSessionFile = path.join(tempDir.path(), "main", "Worker.jsonl");
 		await Bun.write(sessionFile, "");
-		await Bun.write(`${tempDir.path()}/main/Worker.jsonl`, "");
+		await Bun.write(workerSessionFile, "");
 		const agents = new AgentRegistry();
 		const hub = new AgentHubOverlayComponent({
 			observers: new SessionObserverRegistry(),
@@ -107,7 +110,7 @@ describe("Agent hub Enter activation", () => {
 		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
 		expect(rendered).toContain("Worker");
 		expect(rendered).toContain("parked");
-		expect(agents.get("Worker")?.sessionFile).toBe(`${tempDir.path()}/main/Worker.jsonl`);
+		expect(agents.get("Worker")?.sessionFile).toBe(workerSessionFile);
 		hub.dispose();
 	});
 
@@ -125,18 +128,21 @@ describe("Agent hub Enter activation", () => {
 
 		const editor = {};
 		let capturedHub: AgentHubOverlayComponent | undefined;
-		let hideCalls = 0;
+		let editorRestoredCount = 0;
 		const focusedIds: string[] = [];
 		const focusResolved = Promise.withResolvers<void>();
 		const editorFocused = Promise.withResolvers<void>();
 		const focusTargets: unknown[] = [];
+		const editorContainer = {
+			clear: () => {},
+			addChild: (child: unknown) => {
+				if (child === editor) editorRestoredCount++;
+				else capturedHub = child as AgentHubOverlayComponent;
+			},
+		};
 		const ctx = {
 			keybindings: { getKeys: () => [] },
 			ui: {
-				showOverlay: (component: AgentHubOverlayComponent) => {
-					capturedHub = component;
-					return { hide: () => hideCalls++ };
-				},
 				setFocus: (target: unknown) => {
 					focusTargets.push(target);
 					if (target === editor) editorFocused.resolve();
@@ -144,13 +150,14 @@ describe("Agent hub Enter activation", () => {
 				requestRender: () => {},
 			},
 			editor,
+			editorContainer,
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async (id: string) => {
 				focusedIds.push(id);
 				focusResolved.resolve();
 			},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => "/tmp", getSessionFile: () => null },
+			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
@@ -165,7 +172,7 @@ describe("Agent hub Enter activation", () => {
 		await editorFocused.promise;
 
 		expect(focusedIds).toEqual([AGENT_ID]);
-		expect(hideCalls).toBe(1);
+		expect(editorRestoredCount).toBe(1);
 		expect(focusTargets.at(-1)).toBe(editor);
 		capturedHub!.dispose();
 	});
@@ -182,21 +189,24 @@ describe("Agent hub double-← gating", () => {
 
 	function setup(agents: AgentRegistry) {
 		let shown: AgentHubOverlayComponent | undefined;
+		const editor = {};
 		const ctx = {
 			keybindings: { getKeys: () => [] },
 			ui: {
-				showOverlay: (component: AgentHubOverlayComponent) => {
-					shown = component;
-					return { hide: () => {} };
-				},
 				setFocus: () => {},
 				requestRender: () => {},
 			},
-			editor: {},
+			editor,
+			editorContainer: {
+				clear: () => {},
+				addChild: (child: unknown) => {
+					if (child !== editor) shown = child as AgentHubOverlayComponent;
+				},
+			},
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async () => {},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => "/tmp", getSessionFile: () => null },
+			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => null },
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);

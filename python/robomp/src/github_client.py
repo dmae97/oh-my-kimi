@@ -7,6 +7,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -445,6 +446,16 @@ class GitHubClient:
             json={"labels": labels},
         )
         return tuple(str(lbl["name"]) if isinstance(lbl, dict) else str(lbl) for lbl in (data or []))
+
+    async def remove_issue_label(self, repo: str, number: int, label: str) -> None:
+        """Remove one label from an issue (or PR)."""
+        if not label:
+            return
+        encoded = quote(label, safe="")
+        await self.request(
+            "DELETE",
+            f"/repos/{repo}/issues/{number}/labels/{encoded}",
+        )
 
     async def submit_pr_review(
         self,

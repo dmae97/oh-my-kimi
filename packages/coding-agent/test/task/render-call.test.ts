@@ -124,7 +124,7 @@ describe("task renderer: streaming call preview", () => {
 		expect(out).toContain("Shared brief.");
 		// Interior divider bars start with the tee glyph; only the header (top)
 		// and bottom border may exist.
-		const tee = theme.boxSharp.teeRight;
+		const tee = theme.boxRound.teeRight;
 		expect(lines.filter(line => line.trimStart().startsWith(tee))).toHaveLength(0);
 	});
 

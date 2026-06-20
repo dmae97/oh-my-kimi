@@ -2,6 +2,68 @@
 
 ## [Unreleased]
 
+## [16.1.5] - 2026-06-19
+
+### Fixed
+
+- Wire-encoded `normalizeTools` parameters unconditionally so tools whose `intent` resolves to `"omit"` (function intent or `intent: "omit"`, e.g. builtin `eval` / `resolve`) no longer leak raw arktype/zod schema objects in `parameters` ([#3074](https://github.com/can1357/oh-my-pi/issues/3074))
+
+## [16.1.2] - 2026-06-19
+
+### Fixed
+
+- Prevented sensitive raw JSON payloads from leaking into agent events during tool validation
+- Ensured tool validation errors are handled correctly for malformed JSON parse inputs
+- Ensure deep-cloning of tool-call arguments respects own enumerable properties
+- Prevent direct object references between agent message snapshots and streaming events
+
+## [16.1.0] - 2026-06-19
+
+### Added
+
+- Added `SoftToolRequirement` support to `getToolChoice`: a host can require a tool by returning a soft requirement instead of a hard `ToolChoice`. The loop injects the supplied reminder once (leaving `tool_choice` on auto), and escalates to a one-turn forced choice — skipping any detour tool batch — only if the model fails to call the required tool, avoiding the provider message-cache invalidation of forcing every turn.
+- Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
+
+### Fixed
+
+- Improved token estimation accuracy for compaction summaries containing multi-block content
+
+## [16.0.11] - 2026-06-19
+
+### Changed
+
+- Updated the display format for truncated file operation summaries
+
+## [16.0.8] - 2026-06-18
+
+### Fixed
+
+- Stopped the compaction `<files>` summary from tracking `scheme://` URLs — internal URIs (`conflict://`, `artifact://`, `local://`, `history://`, …) and web URLs are no longer recorded as files, and legacy entries rehydrated from older compaction summaries are dropped.
+
+## [16.0.6] - 2026-06-18
+
+### Added
+
+- Added `transformAssistantMessage` hook to `AgentOptions` and `Agent` to allow mutating the finalized assistant message before UI emission, context appending, or tool dispatch
+
+## [16.0.5] - 2026-06-17
+
+### Breaking Changes
+
+- Changed `AgentOptions.getApiKey` and `AgentLoopConfig.getApiKey` to receive the active `Model` and return an API key or `ApiKeyResolver`, so credential routing stays model-scoped and retry context is no longer exposed through the agent-core API
+
+### Added
+
+- Added agent-loop deadline support for graceful wall-clock session stops.
+
+### Changed
+
+- Changed Gemini repetition-loop detection to live in the pi-ai stream layer instead of the agent loop. The agent no longer runs its own Gemini-gated verbatim repetition check (`detectRepetition`/`truncateRepetition`); loops now surface as a retryable transient stream error that the standard auto-retry path discards and re-samples, rather than a committed contentful error message.
+
+### Fixed
+
+- Fixed `PI_DIALECT=minimax` being ignored by the owned tool-calling env selector. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
+
 ## [16.0.1] - 2026-06-15
 
 ### Fixed

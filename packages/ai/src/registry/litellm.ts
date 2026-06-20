@@ -16,7 +16,8 @@ export async function loginLiteLLM(options: OAuthController): Promise<string> {
 
 	options.onAuth?.({
 		url: AUTH_URL,
-		instructions: "Run LiteLLM proxy (default http://localhost:4000/v1), then copy your master key or virtual key",
+		instructions:
+			"Run LiteLLM proxy (default http://localhost:4000/v1; set LITELLM_BASE_URL to customize it), then copy your master key or virtual key",
 	});
 
 	const apiKey = await options.onPrompt({

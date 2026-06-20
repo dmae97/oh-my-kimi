@@ -12,6 +12,7 @@ import { SessionObserverRegistry } from "@oh-my-pi/pi-coding-agent/modes/session
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
 interface GeometryStub {
 	setRows(n: number): void;
@@ -112,6 +113,51 @@ describe("Agent hub row ordering", () => {
 		agents.register({ id: "D", displayName: "Delta", kind: "sub", session: sessionD });
 
 		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A", "D"]);
+
+		hub.dispose();
+	});
+
+	it("truncates lines and sanitizes newlines to prevent terminal wrapping", () => {
+		geometry = stubStdoutGeometry(80);
+		const agents = new AgentRegistry();
+		const sessionA = {} as AgentSession;
+		agents.register({
+			id: "RevAgentStream",
+			displayName: "Agent runtime + compaction reviewer",
+			kind: "sub",
+			session: sessionA,
+		});
+
+		const observers = new SessionObserverRegistry();
+		vi.spyOn(observers, "getSessions").mockReturnValue([
+			{
+				id: "RevAgentStream",
+				kind: "subagent",
+				label: "Subagent",
+				status: "active",
+				description: "Complete the assignment below, thoroughly:\n- check performance\n- check leaks",
+				lastUpdate: Date.now(),
+			},
+		]);
+
+		const hub = new AgentHubOverlayComponent({
+			observers,
+			hubKeys: [],
+			onDone: () => {},
+			requestRender: () => {},
+			registry: agents,
+			irc: new IrcBus(agents),
+			focusAgent: async () => {},
+		});
+
+		const lines = hub.render(80);
+		for (const line of lines) {
+			const cleanLine = Bun.stripANSI(line);
+			expect(cleanLine.includes("\n")).toBe(false);
+			expect(cleanLine.includes("\r")).toBe(false);
+			const width = visibleWidth(line);
+			expect(width).toBeLessThanOrEqual(78);
+		}
 
 		hub.dispose();
 	});

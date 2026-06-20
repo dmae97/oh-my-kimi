@@ -1,46 +1,35 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
-import { isDeepseekModelIdOrName } from "@oh-my-pi/pi-catalog/identity";
-import { getSupportedEfforts, resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
+import { isKimiModelId } from "@oh-my-pi/pi-catalog/identity";
+import { resolveWireModelId } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
-import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import packageJson from "../../package.json" with { type: "json" };
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
 import { getEnvApiKey } from "../stream";
-import {
-	type AssistantMessage,
-	type Context,
-	type Message,
-	type MessageAttribution,
-	type Model,
-	OPENAI_MAX_OUTPUT_TOKENS,
-	type OpenAICompat,
-	type ProviderSessionState,
-	type RawSseEvent,
-	resolveServiceTier,
-	type ServiceTier,
-	type StopReason,
-	type StreamFunction,
-	type StreamOptions,
-	shouldSendServiceTier,
-	type TextContent,
-	type ThinkingContent,
-	type Tool,
-	type ToolCall,
-	type ToolChoice,
-	type ToolResultMessage,
+import type {
+	AssistantMessage,
+	Context,
+	Message,
+	MessageAttribution,
+	Model,
+	ProviderSessionState,
+	RawSseEvent,
+	ServiceTier,
+	StopReason,
+	StreamFunction,
+	StreamOptions,
+	TextContent,
+	ThinkingContent,
+	Tool,
+	ToolCall,
+	ToolChoice,
+	ToolResultMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import {
-	type CapturedHttpErrorResponse,
-	finalizeErrorMessage,
-	type RawHttpRequestDump,
-	rewriteCopilotError,
-} from "../utils/http-inspector";
+import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
@@ -51,39 +40,115 @@ import { parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-p
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
 import {
-	getStreamMarkupHealingPattern,
 	type HealedToolCall,
-	modelMayLeakThinkingTags,
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
-import { parseAzureDeploymentNameMap } from "./azure-openai-responses";
-import {
-	buildCopilotDynamicHeaders,
-	hasCopilotVisionInput,
-	resolveGitHubCopilotBaseUrl,
-} from "./github-copilot-headers";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
 	ChatCompletionContentPart,
 	ChatCompletionContentPartImage,
 	ChatCompletionContentPartText,
-	ChatCompletionCreateParamsStreaming,
 	ChatCompletionMessageParam,
 	ChatCompletionTool,
 	ChatCompletionToolMessageParam,
 } from "./openai-chat-wire";
-import { createInitialResponsesAssistantMessage } from "./openai-responses-shared";
+import {
+	applyOpenAIReasoningEffortFallback,
+	clearOpenAIReasoningEffortFallbackState,
+	createOpenAIReasoningEffortFallbackKey,
+	createOpenAIReasoningEffortFallbackState,
+	getOpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallbackState,
+	rememberOpenAIReasoningEffortFallback,
+	resolveOpenAIReasoningEffortFallback,
+} from "./openai-reasoning-fallback";
+import {
+	applyChatCompletionsCompatPolicy,
+	applyChatCompletionsToolStream,
+	applyOpenAIExtraBody,
+	applyOpenAIGatewayRouting,
+	applyOpenAIServiceTier,
+	applyWireModelIdTransform,
+	calculateOpenAIUsageAccounting,
+	clearOpenAIStrictToolsState,
+	createInitialResponsesAssistantMessage,
+	createOpenAIStrictToolsState,
+	disableStrictToolsForScope,
+	getOpenAIStrictToolsScope,
+	isCompiledGrammarTooLargeStrictError,
+	isOpenRouterAnthropicModel,
+	isStrictToolsDisabledForScope,
+	type OpenAICompatPolicy,
+	type OpenAICompletionsParams,
+	type OpenAIRequestSetup,
+	type OpenAIStrictToolsState,
+	parseAzureDeploymentNameMap,
+	resolveOpenAICompatPolicy,
+	resolveOpenAIOutputTokenParam,
+	resolveOpenAIRequestSetup,
+	resolveZaiReasoningOutputClamp,
+	shouldRetryWithoutStrictTools,
+} from "./openai-shared";
 import { transformMessages } from "./transform-messages";
 import {
 	isDashscopeCompatibleModeTextOnlyQwen,
 	joinTextWithImagePlaceholder,
 	NON_VISION_IMAGE_PLACEHOLDER,
 } from "./vision-guard";
+
+export { applyOpenRouterRoutingVariant } from "./openai-shared";
+
+type OpenAICompletionsReasoningField = NonNullable<ResolvedOpenAICompat["reasoningContentField"]>;
+
+type ProviderAttributedChatCompletionChunk = ChatCompletionChunk & {
+	provider?: unknown;
+};
+
+type OpenAICompletionsChoiceUsage = ChatCompletionChunk.Choice & {
+	usage?: unknown;
+};
+
+type OpenAICompletionsDeltaWithReasoningDetails = ChatCompletionChunk.Choice["delta"] & {
+	reasoning_details?: unknown;
+};
+
+type OpenAICompletionsAssistantMessageParam = ChatCompletionAssistantMessageParam &
+	Partial<Record<OpenAICompletionsReasoningField, string>> & {
+		reasoning_details?: unknown[];
+	};
+
+type OpenAICompletionsToolMessageParam = ChatCompletionToolMessageParam & {
+	name?: string;
+};
+
+type OpenAICompletionsContentBlockWithIndex = AssistantMessage["content"][number] & {
+	index?: unknown;
+};
+
+type OpenAICompletionsUsageLike = {
+	completion_tokens?: unknown;
+	prompt_tokens?: unknown;
+	cached_tokens?: unknown;
+	prompt_cache_hit_tokens?: unknown;
+	prompt_cache_miss_tokens?: unknown;
+	prompt_tokens_details?: unknown;
+	completion_tokens_details?: unknown;
+};
+
+type OpenAICompletionsPromptTokenDetails = {
+	cached_tokens?: unknown;
+	cache_write_tokens?: unknown;
+};
+
+type OpenAICompletionsCompletionTokenDetails = {
+	reasoning_tokens?: unknown;
+};
 
 /**
  * Normalize tool call ID for Mistral.
@@ -107,7 +172,7 @@ function normalizeMistralToolId(id: string, isMistral: boolean): string {
 // path. We deliberately do NOT append `:tools` here: with `:tools`, NanoGPT
 // performs server-side tool-call parsing on the upstream DeepSeek stream and
 // 502s with `code: "malformed_tool_call"` on more complex tool schemas (issue
-// #1488). The default route forwards `delta.content` (including any DSML
+// #1488). The default route forwards `delta.content` (including DSML
 // envelope leaks) which `StreamMarkupHealing` heals into a structured call
 // client-side.
 function resolveOpenAICompletionsModelId(
@@ -120,10 +185,7 @@ function resolveOpenAICompletionsModelId(
 	const effort =
 		options?.reasoning && !options.disableReasoning && model.reasoning ? (options.reasoning as Effort) : undefined;
 	const wireId = resolveWireModelId(model, effort);
-	if (model.provider === "firepass") return toFirepassWireModelId(wireId);
-	if (model.provider === "fireworks") return toFireworksWireModelId(wireId);
-	if (model.provider === "openrouter") return applyOpenRouterRoutingVariant(wireId, options?.openrouterVariant);
-	return wireId;
+	return applyWireModelIdTransform(wireId, model.compat.wireModelIdMode, options?.openrouterVariant);
 }
 
 /**
@@ -186,20 +248,12 @@ function serializeToolArguments(value: unknown): string {
 	return "{}";
 }
 
-function isUnsafeToolArgumentKey(key: string): boolean {
-	return key === "__proto__" || key === "constructor" || key === "prototype";
-}
-
-function isStreamingArgumentObject(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function cloneStreamingArgumentValue(value: unknown): unknown {
 	if (Array.isArray(value)) {
 		return value.map(cloneStreamingArgumentValue);
 	}
-	if (isStreamingArgumentObject(value)) {
-		return mergeStreamingArgumentObjects(undefined, value);
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		return mergeStreamingArgumentObjects(undefined, value as Record<string, unknown>);
 	}
 	return value;
 }
@@ -213,16 +267,29 @@ function streamingArgumentValuesEqual(left: unknown, right: unknown): boolean {
 		}
 		return true;
 	}
-	if (isStreamingArgumentObject(left) && isStreamingArgumentObject(right)) {
+	if (
+		left !== null &&
+		typeof left === "object" &&
+		!Array.isArray(left) &&
+		right !== null &&
+		typeof right === "object" &&
+		!Array.isArray(right)
+	) {
+		const leftObject = left as Record<string, unknown>;
+		const rightObject = right as Record<string, unknown>;
 		let leftKeys = 0;
-		for (const key in left) {
-			if (!Object.hasOwn(left, key) || isUnsafeToolArgumentKey(key)) continue;
+		for (const key in leftObject) {
+			if (!Object.hasOwn(leftObject, key) || key === "__proto__" || key === "constructor" || key === "prototype")
+				continue;
 			leftKeys++;
-			if (!Object.hasOwn(right, key) || !streamingArgumentValuesEqual(left[key], right[key])) return false;
+			if (!Object.hasOwn(rightObject, key) || !streamingArgumentValuesEqual(leftObject[key], rightObject[key])) {
+				return false;
+			}
 		}
 		let rightKeys = 0;
-		for (const key in right) {
-			if (!Object.hasOwn(right, key) || isUnsafeToolArgumentKey(key)) continue;
+		for (const key in rightObject) {
+			if (!Object.hasOwn(rightObject, key) || key === "__proto__" || key === "constructor" || key === "prototype")
+				continue;
 			rightKeys++;
 		}
 		return leftKeys === rightKeys;
@@ -259,8 +326,15 @@ function mergeStreamingArgumentValues(prev: unknown, fragment: unknown): unknown
 	if (Array.isArray(prev) && Array.isArray(fragment)) {
 		return mergeStreamingArgumentArrays(prev, fragment);
 	}
-	if (isStreamingArgumentObject(prev) && isStreamingArgumentObject(fragment)) {
-		return mergeStreamingArgumentObjects(prev, fragment);
+	if (
+		prev !== null &&
+		typeof prev === "object" &&
+		!Array.isArray(prev) &&
+		fragment !== null &&
+		typeof fragment === "object" &&
+		!Array.isArray(fragment)
+	) {
+		return mergeStreamingArgumentObjects(prev as Record<string, unknown>, fragment as Record<string, unknown>);
 	}
 	return cloneStreamingArgumentValue(fragment);
 }
@@ -272,12 +346,13 @@ function mergeStreamingArgumentObjects(
 	const merged: Record<string, unknown> = {};
 	if (prev) {
 		for (const key in prev) {
-			if (!Object.hasOwn(prev, key) || isUnsafeToolArgumentKey(key)) continue;
+			if (!Object.hasOwn(prev, key) || key === "__proto__" || key === "constructor" || key === "prototype") continue;
 			merged[key] = cloneStreamingArgumentValue(prev[key]);
 		}
 	}
 	for (const key in fragment) {
-		if (!Object.hasOwn(fragment, key) || isUnsafeToolArgumentKey(key)) continue;
+		if (!Object.hasOwn(fragment, key) || key === "__proto__" || key === "constructor" || key === "prototype")
+			continue;
 		merged[key] = Object.hasOwn(merged, key)
 			? mergeStreamingArgumentValues(merged[key], fragment[key])
 			: cloneStreamingArgumentValue(fragment[key]);
@@ -312,7 +387,7 @@ function hasToolHistory(messages: Message[]): boolean {
  * subagent stalled for hours with no error surfaced.
  *
  * A chunk counts as progress when it carries terminal usage, a finish reason,
- * or any model-produced delta (content / tool calls / reasoning / refusal).
+ * or a model-produced delta (content / tool calls / reasoning / refusal).
  * Role-only `delta: { role: "assistant" }` preambles do NOT count; we want the
  * (longer) first-event timeout to keep governing until real output appears.
  */
@@ -356,6 +431,8 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	/** Force-disable reasoning where supported, or request the lowest effort on generic effort endpoints. */
 	disableReasoning?: boolean;
 	serviceTier?: ServiceTier;
+	/** @internal True when maxTokens came from the caller, not the model default. */
+	maxTokensExplicit?: boolean;
 	/**
 	 * Routing-variant suffix appended to OpenRouter model IDs when none is
 	 * already present (`anthropic/claude-haiku-latest` → `…:nitro`). Common
@@ -366,18 +443,6 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 	 */
 	openrouterVariant?: string;
 }
-
-type OpenAICompletionsParams = ChatCompletionCreateParamsStreaming & {
-	top_k?: number;
-	min_p?: number;
-	repetition_penalty?: number;
-	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
-	enable_thinking?: boolean;
-	chat_template_kwargs?: { enable_thinking: boolean };
-	reasoning?: { effort?: string } | { enabled: false };
-	provider?: OpenAICompat["openRouterRouting"];
-	providerOptions?: { gateway?: { only?: string[]; order?: string[] } };
-};
 
 type AppliedToolStrictMode = "mixed" | "all_strict" | "none";
 type ToolStrictModeOverride = Exclude<ResolvedOpenAICompat["toolStrictMode"], "mixed"> | undefined;
@@ -391,15 +456,19 @@ type BuiltOpenAICompletionTools = {
 
 const OPENAI_COMPLETIONS_PROVIDER_SESSION_STATE_PREFIX = "openai-completions:";
 
-type OpenAICompletionsProviderSessionState = ProviderSessionState & {
-	strictToolsDisabled: boolean;
-};
+type OpenAICompletionsProviderSessionState = ProviderSessionState &
+	OpenAIStrictToolsState &
+	OpenAIReasoningEffortFallbackState;
 
 function createOpenAICompletionsProviderSessionState(): OpenAICompletionsProviderSessionState {
+	const strictToolsState = createOpenAIStrictToolsState();
+	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
 	const state: OpenAICompletionsProviderSessionState = {
-		strictToolsDisabled: false,
+		...strictToolsState,
+		...reasoningEffortFallbackState,
 		close: () => {
-			state.strictToolsDisabled = false;
+			clearOpenAIStrictToolsState(state);
+			clearOpenAIReasoningEffortFallbackState(state);
 		},
 	};
 	return state;
@@ -417,44 +486,6 @@ function getOpenAICompletionsProviderSessionState(
 	const created = createOpenAICompletionsProviderSessionState();
 	providerSessionState.set(key, created);
 	return created;
-}
-
-function isOpenRouterAnthropicModel(model: Model<"openai-completions">): boolean {
-	return model.provider === "openrouter" && model.id.toLowerCase().startsWith("anthropic/");
-}
-
-/**
- * Append an OpenRouter routing-variant suffix (e.g. `:nitro`, `:floor`, `:online`, `:exacto`)
- * to a model id when no explicit variant is already present. A variant is considered
- * "already present" when `modelId` contains a colon after the last `/` separator —
- * which covers both user-typed selectors (`anthropic/claude-haiku:nitro`) and catalog
- * entries that bake the variant in (`deepseek/deepseek-v3.1-terminus:exacto`).
- *
- * Exported for unit testing.
- */
-export function applyOpenRouterRoutingVariant(modelId: string, variant: string | undefined): string {
-	if (!variant) return modelId;
-	const lastSlash = modelId.lastIndexOf("/");
-	const lastColon = modelId.lastIndexOf(":");
-	// Existing `:suffix` after the last path segment — leave the id untouched.
-	if (lastColon > lastSlash) return modelId;
-	return `${modelId}:${variant}`;
-}
-
-function isCompiledGrammarTooLargeStrictError(
-	error: unknown,
-	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
-): boolean {
-	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
-	if (status !== 400) return false;
-	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
-		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-		.join("\n");
-	return (
-		/invalid_request_error/i.test(messageParts) &&
-		/compiled grammar/i.test(messageParts) &&
-		/too large/i.test(messageParts)
-	);
 }
 
 // DeepSeek models leak chat-template special tokens (e.g. `<｜tool_calls_begin｜>`,
@@ -479,7 +510,7 @@ function stripDeepseekSpecialTokens(text: string): string {
 	return normalized;
 }
 
-// Find any trailing partial `<｜...` (or `<|...`) that has not yet been closed by a
+// Find a trailing partial `<｜...` (or `<|...`) that has not yet been closed by a
 // matching `｜>`/`|>`, so it can be held back until the next chunk arrives. A solo
 // trailing `<` is also held in case it is the start of a new token.
 function getTrailingPartialDeepseekToken(text: string): string {
@@ -507,7 +538,7 @@ const OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE =
 // converts the already-successful response into a timeout error.
 const OPENAI_COMPLETIONS_POST_FINISH_GRACE_MS = 2_500;
 
-export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
+const streamOpenAICompletionsOnce = (
 	model: Model<"openai-completions">,
 	context: Context,
 	options?: OpenAICompletionsOptions,
@@ -517,6 +548,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	(async () => {
 		const startTime = Date.now();
 		let firstTokenTime: number | undefined;
+		const policy = resolveOpenAICompatForRequest(model, options);
 
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
@@ -545,7 +577,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 			: undefined;
 		// Assigned once the block helpers exist (they are scoped to the `try`);
-		// the catch handler uses it to close any open blocks before emitting the
+		// the catch handler uses it to close open blocks before emitting the
 		// terminal error so both exit paths obey the same block lifecycle.
 		let finishOpenBlocksOnError: () => void = () => {};
 
@@ -557,7 +589,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = await createRequestSetup(
+			const { copilotPremiumRequests, baseUrl, headers, query, requestHeaders } = createRequestSetup(
 				model,
 				context,
 				apiKey,
@@ -566,13 +598,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
+			const requestReasoningEffortFallbacks = new Map<string, OpenAIReasoningEffortFallback>();
+			const attemptedReasoningEffortFallbacks = new Set<string>();
+			let activeReasoningEffortFallbackKey: string | undefined;
+			let activeRequestParams: OpenAICompletionsParams | undefined;
 			const providerSessionState = getOpenAICompletionsProviderSessionState(
 				model,
 				baseUrl,
 				options?.providerSessionState,
 			);
-			let disableStrictTools = providerSessionState?.strictToolsDisabled ?? false;
-			let strictFallbackErrorMessage: string | undefined;
+			const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
+			let disableStrictTools = isStrictToolsDisabledForScope(providerSessionState, strictToolsScope);
 			const trimmedBaseUrl = baseUrl.replace(/\/+$/, "");
 			const completionsUrl = query
 				? `${trimmedBaseUrl}/chat/completions?${new URLSearchParams(query)}`
@@ -586,6 +622,19 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					effectiveToolStrictModeOverride,
 				);
 				appliedStrictTools = strictToolsApplied;
+				const reasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
+					"chat-completions",
+					trimmedBaseUrl,
+					params.model,
+				);
+				const requestReasoningEffortFallback = requestReasoningEffortFallbacks.has(reasoningEffortFallbackKey)
+					? requestReasoningEffortFallbacks.get(reasoningEffortFallbackKey)
+					: getOpenAIReasoningEffortFallback(providerSessionState, reasoningEffortFallbackKey);
+				if (requestReasoningEffortFallback !== undefined) {
+					applyOpenAIReasoningEffortFallback(params, requestReasoningEffortFallback);
+				}
+				activeReasoningEffortFallbackKey = reasoningEffortFallbackKey;
+				activeRequestParams = params;
 				options?.onPayload?.(params);
 				rawRequestDump = {
 					provider: model.provider,
@@ -635,16 +684,29 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				});
 			} catch (error) {
 				const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
-				if (
+				const reasoningEffortFallback =
+					activeReasoningEffortFallbackKey && activeRequestParams && !requestSignal.aborted
+						? resolveOpenAIReasoningEffortFallback(error, capturedErrorResponse, activeRequestParams, {
+								explicitDisable: options?.disableReasoning === true && options.reasoning === undefined,
+							})
+						: undefined;
+				if (reasoningEffortFallback !== undefined && activeReasoningEffortFallbackKey) {
+					const retryMarker = `${activeReasoningEffortFallbackKey}:${String(reasoningEffortFallback)}`;
+					if (attemptedReasoningEffortFallbacks.has(retryMarker)) throw error;
+					attemptedReasoningEffortFallbacks.add(retryMarker);
+					requestReasoningEffortFallbacks.set(activeReasoningEffortFallbackKey, reasoningEffortFallback);
+					openaiStream = await createCompletionsStream();
+					rememberOpenAIReasoningEffortFallback(
+						providerSessionState,
+						activeReasoningEffortFallbackKey,
+						reasoningEffortFallback,
+					);
+				} else if (
 					isOpenRouterAnthropicModel(model) &&
 					!disableStrictTools &&
 					isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse)
 				) {
-					strictFallbackErrorMessage = await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse);
-					output.errorMessage = strictFallbackErrorMessage;
-					if (providerSessionState) {
-						providerSessionState.strictToolsDisabled = true;
-					}
+					disableStrictToolsForScope(providerSessionState, strictToolsScope);
 					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				} else {
@@ -653,9 +715,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					}
 					// Remember the rejection for the rest of the session so every
 					// subsequent request doesn't pay a strict-400 + retry round-trip.
-					if (providerSessionState) {
-						providerSessionState.strictToolsDisabled = true;
-					}
+					disableStrictToolsForScope(providerSessionState, strictToolsScope);
 					disableStrictTools = true;
 					openaiStream = await createCompletionsStream("none");
 				}
@@ -669,8 +729,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			// native API) leak chat-template tool-call markers in `delta.content` even
 			// though tool calls are also surfaced structurally. Strip the leaked markers
 			// so users don't see raw `<｜...｜>` tokens.
-			const stripDeepseekChatTemplateTokens =
-				isDeepseekModelIdOrName(model.id) && (model.provider === "nvidia" || model.provider === "deepseek");
+			const stripDeepseekChatTemplateTokens = policy.stream.stripSpecialTokens === "deepseek";
 			type ToolCallStreamBlock = ToolCall & {
 				partialArgs?: string | Record<string, unknown>;
 				streamIndex?: number;
@@ -850,11 +909,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					appendTextDelta(processedText);
 				}
 			};
-			const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
+			const streamMarkupHealingPattern = policy.stream.markupHealingPattern;
 			const streamMarkupHealing = streamMarkupHealingPattern
 				? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
 				: undefined;
-			const explicitReasoningDeltasMayBeCumulative = modelMayLeakThinkingTags(model.provider, model.id);
+			const explicitReasoningDeltasMayBeCumulative = policy.stream.reasoningDeltasMayBeCumulative;
 			let suppressHealedThinking = false;
 			let healedToolCallEmitted = false;
 			const emitHealedToolCall = (call: HealedToolCall): void => {
@@ -897,7 +956,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 
 			// Terminal-chunk bookkeeping for the post-finish grace window below.
 			// `streamFinishedAt` flips when a chunk carries `finish_reason`;
-			// `sawUsagePayload` flips when any usage payload was parsed.
+			// `sawUsagePayload` flips when a usage payload was parsed.
 			let streamFinishedAt: number | undefined;
 			let sawUsagePayload = false;
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
@@ -930,7 +989,11 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				// provider that actually served the request via a top-level `provider`
 				// field present on every chunk. Capture the first non-empty value so
 				// callers can attribute routing without re-parsing the raw stream.
-				output.upstreamProvider ||= getOptionalStringProperty(chunk, "provider");
+				if (!output.upstreamProvider) {
+					const upstreamProvider = (chunk as ProviderAttributedChatCompletionChunk).provider;
+					output.upstreamProvider =
+						typeof upstreamProvider === "string" && upstreamProvider.length > 0 ? upstreamProvider : undefined;
+				}
 
 				if (chunk.usage) {
 					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
@@ -947,8 +1010,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				}
 
 				if (!chunk.usage) {
-					const choiceUsage = getChoiceUsage(choice);
-					if (choiceUsage) {
+					const choiceUsage = (choice as OpenAICompletionsChoiceUsage).usage;
+					if (typeof choiceUsage === "object" && choiceUsage !== null) {
 						output.usage = parseChunkUsage(choiceUsage, model, premiumRequestsTotal);
 						sawUsagePayload = true;
 					}
@@ -1089,7 +1152,12 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 								// openai-responses-server, anthropic-messages-server) an invalid sequence like
 								// `{"input":"a"}{"input":"b"}`. The merged object is flushed as a single
 								// concat-safe delta in `finishToolCallBlock` before `toolcall_end` instead.
-								const prev = isStreamingArgumentObject(block.partialArgs) ? block.partialArgs : undefined;
+								const prev =
+									block.partialArgs !== null &&
+									typeof block.partialArgs === "object" &&
+									!Array.isArray(block.partialArgs)
+										? (block.partialArgs as Record<string, unknown>)
+										: undefined;
 								const merged = mergeStreamingArgumentObjects(prev, rawArgs);
 								block.partialArgs = merged;
 								block.arguments = merged;
@@ -1103,15 +1171,17 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 						}
 					}
 
-					const reasoningDetails = (choice.delta as any).reasoning_details;
-					if (reasoningDetails && Array.isArray(reasoningDetails)) {
+					const reasoningDetails = (choice.delta as OpenAICompletionsDeltaWithReasoningDetails).reasoning_details;
+					if (Array.isArray(reasoningDetails)) {
 						for (const detail of reasoningDetails) {
-							if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
+							if (!detail || typeof detail !== "object") continue;
+							const detailObject = detail as { type?: unknown; id?: unknown; data?: unknown };
+							if (detailObject.type === "reasoning.encrypted" && detailObject.id && detailObject.data) {
 								const matchingToolCall = output.content.find(
-									b => b.type === "toolCall" && b.id === detail.id,
+									b => b.type === "toolCall" && b.id === detailObject.id,
 								) as ToolCall | undefined;
 								if (matchingToolCall) {
-									matchingToolCall.thoughtSignature = JSON.stringify(detail);
+									matchingToolCall.thoughtSignature = JSON.stringify(detailObject);
 								}
 							}
 						}
@@ -1162,6 +1232,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				output.stopReason = "toolUse";
 			}
 
+			if (
+				policy.stream.emptyLengthFinishIsContextError &&
+				output.stopReason === "length" &&
+				!hasVisibleAssistantContent(output)
+			) {
+				output.stopReason = "error";
+				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;
+			}
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			if (firstEventTimeoutError) {
 				throw firstEventTimeoutError;
@@ -1177,7 +1255,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 
-			output.errorMessage = strictFallbackErrorMessage;
+			output.errorMessage = undefined;
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -1189,7 +1267,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 			try {
 				finishOpenBlocksOnError();
 			} catch {}
-			for (const block of output.content) delete (block as any).index;
+			for (const block of output.content) delete (block as OpenAICompletionsContentBlockWithIndex).index;
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
@@ -1211,102 +1289,68 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 	return stream;
 };
 
-async function createRequestSetup(
+/**
+ * Public entry: wrap the single-attempt streamer with bounded empty-completion
+ * retries — flaky gateways occasionally 200 with `delta: {}` + `finish_reason:
+ * "stop"` and no usage, which would otherwise stall the agent loop. Shared with
+ * the Anthropic provider via `withEmptyCompletionRetry`.
+ */
+export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamOpenAICompletionsOnce);
+
+function createRequestSetup(
 	model: Model<"openai-completions">,
 	context: Context,
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
-): Promise<{
-	copilotPremiumRequests: number | undefined;
-	baseUrl: string;
-	/** Headers sent on the wire, including `Authorization`. */
-	headers: Record<string, string>;
-	/** Query params appended to the request URL (Azure `api-version`). */
-	query: Record<string, string> | undefined;
-	/** Headers recorded in `rawRequestDump` (sans `Authorization`). */
-	requestHeaders: Record<string, string>;
-}> {
-	if (!apiKey) {
-		if (!$env.OPENAI_API_KEY) {
-			throw new Error(
-				"OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
-			);
-		}
-		apiKey = $env.OPENAI_API_KEY;
+): OpenAIRequestSetup & { baseUrl: string } {
+	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
+	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
+	const setup = resolveOpenAIRequestSetup(model, {
+		apiKey,
+		extraHeaders,
+		initiatorOverride,
+		messages: context.messages,
+		defaultBaseUrl: "https://api.openai.com/v1",
+		// Provider auth/header overlay: Kimi-code hosts require shared client
+		// attribution headers prepended before caller headers. Kept here (not in
+		// the shared helper) because it is provider-specific request setup.
+		prependHeaders: model.provider === "kimi-code" ? getKimiCommonHeaders : undefined,
+		alibabaCodingPlanAuth: true,
+		azureChatCompletions: { apiVersion, deploymentName },
+	});
+	if (!setup.baseUrl) {
+		throw new Error("OpenAI request setup did not resolve a base URL");
 	}
-	const rawApiKey = apiKey;
-
-	let headers = { ...model.headers };
-	if (model.provider === "openrouter") {
-		// App attribution — opts the agent into OpenRouter's public rankings and per-app
-		// analytics. `HTTP-Referer` is the unique app identifier; without it nothing is
-		// tracked. `X-OpenRouter-Title` is the display name (`X-Title` is the legacy
-		// alias kept for back-compat). `X-OpenRouter-Categories` slots us into the
-		// `cli-agent` marketplace category. `User-Agent` makes our traffic
-		// identifiable in upstream provider logs.
-		// https://openrouter.ai/docs/app-attribution
-		headers["User-Agent"] = `Oh-My-Pi/${packageJson.version}`;
-		headers["HTTP-Referer"] = "https://omp.sh/";
-		headers["X-OpenRouter-Title"] = "Oh-My-Pi";
-		headers["X-OpenRouter-Categories"] = "cli-agent";
-		// Always-on response caching: identical requests return cached responses for free.
-		// TTL 1h; first call hits the provider, every identical call within the window
-		// replays from OpenRouter's edge cache. https://openrouter.ai/docs/features/response-caching
-		headers["X-OpenRouter-Cache"] = "true";
-		headers["X-OpenRouter-Cache-TTL"] = "3600";
-	}
-	Object.assign(headers, extraHeaders);
-	if (model.provider === "kimi-code") {
-		headers = { ...getKimiCommonHeaders(), ...headers };
-	}
-	let copilotPremiumRequests: number | undefined;
-
-	let baseUrl = model.baseUrl;
-	if (model.provider === "github-copilot") {
-		apiKey = parseGitHubCopilotApiKey(rawApiKey).accessToken;
-		const hasImages = hasCopilotVisionInput(context.messages);
-		const copilot = buildCopilotDynamicHeaders({
-			messages: context.messages,
-			hasImages,
-			premiumMultiplier: model.premiumMultiplier,
-			headers,
-			initiatorOverride,
-		});
-		Object.assign(headers, copilot.headers);
-		copilotPremiumRequests = copilot.premiumRequests;
-		baseUrl = resolveGitHubCopilotBaseUrl(model.baseUrl, rawApiKey) ?? model.baseUrl;
-	}
-	// Azure OpenAI requires /deployments/{id}/chat/completions?api-version=YYYY-MM-DD.
-	// The generic openai-completions path adds neither, producing silent 404s.
-	let azureDefaultQuery: Record<string, string> | undefined;
-	if (baseUrl?.includes(".openai.azure.com")) {
-		const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
-		if (!baseUrl.includes("/deployments/")) {
-			// Honor AZURE_OPENAI_DEPLOYMENT_NAME_MAP like the responses provider:
-			// deployment names routinely differ from catalog model ids.
-			const deploymentName =
-				parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
-			baseUrl = `${baseUrl}/deployments/${deploymentName}`;
-		}
-		azureDefaultQuery = { "api-version": apiVersion };
-	}
-	// The removed SDK client resolved its base URL as
-	// `baseURL ?? $OPENAI_BASE_URL ?? https://api.openai.com/v1`; keep that
-	// resolution explicit now that we build the request URL ourselves.
-	const resolvedBaseUrl = baseUrl ?? ($env.OPENAI_BASE_URL?.trim() || "https://api.openai.com/v1");
-	return {
-		copilotPremiumRequests,
-		baseUrl: resolvedBaseUrl,
-		headers: { Authorization: `Bearer ${apiKey}`, ...headers },
-		query: azureDefaultQuery,
-		requestHeaders: headers,
-	};
+	return setup as OpenAIRequestSetup & { baseUrl: string };
 }
 
-function getForcedCompletionsToolName(toolChoice: OpenAICompletionsParams["tool_choice"]): string | undefined {
-	if (typeof toolChoice !== "object" || toolChoice === null || !("function" in toolChoice)) return undefined;
-	return toolChoice.function.name;
+function resolveOpenAICompatForRequest(
+	model: Model<"openai-completions">,
+	options: OpenAICompletionsOptions | undefined,
+): OpenAICompatPolicy {
+	return resolveOpenAICompatPolicy(model, {
+		endpoint: "chat-completions",
+		reasoning: options?.reasoning,
+		disableReasoning: options?.disableReasoning,
+		toolChoice: mapToOpenAICompletionsToolChoice(options?.toolChoice),
+	});
+}
+
+function dropOpenRouterKimiForcedToolReasoning(
+	params: OpenAICompletionsParams,
+	model: Model<"openai-completions">,
+	policy: OpenAICompatPolicy,
+): void {
+	if (
+		policy.reasoning.disableReason === "forced-tool-choice" &&
+		policy.reasoning.disableMode === "openrouter-enabled-false" &&
+		policy.compat.isOpenRouterHost &&
+		isKimiModelId(model.id)
+	) {
+		delete params.reasoning;
+	}
 }
 
 function buildParams(
@@ -1315,60 +1359,24 @@ function buildParams(
 	options: OpenAICompletionsOptions | undefined,
 	toolStrictModeOverride?: ToolStrictModeOverride,
 ): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode; strictToolsApplied: boolean } {
-	let compat = model.compat;
-	const thinkingEnabledForRequest =
-		Boolean(options?.reasoning) && !options?.disableReasoning && Boolean(model.reasoning);
-	const forcedToolChoiceSuppressesThinking =
-		compat.disableReasoningOnForcedToolChoice &&
-		compat.supportsForcedToolChoice &&
-		isForcedToolChoice(mapToOpenAICompletionsToolChoice(options?.toolChoice));
-	if (compat.whenThinking && thinkingEnabledForRequest && !forcedToolChoiceSuppressesThinking) {
-		compat = compat.whenThinking; // precomputed at model build — pointer swap, no allocation
-	}
-	const messages = convertMessages(model, context, compat);
-	maybeAddAnthropicCacheControl(compat, messages);
-	const supportsReasoningParams = compat.supportsReasoningParams;
-
-	// Kimi-family models calculate TPM rate limits from max_tokens (not actual
-	// output) and the official guidance requires sending it on every call —
-	// `compat.alwaysSendMaxTokens` carries that detection.
-	const requestedMaxTokens =
-		options?.maxTokens ?? (compat.alwaysSendMaxTokens ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined);
-	// OpenRouter fans out to upstreams whose output caps differ from the catalog
-	// value (which tracks the highest-cap provider). A max_tokens above the routed
-	// upstream's cap makes OpenRouter silently skip that provider (e.g. Cerebras
-	// GLM-4.7, ~40k) for a higher-cap one, defeating `provider.order`/`only`. Omit
-	// it for OpenRouter so each upstream self-caps and routing is honored — unless
-	// the model always requires max_tokens (Kimi TPM accounting, see above).
-	const omitMaxTokensForRouting = compat.isOpenRouterHost && !compat.alwaysSendMaxTokens;
-	const effectiveMaxTokens =
-		requestedMaxTokens === undefined || omitMaxTokensForRouting
-			? undefined
-			: Math.min(requestedMaxTokens, model.maxTokens ?? Number.POSITIVE_INFINITY, OPENAI_MAX_OUTPUT_TOKENS);
+	const initialPolicy = resolveOpenAICompatForRequest(model, options);
+	const initialCompat = initialPolicy.compat as ResolvedOpenAICompat;
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
 	const params: OpenAICompletionsParams = {
 		model: requestModelId,
-		messages,
+		messages: [],
 		stream: true,
 	};
 	let toolStrictMode: AppliedToolStrictMode = "none";
 	let strictToolsApplied = false;
 
-	if (compat.supportsUsageInStreaming !== false) {
+	if (initialCompat.supportsUsageInStreaming !== false) {
 		params.stream_options = { include_usage: true };
 	}
 
-	if (compat.supportsStore) {
+	if (initialCompat.supportsStore) {
 		params.store = false;
-	}
-
-	if (effectiveMaxTokens && !model.omitMaxOutputTokens) {
-		if (compat.maxTokensField === "max_tokens") {
-			params.max_tokens = effectiveMaxTokens;
-		} else {
-			params.max_completion_tokens = effectiveMaxTokens;
-		}
 	}
 
 	if (options?.temperature !== undefined) {
@@ -1396,15 +1404,10 @@ function buildParams(
 	if (options?.frequencyPenalty !== undefined) {
 		params.frequency_penalty = options.frequencyPenalty;
 	}
-	if (shouldSendServiceTier(options?.serviceTier, model.provider)) {
-		const resolved = resolveServiceTier(options?.serviceTier, model.provider);
-		if (resolved === "flex" || resolved === "scale" || resolved === "priority") {
-			params.service_tier = resolved;
-		}
-	}
+	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 
 	if (context.tools?.length) {
-		const builtTools = convertTools(context.tools, compat, toolStrictModeOverride);
+		const builtTools = convertTools(context.tools, initialCompat, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
 		strictToolsApplied = builtTools.strictToolsApplied;
@@ -1419,10 +1422,10 @@ function buildParams(
 		params.tools = [];
 	}
 
-	if (options?.toolChoice && compat.supportsToolChoice) {
+	if (options?.toolChoice && initialCompat.supportsToolChoice) {
 		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
 	}
-	if (isForcedToolChoice(params.tool_choice) && !compat.supportsForcedToolChoice) {
+	if (isForcedToolChoice(params.tool_choice) && !initialCompat.supportsForcedToolChoice) {
 		// Some thinking-required OpenAI-compatible models reject forced
 		// `tool_choice` while still accepting tools with the default auto
 		// selector. Keep the tool available and let the model choose it.
@@ -1441,7 +1444,10 @@ function buildParams(
 		delete params.tool_choice;
 	}
 
-	const forcedToolName = getForcedCompletionsToolName(params.tool_choice);
+	const forcedToolName =
+		typeof params.tool_choice === "object" && params.tool_choice !== null && "function" in params.tool_choice
+			? params.tool_choice.function.name
+			: undefined;
 	if (
 		forcedToolName !== undefined &&
 		(!Array.isArray(params.tools) ||
@@ -1454,133 +1460,45 @@ function buildParams(
 		delete params.tool_choice;
 	}
 
-	if (supportsReasoningParams && compat.thinkingFormat === "zai" && model.reasoning) {
-		// Z.ai uses binary thinking: { type: "enabled" | "disabled" }
-		// Must explicitly disable since z.ai defaults to thinking enabled.
-		const enabled = options?.reasoning && !options?.disableReasoning;
-		params.thinking = { type: enabled ? "enabled" : "disabled" };
-		if (enabled && compat.thinkingKeep) {
-			params.thinking.keep = compat.thinkingKeep;
+	const finalPolicy = resolveOpenAICompatPolicy(model, {
+		endpoint: "chat-completions",
+		reasoning: options?.reasoning,
+		disableReasoning: options?.disableReasoning,
+		toolChoice: params.tool_choice,
+	});
+	const compat = finalPolicy.compat as ResolvedOpenAICompat;
+	const messages = convertMessages(model, context, compat);
+	maybeAddAnthropicCacheControl(compat, messages);
+	params.messages = messages;
+	const outputToken = resolveOpenAIOutputTokenParam({
+		field: compat.maxTokensField,
+		maxTokens: options?.maxTokens,
+		maxTokensExplicit: options?.maxTokensExplicit ?? options?.maxTokens !== undefined,
+		modelMaxTokens: model.maxTokens,
+		omitMaxOutputTokens: model.omitMaxOutputTokens ?? false,
+		isOpenRouterHost: compat.isOpenRouterHost,
+		alwaysSendMaxTokens: compat.alwaysSendMaxTokens,
+		providerOutputClamp: resolveZaiReasoningOutputClamp(model, compat),
+	});
+	if (outputToken) {
+		if (outputToken.field === "max_tokens") {
+			params.max_tokens = outputToken.value;
+		} else if (outputToken.field === "max_completion_tokens") {
+			params.max_completion_tokens = outputToken.value;
 		}
-	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen" && model.reasoning) {
-		// Qwen uses top-level enable_thinking: boolean
-		params.enable_thinking = !!options?.reasoning && !options?.disableReasoning;
-	} else if (supportsReasoningParams && compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		params.chat_template_kwargs = {
-			enable_thinking: !!options?.reasoning && !options?.disableReasoning,
-		};
-	} else if (supportsReasoningParams && compat.thinkingFormat === "openrouter" && model.reasoning) {
-		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
-		// Without an explicit signal, OpenRouter defaults reasoning models to thinking, which
-		// silently consumes the entire output budget on small `max_tokens` requests (e.g.
-		// title generation). Honor `disableReasoning` to opt out cleanly.
-		const openRouterParams = params as typeof params & {
-			reasoning?: { effort?: string } | { enabled: false };
-		};
-		if (options?.disableReasoning) {
-			openRouterParams.reasoning = { enabled: false };
-		} else if (options?.reasoning) {
-			openRouterParams.reasoning = {
-				effort:
-					compat.reasoningEffortMap?.[options.reasoning] ??
-					model.thinking?.effortMap?.[options.reasoning] ??
-					options.reasoning,
-			};
-		}
-	} else if (
-		supportsReasoningParams &&
-		options?.reasoning &&
-		!options?.disableReasoning &&
-		model.reasoning &&
-		compat.supportsReasoningEffort
-	) {
-		// OpenAI-style reasoning_effort
-		params.reasoning_effort = (compat.reasoningEffortMap?.[options.reasoning] ??
-			model.thinking?.effortMap?.[options.reasoning] ??
-			options.reasoning) as Effort;
-	} else if (
-		supportsReasoningParams &&
-		options?.disableReasoning &&
-		!options?.reasoning &&
-		model.reasoning &&
-		compat.supportsReasoningEffort
-	) {
-		// Generic OpenAI-compatible effort endpoints do not expose a true off
-		// switch. Use the model's lowest supported effort as the closest
-		// transport-level approximation when callers request disabled reasoning.
-		const minEffort = getSupportedEfforts(model)[0];
-		if (minEffort === undefined) {
-			throw new Error(`Model ${model.provider}/${model.id} has no supported reasoning efforts`);
-		}
-		params.reasoning_effort = (compat.reasoningEffortMap?.[minEffort] ??
-			model.thinking?.effortMap?.[minEffort] ??
-			minEffort) as Effort;
 	}
+	applyChatCompletionsToolStream(params, model, compat);
 
-	if (compat.disableReasoningOnToolChoice && params.tool_choice !== undefined) {
-		// DeepSeek reasoning models accept tools/tool_choice, but reject that
-		// control field while thinking is enabled. Keep the tool-selection
-		// contract and suppress reasoning for this single request.
-		delete params.reasoning_effort;
-		delete params.reasoning;
-	}
+	applyChatCompletionsCompatPolicy(params, finalPolicy);
+	dropOpenRouterKimiForcedToolReasoning(params, model, finalPolicy);
 
-	if (compat.disableReasoningOnForcedToolChoice && isForcedToolChoice(params.tool_choice)) {
-		// Backends like Kimi 400 with `tool_choice 'specified' is incompatible
-		// with thinking enabled`. Suppress thinking for this single forced-tool
-		// turn while keeping the tool-selection contract intact.
-		delete params.reasoning_effort;
-		delete params.reasoning;
-		if (compat.thinkingFormat === "zai") {
-			params.thinking = { type: "disabled" };
-		}
-	}
+	applyOpenAIGatewayRouting(params, compat);
 
-	// OpenRouter provider routing preferences
-	if (compat.isOpenRouterHost && compat.openRouterRouting) {
-		params.provider = compat.openRouterRouting;
-	}
-
-	// Vercel AI Gateway provider routing preferences
-	if (compat.isVercelGatewayHost && compat.vercelGatewayRouting) {
-		const routing = compat.vercelGatewayRouting;
-		if (routing.only || routing.order) {
-			const gatewayOptions: Record<string, string[]> = {};
-			if (routing.only) gatewayOptions.only = routing.only;
-			if (routing.order) gatewayOptions.order = routing.order;
-			params.providerOptions = { gateway: gatewayOptions };
-		}
-	}
-
-	if (compat.extraBody) {
-		Object.assign(params, compat.extraBody);
-		if (model.provider === "fireworks" && params.reasoning_effort !== undefined) {
-			// Fireworks rejects simultaneous DeepSeek-style `thinking` toggles and
-			// OpenAI-style `reasoning_effort`; the effort field carries the user's level.
-			delete params.thinking;
-		}
-	}
+	applyOpenAIExtraBody(params, compat.extraBody, {
+		dropThinkingWhenReasoningEffort: compat.dropThinkingWhenReasoningEffort,
+	});
 
 	return { params, toolStrictMode, strictToolsApplied };
-}
-
-function getOptionalNumberProperty(value: object, key: string): number | undefined {
-	const property = Reflect.get(value, key);
-	return typeof property === "number" ? property : undefined;
-}
-
-function getOptionalStringProperty(value: object, key: string): string | undefined {
-	const property = Reflect.get(value, key);
-	return typeof property === "string" && property.length > 0 ? property : undefined;
-}
-
-function getOptionalObjectProperty(value: object, key: string): object | undefined {
-	const property = Reflect.get(value, key);
-	return typeof property === "object" && property !== null ? property : undefined;
-}
-
-function getChoiceUsage(choice: ChatCompletionChunk.Choice): object | undefined {
-	return getOptionalObjectProperty(choice, "usage");
 }
 
 export function parseChunkUsage(
@@ -1588,61 +1506,41 @@ export function parseChunkUsage(
 	model: Model<"openai-completions">,
 	premiumRequests: number | undefined,
 ): AssistantMessage["usage"] {
-	const promptTokenDetails = getOptionalObjectProperty(rawUsage, "prompt_tokens_details");
-	const completionTokenDetails = getOptionalObjectProperty(rawUsage, "completion_tokens_details");
-	const cachedTokens =
-		getOptionalNumberProperty(rawUsage, "cached_tokens") ??
-		getOptionalNumberProperty(rawUsage, "prompt_cache_hit_tokens") ??
-		(promptTokenDetails ? getOptionalNumberProperty(promptTokenDetails, "cached_tokens") : undefined) ??
-		0;
-	// OpenRouter exposes cache writes via `prompt_tokens_details.cache_write_tokens`
-	// and INCLUDES them in `prompt_tokens` — they are billed on top of the input, so
-	// we subtract them to get the real billed input.
-	// DeepSeek exposes cache hit/miss via `prompt_cache_hit_tokens` /
-	// `prompt_cache_miss_tokens` at the top level where `prompt_tokens` equals their
-	// sum. The miss portion IS the billed input — we must NOT subtract it.
-	// Ref: https://openrouter.ai/docs/guides/best-practices/prompt-caching
-	// Ref: https://api-docs.deepseek.com/api/create-chat-completion
-	//
-	// Resolve cacheWrite from both possible sources separately.
-	// They have different billing semantics: OpenRouter's cache_write is billed
-	// on top of prompt_tokens, while DeepSeek's miss IS the billed input.
-	const cacheWriteOpenRouter = promptTokenDetails
-		? getOptionalNumberProperty(promptTokenDetails, "cache_write_tokens")
-		: undefined;
-	const cacheWriteDeepSeek = getOptionalNumberProperty(rawUsage, "prompt_cache_miss_tokens");
-	// Prefer OpenRouter's value for the input subtraction; fall back to DeepSeek.
-	const cacheWriteTokens = cacheWriteOpenRouter ?? cacheWriteDeepSeek ?? 0;
-
-	const reasoningTokens =
-		(completionTokenDetails ? getOptionalNumberProperty(completionTokenDetails, "reasoning_tokens") : undefined) ?? 0;
-	const promptTokens = getOptionalNumberProperty(rawUsage, "prompt_tokens") ?? 0;
-
-	const isDeepSeekNative =
-		getOptionalNumberProperty(rawUsage, "prompt_cache_hit_tokens") !== undefined && cacheWriteDeepSeek !== undefined;
-	// Only use the DeepSeek input path when cacheWrite came from DeepSeek's
-	// miss field, not from prompt_tokens_details. Avoids false positives when
-	// DeepSeek models route through OpenRouter (which may pass through native
-	// fields alongside its own cache_write_tokens).
-	const isDeepSeekUsage = isDeepSeekNative && cacheWriteOpenRouter === undefined && cacheWriteDeepSeek > 0;
-	const input = isDeepSeekUsage
-		? Math.max(0, promptTokens - cachedTokens)
-		: Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
-	// Per OpenAI's CompletionUsage spec, `reasoning_tokens` is a subset of
-	// `completion_tokens` (which is the total billed output). Adding them would
-	// double-count.
-	const outputTokens = getOptionalNumberProperty(rawUsage, "completion_tokens") ?? 0;
-	// DeepSeek only exposes cache hit/miss (no cache-write data).
-	// Emitting miss tokens as cacheWrite would make downstream consumers
-	// double-count them (input already equals miss for DeepSeek).
-	const emittedCacheWrite = isDeepSeekUsage ? 0 : cacheWriteTokens;
+	const usageLike = rawUsage as OpenAICompletionsUsageLike;
+	const rawPromptTokenDetails = usageLike.prompt_tokens_details;
+	const promptTokenDetails =
+		typeof rawPromptTokenDetails === "object" && rawPromptTokenDetails !== null
+			? (rawPromptTokenDetails as OpenAICompletionsPromptTokenDetails)
+			: undefined;
+	const rawCompletionTokenDetails = usageLike.completion_tokens_details;
+	const completionTokenDetails =
+		typeof rawCompletionTokenDetails === "object" && rawCompletionTokenDetails !== null
+			? (rawCompletionTokenDetails as OpenAICompletionsCompletionTokenDetails)
+			: undefined;
+	const completionTokens = usageLike.completion_tokens;
+	const promptTokens = usageLike.prompt_tokens;
+	const cachedTokens = usageLike.cached_tokens;
+	const promptCacheHitTokens = usageLike.prompt_cache_hit_tokens;
+	const promptCacheMissTokens = usageLike.prompt_cache_miss_tokens;
+	const promptTokenCachedTokens = promptTokenDetails?.cached_tokens;
+	const completionReasoningTokens = completionTokenDetails?.reasoning_tokens;
+	const cacheWriteTokens = promptTokenDetails?.cache_write_tokens;
+	const outputTokens = typeof completionTokens === "number" ? completionTokens : 0;
+	const accounting = calculateOpenAIUsageAccounting({
+		promptTokens: typeof promptTokens === "number" ? promptTokens : 0,
+		outputTokens,
+		cachedTokens:
+			(typeof cachedTokens === "number" ? cachedTokens : undefined) ??
+			(typeof promptCacheHitTokens === "number" ? promptCacheHitTokens : undefined) ??
+			(typeof promptTokenCachedTokens === "number" ? promptTokenCachedTokens : undefined) ??
+			0,
+		reasoningTokens: typeof completionReasoningTokens === "number" ? completionReasoningTokens : 0,
+		cacheWriteOpenRouter: typeof cacheWriteTokens === "number" ? cacheWriteTokens : undefined,
+		cacheWriteDeepSeek: typeof promptCacheMissTokens === "number" ? promptCacheMissTokens : undefined,
+		hasDeepSeekCacheHitAndMiss: typeof promptCacheHitTokens === "number" && typeof promptCacheMissTokens === "number",
+	});
 	const usage: AssistantMessage["usage"] = {
-		input,
-		output: outputTokens,
-		cacheRead: cachedTokens,
-		cacheWrite: emittedCacheWrite,
-		totalTokens: input + outputTokens + cachedTokens + emittedCacheWrite,
-		...(reasoningTokens > 0 ? { reasoningTokens } : {}),
+		...accounting,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		...(premiumRequests !== undefined ? { premiumRequests } : {}),
 	};
@@ -1691,7 +1589,7 @@ export function convertMessages(
 
 	const maxNormalizedToolCallIdLength = compat.requiresMistralToolIds
 		? 9
-		: model.provider === "openai"
+		: compat.usesOpenAIToolCallIdLimit
 			? 40
 			: undefined;
 	const duplicateToolCallIdSuffixPrefix = compat.requiresMistralToolIds ? "dup" : undefined;
@@ -1708,7 +1606,7 @@ export function convertMessages(
 			return callId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
 		}
 
-		if (model.provider === "openai") return id.length > 40 ? id.slice(0, 40) : id;
+		if (compat.usesOpenAIToolCallIdLimit) return id.length > 40 ? id.slice(0, 40) : id;
 		return id;
 	};
 	const transformedMessages = transformMessages(
@@ -1835,7 +1733,7 @@ export function convertMessages(
 				});
 			}
 		} else if (msg.role === "assistant") {
-			const assistantMsg: ChatCompletionAssistantMessageParam = {
+			const assistantMsg: OpenAICompletionsAssistantMessageParam = {
 				role: "assistant",
 				content: null,
 			};
@@ -1871,17 +1769,15 @@ export function convertMessages(
 					// configured `reasoningContentField` instead, so honor that here
 					// rather than echoing the upstream field name.
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
 					const wireField =
 						compat.allowsSyntheticReasoningContentForToolCalls &&
-						signature &&
-						recognizedFields.includes(signature)
+						(signature === "reasoning_content" || signature === "reasoning" || signature === "reasoning_text")
 							? signature
-							: signature && recognizedFields.includes(signature)
+							: signature === "reasoning_content" || signature === "reasoning" || signature === "reasoning_text"
 								? (compat.reasoningContentField ?? "reasoning_content")
 								: undefined;
 					if (wireField) {
-						(assistantMsg as any)[wireField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+						assistantMsg[wireField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
 				}
 			}
@@ -1895,16 +1791,16 @@ export function convertMessages(
 						streamedReasoningField === "reasoning_text")
 						? streamedReasoningField
 						: (compat.reasoningContentField ?? "reasoning_content");
-				const reasoningContent = (assistantMsg as any)[reasoningField];
+				const reasoningContent = assistantMsg[reasoningField];
 				if (!reasoningContent) {
-					const reasoning = (assistantMsg as any).reasoning;
-					const reasoningText = (assistantMsg as any).reasoning_text;
+					const reasoning = assistantMsg.reasoning;
+					const reasoningText = assistantMsg.reasoning_text;
 					if (reasoning && reasoningField !== "reasoning") {
-						(assistantMsg as any)[reasoningField] = reasoning;
+						assistantMsg[reasoningField] = reasoning;
 					} else if (reasoningText && reasoningField !== "reasoning_text") {
-						(assistantMsg as any)[reasoningField] = reasoningText;
+						assistantMsg[reasoningField] = reasoningText;
 					} else if (nonEmptyThinkingBlocks.length > 0) {
-						(assistantMsg as any)[reasoningField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+						assistantMsg[reasoningField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
 				}
 			}
@@ -1912,7 +1808,7 @@ export function convertMessages(
 			const toolCalls = msg.content.filter(b => b.type === "toolCall") as ToolCall[];
 			// Replay reasoning_content on assistant turns for backends that validate
 			// thinking-mode history. DeepSeek V4 requires reasoning_content on EVERY
-			// assistant turn once any prior turn included it — not just tool-call turns.
+			// assistant turn once a prior turn included it — not just tool-call turns.
 			// The replay logic has three tiers:
 			//   1. Recover from thinking blocks with valid signatures (covers same-model replay
 			//      where nonEmptyThinkingBlocks may have filtered out empty-text blocks)
@@ -1930,13 +1826,12 @@ export function convertMessages(
 			// DeepSeek-compatible reasoning models require reasoning_content on all
 			// assistant turns. Providers that allow placeholders only need it on
 			// tool-call turns.
-			const needsReasoningOnAllTurns =
-				compat.requiresReasoningContentForToolCalls && !compat.allowsSyntheticReasoningContentForToolCalls;
+			const needsReasoningOnAllTurns = compat.requiresReasoningContentForAllAssistantTurns;
 			const needsReasoningField = needsReasoningOnAllTurns || toolCalls.length > 0;
 			let hasReasoningField =
-				(assistantMsg as any).reasoning_content !== undefined ||
-				(assistantMsg as any).reasoning !== undefined ||
-				(assistantMsg as any).reasoning_text !== undefined;
+				assistantMsg.reasoning_content !== undefined ||
+				assistantMsg.reasoning !== undefined ||
+				assistantMsg.reasoning_text !== undefined;
 			// Tier 1: Recover reasoning_content from ALL thinking blocks (including empty-text
 			// ones) when the provider requires exact replay and rejects synthetic placeholders.
 			// This covers the case where thinking blocks have valid signatures but were excluded
@@ -1954,10 +1849,9 @@ export function convertMessages(
 				const allThinkingBlocks = msg.content.filter(b => b.type === "thinking") as ThinkingContent[];
 				if (allThinkingBlocks.length > 0) {
 					const signature = allThinkingBlocks[0].thinkingSignature;
-					const recognizedFields = ["reasoning_content", "reasoning", "reasoning_text"];
-					if (signature && recognizedFields.includes(signature)) {
+					if (signature === "reasoning_content" || signature === "reasoning" || signature === "reasoning_text") {
 						const reasoningField = compat.reasoningContentField ?? "reasoning_content";
-						(assistantMsg as any)[reasoningField] = allThinkingBlocks.map(b => b.thinking).join("\n");
+						assistantMsg[reasoningField] = allThinkingBlocks.map(b => b.thinking).join("\n");
 						hasReasoningField = true;
 					}
 				}
@@ -1973,13 +1867,13 @@ export function convertMessages(
 				!compat.allowsSyntheticReasoningContentForToolCalls
 			) {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
-				(assistantMsg as any)[reasoningField] = "";
+				assistantMsg[reasoningField] = "";
 				hasReasoningField = true;
 			}
 			// Tier 3: For providers that accept synthetic placeholders (Kimi, OpenRouter).
 			if (toolCalls.length > 0 && canUseSyntheticReasoningContent && !hasReasoningField) {
 				const reasoningField = compat.reasoningContentField ?? "reasoning_content";
-				(assistantMsg as any)[reasoningField] = ".";
+				assistantMsg[reasoningField] = ".";
 				hasReasoningField = true;
 			}
 			if (toolCalls.length > 0) {
@@ -1999,14 +1893,15 @@ export function convertMessages(
 					.filter(tc => tc.thoughtSignature)
 					.map(tc => {
 						try {
-							return JSON.parse(tc.thoughtSignature!);
+							const parsed: unknown = JSON.parse(tc.thoughtSignature!);
+							return parsed;
 						} catch {
 							return null;
 						}
 					})
 					.filter(Boolean);
 				if (reasoningDetails.length > 0) {
-					(assistantMsg as any).reasoning_details = reasoningDetails;
+					assistantMsg.reasoning_details = reasoningDetails;
 				}
 			}
 			// Some OpenAI-compatible backends concatenate assistant content as a
@@ -2059,13 +1954,13 @@ export function convertMessages(
 						: hasImages
 							? "(see attached image)"
 							: "";
-				const toolResultMsg: ChatCompletionToolMessageParam = {
+				const toolResultMsg: OpenAICompletionsToolMessageParam = {
 					role: "tool",
 					content: toolResultContent.toWellFormed(),
 					tool_call_id: normalizeMistralToolId(resolvedToolCallId, compat.requiresMistralToolIds),
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
-					(toolResultMsg as any).name = toolMsg.toolName;
+					toolResultMsg.name = toolMsg.toolName;
 				}
 				params.push(toolResultMsg);
 
@@ -2152,12 +2047,18 @@ function convertTools(
 	return {
 		tools: adaptedTools.map(({ tool, baseParameters, parameters, strict }) => {
 			const includeStrict = toolStrictMode === "all_strict" || (toolStrictMode === "mixed" && strict);
+			const wireParameters = includeStrict ? parameters : baseParameters;
 			return {
 				type: "function",
 				function: {
 					name: tool.name,
 					description: tool.description || "",
-					parameters: includeStrict ? parameters : baseParameters,
+					// Moonshot/Kimi native hosts validate against the stricter MFJS subset
+					// (const→enum, typed enums, no validators) and 400 otherwise.
+					parameters:
+						compat.toolSchemaFlavor === "moonshot-mfjs"
+							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
+							: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
 					...(includeStrict && { strict: true }),
 				},
@@ -2170,31 +2071,8 @@ function convertTools(
 	};
 }
 
-function shouldRetryWithoutStrictTools(
-	error: unknown,
-	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
-	strictToolsApplied: boolean,
-	tools: Tool[] | undefined,
-): boolean {
-	if (!tools || tools.length === 0 || !strictToolsApplied) {
-		return false;
-	}
-	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
-	if (status !== 400 && status !== 422) {
-		return false;
-	}
-	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
-		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-		.join("\n");
-	// Last two alternatives catch upstream tool-schema validators rejecting our
-	// strictified schemas outright (e.g. OpenRouter DeepSeek's "Invalid tool
-	// parameters schema : field `anyOf`: missing field `type`", #2270, and
-	// OpenAI's own "Invalid schema for function 'x'"). Retrying non-strict sends
-	// the unmodified base schemas, which those validators accept.
-	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool|tool parameters? schema|invalid schema for function/i.test(
-		messageParts,
-	);
-}
+const EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE =
+	"Model returned no content: prompt filled the context window; raise Ollama num_ctx or shorten the prompt.";
 
 function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | string): {
 	stopReason: StopReason;

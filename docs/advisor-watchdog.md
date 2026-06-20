@@ -9,6 +9,7 @@ The advisor is not a second executor. It cannot edit files, run commands, approv
 - [`src/advisor/runtime.ts`](../packages/coding-agent/src/advisor/runtime.ts)
 - [`src/advisor/advise-tool.ts`](../packages/coding-agent/src/advisor/advise-tool.ts)
 - [`src/advisor/watchdog.ts`](../packages/coding-agent/src/advisor/watchdog.ts)
+- [`src/advisor/transcript-recorder.ts`](../packages/coding-agent/src/advisor/transcript-recorder.ts)
 - [`src/prompts/advisor/system.md`](../packages/coding-agent/src/prompts/advisor/system.md)
 - [`src/prompts/advisor/advise-tool.md`](../packages/coding-agent/src/prompts/advisor/advise-tool.md)
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts)
@@ -44,14 +45,14 @@ Slash commands:
 | `/advisor on` | Enable the setting and start the runtime when an advisor model is assigned. |
 | `/advisor off` | Disable the setting and stop the runtime. |
 | `/advisor status` | Show active model, context usage, token usage, and cost. |
-| `/advisor dump` | Print the advisor's compact transcript. |
-| `/advisor dump raw` | Print the advisor's full dump with system prompt, tools, thinking, and calls. |
+| `/advisor dump` | Copy the advisor's compact transcript to the clipboard. |
+| `/advisor dump raw` | Copy the advisor's full dump (system prompt, tools, thinking, and calls) to the clipboard. |
 
 If `advisor.enabled` is true but no `modelRoles.advisor` value resolves to an available model, status reports that the setting is enabled but no advisor model is assigned.
 
 ## What the advisor sees
 
-At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
+At each primary turn end, `AdvisorRuntime` receives only the new transcript delta since the last advisor update. Deltas are rendered with `formatSessionHistoryMarkdown(..., { includeThinking: true, includeToolIntent: true, watchedRoles: true })`, so the advisor can review assistant reasoning as well as user-visible text, tool calls, and tool results.
 
 Advisor messages already injected into the primary transcript are filtered out before the next delta is rendered. This prevents the advisor from recursively reviewing its own advice.
 
@@ -85,13 +86,17 @@ The `advise` tool accepts one note and an optional severity:
 | `concern` | Interrupting steering message. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
 | `blocker` | Interrupting steering message. | Continuing would clearly waste work or produce broken output. |
 
-Interrupting advice is sent through the steering channel and can abort in-flight tools at the next steering boundary. Non-interrupting notes are batched into one custom `advisor` transcript card with this prefix:
+Interrupting advice is sent through the steering channel and can abort in-flight tools at the next steering boundary. Each note (interrupting or batched) is rendered into the primary transcript as an `<advisory>` element — severity rides a `severity` attribute, and a `guidance` attribute carries the "weigh, don't blindly obey" framing (the primary agent's system prompt never mentions advisories, so the tag is its only cue). Note bodies are XML-escaped so advice containing `<`, `>`, or `&` can't break the wrapper:
 
 ```text
-Advisor (a senior reviewer watching your work — weigh it, don't blindly obey):
+<advisory severity="concern" guidance="weigh, don't blindly obey">
+note text
+</advisory>
 ```
 
 When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.
+
+`advisor.immuneTurns` limits interruption frequency. After the advisor successfully delivers a `concern` or `blocker` through the steering channel, later concerns/blockers are routed as non-interrupting asides until the configured number of primary turns has completed. The default is `1`. `nit` notes are unchanged, and advice raised while user-interrupt auto-resume suppression is active is still preserved instead of restarting a stopped run.
 
 ## Bounded catch-up with `advisor.syncBacklog`
 
@@ -199,4 +204,22 @@ The advisor has its own append-only context. Before each advisor prompt, `AgentS
 2. if promotion cannot fit enough context, compact the advisor's own message history
 3. if compaction has no candidates or still cannot fit, re-prime from the current bounded primary transcript
 
-The advisor transcript is in-memory for the session. It is retained while the session runs so `/advisor dump` can inspect it, but advisor state is not a replacement for the primary persisted transcript.
+The advisor's live context is in-memory and append-only; it is retained while the session runs so `/advisor dump` can inspect it, and is independently promoted/compacted/re-primed (above). It is not a replacement for the primary persisted transcript.
+
+## Transcript persistence and observability
+
+The advisor is a passive reviewer with its own model usage, so — like a task subagent — every finalized advisor turn is appended to a JSONL inside the owning session's artifacts dir:
+
+- main session: `<session>/__advisor.jsonl`
+- subagent advisor (`advisor.subagents: true`): `<session>/<SubId>/__advisor.jsonl`
+
+The path is derived from the session file (not the artifacts dir, which subagents share with their parent), so each advisor writes a distinct file. The reserved `__advisor` stem cannot collide with a task subagent's `<id>.jsonl` (task id allocation reserves it).
+
+Why a file:
+
+- **Usage attribution.** `omp stats` scans each session folder recursively, so advisor assistant turns (with their usage/cost) are attributed to the same project/session like any other subagent. Advisor "session update" prompts are persisted as `synthetic`, agent-attributed user messages so they never inflate user-message metrics.
+- **Observability.** The Agent Hub discovers `__advisor.jsonl` on open and shows it as a read-only `advisor`-kind transcript under its owning session.
+
+The file follows session switches: on `/new`, resume/switch, and branch the recorder reopens at the new session's path on the next advisor turn; before a `/drop` deletes the old artifacts dir the recorder feed is detached and drained so a queued write cannot recreate the deleted file. The on-disk log is append-only and independent of the in-memory context — re-primes and compaction never truncate it.
+
+The advisor is never a peer. The `advisor`-kind registry ref is excluded from every agent-facing surface — the `irc` peer roster and broadcast targets, the subagent peer prompt, and the `history://` index/lookup/completions — and cannot be messaged (`irc send` and collab chat refuse it) or revived/killed from the Agent Hub or collab. It is observability only.

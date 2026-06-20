@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	isClaudeModelId,
 	isGlmVisionModelId,
+	isGrokReasoningEffortCapable,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMinimaxM2FamilyModelId,
+	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
 	isReasoningGlmModelId,
 	modelFamilyToken,
@@ -90,6 +92,21 @@ describe("isMinimaxM2FamilyModelId", () => {
 		// Lone "m2" string with no MiniMax context does not match.
 		expect(isMinimaxM2FamilyModelId("kimi-m2")).toBe(false);
 		expect(isMinimaxM2FamilyModelId("gpt-oss-120b")).toBe(false);
+	});
+});
+
+describe("isMinimaxM3FamilyModelId", () => {
+	test("matches MiniMax M3 ids without broadening the M2 effort predicate", () => {
+		expect(isMinimaxM3FamilyModelId("MiniMax-M3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax-m3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax/minimax-m3")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax-m3-free")).toBe(true);
+		expect(isMinimaxM3FamilyModelId("minimax/m3")).toBe(true);
+
+		expect(isMinimaxM3FamilyModelId("MiniMax-M2.7")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("MiniMax-Text-01")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("minimax-music")).toBe(false);
+		expect(isMinimaxM3FamilyModelId("kimi-m3")).toBe(false);
 	});
 });
 
@@ -179,5 +196,22 @@ describe("modelFamilyToken", () => {
 
 	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
 		expect(modelFamilyToken("some-unknown-model")).toBe("");
+	});
+});
+
+describe("isGrokReasoningEffortCapable", () => {
+	test("matches effort-capable Grok SKUs across namespaces", () => {
+		expect(isGrokReasoningEffortCapable("grok-4.3")).toBe(true);
+		expect(isGrokReasoningEffortCapable("grok-3-mini")).toBe(true);
+		expect(isGrokReasoningEffortCapable("grok-4.20-multi-agent")).toBe(true);
+		expect(isGrokReasoningEffortCapable("xai-oauth/grok-4.3")).toBe(true);
+		expect(isGrokReasoningEffortCapable("openrouter/xai/grok-3-mini")).toBe(true);
+	});
+
+	test("rejects effort-dial-less Grok SKUs and non-Grok ids", () => {
+		expect(isGrokReasoningEffortCapable("grok-build")).toBe(false);
+		expect(isGrokReasoningEffortCapable("grok-4.20-0309-reasoning")).toBe(false);
+		expect(isGrokReasoningEffortCapable("gpt-5")).toBe(false);
+		expect(isGrokReasoningEffortCapable("")).toBe(false);
 	});
 });

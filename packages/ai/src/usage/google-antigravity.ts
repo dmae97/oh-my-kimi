@@ -157,27 +157,48 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	const accessToken = resolveAccessToken(params);
 	if (!accessToken) return null;
 
-	const baseUrl = params.baseUrl?.replace(/\/+$/, "") || DEFAULT_ENDPOINT;
-	const url = `${baseUrl}${FETCH_AVAILABLE_MODELS_PATH}`;
-	const response = await ctx.fetch(url, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${accessToken}`,
-			"Content-Type": "application/json",
-			"User-Agent": getAntigravityUserAgent(),
-		},
-		body: JSON.stringify({ project: credential.projectId }),
-		signal: params.signal,
-	});
+	const baseUrl = params.baseUrl?.replace(/\/+$/, "");
+	const endpoints = baseUrl ? [baseUrl] : [DEFAULT_ENDPOINT, "https://daily-cloudcode-pa.sandbox.googleapis.com"];
 
-	if (!response.ok) {
+	let response: Response | undefined;
+	let successfulEndpoint = DEFAULT_ENDPOINT;
+	for (const endpoint of endpoints) {
+		try {
+			const url = `${endpoint}${FETCH_AVAILABLE_MODELS_PATH}`;
+			response = await ctx.fetch(url, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"Content-Type": "application/json",
+					"User-Agent": getAntigravityUserAgent(),
+				},
+				body: JSON.stringify({ project: credential.projectId }),
+				signal: params.signal,
+			});
+
+			if (response.ok) {
+				successfulEndpoint = endpoint;
+				break;
+			}
+
+			if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
+				continue;
+			}
+			break;
+		} catch (error) {
+			if (endpoint === endpoints[endpoints.length - 1]) {
+				throw error;
+			}
+		}
+	}
+
+	if (!response?.ok) {
 		ctx.logger?.warn("Antigravity usage fetch failed", {
-			status: response.status,
-			statusText: response.statusText,
+			status: response?.status ?? 0,
+			statusText: response?.statusText ?? "unknown",
 		});
 		return null;
 	}
-
 	const data = (await response.json()) as AntigravityUsageResponse;
 
 	// The API returns per-model quota entries, but quota is shared across
@@ -279,7 +300,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 	});
 
 	const metadata: UsageReport["metadata"] = {
-		endpoint: url,
+		endpoint: successfulEndpoint,
 		projectId: credential.projectId,
 	};
 	if (credential.email) metadata.email = credential.email;

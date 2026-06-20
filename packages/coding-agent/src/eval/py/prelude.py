@@ -5,6 +5,7 @@ if "__omp_prelude_loaded__" not in globals():
     from pathlib import Path
     import os, json, math, re
     from urllib.parse import unquote
+    INTENT_FIELD = "i"
 
     # __omp_display is injected by runner.py before the prelude executes; it
     # mirrors IPython's display() semantics with the same MIME bundle output.
@@ -479,8 +480,8 @@ if "__omp_prelude_loaded__" not in globals():
                     f"tool.{self._name}(...) expects a dict of arguments (got {type(args).__name__})"
                 )
             merged.update(kwargs)
-            if "_i" not in merged:
-                merged["_i"] = "py prelude"
+            if INTENT_FIELD not in merged:
+                merged[INTENT_FIELD] = "py prelude"
             return _bridge_call(self._name, merged)
 
     class _ToolProxy:

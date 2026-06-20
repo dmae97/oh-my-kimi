@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
@@ -13,7 +14,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/gh";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 import { getAgentDir, hashPath, setAgentDir } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
 
 // Isolate every `git` invocation in this file from the developer's host
 // configuration. The fixture spawns dozens of git subprocesses against tiny
@@ -180,6 +180,11 @@ async function createPrFixture(): Promise<PrFixture> {
  * `getWorktreesDir()` resolves under an isolated temp home instead of the
  * user's real `~/.omp/wt`. Returns the temp home and a cleanup hook.
  */
+interface TempHome {
+	home: string;
+	cleanup: () => Promise<void>;
+}
+
 async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<void> }> {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-home-"));
 	vi.spyOn(os, "homedir").mockReturnValue(home);
@@ -765,7 +770,7 @@ describe("github tool", () => {
 		// Arrange the mutable fixture + isolated $HOME once in beforeAll (excluded
 		// from test-body time); the body only performs the checkout and assertions.
 		let fixture: PrFixture;
-		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		let tempHome: TempHome;
 		beforeAll(async () => {
 			fixture = await createPrFixture();
 			tempHome = await setupTempHome();
@@ -867,7 +872,7 @@ describe("github tool", () => {
 	describe("pr_checkout (array of pull requests)", () => {
 		// Same beforeAll-hoisted arrange: the body only runs the array checkout.
 		let fixture: PrFixture;
-		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		let tempHome: TempHome;
 		beforeAll(async () => {
 			fixture = await createPrFixture();
 			tempHome = await setupTempHome();
@@ -958,7 +963,7 @@ describe("github tool", () => {
 
 	it("exposes a flat op-based schema without legacy run_watch parameters", () => {
 		const tool = new GithubTool(createSession());
-		const wire = z.toJSONSchema(tool.parameters, { target: "draft-2020-12" }) as Record<string, unknown>;
+		const wire = toolWireSchema(tool);
 		const properties = wire.properties as Record<string, unknown>;
 		expect(properties.op).toBeDefined();
 		expect(properties.interval).toBeUndefined();

@@ -598,7 +598,7 @@ async function runWorkspaceDiagnostics(
 		// Limit output length
 		const lines = combined.split("\n");
 		if (lines.length > 50) {
-			return { output: `${lines.slice(0, 50).join("\n")}\n... and ${lines.length - 50} more lines`, projectType };
+			return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
 		}
 		return { output: combined, projectType };
 	} catch (e) {
@@ -2035,7 +2035,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			const lines = limitedSymbols.map(s => formatSymbolInformation(s, this.session.cwd));
 			const truncationLine =
 				dedupedSymbols.length > WORKSPACE_SYMBOL_LIMIT
-					? `\n... ${dedupedSymbols.length - WORKSPACE_SYMBOL_LIMIT} additional symbol(s) omitted`
+					? `\n[…${dedupedSymbols.length - WORKSPACE_SYMBOL_LIMIT} symbols elided…]`
 					: "";
 			return {
 				content: [

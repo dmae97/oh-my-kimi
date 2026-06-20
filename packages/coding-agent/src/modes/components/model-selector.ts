@@ -179,9 +179,9 @@ export class ModelSelectorComponent extends Container {
 	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
 	#refreshingProviders: Set<string> = new Set();
-	#scheduledProviderRefreshes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	#scheduledProviderRefreshes: Map<string, Timer> = new Map();
 	#refreshSpinnerFrame: number = 0;
-	#refreshSpinnerInterval?: NodeJS.Timeout;
+	#refreshSpinnerInterval?: Timer;
 
 	// Context menu state
 	#isMenuOpen: boolean = false;
@@ -1112,7 +1112,7 @@ export class ModelSelectorComponent extends Container {
 		const menuWidth = contentWidth + (needsScroll ? 1 : 0);
 
 		this.#menuContainer.addChild(new Spacer(1));
-		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
+		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxRound.horizontal.repeat(menuWidth)), 0, 0));
 		if (showingThinking && this.#menuSelectedRole) {
 			this.#menuContainer.addChild(
 				new Text(
@@ -1152,7 +1152,7 @@ export class ModelSelectorComponent extends Container {
 
 		this.#menuContainer.addChild(new Spacer(1));
 		this.#menuContainer.addChild(new Text(theme.fg("dim", hintText), 0, 0));
-		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxSharp.horizontal.repeat(menuWidth)), 0, 0));
+		this.#menuContainer.addChild(new Text(theme.fg("border", theme.boxRound.horizontal.repeat(menuWidth)), 0, 0));
 	}
 
 	#getMenuVisibleCount(optionCount: number): number {

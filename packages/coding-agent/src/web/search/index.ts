@@ -7,7 +7,8 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
+import { settings } from "../../config/settings";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
 import webSearchSystemPrompt from "../../prompts/system/web-search.md" with { type: "text" };
@@ -22,16 +23,16 @@ import type { SearchProviderId, SearchResponse } from "./types";
 import { SearchProviderError } from "./types";
 
 /** Web search tool parameters schema */
-export const webSearchSchema = z.object({
-	query: z.string().describe("search query"),
-	recency: z.enum(["day", "week", "month", "year"]).describe("recency filter").optional(),
-	limit: z.number().describe("max results").optional(),
-	max_tokens: z.number().describe("max output tokens").optional(),
-	temperature: z.number().describe("sampling temperature").optional(),
-	num_search_results: z.number().describe("number of search results").optional(),
+export const webSearchSchema = type({
+	query: "string",
+	recency: "'day' | 'week' | 'month' | 'year'?",
+	limit: "number?",
+	max_tokens: "number?",
+	temperature: "number?",
+	num_search_results: "number?",
 });
 
-export type SearchToolParams = z.infer<typeof webSearchSchema>;
+export type SearchToolParams = typeof webSearchSchema.infer;
 
 export interface SearchQueryParams extends SearchToolParams {
 	provider?: SearchProviderId | "auto";
@@ -153,6 +154,16 @@ async function executeSearch(
 		};
 	}
 
+	// Invariant across providers; read once and tolerate an uninitialized
+	// Settings singleton (e.g. `omp q ...` CLI path, unit tests) so the
+	// provider-fallback loop never aborts before any provider runs.
+	let antigravityEndpointMode: "auto" | "production" | "sandbox" | undefined;
+	try {
+		antigravityEndpointMode = settings.get("providers.antigravityEndpoint");
+	} catch {
+		antigravityEndpointMode = undefined;
+	}
+
 	const failures: Array<{ provider: SearchProvider; error: unknown }> = [];
 	let lastProvider = providers[0];
 	for (const provider of providers) {
@@ -169,6 +180,7 @@ async function executeSearch(
 				signal,
 				authStorage,
 				sessionId,
+				antigravityEndpointMode,
 			});
 
 			if (!hasRenderableSearchContent(response)) {

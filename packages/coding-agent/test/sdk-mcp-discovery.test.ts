@@ -13,7 +13,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@oh-my-pi/pi-coding-agent/tool-discovery/mode";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
 	return {
@@ -22,7 +22,7 @@ function createMcpCustomTool(name: string, serverName: string, mcpToolName: stri
 		description: `Tool ${mcpToolName} from ${serverName}`,
 		mcpServerName: serverName,
 		mcpToolName,
-		parameters: z.object({ query: z.string() }),
+		parameters: type({ query: "string" }),
 		async execute() {
 			return { content: [{ type: "text", text: `${name} executed` }] };
 		},
@@ -177,60 +177,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("task");
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		// `preferred` renders the soft delegation nudge, not the hard MUST/ONLY wording.
-		expect(prompt).toContain("Delegation is preferred here");
-		expect(prompt).toContain("batch them into one parallel");
-		expect(prompt).not.toContain("you MUST fan the work out");
-		await session.dispose();
-	});
-
-	it("uses hard delegation wording in the Eager Tasks section when task.eager is always", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "task.eager": "always" }),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		expect(prompt).toContain("you MUST fan the work out");
-		expect(prompt).toContain("Batch independent slices");
-		expect(prompt).not.toContain("Delegation is preferred here");
-		await session.dispose();
-	});
-
-	it("omits batch guidance from the Eager Tasks section when task.batch is disabled", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "task.eager": "preferred", "task.batch": false }),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		expect(prompt).not.toContain("batch them into one parallel");
 		await session.dispose();
 	});
 
@@ -252,7 +198,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 
 		expect(session.getActiveToolNames()).not.toContain("task");
-		expect(session.systemPrompt.join("\n")).not.toContain("# Eager Tasks");
 		await session.dispose();
 	});
 

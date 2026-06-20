@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { formatSessionHistoryMarkdown } from "@oh-my-pi/pi-coding-agent/session/session-history-format";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 
 function buildMessages(): unknown[] {
 	return [
@@ -92,6 +93,14 @@ describe("formatSessionHistoryMarkdown", () => {
 		expect(output.startsWith("# Spawnling (idle)\n")).toBe(true);
 	});
 
+	it("renders watched roles using bold text rather than level-2 headers when watchedRoles is true", () => {
+		const output = formatSessionHistoryMarkdown(buildMessages(), { watchedRoles: true });
+		expect(output).toContain("**user**:");
+		expect(output).toContain("**agent**:");
+		expect(output).not.toContain("## user");
+		expect(output).not.toContain("## assistant");
+	});
+
 	it("renders an orphan toolResult (truncated history) as its own line", () => {
 		const output = formatSessionHistoryMarkdown([
 			{
@@ -115,7 +124,7 @@ describe("formatSessionHistoryMarkdown", () => {
 						type: "toolCall",
 						id: "tc-intent",
 						name: "read",
-						arguments: { path: "src/config.ts", _i: "reading config file" },
+						arguments: { path: "src/config.ts", [INTENT_FIELD]: "reading config file" },
 					},
 					{
 						type: "toolCall",
@@ -123,7 +132,8 @@ describe("formatSessionHistoryMarkdown", () => {
 						name: "read",
 						arguments: {
 							path: "src/config.ts",
-							_i: "reading config file with a very very long and descriptive intent that will exceed the maximum length limit of eighty characters",
+							[INTENT_FIELD]:
+								"reading config file with a very very long and descriptive intent that will exceed the maximum length limit of eighty characters",
 						},
 					},
 				],
@@ -145,14 +155,44 @@ describe("formatSessionHistoryMarkdown", () => {
 		];
 
 		const outputWithIntent = formatSessionHistoryMarkdown(messages, { includeToolIntent: true });
-		expect(outputWithIntent).toContain("# reading config file\n→ read(src/config.ts) ⇒ ok · 1 line");
+		expect(outputWithIntent).toContain("// reading config file\n→ read(src/config.ts) ⇒ ok · 1 line");
 		// The long intent should be flattened to one line and truncated to 80 characters (including ellipsis).
 		expect(outputWithIntent).toContain(
-			"# reading config file with a very very long and descriptive intent that will exce…\n→ read(src/config.ts) ⇒ ok · 1 line",
+			"// reading config file with a very very long and descriptive intent that will exce…\n→ read(src/config.ts) ⇒ ok · 1 line",
 		);
 
 		const outputWithoutIntent = formatSessionHistoryMarkdown(messages);
-		expect(outputWithoutIntent).not.toContain("# reading config file");
+		expect(outputWithoutIntent).not.toContain("// reading config file");
 		expect(outputWithoutIntent).toContain("→ read(src/config.ts) ⇒ ok · 1 line");
+	});
+	it("summarizes advise tool calls by their note and severity", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-advise-1",
+						name: "advise",
+						// Severity is intentionally placed before note so the test proves
+						// PRIMARY_ARG_KEYS / the special-case picks the note, not insertion order.
+						arguments: { severity: "concern", note: "Avoid shadowing the outer variable." },
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-advise-1",
+				toolName: "advise",
+				content: [{ type: "text", text: "Recorded." }],
+				isError: false,
+				timestamp: 2,
+			},
+		];
+
+		const output = formatSessionHistoryMarkdown(messages);
+		expect(output).toContain("→ advise(concern: Avoid shadowing the outer variable.) ⇒ ok · 1 line");
+		expect(output).not.toContain("Recorded.");
 	});
 });

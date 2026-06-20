@@ -110,7 +110,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --keep-names --define process.env.PI_COMPILED="true" --root . --external mupdf --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --minify-identifiers --keep-names --define process.env.PI_COMPILED="true" --root . --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
 		return;
 	}
 
@@ -126,13 +126,12 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 			"--no-compile-autoload-dotenv",
 			"--no-compile-autoload-tsconfig",
 			"--no-compile-autoload-package-json",
+			"--minify-identifiers",
 			"--keep-names",
 			"--define",
 			'process.env.PI_COMPILED="true"',
 			"--root",
 			".",
-			"--external",
-			"mupdf",
 			"--target",
 			target.target,
 			entrypoint,
@@ -152,19 +151,27 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 async function generateBundle(): Promise<void> {
 	if (isDryRun) {
 		console.log("DRY RUN bun --cwd=packages/stats scripts/generate-client-bundle.ts --generate");
+		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/generate-docs-index.ts --generate");
+		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/embed-mupdf-wasm.ts --generate");
 		return;
 	}
 	await runCommand(["bun", "--cwd=packages/stats", "scripts/generate-client-bundle.ts", "--generate"], repoRoot);
+	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/generate-docs-index.ts", "--generate"], repoRoot);
+	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/embed-mupdf-wasm.ts", "--generate"], repoRoot);
 }
 
 async function resetArtifacts(): Promise<void> {
 	if (isDryRun) {
 		console.log("DRY RUN bun --cwd=packages/natives run embed:native --reset");
 		console.log("DRY RUN bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset");
+		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/generate-docs-index.ts --reset");
+		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/embed-mupdf-wasm.ts --reset");
 		return;
 	}
 	await runCommand(["bun", "--cwd=packages/natives", "run", "embed:native", "--reset"], repoRoot);
 	await runCommand(["bun", "--cwd=packages/stats", "scripts/generate-client-bundle.ts", "--reset"], repoRoot);
+	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/generate-docs-index.ts", "--reset"], repoRoot);
+	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/embed-mupdf-wasm.ts", "--reset"], repoRoot);
 }
 
 async function main(): Promise<void> {
@@ -187,8 +194,10 @@ async function main(): Promise<void> {
 	}
 
 	await fs.mkdir(binariesDir, { recursive: true });
-	await generateBundle();
+	// Generate inside the try so resetArtifacts() always restores the empty
+	// checked-in placeholders, even if a generate or build step throws.
 	try {
+		await generateBundle();
 		for (const target of selectedTargets) {
 			await buildBinary(target);
 		}

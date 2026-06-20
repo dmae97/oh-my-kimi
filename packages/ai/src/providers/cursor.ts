@@ -548,24 +548,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				}
 			});
 
-			if (state.currentTextBlock) {
-				const idx = output.content.indexOf(state.currentTextBlock);
-				stream.push({
-					type: "text_end",
-					contentIndex: idx,
-					content: state.currentTextBlock.text,
-					partial: output,
-				});
-			}
-			if (state.currentThinkingBlock) {
-				const idx = output.content.indexOf(state.currentThinkingBlock);
-				stream.push({
-					type: "thinking_end",
-					contentIndex: idx,
-					content: state.currentThinkingBlock.thinking,
-					partial: output,
-				});
-			}
+			endCurrentTextBlock(output, stream, state);
+			endCurrentThinkingBlock(output, stream, state);
 			if (state.currentToolCall) {
 				const idx = output.content.indexOf(state.currentToolCall);
 				state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson);
@@ -1972,6 +1956,38 @@ export function mergeCursorMcpToolCallArgs(
 	return merged;
 }
 
+function endCurrentTextBlock(output: AssistantMessage, stream: AssistantMessageEventStream, state: BlockState): void {
+	const block = state.currentTextBlock;
+	if (!block) return;
+	const idx = output.content.indexOf(block);
+	delete (block as { index?: number }).index;
+	stream.push({
+		type: "text_end",
+		contentIndex: idx,
+		content: block.text,
+		partial: output,
+	});
+	state.setTextBlock(null);
+}
+
+function endCurrentThinkingBlock(
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	state: BlockState,
+): void {
+	const block = state.currentThinkingBlock;
+	if (!block) return;
+	const idx = output.content.indexOf(block);
+	delete (block as { index?: number }).index;
+	stream.push({
+		type: "thinking_end",
+		contentIndex: idx,
+		content: block.thinking,
+		partial: output,
+	});
+	state.setThinkingBlock(null);
+}
+
 /** Exported for tests: drives one Cursor interaction update through the streaming state machine. */
 export function processInteractionUpdate(
 	update: any,
@@ -2017,18 +2033,10 @@ export function processInteractionUpdate(
 		const idx = output.content.indexOf(state.currentThinkingBlock!);
 		stream.push({ type: "thinking_delta", contentIndex: idx, delta, partial: output });
 	} else if (updateCase === "thinkingCompleted") {
-		if (state.currentThinkingBlock) {
-			const idx = output.content.indexOf(state.currentThinkingBlock);
-			delete (state.currentThinkingBlock as any).index;
-			stream.push({
-				type: "thinking_end",
-				contentIndex: idx,
-				content: state.currentThinkingBlock.thinking,
-				partial: output,
-			});
-			state.setThinkingBlock(null);
-		}
+		endCurrentThinkingBlock(output, stream, state);
 	} else if (updateCase === "toolCallStarted") {
+		endCurrentTextBlock(output, stream, state);
+		endCurrentThinkingBlock(output, stream, state);
 		const toolCall = update.message.value.toolCall;
 		if (toolCall) {
 			const mcpCall = toolCall.mcpToolCall;

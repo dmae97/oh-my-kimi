@@ -11,7 +11,7 @@ import type {
 } from "@oh-my-pi/pi-agent-core";
 
 import { getWorktreeDir, hashPath, isEnoent, prompt, untilAborted } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { Settings } from "../config/settings";
 import githubDescription from "../prompts/tools/github.md" with { type: "text" };
 import * as git from "../utils/git";
@@ -255,54 +255,34 @@ const GITHUB_READONLY_OPS: ReadonlySet<string> = new Set([
 	"run_watch",
 ]);
 
-const githubSchema = z
-	.object({
-		op: z
-			.enum([
-				"repo_view",
-				"pr_create",
-				"pr_checkout",
-				"pr_push",
-				"search_issues",
-				"search_prs",
-				"search_code",
-				"search_commits",
-				"search_repos",
-				"run_watch",
-			] as const)
-			.describe("github operation"),
-		repo: z.string().describe("owner/repo").optional(),
-		branch: z.string().describe("branch").optional(),
-		pr: z
-			.union([z.string(), z.array(z.string())])
-			.describe("pr number, url, or branch")
-			.optional(),
-		force: z.boolean().describe("reset existing local branch").optional(),
-		forceWithLease: z.boolean().describe("force-with-lease push").optional(),
-		title: z.string().describe("pr title").optional(),
-		body: z.string().describe("pr body markdown").optional(),
-		base: z.string().describe("pr base branch").optional(),
-		head: z.string().describe("pr head branch").optional(),
-		draft: z.boolean().describe("open pr as draft").optional(),
-		fill: z.boolean().describe("auto-fill pr title/body from commits").optional(),
-		reviewer: z.array(z.string()).describe("reviewers").optional(),
-		assignee: z.array(z.string()).describe("assignees").optional(),
-		label: z.array(z.string()).describe("labels").optional(),
-		query: z.string().describe("search query").optional(),
-		since: z.string().describe("lower-bound date filter").optional(),
-		until: z.string().describe("upper-bound date filter").optional(),
-		dateField: z
-			.enum(["created", "updated"] as const)
-			.describe("date field")
-			.default("created")
-			.optional(),
-		limit: z.number().default(10).describe("max results").optional(),
-		run: z.string().describe("actions run id or url").optional(),
-		tail: z.number().default(15).describe("log lines per failed job").optional(),
-	})
-	.strict();
+const githubSchema = type({
+	op: type(
+		"'repo_view' | 'pr_create' | 'pr_checkout' | 'pr_push' | 'search_issues' | 'search_prs' | 'search_code' | 'search_commits' | 'search_repos' | 'run_watch'",
+	).describe("github operation"),
+	"repo?": type("string").describe("owner/repo"),
+	"branch?": type("string").describe("branch"),
+	"pr?": type("string | string[]").describe("pr number, url, or branch"),
+	"force?": type("boolean").describe("reset existing local branch"),
+	"forceWithLease?": type("boolean").describe("force-with-lease push"),
+	"title?": type("string").describe("pr title"),
+	"body?": type("string").describe("pr body markdown"),
+	"base?": type("string").describe("pr base branch"),
+	"head?": type("string").describe("pr head branch"),
+	"draft?": type("boolean").describe("open pr as draft"),
+	"fill?": type("boolean").describe("auto-fill pr title/body from commits"),
+	"reviewer?": type("string[]").describe("reviewers"),
+	"assignee?": type("string[]").describe("assignees"),
+	"label?": type("string[]").describe("labels"),
+	"query?": type("string").describe("search query"),
+	"since?": type("string").describe("lower-bound date filter"),
+	"until?": type("string").describe("upper-bound date filter"),
+	"dateField?": type("'created' | 'updated'").describe("date field"),
+	"limit?": type("number").describe("max results"),
+	"run?": type("string").describe("actions run id or url"),
+	"tail?": type("number").describe("log lines per failed job"),
+});
 
-type GithubInput = z.infer<typeof githubSchema>;
+type GithubInput = typeof githubSchema.infer;
 
 export interface GhToolDetails {
 	meta?: OutputMeta;
@@ -2199,7 +2179,7 @@ function formatPrFiles(files: GhPrFile[] | undefined): string[] {
 	}
 
 	if (files.length > FILE_PREVIEW_LIMIT) {
-		lines.push(`- ... ${files.length - FILE_PREVIEW_LIMIT} more files`);
+		lines.push(`[…${files.length - FILE_PREVIEW_LIMIT} files elided…]`);
 	}
 
 	return lines;

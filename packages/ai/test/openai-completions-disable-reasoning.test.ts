@@ -84,7 +84,7 @@ async function captureDisableReasoningPayload(model: Model<"openai-completions">
 	return payload;
 }
 
-describe("OpenAI completions disableReasoning", () => {
+describe("OpenAI completions disableReasoning and thinking dialects", () => {
 	it("sends the lowest supported reasoning effort for generic effort-mode models", async () => {
 		const payload = await captureDisableReasoningPayload(createReasoningEffortModel());
 
@@ -98,4 +98,186 @@ describe("OpenAI completions disableReasoning", () => {
 		expect(payload.reasoning_effort).toBe("none");
 		expect(payload.reasoning).toBeUndefined();
 	});
+
+	// Additional requested tests for applyChatCompletionsReasoningParams dialect / behavior verification
+	it("sets OpenRouter thinking disabled when disableReasoning: true", async () => {
+		const model = buildModel({
+			id: "openrouter-reasoner",
+			name: "OpenRouter Reasoner",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "openrouter",
+				supportsReasoningParams: true,
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		});
+
+		const payload = await captureDisableReasoningPayload(model);
+		expect(payload.reasoning).toEqual({ enabled: false });
+	});
+
+	it("sets Qwen enable_thinking: true with reasoning enabled, and false with forced tool choice", async () => {
+		const model = buildModel({
+			id: "qwen-reasoner",
+			name: "Qwen Reasoner",
+			api: "openai-completions",
+			provider: "custom",
+			baseUrl: "https://proxy.example.com/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "qwen",
+				supportsReasoningParams: true,
+				supportsToolChoice: true,
+				supportsForcedToolChoice: true,
+				disableReasoningOnForcedToolChoice: true,
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		});
+
+		// 1. Enabled check using stream call
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: createMockFetchForQwen(resolve),
+			reasoning: "medium",
+		});
+		const payloadEnabled = (await promise) as Record<string, unknown>;
+		expect(payloadEnabled.enable_thinking).toBe(true);
+
+		// 2. Disabled on forced tool choice check
+		const { promise: p2, resolve: r2 } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(
+			model,
+			{
+				messages: testContext.messages,
+				tools: [
+					{
+						name: "read",
+						description: "Read a file",
+						parameters: { type: "object", properties: {} },
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				fetch: createMockFetchForQwen(r2),
+				reasoning: "medium",
+				toolChoice: { type: "tool", name: "read" },
+			},
+		);
+		const payloadDisabled = (await p2) as Record<string, unknown>;
+		expect(payloadDisabled.enable_thinking).toBe(false);
+	});
+
+	it("sets Qwen chat-template thinking format properly", async () => {
+		const model = buildModel({
+			id: "qwen-ct-reasoner",
+			name: "Qwen Chat Template Reasoner",
+			api: "openai-completions",
+			provider: "custom",
+			baseUrl: "https://proxy.example.com/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "qwen-chat-template",
+				supportsReasoningParams: true,
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		});
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: createMockFetchForQwen(resolve),
+			reasoning: "medium",
+		});
+		const payload = (await promise) as Record<string, unknown>;
+		expect(payload.chat_template_kwargs).toEqual({ enable_thinking: true });
+	});
+
+	it("sets Z.AI thinking format and toggles type logically based on forced tool choice", async () => {
+		const model = buildModel({
+			id: "zai-reasoner",
+			name: "Z.AI Reasoner",
+			api: "openai-completions",
+			provider: "custom",
+			baseUrl: "https://proxy.example.com/v1",
+			reasoning: true,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningParams: true,
+				supportsToolChoice: true,
+				supportsForcedToolChoice: true,
+				disableReasoningOnForcedToolChoice: true,
+			},
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 16_384,
+		});
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(model, testContext, {
+			apiKey: "test-key",
+			fetch: createMockFetchForQwen(resolve),
+			reasoning: "medium",
+		});
+		const payloadEnabled = (await promise) as Record<string, unknown>;
+		expect(payloadEnabled.thinking).toEqual({ type: "enabled" });
+
+		const { promise: p2, resolve: r2 } = Promise.withResolvers<unknown>();
+		streamOpenAICompletions(
+			model,
+			{
+				messages: testContext.messages,
+				tools: [
+					{
+						name: "read",
+						description: "Read a file",
+						parameters: { type: "object", properties: {} },
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				fetch: createMockFetchForQwen(r2),
+				reasoning: "medium",
+				toolChoice: { type: "tool", name: "read" },
+			},
+		);
+		const payloadDisabled = (await p2) as Record<string, unknown>;
+		expect(payloadDisabled.thinking).toEqual({ type: "disabled" });
+	});
 });
+
+function createMockFetchForQwen(resolve: (value: unknown) => void): FetchImpl {
+	const fetchMock: FetchImpl = Object.assign(
+		async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const payload = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>;
+			resolve(payload);
+			return createSseResponse([
+				{
+					id: "chatcmpl",
+					object: "chat.completion.chunk",
+					created: 0,
+					model: "model",
+					choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				},
+				"[DONE]",
+			]);
+		},
+		{ preconnect: fetch.preconnect },
+	);
+	return fetchMock;
+}

@@ -12,6 +12,7 @@ import type {
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { logger } from "@oh-my-pi/pi-utils";
 import { getDefault, type Settings } from "../config/settings";
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
@@ -616,9 +617,22 @@ async function spillLargeResultToArtifact(
 	const totalBytes = Buffer.byteLength(fullText, "utf-8");
 	if (totalBytes <= threshold) return result;
 
-	// Save full output as artifact
-	const artifactId = await sessionManager.saveArtifact(fullText, toolName);
-	if (!artifactId) return result;
+	// Save the full output as an artifact so the elided bytes stay recoverable.
+	// In a persistent session this hits `Bun.write`, which can throw (disk full,
+	// permissions). The spill wraps arbitrary tools (built-in, MCP, extension,
+	// RPC-host); a save failure must never convert a successful call into an
+	// error, nor re-expose the full (possibly context-blowing) output. Mirror
+	// `enforceInlineByteCap`: always truncate past the threshold, and only
+	// attach the `artifact://` recovery link when the save actually succeeded.
+	let artifactId: string | undefined;
+	try {
+		artifactId = await sessionManager.saveArtifact(fullText, toolName);
+	} catch (error) {
+		logger.warn("Failed to spill large tool result to artifact", {
+			tool: toolName,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 
 	// Truncate: middle elision when a head budget is configured, otherwise tail-only.
 	const useMiddle = headBytes > 0;

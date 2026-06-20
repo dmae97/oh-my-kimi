@@ -8,7 +8,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentSideConnection, InitializeRequest } from "@agentclientprotocol/sdk";
-import { zInitializeResponse } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { AcpAgent } from "@oh-my-pi/pi-coding-agent/modes/acp/acp-agent";
@@ -16,7 +15,16 @@ import { ACP_TERMINAL_AUTH_FLAG, prepareAcpTerminalAuthArgs } from "@oh-my-pi/pi
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getConfigRootDir, setAgentDir, VERSION } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { expectAcpStructure } from "./helpers/acp-schema";
+
+const arkInitializeResponse = type({
+	protocolVersion: "number",
+	"_meta?": type({ "[string]": "unknown" }).or("null"),
+	"agentCapabilities?": type({ "[string]": "unknown" }),
+	"agentInfo?": type({ "[string]": "unknown" }).or("null"),
+	"authMethods?": type({ "[string]": "unknown" }).array(),
+});
 
 const TEST_MODELS: Model[] = [
 	buildModel({
@@ -166,7 +174,7 @@ describe("ACP initialize conformance", () => {
 	it("only advertises the agent-managed auth method when the client lacks terminal capability", async () => {
 		const agent = await createAgent();
 		const response = await agent.initialize(buildInitializeRequest());
-		expectAcpStructure(zInitializeResponse, response);
+		expectAcpStructure(arkInitializeResponse, response);
 		expect(response.authMethods).toHaveLength(1);
 		const [agentMethod] = response.authMethods!;
 		// AuthMethodAgent omits the `type` discriminator per ACP spec — the absence is the signal.
@@ -185,7 +193,7 @@ describe("ACP initialize conformance", () => {
 		const response = await agent.initialize(
 			buildInitializeRequest({ clientCapabilities: { auth: { terminal: true } } }),
 		);
-		expectAcpStructure(zInitializeResponse, response);
+		expectAcpStructure(arkInitializeResponse, response);
 		expect(response.authMethods).toHaveLength(2);
 		const [first, second] = response.authMethods!;
 		expect((first as { type?: string }).type).toBeUndefined();
@@ -231,7 +239,7 @@ describe("ACP initialize conformance", () => {
 	it("preserves the agentCapabilities contract clients depend on", async () => {
 		const agent = await createAgent();
 		const response = await agent.initialize(buildInitializeRequest());
-		expectAcpStructure(zInitializeResponse, response);
+		expectAcpStructure(arkInitializeResponse, response);
 		expect(response.agentCapabilities).toEqual(
 			expect.objectContaining({
 				loadSession: true,

@@ -251,13 +251,20 @@ cosmetic, not corrupting.
 ## 5. Width model
 
 `visibleWidth` / `truncateToWidth` / `sliceByColumn` / `wrapTextWithAnsi`
-(`utils.ts`) all route through **one native UAX#11 engine**
-(`@oh-my-pi/pi-natives`, Rust `unicode-width`). `Bun.stringWidth` was dropped
-deliberately — mixing two width models in measure-vs-slice produced crashes.
+(`utils.ts`) all agree on **one UAX#11 width model**. Slicing, truncation,
+wrapping, and segment extraction run on the native engine
+(`@oh-my-pi/pi-natives`, Rust `unicode-width`); `visibleWidth` measures with
+`Bun.stringWidth` **pinned to that same model** (`STRING_WIDTH_OPTS`:
+`countAnsiEscapeCodes: false`, `ambiguousIsNarrow: true`) — a JSC builtin that
+shares the native width tables without the per-call N-API box the native
+scanner traps on under Bun 1.3.x. The two must never disagree; mixing unpinned
+width models in measure-vs-slice produced crashes.
 
 - Fast path: printable ASCII is one cell per code unit.
-- ZWJ pictographic emoji take the `visibleWidthByGrapheme` override.
-- OSC 66 sized text takes the native path.
+- Anything past the ASCII prefix measures through `Bun.stringWidth` (CSI/OSC
+  stripped to zero); tabs are added back at the fixed `DEFAULT_TAB_WIDTH` columns.
+- OSC 66 sized spans are added back as `scale × (explicit w ?? payload width)` —
+  `Bun.stringWidth` would otherwise strip the whole span to zero.
 
 **Rule:** any new measuring code routes through these helpers, and the hot
 path clamps instead of throwing. Known residual: combining-heavy scripts
@@ -340,6 +347,7 @@ default-on only for kitty/ghostty (`PI_NO_KITTY_PLACEHOLDERS` /
 | `PI_HARDWARE_CURSOR=1` | Show the real hardware cursor instead of a rendered one. |
 | `PI_NOTIFICATIONS=off\|0\|false` | Suppress terminal notifications. |
 | `PI_DEBUG_REDRAW=1` | Log the chosen render intent + ledger state per frame to the debug log. |
+| `PI_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). |
 
 Removed with the old engine: `PI_TUI_ED3_SAFE` (no ED3-risk lever exists),
 `PI_CLEAR_ON_SHRINK` (shrinks always clear exactly), `PI_TUI_DEBUG` (per-render

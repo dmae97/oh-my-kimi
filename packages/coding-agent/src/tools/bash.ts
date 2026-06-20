@@ -9,7 +9,7 @@ import type {
 import type { Component } from "@oh-my-pi/pi-tui";
 import { ImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import { type BashResult, executeBash } from "../exec/bash-executor";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
@@ -100,16 +100,21 @@ async function saveBashOriginalArtifact(session: ToolSession, originalText: stri
 	}
 }
 
-const bashSchemaBase = z.object({
-	command: z.string().describe("command to execute"),
-	env: z.record(z.string().regex(BASH_ENV_NAME_PATTERN), z.string()).optional().describe("extra env vars"),
-	timeout: z.number().default(300).describe("timeout in seconds").optional(),
-	cwd: z.string().describe("working directory").optional(),
-	pty: z.boolean().describe("run in pty mode").optional(),
+const bashSchemaBase = type({
+	command: type("string").describe("command to execute"),
+	"env?": type({ "[string]": "string" }).describe("extra env vars"),
+	"timeout?": type("number").describe("timeout in seconds"),
+	"cwd?": type("string").describe("working directory"),
+	"pty?": type("boolean").describe("run in pty mode"),
 });
 
-const bashSchemaWithAsync = bashSchemaBase.extend({
-	async: z.boolean().describe("run in background").optional(),
+const bashSchemaWithAsync = type({
+	command: "string",
+	"env?": { "[string]": "string" },
+	"timeout?": "number",
+	"cwd?": "string",
+	"pty?": "boolean",
+	"async?": type("boolean").describe("run in background"),
 });
 
 type BashToolSchema = typeof bashSchemaBase | typeof bashSchemaWithAsync;
@@ -349,7 +354,7 @@ function stripExitCodeNotice(text: string, exitCode: number | undefined): string
  *
  * Executes bash commands with optional timeout and working directory.
  */
-export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
+export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSchemaWithAsync, BashToolDetails> {
 	readonly name = "bash";
 	readonly approval = (args: unknown): ToolApprovalDecision => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
@@ -480,7 +485,6 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// head-retention spill, minimizer miss) may emit more than
 		// ~DEFAULT_MAX_BYTES inline. No-op for already-bounded output.
 		const cappedOutputText = await enforceInlineByteCap(outputText, {
-			label: "bash output",
 			saveArtifact: full => saveBashOriginalArtifact(this.session, full),
 		});
 

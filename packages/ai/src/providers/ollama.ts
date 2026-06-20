@@ -5,20 +5,23 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
-	DeveloperMessage,
+	ImageContent,
 	Message,
 	Model,
 	StreamFunction,
 	StreamOptions,
+	TextContent,
 	Tool,
 	ToolChoice,
-	ToolResultMessage,
-	UserMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { type CapturedHttpErrorResponse, finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getOpenAIStreamFirstEventTimeoutMs, getOpenAIStreamIdleTimeoutMs } from "../utils/idle-iterator";
+import {
+	armPreResponseTimeout,
+	getOpenAIStreamFirstEventTimeoutMs,
+	getOpenAIStreamIdleTimeoutMs,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
@@ -28,6 +31,7 @@ import {
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { transformMessages } from "./transform-messages";
+import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
 /** Non-2xx response from the Ollama `/api/chat` endpoint. */
 export class OllamaApiError extends ProviderHttpError {
@@ -99,21 +103,31 @@ function normalizeBaseUrl(baseUrl?: string): string {
 	return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
 }
 
+type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max" | undefined;
+
 function mapReasoning(
+	model: Model<"ollama-chat">,
 	reasoning: OllamaChatOptions["reasoning"],
 	disableReasoning: boolean | undefined,
-	modelReasoning: boolean,
-): boolean | "low" | "medium" | "high" | undefined {
+): OllamaThinkValue {
+	const modelReasoning = model.reasoning;
 	if (disableReasoning && modelReasoning) {
 		return false;
 	}
-	switch (reasoning) {
+	const mappedReasoning =
+		model.provider === "ollama-cloud" && reasoning
+			? (model.thinking?.effortMap?.[reasoning] ?? reasoning)
+			: reasoning;
+	switch (mappedReasoning) {
 		case "minimal":
 		case "low":
 			return "low";
 		case "medium":
 			return "medium";
 		case "high":
+			return "high";
+		case "max":
+			return "max";
 		case "xhigh":
 			return "high";
 		default:
@@ -160,40 +174,35 @@ function selectToolsForToolChoice(tools: Tool[] | undefined, toolChoice: ToolCho
 	return [];
 }
 
-function toPlainContent(content: string | Array<{ type: "text" | "image"; text?: string; data?: string }>): {
+function toPlainContent(
+	content: string | ReadonlyArray<TextContent | ImageContent>,
+	supportsImages: boolean,
+): {
 	content: string;
 	images?: string[];
 } {
 	if (typeof content === "string") {
 		return { content };
 	}
-	const textParts: string[] = [];
-	const images: string[] = [];
-	for (const block of content) {
-		if (block.type === "text" && typeof block.text === "string") {
-			textParts.push(block.text);
-		}
-		if (block.type === "image" && typeof block.data === "string") {
-			images.push(block.data);
-		}
-	}
+	const { textBlocks, imageBlocks, omittedImages } = partitionVisionContent(content, supportsImages);
+	const text = textBlocks.map(block => block.text).join("\n");
 	return {
-		content: textParts.join("\n"),
-		...(images.length > 0 ? { images } : {}),
+		content: joinTextWithImagePlaceholder(text, omittedImages),
+		...(imageBlocks.length > 0 ? { images: imageBlocks.map(block => block.data) } : {}),
 	};
 }
 
-function convertMessage(message: Message): OllamaMessage {
+function convertMessage(message: Message, supportsImages: boolean): OllamaMessage {
 	if (message.role === "user") {
-		const converted = toPlainContent(message.content as UserMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "user", ...converted };
 	}
 	if (message.role === "developer") {
-		const converted = toPlainContent(message.content as DeveloperMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "system", ...converted };
 	}
 	if (message.role === "toolResult") {
-		const converted = toPlainContent(message.content as ToolResultMessage["content"]);
+		const converted = toPlainContent(message.content, supportsImages);
 		return {
 			role: "tool",
 			tool_name: message.toolName,
@@ -245,8 +254,9 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 	}
 	messages.push(...context.messages);
 	const isCloud = model.provider === "ollama-cloud";
+	const supportsImages = model.input.includes("image");
 	return transformMessages(messages, model).map(msg => {
-		const converted = convertMessage(msg);
+		const converted = convertMessage(msg, supportsImages);
 		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
 		// field — it's valid in model responses but not accepted as a history input. Strip it
 		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
@@ -273,7 +283,7 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 }
 
 function createChatBody(model: Model<"ollama-chat">, context: Context, options: OllamaChatOptions | undefined) {
-	const think = mapReasoning(options?.reasoning, options?.disableReasoning, model.reasoning);
+	const think = mapReasoning(model, options?.reasoning, options?.disableReasoning);
 	const toolChoice = mapToolChoice(options?.toolChoice);
 	const selectedTools = selectToolsForToolChoice(context.tools, options?.toolChoice);
 	const tools = convertTools(selectedTools);
@@ -533,29 +543,29 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			const idleTimeoutMs = options.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
 			const firstEventTimeoutMs =
 				options.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
-			const preResponseWatchdog =
-				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0
-					? AbortSignal.timeout(firstEventTimeoutMs)
-					: undefined;
-			const fetchSignal = preResponseWatchdog
-				? options.signal
-					? AbortSignal.any([options.signal, preResponseWatchdog])
-					: preResponseWatchdog
-				: options.signal;
-			const response = await fetchWithRetry(`${baseUrl}/api/chat`, {
-				method: "POST",
-				headers: {
-					...model.headers,
-					...options.headers,
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify(body),
-				signal: fetchSignal,
-				defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
-				fetch: options.fetch,
-				timeout: false,
-			});
+			// Cleared the instant headers arrive (below) so the pre-response timer
+			// never aborts the actively streaming body — an absolute
+			// `AbortSignal.timeout` would (issue #2422).
+			const watchdog = armPreResponseTimeout(options.signal, firstEventTimeoutMs);
+			let response: Response;
+			try {
+				response = await fetchWithRetry(`${baseUrl}/api/chat`, {
+					method: "POST",
+					headers: {
+						...model.headers,
+						...options.headers,
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(body),
+					signal: watchdog.signal,
+					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
+					fetch: options.fetch,
+					timeout: false,
+				});
+			} finally {
+				watchdog.clear();
+			}
 			if (!response.ok) {
 				capturedErrorResponse = await captureHttpErrorResponse(response);
 				throw new OllamaApiError(`HTTP ${response.status} from ${baseUrl}/api/chat`, response.status, {

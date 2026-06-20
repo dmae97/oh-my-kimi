@@ -12,11 +12,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
+import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
 import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
+import type { TUI } from "@oh-my-pi/pi-tui";
 
 const SESSION_ID = "test-session-1";
 
@@ -36,7 +37,7 @@ function makeSubagentRegistry(sessions: ObservableSession[]) {
 	} as unknown as import("@oh-my-pi/pi-coding-agent/modes/session-observer-registry").SessionObserverRegistry;
 }
 
-function makeHub(sessionFile: string, observed: ObservableSession[]): AgentHubOverlayComponent {
+function makeViewer(sessionFile: string, observed: ObservableSession[]): AgentTranscriptViewer {
 	const agents = new AgentRegistry();
 	agents.register({
 		id: SESSION_ID,
@@ -47,15 +48,19 @@ function makeHub(sessionFile: string, observed: ObservableSession[]): AgentHubOv
 		sessionFile,
 		status: "parked",
 	});
-	const hub = new AgentHubOverlayComponent({
-		observers: makeSubagentRegistry(observed),
-		hubKeys: ["ctrl+s"],
-		onDone: () => {},
-		requestRender: () => {},
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+	return new AgentTranscriptViewer({
+		agentId: SESSION_ID,
 		registry: agents,
+		observers: makeSubagentRegistry(observed),
+		ui,
+		cwd: path.dirname(sessionFile),
+		expandKeys: ["ctrl+o"],
+		hubKeys: ["ctrl+s"],
+		requestRender: () => {},
+		onClose: () => {},
+		onHubClose: () => {},
 	});
-	hub.openChat(SESSION_ID);
-	return hub;
 }
 
 describe("Agent hub silent-abort regression", () => {
@@ -112,7 +117,7 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const hub = makeHub(sessionFile, [
+		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -123,10 +128,8 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		// Render with a reasonable width — the hub chat view reads the session
-		// file and calls #buildTranscriptLines internally.
-		const rendered = hub.render(120);
-		hub.dispose();
+		const rendered = viewer.render(120);
+		viewer.dispose();
 		const renderedText = rendered.join("\n");
 
 		// The sentinel MUST NOT appear verbatim in any rendered line
@@ -171,7 +174,7 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const hub = makeHub(sessionFile, [
+		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
 				kind: "subagent",
@@ -182,8 +185,8 @@ describe("Agent hub silent-abort regression", () => {
 			},
 		]);
 
-		const rendered = hub.render(120);
-		hub.dispose();
+		const rendered = viewer.render(120);
+		viewer.dispose();
 		const renderedText = rendered.join("\n");
 
 		// AssistantMessageComponent renders the error as "Error: <message>"

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as geminiCliProvider from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import {
-	ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION,
 	ANTIGRAVITY_SYSTEM_INSTRUCTION,
 	buildRequest,
 	parseGeminiCliCredentials,
@@ -38,6 +37,22 @@ function createContext(): Context {
 		messages: [{ role: "user", content: "implement token refresh", timestamp: Date.now() }],
 	};
 }
+
+const VALIDATION_URL = "https://accounts.google.com/signin/continue?sarp=1&scc=1&plt=AKgnsbtTOKEN";
+
+const validationRequiredBody = JSON.stringify({
+	error: {
+		code: 403,
+		status: "PERMISSION_DENIED",
+		details: [
+			{
+				"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+				reason: "VALIDATION_REQUIRED",
+				metadata: { validation_url: VALIDATION_URL, validation_url_link_text: "Verify your account" },
+			},
+		],
+	},
+});
 
 describe("Google Gemini CLI alignment", () => {
 	it("encodes enriched OAuth JSON while preserving token + projectId", async () => {
@@ -77,6 +92,7 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-legacy",
 			refreshToken: undefined,
 			expiresAt: undefined,
+			email: undefined,
 		});
 
 		const aliasPayload = parseGeminiCliCredentials(
@@ -92,6 +108,7 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-alias",
 			refreshToken: "refresh-alias",
 			expiresAt: 1_737_000_000_000,
+			email: undefined,
 		});
 
 		const enriched = parseGeminiCliCredentials(
@@ -100,6 +117,7 @@ describe("Google Gemini CLI alignment", () => {
 				projectId: "proj-enriched",
 				refreshToken: "refresh-token",
 				expiresAt: 1_737_000_000_000,
+				email: "dev@example.com",
 			}),
 		);
 		expect(enriched).toEqual({
@@ -107,7 +125,20 @@ describe("Google Gemini CLI alignment", () => {
 			projectId: "proj-enriched",
 			refreshToken: "refresh-token",
 			expiresAt: 1_737_000_000_000,
+			email: "dev@example.com",
 		});
+	});
+
+	it("keeps projectId alias precedence and tolerates a mistyped projectId", () => {
+		// projectId wins over project_id even when it is an empty string.
+		const emptyPrimary = parseGeminiCliCredentials(
+			JSON.stringify({ token: "t", projectId: "", project_id: "fallback" }),
+		);
+		expect(emptyPrimary.projectId).toBe("");
+
+		// A non-string projectId is dropped, so project_id is used instead.
+		const mistyped = parseGeminiCliCredentials(JSON.stringify({ token: "t", projectId: 42, project_id: "fallback" }));
+		expect(mistyped.projectId).toBe("fallback");
 	});
 
 	it("avoids excessive antigravity refresh churn with pre-buffered OAuth expiry", () => {
@@ -160,7 +191,11 @@ describe("Google Gemini CLI alignment", () => {
 	it("keeps antigravity metadata in antigravity request payloads", () => {
 		const model = createModel("google-antigravity");
 		const payload = buildRequest(model, createContext(), "proj-123", {}, true) as {
-			request: { sessionId?: string };
+			request: {
+				sessionId?: string;
+				labels?: Record<string, string>;
+				systemInstruction?: { role?: string };
+			};
 			requestType?: string;
 			userAgent?: string;
 			requestId?: string;
@@ -169,7 +204,92 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.request.sessionId).toMatch(/^-[0-9]+$/);
 		expect(payload.requestType).toBe("agent");
 		expect(payload.userAgent).toBe("antigravity");
-		expect(payload.requestId).toMatch(/^agent-/);
+		// Structured requestId: agent/<agentId>/<ts>/<trajectoryId>/<step>.
+		expect(payload.requestId).toMatch(/^agent\/[0-9a-f-]+\/\d+\/[0-9a-f-]+\/\d+$/);
+		// Antigravity tags its system instruction with role "user".
+		expect(payload.request.systemInstruction?.role).toBe("user");
+		const labels = payload.request.labels;
+		expect(labels?.trajectory_id).toMatch(/^[0-9a-f-]+$/);
+		expect(labels?.last_step_index).toBe("1");
+		expect(labels?.used_claude).toBe("false");
+		expect(labels?.used_claude_conservative).toBe("false");
+	});
+
+	it("stamps the antigravity wire profile (maxOutputTokens + model_enum) by routed wire id", () => {
+		const model = createModel("google-antigravity");
+		const payload = buildRequest(
+			model,
+			createContext(),
+			"proj-123",
+			{ requestModelId: "gemini-3.5-flash-low" },
+			true,
+		) as {
+			model?: string;
+			request: { generationConfig?: { maxOutputTokens?: number }; labels?: Record<string, string> };
+		};
+
+		expect(payload.model).toBe("gemini-3.5-flash-low");
+		expect(payload.request.generationConfig?.maxOutputTokens).toBe(65536);
+		expect(payload.request.labels?.model_enum).toBe("MODEL_PLACEHOLDER_M20");
+	});
+
+	it("caps Claude maxOutputTokens at 64000 and omits the unset model_enum label", () => {
+		// Regression for #3067: discovery may advertise 65536, but
+		// `daily-cloudcode-pa` 400s when Claude requests exceed 64000.
+		// The Claude profiles also lack a captured model_enum token, so
+		// the request must not emit a stale or placeholder label.
+		const cases = [{ requestModelId: "claude-sonnet-4-6" }, { requestModelId: "claude-opus-4-6-thinking" }];
+		for (const opts of cases) {
+			const payload = buildRequest(createModel("google-antigravity"), createContext(), "proj-123", opts, true) as {
+				model?: string;
+				request: { generationConfig?: { maxOutputTokens?: number }; labels?: Record<string, string> };
+			};
+
+			expect(payload.model).toBe(opts.requestModelId);
+			expect(payload.request.generationConfig?.maxOutputTokens).toBe(64000);
+			expect(payload.request.labels?.model_enum).toBeUndefined();
+		}
+	});
+
+	it("defaults antigravity tools to VALIDATED but omits AUTO toolConfig for plain gemini-cli", () => {
+		const context: Context = {
+			messages: [{ role: "user", content: "inspect repo", timestamp: Date.now() }],
+			tools: [
+				{
+					name: "read_file",
+					description: "Read a file",
+					parameters: {
+						type: "object",
+						properties: { path: { type: "string" } },
+						required: ["path"],
+					} as TJsonSchema,
+				},
+			],
+		};
+
+		const cli = buildRequest(
+			createModel("google-gemini-cli"),
+			context,
+			"proj-123",
+			{ toolChoice: "auto" },
+			false,
+		) as {
+			request: { tools?: unknown; toolConfig?: unknown };
+		};
+		expect(cli.request.tools).toBeDefined();
+		expect(cli.request.toolConfig).toBeUndefined();
+
+		const antigravity = buildRequest(
+			createModel("google-antigravity"),
+			context,
+			"proj-123",
+			{ toolChoice: "auto" },
+			true,
+		) as {
+			request: { tools?: unknown; toolConfig?: { functionCallingConfig: { mode: string } } };
+		};
+		expect(antigravity.request.tools).toBeDefined();
+		expect(antigravity.request.toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
 	});
 
 	it("strips patternProperties when antigravity rewrites tools to legacy parameters", () => {
@@ -223,10 +343,8 @@ describe("Google Gemini CLI alignment", () => {
 			const parts = payload.request.systemInstruction?.parts ?? [];
 			// The antigravity identity header must be injected as the first part.
 			expect(parts[0]?.text).toBe(ANTIGRAVITY_SYSTEM_INSTRUCTION);
-			expect(parts[1]?.text).toBe(`Please ignore following [ignore]${ANTIGRAVITY_SYSTEM_INSTRUCTION}[/ignore]`);
-			expect(parts[2]?.text).toBe(ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION);
-			// The user-supplied system prompt must appear after the injected parts.
-			expect(parts.slice(3).some(p => p.text === "my instructions")).toBe(true);
+			// The user-supplied system prompt must appear after the single injected part.
+			expect(parts.slice(1).some(p => p.text === "my instructions")).toBe(true);
 		}
 	});
 	it("adds anthropic-beta for Antigravity Claude reasoning models without relying on id suffix", async () => {
@@ -253,6 +371,23 @@ describe("Google Gemini CLI alignment", () => {
 		expect(requestHeaders!.get("anthropic-beta")).toBe("interleaved-thinking-2025-05-14");
 		expect(requestHeaders!.get("X-Goog-Api-Client")).toBeNull();
 		expect(requestHeaders!.get("Client-Metadata")).toBeNull();
+	});
+
+	it("sends the antigravity/hub User-Agent header on the Antigravity transport", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_url, init) => {
+			requestHeaders = new Headers(init?.headers);
+			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
+		};
+
+		const model = createModel("google-antigravity");
+		await streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		}).result();
+
+		expect(requestHeaders).toBeDefined();
+		expect(requestHeaders!.get("User-Agent")).toMatch(/^antigravity\/hub\/[0-9.]+ /);
 	});
 
 	it("filters out empty text parts at stream end but preserves terminal thought signatures", async () => {
@@ -377,6 +512,23 @@ describe("Google Gemini CLI alignment", () => {
 		}
 
 		expect(events.filter(e => e.type === "toolcall_start")).toHaveLength(1);
+	});
+
+	it("surfaces account verification failures from model requests", async () => {
+		const fetchMock: FetchImpl = async () => new Response(validationRequiredBody, { status: 403 });
+		const model = createModel("google-antigravity");
+
+		const stream = streamGoogleGeminiCli(model, createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123", email: "dev@example.com" }),
+			fetch: fetchMock,
+		});
+
+		const result = await stream.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorStatus).toBe(403);
+		expect(result.errorMessage).toBe(
+			`Cloud Code Assist API error (403): Account verification required for dev@example.com. Visit ${VALIDATION_URL} to continue, then retry your request.`,
+		);
 	});
 
 	describe("retry guardrails", () => {

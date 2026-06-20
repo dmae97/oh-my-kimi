@@ -58,7 +58,6 @@ export function getContextUsageLevel(contextPercent: number, contextWindow: numb
 /**
  * Format context usage as `<percent>%/<window>` (e.g. `5.1%/1M`), matching the
  * status line's context gauge so subagent and footer renderers stay in sync.
- * A `null`/`undefined` percent (unknown, e.g. right after compaction) renders as `?`.
  */
 export function formatContextUsage(contextPercent: number | null | undefined, contextWindow: number): string {
 	const pct = contextPercent === null || contextPercent === undefined ? "?" : `${contextPercent.toFixed(1)}%`;

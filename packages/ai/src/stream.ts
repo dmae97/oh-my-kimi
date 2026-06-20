@@ -46,7 +46,6 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
-import { streamXAIResponses } from "./providers/xai-responses";
 import { isUsageLimitError } from "./rate-limit-utils";
 import { PROVIDER_REGISTRY } from "./registry";
 import type {
@@ -64,6 +63,7 @@ import type {
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { withRequestDebugFetch } from "./utils/request-debug";
+import { withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
 
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
@@ -228,6 +228,14 @@ export function stream<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
+	return withGeminiThinkingLoopGuard(model, options, opts => streamDispatch(model, context, opts));
+}
+
+function streamDispatch<TApi extends Api>(
+	model: Model<TApi>,
+	context: Context,
+	options?: OptionsForApi<TApi>,
+): AssistantMessageEventStream {
 	const requestOptions = withRequestDebugFetch(options as StreamOptions | undefined) as
 		| OptionsForApi<TApi>
 		| undefined;
@@ -283,15 +291,19 @@ export function stream<TApi extends Api>(
 			});
 		}
 
+		case "openrouter": {
+			const useResponses = $env.PI_OPENROUTER_RESPONSES !== "0";
+			if (useResponses) {
+				return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+			}
+			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
+		}
+
 		case "openai-completions":
 			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
 
-		case "openai-responses": {
-			if (model.provider === "xai-oauth") {
-				return streamXAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
-			}
+		case "openai-responses":
 			return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
-		}
 
 		case "azure-openai-responses":
 			return streamAzureOpenAIResponses(model as Model<"azure-openai-responses">, context, providerOptions as any);
@@ -489,13 +501,15 @@ export function streamSimple<TApi extends Api>(
 	// extension-registered APIs can't accidentally override a configured
 	// pi-native transport.
 	if (model.transport === "pi-native") {
-		return streamPiNative(model, context, requestOptions);
+		return withGeminiThinkingLoopGuard(model, requestOptions, opts => streamPiNative(model, context, opts));
 	}
 
 	// Check custom API registry (extension-provided APIs)
 	const customApiProvider = getCustomApi(model.api);
 	if (customApiProvider) {
-		return customApiProvider.streamSimple(model, context, requestOptions);
+		return withGeminiThinkingLoopGuard(model, requestOptions, opts =>
+			customApiProvider.streamSimple(model, context, opts),
+		);
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys
@@ -668,11 +682,10 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 	// Models that reason natively but expose no effort dial carry
 	// `thinking: undefined` (baked at build time from
 	// `compat.supportsReasoningEffort: false` on openai-responses*). The
-	// wire-side omitReasoningEffort gate (providers/xai-responses.ts:78) is the
-	// actual strip; returning undefined here avoids a redundant
-	// requireSupportedEffort throw that would defeat the gate and surface a
-	// confusing "Compaction failed: Thinking effort high is not supported
-	// by..." to the user.
+	// wire-side omitReasoningEffort gate (stream.ts) is the actual strip; returning
+	// undefined here avoids a redundant requireSupportedEffort throw that would
+	// defeat the gate and surface a confusing "Compaction failed: Thinking effort
+	// high is not supported by..." to the user.
 	if (!model.thinking) return undefined;
 	return requireSupportedEffort(model, reasoning);
 }
@@ -858,6 +871,31 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"bedrock-converse-stream">({ ...bedrockBase, maxTokens, thinkingBudgets });
 		}
 
+		case "openrouter": {
+			const useResponses = $env.PI_OPENROUTER_RESPONSES !== "0";
+			if (useResponses) {
+				return castApi<"openai-responses">({
+					...base,
+					reasoning: resolveOpenAiReasoningEffort(model, options),
+					toolChoice: mapOpenAiToolChoice(options?.toolChoice),
+					serviceTier: options?.serviceTier,
+					reasoningSummary: options?.hideThinkingSummary ? null : undefined,
+					openrouterVariant: options?.openrouterVariant,
+					maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+					disableReasoning: options?.disableReasoning,
+				});
+			}
+			return castApi<"openai-completions">({
+				...base,
+				reasoning: resolveOpenAiReasoningEffort(model, options),
+				disableReasoning: options?.disableReasoning,
+				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
+				serviceTier: options?.serviceTier,
+				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+			});
+		}
+
 		case "openai-completions":
 			return castApi<"openai-completions">({
 				...base,
@@ -866,6 +904,7 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
 			});
 
 		case "openai-responses":
@@ -875,6 +914,9 @@ function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapOpenAiToolChoice(options?.toolChoice),
 				serviceTier: options?.serviceTier,
 				reasoningSummary: options?.hideThinkingSummary ? null : undefined,
+				openrouterVariant: options?.openrouterVariant,
+				maxTokensExplicit: rawOptions?.maxTokens !== undefined,
+				disableReasoning: options?.disableReasoning,
 			});
 
 		case "azure-openai-responses":
@@ -950,10 +992,12 @@ function mapOptionsForApi<TApi extends Api>(
 							level: mapEffortToGoogleThinkingLevel(effort),
 						},
 						toolChoice,
+						antigravityEndpointMode: options?.antigravityEndpointMode,
 					});
 				}
 
-				let thinkingBudget = options.thinkingBudgets?.[effort] ?? GOOGLE_THINKING[effort];
+				let thinkingBudget =
+					options.thinkingBudgets?.[effort] ?? model.thinking?.effortBudgets?.[effort] ?? GOOGLE_THINKING[effort];
 
 				// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
 				const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
@@ -970,6 +1014,7 @@ function mapOptionsForApi<TApi extends Api>(
 						requestModelId: resolveWireModelId(model, effort),
 						thinking: { enabled: true, budgetTokens: thinkingBudget },
 						toolChoice,
+						antigravityEndpointMode: options?.antigravityEndpointMode,
 					});
 				}
 				// Budget clamped to zero — fall through to the thinking-off path.
@@ -986,6 +1031,7 @@ function mapOptionsForApi<TApi extends Api>(
 				requestModelId: resolveWireModelId(model, undefined),
 				thinking,
 				toolChoice,
+				antigravityEndpointMode: options?.antigravityEndpointMode,
 			});
 		}
 

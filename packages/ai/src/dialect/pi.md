@@ -1,57 +1,55 @@
 ## Format guide
 
-A tool call is a `<call:NAME>…</call:NAME>` block (or self-closing `<call:NAME …/>`) written as plain assistant text; arguments are given as tag attributes, child elements, or a verbatim inline body.
+A tool call begins with `§` immediately followed by the function NAME (start each call on its own line). Scalar arguments follow on the same line as `key=value` pairs; a single large or multi-line string argument goes in a verbatim body fenced by `«…»` right after the header.
+
+Scalar-only call (the line ends the call):
 
 ```text
-<call:read path="src/a.ts" offset=50/>
+§read path=src/a.ts offset=50 limit=200
 ```
 
-Objects and arrays use child elements, repeating an element for each array item:
+Call with a verbatim body — everything between `«` and `»` is taken literally, no quoting or escaping:
 
 ```text
-<call:configure>
-<object>
-<y>4</y>
-<list>alpha</list>
-<list>beta</list>
-</object>
-</call:configure>
-```
-
-A single string argument can fill the body directly:
-
-```text
-<call:edit>
+§edit path=src/server/auth.ts«
 *** Begin Patch
-...
+*** Update File: src/server/auth.ts
+@@ class AuthService
+-  login(user) {
++  async login(user, opts) {
 *** End Patch
-</call:edit>
+»
 ```
 
-Tool results arrive as response blocks, read in call order:
+Argument values:
+
+- Strings are written bare and verbatim (`path=src/a.ts`). Quote with `"…"` only when the value contains spaces or starts with `"`, `[`, or `{` (`i="run the tests"`).
+- Numbers, booleans, and `null` are JSON literals (`offset=50`, `force=true`).
+- Arrays and objects are inline JSON (`paths=["src","test"]`).
+- The body fence holds the call's first long/multi-line string parameter; its key is implied, never written.
+
+Private reasoning goes in a `¤…¤` block before your calls:
 
 ```text
-<tool_response>
-verbatim tool result
-</tool_response>
-```
-
-Private reasoning goes in a `<thinking>…</thinking>` block before your calls:
-
-```text
-<thinking>
+¤
 brief reasoning
-</thinking>
+¤
+```
+
+Tool results arrive in `‡‡…‡‡` blocks, read in call order:
+
+```text
+‡‡
+verbatim tool result
+‡‡
 ```
 
 ## Rules
 
-- `NAME` must match a listed function; never wrap calls in JSON or fences.
-- Use attributes only for top-level scalars; put objects, arrays, and long strings in child elements.
-- Strings are verbatim (no quotes, no entity escaping); numbers, booleans, and null are JSON literals.
-- An object opens a child block whose scalar subfields may also be attributes; an array repeats its element once per item.
-- The inline body fills the first unset string-typed parameter and may contain any raw text except `</call:NAME>`.
-- Emit parallel calls as consecutive blocks. NEVER invent call ids; results are positional.
-- Private reasoning goes in a `<thinking>…</thinking>` block before your calls; NEVER put calls inside it.
-- Read each `<tool_response>` in call order. NEVER emit `<tool_response>` yourself.
+- `NAME` MUST match a listed function; never wrap calls in JSON or fences.
+- Put each scalar argument once as `key=value`; reserve the `«…»` body for the one dominant string argument (file contents, patches, commands, queries).
+- Body text is verbatim — include no surrounding quotes. If the body itself contains `»`, widen BOTH guillemet fences equally (`««…»»`, `«««…»»»`).
+- Emit parallel calls as consecutive `§…` blocks. NEVER invent call ids; results are positional.
+- Private reasoning goes in a `¤…¤` block before your calls; NEVER put calls inside it, and keep a literal `¤` out of the reasoning text.
+- Read each `‡‡…‡‡` result in call order. NEVER emit a `‡‡` block yourself.
 - After emitting your tool calls, YOU MUST EMIT THE STOP SEQUENCE AND HALT.

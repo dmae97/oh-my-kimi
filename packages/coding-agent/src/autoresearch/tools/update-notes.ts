@@ -1,5 +1,5 @@
 import { Text } from "@oh-my-pi/pi-tui";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -8,9 +8,9 @@ import { buildExperimentState } from "../state";
 import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions } from "../types";
 
-const updateNotesSchema = z.object({
-	body: z.string().describe("replacement notes body"),
-	append_idea: z.string().describe("append as bullet under Ideas instead of replacing body").optional(),
+const updateNotesSchema = type({
+	body: type("string").describe("replacement notes body"),
+	"append_idea?": type("string").describe("append as bullet under Ideas instead of replacing body"),
 });
 
 interface UpdateNotesDetails {

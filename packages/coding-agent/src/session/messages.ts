@@ -94,7 +94,7 @@ export function shouldRenderAbortReason(errorMessage: string | undefined): boole
 
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
  *  reason (bare `abort()`). Renderers treat it as "no specific reason given". */
-const GENERIC_ABORT_SENTINEL = "Request was aborted";
+export const GENERIC_ABORT_SENTINEL = "Request was aborted";
 
 /** Resolve the operator-facing label for an aborted assistant turn. A custom
  *  abort reason threaded onto `errorMessage` is returned verbatim; aborts with
@@ -204,16 +204,14 @@ function wrapSteeringUserMessage(message: UserMessage): UserMessage {
 }
 
 export function wrapSteeringForModel(messages: AgentMessage[]): AgentMessage[] {
-	const last = messages[messages.length - 1];
-	if (!isSteeringUserMessage(last)) return messages;
-
-	let firstSteer = messages.length - 1;
-	while (firstSteer > 0 && isSteeringUserMessage(messages[firstSteer - 1])) {
-		firstSteer--;
-	}
-
+	// Wrap EVERY steering message, not just a trailing run. The wire bytes of a
+	// steering message must be a pure function of the message itself, independent
+	// of its position in the array. When only the trailing steer was wrapped, the
+	// same persisted message was sent enveloped while it was the tail and raw once
+	// the assistant's reply buried it — rewriting already-cached prefix bytes and
+	// busting the provider prompt cache from that message onward on the next turn.
 	let wrappedMessages: AgentMessage[] | undefined;
-	for (let i = firstSteer; i < messages.length; i++) {
+	for (let i = 0; i < messages.length; i++) {
 		const message = messages[i];
 		if (!isSteeringUserMessage(message)) continue;
 		const wrappedMessage = wrapSteeringUserMessage(message);

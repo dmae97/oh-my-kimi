@@ -113,11 +113,13 @@ const generateMagicArray = (dataArray, proto, itemProto, itemMainProp) => {
 		const blacklist = [...Object_keys(data), "length", "enabledPlugin"];
 		return new Window_Proxy(obj, {
 			ownKeys(target) {
-				return Reflect.ownKeys(target).filter(key => !blacklist.includes(key));
+				return [...Object_getOwnPropertyNames(target), ...Object.getOwnPropertySymbols(target)].filter(
+					key => !blacklist.includes(key),
+				);
 			},
 			getOwnPropertyDescriptor(target, prop) {
 				if (blacklist.includes(prop)) return undefined;
-				return Reflect.getOwnPropertyDescriptor(target, prop);
+				return Object_getOwnPropertyDescriptor(target, prop);
 			},
 		});
 	};
@@ -148,7 +150,7 @@ const generateMagicArray = (dataArray, proto, itemProto, itemMainProp) => {
 			if (key === "item") return functionMocks.item;
 			if (key === "namedItem") return functionMocks.namedItem;
 			if (proto === PluginArray.prototype && key === "refresh") return functionMocks.refresh;
-			return Reflect.get(target, key);
+			return Reflect_get(target, key);
 		},
 		ownKeys(target) {
 			const keys = [];
@@ -159,7 +161,7 @@ const generateMagicArray = (dataArray, proto, itemProto, itemMainProp) => {
 		},
 		getOwnPropertyDescriptor(target, prop) {
 			if (prop === "length") return undefined;
-			return Reflect.getOwnPropertyDescriptor(target, prop);
+			return Object_getOwnPropertyDescriptor(target, prop);
 		},
 	});
 };

@@ -30,11 +30,13 @@ export const COPILOT_API_HEADERS = {
 type GitHubCopilotApiKeyPayload = {
 	token?: unknown;
 	enterpriseUrl?: unknown;
+	apiEndpoint?: unknown;
 };
 
 export type ParsedGitHubCopilotApiKey = {
 	accessToken: string;
 	enterpriseUrl?: string;
+	apiEndpoint?: string;
 };
 
 const PUBLIC_GITHUB_HOSTS = new Set(["api.github.com", "github.com", "www.github.com"]);
@@ -51,6 +53,18 @@ export function normalizeGitHubCopilotEnterpriseDomain(input: string | undefined
 	return normalized;
 }
 
+export function normalizeGitHubCopilotApiEndpoint(input: string | undefined): string | undefined {
+	const trimmed = input?.trim();
+	if (!trimmed?.startsWith("https://")) return undefined;
+	try {
+		const url = new URL(trimmed);
+		if (url.protocol !== "https:" || !url.hostname) return undefined;
+		return trimmed.replace(/\/+$/, "");
+	} catch {
+		return undefined;
+	}
+}
+
 export function parseGitHubCopilotApiKey(apiKeyRaw: string): ParsedGitHubCopilotApiKey {
 	try {
 		const parsed = JSON.parse(apiKeyRaw) as GitHubCopilotApiKeyPayload;
@@ -60,6 +74,10 @@ export function parseGitHubCopilotApiKey(apiKeyRaw: string): ParsedGitHubCopilot
 				enterpriseUrl:
 					typeof parsed.enterpriseUrl === "string"
 						? normalizeGitHubCopilotEnterpriseDomain(parsed.enterpriseUrl)
+						: undefined,
+				apiEndpoint:
+					typeof parsed.apiEndpoint === "string"
+						? normalizeGitHubCopilotApiEndpoint(parsed.apiEndpoint)
 						: undefined,
 			};
 		}

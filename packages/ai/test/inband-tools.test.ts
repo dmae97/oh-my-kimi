@@ -38,6 +38,7 @@ const DIALECTS: readonly Dialect[] = [
 	"kimi",
 	"xml",
 	"anthropic",
+	"minimax",
 	"deepseek",
 	"harmony",
 	"pi",
@@ -144,15 +145,16 @@ describe("in-band tool dialects", () => {
 			'<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>',
 		);
 		expectRawBlock(
+			"minimax",
+			'<minimax:tool_call>\n<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>\n</minimax:tool_call>',
+			'<invoke name="read"><parameter name="path" string="true">src/a.ts</parameter></invoke>',
+		);
+		expectRawBlock(
 			"harmony",
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 			'<|start|>assistant<|channel|>commentary to=functions.read<|message|>{"path":"src/a.ts"}<|call|>',
 		);
-		expectRawBlock(
-			"pi",
-			'<call:write path="out.ts">\nhello\n</call:write>',
-			'<call:write path="out.ts">\nhello\n</call:write>',
-		);
+		expectRawBlock("pi", "§write path=out.ts«\nhello\n»", "§write path=out.ts«\nhello\n»");
 	});
 
 	it("projects raw tool blocks onto parsed ToolCall content", () => {
@@ -161,6 +163,35 @@ describe("in-band tool dialects", () => {
 		const call = parsed.content.find((block): block is ToolCall => block.type === "toolCall");
 
 		expect(call?.rawBlock).toBe(raw);
+	});
+
+	it("parses MiniMax tool-call wrapper arguments without mangling parameter names", () => {
+		const raw =
+			'<minimax:tool_call>\n<invoke name="read">\n<parameter name="path" string="true">src/a.ts</parameter>\n<parameter name="count" string="false">2</parameter>\n</invoke>\n</minimax:tool_call>';
+		const parsed = parseInbandToolMessage(assistant([{ type: "text", text: raw }]), "minimax", TOOLS);
+		const calls = parsed.content.filter((block): block is ToolCall => block.type === "toolCall");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("read");
+		expect(calls[0]?.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		expect(calls[0]?.arguments).not.toHaveProperty('parameter name="path"');
+		expect(calls[0]?.arguments).not.toHaveProperty('parameter name="count"');
+	});
+
+	it("buffers unprefixed MiniMax wrappers across streaming tag splits", () => {
+		const raw =
+			'<tool_call>\n<invoke name="read">\n<parameter name="path" string="true">src/a.ts</parameter>\n<parameter name="count" string="false">2</parameter>\n</invoke>\n</tool_call>';
+		const events = feedText("minimax", raw);
+		const calls = toolEnds(events);
+		const visibleText = events
+			.filter((event): event is Extract<InbandScanEvent, { type: "text" }> => event.type === "text")
+			.map(event => event.text)
+			.join("");
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.name).toBe("read");
+		expect(calls[0]?.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		expect(visibleText).toBe("");
 	});
 
 	it("stops before hallucinated Anthropic function results", () => {
@@ -203,12 +234,13 @@ describe("in-band tool dialects", () => {
 		expect(getDialectDefinition("anthropic").renderToolResults([resultBlock])).toBe(
 			"<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>FILE</stdout>\n</result>\n</function_results>",
 		);
+		expect(getDialectDefinition("minimax").renderToolResults([resultBlock])).toBe(
+			"<function_results>\n<result>\n<tool_name>read</tool_name>\n<stdout>FILE</stdout>\n</result>\n</function_results>",
+		);
 		expect(getDialectDefinition("qwen3").renderToolResults([resultBlock])).toBe(
 			"<tool_response>\nFILE\n</tool_response>",
 		);
-		expect(getDialectDefinition("pi").renderToolResults([resultBlock])).toBe(
-			"<tool_response>\nFILE\n</tool_response>",
-		);
+		expect(getDialectDefinition("pi").renderToolResults([resultBlock])).toBe("‡‡\nFILE\n‡‡");
 		expect(getDialectDefinition("gemini").renderToolResults([resultBlock])).toBe("```tool_outputs\nFILE\n```");
 		expect(getDialectDefinition("gemma").renderToolResults([resultBlock])).toBe(
 			'<|tool_response>response:read{output:<|"|>FILE<|"|>}<tool_response|>',
@@ -257,5 +289,61 @@ describe("in-band tool dialects", () => {
 			.map(event => event.delta)
 			.join("");
 		expect(deltas).toBe("line1\nconst x = `a`;");
+	});
+
+	it("streams the verbatim body incrementally for pi", () => {
+		const text = getDialectDefinition("pi").renderAssistantToolCalls(
+			[
+				{
+					type: "toolCall",
+					id: "c1",
+					name: "write",
+					arguments: { path: "out.ts", content: "line1\nconst x = `a`;" },
+				},
+			],
+			{ tools: TOOLS },
+		);
+		const deltas = feedText("pi", text)
+			.filter(
+				(event): event is Extract<InbandScanEvent, { type: "toolArgDelta" }> =>
+					event.type === "toolArgDelta" && event.key === "content",
+			)
+			.map(event => event.delta)
+			.join("");
+		expect(deltas).toBe("line1\nconst x = `a`;");
+	});
+
+	it("escalates the pi body fence so payloads containing » round-trip", () => {
+		const content = "before »close« and »» double\nsecond line";
+		const text = getDialectDefinition("pi").renderToolCall(
+			{ type: "toolCall", id: "c1", name: "write", arguments: { path: "a.md", content } },
+			{ tools: TOOLS },
+		);
+		expect(text).toContain("«««"); // fence widened past the »» run in the body
+		const calls = toolEnds(feedText("pi", text));
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.arguments).toEqual({ path: "a.md", content });
+	});
+
+	it("ends a scalar-only pi call at the newline and keeps following prose", () => {
+		const events = feedText("pi", "§read path=a.ts count=5\ndone");
+		const calls = toolEnds(events);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.arguments).toEqual({ path: "a.ts", count: 5 });
+		const visible = events
+			.filter((event): event is Extract<InbandScanEvent, { type: "text" }> => event.type === "text")
+			.map(event => event.text)
+			.join("");
+		expect(visible).toBe("done");
+	});
+
+	it("treats a § not naming a known tool as literal text", () => {
+		const events = feedText("pi", "ref §section 3 and §frobnicate end");
+		expect(toolEnds(events)).toHaveLength(0);
+		const visible = events
+			.filter((event): event is Extract<InbandScanEvent, { type: "text" }> => event.type === "text")
+			.map(event => event.text)
+			.join("");
+		expect(visible).toBe("ref §section 3 and §frobnicate end");
 	});
 });

@@ -20,9 +20,9 @@
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `pattern` | `string` | Yes | Regex pattern. `search.ts` rejects whitespace-only input but otherwise preserves the pattern verbatim (leading/trailing whitespace is meaningful in regexes). The native matcher enables multiline only when the pattern text contains a literal newline or the two-character sequence `\\n`. The model prompt explicitly documents literal-brace escaping such as ``interface\\{\\}``, although the native layer also auto-escapes braces that cannot be valid repetition quantifiers. |
+| `pattern` | `string` | Yes | Regex pattern. `search.ts` rejects whitespace-only input but otherwise preserves the pattern verbatim (leading/trailing whitespace is meaningful in regexes). The native matcher enables multiline only when the pattern text contains a literal newline or the two-character sequence `\\n`. The native layer auto-escapes braces that cannot be valid repetition quantifiers, so patterns like `${platform}` stay searchable (see Notes). |
 | `paths` | `string \| string[]` | No | One file path, directory path, glob-like path, archive member, internal URL, or an array of those. Omitted or empty defaults to `.` (the workspace root). Append a line-range selector such as `:50-100` or `:5-16,960-973` to a single file/archive/internal-resource input to constrain matches. Empty strings are rejected after trimming/quote stripping. Single entries accidentally joined with comma, semicolon, or whitespace are expanded only after existence validation; existing paths containing delimiters stay intact. Filesystem-backed internal URLs search their backing file; virtual internal resources search resolved text in memory. Internal URLs cannot contain glob characters. |
-| `i` | `boolean` | No | Case-insensitive search. Defaults to `false`. Passed to native `ignoreCase` or JS `RegExp` flags for virtual resources. |
+| `case` | `boolean` | No | Case-sensitive search. Defaults to `true`. Passed to native `ignoreCase` or JS `RegExp` flags for virtual resources. |
 | `gitignore` | `boolean` | No | Respect `.gitignore` during directory scans. Defaults to `true`. Passed to native `gitignore`. |
 | `skip` | `number` | No | File-page offset for multi-file results. Defaults to `0`; `search.ts` floors finite numbers and rejects negative or non-finite values. Single-file searches ignore it because they do not paginate by file. |
 
@@ -154,7 +154,7 @@ The tool returns a single text block in `content[0].text` plus structured `detai
 - ``Search timed out after 30s; narrow paths or pattern, or scope with `find` first`` when native grep hits `SEARCH_GREP_TIMEOUT_MS`.
 
 ## Notes
-- The model-facing prompt documents Rust regex syntax for filesystem-backed searches and JavaScript `RegExp` for virtual internal URL content.
+- The model-facing prompt documents Rust regex syntax (RE2-style; no lookaround or backreferences). Filesystem-backed searches use that native engine; virtual internal URL content is searched with JavaScript `RegExp`.
 - Native `build_matcher()` already auto-escapes braces that cannot be valid quantifiers, so patterns like `${platform}` become searchable instead of failing. Valid quantifiers like `a{2,4}` remain unchanged.
 - Native compile retry also escapes unescaped literal parentheses only after an unopened/unclosed-group parse error. It is a fallback, not a general parser mode.
 - Internal URLs are resolved before path existence checks. Backed resources become ordinary filesystem paths; virtual resources stay in memory and do not mint editable hashline anchors.

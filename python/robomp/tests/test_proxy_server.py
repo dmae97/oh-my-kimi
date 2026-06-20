@@ -505,6 +505,27 @@ async def test_add_issue_labels(proxy_settings: Settings) -> None:
     assert json.loads(captured["req"].content) == {"labels": ["triage", "bug"]}
 
 
+async def test_remove_issue_label(proxy_settings: Settings) -> None:
+    captured: dict[str, httpx.Request] = {}
+
+    def gh(req: httpx.Request) -> httpx.Response:
+        captured["req"] = req
+        return httpx.Response(200, json={})
+
+    app = _build_app(proxy_settings, gh)
+    body = b'{"repo":"octo/widget","number":1,"label":"needs-info"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/remove_issue_label",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/remove_issue_label", body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert captured["req"].method == "DELETE"
+    assert captured["req"].url.path == "/repos/octo/widget/issues/1/labels/needs-info"
+
+
 async def test_add_assignees(proxy_settings: Settings) -> None:
     captured: dict[str, httpx.Request] = {}
 

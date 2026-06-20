@@ -271,6 +271,68 @@ describe("boundary-balance repair", () => {
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
 	});
 
+	it("drops a one-sided JSX closer echo in a single-line expansion", () => {
+		const file = ["const view = (", "  <section>", "    <Old />", "  </section>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+    <New />", "+  </section>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["const view = (", "  <section>", "    <New />", "  </section>", ");"].join("\n"));
+		expect(text.split("\n").filter(line => line === "  </section>")).toHaveLength(1);
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
+	it("drops a JSX closer echo after a self-closing tag with a greater-than prop expression", () => {
+		const file = ["const view = (", "<Foo>", "old text", "</Foo>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+<Foo value={a > b} />", "+</Foo>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["const view = (", "<Foo>", "<Foo value={a > b} />", "</Foo>", ");"].join("\n"));
+		expect(text.split("\n").filter(line => line === "</Foo>")).toHaveLength(1);
+		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
+	});
+
+	it("preserves a nested JSX closer that matches the surviving parent closer", () => {
+		const file = ["const view = (", '<section className="outer">', "old text", "</section>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+<section>", "+new text", "+</section>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(
+			[
+				"const view = (",
+				'<section className="outer">',
+				"<section>",
+				"new text",
+				"</section>",
+				"</section>",
+				");",
+			].join("\n"),
+		);
+		expect(text.split("\n").filter(line => line.trim() === "</section>")).toHaveLength(2);
+		expect(warnings).toHaveLength(0);
+	});
+
+	it("preserves a nested JSX closer when the opener spans payload lines", () => {
+		const file = ["const view = (", '<section className="outer">', "old text", "</section>", ");"].join("\n");
+		const diff = ["SWAP 3.=3:", "+<section", '+  className="inner"', "+>", "+new text", "+</section>"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(
+			[
+				"const view = (",
+				'<section className="outer">',
+				"<section",
+				'  className="inner"',
+				">",
+				"new text",
+				"</section>",
+				"</section>",
+				");",
+			].join("\n"),
+		);
+		expect(text.split("\n").filter(line => line.trim() === "</section>")).toHaveLength(2);
+		expect(warnings).toHaveLength(0);
+	});
+
 	// Mirror direction: the payload restates the keeper that survives just above
 	// the multi-line range (range one line low instead of one short).
 	it("drops a one-sided leading keeper echo in a multi-line rewrite", () => {

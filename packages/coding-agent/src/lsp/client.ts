@@ -5,6 +5,7 @@ import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import type {
 	LspClient,
+	LspJsonRpcId,
 	LspJsonRpcNotification,
 	LspJsonRpcRequest,
 	LspJsonRpcResponse,
@@ -416,7 +417,6 @@ function currentWorkspaceFolders(client: LspClient): Array<{ uri: string; name: 
  * Handle workspace/workspaceFolders requests from the server.
  */
 async function handleWorkspaceFoldersRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
-	if (typeof message.id !== "number") return;
 	await sendResponse(client, message.id, currentWorkspaceFolders(client), "workspace/workspaceFolders");
 }
 
@@ -424,7 +424,6 @@ async function handleWorkspaceFoldersRequest(client: LspClient, message: LspJson
  * Handle workspace/configuration requests from the server.
  */
 async function handleConfigurationRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
-	if (typeof message.id !== "number") return;
 	const params = message.params as { items?: Array<{ section?: string }> };
 	const items = params?.items ?? [];
 	const result = items.map(item => {
@@ -438,7 +437,6 @@ async function handleConfigurationRequest(client: LspClient, message: LspJsonRpc
  * Handle workspace/applyEdit requests from the server.
  */
 async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequest): Promise<void> {
-	if (typeof message.id !== "number") return;
 	const params = message.params as { edit?: WorkspaceEdit };
 	if (!params?.edit) {
 		await sendResponse(
@@ -475,13 +473,39 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		return;
 	}
 	if (message.method === "window/workDoneProgress/create") {
-		// Accept progress token registration from the server
-		if (typeof message.id === "number") {
-			await sendResponse(client, message.id, null, message.method);
-		}
+		// Accept progress token registration from the server.
+		await sendResponse(client, message.id, null, message.method);
 		return;
 	}
-	if (typeof message.id !== "number") return;
+	if (message.method === "client/registerCapability" || message.method === "client/unregisterCapability") {
+		// Some servers block semantic requests until dynamic registration succeeds.
+		await sendResponse(client, message.id, null, message.method);
+		return;
+	}
+	if (message.method === "window/showMessageRequest") {
+		// Headless: no UI to surface the prompt. Spec says null = "no action selected".
+		await sendResponse(client, message.id, null, message.method);
+		return;
+	}
+	if (message.method === "window/showDocument") {
+		// Headless: nothing to display. Spec result is `{ success: boolean }`.
+		await sendResponse(client, message.id, { success: false }, message.method);
+		return;
+	}
+	if (
+		message.method === "workspace/semanticTokens/refresh" ||
+		message.method === "workspace/inlayHint/refresh" ||
+		message.method === "workspace/codeLens/refresh" ||
+		message.method === "workspace/codeAction/refresh" ||
+		message.method === "workspace/inlineValue/refresh" ||
+		message.method === "workspace/foldingRange/refresh" ||
+		message.method === "workspace/diagnostic/refresh"
+	) {
+		// Void acknowledgement per spec; servers that stall waiting for a reply
+		// (same failure mode as the dynamic-registration hang in #3029) move on.
+		await sendResponse(client, message.id, null, message.method);
+		return;
+	}
 	await sendResponse(client, message.id, null, message.method, {
 		code: -32601,
 		message: `Method not found: ${message.method}`,
@@ -493,7 +517,7 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
  */
 async function sendResponse(
 	client: LspClient,
-	id: number,
+	id: LspJsonRpcId,
 	result: unknown,
 	method: string,
 	error?: { code: number; message: string; data?: unknown },

@@ -9,7 +9,7 @@ describe("InputController thinking visibility", () => {
 		const loadingIndicator = { kind: "loading" };
 		const assistant = new AssistantMessageComponent();
 		const setHideThinkingBlock = vi.spyOn(assistant, "setHideThinkingBlock");
-		const invalidate = vi.spyOn(assistant, "invalidate");
+		const resetDisplay = vi.fn();
 		const clear = vi.fn();
 		const addChild = vi.fn();
 		const rebuildChatFromMessages = vi.fn();
@@ -26,6 +26,7 @@ describe("InputController thinking visibility", () => {
 			streamingMessage: undefined,
 			rebuildChatFromMessages,
 			showStatus,
+			ui: { resetDisplay },
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleThinkingBlockVisibility();
@@ -38,7 +39,7 @@ describe("InputController thinking visibility", () => {
 		expect(addChild).not.toHaveBeenCalled();
 		expect(rebuildChatFromMessages).not.toHaveBeenCalled();
 		expect(setHideThinkingBlock).toHaveBeenCalledWith(true);
-		expect(invalidate).toHaveBeenCalledTimes(1);
+		expect(resetDisplay).toHaveBeenCalledTimes(1);
 		expect(showStatus).toHaveBeenCalledWith("Thinking blocks: hidden");
 	});
 });

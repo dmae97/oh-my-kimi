@@ -42,12 +42,12 @@ export class UserMessageComponent extends Container {
 						? imageReferenceHyperlink(label, index, imageLinks, imageLabel)
 						: theme.fg("accent", `\x1b[1m${label}\x1b[22m`),
 			});
-		this.addChild(
-			new Markdown(text, 1, 1, getMarkdownTheme(), {
-				bgColor,
-				color,
-			}),
-		);
+		const md = new Markdown(text, 1, 1, getMarkdownTheme(), {
+			bgColor,
+			color,
+		});
+		md.setIgnoreTight(true);
+		this.addChild(md);
 	}
 
 	override render(width: number): readonly string[] {

@@ -4,6 +4,7 @@ import { stripVTControlCharacters } from "node:util";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, padding, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatNumber, getProjectDir } from "@oh-my-pi/pi-utils";
+import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { shortenPath } from "../../tools/render-utils";
@@ -58,6 +59,8 @@ export class FooterComponent implements Component {
 			this.#gitWatcher = null;
 		}
 
+		if (!settings.get("git.enabled")) return;
+
 		void git.head
 			.resolve(getProjectDir())
 			.then(head => {
@@ -102,6 +105,7 @@ export class FooterComponent implements Component {
 	 * Returns null if not in a git repo, branch name otherwise.
 	 */
 	#getCurrentBranch(): string | null {
+		if (!settings.get("git.enabled")) return null;
 		if (this.#cachedBranch !== undefined) {
 			return this.#cachedBranch;
 		}
@@ -182,11 +186,8 @@ export class FooterComponent implements Component {
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;
 		const autoIndicator = this.#autoCompactEnabled ? " (auto)" : "";
-		const contextPercentDisplay = `${formatContextUsage(
-			contextUsage?.percent === null ? null : contextPercentValue,
-			contextWindow,
-		)}${autoIndicator}`;
-		if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
+		const contextPercentDisplay = `${formatContextUsage(contextPercentValue, contextWindow)}${autoIndicator}`;
+		if (contextUsage) {
 			const color = getContextUsageThemeColor(getContextUsageLevel(contextPercentValue, contextWindow));
 			contextPercentStr =
 				color === "statusLineContext" ? contextPercentDisplay : theme.fg(color, contextPercentDisplay);

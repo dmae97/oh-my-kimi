@@ -1,6 +1,17 @@
-MIT License
+This directory contains a vendored, locally-patched copy of brush-builtins from
+the brush shell project (https://github.com/reubeno/brush), used under the MIT
+License. It is wired into the workspace via `[patch.crates-io]` so these
+modifications can be maintained against the published release (brush-builtins
+0.2.0).
 
-Copyright (c) 2024 reuben olinsky
+  Copyright (c) 2024 reuben olinsky
+
+Local modifications include: implementing previously-stubbed builtins, the
+`wait` builtin (PID targeting plus the `-f`/`-n`/`-p` flags), and cancellation
+support for the `read` builtin via poll. The remaining logic tracks upstream so
+behavior matches the published crate.
+
+MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

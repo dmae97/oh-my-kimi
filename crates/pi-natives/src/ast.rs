@@ -1175,6 +1175,10 @@ mod tests {
 		assert_eq!(resolve_supported_lang("cpp").ok(), Some(SupportLang::Cpp));
 		assert_eq!(resolve_supported_lang("tla").ok(), Some(SupportLang::Tlaplus));
 		assert_eq!(resolve_supported_lang("pluscal").ok(), Some(SupportLang::Tlaplus));
+		assert_eq!(resolve_supported_lang("emacs-lisp").ok(), Some(SupportLang::EmacsLisp));
+		assert_eq!(resolve_supported_lang("elisp").ok(), Some(SupportLang::EmacsLisp));
+		assert_eq!(resolve_supported_lang("el").ok(), Some(SupportLang::EmacsLisp));
+		assert_eq!(resolve_supported_lang("f90").ok(), Some(SupportLang::Fortran));
 		assert!(resolve_supported_lang("brainfuck").is_err());
 	}
 

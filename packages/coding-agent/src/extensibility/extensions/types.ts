@@ -32,7 +32,8 @@ import type {
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { AutocompleteItem, Component, EditorTheme, KeyId, TUI } from "@oh-my-pi/pi-tui";
 import type { logger as PiLogger } from "@oh-my-pi/pi-utils";
-import type { z } from "zod/v4";
+import type { Type as arktype } from "arktype";
+import type * as zod from "zod/v4";
 import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
@@ -43,6 +44,7 @@ import type * as PiCodingAgent from "../../index";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
+import type { CompactMode } from "../../session/compact-modes";
 import type { CustomMessage } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
 import type {
@@ -82,6 +84,8 @@ import type {
 	SessionEvent,
 	SessionShutdownEvent,
 	SessionStartEvent,
+	SessionStopEvent,
+	SessionStopEventResult,
 	SessionSwitchEvent,
 	SessionTreeEvent,
 	TodoReminderEvent,
@@ -274,16 +278,22 @@ export interface ExtensionUIContext {
 // ============================================================================
 
 export interface ContextUsage {
-	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
-	tokens: number | null;
+	/** Estimated context tokens. */
+	tokens: number;
 	contextWindow: number;
-	/** Context usage as percentage of context window, or null if tokens is unknown. */
-	percent: number | null;
+	/** Context usage as percentage of context window. */
+	percent: number;
 }
 
 export interface CompactOptions {
 	onComplete?: (result: CompactionResult) => void;
 	onError?: (error: Error) => void;
+	/**
+	 * Force a one-off compaction mode for this invocation, overriding the
+	 * configured `compaction.strategy` / `remoteEnabled` (the `/compact`
+	 * subcommands: `soft` | `remote` | `snapcompact`). Omitted = configured behavior.
+	 */
+	mode?: CompactMode;
 }
 
 /**
@@ -525,7 +535,14 @@ export interface BeforeAgentStartEvent {
 	systemPrompt: string[];
 }
 
-export type { AgentEndEvent, AgentStartEvent, TurnEndEvent, TurnStartEvent } from "../shared-events";
+export type {
+	AgentEndEvent,
+	AgentStartEvent,
+	SessionStopEvent,
+	SessionStopEventResult,
+	TurnEndEvent,
+	TurnStartEvent,
+} from "../shared-events";
 
 /** Fired when a message starts (user, assistant, or toolResult) */
 export interface MessageStartEvent {
@@ -802,6 +819,7 @@ export type ExtensionEvent =
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
+	| SessionStopEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -938,8 +956,10 @@ export interface ExtensionAPI {
 	/** Injected zod-backed typebox shim for legacy `Type.Object(...)` parameter authoring. */
 	typebox: typeof TypeBox;
 
-	/** Injected zod module for Zod-authored extension tools (canonical going forward). */
-	zod: typeof z;
+	/** Injected arktype module for arktype-authored extension tools (canonical going forward). */
+	arktype: typeof arktype;
+	/** Injected zod/v4 module for canonical extension tool parameter schemas. */
+	zod: typeof zod;
 
 	/** Injected pi-coding-agent exports for accessing SDK utilities */
 	pi: typeof PiCodingAgent;
@@ -978,6 +998,7 @@ export interface ExtensionAPI {
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+	on(event: "session_stop", handler: ExtensionHandler<SessionStopEvent, SessionStopEventResult>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;

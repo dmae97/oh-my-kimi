@@ -13,14 +13,14 @@ import {
 } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
-import { z } from "zod/v4";
+import { type } from "arktype";
 
 const toolActivationExtension: ExtensionFactory = pi => {
 	pi.registerTool({
 		name: "default_inactive_tool",
 		label: "Default Inactive Tool",
 		description: "Tool hidden from the initial active set unless explicitly requested.",
-		parameters: z.object({}),
+		parameters: type({}),
 		defaultInactive: true,
 		async execute() {
 			return { content: [{ type: "text", text: "inactive" }] };
@@ -30,7 +30,7 @@ const toolActivationExtension: ExtensionFactory = pi => {
 		name: "default_active_tool",
 		label: "Default Active Tool",
 		description: "Tool included in the initial active set.",
-		parameters: z.object({}),
+		parameters: type({}),
 		async execute() {
 			return { content: [{ type: "text", text: "active" }] };
 		},

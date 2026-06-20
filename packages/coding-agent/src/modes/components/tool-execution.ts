@@ -34,7 +34,7 @@ import {
 import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
-import { isFramedBlockComponent, renderStatusLine } from "../../tui";
+import { isFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
 
@@ -169,7 +169,7 @@ let toolExecutionInstanceSeq = 0;
  */
 export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
-	#contentText: Text; // For built-in tools (with its own padding/bg)
+	#contentText: WidthAwareText; // Generic fallback (no custom/built-in renderer)
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
@@ -272,6 +272,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#ui = ui;
 		this.#cwd = cwd;
 		this.#args = args;
+		this.#editMode = resolveEditModeForTool(toolName, tool);
 
 		// Always create both - contentBox for custom tools/bash/tools with renderers, contentText for other built-ins.
 		// paddingY is 1 so background-tinted blocks (custom/extension tools and the
@@ -279,7 +280,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// strips PLAIN-blank edges, so framed/minimal blocks (no bg set) drop these
 		// lines and keep their tight spacing — only tinted lines survive.
 		this.#contentBox = new Box(0, 1);
-		this.#contentText = new Text("", 1, 1);
+		this.#contentText = new WidthAwareText(contentWidth => this.#formatToolExecution(contentWidth), 1, 1);
 
 		// Use Box for custom tools or built-in tools that have renderers
 		const hasRenderer = toolName in toolRenderers;
@@ -289,8 +290,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		} else {
 			this.addChild(this.#contentText);
 		}
-
-		this.#editMode = resolveEditModeForTool(toolName, tool);
+		// Tool blocks are visually distinct cards (background-tinted or framed),
+		// so keep their horizontal padding even when the user enables tight layout.
+		this.setIgnoreTight(true);
 
 		this.#updateDisplay();
 		this.#editDiffInFlight = this.#runPreviewDiff();
@@ -922,9 +924,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				}
 			}
 		} else {
-			// Other built-in tools: use Text directly with caching
+			// Generic fallback (no custom/built-in renderer). WidthAwareText
+			// reformats at render time so output fills the actual terminal width
+			// instead of a fixed column cap.
 			this.#contentText.setCustomBgFn(stateBgFn);
-			this.#contentText.setText(this.#formatToolExecution());
+			this.#contentText.invalidate();
 		}
 
 		// Handle images (same for both custom and built-in)
@@ -1076,14 +1080,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	/**
 	 * Format a generic tool execution (fallback for tools without custom renderers)
 	 */
-	#formatToolExecution(): string {
+	#formatToolExecution(contentWidth: number): string {
 		const lines: string[] = [];
 		const icon = this.#isPartial ? "pending" : this.#result?.isError ? "error" : "done";
 		lines.push(renderStatusLine({ icon, title: this.#toolLabel }, theme));
 
 		const argsObject = this.#args && typeof this.#args === "object" ? (this.#args as Record<string, unknown>) : null;
 		if (!this.#expanded && argsObject && Object.keys(argsObject).length > 0) {
-			const preview = formatArgsInline(argsObject, 70);
+			// Budget the inline preview against the render width, leaving room for
+			// the ` └─ ` connector prefix instead of a fixed cap.
+			const inlineBudget = Math.max(20, contentWidth - Bun.stringWidth(theme.tree.last) - 2);
+			const preview = formatArgsInline(argsObject, inlineBudget);
 			if (preview) {
 				lines.push(` ${theme.fg("dim", theme.tree.last)} ${theme.fg("dim", preview)}`);
 			}
@@ -1143,7 +1150,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const displayLines = outputLines.slice(0, maxOutputLines);
 
 		for (const line of displayLines) {
-			lines.push(theme.fg("toolOutput", truncateToWidth(replaceTabs(line), 80)));
+			lines.push(theme.fg("toolOutput", truncateToWidth(replaceTabs(line), contentWidth)));
 		}
 
 		if (outputLines.length > maxOutputLines) {

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 
 import { Text } from "@oh-my-pi/pi-tui";
-import { z } from "zod/v4";
+import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import type { Theme } from "../../modes/theme/theme";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -16,21 +16,18 @@ export const HARNESS_FILENAME = "autoresearch.sh";
 export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
 
-const initExperimentSchema = z.object({
-	name: z.string().describe("experiment name"),
-	goal: z.string().describe("session goal").optional(),
-	primary_metric: z.string().describe("primary metric name"),
-	metric_unit: z.string().describe("metric unit (e.g. ms, µs, mb)").optional(),
-	direction: z
-		.enum(["lower", "higher"] as const)
-		.describe("better direction (default lower)")
-		.optional(),
-	secondary_metrics: z.array(z.string()).describe("secondary metric names").optional(),
-	scope_paths: z.array(z.string()).describe("expected-to-modify paths").optional(),
-	off_limits: z.array(z.string()).describe("off-limits paths").optional(),
-	constraints: z.array(z.string()).describe("free-form constraints").optional(),
-	max_iterations: z.number().describe("soft iteration cap per segment").optional(),
-	new_segment: z.boolean().describe("bump to a new segment in existing session").optional(),
+const initExperimentSchema = type({
+	name: type("string").describe("experiment name"),
+	"goal?": type("string").describe("session goal"),
+	primary_metric: type("string").describe("primary metric name"),
+	"metric_unit?": type("string").describe("metric unit (e.g. ms, µs, mb)"),
+	"direction?": type("'lower' | 'higher'").describe("better direction (default lower)"),
+	"secondary_metrics?": type("string[]").describe("secondary metric names"),
+	"scope_paths?": type("string[]").describe("expected-to-modify paths"),
+	"off_limits?": type("string[]").describe("off-limits paths"),
+	"constraints?": type("string[]").describe("free-form constraints"),
+	"max_iterations?": type("number").describe("soft iteration cap per segment"),
+	"new_segment?": type("boolean").describe("bump to a new segment in existing session"),
 });
 
 interface InitExperimentDetails {

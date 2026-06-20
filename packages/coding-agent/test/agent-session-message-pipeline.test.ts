@@ -4,6 +4,7 @@ import {
 	type Api,
 	type Context,
 	clearCustomApis,
+	type ImageContent,
 	type Message,
 	type Model,
 	type ModelSpec,
@@ -28,6 +29,13 @@ function createAgent(): Agent {
 			tools: [],
 		},
 	});
+}
+
+function createModelRegistryStub(key = "key") {
+	return {
+		getApiKey: vi.fn(async () => key),
+		resolver: vi.fn(() => async () => key),
+	};
 }
 
 function getConvertedUserText(message: Message | undefined): string {
@@ -113,6 +121,34 @@ describe("AgentSession message pipeline", () => {
 		expect(queued.steering).toBe(true);
 		expect(queued.content).toEqual([{ type: "text", text: "raw <steer> &" }]);
 		session.clearQueue();
+	});
+
+	it("resolves image attachments from submitted messages, not tool-result images", () => {
+		const userImage: ImageContent = { type: "image", data: "user-image", mimeType: "image/png" };
+		const toolImage: ImageContent = { type: "image", data: "tool-image", mimeType: "image/png" };
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+		});
+		sessions.push(session);
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "inspect this" }, userImage],
+			timestamp: Date.now(),
+		});
+		session.agent.appendMessage({
+			role: "toolResult",
+			toolCallId: "eval-1",
+			toolName: "eval",
+			content: [{ type: "text", text: "plot output" }, toolImage],
+			timestamp: Date.now(),
+			isError: false,
+		});
+
+		expect(session.getImageAttachments()).toEqual([{ label: "Image #1", uri: "attachment://1", image: userImage }]);
 	});
 
 	it("keeps stored steering text raw while pre-LLM conversion wraps it", async () => {
@@ -207,9 +243,7 @@ describe("AgentSession message pipeline", () => {
 			}),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
-			modelRegistry: {
-				getApiKey: vi.fn(async () => "key"),
-			} as never,
+			modelRegistry: createModelRegistryStub() as never,
 		});
 		sessions.push(session);
 		const cacheSessionId = session.sessionId;
@@ -221,6 +255,77 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedOptions?.sessionId).toStartWith(`${cacheSessionId}:side:`);
 		expect(capturedOptions?.sessionId).not.toBe(cacheSessionId);
 		expect(capturedOptions?.preferWebsockets).toBe(false);
+	});
+
+	it("rotates ephemeral side-channel credentials on Google Resource exhausted", async () => {
+		const api = "test-ephemeral-google-resource-exhausted";
+		const googleErrorMessage = "Google API error (429): Resource exhausted. Please try again later.";
+		const keys: unknown[] = [];
+		let capturedOptions: SimpleStreamOptions | undefined;
+		registerCustomApi(api, (_model, _context, options) => {
+			capturedOptions = options;
+			keys.push(options?.apiKey);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (options?.apiKey === "next-key") {
+					const message = createAssistantMessage("Recovered");
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "Recovered", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+					return;
+				}
+
+				const error = createAssistantMessage("");
+				error.content = [];
+				error.stopReason = "error";
+				error.errorMessage = googleErrorMessage;
+				error.errorStatus = 429;
+				stream.push({ type: "start", partial: error });
+				stream.push({ type: "error", reason: "error", error });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "side-google-model",
+			name: "Side Google Model",
+			api,
+			provider: "google",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const resolver = vi.fn(
+			() => async (ctx: { error: unknown }) => (ctx.error === undefined ? "old-key" : "next-key"),
+		);
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {
+				getApiKey: vi.fn(async () => "old-key"),
+				resolver,
+			} as never,
+		});
+		sessions.push(session);
+		const cacheSessionId = session.sessionId;
+
+		const result = await session.runEphemeralTurn({ promptText: "Question?" });
+
+		expect(result.replyText).toBe("Recovered");
+		expect(keys).toEqual(["old-key", "next-key"]);
+		expect(capturedOptions?.promptCacheKey).toBe(cacheSessionId);
+		expect(capturedOptions?.sessionId).toStartWith(`${cacheSessionId}:side:`);
+		expect(resolver).toHaveBeenCalledWith(model, cacheSessionId);
 	});
 
 	it("applies configured OpenRouter routing variant to ephemeral side-channel options", async () => {
@@ -263,9 +368,7 @@ describe("AgentSession message pipeline", () => {
 				"compaction.enabled": false,
 				"providers.openrouterVariant": "nitro",
 			}),
-			modelRegistry: {
-				getApiKey: vi.fn(async () => "key"),
-			} as never,
+			modelRegistry: createModelRegistryStub() as never,
 		});
 		sessions.push(session);
 
@@ -313,9 +416,7 @@ describe("AgentSession message pipeline", () => {
 			}),
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false }),
-			modelRegistry: {
-				getApiKey: vi.fn(async () => "key"),
-			} as never,
+			modelRegistry: createModelRegistryStub() as never,
 			obfuscator: new SecretObfuscator([{ type: "plain", content: secret }]),
 		});
 		sessions.push(session);
@@ -361,6 +462,7 @@ describe("AgentSession message pipeline", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			extensionRunner: {
+				hasHandlers: () => true,
 				emit: extensionEmit,
 			} as never,
 		});

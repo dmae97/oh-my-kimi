@@ -195,7 +195,7 @@ describe("wrapSteeringForModel", () => {
 		expect(wrappedText).not.toContain("&amp;");
 	});
 
-	it("leaves buried steering messages unchanged", () => {
+	it("wraps buried steering messages too so wire bytes stay stable across turns", () => {
 		const buried: AgentMessage = {
 			role: "user",
 			content: "old steer",
@@ -207,8 +207,16 @@ describe("wrapSteeringForModel", () => {
 
 		const wrapped = wrapSteeringForModel(messages);
 
-		expect(wrapped).toBe(messages);
-		expect(wrapped[0]).toBe(buried);
+		// Buried steer is rewritten (enveloped) just like a trailing one, so its wire
+		// bytes are identical whether it is the tail (turn N) or buried (turn N+1) —
+		// the cached prefix stays valid instead of busting on the turn after a steer.
+		expect(wrapped).not.toBe(messages);
+		expect(wrapped[0]).not.toBe(buried);
+		expect(getUserText(wrapped[0])).toContain("<user_interjection>");
+		expect(getUserText(wrapped[0])).toContain("<message>\nold steer\n</message>");
+		// Non-steering trailing message is untouched, and the persisted steer is not mutated.
+		expect(wrapped[1]).toBe(later);
+		expect(buried.content).toBe("old steer");
 	});
 
 	it("leaves trailing user messages without the steering marker unchanged", () => {

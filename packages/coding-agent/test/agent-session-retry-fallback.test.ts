@@ -8,6 +8,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -46,7 +47,7 @@ function createFallbackAgent(primaryModel: Model, requestedModels: string[]): Ag
 	const mock = createMockModel();
 	let primaryAttempts = 0;
 	return new Agent({
-		getApiKey: provider => `${provider}-test-key`,
+		getApiKey: model => `${model.provider}-test-key`,
 		initialState: {
 			model: primaryModel,
 			systemPrompt: ["Test"],
@@ -83,6 +84,8 @@ describe("AgentSession retry fallback", () => {
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 		authStorage.setRuntimeApiKey("google", "google-test-key");
+		authStorage.setRuntimeApiKey("google-vertex", "google-vertex-test-key");
+		authStorage.setRuntimeApiKey("openrouter", "openrouter-test-key");
 		sharedRegistry = new ModelRegistry(authStorage);
 	});
 
@@ -123,7 +126,7 @@ describe("AgentSession retry fallback", () => {
 
 		const mock = createMockModel();
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model: primaryModel,
 				systemPrompt: ["Test"],
@@ -233,7 +236,7 @@ describe("AgentSession retry fallback", () => {
 			explanation: "Classifier declined this turn.",
 		};
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model: primaryModel,
 				systemPrompt: ["Test"],
@@ -339,7 +342,7 @@ describe("AgentSession retry fallback", () => {
 		const mock = createMockModel();
 		const refusalMessage = "Refusal (cyber): Classifier declined this fallback turn.";
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model: primaryModel,
 				systemPrompt: ["Test"],
@@ -435,7 +438,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: errorMessage }, { content: ["Recovered after Google quota retry"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -497,7 +500,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: "rate limit exceeded retry-after-ms=200" }, { content: ["Recovered on primary retry"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model: primaryModel,
 				systemPrompt: ["Test"],
@@ -577,7 +580,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: timeoutMessage }, { content: ["Recovered after OpenAI timeout"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -635,7 +638,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: stallMessage }, { content: ["Recovered after stream stall"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -694,7 +697,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: processingError }, { content: ["Recovered after OpenAI processing error"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -756,7 +759,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: staleReplayError }, { content: ["Recovered after Responses state reset"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -837,7 +840,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: zdrReplayError }, { content: ["Recovered after ZDR reset"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -910,7 +913,7 @@ describe("AgentSession retry fallback", () => {
 			responses: [{ throw: envelopeError }, { content: ["Recovered after Anthropic envelope retry"] }],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -969,7 +972,7 @@ describe("AgentSession retry fallback", () => {
 
 		const mock = createMockModel({ handler: () => ({ throw: envelopeError }) });
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model: primaryModel,
 				systemPrompt: ["Test"],
@@ -1030,7 +1033,7 @@ describe("AgentSession retry fallback", () => {
 		const requestedModels: string[] = [];
 		const mock = createMockModel({ handler: () => ({ throw: "Request was aborted." }) });
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -1069,6 +1072,136 @@ describe("AgentSession retry fallback", () => {
 		expect(lastAssistant.errorMessage).toBe("Request was aborted.");
 	});
 
+	it("matches plain fallback roles for compat-routed primary models", async () => {
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!fallbackModel) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+		const routedPrimary = buildModel({
+			id: "z-ai/glm-4.7",
+			name: "GLM 4.7",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+			compat: { openRouterRouting: { only: ["cerebras"] } },
+		});
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: routedPrimary,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				const route =
+					requestedModel.provider === "openrouter" &&
+					requestedModel.compat &&
+					"openRouterRouting" in requestedModel.compat
+						? requestedModel.compat.openRouterRouting?.only?.[0]
+						: undefined;
+				const requested = `${requestedModel.provider}/${requestedModel.id}${route ? `@${route}` : ""}`;
+				requestedModels.push(requested);
+				if (requestedModel.provider === "openrouter" && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					mock.push({ throw: "rate limit exceeded retry-after-ms=200" });
+				} else {
+					mock.push({ content: [`ok:${requested}`] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", "openrouter/z-ai/glm-4.7");
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Compat-routed primary should still match plain role");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([
+			"openrouter/z-ai/glm-4.7@cerebras",
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(session.model?.id).toBe(fallbackModel.id);
+	});
+
+	it("keeps exact @-suffixed model IDs in fallback selectors", async () => {
+		const primaryModel = getBundledModel("openai", "gpt-4o-mini");
+		const fallbackModel = getBundledModel("google-vertex", "claude-opus-4-8@default");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled OpenAI and Vertex Anthropic test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				if (requestedModel.provider === primaryModel.provider && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					mock.push({ throw: "rate limit exceeded retry-after-ms=200" });
+				} else {
+					mock.push({ content: [`ok:${requestedModel.provider}/${requestedModel.id}`] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Fallback should keep exact @ model id");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe(fallbackModel.provider);
+		expect(session.model?.id).toBe(fallbackModel.id);
+	});
 	it("suppresses cooled selectors and lazily reverts to the role primary after cooldown expiry", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
@@ -1130,6 +1263,89 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.id).toBe(primaryModel.id);
 	});
 
+	it("restores routed fallback primaries after cooldown expiry", async () => {
+		const openRouterModel = getBundledModel("openrouter", "z-ai/glm-4.7");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!openRouterModel || !fallbackModel) {
+			throw new Error("Expected bundled OpenRouter and OpenAI test models to exist");
+		}
+		const routedPrimary = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", [openRouterModel]).model;
+		if (!routedPrimary) {
+			throw new Error("Expected routed OpenRouter primary to resolve");
+		}
+
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		let primaryAttempts = 0;
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: routedPrimary,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => {
+				const route =
+					requestedModel.provider === "openrouter"
+						? (
+								requestedModel.compat as {
+									openRouterRouting?: { only?: string[] };
+								}
+							).openRouterRouting?.only?.[0]
+						: undefined;
+				const requested = `${requestedModel.provider}/${requestedModel.id}${route ? `@${route}` : ""}`;
+				requestedModels.push(requested);
+				if (requested === "openrouter/z-ai/glm-4.7@cerebras" && primaryAttempts === 0) {
+					primaryAttempts += 1;
+					mock.push({ throw: "rate limit exceeded retry-after-ms=200" });
+				} else {
+					mock.push({ content: [`ok:${requested}`] });
+				}
+				return mock.stream(requestedModel, context, options);
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
+			"retry.fallbackRevertPolicy": "cooldown-expiry",
+		});
+		settings.setModelRole("default", "openrouter/z-ai/glm-4.7@cerebras");
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		let now = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+
+		await session.prompt("First prompt triggers routed primary fallback");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([
+			"openrouter/z-ai/glm-4.7@cerebras",
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+
+		now += 240;
+		await session.prompt("Second prompt should restore routed primary");
+		await session.waitForIdle();
+		expect(requestedModels).toEqual([
+			"openrouter/z-ai/glm-4.7@cerebras",
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+			"openrouter/z-ai/glm-4.7@cerebras",
+		]);
+		expect(session.model?.provider).toBe("openrouter");
+		expect(session.model?.id).toBe("z-ai/glm-4.7");
+		expect(
+			(session.model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)?.openRouterRouting?.only,
+		).toEqual(["cerebras"]);
+	});
 	it("preserves thinking on bare fallback selectors and does not overwrite user thinking on restore", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
@@ -1210,7 +1426,7 @@ describe("AgentSession retry fallback", () => {
 		});
 		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
 			streamFn: () => {
 				throw new Error("Not exercised");
@@ -1235,6 +1451,10 @@ describe("AgentSession retry fallback", () => {
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(true);
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:low")).toBe(true);
 
+		modelRegistry.suppressSelector("openai/gpt-4o:max", future);
+		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:xhigh")).toBe(true);
+		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:max")).toBe(true);
+
 		await modelRegistry.refresh("offline");
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 	});
@@ -1249,10 +1469,20 @@ describe("AgentSession retry fallback", () => {
 		const requestedModels: string[] = [];
 
 		const mock = createMockModel({
-			responses: [{ throw: malformedError }, { content: ["Recovered after Gemini malformed function call"] }],
+			responses: [
+				{
+					content: [
+						{ type: "thinking", thinking: "Thinking before malformed function call..." },
+						{ type: "text", text: "Text before malformed function call..." },
+					],
+					stopReason: "error",
+					errorMessage: malformedError,
+				},
+				{ content: ["Recovered after Gemini malformed function call"] },
+			],
 		});
 		const agent = new Agent({
-			getApiKey: provider => `${provider}-test-key`,
+			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -1296,5 +1526,64 @@ describe("AgentSession retry fallback", () => {
 			throw new Error(`Expected text content block, got ${contentBlock.type}`);
 		}
 		expect(contentBlock.text).toBe("Recovered after Gemini malformed function call");
+	});
+
+	it("auto-retries provider finish_reason errors after partial text", async () => {
+		const model = getBundledModel("openai", "gpt-4o-mini");
+		if (!model) {
+			throw new Error("Expected bundled OpenAI test model to exist");
+		}
+
+		const errorMessage = "Provider returned error finish_reason";
+		const mock = createMockModel({
+			responses: [
+				{ content: ["partial output before gateway error"], stopReason: "error", errorMessage },
+				{ content: ["Recovered after provider finish_reason error"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
+
+		await session.prompt("recover from provider finish_reason error");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(2);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryStartEvents[0].errorMessage).toBe(errorMessage);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(session.agent.state.messages).toHaveLength(2);
+		const assistantMsg = session.agent.state.messages[1];
+		if (assistantMsg.role !== "assistant") {
+			throw new Error(`Expected assistant message, got ${assistantMsg.role}`);
+		}
+		const contentBlock = assistantMsg.content[0];
+		if (contentBlock.type !== "text") {
+			throw new Error(`Expected text content block, got ${contentBlock.type}`);
+		}
+		expect(contentBlock.text).toBe("Recovered after provider finish_reason error");
 	});
 });

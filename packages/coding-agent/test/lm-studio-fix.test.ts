@@ -60,6 +60,53 @@ describe("ModelRegistry LM Studio Fixes", () => {
 		expect(available.some(m => m.provider === "lm-studio")).toBe(true);
 	});
 
+	test("marks LM Studio native VLM models as image-capable", async () => {
+		const fetchMock: FetchImpl = input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:1234/api/v0/models") {
+				return Promise.resolve(
+					new Response(
+						JSON.stringify({
+							data: [
+								{
+									id: "qwen/qwen3.6-27b",
+									type: "vlm",
+									capabilities: ["tool_use"],
+									max_context_length: 262144,
+								},
+								{ id: "plain-llm", type: "llm" },
+							],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					),
+				);
+			}
+			if (url === "http://127.0.0.1:1234/v1/models") {
+				return Promise.resolve(
+					new Response(
+						JSON.stringify({
+							data: [
+								{ id: "qwen/qwen3.6-27b", object: "model" },
+								{ id: "plain-llm", object: "model" },
+							],
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					),
+				);
+			}
+			return Promise.resolve(new Response(null, { status: 404 }));
+		};
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		const vision = registry.find("lm-studio", "qwen/qwen3.6-27b");
+		const text = registry.find("lm-studio", "plain-llm");
+		expect(vision?.input).toEqual(["text", "image"]);
+		expect(vision?.contextWindow).toBe(262144);
+		expect(text?.input).toEqual(["text"]);
+	});
+
 	test("LM_STUDIO_BASE_URL can target any local OpenAI-compatible /v1 server", async () => {
 		const originalBaseUrl = Bun.env.LM_STUDIO_BASE_URL;
 		Bun.env.LM_STUDIO_BASE_URL = "http://127.0.0.1:11434/v1";

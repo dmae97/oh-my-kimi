@@ -8,7 +8,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import * as z from "zod/v4";
+import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
 import { InteractiveMode } from "../src/modes/interactive-mode";
 
@@ -17,7 +17,7 @@ function makeTool(name: string): AgentTool {
 		name,
 		label: name,
 		description: `Fake ${name}`,
-		parameters: z.object({}),
+		parameters: type({}),
 		async execute() {
 			return { content: [{ type: "text" as const, text: "ok" }] };
 		},

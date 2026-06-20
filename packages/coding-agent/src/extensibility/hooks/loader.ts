@@ -3,7 +3,8 @@
  */
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import { z as zod } from "zod/v4";
+import * as arktype from "arktype";
+import * as zodModule from "zod/v4";
 import { hookCapability } from "../../capability/hook";
 import type { Hook } from "../../discovery";
 import { loadCapability } from "../../discovery";
@@ -139,7 +140,9 @@ async function createHookAPI(
 		},
 		logger,
 		typebox,
-		zod,
+		// HookAPI.arktype is typed as the arktype `Type` constructor; expose it from the module namespace.
+		arktype: arktype.Type,
+		zod: zodModule,
 		pi: PiCodingAgent,
 	} as HookAPI;
 

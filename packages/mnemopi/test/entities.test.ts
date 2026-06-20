@@ -4,6 +4,7 @@ import {
 	extractEntitiesRegex,
 	findSimilarEntities,
 	levenshteinDistance,
+	REGEX_EXTRACTION_MAX_INPUT_CHARS,
 	similarity,
 } from "@oh-my-pi/pi-mnemopi/core/entities";
 
@@ -45,6 +46,12 @@ describe("entity utilities", () => {
 		expect(extractEntitiesRegex("the quick brown fox jumps")).toEqual([]);
 		expect(extractEntitiesRegex("The Quick Brown Fox 123 1,234")).toEqual(["Brown", "Fox", "Quick"]);
 		expect(extractEntitiesRegex("I visited New York with Abdias yesterday.")).toEqual(["Abdias", "New York"]);
+	});
+
+	it("skips regex extraction for oversized raw transcripts", () => {
+		const text = "Project Alpha progress ".repeat(Math.ceil((REGEX_EXTRACTION_MAX_INPUT_CHARS + 1) / 23));
+
+		expect(extractEntitiesRegex(text)).toEqual([]);
 	});
 
 	it("finds similar entities above threshold sorted by score", () => {

@@ -31,8 +31,13 @@ const compat: ResolvedOpenAICompat = {
 	requiresThinkingAsText: false,
 	requiresMistralToolIds: false,
 	thinkingFormat: "openai",
+	reasoningDisableMode: "lowest-effort",
+	omitReasoningEffort: false,
+	includeEncryptedReasoning: true,
+	filterReasoningHistory: false,
 	reasoningContentField: "reasoning_content",
 	requiresReasoningContentForToolCalls: false,
+	requiresReasoningContentForAllAssistantTurns: false,
 	allowsSyntheticReasoningContentForToolCalls: true,
 	requiresAssistantContentForToolCalls: false,
 	openRouterRouting: {},
@@ -44,6 +49,12 @@ const compat: ResolvedOpenAICompat = {
 	alwaysSendMaxTokens: false,
 	isOpenRouterHost: false,
 	isVercelGatewayHost: false,
+	wireModelIdMode: "raw",
+	stripDeepseekSpecialTokens: false,
+	reasoningDeltasMayBeCumulative: false,
+	emptyLengthFinishIsContextError: false,
+	usesOpenAIToolCallIdLimit: false,
+	dropThinkingWhenReasoningEffort: false,
 };
 
 function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {
