@@ -56,6 +56,18 @@ function isTokenStart(text: string, index: number): boolean {
 	return index === 0 || PATH_DELIMITERS.has(text[index - 1] ?? "");
 }
 
+function isCommandLeadingWhitespace(code: number): boolean {
+	return code === 0x20 || (code >= 0x09 && code <= 0x0d);
+}
+
+function findLeadingSlashCommandStart(text: string): number | null {
+	let index = 0;
+	while (index < text.length && isCommandLeadingWhitespace(text.charCodeAt(index))) {
+		index += 1;
+	}
+	return text.charCodeAt(index) === 0x2f ? index : null;
+}
+
 function extractQuotedPrefix(text: string): string | null {
 	const quoteStart = findUnclosedQuoteStart(text);
 	if (quoteStart === null) {
@@ -338,13 +350,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			};
 		}
 
-		// Check for slash commands
-		if (textBeforeCursor.startsWith("/")) {
-			const spaceIndex = textBeforeCursor.indexOf(" ");
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		if (slashStart !== null) {
+			const commandText = textBeforeCursor.slice(slashStart);
+			const spaceIndex = commandText.indexOf(" ");
 
 			if (spaceIndex === -1) {
 				// No space yet - complete command names
-				const prefix = textBeforeCursor.slice(1); // Remove the "/"
+				const prefix = commandText.slice(1); // Remove the "/"
 				const lowerPrefix = prefix.toLowerCase();
 
 				const matches = buildSlashCommandCompletions(this.#commands, lowerPrefix);
@@ -353,12 +366,12 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 				return {
 					items: matches,
-					prefix: textBeforeCursor,
+					prefix: commandText,
 				};
 			} else {
 				// Space found - complete command arguments
-				const commandName = textBeforeCursor.slice(1, spaceIndex); // Command without "/"
-				const argumentText = textBeforeCursor.slice(spaceIndex + 1); // Text after space
+				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
+				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
 
 				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
 				if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
@@ -416,13 +429,12 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 		const afterCursor = currentLine.slice(cursorCol);
 
-		const slashStart = textBeforeCursor.indexOf("/");
-		const hasOnlyWhitespaceBeforeSlash = slashStart >= 0 && textBeforeCursor.slice(0, slashStart).trim() === "";
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
 
 		// Slash command suggestions can be accepted before the debounced refresh
 		// catches up to newly typed characters. Replace the live command token,
 		// not only the prefix captured when the suggestion list was rendered.
-		if (prefix.startsWith("/") && hasOnlyWhitespaceBeforeSlash) {
+		if (prefix.startsWith("/") && slashStart !== null) {
 			const slashPrefix = textBeforeCursor.slice(slashStart);
 			if (!slashPrefix.includes(" ") && !slashPrefix.slice(1).includes("/")) {
 				const beforeSlash = currentLine.slice(0, slashStart);
@@ -854,13 +866,15 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 
-		if (!textBeforeCursor.startsWith("/")) return null;
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		if (slashStart === null) return null;
 
-		const spaceIndex = textBeforeCursor.indexOf(" ");
+		const commandText = textBeforeCursor.slice(slashStart);
+		const spaceIndex = commandText.indexOf(" ");
 		if (spaceIndex === -1) return null;
 
-		const commandName = textBeforeCursor.slice(1, spaceIndex);
-		const argumentText = textBeforeCursor.slice(spaceIndex + 1);
+		const commandName = commandText.slice(1, spaceIndex);
+		const argumentText = commandText.slice(spaceIndex + 1);
 
 		const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
 
@@ -871,16 +885,18 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		return command.getInlineHint(argumentText);
 	}
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
-		if (!textBeforeCursor.startsWith("/")) return null;
-		if (textBeforeCursor.length <= 1) return null; // Bare "/" alone, don't auto-complete
-		if (textBeforeCursor.includes(" ")) return null; // Only complete command name, not args
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		if (slashStart === null) return null;
+		const commandText = textBeforeCursor.slice(slashStart);
+		if (commandText.length <= 1) return null; // Bare "/" alone, don't auto-complete
+		if (commandText.includes(" ")) return null; // Only complete command name, not args
 
-		const prefix = textBeforeCursor.slice(1);
+		const prefix = commandText.slice(1);
 		const lowerPrefix = prefix.toLowerCase();
 
 		const matches = buildSlashCommandCompletions(this.#commands, lowerPrefix);
 
 		if (matches.length === 0) return null;
-		return { items: matches, prefix: textBeforeCursor };
+		return { items: matches, prefix: commandText };
 	}
 }
