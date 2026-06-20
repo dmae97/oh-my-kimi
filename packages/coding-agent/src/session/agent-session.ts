@@ -10098,7 +10098,8 @@ export class AgentSession {
 	setAutoCompactionEnabled(enabled: boolean): void {
 		this.settings.set("compaction.enabled", enabled);
 		if (enabled && this.settings.get("compaction.strategy") === "off") {
-			this.settings.set("compaction.strategy", "context-full");
+			const defaultStrategy = getDefault("compaction.strategy");
+			this.settings.set("compaction.strategy", defaultStrategy === "off" ? "context-full" : defaultStrategy);
 		}
 	}
 
