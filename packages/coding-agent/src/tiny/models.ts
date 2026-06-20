@@ -12,6 +12,8 @@ export interface TinyTitleLocalModelSpec {
 	contextNote: string;
 	/** Model family emits hidden reasoning unless the chat template disables it. */
 	reasoning?: boolean;
+	/** Reason this model is blocked before loading the ONNX runtime. */
+	unsupportedReason?: string;
 }
 
 export const TINY_TITLE_LOCAL_MODELS = [
@@ -108,7 +110,7 @@ export function getTinyTitleModelSpec(key: TinyTitleLocalModelKey): (typeof TINY
 /** Default memory model: the online path (the configured smol / remote LLM; no local download). */
 export const ONLINE_MEMORY_MODEL_KEY = "online";
 /** Recommended local model for memory tasks when none is named. */
-export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "qwen3-1.7b";
+export const DEFAULT_MEMORY_LOCAL_MODEL_KEY = "lfm2-1.2b";
 
 /**
  * Local models for Mnemopi memory tasks (fact extraction + consolidation).
@@ -123,9 +125,11 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		dtype: "q4",
 		label: "Qwen3 1.7B",
 		description:
-			"Recommended; most disciplined extraction (ignores chit-chat), good consolidation, about 1.1 GB cached.",
-		contextNote: "Best single-model pick for memory from the local experiment.",
+			"Disabled for local inference: onnxruntime-node cannot run this ONNX export's RotaryEmbedding cache updates.",
+		contextNote: "Blocked before load to avoid the unsupported RotaryEmbedding runtime path.",
 		reasoning: true,
+		unsupportedReason:
+			"onnxruntime-node does not support Qwen3 RotaryEmbedding cache updates in onnx-community/Qwen3-1.7B-ONNX",
 	},
 	{
 		key: "gemma-3-1b",
