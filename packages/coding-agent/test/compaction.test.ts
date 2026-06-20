@@ -5,7 +5,9 @@ import {
 	type CompactionSettings,
 	calculateContextTokens,
 	compact,
+	compactionContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
+	estimateTokens,
 	findCutPoint,
 	getLastAssistantUsage,
 	prepareCompaction,
@@ -284,6 +286,74 @@ describe("shouldCompact", () => {
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+});
+
+describe("compactionContextTokens", () => {
+	it("floors deflated provider usage by the stored-conversation estimate", () => {
+		// A before_provider_request compression extension (e.g. Headroom) shrinks the
+		// request, so the provider reports far fewer prompt tokens than the real
+		// stored conversation. The compaction decision must use the larger value.
+		expect(compactionContextTokens(20_000, 90_000)).toBe(90_000);
+	});
+
+	it("keeps provider usage when it already exceeds the local estimate", () => {
+		// Without compression the provider count is ground truth and typically >= the
+		// cl100k local estimate; the floor must never lower it.
+		expect(compactionContextTokens(85_000, 80_000)).toBe(85_000);
+	});
+
+	it("clamps negative inputs to zero", () => {
+		expect(compactionContextTokens(-5, -10)).toBe(0);
+		expect(compactionContextTokens(-5, 100)).toBe(100);
+	});
+
+	it("lets a deflated provider count still trigger compaction via the floor", () => {
+		const settings: CompactionSettings = { enabled: true, reserveTokens: 10000, keepRecentTokens: 20000 };
+		// Post-compression provider count is under threshold — raw, it would NOT compact.
+		expect(shouldCompact(20_000, 100_000, settings)).toBe(false);
+		// Floored by the real stored-conversation estimate (95k) it correctly compacts.
+		expect(shouldCompact(compactionContextTokens(20_000, 95_000), 100_000, settings)).toBe(true);
+	});
+});
+
+describe("estimateTokens excludeEncryptedReasoning (compaction floor)", () => {
+	it("drops encrypted reasoning from the floor estimate but counts it by default", () => {
+		const blob = "blob ".repeat(8_000); // large opaque encrypted-reasoning payload
+		const msg: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "short", thinkingSignature: blob },
+				{ type: "text", text: "done" },
+			],
+			usage: createMockUsage(0, 0),
+			stopReason: "stop",
+			timestamp: Date.now(),
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5.5",
+		};
+		const withBlob = estimateTokens(msg);
+		const flooredEstimate = estimateTokens(msg, { excludeEncryptedReasoning: true });
+		// Default counts the blob (providers bill it on replay); the floor excludes it,
+		// so a thinking-heavy turn can't falsely trip compaction on local byte size.
+		expect(withBlob).toBeGreaterThan(flooredEstimate + 1_000);
+		expect(flooredEstimate).toBeLessThan(50); // just "short" + "done"
+	});
+
+	it("still counts tool-result text (the content on-wire compression shrinks)", () => {
+		const big = "alpha beta gamma ".repeat(2_000);
+		const toolMsg = {
+			role: "toolResult",
+			toolCallId: "t1",
+			toolName: "read",
+			content: [{ type: "text", text: big }],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		// Even with the floor option, tool-result content is fully counted — that is
+		// exactly what a before_provider_request compressor (e.g. Headroom) shrinks,
+		// so the floor must still see its real size.
+		expect(estimateTokens(toolMsg, { excludeEncryptedReasoning: true })).toBeGreaterThan(1_000);
 	});
 });
 

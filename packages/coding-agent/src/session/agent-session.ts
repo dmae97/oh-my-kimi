@@ -49,6 +49,7 @@ import {
 	collectEntriesForBranchSummary,
 	collectShakeRegions,
 	compact,
+	compactionContextTokens,
 	createCompactionSummaryMessage,
 	DEFAULT_SHAKE_CONFIG,
 	effectiveReserveTokens,
@@ -8140,12 +8141,37 @@ export class AgentSession {
 		}
 	}
 
+	/**
+	 * Local token estimate of the stored conversation (plus any pending messages),
+	 * independent of provider-reported usage. A `before_provider_request` hook
+	 * (e.g. a compression extension such as Headroom) or other on-wire payload
+	 * transform can shrink the request below the real stored conversation; the
+	 * provider then reports deflated prompt tokens, so anchoring the compaction
+	 * decision purely on that usage lets the real history grow unbounded until it
+	 * overflows and native compaction can no longer run. This estimate is the
+	 * floor the compaction decision respects so on-wire compression can never
+	 * suppress it.
+	 */
+	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
+		// Exclude encrypted reasoning (thinkingSignature / redactedThinking): its
+		// local byte size diverges from what the provider bills, so counting it here
+		// would let a thinking-heavy turn falsely trip the floor. The provider usage
+		// (the other arm of compactionContextTokens) already accounts for it.
+		const opts = { excludeEncryptedReasoning: true } as const;
+		return (
+			computeNonMessageTokens(this) +
+			this.messages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0) +
+			pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0)
+		);
+	}
+
 	#estimatePrePromptContextTokens(messages: AgentMessage[], contextWindow: number): number {
 		const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
-		return (
-			breakdown?.usedTokens ??
-			computeNonMessageTokens(this) + messages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
-		);
+		const localEstimate = this.#estimateStoredContextTokens(messages);
+		// Floor by the local estimate: a payload-shrinking before_provider_request
+		// hook deflates the provider-anchored breakdown, which must not suppress
+		// pre-prompt compaction (see #estimateStoredContextTokens).
+		return compactionContextTokens(breakdown?.usedTokens ?? 0, localEstimate);
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -8175,7 +8201,10 @@ export class AgentSession {
 			contextWindow,
 			model: `${model.provider}/${model.id}`,
 		});
-		await this.#runAutoCompaction("threshold", false, false, false, { autoContinue: false });
+		await this.#runAutoCompaction("threshold", false, false, false, {
+			autoContinue: false,
+			triggerContextTokens: contextTokens,
+		});
 	}
 
 	/**
@@ -8310,6 +8339,12 @@ export class AgentSession {
 		if (pruneResult) {
 			contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
 		}
+		// Floor by the real stored-conversation estimate so a payload-shrinking
+		// before_provider_request hook (e.g. a compression extension such as
+		// Headroom) can't deflate the provider-reported usage below the true
+		// history size and skip the threshold. The estimate runs after the prune
+		// passes above, so it reflects the post-prune message set.
+		contextTokens = compactionContextTokens(contextTokens, this.#estimateStoredContextTokens());
 		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
