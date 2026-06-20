@@ -2746,20 +2746,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return toolResult(details).text(resource.content).sourceInternal(url).done();
 		}
 
-		if (resource.sourcePath) {
-			const stat = await fs.stat(resource.sourcePath).catch(error => {
-				if (isNotFoundError(error)) return undefined;
-				throw error;
-			});
-			if (stat?.isDirectory()) {
-				if (isMultiRange(parsedSel)) {
-					throw new ToolError("Multi-range line selectors are not supported for directory listings.");
-				}
-				const { offset, limit } = selToOffsetLimit(parsedSel);
-				return this.#readDirectory(resource.sourcePath, offset, limit, undefined);
-			}
-		}
-
 		const raw = isRawSelector(parsedSel);
 		if (isMultiRange(parsedSel) && parsedSel.kind === "lines") {
 			return this.#buildInMemoryMultiRangeResult(resource.content, parsedSel.ranges, {

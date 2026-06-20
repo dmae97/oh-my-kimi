@@ -133,7 +133,6 @@ describe("SearchTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("index.md");
 		expect(text).toContain("docs/");
-		expect(result.details?.isDirectory).toBe(true);
 		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "references"));
 	});
 
@@ -342,7 +341,6 @@ describe("SearchTool internal URL resolution", () => {
 		});
 
 		expect(getResultText(readResult)).toContain("PLAN.md");
-		expect(readResult.details?.isDirectory).toBe(true);
 		expect(getResultText(findResult)).toContain("PLAN.md");
 	});
 
