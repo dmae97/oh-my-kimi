@@ -352,7 +352,9 @@ mod tests {
 		ShellRunOptions as CoreShellRunOptions,
 		cancel::{AbortReason, CancelToken},
 	};
-	use tokio::{sync::mpsc, time};
+	#[cfg(unix)]
+	use tokio::sync::mpsc;
+	use tokio::time;
 
 	use super::CoreShell;
 
