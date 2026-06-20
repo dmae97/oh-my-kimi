@@ -2761,6 +2761,11 @@ export class AgentSession {
 
 			if (this.#assistantEndedWithSuccessfulYield(msg)) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				if (this.#goalModeState?.enabled && this.#goalModeState.goal.status === "active") {
+					const compactionTask = this.#checkCompaction(msg);
+					this.#trackPostPromptTask(compactionTask);
+					await compactionTask;
+				}
 				await emitAgentEndNotification();
 				return;
 			}

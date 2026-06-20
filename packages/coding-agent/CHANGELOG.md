@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/goal` continuation turns that end with a successful `yield` skipping threshold auto-compaction while the active goal remains over `compaction.thresholdTokens`. ([#3146](https://github.com/can1357/oh-my-pi/issues/3146))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
