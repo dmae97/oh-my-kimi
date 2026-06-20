@@ -460,6 +460,50 @@ describe("anthropic provider retry delays", () => {
 		expect(result.content).toEqual([{ type: "text", text: "after backoff" }]);
 	});
 
+	it("retries transient TLS server errors before surfacing them to the session", async () => {
+		let attempt = 0;
+		const create = ((_body: unknown, requestOptions?: { signal?: AbortSignal }) => {
+			attempt += 1;
+			if (attempt === 1) {
+				return createRejectedAnthropicRequest(
+					new Error(
+						'Post "https://api.anthropic.com/v1/messages?beta=true": remote error: tls: bad record MAC (type=server_error)',
+					),
+				) as never;
+			}
+			return createAnthropicMockStream({
+				signal: requestOptions?.signal,
+				events: createSuccessfulAnthropicEvents("recovered from tls retry"),
+			}) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async (_delayMs: number, _signal: AbortSignal | undefined) => {});
+
+		const result = await streamAnthropic(model, context, { client, providerRetryWait }).result();
+
+		expect(attempt).toBe(2);
+		expect(providerRetryWait).toHaveBeenCalledTimes(1);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "recovered from tls retry" }]);
+	});
+
+	it("does not retry permanent TLS configuration failures", async () => {
+		let attempt = 0;
+		const create = ((_body: unknown) => {
+			attempt += 1;
+			return createRejectedAnthropicRequest(new Error("tls: failed to verify certificate")) as never;
+		}) as unknown as AnthropicMessagesClientLike["messages"]["create"];
+		const client = { messages: { create } } as AnthropicMessagesClientLike;
+		const providerRetryWait = vi.fn(async (_delayMs: number, _signal: AbortSignal | undefined) => {});
+
+		const result = await streamAnthropic(model, context, { client, providerRetryWait }).result();
+
+		expect(attempt).toBe(1);
+		expect(providerRetryWait).not.toHaveBeenCalled();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("tls: failed to verify certificate");
+	});
+
 	it("retries 502s ten times with Anthropic-style capped backoff", async () => {
 		vi.spyOn(Math, "random").mockReturnValue(0);
 		let attempt = 0;
