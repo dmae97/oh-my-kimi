@@ -714,7 +714,8 @@ async function buildCodexRequestContext(
 	};
 }
 
-async function buildTransformedCodexRequestBody(
+/** @internal Exported for tests. */
+export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: Context,
 	options: OpenAICodexResponsesOptions | undefined,
@@ -743,16 +744,6 @@ async function buildTransformedCodexRequestBody(
 			if (toolChoice) {
 				params.tool_choice = toolChoice;
 			}
-		}
-		// When a custom-tool is active, force serial tool-calling. OpenAI's
-		// `parallel_tool_calls` is request-scoped — disabling it here affects
-		// every tool in the turn, not just the custom one. That's coarser
-		// than spec §1's "supports_parallel_tool_calls = false" (which
-		// strictly targets `apply_patch`), but the platform API offers no
-		// per-tool flag.
-		const emittedTools = params.tools as CodexToolPayload[];
-		if (emittedTools.some(t => t.type === "custom")) {
-			params.parallel_tool_calls = false;
 		}
 	}
 
