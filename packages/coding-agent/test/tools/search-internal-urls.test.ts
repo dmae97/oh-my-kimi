@@ -334,13 +334,18 @@ describe("SearchTool internal URL resolution", () => {
 
 		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
 
-		const session = createSession();
+		const session = createSession({ hasEditTool: true });
 		const readResult = await new ReadTool(session).execute("test-read", { path: "local://notes" });
 		const findResult = await new FindTool(session).execute("test-find", {
 			paths: ["local://notes"],
 		});
+		const dirResource = await InternalUrlRouter.instance().resolve("local://notes");
 
-		expect(getResultText(readResult)).toContain("PLAN.md");
+		const readText = getResultText(readResult);
+		expect(readText).toContain("PLAN.md");
+		// Directory listings must stay immutable so hashline edit anchors never key on a directory path.
+		expect(readText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
+		expect(dirResource.immutable).toBe(true);
 		expect(getResultText(findResult)).toContain("PLAN.md");
 	});
 

@@ -1,7 +1,13 @@
 import * as fs from "node:fs/promises";
 import type { InternalResource } from "./types";
 
-/** Builds a text resource for a filesystem directory resolved by an internal URL handler. */
+/**
+ * Builds a text resource for a filesystem directory resolved by an internal URL handler.
+ *
+ * The resource is flagged immutable so the read tool never mints hashline edit
+ * anchors against a directory listing — only file resources from the same
+ * handler stay editable.
+ */
 export async function buildDirectoryResource(
 	url: string,
 	directoryPath: string,
@@ -22,6 +28,7 @@ export async function buildDirectoryResource(
 		contentType: "text/plain",
 		size: Buffer.byteLength(content, "utf-8"),
 		sourcePath: directoryPath,
+		immutable: true,
 		...(notes ? { notes } : {}),
 	};
 }
