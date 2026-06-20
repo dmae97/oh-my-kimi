@@ -171,6 +171,19 @@ export function getAdapterConfigs(cwd?: string): Record<string, DapAdapterConfig
 	return cwd ? loadAdapterConfigs(cwd) : { ...DEFAULT_ADAPTERS };
 }
 
+function normalizeCommandForCwd(command: string, cwd: string): string {
+	if (path.isAbsolute(command)) return command;
+	if (
+		command.startsWith("./") ||
+		command.startsWith("../") ||
+		command.startsWith(".\\") ||
+		command.startsWith("..\\")
+	) {
+		return path.resolve(cwd, command);
+	}
+	return command;
+}
+
 function resolveAdapterFromConfig(
 	adapterName: string,
 	configs: Record<string, DapAdapterConfig>,
@@ -178,7 +191,7 @@ function resolveAdapterFromConfig(
 ): DapResolvedAdapter | null {
 	const config = configs[adapterName];
 	if (!config) return null;
-	const resolvedCommand = resolveCommand(config.command, cwd);
+	const resolvedCommand = resolveCommand(normalizeCommandForCwd(config.command, cwd), cwd);
 	if (!resolvedCommand) return null;
 	return {
 		name: adapterName,

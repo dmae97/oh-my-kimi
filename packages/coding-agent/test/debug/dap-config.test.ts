@@ -121,6 +121,31 @@ describe("DAP adapter configuration", () => {
 		expect(selected?.launchDefaults).toEqual({ request: "launch", projectRoot: "." });
 	});
 
+	it("resolves relative adapter commands from the debug cwd", async () => {
+		const cwd = await makeTempDir("omp-dap-config-relative-command-");
+		const command = path.join(cwd, "tools", process.platform === "win32" ? "debug-adapter.cmd" : "debug-adapter");
+		await fs.mkdir(path.dirname(command), { recursive: true });
+		await fs.writeFile(command, "");
+		await fs.chmod(command, 0o755);
+		await fs.writeFile(
+			path.join(cwd, "dap.json"),
+			JSON.stringify({
+				adapters: {
+					relative: {
+						command: process.platform === "win32" ? ".\\tools\\debug-adapter.cmd" : "./tools/debug-adapter",
+						fileTypes: [".rel"],
+					},
+				},
+			}),
+		);
+
+		const adapter = resolveAdapter("relative", cwd);
+		expect(adapter?.command).toBe(
+			process.platform === "win32" ? ".\\tools\\debug-adapter.cmd" : "./tools/debug-adapter",
+		);
+		expect(adapter?.resolvedCommand).toBe(command);
+	});
+
 	it("loads plugin DAP adapters from plugin config files", async () => {
 		const cwd = await makeTempDir("omp-dap-config-plugin-");
 		const pluginRoot = path.join(cwd, "plugins", "acme-debug");
