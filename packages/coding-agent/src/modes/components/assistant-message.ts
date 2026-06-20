@@ -1,5 +1,7 @@
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { Container, Image, type ImageBudget, ImageProtocol, Markdown, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import { formatNumber } from "@oh-my-pi/pi-utils";
+import chalk from "chalk";
 import type { AssistantThinkingRenderer } from "../../extensibility/extensions/types";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
@@ -72,11 +74,96 @@ function detectLiveReflowingMarkdown(text: string): boolean {
 /**
  * Frames for the streaming "thinking" pulse rendered in place of a hidden
  * thinking block while the model is still producing it. A single fixed-width
- * glyph that rises ▁▃▄▃ so the indicator animates without shifting the line.
- * Advanced every {@link THINKING_DOTS_FRAME_MS}.
+ * starburst cycles through facets (✻ ✼ ❉ ❊ ✺ ✹ ✸ ✶) so the indicator animates
+ * in place without shifting the line or the trailing speed badge. The dwell per
+ * frame eases between {@link THINKING_DOTS_FRAME_MS_MIN} and
+ * {@link THINKING_DOTS_FRAME_MS_MAX} across each revolution (see
+ * {@link AssistantMessageComponent.thinkingDotsFrameDelay}).
  */
-const THINKING_DOTS_FRAMES = ["▁", "▃", "▄", "▃"] as const;
-const THINKING_DOTS_FRAME_MS = 320;
+const THINKING_DOTS_FRAMES = ["✻", "✼", "❉", "❊", "✺", "✹", "✸", "✶"] as const;
+/**
+ * Pulse cadence bounds (ms). Each frame's dwell eases between these on a
+ * raised-cosine "breath" — quickest at the cycle start, slowest at its midpoint —
+ * so the starburst accelerates and slows instead of ticking at one fixed rate.
+ * Mean ≈ 150ms, snappier than the previous flat 320ms.
+ */
+const THINKING_DOTS_FRAME_MS_MIN = 70;
+const THINKING_DOTS_FRAME_MS_MAX = 230;
+
+/** Rolling window (ms) over which streaming-rate observations are averaged. */
+const SPEED_WINDOW_MS = 3000;
+/** Color/clamp ceiling: a rate at or above this maps to the full accent color. */
+const SPEED_MAX = 200;
+
+/**
+ * Session-wide streaming-speed gauge. Only one thinking indicator animates at a
+ * time, so a single shared instance accumulates instantaneous tok/s observations
+ * and reports their windowed average — smoothing the jumpy per-delta numbers.
+ * Each thinking block resets the gauge on its first live sample (see
+ * {@link AssistantMessageComponent.updateContent}) so the average reflects only
+ * the active block, never a previous turn's trailing rate. Components feed it
+ * deltas (not cumulative totals), so a fresh turn restarting its token count at
+ * zero never produces a spike.
+ */
+class SpeedTracker {
+	#observations: Array<{ time: number; rate: number }> = [];
+
+	#prune(now: number): void {
+		const threshold = now - SPEED_WINDOW_MS;
+		while (this.#observations.length > 0 && this.#observations[0]!.time < threshold) {
+			this.#observations.shift();
+		}
+	}
+
+	/** Record one instantaneous tok/s reading, clamped to {@link SPEED_MAX} so a
+	 *  single oversized delta (e.g. a buffered reflow tick) can't poison the
+	 *  windowed average. Non-finite/negative rates ignored. */
+	observe(rate: number, now = performance.now()): void {
+		if (!Number.isFinite(rate) || rate < 0) return;
+		this.#observations.push({ time: now, rate: Math.min(rate, SPEED_MAX) });
+		this.#prune(now);
+	}
+
+	/** Windowed-average tok/s; 0 once observations age out of the window. */
+	getSpeed(now = performance.now()): number {
+		this.#prune(now);
+		if (this.#observations.length === 0) return 0;
+		let sum = 0;
+		for (const o of this.#observations) sum += o.rate;
+		return sum / this.#observations.length;
+	}
+
+	reset(): void {
+		this.#observations = [];
+	}
+}
+
+/** One gauge for the whole session — see {@link SpeedTracker}. */
+const sharedSpeedTracker = new SpeedTracker();
+
+/** Test-only: clear the shared gauge so observations don't leak across cases. */
+export function resetThinkingSpeedTracker(): void {
+	sharedSpeedTracker.reset();
+}
+
+/**
+ * Linear-interpolate two `#rrggbb` colors in sRGB space. `t` clamps to [0,1]:
+ * `t = 0` → `from`, `t = 1` → `to`. Drives the streaming speed badge, fading
+ * from a dim gray toward the theme accent as tok/s rises.
+ */
+function lerpHex(from: string, to: string, t: number): string {
+	const k = t < 0 ? 0 : t > 1 ? 1 : t;
+	const fr = Number.parseInt(from.slice(1, 3), 16);
+	const fg = Number.parseInt(from.slice(3, 5), 16);
+	const fb = Number.parseInt(from.slice(5, 7), 16);
+	const tr = Number.parseInt(to.slice(1, 3), 16);
+	const tg = Number.parseInt(to.slice(3, 5), 16);
+	const tb = Number.parseInt(to.slice(5, 7), 16);
+	const r = Math.round(fr + (tr - fr) * k);
+	const g = Math.round(fg + (tg - fg) * k);
+	const b = Math.round(fb + (tb - fb) * k);
+	return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+}
 
 /**
  * Component that renders a complete assistant message
@@ -128,6 +215,20 @@ export class AssistantMessageComponent extends Container {
 	#thinkingDots: Text | undefined;
 	#thinkingDotsTimer: NodeJS.Timeout | undefined;
 	#thinkingDotsFrame = 0;
+	/** Previous cumulative provider token count + timestamp, for deriving this
+	 *  block's instantaneous streaming rate fed into {@link sharedSpeedTracker}.
+	 *  Undefined until the first thinking update of this block. */
+	#lastTokenCount: number | undefined;
+	#lastTokenTime = 0;
+	/** Provider-reported tokens in the live thinking block — reasoning tokens when
+	 *  the provider streams them, else total output — shown dimmed beside the
+	 *  speed badge. 0 when no thinking is streaming. */
+	#thinkingTokens = 0;
+	/** Whether this block has observed a positive provider-token delta — i.e. it is
+	 *  genuinely streaming tokens right now. Gates the numeric speed badge so the
+	 *  session-wide {@link sharedSpeedTracker} can't surface a previous turn's rate
+	 *  on a fresh block that has no live token throughput of its own. */
+	#thinkingRateLive = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -210,16 +311,51 @@ export class AssistantMessageComponent extends Container {
 
 	#thinkingDotsLabel(): string {
 		const glyph = THINKING_DOTS_FRAMES[this.#thinkingDotsFrame % THINKING_DOTS_FRAMES.length] ?? "…";
-		return theme.fg("thinkingText", glyph);
+		const coloredGlyph = theme.fg("thinkingText", glyph);
+		const rate = Math.min(SPEED_MAX, sharedSpeedTracker.getSpeed());
+		// The numeric badge ("<total> · <rate> toks/s") only renders while this block
+		// is genuinely streaming provider tokens. A block that has observed no token
+		// delta (e.g. a provider that reports usage only at turn end) or whose rate
+		// has decayed to zero (a streaming lull) drops it entirely — the bare pulse
+		// keeps signalling that the model is thinking. The liveness flag also stops
+		// the session-wide gauge from leaking a previous turn's rate onto a fresh
+		// token-less block.
+		if (!this.#thinkingRateLive || rate < 0.05) return coloredGlyph;
+		// Total provider tokens, dimmed, sit next to the pulse.
+		const totalSpan = this.#thinkingTokens > 0 ? theme.fg("dim", ` ${formatNumber(this.#thinkingTokens)}`) : "";
+		// Speed badge color: dim gray at rest, brightening toward the theme accent as
+		// streaming speed climbs (gray → bright accent). Ease (sqrt) so typical
+		// mid-stream rates already read as clearly accent-tinted instead of staying
+		// gray until the rarely-hit SPEED_MAX ceiling.
+		const ratio = Math.sqrt(rate / SPEED_MAX);
+		const hex = lerpHex(theme.getColorHex("dim"), theme.getAccentColorHex(), ratio);
+		const rateText = ` · ${rate.toFixed(1)} toks/s`;
+		const rateSpan = theme.getColorMode() === "truecolor" ? chalk.hex(hex)(rateText) : theme.fg("muted", rateText);
+		return coloredGlyph + totalSpan + rateSpan;
 	}
 
 	#startThinkingAnimation(): void {
 		if (this.#thinkingDotsTimer) return;
-		this.#thinkingDotsTimer = setInterval(() => this.#advanceThinkingDots(), THINKING_DOTS_FRAME_MS);
+		this.#scheduleThinkingFrame();
+	}
+
+	/** Eased dwell (ms) for the current pulse frame: a raised cosine over the
+	 *  8-frame cycle, continuous across the wrap, so the rotation breathes rather
+	 *  than advancing at a fixed interval. */
+	#thinkingDotsFrameDelay(): number {
+		const phase = (1 - Math.cos((2 * Math.PI * this.#thinkingDotsFrame) / THINKING_DOTS_FRAMES.length)) / 2;
+		return THINKING_DOTS_FRAME_MS_MIN + (THINKING_DOTS_FRAME_MS_MAX - THINKING_DOTS_FRAME_MS_MIN) * phase;
+	}
+
+	/** Self-rescheduling timeout (not a fixed interval) so each frame can pick its
+	 *  own eased dwell. */
+	#scheduleThinkingFrame(): void {
+		this.#thinkingDotsTimer = setTimeout(() => this.#advanceThinkingDots(), this.#thinkingDotsFrameDelay());
 		this.#thinkingDotsTimer.unref?.();
 	}
 
 	#advanceThinkingDots(): void {
+		this.#thinkingDotsTimer = undefined;
 		if (!this.#thinkingDots) {
 			this.#stopThinkingAnimation();
 			return;
@@ -228,11 +364,12 @@ export class AssistantMessageComponent extends Container {
 		if (this.#thinkingDots.setText(this.#thinkingDotsLabel())) {
 			this.onImageUpdate?.();
 		}
+		this.#scheduleThinkingFrame();
 	}
 
 	#stopThinkingAnimation(): void {
 		if (this.#thinkingDotsTimer) {
-			clearInterval(this.#thinkingDotsTimer);
+			clearTimeout(this.#thinkingDotsTimer);
 			this.#thinkingDotsTimer = undefined;
 		}
 		this.#thinkingDotsFrame = 0;
@@ -487,6 +624,11 @@ export class AssistantMessageComponent extends Container {
 				item.lastText = newText;
 			}
 		}
+		if (this.#thinkingDots) {
+			if (this.#thinkingDots.setText(this.#thinkingDotsLabel())) {
+				this.onImageUpdate?.();
+			}
+		}
 		return true;
 	}
 
@@ -494,6 +636,42 @@ export class AssistantMessageComponent extends Container {
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
+
+		// Streaming-speed gauge: only a live, in-flight render of the single
+		// animating hidden-thinking block feeds the shared session tracker. The
+		// token count is the provider's own cumulative output — reasoning tokens when
+		// reported (Gemini's thoughtsTokenCount, OpenAI's reasoning_tokens), else
+		// total output tokens — never a character estimate, which undercounts when
+		// the provider streams a summarized reasoning trace. An instantaneous tok/s
+		// is derived from this block's delta and handed to the windowed averager.
+		// Only transient renders count: the final non-transient render at
+		// message_end carries the turn's end-of-stream usage, whose jump would spike
+		// the gauge and pollute the next block. Providers that report usage only at
+		// turn end leave the live count flat, so the rate stays 0 and the badge
+		// self-suppresses (see #thinkingDotsLabel).
+		const isThinkingNow = this.#lastUpdateTransient && this.#shouldAnimateThinking(message);
+		if (isThinkingNow) {
+			const currentTokens = message.usage.reasoningTokens ?? message.usage.output;
+			this.#thinkingTokens = currentTokens;
+			const now = performance.now();
+			if (this.#lastTokenCount !== undefined) {
+				const tokenDelta = currentTokens - this.#lastTokenCount;
+				const elapsedMs = now - this.#lastTokenTime;
+				if (tokenDelta > 0 && elapsedMs > 0) {
+					// First live sample of this block: drop the session gauge's prior-turn
+					// observations so the windowed average reflects only this block.
+					if (!this.#thinkingRateLive) sharedSpeedTracker.reset();
+					sharedSpeedTracker.observe((tokenDelta / elapsedMs) * 1000, now);
+					this.#thinkingRateLive = true;
+				}
+			}
+			this.#lastTokenCount = currentTokens;
+			this.#lastTokenTime = now;
+		} else {
+			this.#lastTokenCount = undefined;
+			this.#thinkingTokens = 0;
+			this.#thinkingRateLive = false;
+		}
 
 		// Streaming reflowing Markdown (a mermaid diagram reshaping, a GFM table
 		// re-aligning columns) re-lays-out its body each frame; see
