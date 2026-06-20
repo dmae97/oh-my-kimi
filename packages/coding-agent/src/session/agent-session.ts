@@ -6903,7 +6903,7 @@ export class AgentSession {
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
-		this.#resetMnemopiConversationTrackingIfMnemopi();
+		await this.#resetMemoryContextForNewTranscript();
 
 		// Emit session_switch event with reason "fork" to hooks
 		if (this.#extensionRunner) {

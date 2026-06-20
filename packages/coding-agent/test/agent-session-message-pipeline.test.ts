@@ -782,4 +782,96 @@ describe("AgentSession message pipeline", () => {
 		expect(contexts).toHaveLength(2);
 		expect(contexts[1]!.systemPrompt?.join("\n")).not.toContain(injected);
 	});
+
+	it("does not duplicate promoted memory in the base prompt when forking", async () => {
+		using tempDir = TempDir.createSync("@pi-injected-memory-fork-");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		expect(sessionManager.getSessionFile()).toBeString();
+		await sessionManager.flush();
+
+		const api = "test-injected-memory-fork-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		const injected = "<memories>forked recall</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "mnemopi",
+				"provider.appendOnlyContext": "on",
+			}),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+		setMnemopiSessionState(session, {
+			aliasOf: undefined,
+			setSessionId(_sessionId: string) {},
+			resetConversationTracking() {
+				remembered = false;
+			},
+			async dispose() {},
+		} as unknown as MnemopiSessionState);
+
+		await session.sendUserMessage("first");
+		expect(session.systemPrompt.join("\n")).toContain(injected);
+
+		await session.fork();
+		await session.sendUserMessage("second");
+
+		const forkedPrompt = contexts[1]!.systemPrompt?.join("\n") ?? "";
+		const occurrences = forkedPrompt.split(injected).length - 1;
+		expect(occurrences).toBe(1);
+	});
 });
