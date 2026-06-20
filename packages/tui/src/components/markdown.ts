@@ -32,7 +32,43 @@ function isOsc66Line(line: string): boolean {
 }
 
 function normalizeHtmlEntitiesForTerminal(raw: string): string {
-	return raw.replace(/&nbsp;/gi, " ");
+	const parseCodePoint = (value: number): string => {
+		if (Number.isFinite(value) && value >= 0 && value <= 0x10ffff) {
+			try {
+				return String.fromCodePoint(value);
+			} catch (_) {
+				// Fallback to empty string or original if invalid codepoint
+			}
+		}
+		return "";
+	};
+
+	return raw.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-fA-F]+);/gi, (match, entity) => {
+		const lower = entity.toLowerCase();
+		switch (lower) {
+			case "nbsp":
+				return " ";
+			case "lt":
+				return "<";
+			case "gt":
+				return ">";
+			case "quot":
+				return '"';
+			case "apos":
+				return "'";
+			case "amp":
+				return "&";
+			default: {
+				if (lower.startsWith("#x")) {
+					return parseCodePoint(Number.parseInt(lower.slice(2), 16));
+				}
+				if (lower.startsWith("#")) {
+					return parseCodePoint(Number(lower.slice(1)));
+				}
+				return match;
+			}
+		}
+	});
 }
 
 interface HtmlListState {
@@ -50,7 +86,7 @@ function createHtmlNormalizationState(): HtmlNormalizationState {
 	return { lists: [], openItems: [], itemHasContent: [] };
 }
 
-const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li)\b(?:\s[^>]*)?\s*\/?>/gi;
+const HTML_TAG_REGEX = /<\/?(?:br|p|ol|ul|li|span|text)\b(?:\s[^>]*)?\s*\/?>/gi;
 
 function htmlTagName(tag: string): string {
 	const match = /^<\/?\s*([A-Za-z][A-Za-z0-9:-]*)/.exec(tag);
@@ -96,22 +132,28 @@ function normalizeHtmlForTerminal(raw: string, state: HtmlNormalizationState = c
 		const tag = match[0];
 		const index = match.index ?? 0;
 		const textBeforeTag = normalizeHtmlEntitiesForTerminal(raw.slice(lastIndex, index));
+		const name = htmlTagName(tag);
+		// Every tag handled here is block-level EXCEPT span and text. For block-level tags,
 		// HTML formatting whitespace between block/list tags (e.g. the newlines and
 		// indentation in pretty-printed `<ul>\n  <li>…`) is not rendered content;
 		// appending it literally would leak source indentation before bullets and
-		// blank rows between items. Every tag handled here is block-level, so a
-		// whitespace-only slice is always insignificant formatting and is dropped.
-		if (textBeforeTag.trim() !== "") {
+		// blank rows between items. A whitespace-only slice is always insignificant formatting
+		// and is dropped. But for inline tags like span and text, surrounding whitespace
+		// is significant and must NOT be dropped.
+		const isInlineTag = name === "span" || name === "text";
+		if (isInlineTag || textBeforeTag.trim() !== "") {
 			output += textBeforeTag;
 			markCurrentHtmlItemContent(state, textBeforeTag);
 		}
 		lastIndex = index + tag.length;
 
-		const name = htmlTagName(tag);
 		const isClosing = /^<\//.test(tag);
 		const isSelfClosing = /\/\s*>$/.test(tag);
 
 		switch (name) {
+			case "span":
+			case "text":
+				break;
 			case "br":
 				output = appendHtmlLineBreak(output, true);
 				break;

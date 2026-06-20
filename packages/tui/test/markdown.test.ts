@@ -1216,6 +1216,41 @@ bar`,
 				"Should render HTML in code blocks",
 			).toBeTruthy();
 		});
+
+		it("should strip inline span and text HTML tags but keep their contents", () => {
+			const markdown = new Markdown("<span></span><text>▃</text>", 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trim());
+			const joinedPlain = plainLines.join("");
+
+			expect(joinedPlain).toBe("▃");
+		});
+
+		it("should preserve whitespace surrounding stripped inline HTML tags", () => {
+			const markdown = new Markdown("some <span>inner</span> text", 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trim());
+			const joinedPlain = plainLines.join("");
+
+			expect(joinedPlain).toBe("some inner text");
+		});
+
+		it("should unescape HTML entities inside and outside HTML tags", () => {
+			const markdown = new Markdown(
+				"<span>&lt;▃&gt;</span> &amp; &quot;test&quot; &#128512; &#x1F600;",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(80);
+			const plainLines = lines.map(line => stripVTControlCharacters(line).trim());
+			const joinedPlain = plainLines.join("");
+
+			expect(joinedPlain).toBe('<▃> & "test" 😀 😀');
+		});
 	});
 });
 
