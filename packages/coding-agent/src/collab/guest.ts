@@ -232,7 +232,12 @@ export class CollabGuestLink {
 					if (!this.#welcomed || this.#left) return;
 					this.#applyFrame(frame);
 				})
-				.catch(err => logger.warn("collab guest frame apply failed", { type: frame.t, error: String(err) }));
+				.catch(err => {
+					logger.warn("collab guest frame apply failed", { type: frame.t, error: String(err) });
+					if (!joined && (frame.t === "welcome" || frame.t === "snapshot-chunk")) {
+						firstWelcome.reject(err instanceof Error ? err : new Error(String(err)));
+					}
+				});
 		};
 		socket.onClose = (reason, willReconnect) => {
 			this.#clearWelcomeTimer();

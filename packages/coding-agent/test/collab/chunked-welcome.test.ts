@@ -10,8 +10,9 @@
  * forwarding contract exactly; only the TUI context and the network transport
  * are stubbed.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
+import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import {
 	COLLAB_PROTO,
@@ -186,6 +187,42 @@ function makeHostContext(snapshot: SizedSnapshot): InteractiveModeContext {
 	return ctx as unknown as InteractiveModeContext;
 }
 
+function makeFailingGuestContext(failure: Error): InteractiveModeContext {
+	const ctx = {
+		settings: { get: () => "" },
+		sessionManager: {
+			getSessionFile: () => null,
+			switchSession: () => Promise.reject(failure),
+		},
+		session: {
+			newSession: () => Promise.resolve(),
+			messages: [],
+		},
+		statusContainer: { clear: () => {} },
+		pendingMessagesContainer: { clear: () => {} },
+		compactionQueuedMessages: [],
+		streamingComponent: undefined,
+		streamingMessage: undefined,
+		pendingTools: new Map(),
+		loadingAnimation: undefined,
+		statusLine: {
+			setCollabStatus: () => {},
+			invalidate: () => {},
+			setSessionStartTime: () => {},
+		},
+		ui: { requestRender: () => {} },
+		chatContainer: { clear: () => {} },
+		resetObserverRegistry: () => {},
+		renderInitialMessages: () => {},
+		reloadTodos: () => Promise.resolve(),
+		showStatus: () => {},
+		updateEditorTopBorder: () => {},
+		updateEditorBorderColor: () => {},
+		collabGuest: undefined,
+	} as unknown as InteractiveModeContext;
+	return ctx;
+}
+
 // ── Shared host/relay ───────────────────────────────────────────────────────
 
 const RealWebSocket = globalThis.WebSocket;
@@ -264,5 +301,25 @@ describe("collab chunked welcome (#3144)", () => {
 		for (const chunk of chunks) flattened.push(...chunk.entries);
 		expect(flattened.length).toBe(snapshot.entries.length);
 		expect(flattened.map(e => e.id)).toEqual(snapshot.entries.map(e => e.id));
+	});
+
+	it("rejects the pending join when snapshot resume fails", async () => {
+		const failure = new Error("replica write failed during snapshot resume");
+		const writeSpy = spyOn(Bun, "write").mockRejectedValue(failure);
+		const guest = new CollabGuestLink(makeFailingGuestContext(failure));
+		const joinAttempt = guest.join(host.link);
+		try {
+			await expect(
+				Promise.race([
+					joinAttempt,
+					Bun.sleep(250).then(() => {
+						throw new Error("join did not reject");
+					}),
+				]),
+			).rejects.toThrow("replica write failed during snapshot resume");
+		} finally {
+			writeSpy.mockRestore();
+			await guest.leave("test cleanup").catch(() => {});
+		}
 	});
 });
