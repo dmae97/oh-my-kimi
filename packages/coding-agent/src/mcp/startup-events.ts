@@ -1,3 +1,6 @@
+import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
+
 export const MCP_CONNECTION_STATUS_EVENT_CHANNEL = "mcp:connection-status";
 
 export type McpConnectionStatusEvent =
@@ -18,9 +21,36 @@ function formatServerList(serverNames: readonly string[]): string {
 function formatServerCount(count: number): string {
 	return count === 1 ? "server" : "servers";
 }
+function sanitizeMcpStatusError(error: string): string {
+	return truncateToWidth(
+		shortenEmbeddedPaths(
+			replaceTabs(sanitizeText(error))
+				.replace(/[\r\n]+/g, " ")
+				.trim(),
+		),
+		TRUNCATE_LENGTHS.CONTENT,
+	);
+}
+
+function shortenEmbeddedPaths(text: string): string {
+	return text
+		.split(" ")
+		.map(segment => {
+			const leading = segment.match(/^[("'`[]*/)?.[0] ?? "";
+			const trailing = segment.match(/[)"'`,.;:\]]*$/)?.[0] ?? "";
+			const end = segment.length - trailing.length;
+			if (leading.length >= end) return segment;
+			return `${leading}${shortenPath(segment.slice(leading.length, end))}${trailing}`;
+		})
+		.join(" ");
+}
 
 export function formatMCPConnectingMessage(serverNames: readonly string[]): string {
 	return `Connecting to MCP servers: ${formatServerList(serverNames)}…`;
+}
+
+function formatFailedServer({ serverName, error }: { serverName: string; error: string }): string {
+	return `${serverName}: ${sanitizeMcpStatusError(error)}`;
 }
 
 export function formatMCPConnectionStatusMessage(snapshot: McpConnectionStatusSnapshot): string {
@@ -34,13 +64,13 @@ export function formatMCPConnectionStatusMessage(snapshot: McpConnectionStatusSn
 			parts.push(`Connected: ${formatServerList(connectedServers)}.`);
 		}
 		if (failedServers.length > 0) {
-			parts.push(`Failed: ${failedServers.map(({ serverName, error }) => `${serverName}: ${error}`).join("; ")}.`);
+			parts.push(`Failed: ${failedServers.map(formatFailedServer).join("; ")}.`);
 		}
 		parts.push(`Still connecting: ${formatServerList(pendingServers)}…`);
 		return parts.join(" ");
 	}
 	if (failedServers.length > 0) {
-		const failureText = failedServers.map(({ serverName, error }) => `${serverName}: ${error}`).join("; ");
+		const failureText = failedServers.map(formatFailedServer).join("; ");
 		if (connectedServers.length === 0) {
 			return `MCP ${formatServerCount(failedServers.length)} failed to connect: ${failureText}`;
 		}

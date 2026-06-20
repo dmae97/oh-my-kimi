@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as os from "node:os";
 import {
 	formatMCPConnectingMessage,
 	formatMCPConnectionStatusMessage,
@@ -44,6 +45,20 @@ describe("mcp/startup-events — connection-status cross-module contract", () =>
 				failedServers: [{ serverName: "broken", error: "missing command" }],
 			}),
 		).toBe("MCP finished with failures. Connected: alpha. Failed: broken: missing command");
+	});
+
+	it("sanitizes failure errors before rendering them in status text", () => {
+		const homePath = `${os.homedir()}/.omp/mcp.log`;
+		const message = formatMCPConnectionStatusMessage({
+			pendingServers: ["slow"],
+			connectedServers: [],
+			failedServers: [{ serverName: "broken", error: `failed at\t${homePath}\n${"x".repeat(120)}` }],
+		});
+
+		expect(message).not.toContain(os.homedir());
+		expect(message).not.toContain("\n");
+		expect(message).not.toContain("\t");
+		expect(message).toContain("broken: failed at   ~/.omp/mcp.log");
 	});
 
 	it("keeps pending servers visible while other servers settle", () => {
