@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -12,27 +11,25 @@ import {
 	type SettingPath,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("Settings", () => {
 	let settingsState: SettingsTestState | undefined;
-	let testDir = "";
+	let tempDir: TempDir;
 	let agentDir: string;
 	let projectDir: string;
 
 	beforeEach(() => {
 		settingsState = beginSettingsTest();
 
-		// Use snowflake to isolate parallel test runs (SQLite files can't be shared)
-		testDir = path.join(os.tmpdir(), "test-settings-tmp", Snowflake.next());
-		agentDir = path.join(testDir, "agent");
-		projectDir = path.join(testDir, "project");
+		// Use TempDir for Windows-safe cleanup (retries on EBUSY from SQLite
+		// file handle release delays).
+		tempDir = TempDir.createSync("@pi-settings-test-");
+		agentDir = tempDir.join("agent");
+		projectDir = tempDir.join("project");
 
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
 	});
@@ -55,10 +52,7 @@ describe("Settings", () => {
 	afterEach(() => {
 		restoreSettingsTestState(settingsState);
 		settingsState = undefined;
-		if (testDir && fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
-		testDir = "";
+		tempDir?.removeSync();
 	});
 	describe("defaults", () => {
 		it("keeps eight inline images live by default", async () => {
@@ -124,7 +118,7 @@ describe("Settings", () => {
 		});
 
 		it("re-resolves path-scoped arrays when cwd changes", async () => {
-			const otherDir = path.join(testDir, "other-project");
+			const otherDir = path.join(tempDir.toString(), "other-project");
 			fs.mkdirSync(otherDir, { recursive: true });
 
 			const settings = await Settings.init({
