@@ -223,6 +223,10 @@
 
 - Fixed active `/goal` mode being paused by internal compaction and session-switch lifecycle aborts, and made those switches persist wall-clock goal usage without charging time spent in another session to a preserved goal.
 
+### Fixed
+
+- Fixed `/omfg` saved-state copy to advertise `Esc dismiss` after saving and registering the rule live.
+
 ## [16.0.8] - 2026-06-18
 
 ### Changed
@@ -260,9 +264,6 @@
 
 - Fixed `/model` in the TUI to open the model setup picker again, leaving `/switch` as the temporary session model switcher ([#2933](https://github.com/can1357/oh-my-pi/issues/2933)).
 - Fixed OpenCode Go sessions recording per-request cost history so `/usage` can show local cap utilization. ([#2942](https://github.com/can1357/oh-my-pi/issues/2942))
-### Fixed
-
-- Fixed `/omfg` saved-state copy to advertise `Esc dismiss` after saving and registering the rule live.
 
 ### Fixed
 
