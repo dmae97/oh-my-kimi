@@ -273,7 +273,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * When set, the loop reads messages from the append-only log (stable
 	 * byte prefix) and caches system prompt + tools. Tools exclude per-turn
-	 * `_i` intent fields.
+	 * `i` intent fields.
 	 */
 	appendOnlyContext?: AppendOnlyContextManager;
 
@@ -584,11 +584,11 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	interruptible?: boolean;
 	/**
-	 * Controls how the INTENT_FIELD (`_i`) is handled for this tool.
-	 * - `"require"` (default): `_i` is injected and required in the parameter schema.
-	 * - `"optional"`: `_i` is injected as an optional/nullable field.
-	 * - `"omit"`: `_i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo, …).
-	 * - function: `_i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
+	 * Controls how the INTENT_FIELD (`i`) is handled for this tool.
+	 * - `"require"` (default): `i` is injected and required in the parameter schema.
+	 * - `"optional"`: `i` is injected as an optional/nullable field.
+	 * - `"omit"`: `i` is NOT injected. Use for tools where intent is obvious (yield, resolve, todo, …).
+	 * - function: `i` is NOT injected; intent is derived dynamically from (potentially partial / streaming) args.
 	 */
 	intent?: "omit" | "optional" | "require" | ((args: Partial<Static<TParameters>>) => string | undefined);
 

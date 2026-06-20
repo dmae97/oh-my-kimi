@@ -5,12 +5,9 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
-	arkToWireSchema,
 	type Context,
 	EventStream,
 	isApiKeyResolver,
-	isArkSchema,
-	isZodSchema,
 	resolveApiKeyOnce,
 	seedApiKeyResolver,
 	streamSimple,
@@ -20,7 +17,6 @@ import {
 	type TSchema,
 	toolWireSchema,
 	validateToolArguments,
-	zodToWireSchema,
 } from "@oh-my-pi/pi-ai";
 import {
 	type Dialect,
@@ -591,23 +587,15 @@ export function normalizeTools(
 		// specs without their descriptions (top-level + nested schema annotations)
 		// so they are not duplicated on the wire. Strip the STABLE wire schema (the
 		// memoized `stripSchemaDescriptions` result is reused across requests), then
-		// re-inject `_i` (without its hint, which `describeIntent: false` omits) so
+		// re-inject `i` (without its hint, which `describeIntent: false` omits) so
 		// intent tracing keeps the field while no descriptions ride the wire.
 		if (pruneDescriptions) {
 			let parameters = stripSchemaDescriptions(toolWireSchema(t)) as TSchema;
 			if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode, false) as TSchema;
 			return { ...t, parameters, description: "" };
 		}
-		let parameters: TSchema = t.parameters;
-		if (doInjectIntent) {
-			if (isZodSchema(parameters)) {
-				parameters = injectIntentIntoSchema(zodToWireSchema(parameters), intentMode) as TSchema;
-			} else if (isArkSchema(parameters)) {
-				parameters = injectIntentIntoSchema(arkToWireSchema(parameters), intentMode) as TSchema;
-			} else {
-				parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
-			}
-		}
+		let parameters = toolWireSchema(t) as TSchema;
+		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 		const description = t.description ?? "";
 		const examplesBlock = exampleDialect
 			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
@@ -718,7 +706,7 @@ async function runLoopBody(
 	stepCounter: StepCounter,
 	streamFn?: StreamFn,
 ): Promise<void> {
-	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+	let deadlineTimer: Timer | undefined;
 	if (config.deadline !== undefined) {
 		const deadlineAbortController = new AbortController();
 		const delay = config.deadline - Date.now();
@@ -1756,7 +1744,44 @@ async function executeToolCalls(
 				}
 			}
 		}
-		record.args = argsForExecution;
+		let effectiveArgs: Record<string, unknown>;
+		try {
+			if (!tool) throw new Error(`Tool ${toolCall.name} not found`);
+			effectiveArgs = validateToolArguments(tool, { ...toolCall, arguments: argsForExecution });
+		} catch (validationError) {
+			if (tool?.lenientArgValidation) {
+				effectiveArgs = { ...argsForExecution };
+				delete effectiveArgs.__parseError;
+				delete effectiveArgs.__rawJson;
+			} else {
+				if ("__parseError" in argsForExecution) {
+					record.args = {
+						__parseError: argsForExecution.__parseError,
+					};
+				} else {
+					record.args = argsForExecution;
+				}
+				emitToolResult(
+					record,
+					{
+						content: [
+							{
+								type: "text" as const,
+								text: validationError instanceof Error ? validationError.message : String(validationError),
+							},
+						],
+						details: {
+							isError: true,
+							error: validationError instanceof Error ? validationError.message : String(validationError),
+						},
+					},
+					true,
+				);
+				return;
+			}
+		}
+
+		record.args = effectiveArgs;
 		if (toolSignal.aborted) {
 			record.skipped = true;
 			recordSkippedTool(telemetry, {
@@ -1772,7 +1797,7 @@ async function executeToolCalls(
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
-			args: argsForExecution,
+			args: effectiveArgs,
 			intent: toolCall.intent,
 		});
 
@@ -1780,7 +1805,7 @@ async function executeToolCalls(
 			tool,
 			toolName: toolCall.name,
 			toolCallId: toolCall.id,
-			args: argsForExecution,
+			args: effectiveArgs,
 			parent: invokeAgentSpan,
 		});
 		if (toolSpan && toolCall.intent) {
@@ -1799,17 +1824,6 @@ async function executeToolCalls(
 					result = createToolSignalAbortedResult(toolSignal);
 					isError = true;
 					return;
-				}
-
-				let effectiveArgs: Record<string, unknown>;
-				try {
-					effectiveArgs = validateToolArguments(tool, { ...toolCall, arguments: argsForExecution });
-				} catch (validationError) {
-					if (tool.lenientArgValidation) {
-						effectiveArgs = argsForExecution;
-					} else {
-						throw validationError;
-					}
 				}
 
 				if (beforeToolCall) {

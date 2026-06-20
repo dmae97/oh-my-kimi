@@ -43,6 +43,8 @@ from robomp.sandbox import (
 log = logging.getLogger(__name__)
 _PRE_PR_FIX_COMMAND = ("bun", "run", "fix")
 _PRE_PR_CHECK_COMMAND = ("bun", "check")
+_BUN_INSTALL_COMMAND = ("bun", "install", "--frozen-lockfile", "--ignore-scripts")
+_BUN_INSTALL_TIMEOUT_SECONDS = 300.0
 _REPO_COMMAND_SCRUBBED_ENV_KEYS: tuple[str, ...] = (
     "GITHUB_TOKEN",
     "GITHUB_WEBHOOK_SECRET",
@@ -282,6 +284,59 @@ def _format_process_output(stdout: Any, stderr: Any) -> str:
     return (
         f"... output truncated to last {_PRE_PR_CHECK_MAX_OUTPUT} characters ...\n{output[-_PRE_PR_CHECK_MAX_OUTPUT:]}"
     )
+
+
+def ensure_workspace_dependencies(bindings: ToolBindings) -> None:
+    """Bootstrap ``node_modules`` so the agent can resolve workspace packages.
+
+    A per-issue worktree is a bare source checkout (``git worktree add`` off
+    the shared clone pool): it has the repo's ``package.json``/``bun.lock`` but
+    no ``node_modules``. With bun's ``hoisted`` linker the workspace links
+    (``@oh-my-pi/pi-*``) only exist after an install, so without one any
+    ``bun test``/``bun check`` the agent runs fails instantly with "Cannot find
+    package" — the agent then reports it could not verify. We install before
+    the agent starts, mirroring how the natives cache pre-populates ``.node``
+    artifacts. The links resolve into *this* worktree's ``packages/*`` (not the
+    orchestrator's read-only ``/work/pi``), so tests exercise the PR's edited
+    source.
+
+    ``--frozen-lockfile`` keeps the lockfile pristine (no spurious diff for the
+    agent to commit) and ``--ignore-scripts`` skips lifecycle scripts so an
+    untrusted PR's ``postinstall``/``prepare`` cannot execute as the slot and
+    the cached native build is not redone. Runs with the same scrubbed,
+    slot-owned env as the other repo-owned bun commands (``bun run fix`` /
+    ``bun check``).
+
+    Skips non-bun repos. Otherwise runs unconditionally on every launch
+    (including ``--continue`` resumes): a frozen install verifies an intact
+    tree in ~20ms and re-links anything missing, so a previous install that
+    timed out or crashed half-way self-heals instead of being skipped forever
+    on a mere ``node_modules/`` directory existing. Best-effort: any failure
+    (offline, or a PR that bumped deps so the frozen lockfile is stale) is
+    logged and swallowed — the agent can still install itself or report the gap.
+    """
+    repo_dir = bindings.workspace.repo_dir
+    if not (repo_dir / "package.json").is_file() or not (repo_dir / "bun.lock").is_file():
+        return
+    try:
+        proc = _run_repo_command(bindings, _BUN_INSTALL_COMMAND, timeout=_BUN_INSTALL_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        log.warning("bun_install bootstrap skipped: bun not on PATH", extra={"issue": bindings.issue_key})
+        return
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("bun_install bootstrap failed", extra={"issue": bindings.issue_key, "err": str(exc)})
+        return
+    if proc.returncode != 0:
+        log.warning(
+            "bun_install bootstrap nonzero exit",
+            extra={
+                "issue": bindings.issue_key,
+                "code": proc.returncode,
+                "output": _format_process_output(proc.stdout, proc.stderr),
+            },
+        )
+        return
+    log.info("bun_install bootstrap ok", extra={"issue": bindings.issue_key})
 
 
 def _run_pre_publish_bun_fix(

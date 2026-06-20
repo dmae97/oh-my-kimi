@@ -120,6 +120,14 @@ export const mnemopiBackend: MemoryBackend = {
 		const config = previous?.config ?? (session ? loadMnemopiConfig(session.settings, agentDir) : undefined);
 		if (!config) return;
 		await loadMnemopiCore();
+		// Close the cached default Mnemopi instance so its SQLite handle doesn't
+		// keep the DB files locked on Windows when removeDbFiles tries to delete.
+		// Use the core module (already awaited via loadMnemopiCore above):
+		// requireMnemopi() throws "module not loaded" when clear() runs before the
+		// fire-and-forget start() has awaited loadMnemopi() (autolearn disabled, or
+		// taskDepth > 0). resetMemoryForTests is re-exported identically from core.
+		requireMnemopiCore().resetMemoryForTests();
+		await Bun.sleep(0);
 		await removeDbFiles(getMnemopiScopedDbPaths(config));
 	},
 
@@ -557,10 +565,48 @@ export function getMnemopiDbDirForTests(session: AgentSession): string | undefin
 	return state ? path.dirname(state.config.dbPath) : undefined;
 }
 
+/**
+ * Best-effort removal of a SQLite DB file and its WAL/SHM sidecars.
+ *
+ * Windows keeps `-wal`/`-shm` busy briefly after the DB handle closes, so a
+ * single `rm` races with EBUSY/EPERM. Retry a handful of times before giving
+ * up; `force: true` already makes "missing" a non-error.
+ */
 async function removeDbFiles(dbPaths: readonly string[]): Promise<void> {
 	for (const dbPath of dbPaths) {
-		await rm(dbPath, { force: true });
-		await rm(`${dbPath}-wal`, { force: true });
-		await rm(`${dbPath}-shm`, { force: true });
+		for (const suffix of ["", "-wal", "-shm"]) {
+			await removeWithRetries(`${dbPath}${suffix}`).catch(error => {
+				// `force: true` already makes ENOENT a non-error; anything else
+				// after the full retry window means the DB is genuinely locked and
+				// the user's "Memory cleared" message would be misleading. Log so
+				// the failure is diagnosable without blocking the clear flow.
+				const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+				if (code !== "ENOENT") {
+					logger.warn("Mnemopi: failed to remove DB file after retries", { path: `${dbPath}${suffix}`, code });
+				}
+			});
+		}
+	}
+}
+
+const kRemoveRetries = 40;
+const kRemoveRetryDelayMs = 25;
+const kRetryableRemoveErrorCodes = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
+
+async function removeWithRetries(target: string): Promise<void> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await rm(target, { force: true });
+			return;
+		} catch (err) {
+			const retryable =
+				typeof err === "object" &&
+				err !== null &&
+				"code" in err &&
+				typeof err.code === "string" &&
+				kRetryableRemoveErrorCodes.has(err.code);
+			if (!retryable || attempt >= kRemoveRetries) throw err;
+			await Bun.sleep(kRemoveRetryDelayMs);
+		}
 	}
 }

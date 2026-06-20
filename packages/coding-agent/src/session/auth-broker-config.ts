@@ -30,6 +30,7 @@ import {
 } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { resolveConfigValue } from "../config/resolve-config-value";
+import type { AuthStorage } from "./auth-storage";
 
 export { type AuthBrokerClientConfig, getAuthBrokerTokenFilePath };
 
@@ -82,7 +83,7 @@ export function resolveAuthBrokerConfig(): Promise<AuthBrokerClientConfig | null
 export function discoverAuthStorage(
 	agentDir: string = getAgentDir(),
 	options?: Omit<DiscoverAuthStorageOptions, "agentDir" | "configValueResolver">,
-): ReturnType<typeof discoverAuthStorageShared> {
+): Promise<AuthStorage> {
 	return discoverAuthStorageShared({
 		...options,
 		agentDir,

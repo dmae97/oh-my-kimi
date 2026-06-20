@@ -3,6 +3,7 @@ import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } fro
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyWorkerEnvOverlay } from "../tiny/title-client";
+import { safeSend } from "../utils/ipc";
 import { isTtsLocalModelKey, type TtsLocalModelKey } from "./models";
 import type { TtsProgressEvent, TtsWorkerInbound, TtsWorkerOutbound } from "./tts-protocol";
 
@@ -245,13 +246,7 @@ export function createTtsSubprocess(): SpawnedSubprocess {
 function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			try {
-				proc.send(message);
-			} catch (error) {
-				logger.debug("tts: send to subprocess failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			safeSend(proc, message, "tts");
 		},
 		onMessage(handler) {
 			inbound.add(handler);

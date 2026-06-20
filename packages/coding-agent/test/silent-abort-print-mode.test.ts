@@ -5,7 +5,7 @@
  * when stopReason is "aborted", which would surface the sentinel to stderr
  * (and exit with code 1). This test verifies the guard skips silent-abort.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { runPrintMode } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -47,7 +47,7 @@ function createMockSession(messages: AssistantMessage[]): AgentSession {
 }
 
 describe("Print-mode silent-abort regression", () => {
-	let exitSpy: ReturnType<typeof vi.spyOn>;
+	let exitSpy: Mock<typeof process.exit>;
 	let stderrOutput: string[];
 	let stdoutOutput: string[];
 

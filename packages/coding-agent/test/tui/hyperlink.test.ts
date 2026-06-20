@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -58,6 +60,17 @@ afterEach(() => {
 });
 
 describe("isHyperlinkEnabled", () => {
+	it("falls back to plain text before Settings.init", async () => {
+		resetSettingsForTest();
+		try {
+			expect(isHyperlinkEnabled()).toBe(false);
+			expect(fileHyperlink(path.resolve("/Users/foo/bar.ts"), "bar.ts")).toBe("bar.ts");
+			expect(urlHyperlinkAlways("https://example.com/path", "example")).toBe("example");
+		} finally {
+			await Settings.init({ inMemory: true });
+		}
+	});
+
 	it('returns false when mode is "off"', () => {
 		setHyperlinkMode("off");
 		expect(isHyperlinkEnabled()).toBe(false);
@@ -112,20 +125,23 @@ describe("isHyperlinkEnabled", () => {
 describe("fileHyperlink", () => {
 	it("returns plain text when hyperlinks are disabled (mode=off)", () => {
 		setHyperlinkMode("off");
-		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts");
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, "bar.ts");
 		expect(result).toBe("bar.ts");
 	});
 
 	it("wraps text in OSC 8 when hyperlinks are enabled (mode=always)", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts");
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, "bar.ts");
 		expect(isHyperlinked(result)).toBe(true);
 		expect(result).toContain("bar.ts");
 	});
 
 	it("builds a valid file:// URI with the absolute path", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts");
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, "bar.ts");
 		const uri = extractLinkUri(result);
 		expect(uri).toMatch(/^file:\/\//);
 		expect(uri).toContain("bar.ts");
@@ -133,7 +149,8 @@ describe("fileHyperlink", () => {
 
 	it("encodes spaces in the path", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/my file.ts", "my file.ts");
+		const filePath = path.resolve("/Users/foo/my file.ts");
+		const result = fileHyperlink(filePath, "my file.ts");
 		const uri = extractLinkUri(result);
 		expect(uri).toContain("%20");
 		expect(uri).not.toContain(" ");
@@ -141,9 +158,12 @@ describe("fileHyperlink", () => {
 
 	it("percent-encodes URL-reserved path bytes before appending query params", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/a#b?c% d.ts", "a#b?c% d.ts", { line: 12 });
+		const filePath = path.resolve("/Users/foo/a#b?c% d.ts");
+		const result = fileHyperlink(filePath, "a#b?c% d.ts", { line: 12 });
 		const uri = extractLinkUri(result);
-		expect(uri).toBe("file:///Users/foo/a%23b%3Fc%25%20d.ts?line=12");
+		const expectedUri = new URL(url.pathToFileURL(path.resolve(filePath)).href);
+		expectedUri.searchParams.set("line", "12");
+		expect(uri).toBe(expectedUri.href);
 	});
 
 	it("resolves relative paths before building file URIs", () => {
@@ -156,7 +176,8 @@ describe("fileHyperlink", () => {
 
 	it("appends line and col as query params when provided", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts", { line: 42, col: 7 });
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, "bar.ts", { line: 42, col: 7 });
 		const uri = extractLinkUri(result);
 		expect(uri).toContain("line=42");
 		expect(uri).toContain("col=7");
@@ -164,15 +185,17 @@ describe("fileHyperlink", () => {
 
 	it("omits query params when line/col are not provided", () => {
 		setHyperlinkMode("always");
-		const result = fileHyperlink("/Users/foo/bar.ts", "bar.ts");
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, "bar.ts");
 		const uri = extractLinkUri(result);
 		expect(uri).not.toContain("?");
 	});
 
 	it("produces a stable id for the same path", () => {
 		setHyperlinkMode("always");
-		const r1 = fileHyperlink("/Users/foo/bar.ts", "bar.ts");
-		const r2 = fileHyperlink("/Users/foo/bar.ts", "different display text");
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const r1 = fileHyperlink(filePath, "bar.ts");
+		const r2 = fileHyperlink(filePath, "different display text");
 		// Extract id= from params (between "id=" and next ";")
 		const id1 = r1.match(/id=([^;]+)/)?.[1];
 		const id2 = r2.match(/id=([^;]+)/)?.[1];
@@ -182,8 +205,9 @@ describe("fileHyperlink", () => {
 
 	it("does not double-wrap text that already contains an OSC 8 sequence", () => {
 		setHyperlinkMode("always");
-		const alreadyWrapped = `${OSC}8;id=abc123;file:///foo/bar.ts${ST}bar.ts${LINK_END}`;
-		const result = fileHyperlink("/Users/foo/other.ts", alreadyWrapped);
+		const alreadyWrappedUri = url.pathToFileURL(path.resolve("/foo/bar.ts")).href;
+		const alreadyWrapped = `${OSC}8;id=abc123;${alreadyWrappedUri}${ST}bar.ts${LINK_END}`;
+		const result = fileHyperlink(path.resolve("/Users/foo/other.ts"), alreadyWrapped);
 		// Should return the already-wrapped text unchanged
 		expect(result).toBe(alreadyWrapped);
 	});
@@ -191,7 +215,8 @@ describe("fileHyperlink", () => {
 	it("preserves ANSI color codes inside the hyperlink", () => {
 		setHyperlinkMode("always");
 		const colored = "\x1b[32mbar.ts\x1b[0m";
-		const result = fileHyperlink("/Users/foo/bar.ts", colored);
+		const filePath = path.resolve("/Users/foo/bar.ts");
+		const result = fileHyperlink(filePath, colored);
 		expect(result).toContain(colored);
 		expect(isHyperlinked(result)).toBe(true);
 	});

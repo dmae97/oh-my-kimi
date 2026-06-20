@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import {
 	claimStage1Jobs,
 	clearMemoryData,
@@ -13,26 +10,24 @@ import {
 	tryClaimGlobalPhase2Job,
 	upsertThreads,
 } from "@oh-my-pi/pi-coding-agent/memories/storage";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 const GLOBAL_KIND = "memory_consolidate_global";
 const PROJECT_CWD = "/repo";
 const GLOBAL_KEY = `global:${PROJECT_CWD}`;
 
 describe("memories/storage", () => {
-	let testDir: string;
+	let tempDir: TempDir;
 	let dbPath: string;
 
 	beforeEach(() => {
-		testDir = path.join(os.tmpdir(), "test-memories-storage", Snowflake.next());
-		fs.mkdirSync(testDir, { recursive: true });
-		dbPath = path.join(testDir, "state.db");
+		tempDir = TempDir.createSync("@test-memories-storage-");
+		dbPath = tempDir.join("state.db");
 	});
 
-	afterEach(() => {
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
+	afterEach(async () => {
+		await Bun.sleep(0);
+		await tempDir.remove().catch(() => {});
 	});
 
 	test("claimStage1Jobs excludes explicitly blocked thread IDs", () => {

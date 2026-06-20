@@ -21,18 +21,30 @@ const context: Context = {
 
 function createSseResponse(): Response {
 	return new Response(
-		`data: ${JSON.stringify({
-			type: "response.completed",
-			response: {
-				status: "completed",
-				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
-			},
-		})}\n\n`,
+		`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}\n\n` +
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n` +
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 1,
+						output_tokens: 1,
+						total_tokens: 2,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			})}\n\n`,
 		{ status: 200, headers: { "content-type": "text/event-stream" } },
 	);
 }
 function createChatDoneResponse(): Response {
-	return new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+	return new Response(
+		`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] })}\n\n` +
+			`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n` +
+			`data: [DONE]\n\n`,
+		{ status: 200, headers: { "content-type": "text/event-stream" } },
+	);
 }
 
 function buildOpenRouterModel(

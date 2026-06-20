@@ -177,7 +177,7 @@ export class CustomEditor extends Editor {
 	/** Per-render scratch flag: did any layout line in this render contain a magic
 	 *  keyword that should shimmer? Reset by {@link #scheduleShimmerIfNeeded} each
 	 *  time a frame is queued. */
-	#shimmerTimer: ReturnType<typeof setTimeout> | undefined;
+	#shimmerTimer: Timer | undefined;
 	/** Repaint hook the host wires once at construction. Called from the shimmer
 	 *  timer to request the next animation frame. Undefined when nobody is
 	 *  listening (tests, headless callers); the timer chain still self-cleans. */

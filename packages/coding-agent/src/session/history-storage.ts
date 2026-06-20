@@ -145,9 +145,21 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		return HistoryStorage.#instance;
 	}
 
-	/** @internal Reset the singleton — test-only. */
+	/** @internal Reset the singleton and close its database — test-only. */
 	static resetInstance(): void {
+		const instance = HistoryStorage.#instance;
 		HistoryStorage.#instance = undefined;
+		if (instance) instance.#close();
+	}
+
+	#close(): void {
+		for (const stmt of this.#substringStmts.values()) stmt.finalize();
+		this.#substringStmts.clear();
+		this.#insertRowStmt.finalize();
+		this.#recentStmt.finalize();
+		this.#searchStmt.finalize();
+		this.#lastPromptStmt.finalize();
+		this.#db.close();
 	}
 
 	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {

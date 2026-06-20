@@ -170,7 +170,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 		expect(out).toContain("### Tool Result: read");
 		expect(out).toContain("### Tool Call: read");
 		expect(out).toContain("path: src/foo.ts");
-		// The `_i` intent renders as a `//` comment under the heading, never inside the YAML args.
+		// The `i` intent renders as a `//` comment under the heading, never inside the YAML args.
 		expect(out).toContain("// Reading the file");
 		expect(out).not.toContain(`${INTENT_FIELD}:`);
 		// Tool calls render as a readable heading + YAML, never the <invoke>/<parameter> XML.

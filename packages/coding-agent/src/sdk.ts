@@ -688,6 +688,37 @@ export async function loadSessionExtensions(
 }
 
 /**
+ * Load discovered/configured extensions and register their providers into
+ * `modelRegistry`, then discover the dynamic provider catalogs. One-shot CLIs
+ * (`omp bench`, dry-balance) build a bare {@link ModelRegistry} that only knows
+ * built-in catalog providers; without this, providers contributed by an
+ * extension (e.g. a custom OpenAI-compatible provider under
+ * `~/.omp/agent/extensions/`) never reach model resolution. Mirrors the
+ * session / `omp models` path: drain the queued provider registrations, then
+ * `refreshRuntimeProviders` so dynamically-discovered models exist before
+ * selectors are resolved.
+ */
+export async function loadCliExtensionProviders(
+	modelRegistry: ModelRegistry,
+	settings: Settings,
+	cwd: string,
+	options: Pick<CreateAgentSessionOptions, "disableExtensionDiscovery" | "additionalExtensionPaths"> = {},
+): Promise<void> {
+	const eventBus = new EventBus();
+	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
+	const activeSources = extensionsResult.extensions.map(extension => extension.path);
+	modelRegistry.syncExtensionSources(activeSources);
+	for (const sourceId of new Set(activeSources)) {
+		modelRegistry.clearSourceRegistrations(sourceId);
+	}
+	for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
+		modelRegistry.registerProvider(name, config, sourceId);
+	}
+	extensionsResult.runtime.pendingProviderRegistrations = [];
+	await modelRegistry.refreshRuntimeProviders();
+}
+
+/**
  * Discover skills from cwd and agentDir.
  */
 export async function discoverSkills(
@@ -1051,6 +1082,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry =
 		options.modelRegistry ??
 		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+	// Track whether we internally created the authStorage so we can close it
+	// if construction fails before the session takes ownership.
+	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
 	const authStorage = modelRegistry.authStorage;
 	if (options.authStorage && options.authStorage !== authStorage) {
 		throw new Error(
@@ -1515,6 +1549,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					timestamp: Date.now(),
 				}),
 			peekQueueInvoker: () => session.peekQueueInvoker(),
+			peekPendingInvoker: () => session.peekPendingInvoker(),
+			clearPendingInvokers: () => session.clearPendingInvokers(),
 			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
 			setStandingResolveHandler: handler => session.setStandingResolveHandler(handler),
 			allocateOutputArtifact: async toolType => {
@@ -2854,6 +2890,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					await asyncJobManager.dispose({ timeoutMs: 3_000 });
 				}
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
+				if (ownsAuthStorage) authStorage.close();
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {

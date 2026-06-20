@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MiMo models on OpenAI-compatible gateways to expose only accepted `low`, `medium`, and `high` reasoning tiers and map unsupported raw `minimal`/`xhigh` requests to safe wire values. ([#2864](https://github.com/can1357/oh-my-pi/issues/2864))
+
+## [16.1.4] - 2026-06-19
+
+### Fixed
+
+- Fixed Claude 4.6 routing on the `google-antigravity` (and `google-gemini-cli`) Cloud Code Assist providers, whose backend exposes the models asymmetrically: `claude-sonnet-4-6` has no `-thinking` twin and `claude-opus-4-6` has only the `-thinking` twin. The shared `thinkingPair` family was routing thinking efforts on `claude-sonnet-4-6` to a non-existent `claude-sonnet-4-6-thinking` wire id (404 `Requested entity was not found`); replaced both 4.6 entries with bespoke single-wire families that declare the dead ids as `retiredMembers` so `reconcileRetiredRouting` re-points stale bundled-catalog and SQLite-cache rows away from the 404 wire id. Refreshed the bundled `models.json` Sonnet 4.6 entry whose stored `effortRouting` still targeted the dead `-thinking` id. Added `claude-sonnet-4-6` and `claude-opus-4-6-thinking` entries to `ANTIGRAVITY_MODEL_WIRE_PROFILES` capped at the backend's 64000-output-token limit (over-cap requests 400'd with `Request contains an invalid argument`); `modelEnum` is now optional on `AntigravityModelWireProfile` since the Claude wire ids are accepted without a captured `labels.model_enum`. ([#3067](https://github.com/can1357/oh-my-pi/issues/3067))
+
+## [16.1.3] - 2026-06-19
+
+### Fixed
+
+- Marked Ollama Cloud catalog models to omit on-the-wire output-token caps, preventing context-window-sized `num_predict` values from causing HTTP 400s for models whose true output cap is not discoverable. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
+- Fixed `readModelCache`/`writeModelCache` using a process-global shared database even when a custom `dbPath` was provided. Custom-path cache operations now open and close a per-call database via `withModelCacheDb`, preventing leaked SQLite handles on Windows
+
 ## [16.1.2] - 2026-06-19
 
 ### Added
@@ -62,7 +79,6 @@
 - Advertised Ollama Cloud GLM-5.2 reasoning efforts as high/xhigh-only and mapped `xhigh` to native max effort ([#2911](https://github.com/can1357/oh-my-pi/pull/2911) by [@serverinspector](https://github.com/serverinspector))
 - Fixed OpenRouter pseudo-API model construction so bundled OpenRouter models resolve shared OpenAI compatibility metadata instead of an undefined compat record.
 - Fixed custom/direct `xai-oauth` Responses model specs (e.g. `grok-build`) emitting `reasoning.effort` and hitting xAI's HTTP 400: `buildOpenAIResponsesCompat` now defaults `supportsReasoningEffort` to `false` for `xai-oauth` Grok models that are off the effort-capable allowlist (`grok-3-mini`/`grok-4.20-multi-agent`/`grok-4.3`), matching the curated discovery path; explicit `compat.supportsReasoningEffort` still overrides. The allowlist moved to a shared `isGrokReasoningEffortCapable` identity helper consumed by both the compat builder and provider-model curation so the two cannot drift.
-- Fixed MiMo models on OpenAI-compatible gateways to expose only accepted `low`, `medium`, and `high` reasoning tiers and map unsupported raw `minimal`/`xhigh` requests to safe wire values. ([#2864](https://github.com/can1357/oh-my-pi/issues/2864))
 
 ## [16.0.5] - 2026-06-17
 

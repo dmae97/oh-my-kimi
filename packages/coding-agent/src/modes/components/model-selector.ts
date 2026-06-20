@@ -179,9 +179,9 @@ export class ModelSelectorComponent extends Container {
 	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
 	#refreshingProviders: Set<string> = new Set();
-	#scheduledProviderRefreshes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	#scheduledProviderRefreshes: Map<string, Timer> = new Map();
 	#refreshSpinnerFrame: number = 0;
-	#refreshSpinnerInterval?: NodeJS.Timeout;
+	#refreshSpinnerInterval?: Timer;
 
 	// Context menu state
 	#isMenuOpen: boolean = false;

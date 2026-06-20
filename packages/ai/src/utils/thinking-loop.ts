@@ -25,11 +25,11 @@
  *    13.5k non-loop thinking blocks (zero false positives; hardest negative
  *    scored 3 against the trigger of 4).
  *
- * Scope is deliberately narrow: **thinking only**. Answer text is left
- * untouched so the guard can never discard already-streamed visible output. The
- * guard is gated to Gemini models and wraps the provider stream, so it works
- * across every Gemini transport (OpenRouter `openai-completions`, direct
- * `google-generative-ai` / `google-gemini-cli`, Vertex). Disable with
+ * Scope is narrow: guarded Gemini/DeepSeek streams before any tool call. Native
+ * thinking is checked first; assistant text can also be checked for providers
+ * that surface reasoning as visible prose. On a hit, the failed turn is emitted
+ * as an empty retryable stream-stall error so the session drops and re-samples
+ * it instead of committing the runaway transcript. Disable with
  * `PI_NO_THINKING_LOOP_GUARD=1`.
  */
 import { logger } from "@oh-my-pi/pi-utils";
@@ -208,7 +208,6 @@ export function guardThinkingLoopStream(
 	void (async () => {
 		let thinkingArmed = true;
 		let textArmed = checkAssistantContent;
-		let accumulatedText = "";
 		try {
 			for await (const event of inner) {
 				let detail: string | null = null;
@@ -221,7 +220,6 @@ export function guardThinkingLoopStream(
 					thinkingArmed = false;
 					if (textArmed && event.type === "text_delta") {
 						detail = textDetector.push(event.delta);
-						accumulatedText += event.delta;
 					}
 				} else if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
 					thinkingArmed = false;
@@ -244,7 +242,7 @@ export function guardThinkingLoopStream(
 					outer.push({
 						type: "error",
 						reason: "error",
-						error: buildThinkingLoopError(model, detail, accumulatedText),
+						error: buildThinkingLoopError(model, detail),
 					});
 					return;
 				}
@@ -289,13 +287,13 @@ export function withGeminiThinkingLoopGuard<
 	return guardThinkingLoopStream(dispatch(merged), model, controller, options);
 }
 
-function buildThinkingLoopError(model: Model<Api>, detail: string, accumulatedText?: string): AssistantMessage {
-	const hasText = Boolean(accumulatedText);
+function buildThinkingLoopError(model: Model<Api>, detail: string): AssistantMessage {
 	return {
 		role: "assistant",
-		// Empty content is load-bearing: a contentful error stop is replay-unsafe
-		// and would NOT be auto-retried by the session.
-		content: hasText ? [{ type: "text", text: accumulatedText! }] : [],
+		// Empty content is load-bearing: loop-guard output is replay garbage, even
+		// when it arrived as assistant text instead of native thinking. Keeping it
+		// would persist the failed attempt before AgentSession retries.
+		content: [],
 		api: model.api,
 		provider: model.provider,
 		model: model.id,
@@ -310,7 +308,7 @@ function buildThinkingLoopError(model: Model<Api>, detail: string, accumulatedTe
 		stopReason: "error",
 		// "stream stall" makes the transport/session retry classifiers treat this
 		// as a transient (retryable) failure with no bespoke rule.
-		errorMessage: `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content (${detail}).${hasText ? " Non-retryable because output was already streamed." : " Treating as a stream stall and retrying."}`,
+		errorMessage: `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content (${detail}). Treating as a stream stall and retrying.`,
 		timestamp: Date.now(),
 	};
 }
@@ -345,14 +343,15 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	return null;
 }
 
-/** Lowercase, drop code spans / paths / digits, keep only letter words. */
+/** Lowercase and tokenize prose plus code/path payloads, dropping pure numbers. */
 function normalizeSegment(segment: string): string {
 	return segment
 		.toLowerCase()
-		.replace(/`[^`]*`/g, " ")
-		.replace(/\/[^\s`]+/g, " ")
-		.replace(/\d+/g, " ")
-		.replace(/[^a-z]+/g, " ")
+		.replace(/`([^`]*)`/g, " $1 ")
+		.replace(/[^a-z0-9]+/g, " ")
+		.split(/\s+/)
+		.filter(token => /[a-z]/.test(token))
+		.join(" ")
 		.trim();
 }
 

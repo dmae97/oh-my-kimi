@@ -6,6 +6,7 @@ import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -34,7 +35,7 @@ describe("tools.approvalMode setting", () => {
 	// settings per assertion. This avoids paying createAgentSession's cost (model registry,
 	// auth-storage discovery, settings init) nine times over.
 	let tempDir: string;
-	let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+	let session: AgentSession;
 
 	beforeAll(async () => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-approval-mode-${Snowflake.next()}-`));

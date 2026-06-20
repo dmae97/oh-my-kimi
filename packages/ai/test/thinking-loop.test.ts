@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, type MockContent, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model, TextContent } from "@oh-my-pi/pi-ai/types";
+import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
 	isGeminiThinkingLoopModel,
@@ -116,6 +116,75 @@ describe("ThinkingLoopDetector", () => {
 			detail = detector.push(text.slice(i, i + 23));
 		}
 		// flush the trailing paragraph too
+		detail ??= detector.flush();
+		expect(detail).toBeNull();
+	});
+
+	test("does not collapse distinct per-file assignment templates into a loop", () => {
+		const detector = new ThinkingLoopDetector();
+		const text = [
+			`1. Subagent ApprovalModeTest:
+  - target: packages/coding-agent/test/tools/approval-mode.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/approval-mode.test.ts
+
+      # Change
+      Replace the type annotation:
+      \`let session: Awaited<ReturnType<typeof createAgentSession>>["session"];\`
+      with \`AgentSession\`.
+      Verify where \`AgentSession\` is imported from.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`2. Subagent GhTest:
+  - target: packages/coding-agent/test/tools/gh.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/gh.test.ts
+
+      # Change
+      Replace the type annotations:
+      \`let tempHome: Awaited<ReturnType<typeof setupTempHome>>;\`
+      with \`TempDir\`.
+      Verify where \`TempDir\` is imported from.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`3. Subagent TodoTest:
+  - target: packages/coding-agent/test/tools/todo.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/todo.test.ts
+
+      # Change
+      Locate line 438 containing:
+      \`function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {\`
+      Replace \`ReturnType<typeof todoToolRenderer.renderResult>\` with the explicit return type.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`4. Subagent HookEditorTest:
+  - target: packages/coding-agent/test/hook-editor.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/hook-editor.test.ts
+
+      # Change
+      Replace \`setFocus: ReturnType<typeof vi.fn>;\` and \`requestRender: ReturnType<typeof vi.fn>;\`
+      with Bun's explicit mock type from \`bun:test\`.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+		].join("\n\n");
+		let detail: string | null = null;
+		for (let i = 0; i < text.length && !detail; i += 37) {
+			detail = detector.push(text.slice(i, i + 37));
+		}
 		detail ??= detector.flush();
 		expect(detail).toBeNull();
 	});
@@ -326,13 +395,12 @@ describe("loop guard assistant prose/text loops", () => {
 
 		const result = await guarded.result();
 		expect(result.stopReason).toBe("error");
-		// Content must hold the text streamed BEFORE the loop detector tripped.
-		expect(result.content.length).toBe(1);
-		expect(result.content[0].type).toBe("text");
-		expect((result.content[0] as TextContent).text).toContain("First healthy text");
+		// Loop-guard output is replay garbage even when it came through text_delta:
+		// drop it so AgentSession can retry with a clean assistant turn.
+		expect(result.content).toEqual([]);
 		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
-		// Since some text was forwarded, it is replay-unsafe, so isRetryableError should return false.
-		expect(isRetryableError(new Error(result.errorMessage))).toBe(false);
+		expect(result.errorMessage).toContain("stream stall");
+		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
 	});
 
 	test("does not trip on assistant text loop when checkAssistantContent is false", async () => {

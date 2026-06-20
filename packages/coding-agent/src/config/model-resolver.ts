@@ -556,6 +556,27 @@ function isAlias(id: string): boolean {
 	return !datePattern.test(id);
 }
 
+function includeSyntheticAllowedModels(available: Model<Api>[], allowedModels: Iterable<Model<Api>>): Model<Api>[] {
+	const allowedByKey = new Map<string, Model<Api>>();
+	for (const model of allowedModels) {
+		const key = formatModelString(model);
+		if (!allowedByKey.has(key)) {
+			allowedByKey.set(key, model);
+		}
+	}
+	if (allowedByKey.size === 0) return [];
+
+	const result: Model<Api>[] = [];
+	for (const model of available) {
+		if (allowedByKey.delete(formatModelString(model))) {
+			result.push(model);
+		}
+	}
+
+	result.push(...allowedByKey.values());
+	return result;
+}
+
 /**
  * Find an exact explicit provider/model match.
  * Bare model ids are handled separately so canonical ids can coalesce variants.
@@ -1335,9 +1356,9 @@ export async function resolveModelScope(
  * the result to models matching those patterns.
  *
  * Returns the unfiltered available list when `enabledModels` is empty.
- * Returns an empty list when `enabledModels` is configured but no available
- * model matches any pattern — callers MUST treat this as "no usable model"
- * rather than falling back to the global default (see issue #1022).
+ * Returns an empty list when `enabledModels` is configured but no model matches
+ * any pattern — callers MUST treat this as "no usable model" rather than
+ * falling back to the global default (see issue #1022).
  */
 export async function resolveAllowedModels(
 	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getCanonicalVariants">,
@@ -1353,8 +1374,10 @@ export async function resolveAllowedModels(
 	if (scoped.length === 0) {
 		return [];
 	}
-	const allowed = new Set(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`));
-	return available.filter(model => allowed.has(`${model.provider}/${model.id}`));
+	return includeSyntheticAllowedModels(
+		available,
+		scoped.map(entry => entry.model),
+	);
 }
 
 /**
@@ -1382,9 +1405,9 @@ export function filterAvailableModelsByEnabledPatterns(
 	if (patterns.length === 0) return available;
 
 	const context = buildPreferenceContext(available, undefined);
-	const allowed = new Set<string>();
+	const allowedModels: Model<Api>[] = [];
 	const addAllowed = (model: Model<Api>) => {
-		allowed.add(`${model.provider}/${model.id}`);
+		allowedModels.push(model);
 	};
 
 	for (const pattern of patterns) {
@@ -1409,7 +1432,7 @@ export function filterAvailableModelsByEnabledPatterns(
 		}
 	}
 
-	return allowed.size === 0 ? [] : available.filter(model => allowed.has(`${model.provider}/${model.id}`));
+	return includeSyntheticAllowedModels(available, allowedModels);
 }
 
 export interface ResolveCliModelResult {

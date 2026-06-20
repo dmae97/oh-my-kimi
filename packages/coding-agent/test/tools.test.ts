@@ -38,6 +38,10 @@ function writeFileWithMtime(filePath: string, content: string, mtimeMs: number):
 	fs.utimesSync(filePath, mtime, mtime);
 }
 
+function shellEscape(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function createFifoOrSkip(fifoPath: string): boolean {
 	if (process.platform === "win32") {
 		return false;
@@ -1199,7 +1203,7 @@ function b() {
 
 			const result = await interceptedBashTool.execute(
 				"test-call-8-intercept-empty",
-				{ command: `cat ${allowedFile}` },
+				{ command: `cat ${shellEscape(allowedFile)}` },
 				undefined,
 				undefined,
 				createTestToolContext(["read"]),
@@ -1269,7 +1273,9 @@ function b() {
 			const targetPath = path.join(testDir, "session", "local", "moved-via-bash.json");
 			fs.writeFileSync(sourcePath, '{"move":true}\n');
 
-			await bashTool.execute("test-call-8-local-mv", { command: `mv ${sourcePath} local://moved-via-bash.json` });
+			await bashTool.execute("test-call-8-local-mv", {
+				command: `mv ${shellEscape(sourcePath)} local://moved-via-bash.json`,
+			});
 
 			expect(fs.existsSync(sourcePath)).toBe(false);
 			expect(fs.existsSync(targetPath)).toBe(true);
@@ -1739,6 +1745,34 @@ function b() {
 			expect(secondOutput).not.toContain("# file-2.txt");
 			expect(secondOutput).toContain("# file-3.txt");
 			expect(secondOutput).toContain("# file-4.txt");
+		});
+
+		it("respects the case parameter (case-sensitive by default, case-insensitive if false)", async () => {
+			const caseFile = path.join(testDir, "case.txt");
+			fs.writeFileSync(caseFile, "Hello World\nhello world\n");
+
+			// 1. By default, search is case-sensitive (only matches the lowercase pattern "hello")
+			const defaultResult = await searchTool.execute("test-case-default", {
+				pattern: "hello",
+				paths: [caseFile],
+			});
+			expect(defaultResult.details?.matchCount).toBe(1);
+
+			// 2. With case: true, search is case-sensitive (only matches "hello")
+			const sensitiveResult = await searchTool.execute("test-case-sensitive", {
+				pattern: "hello",
+				paths: [caseFile],
+				case: true,
+			});
+			expect(sensitiveResult.details?.matchCount).toBe(1);
+
+			// 3. With case: false, search is case-insensitive (matches both "Hello World" and "hello world")
+			const insensitiveResult = await searchTool.execute("test-case-insensitive", {
+				pattern: "hello",
+				paths: [caseFile],
+				case: false,
+			});
+			expect(insensitiveResult.details?.matchCount).toBe(2);
 		});
 
 		it("should group multi-file matches", async () => {

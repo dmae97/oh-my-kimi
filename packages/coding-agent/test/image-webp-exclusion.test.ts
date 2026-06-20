@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
 	modelLacksWebpSupport,
@@ -20,6 +22,28 @@ async function makeRedWebP(width: number, height: number): Promise<string> {
 	return Buffer.from(upscaled).toBase64();
 }
 
+function buildLocalVisionModel(provider: string, api: Api = "openai-completions"): Model {
+	return buildModel({
+		id: "local-vision",
+		name: "Local vision",
+		api,
+		provider,
+		baseUrl: "http://localhost:8001/v1",
+		reasoning: false,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+	});
+}
+
+function buildStbVisionModel(provider: string, api: Api = "openai-completions"): Model {
+	return buildModel({
+		...buildLocalVisionModel(provider, api),
+		imageInputDecoder: "stb",
+	});
+}
+
 describe("modelLacksWebpSupport", () => {
 	test("flags the local + cloud Ollama providers", () => {
 		expect(modelLacksWebpSupport({ provider: "ollama", api: "openai-responses" })).toBe(true);
@@ -29,6 +53,22 @@ describe("modelLacksWebpSupport", () => {
 	test("flags the ollama-chat api even behind a custom provider id", () => {
 		// A proxy/custom provider still routes images through Ollama's STB decoder.
 		expect(modelLacksWebpSupport({ provider: "my-local-ollama", api: "ollama-chat" })).toBe(true);
+	});
+
+	test("flags local model provider ids", () => {
+		for (const provider of ["llama.cpp", "lm-studio", "local-server"]) {
+			expect(modelLacksWebpSupport({ provider, api: "openai-completions" })).toBe(true);
+		}
+	});
+
+	test("flags discovered STB-backed models even behind a custom provider id", () => {
+		expect(
+			modelLacksWebpSupport({
+				provider: "my-renamed-llama",
+				api: "openai-completions",
+				imageInputDecoder: "stb",
+			}),
+		).toBe(true);
 	});
 
 	test("leaves WebP-capable providers and undefined untouched", () => {
@@ -64,6 +104,32 @@ describe("normalizeModelContextImages model-aware WebP exclusion", () => {
 		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
 
 		const result = await normalizeModelContextImages([webp], { model: ollama });
+		expect(result).toHaveLength(1);
+		const mime = result![0]!.mimeType;
+		expect(mime).not.toBe("image/webp");
+		expect(["image/png", "image/jpeg"]).toContain(mime);
+	});
+
+	test("re-encodes a WebP image out of WebP for local model provider ids", async () => {
+		for (const provider of ["llama.cpp", "lm-studio", "local-server"]) {
+			const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
+
+			const result = await normalizeModelContextImages([webp], { model: buildLocalVisionModel(provider) });
+
+			expect(result).toHaveLength(1);
+			const mime = result![0]!.mimeType;
+			expect(mime).not.toBe("image/webp");
+			expect(["image/png", "image/jpeg"]).toContain(mime);
+		}
+	});
+
+	test("re-encodes a WebP image out of WebP for renamed STB-backed local providers", async () => {
+		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
+
+		const result = await normalizeModelContextImages([webp], {
+			model: buildStbVisionModel("my-renamed-llama"),
+		});
+
 		expect(result).toHaveLength(1);
 		const mime = result![0]!.mimeType;
 		expect(mime).not.toBe("image/webp");

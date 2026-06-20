@@ -11,7 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { queueResolveHandler } from "@oh-my-pi/pi-coding-agent/tools/resolve";
+import { queueResolveHandler, ResolveTool } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { buildNamedToolChoice } from "@oh-my-pi/pi-coding-agent/utils/tool-choice";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -40,6 +40,10 @@ describe("AgentSession resolve reminder", () => {
 		toolSession = {
 			getToolChoiceQueue: () => session.toolChoiceQueue,
 			buildToolChoice: (name: string) => buildNamedToolChoice(name, session.model!),
+			peekQueueInvoker: () => session.peekQueueInvoker(),
+			peekPendingInvoker: () => session.peekPendingInvoker(),
+			clearPendingInvokers: () => session.clearPendingInvokers(),
+			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
 		} as unknown as ToolSession;
 
 		const agent = new Agent({
@@ -73,7 +77,7 @@ describe("AgentSession resolve reminder", () => {
 		});
 
 		// Forcing was removed — staging a preview never queues a hard tool_choice.
-		expect(session.nextToolChoice()).toBeUndefined();
+		expect(session.toolChoiceQueue.nextToolChoice()).toBeUndefined();
 
 		// The reminder now rides an agent-level soft requirement (delivered once by
 		// the agent loop) instead of a host-side steer that churned the prefix.
@@ -89,5 +93,51 @@ describe("AgentSession resolve reminder", () => {
 
 		// Nothing was steered into the conversation — no prefix churn.
 		expect(session.agent.peekSteeringQueue()).toHaveLength(0);
+	});
+
+	it("dispatches a staged preview through the production toolSession wiring and drains the gate", async () => {
+		let applyRuns = 0;
+		queueResolveHandler(toolSession, {
+			label: "AST Edit: 1 replacement in 1 file",
+			sourceToolName: "ast_edit",
+			apply: async () => {
+				applyRuns++;
+				return { content: [{ type: "text", text: "Applied" }] };
+			},
+		});
+
+		// Gate armed before resolve runs.
+		expect(isSoftToolRequirement(session.nextToolChoiceDirective())).toBe(true);
+
+		const tool = new ResolveTool(toolSession);
+		await tool.execute("call-apply", { action: "apply", reason: "looks correct" });
+
+		// Apply ran (forwarding works) AND the gate cleared (no phantom pending).
+		expect(applyRuns).toBe(1);
+		expect(session.nextToolChoiceDirective()).toBeUndefined();
+	});
+
+	it("drains a phantom pending gate when resolve cannot dispatch", async () => {
+		queueResolveHandler(toolSession, {
+			label: "AST Edit: 1 replacement in 1 file",
+			sourceToolName: "ast_edit",
+			apply: async () => ({ content: [{ type: "text", text: "Applied" }] }),
+		});
+		expect(isSoftToolRequirement(session.nextToolChoiceDirective())).toBe(true);
+
+		// Mirror the production deadlock: the queue still reports a pending head, but
+		// every dispatch peek returns undefined (the original loop-trigger).
+		const facade = {
+			...toolSession,
+			peekQueueInvoker: () => undefined,
+			peekPendingInvoker: () => undefined,
+			peekStandingResolveHandler: () => undefined,
+		} as ToolSession;
+		const tool = new ResolveTool(facade);
+
+		// `discard` with no invoker now drains the gate instead of leaving a phantom.
+		const result = await tool.execute("call-discard", { action: "discard", reason: "drain stale gate" });
+		expect(result.isError ?? false).toBe(false);
+		expect(session.nextToolChoiceDirective()).toBeUndefined();
 	});
 });

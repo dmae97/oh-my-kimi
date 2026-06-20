@@ -772,8 +772,8 @@ export function serializeConversation(messages: Message[], options?: SerializeOp
 					if (uselessCallIds.has(block.id)) continue;
 					flushAssistant();
 					const args = block.arguments as Record<string, unknown>;
-					// Prefer the harness-derived intent, else the raw `_i` arg; render it as
-					// a one-line `//comment` and drop `_i` from the args below.
+					// Prefer the harness-derived intent, else the raw intent arg; render it as
+					// a one-line `//comment` and drop it from the args below.
 					const rawIntent =
 						typeof block.intent === "string"
 							? block.intent

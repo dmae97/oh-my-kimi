@@ -68,6 +68,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
 	const { smokeTestSttWorker } = await import("./stt/asr-client");
 	const { smokeTestTtsWorker } = await import("./tts/tts-client");
+	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	await smokeTestSyncWorker();
 
@@ -87,6 +88,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestSttWorker();
 	await smokeTestJsEvalWorker();
 	await smokeTestTtsWorker();
+	await smokeTestMnemopiEmbedWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -96,6 +98,7 @@ const TAB_WORKER_ARG = "__omp_worker_tab";
 const JS_EVAL_WORKER_ARG = "__omp_worker_js_eval";
 const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
+const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === TINY_WORKER_ARG) {
@@ -149,6 +152,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === TTS_WORKER_ARG) {
 		const { startTtsWorker } = await import("./tts/tts-worker");
 		await runIpcSubprocessWorker(startTtsWorker);
+		return true;
+	}
+	if (arg === MNEMOPI_EMBED_WORKER_ARG) {
+		const { startMnemopiEmbedWorker } = await import("./mnemopi/embed-worker");
+		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
 		return true;
 	}
 	return false;

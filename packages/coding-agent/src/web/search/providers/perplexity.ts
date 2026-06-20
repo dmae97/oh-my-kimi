@@ -14,7 +14,6 @@ import {
 	type AuthStorage,
 	type Context,
 	type FetchImpl,
-	type OAuthAccess,
 	type Usage,
 	withOAuthAccess,
 } from "@oh-my-pi/pi-ai";
@@ -34,35 +33,18 @@ import { SearchProviderError } from "../../../web/search/types";
 import { dateToAgeSeconds } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
+import { type ApiConfig, getAvailableAuthMethods } from "./perplexity-auth";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
-const PERPLEXITY_CHAT_BASE_URL = "https://api.perplexity.ai";
-const PERPLEXITY_RESPONSES_BASE_URL = "https://api.perplexity.ai/v1";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_OAUTH_ASK_URL = "https://www.perplexity.ai/rest/sse/perplexity_ask";
 
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_TEMPERATURE = 0.2;
 const DEFAULT_NUM_SEARCH_RESULTS = 20;
-const OAUTH_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 const OAUTH_API_VERSION = "2.18";
 const OAUTH_USER_AGENT = "Perplexity/641 CFNetwork/1568 Darwin/25.2.0";
 const ANONYMOUS_USER_AGENT =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
-
-type PerplexityAuth =
-	| ApiConfig
-	| {
-			type: "oauth";
-			access: OAuthAccess;
-	  }
-	| {
-			type: "cookies";
-			cookies: string;
-	  }
-	| {
-			type: "anonymous";
-	  };
 
 interface PerplexityOAuthStreamMarkdownBlock {
 	answer?: string;
@@ -287,111 +269,6 @@ export interface PerplexitySearchParams {
 	authStorage: AuthStorage;
 	sessionId?: string;
 	fetch?: FetchImpl;
-}
-
-interface ApiConfig {
-	type: "api_key";
-	apiKey: string;
-	provider: "perplexity" | "openrouter";
-	chatBaseUrl: string;
-	responsesBaseUrl: string;
-	modelPrefix: string;
-	useResponses: boolean;
-}
-
-/** Detect API-key endpoints to try in priority order (Perplexity direct, then OpenRouter). */
-async function getApiConfigs(
-	authStorage: AuthStorage,
-	sessionId: string | undefined,
-	signal: AbortSignal | undefined,
-): Promise<ApiConfig[]> {
-	const useResponses = $env.PI_PERPLEXITY_RESPONSES === "1";
-	const configs: ApiConfig[] = [];
-
-	const perplexityKey = await authStorage.getApiKey("perplexity", sessionId, { signal });
-	if (perplexityKey) {
-		configs.push({
-			type: "api_key",
-			apiKey: perplexityKey,
-			provider: "perplexity",
-			chatBaseUrl: PERPLEXITY_CHAT_BASE_URL,
-			responsesBaseUrl: PERPLEXITY_RESPONSES_BASE_URL,
-			modelPrefix: "",
-			useResponses,
-		});
-	}
-
-	const openrouterKey = await authStorage.getApiKey("openrouter", sessionId, { signal });
-	if (openrouterKey) {
-		configs.push({
-			type: "api_key",
-			apiKey: openrouterKey,
-			provider: "openrouter",
-			chatBaseUrl: OPENROUTER_BASE_URL,
-			responsesBaseUrl: OPENROUTER_BASE_URL,
-			modelPrefix: "perplexity/",
-			useResponses,
-		});
-	}
-
-	return configs;
-}
-
-/**
- * Decode a Perplexity JWT's `exp` claim, in ms. Returns `undefined` when the
- * token has no `exp` (which is the common case — Perplexity sessions are
- * server-side and effectively non-expiring from the client's POV).
- */
-function jwtExpiryMs(token: string): number | undefined {
-	const parts = token.split(".");
-	if (parts.length !== 3) return undefined;
-	const payload = parts[1];
-	if (!payload) return undefined;
-	try {
-		const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { exp?: unknown };
-		if (typeof decoded.exp !== "number" || !Number.isFinite(decoded.exp)) return undefined;
-		return decoded.exp * 1000;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Collect all available auth methods to try in priority order */
-async function getAvailableAuthMethods(
-	authStorage: AuthStorage,
-	sessionId: string | undefined,
-	signal: AbortSignal | undefined,
-): Promise<PerplexityAuth[]> {
-	const methods: PerplexityAuth[] = [];
-
-	// 1. Perplexity OAuth & Cookies (same priority - highest)
-	try {
-		const access = await authStorage.getOAuthAccess("perplexity", sessionId, { signal });
-		const token = access?.accessToken;
-		if (access && token) {
-			const jwtExpiry = jwtExpiryMs(token);
-			if (jwtExpiry === undefined || jwtExpiry > Date.now() + OAUTH_EXPIRY_BUFFER_MS) {
-				methods.push({ type: "oauth", access });
-			}
-		}
-	} catch {
-		// ignored
-	}
-
-	const cookies = $env.PERPLEXITY_COOKIES?.trim();
-	if (cookies) {
-		methods.push({ type: "cookies", cookies });
-	}
-
-	const apiConfigs = await getApiConfigs(authStorage, sessionId, signal);
-	methods.push(...apiConfigs);
-
-	// 5. Fallback to Perplexity free (anonymous)
-	if (methods.length === 0) {
-		methods.push({ type: "anonymous" });
-	}
-
-	return methods;
 }
 
 interface PerplexityApiStreamMetadata {
@@ -904,7 +781,7 @@ export async function searchPerplexity(params: PerplexitySearchParams): Promise<
 		request.search_recency_filter = params.search_recency_filter;
 	}
 
-	const authMethods = await getAvailableAuthMethods(params.authStorage, params.sessionId, params.signal);
+	const authMethods = await getAvailableAuthMethods(params.authStorage, params.sessionId, { signal: params.signal });
 	let lastError: unknown;
 
 	for (const auth of authMethods) {

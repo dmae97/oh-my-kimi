@@ -592,7 +592,7 @@ describe("message sync", () => {
 // ---------------------------------------------------------------------------
 
 describe("intent injection through build()", () => {
-	it("injects required `_i` into tool schemas when intentTracing is true", () => {
+	it("injects required `i` into tool schemas when intentTracing is true", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("read", "Read", {
 			type: "object",
@@ -608,20 +608,20 @@ describe("intent injection through build()", () => {
 		expect(params!.required).toContain(INTENT_FIELD);
 	});
 
-	it("materializes ArkType params and keeps `_i` first in authored order", () => {
+	it("materializes ArkType params and keeps `i` first in authored order", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("write", "Write", type({ path: "string", content: "string" }));
 		const ctx = makeContext({ tools: [tool] });
 
 		const result = mgr.build(ctx, { intentTracing: true });
 		const params = result.tools?.[0]?.parameters as { properties?: Record<string, unknown>; required?: string[] };
-		// `_i` must lead; authored order (path before content) is preserved rather
+		// `i` must lead; authored order (path before content) is preserved rather
 		// than ArkType's alphabetized-by-hash order (content, path).
 		expect(Object.keys(params.properties ?? {})).toEqual([INTENT_FIELD, "path", "content"]);
 		expect(params.required).toContain(INTENT_FIELD);
 	});
 
-	it("omits `_i` when intentTracing is false", () => {
+	it("omits `i` when intentTracing is false", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("read", "Read", {
 			type: "object",
@@ -679,7 +679,7 @@ describe("tool examples injection through build()", () => {
 		expect(desc).toBe("Find files.");
 	});
 
-	it("injects the `_i` placeholder into examples when intentTracing is on", () => {
+	it("injects the `i` placeholder into examples when intentTracing is on", () => {
 		const mgr = new AppendOnlyContextManager();
 		const tool = makeTool("find", "Find files.", findParams, findExamples);
 		const ctx = makeContext({ tools: [tool] });

@@ -3,6 +3,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type * as MnemopiNs from "@oh-my-pi/pi-mnemopi";
 import type { Mnemopi, RecallResult } from "@oh-my-pi/pi-mnemopi";
 import type * as MnemopiCoreNs from "@oh-my-pi/pi-mnemopi/core";
+import type { LocalModelInitializer } from "@oh-my-pi/pi-mnemopi/core";
 import { logger } from "@oh-my-pi/pi-utils";
 import {
 	composeRecallQuery,
@@ -13,16 +14,42 @@ import {
 import { extractMessages } from "../hindsight/transcript";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { MnemopiBackendConfig, MnemopiScoping } from "./config";
+import { mnemopiEmbedClient } from "./embed-client";
 
 // The mnemopi package pulls the embeddings stack; keep it off the CLI startup
 // module graph by loading it lazily at the async boundaries that need it.
 let mnemopiMod: typeof MnemopiNs | undefined;
 let mnemopiCoreMod: typeof MnemopiCoreNs | undefined;
 
-/** Lazily load `@oh-my-pi/pi-mnemopi` (memoized). */
+// `setLocalModelInitializer` writes a single module-level slot shared by
+// both the root and `/core` re-exports, so install at most once across both
+// loaders. Either entry point is enough to wire up the override.
+let localModelInitializerInstalled = false;
+
+function installLocalModelInitializer(setInitializer: (initializer: LocalModelInitializer) => void): void {
+	if (localModelInitializerInstalled) return;
+	localModelInitializerInstalled = true;
+	setInitializer(({ model, cacheDir }) =>
+		mnemopiEmbedClient.initialize(model, cacheDir).then(handle => {
+			if (handle) return handle;
+			throw new Error("mnemopi embed subprocess unavailable");
+		}),
+	);
+}
+
+/**
+ * Lazily load `@oh-my-pi/pi-mnemopi` (memoized) and route fastembed loads
+ * through the dedicated embeddings subprocess. The override is installed once
+ * — before any consumer gets the chance to call `embed()` — so
+ * `onnxruntime-node`'s NAPI constructor + finalizer never run inside the
+ * agent's address space (issue #3031). Test seams that swap the initializer
+ * with `setLocalModelInitializerForTests` still win because both go through
+ * the same module-level slot.
+ */
 export async function loadMnemopi(): Promise<typeof MnemopiNs> {
 	if (!mnemopiMod) {
 		mnemopiMod = await import("@oh-my-pi/pi-mnemopi");
+		installLocalModelInitializer(mnemopiMod.setLocalModelInitializer);
 	}
 	return mnemopiMod;
 }
@@ -31,6 +58,7 @@ export async function loadMnemopi(): Promise<typeof MnemopiNs> {
 export async function loadMnemopiCore(): Promise<typeof MnemopiCoreNs> {
 	if (!mnemopiCoreMod) {
 		mnemopiCoreMod = await import("@oh-my-pi/pi-mnemopi/core");
+		installLocalModelInitializer(mnemopiCoreMod.setLocalModelInitializer);
 	}
 	return mnemopiCoreMod;
 }

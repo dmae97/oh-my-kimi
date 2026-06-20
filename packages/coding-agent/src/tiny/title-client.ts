@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
+import { safeSend } from "../utils/ipc";
 import { tinyModelDeviceSettingToEnv } from "./device";
 import { tinyModelDtypeSettingToEnv } from "./dtype";
 import {
@@ -216,13 +217,7 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			try {
-				proc.send(message);
-			} catch (error) {
-				logger.debug("tiny-title: send to subprocess failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			safeSend(proc, message, "tiny-title");
 		},
 		onMessage(handler) {
 			inbound.add(handler);

@@ -1291,6 +1291,18 @@ function truncateArgsForError(value: unknown): unknown {
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
+	if (originalArgs && typeof originalArgs === "object" && "__parseError" in originalArgs) {
+		const parseError = originalArgs.__parseError;
+		const rawJson = String(originalArgs.__rawJson ?? "");
+		const maxLen = 512;
+		const truncatedRawJson =
+			rawJson.length <= maxLen
+				? rawJson
+				: `${rawJson.slice(0, maxLen)}… [truncated ${rawJson.length - maxLen} chars]`;
+		throw new Error(
+			`Validation failed for tool "${toolCall.name}": Tool call arguments are not valid JSON.\nParse Error: ${parseError}\nRaw JSON:\n${truncatedRawJson}`,
+		);
+	}
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 

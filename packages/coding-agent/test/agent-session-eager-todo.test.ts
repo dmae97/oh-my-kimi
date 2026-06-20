@@ -132,7 +132,7 @@ describe("AgentSession eager todo enforcement", () => {
 				messages: [],
 			},
 			convertToLlm,
-			getToolChoice: () => session?.nextToolChoice(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			streamFn: (_model, context, options) => {
 				streamCallCount++;
 				const lastMessage = context.messages.at(-1);

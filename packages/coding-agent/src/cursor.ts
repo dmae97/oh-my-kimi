@@ -181,7 +181,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		const toolResultMessage = await executeTool(this.options, "search", toolCallId, {
 			pattern: args.pattern,
 			paths: [searchPath],
-			i: args.caseInsensitive || undefined,
+			case: args.caseInsensitive === true ? false : undefined,
 		});
 		return toolResultMessage;
 	}

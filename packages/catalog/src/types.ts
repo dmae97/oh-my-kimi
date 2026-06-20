@@ -595,6 +595,11 @@ export interface Model<TApi extends Api = Api> {
 	reasoning: boolean;
 	input: ("text" | "image")[];
 	/**
+	 * Decoder family used for image inputs when it has narrower format support
+	 * than OMP's general image pipeline. `stb` local backends reject WebP.
+	 */
+	imageInputDecoder?: "stb";
+	/**
 	 * Native provider tool-call support. `false` is the only unsupported signal:
 	 * `true` and `undefined` both mean callers may use native tools. Catalog and
 	 * discovery sources should set this sparsely when an upstream explicitly
