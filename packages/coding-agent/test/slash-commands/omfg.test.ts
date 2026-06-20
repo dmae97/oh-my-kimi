@@ -5,12 +5,14 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 function createRuntime() {
 	const handleOmfgCommand = vi.fn(async () => {});
 	const setText = vi.fn();
+	const addToHistory = vi.fn();
 	return {
 		handleOmfgCommand,
 		setText,
+		addToHistory,
 		runtime: {
 			ctx: {
-				editor: { setText } as unknown as InteractiveModeContext["editor"],
+				editor: { setText, addToHistory } as unknown as InteractiveModeContext["editor"],
 				handleOmfgCommand,
 			} as unknown as InteractiveModeContext,
 		},
@@ -24,6 +26,7 @@ describe("/omfg slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/omfg This guy used any again....", harness.runtime);
 
 		expect(handled).toBe(true);
+		expect(harness.addToHistory).toHaveBeenCalledWith("/omfg This guy used any again....");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("This guy used any again....");
 	});
@@ -37,6 +40,18 @@ describe("/omfg slash command", () => {
 		);
 
 		expect(handled).toBe(true);
+		expect(harness.addToHistory).toHaveBeenCalledWith("/omfg    stop making unchecked casts in generated TypeScript");
 		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("stop making unchecked casts in generated TypeScript");
+	});
+
+	it("does not add a blank /omfg invocation to history", async () => {
+		const harness = createRuntime();
+
+		const handled = await executeBuiltinSlashCommand("/omfg   ", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.addToHistory).not.toHaveBeenCalled();
+		expect(harness.setText).toHaveBeenCalledWith("");
+		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("");
 	});
 });
