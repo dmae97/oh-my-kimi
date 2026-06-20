@@ -186,6 +186,6 @@ describe("renderToolExamples", () => {
 			examples: [{ caption: "Find files", call: { paths: ["src/**/*.ts"] } }],
 		};
 
-		expect(renderToolExamples(tool, "anthropic")).not.toContain(INTENT_FIELD);
+		expect(renderToolExamples(tool, "anthropic")).not.toContain(`<parameter name="${INTENT_FIELD}"`);
 	});
 });

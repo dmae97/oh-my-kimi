@@ -7,7 +7,7 @@
  */
 import * as url from "node:url";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { settings } from "../config/settings";
+import { isSettingsInitialized, settings } from "../config/settings";
 import {
 	LocalProtocolHandler,
 	memoryRootsFromRegistry,
@@ -45,8 +45,10 @@ function buildFileUri(filePath: string, opts?: { line?: number; col?: number }):
  * - `"off"`: never
  * - `"auto"`: when `process.stdout.isTTY`, `NO_COLOR` is unset, and the detected terminal reports hyperlink support
  * - `"always"`: unconditionally (useful for viewers that support OSC 8 without advertising it)
+ * Before settings initialization, returns false so early render paths stay plain text.
  */
 export function isHyperlinkEnabled(): boolean {
+	if (!isSettingsInitialized()) return false;
 	const mode = settings.get("tui.hyperlinks");
 	if (mode === "off") return false;
 	if (mode === "always") return true;
@@ -104,10 +106,11 @@ export function urlHyperlink(url: string, displayText: string): string {
  * Wrap `displayText` in an OSC 8 hyperlink pointing at an HTTP(S) URL,
  * bypassing terminal capability auto-detection. Used for auth prompts where
  * an inert "click" label blocks login on terminals whose capabilities are
- * not advertised. Still returns plain text when the user has explicitly
- * opted out via `tui.hyperlinks=off`.
+ * not advertised. Still returns plain text before settings initialization or
+ * when the user has explicitly opted out via `tui.hyperlinks=off`.
  */
 export function urlHyperlinkAlways(url: string, displayText: string): string {
+	if (!isSettingsInitialized()) return displayText;
 	if (settings.get("tui.hyperlinks") === "off") return displayText;
 	const normalized = url.match(/^www\./i) ? `https://${url}` : url;
 	try {

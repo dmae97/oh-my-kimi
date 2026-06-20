@@ -346,7 +346,7 @@ export type WireFrame = GuestFrame | HostFrame;
 export const COLLAB_PROTO = 1;
 
 /** Parameter key used for intent tracing (e.g. prompt explanation/reasoning) */
-export const INTENT_FIELD = "_i";
+export const INTENT_FIELD = "i";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Envelope & link constants

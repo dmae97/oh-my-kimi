@@ -21,7 +21,7 @@ afterEach(() => {
 describe("selector setting side effects", () => {
 	it("formats temporary model status with role assignment guidance", () => {
 		expect(formatTemporaryModelStatus("openai/gpt-5.1", "alt+m")).toBe(
-			"Temporary session model: openai/gpt-5.1. Role models (default/smol/plan/task/slow/custom roles): use alt+m or /model.",
+			"Temporary model selection is session-only: openai/gpt-5.1. Use alt+m or /model for role models (default/smol/plan/task/slow/custom roles).",
 		);
 	});
 

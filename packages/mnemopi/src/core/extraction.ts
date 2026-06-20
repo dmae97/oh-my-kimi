@@ -35,10 +35,6 @@ function hostLlmEnabled(): boolean {
 	return envBool("MNEMOPI_HOST_LLM_ENABLED", false);
 }
 
-function llmBaseUrl(): string {
-	return env("MNEMOPI_LLM_BASE_URL").replace(/\/+$/, "");
-}
-
 function llmMaxTokens(): number {
 	return envInt("MNEMOPI_LLM_MAX_TOKENS", 2048);
 }
@@ -301,23 +297,21 @@ export async function extractFacts(text: string | null | undefined, options: Rem
 		return [];
 	}
 
-	if (llmEnabled() && llmBaseUrl() !== "") {
-		diag.recordAttempt("remote");
-		try {
-			const raw = await callRemoteLlm(prompt, 0, options);
-			if (raw !== null) {
-				const facts = parseFacts(cleanOutput(raw));
-				if (facts.length > 0) {
-					diag.recordSuccess("remote", facts.length);
-					diag.recordCall({ succeeded: true });
-					return facts;
-				}
+	diag.recordAttempt("remote");
+	try {
+		const raw = await callRemoteLlm(prompt, 0, options);
+		if (raw !== null) {
+			const facts = parseFacts(cleanOutput(raw));
+			if (facts.length > 0) {
+				diag.recordSuccess("remote", facts.length);
+				diag.recordCall({ succeeded: true });
+				return facts;
 			}
-			diag.recordNoOutput("remote");
-		} catch (exc) {
-			diag.recordFailure("remote", exc, "remote_call_raised");
-			console.warn(`extractFacts: remote LLM raised: ${safeForLog(exc)}`);
 		}
+		diag.recordNoOutput("remote");
+	} catch (exc) {
+		diag.recordFailure("remote", exc, "remote_call_raised");
+		console.warn(`extractFacts: remote LLM raised: ${safeForLog(exc)}`);
 	}
 
 	return localFallback(prompt, text, diag);

@@ -32,7 +32,7 @@ export interface StablePrefixSnapshot {
 
 /** Options threaded through `build()` so the snapshot reflects loop-time settings. */
 export interface BuildOptions {
-	/** Inject the `_i` intent field into tool schemas (must match agent-loop's normalizeTools). */
+	/** Inject the `i` intent field into tool schemas (must match agent-loop's normalizeTools). */
 	intentTracing: boolean;
 	exampleDialect?: Dialect;
 	/** Strip tool descriptions from the provider-bound specs (must match normalizeTools). */

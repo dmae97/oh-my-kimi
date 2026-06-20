@@ -154,6 +154,8 @@ interface ContextUsageMemo {
 }
 
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
+const STATUS_USAGE_START_DELAY_MS = 0;
+const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
 
 function hasContextSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("context_pct") || segments.includes("context_total");
@@ -212,6 +214,7 @@ export class StatusLineComponent implements Component {
 	} | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
+	#usageStartTimer: Timer | null = null;
 	// Context-usage memo. The status line redraws on every agent event, so the
 	// hot path must not recompute context tokens unless an input changed.
 	// `getContextUsage()` anchors on the last assistant's real prompt-token
@@ -344,16 +347,24 @@ export class StatusLineComponent implements Component {
 	dispose(): void {
 		this.#disposed = true;
 		this.#onBranchChange = null;
+		this.#clearUsageStartTimer();
 		if (this.#gitWatcher) {
 			this.#gitWatcher.close();
 			this.#gitWatcher = null;
 		}
 	}
 
+	#clearUsageStartTimer(): void {
+		if (!this.#usageStartTimer) return;
+		clearTimeout(this.#usageStartTimer);
+		this.#usageStartTimer = null;
+	}
+
 	invalidate(): void {
 		this.#invalidateGitCaches();
 	}
 	#invalidateSessionCaches(): void {
+		this.#clearUsageStartTimer();
 		this.#cachedUsage = null;
 		this.#usageFetchedAt = 0;
 		this.#usageInFlight = false;
@@ -521,36 +532,71 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Background-refresh the Anthropic OAuth quota report. Guarded by a 5-min
-	 * TTL on both success (cache lifetime) and error (backoff). Exposed
-	 * (non-private) so unit tests can verify the backoff invariant.
+	 * Startup redraws only arm a short-delayed task; timeout releases the render
+	 * cadence while a late successful fetch can still refresh the cached segment.
 	 */
 	refreshUsageInBackground(): void {
 		const now = Date.now();
-		if (this.#usageInFlight) return;
+		if (this.#usageInFlight || this.#usageStartTimer) return;
 		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
 		const session = this.session;
-		const fetcher = (session as { fetchUsageReports?: () => Promise<unknown> }).fetchUsageReports;
+		const fetcher = (session as { fetchUsageReports?: (signal?: AbortSignal) => Promise<unknown> }).fetchUsageReports;
 		if (typeof fetcher !== "function") return;
 		this.#usageInFlight = true;
-		void fetcher
-			.call(session)
+		this.#usageStartTimer = setTimeout(() => {
+			this.#usageStartTimer = null;
+			void this.#runUsageRefresh(session, fetcher);
+		}, STATUS_USAGE_START_DELAY_MS);
+	}
+
+	async #runUsageRefresh(session: AgentSession, fetcher: (signal?: AbortSignal) => Promise<unknown>): Promise<void> {
+		if (this.#disposed || this.session !== session) {
+			this.#usageInFlight = false;
+			return;
+		}
+		const signal = AbortSignal.timeout(STATUS_USAGE_REFRESH_TIMEOUT_MS);
+		let reportsPromise: Promise<unknown> | undefined;
+		try {
+			reportsPromise = fetcher.call(session, signal);
+			this.#applyUsageRefreshReports(session, await this.#raceUsageRefreshWithSignal(reportsPromise, signal));
+		} catch {
+			if (this.session !== session) return;
+			this.#usageFetchedAt = Date.now();
+			if (signal.aborted && reportsPromise) {
+				this.#observeLateUsageRefresh(session, reportsPromise);
+			}
+		} finally {
+			if (this.session === session) this.#usageInFlight = false;
+		}
+	}
+
+	#applyUsageRefreshReports(session: AgentSession, reports: unknown): void {
+		if (this.#disposed || this.session !== session) return;
+		this.#cachedUsage = this.#normalizeUsageReports(reports);
+		this.#usageFetchedAt = Date.now();
+	}
+
+	#observeLateUsageRefresh(session: AgentSession, reportsPromise: Promise<unknown>): void {
+		void reportsPromise
 			.then(reports => {
-				if (this.session !== session) return;
-				this.#cachedUsage = this.#normalizeUsageReports(reports);
-				this.#usageFetchedAt = Date.now();
+				this.#applyUsageRefreshReports(session, reports);
 			})
 			.catch(() => {
-				if (this.session !== session) return;
-				// Backoff on error: stamp the fetch time so the 5-min TTL guard
-				// also acts as an error budget. Without this, every render
-				// kicks off another fetch (gated only by #usageInFlight),
-				// which hammers the endpoint during a network outage / 5xx.
+				if (this.#disposed || this.session !== session) return;
 				this.#usageFetchedAt = Date.now();
-			})
-			.finally(() => {
-				if (this.session === session) this.#usageInFlight = false;
 			});
+	}
+
+	async #raceUsageRefreshWithSignal(promise: Promise<unknown>, signal: AbortSignal): Promise<unknown> {
+		if (signal.aborted) throw signal.reason;
+		const aborted = Promise.withResolvers<never>();
+		const onAbort = () => aborted.reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await Promise.race([promise, aborted.promise]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
 	}
 
 	#normalizeUsageReports(reports: unknown): {

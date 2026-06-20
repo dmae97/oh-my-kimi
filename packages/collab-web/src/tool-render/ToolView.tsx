@@ -16,7 +16,7 @@ export interface ToolViewProps {
 	result?: ToolResultLike;
 	/** Tool is still executing (live collab view). */
 	running?: boolean;
-	/** Model-provided intent (`_i`), shown atop the body. */
+	/** Model-provided intent (`i`), shown atop the body. */
 	intent?: string;
 	/** Streaming partial output tail while running. */
 	partial?: string;

@@ -14,20 +14,19 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { runModelsListing } from "@oh-my-pi/pi-coding-agent/cli/models-cli";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
-let tmp: string;
+let tmp: TempDir;
 let extPath: string;
 let dbPath: string;
 
 beforeAll(async () => {
-	tmp = await fs.mkdtemp(path.join(os.tmpdir(), "issue-905-"));
-	extPath = path.join(tmp, "ext.ts");
-	dbPath = path.join(tmp, "auth.db");
+	tmp = await TempDir.create("@issue-905-");
+	extPath = tmp.join("ext.ts");
+	dbPath = tmp.join("auth.db");
 	await fs.writeFile(
 		extPath,
 		`export default function (pi) {
@@ -51,33 +50,38 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-	await fs.rm(tmp, { recursive: true, force: true });
+	await Bun.sleep(0);
+	await tmp.remove();
 });
 
 test("omp models surfaces extension-registered providers (issue #905)", async () => {
 	const authStorage = await AuthStorage.create(dbPath);
-	const modelRegistry = new ModelRegistry(authStorage);
-
-	const captured: string[] = [];
-	const originalWrite = process.stdout.write.bind(process.stdout);
-	process.stdout.write = ((chunk: string | Uint8Array) => {
-		captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-		return true;
-	}) as typeof process.stdout.write;
-
 	try {
-		await runModelsListing({
-			modelRegistry,
-			cwd: tmp,
-			action: "ls",
-			additionalExtensionPaths: [extPath],
-			disableExtensionDiscovery: true,
-		});
-	} finally {
-		process.stdout.write = originalWrite;
-	}
+		const modelRegistry = new ModelRegistry(authStorage);
 
-	const output = captured.join("");
-	expect(output).toContain("test-gw");
-	expect(output).toContain("test-model");
+		const captured: string[] = [];
+		const originalWrite = process.stdout.write.bind(process.stdout);
+		process.stdout.write = ((chunk: string | Uint8Array) => {
+			captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+			return true;
+		}) as typeof process.stdout.write;
+
+		try {
+			await runModelsListing({
+				modelRegistry,
+				cwd: tmp.path(),
+				action: "ls",
+				additionalExtensionPaths: [extPath],
+				disableExtensionDiscovery: true,
+			});
+		} finally {
+			process.stdout.write = originalWrite;
+		}
+
+		const output = captured.join("");
+		expect(output).toContain("test-gw");
+		expect(output).toContain("test-model");
+	} finally {
+		authStorage.close();
+	}
 });

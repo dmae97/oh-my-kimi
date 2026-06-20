@@ -13,9 +13,19 @@ export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;
  * with an opaque HTTP 400. Detect those models so the resize pipeline encodes
  * to PNG/JPEG instead — the automatic equivalent of `OMP_NO_WEBP=1`.
  */
-export function modelLacksWebpSupport(model: Pick<Model, "provider" | "api"> | undefined): boolean {
+export function modelLacksWebpSupport(
+	model: Pick<Model, "provider" | "api" | "imageInputDecoder"> | undefined,
+): boolean {
 	if (!model) return false;
-	return model.provider === "ollama" || model.provider === "ollama-cloud" || model.api === "ollama-chat";
+	return (
+		model.imageInputDecoder === "stb" ||
+		model.provider === "ollama" ||
+		model.provider === "ollama-cloud" ||
+		model.provider === "llama.cpp" ||
+		model.provider === "lm-studio" ||
+		model.provider === "local-server" ||
+		model.api === "ollama-chat"
+	);
 }
 
 /**

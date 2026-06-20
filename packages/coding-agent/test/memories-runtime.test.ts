@@ -11,7 +11,7 @@ import {
 	startMemoryStartupTask,
 } from "@oh-my-pi/pi-coding-agent/memories";
 import * as memoryStorage from "@oh-my-pi/pi-coding-agent/memories/storage";
-import { getAgentDbPath, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 
 interface SessionFixture {
 	agentDir: string;
@@ -24,8 +24,7 @@ interface SessionFixture {
 	whenSettled: Promise<void>;
 }
 
-const createdDirs = new Set<string>();
-let sharedRoot: string | undefined;
+let sharedRoot: TempDir | undefined;
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
 	let resolve!: () => void;
@@ -34,12 +33,10 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	});
 	return { promise, resolve };
 }
-
 async function makeTempDir(prefix: string): Promise<string> {
-	const base = sharedRoot ?? os.tmpdir();
+	const base = sharedRoot?.path() ?? os.tmpdir();
 	const dir = path.join(base, `${prefix}-${Snowflake.next()}`);
 	await fs.mkdir(dir, { recursive: true });
-	createdDirs.add(dir);
 	return dir;
 }
 
@@ -105,7 +102,7 @@ const flushAsync = (): Promise<void> => new Promise<void>(resolve => setTimeout(
 // instead of polling, racing a generous timeout so a stalled regression fails
 // loudly rather than hanging.
 async function settle(promise: Promise<void>, label: string, timeoutMs = 3000): Promise<void> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: Timer | undefined;
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), timeoutMs);
 	});
@@ -117,14 +114,15 @@ async function settle(promise: Promise<void>, label: string, timeoutMs = 3000): 
 }
 
 beforeAll(async () => {
-	sharedRoot = path.join(os.tmpdir(), `memories-runtime-${Snowflake.next()}`);
-	await fs.mkdir(sharedRoot, { recursive: true });
+	sharedRoot = await TempDir.create(`memories-runtime-${Snowflake.next()}`);
 });
 
 afterAll(async () => {
-	if (sharedRoot) await fs.rm(sharedRoot, { recursive: true, force: true });
+	if (sharedRoot) {
+		await Bun.sleep(0);
+		await sharedRoot.remove();
+	}
 	sharedRoot = undefined;
-	createdDirs.clear();
 });
 
 describe("memories runtime", () => {

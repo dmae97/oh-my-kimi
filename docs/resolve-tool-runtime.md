@@ -44,7 +44,7 @@ Runtime behavior:
 
 - the pending invoker owns the `apply`/`reject` callbacks,
 - `resolve` dispatches via `peekQueueInvoker() ?? peekPendingInvoker() ?? peekStandingResolveHandler()`,
-- a genuine hard forced tool choice (queued via `nextToolChoice`) preempts the soft requirement,
+- a genuine hard forced tool choice (dequeued first by `nextToolChoiceDirective`) preempts the soft requirement,
 - if an apply callback throws, the helper re-registers the same pending invoker (same id) so the preview can still be discarded or retried.
 
 `resolve` also checks a standing resolve handler after the invokers; this is used by long-lived approval flows that are not ordinary preview tool calls.

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, type Mock, mock, spyOn } from "bun:test";
 import { streamPiNative } from "@oh-my-pi/pi-ai/providers/pi-native-client";
 import type {
 	AssistantMessage,
@@ -288,7 +288,7 @@ describe("streamPiNative event flow", () => {
 
 		await expect(stream.result()).rejects.toThrow(/pre-aborted/);
 		// fetch was never called — short-circuit happened in the abort guard
-		expect((fetchImpl as unknown as ReturnType<typeof spyOn>).mock.calls.length).toBe(0);
+		expect((fetchImpl as unknown as Mock<typeof globalThis.fetch>).mock.calls.length).toBe(0);
 	});
 
 	it("forwards the caller's AbortSignal to the underlying fetch", async () => {

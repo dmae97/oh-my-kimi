@@ -145,7 +145,7 @@ function createProviderTab(providerId: string): ProviderTabState {
 	return { id: providerId, label: formatProviderTabLabel(providerId), providerId };
 }
 const TEMPORARY_MODEL_PICKER_HINT =
-	"Temporary/session model only. Use Alt+M or /model for role models (default/smol/plan/task/slow/custom roles).";
+	"Temporary model selection is session-only. Use Alt+M or /model for role models (default/smol/plan/task/slow/custom roles).";
 
 /**
  * Component that renders a model selector with provider tabs and context menu.
@@ -154,7 +154,6 @@ const TEMPORARY_MODEL_PICKER_HINT =
  * - Enter: Open context menu to select action
  * - Escape: Close menu or selector
  */
-
 export class ModelSelectorComponent extends Container {
 	#searchInput: Input;
 	#headerContainer: Container;
@@ -183,9 +182,9 @@ export class ModelSelectorComponent extends Container {
 	#providers: ProviderTabState[] = STATIC_PROVIDER_TABS;
 	#activeTabIndex: number = 0;
 	#refreshingProviders: Set<string> = new Set();
-	#scheduledProviderRefreshes: Map<string, ReturnType<typeof setTimeout>> = new Map();
+	#scheduledProviderRefreshes: Map<string, Timer> = new Map();
 	#refreshSpinnerFrame: number = 0;
-	#refreshSpinnerInterval?: NodeJS.Timeout;
+	#refreshSpinnerInterval?: Timer;
 
 	// Context menu state
 	#isMenuOpen: boolean = false;

@@ -27,7 +27,7 @@ import {
 	theme,
 } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import type { ResetCreditRedeemOutcome } from "../../session/auth-storage";
+import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "../../session/auth-storage";
 import type { SessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
@@ -72,7 +72,7 @@ import { buildCopyTargets } from "../utils/copy-targets";
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
 export function formatTemporaryModelStatus(modelLabel: string, roleSelectorHint = "Alt+M"): string {
-	return `Temporary session model: ${modelLabel}. Role models (default/smol/plan/task/slow/custom roles): use ${roleSelectorHint} or /model.`;
+	return `Temporary model selection is session-only: ${modelLabel}. Use ${roleSelectorHint} or /model for role models (default/smol/plan/task/slow/custom roles).`;
 }
 
 export class SelectorController {
@@ -1166,7 +1166,7 @@ export class SelectorController {
 	async showResetUsageSelector(): Promise<void> {
 		const session = this.ctx.session;
 		this.ctx.showStatus("Checking saved rate-limit resets…", { dim: true });
-		let statuses: Awaited<ReturnType<typeof session.listResetCredits>>;
+		let statuses: ResetCreditAccountStatus[];
 		try {
 			statuses = await session.listResetCredits();
 		} catch (error) {

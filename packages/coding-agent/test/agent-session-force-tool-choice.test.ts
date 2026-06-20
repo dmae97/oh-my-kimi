@@ -78,9 +78,9 @@ afterEach(async () => {
 it("forces specific tool, then transitions to none, then clears", () => {
 	session.setForcedToolChoice("write");
 
-	const first = session.nextToolChoice();
-	const second = session.nextToolChoice();
-	const third = session.nextToolChoice();
+	const first = session.nextToolChoiceDirective();
+	const second = session.nextToolChoiceDirective();
+	const third = session.nextToolChoiceDirective();
 
 	expect(first).toEqual({ type: "tool", name: "write" });
 	// After the forced call, "none" prevents the loop from making more tool calls
@@ -93,11 +93,11 @@ it("requeues a forced choice whose tool is filtered out before dequeue", async (
 	session.setForcedToolChoice("write");
 
 	await session.setActiveToolsByName(["bash"]);
-	expect(session.nextToolChoice()).toBeUndefined();
+	expect(session.nextToolChoiceDirective()).toBeUndefined();
 	expect(session.toolChoiceQueue.hasInFlight).toBe(false);
 
 	await session.setActiveToolsByName(["bash", "write"]);
-	expect(session.nextToolChoice()).toEqual({ type: "tool", name: "write" });
+	expect(session.nextToolChoiceDirective()).toEqual({ type: "tool", name: "write" });
 	session.toolChoiceQueue.clear();
 });
 

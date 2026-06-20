@@ -184,7 +184,7 @@ describe("ModelSelector role badge thinking display", () => {
 		installTestTheme();
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(rendered).toContain("Temporary/session model only");
+		expect(rendered).toContain("Temporary model selection is session-only");
 		expect(rendered).toContain("Alt+M or /model");
 		expect(rendered).toContain("default/smol/plan/task/slow/custom roles");
 	});

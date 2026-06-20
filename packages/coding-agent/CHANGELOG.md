@@ -5,6 +5,56 @@
 ### Changed
 
 - Changed the temporary model picker to label Alt+P selections as session-only and point users to Alt+M or `/model` for role model assignment. ([#2952](https://github.com/can1357/oh-my-pi/issues/2952))
+
+## [16.1.5] - 2026-06-19
+
+### Changed
+
+- Removed the legacy `AgentSession.nextToolChoice()` method. The per-turn tool-choice directive now flows solely through `nextToolChoiceDirective()` (which folds in the hard-choice dequeue plus active-tool filtering as a private helper), eliminating the dual entry point that let callers consume the queue while bypassing the soft pending-preview lifecycle. The underlying `ToolChoiceQueue.nextToolChoice()` is unchanged.
+
+## [16.1.4] - 2026-06-19
+
+### Fixed
+
+- Fixed `omp bench` and `omp dry-balance` failing to resolve models from extension providers
+- Improved error reporting for `omp bench` runs that return no output or tokens
+- Cache-miss marker no longer fires on a cold turn whose predecessor only *wrote* the prompt cache (never read it back). The session's opening request always writes the prefix with `cacheRead 0`, so a long-running first tool call (e.g. `gh run watch`) that outlived the provider's cache TTL surfaced a spurious `⊘ cache miss` divider right under the opening message. The marker now requires the previous turn to have actually read a warm prefix, so it flags only a demonstrably working cache going cold — and collapses a run of consecutive cold turns to a single marker at the moment the cache broke.
+- Fixed `omp bench` and `omp dry-balance` failing to resolve models from extension-registered providers (`pi.registerProvider(...)`). Both commands build a one-shot `ModelRegistry` that previously only knew built-in catalog providers, so a `provider/model` selector for a provider contributed by an extension under `~/.omp/agent/extensions/` errored with "Model not found". A new `loadCliExtensionProviders` helper loads the session's extensions, drains their provider registrations into the registry, and discovers dynamic provider catalogs before resolving selectors — mirroring the interactive session and `omp models` paths.
+- `omp bench` now reports a run that streamed no content and measured no output tokens as a failure ("provider returned no output") instead of a misleading green check with `tokens 0 / TPS 0.0`.
+- Cleared stale pending-preview gates when `resolve` finds no runnable handler, and forwarded the missing `peekPendingInvoker` and `clearPendingInvokers` hooks on the production session so staged previews actually reach the resolve tool and the gate drains on dispatch failure. ([#3061](https://github.com/can1357/oh-my-pi/issues/3061))
+- Deferred status-line usage refreshes off the render path and timeboxed the startup fetch so slow Anthropic quota lookups no longer block interactive startup. ([#3057](https://github.com/can1357/oh-my-pi/issues/3057))
+- Fixed image paste placeholders falling through to terminal hyperlink settings before `Settings.init()`, so early editor rendering falls back to plain text instead of crashing. ([#3064](https://github.com/can1357/oh-my-pi/issues/3064))
+- Fixed `omp plugin install github:owner/repo` silently keeping the user on a stale commit when re-run on an already-installed GitHub plugin. `bun install <spec>` respects the existing `bun.lock` pin when the spec is unchanged and never re-resolves the remote ref, so the manager now follows a git re-install with `bun update <name>` to refresh the lockfile pin against the upstream. The install transaction also snapshots `bun.lock` up front and routes feature validation, extension validation, and runtime-config save through one rollback path so a failed install can never leave the rejected commit pinned in the active tree or lockfile. First-time installs are unaffected. ([#3063](https://github.com/can1357/oh-my-pi/issues/3063))
+
+## [16.1.3] - 2026-06-19
+
+### Changed
+
+- Refactored Perplexity authentication logic to prioritize cookies over OAuth in search operations
+- Updated `token` command to correctly display active Perplexity OAuth tokens when present
+
+### Fixed
+
+- Enabled auto-retry for AI "thinking loop" errors encountered during model inference
+- Cleared stale error banners automatically when triggered by an auto-retry recovery phase
+- Preserved bundled `omitMaxOutputTokens` policy when fresh cached provider discovery rows replace Ollama Cloud catalog models, so stale `models.db` entries cannot re-enable context-window-sized `num_predict` values. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
+- Normalized cached-only Ollama Cloud discovery rows to omit on-the-wire output-token caps even when the cached model id has no bundled catalog entry. ([#2984](https://github.com/can1357/oh-my-pi/issues/2984))
+- Fixed Ollama, LM Studio, and llama.cpp (plus loopback vLLM / sglang servers) reprocessing the full prompt on every turn because `provider.appendOnlyContext: auto` only recognized DeepSeek and Xiaomi as prefix-cache providers. The auto-detect now enables append-only mode for `ollama`, `ollama-cloud`, `lm-studio`, `llama.cpp`, and any baseUrl resolving to a loopback/RFC1918/`.local` host, so the system prompt + tool catalogue + prior-turn message bytes stay byte-stable across turns and llama.cpp's KV-cache prefix reuse can hit ([#3033](https://github.com/can1357/oh-my-pi/issues/3033)).
+- Isolated mnemopi's local embedding provider in a dedicated `Bun.spawn` subprocess so `onnxruntime-node` and `fastembed` never load into the main agent process. Previously `memory.backend: mnemopi` crashed Bun on Windows — standalone binaries faulted in the NAPI `process.dlopen` constructor at session start, npm installs faulted in the NAPI finalizer at process teardown. Mirrors the tiny-model isolation pattern from [#1607](https://github.com/can1357/oh-my-pi/pull/1607); the parent SIGKILLs the child on dispose so the destructor never runs in either address space ([#3031](https://github.com/can1357/oh-my-pi/issues/3031)).
+- Fixed image tool registration resolving image provider credentials during session startup, so broken or slow `google-antigravity` OAuth state no longer blocks sessions that never invoke `generate_image` ([#3036](https://github.com/can1357/oh-my-pi/issues/3036)).
+- Fixed LSP client returning `-32601 Method not found` for defined server→client requests (`window/showMessageRequest`, `window/showDocument`, `workspace/{semanticTokens,inlayHint,codeLens,codeAction,diagnostic}/refresh`). Servers that stall waiting for a real reply (same failure mode as #3029) now receive the spec no-op result ([#3044](https://github.com/can1357/oh-my-pi/issues/3044)).
+- Fixed WebP images being sent unchanged to `local-server` vision models, which can fail through llama.cpp/STB-backed decoders that do not support WebP ([#2922](https://github.com/can1357/oh-my-pi/issues/2922)).
+- Made `getSettingsListTheme`, `getEditorTheme`, `getSelectListTheme`, and `getSymbolTheme` return a plain ASCII fallback instead of crashing with "undefined is not an object (evaluating 'theme.fg')" when the global `theme` is undefined — e.g. when a plugin calls them before `initTheme()` completes or from a separate module instance under npm-global installs. ([#2998](https://github.com/can1357/oh-my-pi/issues/2998))
+- Hardened TTS, STT, and tiny-title worker IPC `send()` paths against async EPIPE rejections: `Subprocess.send()` is now wrapped so neither a synchronous "process exited" throw nor an asynchronous EPIPE rejection (when the pipe breaks between exit being observed and the next send) can escape as a fatal unhandled rejection. A dying Kokoro/TTS/STT worker can no longer crash the whole agent session mid-task. ([#2997](https://github.com/can1357/oh-my-pi/issues/2997))
+- Fixed Windows test failures caused by path handling: tests now use `pathToFileURL`, `path.resolve`, and `path.join` instead of hard-coded POSIX paths; `shortenPath()` normalizes backslashes to forward slashes after `~` and respects home directory boundaries; shell-escaped interpolated paths in bash tool tests to prevent Git Bash eating backslashes
+- Fixed `HistoryStorage.resetInstance()` leaking its SQLite database handle on Windows by adding a `#close()` method that finalizes all prepared statements and closes the database; `AgentStorage` gained the same `resetInstance()`/`#close()` pattern
+- Fixed `createAgentSession` leaking the internally-created `AuthStorage` when session construction fails before the session takes ownership, causing EBUSY on Windows temp dir cleanup
+- Fixed `MnemopiBackend.removeDbFiles()` throwing on Windows when the database handle is still being released; it is now truly best-effort (logs failures instead of silently swallowing)
+- Fixed Windows EBUSY test failures by replacing raw `fs.rmSync`/`fs.rm` cleanup with `TempDir` (which retries) and best-effort `.catch(() => {})` where SQLite handles outlive the test
+- Fixed `TempDir` prefix convention: non-`@` prefixes created temp dirs relative to cwd instead of `os.tmpdir()`, causing module resolution failures on Windows
+- Fixed git line-ending mismatches in autoresearch tests by setting `core.autocrlf false` in test repo initialization
+- Fixed Bedrock inference-profile ARN models being dropped from the allowed-model set when models were scoped via `enabledModels`, the SDK, or ACP, so an accepted ARN no longer resolves to an empty selection. ([#3006](https://github.com/can1357/oh-my-pi/pull/3006))
+
 ## [16.1.2] - 2026-06-19
 
 ### Added
@@ -13,12 +63,15 @@
 
 ### Changed
 
+- Renamed the search tool's `i` parameter to `case` and inverted its semantics to represent case-sensitive search.
+- Improved session history to export empty objects as `{}` instead of empty strings
 - Refined system prompt and tool documentation to improve conciseness and clarity
 - Simplified tool input descriptions for browser, eval, find, and memory-edit operations
 - Refactored authentication storage discovery to share logic with other pi-ai tools
 
 ### Fixed
 
+- Fixed `omp bench` resolving an ambiguous model selector — a bare or canonical id shared by several providers (e.g. `gpt-oss-20b` or `openai/gpt-oss-20b`) — to a provider you have no credentials for. Bench resolves against the full catalog (credentials are ignored), so the default pick was decided by provider-priority order alone. It now redirects such selectors to an equivalent model under a provider with configured auth (honoring `modelProviderOrder` and canonical cross-provider variants), while an explicit `provider/id` selector is still benchmarked verbatim so forced/unauthenticated runs keep working.
 - Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
 - Fixed streaming reflowing Markdown — a fenced mermaid diagram or a GFM table — stranding stale fragments in native scrollback once the reply scrolled past the viewport (cleared only by a full repaint / Ctrl+L). While streaming, the assistant block defaulted to commit-stable, so the transcript advertised its scrolled-off rows as durable snapshot content and the renderer committed an intermediate layout to immutable terminal history; the later re-layout (a diagram reshaping, a table re-aligning its columns) then froze that superseded fragment in scrollback. A still-streaming reply whose Markdown carries a mermaid fence or a table — detected outside fenced code blocks so ordinary code snippets are unaffected — is now commit-unstable, so it stays wholly in the repaintable live region and commits once, at its final layout, when the turn finalizes.
 - Fixed `SYSTEM.md` prompt customization going through the raw system prompt override path, which dropped sections rendered by `custom-system-prompt.md` such as skills and rules ([#3014](https://github.com/can1357/oh-my-pi/issues/3014)).
@@ -141,6 +194,7 @@
 - Changed `omp://` documentation embedding to a gzipped base64 index (`docs-index.generated.txt`, populated at build time and reset afterward) inflated on first read, instead of a ~1.6MB raw TypeScript map. The compiled binary / npm bundle drops ~0.9MB; the dev tree and source checkouts read `docs/` from disk.
 - Replaced the `markit-ai` package with a vendored in-house document engine (`src/markit`) for the document formats it converts: PDF (via `mupdf`), DOCX (via `mammoth`), and PPTX/XLSX/EPUB (via `fast-xml-parser`). Conversion output is preserved, including the PDF column/table-detection pipeline and HTML-table normalization; `markit-ai`'s unused converters and their dependency tail are gone. Legacy `.doc`/`.ppt`/`.xls`/`.rtf` remain unsupported (a conversion error), as before.
 - Centralized ZIP handling behind a single `src/utils/zip.ts` (`fflate`): the new document converters, the `write` tool's in-place archive editing, and the `read` tool's ranged archive reader now share one ZIP implementation instead of mixing `jszip` and `fflate`.
+
 ### Fixed
 
 - Fixed settings overlay crash when scrolling past the last row in list views

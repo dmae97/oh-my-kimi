@@ -1,4 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import * as path from "node:path";
+import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
@@ -132,12 +134,14 @@ describe("searchToolRenderer", () => {
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
 
+		const projectRoot = path.resolve("/tmp/omp-project");
+		const filePath = path.join(projectRoot, "src", "file.ts");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
 				matchCount: 1,
 				fileCount: 1,
-				searchPath: "/tmp/omp-project",
+				searchPath: projectRoot,
 				scopePath: "src",
 				displayContent: ["# src/", "## file.ts#abcd", "*12│const needle = true;"].join("\n"),
 			},
@@ -147,10 +151,13 @@ describe("searchToolRenderer", () => {
 			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { pattern: "needle" })
 			.render(240)
 			.join("\n");
+		const fileUri = url.pathToFileURL(path.resolve(filePath)).href;
+		const lineUri = new URL(fileUri);
+		lineUri.searchParams.set("line", "12");
 		const uris = extractLinkUris(rendered);
 
-		expect(uris).toContain("file:///tmp/omp-project/src/file.ts");
-		expect(uris).toContain("file:///tmp/omp-project/src/file.ts?line=12");
+		expect(uris).toContain(fileUri);
+		expect(uris).toContain(lineUri.href);
 	});
 
 	it("links single-file code-frame lines to the searched file", async () => {
@@ -159,12 +166,13 @@ describe("searchToolRenderer", () => {
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
 
+		const filePath = path.resolve("/tmp/omp-project/file.ts");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
 				matchCount: 1,
 				fileCount: 1,
-				searchPath: "/tmp/omp-project/file.ts",
+				searchPath: filePath,
 				scopePath: "file.ts",
 				displayContent: "*7│needle();",
 			},
@@ -175,7 +183,9 @@ describe("searchToolRenderer", () => {
 			.render(240)
 			.join("\n");
 
-		expect(extractLinkUris(rendered)).toContain("file:///tmp/omp-project/file.ts?line=7");
+		const lineUri = new URL(url.pathToFileURL(path.resolve(filePath)).href);
+		lineUri.searchParams.set("line", "7");
+		expect(extractLinkUris(rendered)).toContain(lineUri.href);
 	});
 
 	it("bounds the expanded single-file view instead of dumping every match", async () => {
@@ -194,12 +204,13 @@ describe("searchToolRenderer", () => {
 			})
 			.join("\n");
 
+		const filePath = path.resolve("/tmp/omp-project/renderer.ts");
 		const result = {
 			content: [{ type: "text", text: "" }],
 			details: {
 				matchCount: clusters.length,
 				fileCount: 1,
-				searchPath: "/tmp/omp-project/renderer.ts",
+				searchPath: filePath,
 				scopePath: "renderer.ts",
 				displayContent,
 			},

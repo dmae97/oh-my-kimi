@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Message, Usage } from "@oh-my-pi/pi-ai";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import * as snapcompact from "../src";
 
 // Small frames keep render time negligible. Legacy 5x8 shape: 320px → 64 cols
@@ -567,11 +568,16 @@ describe("serializeConversation", () => {
 		expect(out).toBe("# User ¶\ndo the thing\n\n# Assistant ¶\ndone");
 	});
 
-	it("merges a tool call with its paired result into one block, _i as a // comment", () => {
+	it("merges a tool call with its paired result into one block, intent as a // comment", () => {
 		const out = snapcompact.serializeConversation(
 			[
 				createAssistantMessage([
-					{ type: "toolCall", id: "c1", name: "bash", arguments: { _i: "Running tests", command: "bun test" } },
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "bash",
+						arguments: { [INTENT_FIELD]: "Running tests", command: "bun test" },
+					},
 				]),
 				{ ...createToolResultMessage("3 pass"), toolCallId: "c1" } as Message,
 			],
@@ -580,21 +586,21 @@ describe("serializeConversation", () => {
 		expect(out).toBe('# Tool call ¶\n//Running tests\nbash(command="bun test")\n<out>\n3 pass\n</out>');
 	});
 
-	it("prefers the harness-derived intent over the raw _i arg and squashes newlines", () => {
+	it("prefers the harness-derived intent over the raw intent arg and squashes newlines", () => {
 		const out = snapcompact.serializeConversation([
 			createAssistantMessage([
 				{
 					type: "toolCall",
 					id: "c1",
 					name: "bash",
-					arguments: { _i: "raw arg", command: "ls" },
+					arguments: { [INTENT_FIELD]: "raw arg", command: "ls" },
 					intent: "Derived\nintent  line",
 				},
 			]),
 		]);
 		expect(out).toContain("//Derived intent line");
 		expect(out).not.toContain("raw arg");
-		expect(out).not.toContain("_i=");
+		expect(out).not.toContain(`${INTENT_FIELD}=`);
 	});
 
 	it("folds thinking into the assistant block as italics above the text", () => {

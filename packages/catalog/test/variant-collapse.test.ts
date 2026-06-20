@@ -126,58 +126,139 @@ describe("collapseEffortVariants", () => {
 		});
 	});
 
-	it("routes claude pairs off to the bare id and efforts to -thinking", () => {
+	it("routes both bare and -thinking sonnet 4.6 ids to the bare wire id (backend has no -thinking twin)", () => {
 		const out = collapseEffortVariants(
 			[
 				memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 }),
-				memberSpec("claude-sonnet-4-6-thinking", { maxTokens: 128_000 }),
+				memberSpec("claude-sonnet-4-6-thinking", { maxTokens: 64_000 }),
 			],
 			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
 		);
 
 		expect(out).toHaveLength(1);
-		expect(out[0]?.id).toBe("claude-sonnet-4-6");
-		// The default wire id equals the logical id — requestModelId is omitted.
-		expect(out[0]?.requestModelId).toBeUndefined();
-		expect(out[0]?.maxTokens).toBe(128_000);
-		expect(out[0]?.thinking?.mode).toBe("budget");
-		expect(out[0]?.thinking?.suppressWhenOff).toBeUndefined();
-		expect(out[0]?.thinking?.effortRouting).toEqual({
-			off: "claude-sonnet-4-6",
-			minimal: "claude-sonnet-4-6-thinking",
-			low: "claude-sonnet-4-6-thinking",
-			medium: "claude-sonnet-4-6-thinking",
-			high: "claude-sonnet-4-6-thinking",
-		});
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-sonnet-4-6");
+		// Default wire id equals the logical id — requestModelId is omitted and
+		// no effortRouting is needed; the request-body `thinkingBudget` carries
+		// per-effort behavior on a single shared wire id.
+		expect(spec?.requestModelId).toBeUndefined();
+		expect(spec?.thinking?.effortRouting).toBeUndefined();
+		expect(spec?.thinking?.mode).toBe("budget");
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, undefined)).toBe("claude-sonnet-4-6");
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-sonnet-4-6");
 	});
 
-	it("keeps claude -thinking routing when discovery only returns the bare id", () => {
+	it("collapses a bare-only sonnet 4.6 discovery to the bare wire id", () => {
 		const out = collapseEffortVariants(
 			[memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 })],
 			ANTIGRAVITY_VARIANT_COLLAPSE_TABLE,
 		);
 
 		expect(out).toHaveLength(1);
-		expect(out[0]?.id).toBe("claude-sonnet-4-6");
-		expect(out[0]?.requestModelId).toBe("claude-sonnet-4-6");
-		expect(out[0]?.thinking?.effortRouting).toEqual({
-			off: "claude-sonnet-4-6",
-			minimal: "claude-sonnet-4-6-thinking",
-			low: "claude-sonnet-4-6-thinking",
-			medium: "claude-sonnet-4-6-thinking",
-			high: "claude-sonnet-4-6-thinking",
-		});
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-sonnet-4-6");
+		expect(spec?.requestModelId).toBeUndefined();
+		expect(spec?.thinking?.effortRouting).toBeUndefined();
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		// Regression: previously this routed thinking efforts to a non-existent
+		// `claude-sonnet-4-6-thinking` wire id and 404'd on the backend.
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-sonnet-4-6");
+		expect(resolveWireModelId(model, undefined)).toBe("claude-sonnet-4-6");
 	});
 
-	it("keeps the thinking backing id for a -thinking-only claude family", () => {
+	it("routes every opus 4.6 request to the -thinking wire id (the only one the backend exposes)", () => {
 		const out = collapseEffortVariants([memberSpec("claude-opus-4-6-thinking")], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
 
-		expect(out[0]?.id).toBe("claude-opus-4-6");
-		expect(out[0]?.requestModelId).toBe("claude-opus-4-6-thinking");
-		// The off route targeted the absent bare id — dropped; off falls back
-		// to requestModelId, preserving today's served default.
-		expect(out[0]?.thinking?.effortRouting?.off).toBeUndefined();
-		expect(out[0]?.thinking?.effortRouting?.[Effort.High]).toBe("claude-opus-4-6-thinking");
+		expect(out).toHaveLength(1);
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-opus-4-6");
+		expect(spec?.requestModelId).toBe("claude-opus-4-6-thinking");
+		expect(spec?.thinking?.effortRouting).toBeUndefined();
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		// Thinking-off and every effort fall back through requestModelId to
+		// the only wire id the backend actually serves.
+		expect(resolveWireModelId(model, undefined)).toBe("claude-opus-4-6-thinking");
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-opus-4-6-thinking");
+	});
+
+	it("reconciles a stale Sonnet 4.6 snapshot whose routing still targets the dead -thinking wire id", () => {
+		// Bundled `models.json` and SQLite cache rows written before #3071
+		// route every effort to `claude-sonnet-4-6-thinking` (a wire id
+		// `daily-cloudcode-pa` does not expose). The `retiredMembers` entry
+		// triggers `reconcileRetiredRouting`, which re-points every retired
+		// route to the live bare wire id.
+		const stale: ModelSpec<"google-gemini-cli"> = {
+			...memberSpec("claude-sonnet-4-6", { maxTokens: 64_000 }),
+			requestModelId: "claude-sonnet-4-6",
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "claude-sonnet-4-6",
+					[Effort.Minimal]: "claude-sonnet-4-6-thinking",
+					[Effort.Low]: "claude-sonnet-4-6-thinking",
+					[Effort.Medium]: "claude-sonnet-4-6-thinking",
+					[Effort.High]: "claude-sonnet-4-6-thinking",
+				},
+			},
+		};
+		const out = collapseEffortVariants([stale], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+
+		expect(out).toHaveLength(1);
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-sonnet-4-6");
+		expect(spec?.thinking?.effortRouting).toEqual({
+			off: "claude-sonnet-4-6",
+			minimal: "claude-sonnet-4-6",
+			low: "claude-sonnet-4-6",
+			medium: "claude-sonnet-4-6",
+			high: "claude-sonnet-4-6",
+		});
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-sonnet-4-6");
+	});
+
+	it("reconciles a stale Opus 4.6 snapshot whose routing still targets the dead bare wire id", () => {
+		// Defensive: a stale snapshot with `off`/efforts pointing at the bare
+		// `claude-opus-4-6` (never exposed by Antigravity) is re-pointed to
+		// the live `-thinking` wire id by `reconcileRetiredRouting`.
+		const stale: ModelSpec<"google-gemini-cli"> = {
+			...memberSpec("claude-opus-4-6"),
+			requestModelId: "claude-opus-4-6",
+			thinking: {
+				mode: "budget",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "claude-opus-4-6",
+					[Effort.Minimal]: "claude-opus-4-6",
+					[Effort.Low]: "claude-opus-4-6",
+					[Effort.Medium]: "claude-opus-4-6",
+					[Effort.High]: "claude-opus-4-6",
+				},
+			},
+		};
+		const out = collapseEffortVariants([stale], ANTIGRAVITY_VARIANT_COLLAPSE_TABLE);
+
+		expect(out).toHaveLength(1);
+		const spec = out[0];
+		expect(spec?.id).toBe("claude-opus-4-6");
+		expect(spec?.requestModelId).toBe("claude-opus-4-6-thinking");
+		expect(spec?.thinking?.effortRouting).toEqual({
+			off: "claude-opus-4-6-thinking",
+			minimal: "claude-opus-4-6-thinking",
+			low: "claude-opus-4-6-thinking",
+			medium: "claude-opus-4-6-thinking",
+			high: "claude-opus-4-6-thinking",
+		});
+
+		const model = buildModel(spec as ModelSpec<"google-gemini-cli">);
+		expect(resolveWireModelId(model, undefined)).toBe("claude-opus-4-6-thinking");
+		expect(resolveWireModelId(model, Effort.High)).toBe("claude-opus-4-6-thinking");
 	});
 
 	it("renames single-member families through requestModelId with no routing", () => {

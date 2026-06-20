@@ -180,6 +180,11 @@ async function createPrFixture(): Promise<PrFixture> {
  * `getWorktreesDir()` resolves under an isolated temp home instead of the
  * user's real `~/.omp/wt`. Returns the temp home and a cleanup hook.
  */
+interface TempHome {
+	home: string;
+	cleanup: () => Promise<void>;
+}
+
 async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<void> }> {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-home-"));
 	vi.spyOn(os, "homedir").mockReturnValue(home);
@@ -765,7 +770,7 @@ describe("github tool", () => {
 		// Arrange the mutable fixture + isolated $HOME once in beforeAll (excluded
 		// from test-body time); the body only performs the checkout and assertions.
 		let fixture: PrFixture;
-		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		let tempHome: TempHome;
 		beforeAll(async () => {
 			fixture = await createPrFixture();
 			tempHome = await setupTempHome();
@@ -867,7 +872,7 @@ describe("github tool", () => {
 	describe("pr_checkout (array of pull requests)", () => {
 		// Same beforeAll-hoisted arrange: the body only runs the array checkout.
 		let fixture: PrFixture;
-		let tempHome: Awaited<ReturnType<typeof setupTempHome>>;
+		let tempHome: TempHome;
 		beforeAll(async () => {
 			fixture = await createPrFixture();
 			tempHome = await setupTempHome();

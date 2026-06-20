@@ -656,8 +656,8 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	 * Illustrative calls/notes; the AI layer renders them into an `<examples>`
 	 * block in the model's native tool-call syntax and appends to the wire
 	 * description. Author `call`/`bad`/`good` as plain argument objects WITHOUT
-	 * `_i` — when intent tracing injects `_i` into the schema, the renderer adds
-	 * a placeholder `_i` automatically. Type each tool's `examples` against its
+	 * `i` — when intent tracing injects `i` into the schema, the renderer adds
+	 * a placeholder `i` automatically. Type each tool's `examples` against its
 	 * own schema (e.g. `readonly ToolExample<typeof schema["type"]>[]`).
 	 */
 	examples?: readonly ToolExample[];

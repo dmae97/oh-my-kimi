@@ -31,7 +31,11 @@ function lexicalIsWithin(root: string, candidate: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export function filterUserScoped<T extends { path: string }>(items: T[]): T[] {
+export function filterUserScoped<T extends { path: string }>(items: T[], keepRoots?: string | string[]): T[] {
+	if (keepRoots) {
+		const roots = Array.isArray(keepRoots) ? keepRoots : [keepRoots];
+		return items.filter(it => roots.some(root => lexicalIsWithin(root, it.path)));
+	}
 	const prefixes = [getConfigRootDir(), getAgentDir(), getPluginsDir()];
 	return items.filter(it => !prefixes.some(prefix => lexicalIsWithin(prefix, it.path)));
 }

@@ -196,6 +196,30 @@ describe("generated model policies", () => {
 		expect(models[2]?.maxTokens).toBe(64000);
 	});
 
+	it("marks Ollama Cloud generated rows to omit max output tokens", () => {
+		const models: ModelSpec<Api>[] = [
+			createSpec({
+				id: "deepseek-v4-flash",
+				api: "ollama-chat",
+				provider: "ollama-cloud",
+				contextWindow: 1048576,
+				maxTokens: 1048576,
+			}),
+			createSpec({
+				id: "deepseek-v4-flash",
+				api: "ollama-chat",
+				provider: "ollama",
+				contextWindow: 1048576,
+				maxTokens: 1048576,
+			}),
+		];
+
+		applyGeneratedModelPolicies(models);
+
+		expect(models[0]?.omitMaxOutputTokens).toBe(true);
+		expect(models[1]?.omitMaxOutputTokens).toBeUndefined();
+	});
+
 	it("marks OpenCode Go MiMo models as not supporting tool_choice", () => {
 		const models: ModelSpec<"openai-completions">[] = [
 			createSpec({

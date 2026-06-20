@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [16.1.3] - 2026-06-19
+
+### Added
+
+- Exposed `setLocalModelInitializer` (and the `LocalEmbeddingModel`, `LocalModelInitializer`, `LocalModelInitOptions`, `StandardEmbeddingModel` types) so hosts can route fastembed loads through a dedicated subprocess and keep `onnxruntime-node`'s NAPI constructor + finalizer out of their own address space. Same wipe semantics as the existing `setLocalModelInitializerForTests` seam; the agent CLI uses it to crash-proof Windows when `memory.backend: mnemopi` is enabled ([#3031](https://github.com/can1357/oh-my-pi/issues/3031)).
+
+### Fixed
+
+- Fixed background fact extraction skipping runtime-configured remote LLM endpoints when `MNEMOPI_LLM_BASE_URL` was unset, so `remember(..., { extract: true })` now stores remote-distilled facts from `mnemopi.llm` config instead of falling back to regex heuristics. ([#3041](https://github.com/can1357/oh-my-pi/issues/3041))
+- Fixed local fastembed startup on macOS ARM64 by letting `fastembed@2.1.0` install its matching `onnxruntime-node@1.21.0` native runtime instead of forcing `1.26.0`, and by repairing missing tokenizer sidecars from the upstream Hugging Face model cache when a stale fastembed archive lacks them. ([#3054](https://github.com/can1357/oh-my-pi/issues/3054))
+
 ## [16.0.6] - 2026-06-18
 
 ### Fixed
