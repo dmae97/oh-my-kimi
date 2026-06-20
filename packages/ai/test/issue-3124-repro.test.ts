@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { streamBedrock } from "@oh-my-pi/pi-ai/providers/amazon-bedrock";
 import { crc32 } from "@oh-my-pi/pi-ai/providers/aws-eventstream";
-import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
+import type { Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { z } from "zod/v4";
 
 const originalSkipAuth = process.env.AWS_BEDROCK_SKIP_AUTH;
 
@@ -188,5 +189,29 @@ describe("issue #3124 — Bedrock /btw with tool history", () => {
 
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.some(block => block.type === "toolCall")).toBe(false);
+	});
+
+	it("preserves a real caller tool literally named __no_tools__ on normal turns", async () => {
+		const userTool: Tool = {
+			name: "__no_tools__",
+			description: "Caller-registered tool that collides with the sentinel name.",
+			parameters: z.object({ query: z.string() }),
+		};
+		const context: Context = {
+			messages: [{ role: "user", content: "Use my tool", timestamp: 0 }],
+			tools: [userTool],
+		};
+
+		const result = await streamBedrock(model(), context, {
+			toolChoice: "auto",
+			fetch: sentinelToolUseFetch(),
+		}).result();
+
+		expect(result.stopReason).toBe("toolUse");
+		const toolCalls = result.content.filter(
+			(block): block is Extract<typeof block, { type: "toolCall" }> => block.type === "toolCall",
+		);
+		expect(toolCalls).toHaveLength(1);
+		expect(toolCalls[0]?.name).toBe("__no_tools__");
 	});
 });
