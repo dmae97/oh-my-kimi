@@ -87,7 +87,7 @@ import {
 	type MCPToolsLoadResult,
 	parseMCPToolName,
 } from "./mcp";
-import { MCP_CONNECTING_EVENT_CHANNEL, type McpConnectingEvent } from "./mcp/startup-events";
+import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import type { MnemopiSessionState } from "./mnemopi/state";
 import asyncResultTemplate from "./prompts/tools/async-result.md" with { type: "text" };
@@ -1620,12 +1620,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			| ((liveSession: AgentSession, activation: DeferredMCPActivation) => void)
 			| undefined;
 		const startupQuiet = settings.get("startup.quiet");
-		const onMCPConnecting = (serverNames: string[]) => {
-			if (!options.hasUI || startupQuiet || serverNames.length === 0) return;
-			eventBus.emit(MCP_CONNECTING_EVENT_CHANNEL, { serverNames } satisfies McpConnectingEvent);
+		const onMCPStatus = (event: McpConnectionStatusEvent) => {
+			if (!options.hasUI || startupQuiet) return;
+			if (event.type === "connecting" && event.serverNames.length === 0) return;
+			eventBus.emit(MCP_CONNECTION_STATUS_EVENT_CHANNEL, event);
 		};
 		const mcpDiscoverOptions = {
-			onConnecting: onMCPConnecting,
+			onStatus: onMCPStatus,
 			enableProjectConfig: settings.get("mcp.enableProjectConfig") ?? true,
 			// Always filter Exa - we have native integration
 			filterExa: true,

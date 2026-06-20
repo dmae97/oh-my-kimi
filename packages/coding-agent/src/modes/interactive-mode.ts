@@ -70,7 +70,12 @@ import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
-import { formatMCPConnectingMessage, isMcpConnectingEvent, MCP_CONNECTING_EVENT_CHANNEL } from "../mcp/startup-events";
+import {
+	formatMCPConnectionStatusMessage,
+	isMcpConnectionStatusEvent,
+	MCP_CONNECTION_STATUS_EVENT_CHANNEL,
+	type McpConnectionStatusEvent,
+} from "../mcp/startup-events";
 import {
 	humanizePlanTitle,
 	type PlanApprovalDetails,
@@ -527,6 +532,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
+	#mcpStatusOrder: string[] = [];
+	#mcpPendingServers = new Set<string>();
+	#mcpConnectedServers = new Set<string>();
+	#mcpFailedServers = new Map<string, string>();
 	#welcomeComponent?: WelcomeComponent;
 	readonly #chatHost: ChatBlockHost = { requestRender: () => this.ui.requestRender() };
 
@@ -560,13 +569,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 			);
 			this.#eventBusUnsubscribers.push(
-				eventBus.on(MCP_CONNECTING_EVENT_CHANNEL, data => {
-					if (!isMcpConnectingEvent(data)) {
-						logger.warn("Ignoring malformed mcp:connecting event", { data });
+				eventBus.on(MCP_CONNECTION_STATUS_EVENT_CHANNEL, data => {
+					if (!isMcpConnectionStatusEvent(data)) {
+						logger.warn("Ignoring malformed mcp:connection-status event", { data });
 						return;
 					}
-					if (this.settings.get("startup.quiet")) return;
-					this.showStatus(formatMCPConnectingMessage(data.serverNames));
+					this.#handleMcpConnectionStatusEvent(data);
 				}),
 			);
 		}
@@ -660,6 +668,54 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.#observerRegistry = new SessionObserverRegistry();
+	}
+
+	#handleMcpConnectionStatusEvent(event: McpConnectionStatusEvent): void {
+		if (this.settings.get("startup.quiet")) return;
+		if (event.type === "connecting") {
+			this.#mcpStatusOrder = [];
+			this.#mcpPendingServers.clear();
+			this.#mcpConnectedServers.clear();
+			this.#mcpFailedServers.clear();
+			for (const serverName of event.serverNames) {
+				this.#trackMcpStatusServer(serverName);
+				this.#mcpPendingServers.add(serverName);
+			}
+		} else if (event.type === "connected") {
+			this.#trackMcpStatusServer(event.serverName);
+			this.#mcpPendingServers.delete(event.serverName);
+			this.#mcpFailedServers.delete(event.serverName);
+			this.#mcpConnectedServers.add(event.serverName);
+		} else {
+			this.#trackMcpStatusServer(event.serverName);
+			this.#mcpPendingServers.delete(event.serverName);
+			this.#mcpConnectedServers.delete(event.serverName);
+			this.#mcpFailedServers.set(event.serverName, event.error);
+		}
+
+		const message = formatMCPConnectionStatusMessage({
+			pendingServers: this.#orderedMcpStatusServers(this.#mcpPendingServers),
+			connectedServers: this.#orderedMcpStatusServers(this.#mcpConnectedServers),
+			failedServers: this.#orderedMcpStatusFailures(),
+		});
+		if (message) this.showStatus(message);
+	}
+
+	#trackMcpStatusServer(serverName: string): void {
+		if (!this.#mcpStatusOrder.includes(serverName)) {
+			this.#mcpStatusOrder.push(serverName);
+		}
+	}
+
+	#orderedMcpStatusServers(servers: ReadonlySet<string>): string[] {
+		return this.#mcpStatusOrder.filter(serverName => servers.has(serverName));
+	}
+
+	#orderedMcpStatusFailures(): Array<{ serverName: string; error: string }> {
+		return this.#mcpStatusOrder.flatMap(serverName => {
+			const error = this.#mcpFailedServers.get(serverName);
+			return error === undefined ? [] : [{ serverName, error }];
+		});
 	}
 
 	playWelcomeIntro(): void {
