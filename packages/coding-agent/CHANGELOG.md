@@ -253,6 +253,10 @@
 - Fixed `/model` in the TUI to open the model setup picker again, leaving `/switch` as the temporary session model switcher ([#2933](https://github.com/can1357/oh-my-pi/issues/2933)).
 - Fixed OpenCode Go sessions recording per-request cost history so `/usage` can show local cap utilization. ([#2942](https://github.com/can1357/oh-my-pi/issues/2942))
 
+### Fixed
+
+- Fixed legacy Pi extensions importing `getModel`/`getModels` from the `@oh-my-pi/pi-ai` package root failing to load, by restoring them as compatibility aliases for `@oh-my-pi/pi-catalog`'s `getBundledModel`/`getBundledModels`. The root `StringEnum` compatibility shim also accepts TypeScript enum objects in addition to value arrays ([#2907](https://github.com/can1357/oh-my-pi/pull/2907)).
+
 ## [16.0.6] - 2026-06-18
 
 ### Added
@@ -325,8 +329,6 @@
 - Changed context usage reporting to always return numeric token counts and percentages, so status-line and footer now show estimated values instead of `?` immediately after compaction
 - Changed context usage reporting to use anchored snapshots and pending-prompts estimates, which now keeps `/context`, status line, and model selector token counts in sync
 
-- Fixed legacy Pi extension plugin validation failing when extensions import from the bare `typebox` package instead of `@sinclair/typebox`, by extending the compatibility import remapping and on-resolve hooks to intercept and redirect `typebox` to the bundled Zod-backed TypeBox compatibility shim.
-- Fixed legacy Pi extension plugin validation failing when extensions import `getModel`/`getModels` or `StringEnum` from the `@oh-my-pi/pi-ai` package root, by restoring `getModel`/`getModels` as compatibility aliases and providing a Zod-backed `StringEnum` schema builder in the `@oh-my-pi/pi-ai` root compatibility shim.
 ### Fixed
 
 - Fixed Matplotlib figure display to emit PNG output immediately when `display(fig)` is called, even if the figure is closed before the end-of-cell flush
