@@ -15,7 +15,7 @@
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/errors";
 import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import type { AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
+import type { Api, AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
 import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
@@ -86,12 +86,22 @@ export interface RemoteCompactionResponse {
 // OpenAI provider gating + endpoint resolution
 // ============================================================================
 
+function isOpenAiRemoteCompactionApi(api: Api | undefined): boolean {
+	return api === "openai-responses" || api === "azure-openai-responses" || api === "openai-codex-responses";
+}
+
 export function shouldUseOpenAiRemoteCompaction(model: Model): boolean {
-	return model.provider === "openai" || model.provider === "openai-codex";
+	if (model.remoteCompaction?.enabled === false) return false;
+	if (model.provider === "openai" || model.provider === "openai-codex") return true;
+	if (model.remoteCompaction?.enabled !== true) return false;
+	return isOpenAiRemoteCompactionApi(model.remoteCompaction.api ?? model.api);
 }
 
 function resolveOpenAiCompactEndpoint(model: Model): string {
-	if (model.provider === "openai-codex") {
+	const configuredEndpoint = model.remoteCompaction?.endpoint;
+	if (configuredEndpoint && configuredEndpoint.length > 0) return configuredEndpoint;
+	const compactionApi = model.remoteCompaction?.api ?? model.api;
+	if (model.provider === "openai-codex" || compactionApi === "openai-codex-responses") {
 		return resolveOpenAiCodexCompactEndpoint(model.baseUrl);
 	}
 
@@ -444,7 +454,6 @@ export function buildOpenAiNativeHistory(
 // ============================================================================
 // Endpoint requests
 // ============================================================================
-
 export async function requestOpenAiRemoteCompaction(
 	model: Model,
 	apiKey: string,
@@ -454,8 +463,9 @@ export async function requestOpenAiRemoteCompaction(
 	opts?: { fetch?: FetchImpl; timeoutMs?: number },
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
+	const requestModel = model.remoteCompaction?.model ?? model.requestModelId ?? model.id;
 	const request: OpenAiRemoteCompactionRequest = {
-		model: model.id,
+		model: requestModel,
 		input: trimOpenAiCompactInput(compactInput, model.contextWindow ?? Number.POSITIVE_INFINITY, instructions),
 		instructions,
 	};

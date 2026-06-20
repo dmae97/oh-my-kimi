@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added model metadata for provider-native remote compaction and compaction-only model selection. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

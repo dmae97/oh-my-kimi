@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `models.yml` `remoteCompaction` and `compactionModel` config so custom providers can opt into provider-native compaction and run compaction on a separate model without changing the active session model. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
