@@ -326,6 +326,15 @@ export class SelectorController {
 				// InputController.toggleThinkingBlockVisibility).
 				this.ctx.ui.resetDisplay();
 				break;
+			case "proseOnlyThinking":
+				this.ctx.proseOnlyThinking = value as boolean;
+				for (const child of this.ctx.chatContainer.children) {
+					if (child instanceof AssistantMessageComponent) {
+						child.setProseOnlyThinking(value as boolean);
+					}
+				}
+				this.ctx.ui.resetDisplay();
+				break;
 			case "omitThinking":
 				this.ctx.session.agent.hideThinkingSummary = value as boolean;
 				break;
@@ -1266,6 +1275,7 @@ export class SelectorController {
 			getMessageRenderer: type => this.ctx.session.extensionRunner?.getMessageRenderer(type),
 			cwd: this.ctx.sessionManager.getCwd(),
 			hideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			proseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			focusAgent: id => this.ctx.focusAgentSession(id),
 			sessionFile: this.ctx.sessionManager.getSessionFile() ?? null,
 		});

@@ -332,6 +332,7 @@ export class UiHelpers {
 					() => this.ctx.ui.requestRender(),
 					this.ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 					this.ctx.ui.imageBudget,
+					this.ctx.proseOnlyThinking,
 				);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;

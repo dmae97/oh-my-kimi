@@ -6,7 +6,7 @@ import type { AssistantThinkingRenderer } from "../../extensibility/extensions/t
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
 import { resolveAbortLabel, shouldRenderAbortReason } from "../../session/messages";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../tools/render-utils";
-import { canonicalizeMessage } from "../../utils/thinking-display";
+import { canonicalizeMessage, formatThinkingForDisplay, hasDisplayableThinking } from "../../utils/thinking-display";
 import { type CacheInvalidation, CacheInvalidationMarkerComponent } from "./cache-invalidation-marker";
 
 /**
@@ -29,6 +29,18 @@ const MARKDOWN_TABLE_DELIMITER = /^ {0,3}\|?(?:[ \t]*:?-+:?[ \t]*\|)+[ \t]*:?-*:
 
 /** Opening or closing fence of a code block: ≥3 backticks/tildes plus info string. */
 const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+type ThinkingContentBlock = Extract<AssistantMessage["content"][number], { type: "thinking" }>;
+type DisplayThinkingContentBlock = ThinkingContentBlock & { rawThinking?: string };
+
+function resolveThinkingDisplay(block: ThinkingContentBlock, proseOnly: boolean): { text: string; visible: boolean } {
+	const rawThinking = (block as DisplayThinkingContentBlock).rawThinking ?? block.thinking;
+	const formatted = formatThinkingForDisplay(block.thinking, proseOnly);
+	return {
+		text: formatted.trim(),
+		visible: hasDisplayableThinking(rawThinking, formatted),
+	};
+}
 
 /**
  * Whether `text` currently contains reflowing Markdown whose layout is not yet
@@ -236,6 +248,7 @@ export class AssistantMessageComponent extends Container {
 		private readonly onImageUpdate?: () => void,
 		private readonly thinkingRenderers: readonly AssistantThinkingRenderer[] = [],
 		private readonly imageBudget?: ImageBudget,
+		private proseOnlyThinking = true,
 	) {
 		super();
 		this.#transcriptBlockFinalized = message !== undefined;
@@ -283,6 +296,10 @@ export class AssistantMessageComponent extends Container {
 
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
+	}
+
+	setProseOnlyThinking(proseOnly: boolean): void {
+		this.proseOnlyThinking = proseOnly;
 	}
 
 	override dispose(): void {
@@ -540,13 +557,13 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#computeShapeKey(message: AssistantMessage): string {
-		const parts: string[] = [`htb:${this.hideThinkingBlock ? 1 : 0}`];
+		const parts: string[] = [`htb:${this.hideThinkingBlock ? 1 : 0}|pot:${this.proseOnlyThinking ? 1 : 0}`];
 		for (const content of message.content) {
 			if (content.type === "text") {
 				parts.push(canonicalizeMessage(content.text) ? "T1" : "T0");
 			} else if (content.type === "thinking") {
-				const canon = canonicalizeMessage(content.thinking);
-				if (!canon) parts.push("K0");
+				const display = resolveThinkingDisplay(content, this.proseOnlyThinking);
+				if (!display.visible) parts.push("K0");
 				else if (this.hideThinkingBlock) parts.push("KH");
 				else parts.push("KV");
 			} else {
@@ -579,8 +596,10 @@ export class AssistantMessageComponent extends Container {
 			for (const item of this.#fastPathItems) {
 				if (item.blockType === "thinking") {
 					const content = message.content[item.contentIndex];
-					if (content?.type === "thinking" && canonicalizeMessage(content.thinking) !== item.lastText)
-						return false;
+					if (content?.type === "thinking") {
+						const display = resolveThinkingDisplay(content, this.proseOnlyThinking);
+						if (display.text !== item.lastText) return false;
+					}
 				}
 			}
 		}
@@ -613,7 +632,7 @@ export class AssistantMessageComponent extends Container {
 			if (item.blockType === "text" && content.type === "text") {
 				newText = content.text.trim();
 			} else if (item.blockType === "thinking" && content.type === "thinking") {
-				newText = canonicalizeMessage(content.thinking);
+				newText = resolveThinkingDisplay(content, this.proseOnlyThinking).text;
 			} else {
 				this.#fastPathKey = undefined;
 				this.#fastPathItems = undefined;
@@ -698,7 +717,9 @@ export class AssistantMessageComponent extends Container {
 		const hasVisibleContent = message.content.some(
 			c =>
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
-				(!this.hideThinkingBlock && c.type === "thinking" && canonicalizeMessage(c.thinking)),
+				(!this.hideThinkingBlock &&
+					c.type === "thinking" &&
+					resolveThinkingDisplay(c, this.proseOnlyThinking).visible),
 		);
 
 		// Render content in order
@@ -712,8 +733,8 @@ export class AssistantMessageComponent extends Container {
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
-			} else if (content.type === "thinking" && canonicalizeMessage(content.thinking)) {
-				const thinkingText = canonicalizeMessage(content.thinking);
+			} else if (content.type === "thinking" && resolveThinkingDisplay(content, this.proseOnlyThinking).visible) {
+				const thinkingText = resolveThinkingDisplay(content, this.proseOnlyThinking).text;
 				if (this.hideThinkingBlock) {
 					thinkingIndex += 1;
 					continue;
@@ -725,7 +746,7 @@ export class AssistantMessageComponent extends Container {
 					.some(
 						c =>
 							(c.type === "text" && canonicalizeMessage(c.text)) ||
-							(c.type === "thinking" && canonicalizeMessage(c.thinking)),
+							(c.type === "thinking" && resolveThinkingDisplay(c, this.proseOnlyThinking).visible),
 					);
 
 				// Thinking traces in thinkingText color, italic

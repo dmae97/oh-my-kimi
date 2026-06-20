@@ -899,6 +899,16 @@ export const SETTINGS_SCHEMA = {
 			description: "Hide thinking blocks in assistant responses",
 		},
 	},
+	proseOnlyThinking: {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Prose Only Thinking",
+			description: "Omit code blocks from thinking summaries and replace them with an ellipsis",
+		},
+	},
 
 	omitThinking: {
 		type: "boolean",

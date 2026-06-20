@@ -50,6 +50,7 @@ export interface AgentTranscriptViewerDeps {
 	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
 	cwd: string;
 	hideThinkingBlock?: () => boolean;
+	proseOnlyThinking?: () => boolean;
 	expandKeys: KeyId[];
 	/** Keys that toggle the whole hub closed (app.agents.hub + app.session.observe). */
 	hubKeys: KeyId[];
@@ -105,6 +106,7 @@ export class AgentTranscriptViewer implements Component {
 			getMessageRenderer: deps.getMessageRenderer,
 			cwd: deps.cwd,
 			hideThinkingBlock: deps.hideThinkingBlock,
+			proseOnlyThinking: deps.proseOnlyThinking,
 			requestRender: deps.requestRender,
 		});
 		this.#scrollView = new ScrollView([], {
