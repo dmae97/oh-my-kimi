@@ -8,6 +8,10 @@
 - Added a live tokens-per-second readout to the thinking pulse, counting only provider-reported tokens (no character estimate, which undercounts a summarized reasoning trace) and hiding itself whenever the rate is zero. Live numbers therefore appear only for providers that report usage mid-turn; otherwise the bare pulse keeps signalling that the model is thinking.
 - Updated the thinking pulse to a faster starburst whose rotation eases across each cycle (instead of ticking at a fixed rate), with a speed badge that fades from gray to the theme accent as the rate climbs.
 
+### Fixed
+
+- Fixed `read` against a SQLite table with many columns (e.g. 33) rendering every cell as an ellipsis and chopping the right edge. The ASCII table shrinker bottomed out at `MIN_COLUMN_WIDTH=1` so every multi-char cell collapsed to `…`, and the final line truncation then cut off the right side. The renderer now bumps the per-column floor to 3 and falls back to a vertical `column: value` block layout per row when the column count exceeds the horizontal width budget. ([#3107](https://github.com/can1357/oh-my-pi/issues/3107))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
