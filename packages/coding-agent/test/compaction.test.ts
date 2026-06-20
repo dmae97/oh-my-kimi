@@ -5,6 +5,7 @@ import {
 	type CompactionSettings,
 	calculateContextTokens,
 	compact,
+	compactionContextTokens,
 	DEFAULT_COMPACTION_SETTINGS,
 	findCutPoint,
 	getLastAssistantUsage,
@@ -284,6 +285,34 @@ describe("shouldCompact", () => {
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+});
+
+describe("compactionContextTokens", () => {
+	it("floors deflated provider usage by the stored-conversation estimate", () => {
+		// A before_provider_request compression extension (e.g. Headroom) shrinks the
+		// request, so the provider reports far fewer prompt tokens than the real
+		// stored conversation. The compaction decision must use the larger value.
+		expect(compactionContextTokens(20_000, 90_000)).toBe(90_000);
+	});
+
+	it("keeps provider usage when it already exceeds the local estimate", () => {
+		// Without compression the provider count is ground truth and typically >= the
+		// cl100k local estimate; the floor must never lower it.
+		expect(compactionContextTokens(85_000, 80_000)).toBe(85_000);
+	});
+
+	it("clamps negative inputs to zero", () => {
+		expect(compactionContextTokens(-5, -10)).toBe(0);
+		expect(compactionContextTokens(-5, 100)).toBe(100);
+	});
+
+	it("lets a deflated provider count still trigger compaction via the floor", () => {
+		const settings: CompactionSettings = { enabled: true, reserveTokens: 10000, keepRecentTokens: 20000 };
+		// Post-compression provider count is under threshold — raw, it would NOT compact.
+		expect(shouldCompact(20_000, 100_000, settings)).toBe(false);
+		// Floored by the real stored-conversation estimate (95k) it correctly compacts.
+		expect(shouldCompact(compactionContextTokens(20_000, 95_000), 100_000, settings)).toBe(true);
 	});
 });
 

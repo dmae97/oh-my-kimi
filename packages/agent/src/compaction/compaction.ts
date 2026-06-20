@@ -228,6 +228,25 @@ export function shouldCompact(contextTokens: number, contextWindow: number, sett
 	return contextTokens > thresholdTokens;
 }
 
+/**
+ * Context tokens to feed the compaction decision, floored by a local estimate of
+ * the stored conversation.
+ *
+ * The provider-reported usage is normally ground truth, but a
+ * `before_provider_request` payload transform — a compression extension (e.g.
+ * Headroom), an obfuscator, or inline snapcompact — can shrink the request below
+ * the real stored conversation. The provider then reports deflated prompt
+ * tokens, so anchoring compaction purely on that usage lets the real history
+ * grow unbounded until it overflows and native compaction can no longer run.
+ * Flooring by the agent's own estimate of the stored conversation keeps the
+ * compaction trigger honest regardless of on-wire compression. (Display/cost
+ * accounting still uses the exact provider usage; only the compaction decision
+ * takes the floor.)
+ */
+export function compactionContextTokens(providerContextTokens: number, storedConversationEstimate: number): number {
+	return Math.max(Math.max(0, providerContextTokens), Math.max(0, storedConversationEstimate));
+}
+
 export function resolveThresholdTokens(contextWindow: number, settings: CompactionSettings): number {
 	// Fixed token limit takes priority over percentage
 	const thresholdTokens = settings.thresholdTokens;
