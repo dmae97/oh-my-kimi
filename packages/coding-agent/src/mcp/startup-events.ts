@@ -14,22 +14,28 @@ export type McpConnectionStatusSnapshot = {
 	failedServers: readonly { serverName: string; error: string }[];
 };
 
+function sanitizeMcpStatusText(value: string, maxWidth: number): string {
+	const text = shortenEmbeddedPaths(
+		replaceTabs(sanitizeText(value))
+			.replace(/[\r\n]+/g, " ")
+			.trim(),
+	);
+	return truncateToWidth(text.length > 0 ? text : "(unnamed)", maxWidth);
+}
+
+function sanitizeMcpServerName(serverName: string): string {
+	return sanitizeMcpStatusText(serverName, TRUNCATE_LENGTHS.SHORT);
+}
+
 function formatServerList(serverNames: readonly string[]): string {
-	return serverNames.join(", ");
+	return serverNames.map(sanitizeMcpServerName).join(", ");
 }
 
 function formatServerCount(count: number): string {
 	return count === 1 ? "server" : "servers";
 }
 function sanitizeMcpStatusError(error: string): string {
-	return truncateToWidth(
-		shortenEmbeddedPaths(
-			replaceTabs(sanitizeText(error))
-				.replace(/[\r\n]+/g, " ")
-				.trim(),
-		),
-		TRUNCATE_LENGTHS.CONTENT,
-	);
+	return sanitizeMcpStatusText(error, TRUNCATE_LENGTHS.CONTENT);
 }
 
 function shortenEmbeddedPaths(text: string): string {
@@ -50,7 +56,7 @@ export function formatMCPConnectingMessage(serverNames: readonly string[]): stri
 }
 
 function formatFailedServer({ serverName, error }: { serverName: string; error: string }): string {
-	return `${serverName}: ${sanitizeMcpStatusError(error)}`;
+	return `${sanitizeMcpServerName(serverName)}: ${sanitizeMcpStatusError(error)}`;
 }
 
 export function formatMCPConnectionStatusMessage(snapshot: McpConnectionStatusSnapshot): string {
