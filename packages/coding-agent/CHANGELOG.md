@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.6] - 2026-06-20
+
 ### Added
 
 - Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
