@@ -1290,6 +1290,34 @@ mod tests {
 			3
 		);
 	}
+
+	#[cfg(unix)]
+	#[test]
+	fn streaming_grep_keeps_large_budgets_parallel() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("a.txt"), "needle a1\nneedle a2\n");
+		write_file(&root.path().join("z.txt"), "needle z1\nneedle z2\n");
+		let matcher = super::build_matcher("needle", false, false).expect("build test matcher");
+		let params = content_search_params(super::ORDERED_STREAMING_STOP_MAX_COUNT + 1, None);
+
+		let (results, skipped_oversized, stopped_after_budget) = super::run_streaming_grep(
+			root.path(),
+			&matcher,
+			None,
+			None,
+			params,
+			true,
+			false,
+			true,
+			&task::CancelToken::default(),
+			4,
+		)
+		.expect("streaming grep should succeed");
+
+		assert!(!stopped_after_budget);
+		assert_eq!(skipped_oversized, 0);
+		assert_eq!(results.len(), 2);
+	}
 }
 
 fn build_matcher(
@@ -1317,6 +1345,7 @@ fn build_matcher(
 // ---------------------------------------------------------------------------
 // File / directory search orchestration
 // ---------------------------------------------------------------------------
+const ORDERED_STREAMING_STOP_MAX_COUNT: u64 = 64;
 
 fn per_file_params(params: SearchParams) -> SearchParams {
 	let file_limit = match params.mode {
@@ -1339,7 +1368,9 @@ fn streaming_stop_after(params: SearchParams) -> Option<u64> {
 	if params.mode != OutputMode::Content || params.offset != 0 {
 		return None;
 	}
-	params.max_count.filter(|max| *max > 0)
+	params
+		.max_count
+		.filter(|max| (1..=ORDERED_STREAMING_STOP_MAX_COUNT).contains(max))
 }
 
 fn run_parallel_search(
