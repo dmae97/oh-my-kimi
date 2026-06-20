@@ -325,6 +325,8 @@
 - Changed context usage reporting to always return numeric token counts and percentages, so status-line and footer now show estimated values instead of `?` immediately after compaction
 - Changed context usage reporting to use anchored snapshots and pending-prompts estimates, which now keeps `/context`, status line, and model selector token counts in sync
 
+- Fixed legacy Pi extension plugin validation failing when extensions import from the bare `typebox` package instead of `@sinclair/typebox`, by extending the compatibility import remapping and on-resolve hooks to intercept and redirect `typebox` to the bundled Zod-backed TypeBox compatibility shim.
+- Fixed legacy Pi extension plugin validation failing when extensions import `getModel`/`getModels` or `StringEnum` from the `@oh-my-pi/pi-ai` package root, by restoring `getModel`/`getModels` as compatibility aliases and providing a Zod-backed `StringEnum` schema builder in the `@oh-my-pi/pi-ai` root compatibility shim.
 ### Fixed
 
 - Fixed Matplotlib figure display to emit PNG output immediately when `display(fig)` is called, even if the figure is closed before the end-of-cell flush
