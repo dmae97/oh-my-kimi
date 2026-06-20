@@ -807,6 +807,57 @@ describe("compact", () => {
 		expect(archive?.frames.length).toBe(5);
 	});
 
+	it("keeps the original text head across later compactions", async () => {
+		const first = await snapcompact.compact(
+			makePreparation({
+				messagesToSummarize: [
+					createUserMessage(`ORIGINAL BEGINNING SENTINEL. ${"A long first turn. ".repeat(500)}`),
+				],
+			}),
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
+		);
+		const second = await snapcompact.compact(
+			makePreparation({
+				messagesToSummarize: [createUserMessage("A short follow-up turn.")],
+				previousSummary: first.summary,
+				previousPreserveData: first.preserveData,
+			}),
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
+		);
+		const archive = snapcompact.getPreservedArchive(second.preserveData);
+		expect(archive?.text).toContain("ORIGINAL BEGINNING SENTINEL.");
+		expect(archive?.textHead).toContain("ORIGINAL BEGINNING SENTINEL.");
+		expect(archive?.textTail ?? archive?.textHead).toContain("A short follow-up turn.");
+	});
+
+	it("keeps continuity for legacy frame-only archives by falling back to the prior summary", async () => {
+		const result = await snapcompact.compact(
+			makePreparation({
+				messagesToSummarize: [createUserMessage("New work after a legacy archive.")],
+				previousSummary: "Legacy beginning summary: user approved PLAN.md and started auth work.",
+				previousPreserveData: {
+					snapcompact: {
+						frames: [
+							{
+								data: btoa("legacy-frame"),
+								mimeType: "image/png",
+								cols: 1,
+								rows: 1,
+								chars: 12,
+							},
+						],
+						totalChars: 12,
+						truncatedChars: 0,
+					},
+				},
+			}),
+			{ frameSize: TEST_FRAME_SIZE, maxFrames: 5 },
+		);
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		expect(archive?.text).toContain("Legacy beginning summary");
+		expect(result.summary).toContain("condensed digest of still-older context");
+	});
+
 	it("includes the previous text summary when the prior compaction was not snapcompact", async () => {
 		const result = await snapcompact.compact(
 			makePreparation({ previousSummary: "Older context: project scaffolding done." }),

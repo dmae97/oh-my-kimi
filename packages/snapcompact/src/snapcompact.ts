@@ -1482,7 +1482,13 @@ export async function compact<TMessage = Message>(
 	let archiveText = normalize(serializeConversation(llmMessages, options));
 
 	const previousArchive = getPreservedArchive(previousPreserveData);
-	const includedPreviousSummary = !previousArchive && !!previousSummary;
+	const previousText =
+		previousArchive?.text ??
+		[previousArchive?.textHead, previousArchive?.textTail]
+			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.join(NEWLINE_GLYPH);
+	const hasPreviousText = previousText.length > 0;
+	const includedPreviousSummary = !hasPreviousText && !!previousSummary;
 	if (includedPreviousSummary && previousSummary) {
 		const head = `[Summary of earlier history] ${normalize(previousSummary)}`;
 		archiveText = archiveText.length > 0 ? `${head} [Recent conversation] ${archiveText}` : head;
@@ -1493,8 +1499,7 @@ export async function compact<TMessage = Message>(
 	// Re-compacting a snapcompacted history unfolds the prior archive's source
 	// text and treats it as one coherent transcript: the previous kept source
 	// ages in ahead of the new history, then the whole thing is re-rendered.
-	const previousText = previousArchive?.text;
-	if (previousText) {
+	if (hasPreviousText) {
 		archiveText = archiveText.length > 0 ? `${previousText}${NEWLINE_GLYPH}${archiveText}` : previousText;
 	}
 
