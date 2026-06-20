@@ -90,6 +90,27 @@ describe("embed() input cap (#3126)", () => {
 		expect(provider.calls[0]?.[0]?.length).toBe(256);
 	});
 
+	it("preserves both ends of a chronological transcript via the head/tail clip", async () => {
+		const provider = captureProvider();
+		setEmbeddingProviderForTests(provider);
+
+		// `MnemopiSessionState.retainMessages` hands `embed()` the full
+		// chronological transcript. Before the head/tail clip, a `slice(0, max)`
+		// would land on the oldest turns and drop the most recent (and most
+		// semantically loaded) content. Verify both ends survive.
+		const earliest = "OPENING_TURN_MARKER";
+		const latest = "FINAL_TURN_MARKER";
+		const transcript = `${earliest}${"x".repeat(50_000)}${latest}`;
+
+		await withEnvValue(undefined, () => embed([transcript]));
+
+		const seen = provider.calls[0]?.[0] ?? "";
+		expect(seen.length).toBe(8192);
+		expect(seen.startsWith(earliest)).toBe(true);
+		expect(seen.endsWith(latest)).toBe(true);
+		expect(seen).toContain("[...]");
+	});
+
 	it("returns the original array reference when no input needs trimming", async () => {
 		const provider = captureProvider();
 		setEmbeddingProviderForTests(provider);

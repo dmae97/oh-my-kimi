@@ -135,14 +135,39 @@ function effectiveMaxInputChars(): number {
 	return 8192;
 }
 
+/** Elision marker injected between the retained head and tail of an oversized input. */
+const EMBEDDING_ELISION_MARKER = "\n\n[...]\n\n";
+
 /**
- * Right-truncate every input to {@link effectiveMaxInputChars} so a runaway
- * retention transcript can't blow past the embedding model's context window.
- * Returns the original array when no input needs trimming (the common case);
- * the new array is allocated only when at least one input is oversized so
- * we don't churn arrays for the typical short-query path through `embedQuery`.
- * Emits one debug-or-warn log per call summarizing how many inputs were
- * trimmed and by how much — silent truncation was the original bug (#3126).
+ * Right-clip a single oversized input to {@link max} chars while preserving
+ * both ends. Retention transcripts are chronological (oldest → newest), so a
+ * naive `slice(0, max)` would drop the most recent — and most semantically
+ * loaded — turns once a session passed the cap, leaving every later retained
+ * episode with essentially the same prefix vector. Keeping a head/tail split
+ * lets the embedding capture the topic setup at the start AND the latest
+ * exchanges at the end. Falls back to a tail-only clip when `max` is too
+ * small to fit the elision marker plus a useful slice on either side.
+ */
+function clipToWindow(text: string, max: number): string {
+	if (text.length <= max) return text;
+	if (max <= EMBEDDING_ELISION_MARKER.length + 16) return text.slice(text.length - max);
+	const budget = max - EMBEDDING_ELISION_MARKER.length;
+	const headLen = budget >>> 1;
+	const tailLen = budget - headLen;
+	return text.slice(0, headLen) + EMBEDDING_ELISION_MARKER + text.slice(text.length - tailLen);
+}
+
+/**
+ * Clip every input to {@link effectiveMaxInputChars} so a runaway retention
+ * transcript can't blow past the embedding model's context window. Uses a
+ * head/tail split via {@link clipToWindow} so the embedding still sees the
+ * tail of the conversation (where the latest topic shifts live) and not just
+ * the stale prefix. Returns the original array when no input needs trimming
+ * (the common case); the new array is allocated only when at least one input
+ * is oversized so we don't churn arrays for the typical short-query path
+ * through `embedQuery`. Emits one debug-or-warn log per call summarizing how
+ * many inputs were trimmed and by how much — silent truncation was the
+ * original bug (#3126).
  */
 function capInputs(texts: readonly string[]): readonly string[] {
 	const max = effectiveMaxInputChars();
@@ -154,7 +179,7 @@ function capInputs(texts: readonly string[]): readonly string[] {
 		const text = texts[i] ?? "";
 		if (text.length <= max) continue;
 		if (trimmed === null) trimmed = texts.slice() as string[];
-		trimmed[i] = text.slice(0, max);
+		trimmed[i] = clipToWindow(text, max);
 		trimmedCount++;
 		if (text.length > maxOriginalLen) maxOriginalLen = text.length;
 	}
