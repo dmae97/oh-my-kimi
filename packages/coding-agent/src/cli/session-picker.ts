@@ -13,7 +13,7 @@ import { FileSessionStorage } from "../session/session-storage";
  */
 export async function selectSession(
 	sessions: SessionInfo[],
-	options?: { allSessions?: SessionInfo[]; startInAllScope?: boolean },
+	options?: { allSessions?: SessionInfo[] },
 ): Promise<SessionInfo | null> {
 	const { promise, resolve } = Promise.withResolvers<SessionInfo | null>();
 	const ui = new TUI(new ProcessTerminal());
@@ -64,7 +64,6 @@ export async function selectSession(
 				historyMatcher,
 				loadAllSessions: () => SessionManager.listAll(storage),
 				allSessions: options?.allSessions,
-				startInAllScope: options?.startInAllScope,
 				getTerminalRows: () => ui.terminal.rows,
 			},
 		);

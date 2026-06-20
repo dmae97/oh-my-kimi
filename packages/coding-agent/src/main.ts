@@ -1130,21 +1130,21 @@ export async function runRootCommand(
 	if (parsedArgs.resume === true && !parsedArgs.fork) {
 		const folderSessions = await logger.time("SessionManager.list", SessionManager.list, cwd, parsedArgs.sessionDir);
 		let preloadedAllSessions: SessionInfo[] | undefined;
-		let startInAllScope = false;
 		if (folderSessions.length === 0) {
-			// Nothing in the current folder — fall back to a global scan so the
-			// picker can still open in all-projects scope instead of dead-ending.
+			// Probe globally so we can exit fast when the user has no sessions at
+			// all, but never auto-switch the picker into all-projects scope — that
+			// silently surfaced other projects' history when the cwd was empty
+			// (issue #3099). The preloaded list also makes the user's Tab switch
+			// instant on the way in.
 			preloadedAllSessions = await logger.time("SessionManager.listAll", SessionManager.listAll);
 			if (preloadedAllSessions.length === 0) {
 				writeStartupNotice(parsedArgs, `${chalk.dim("No sessions found")}\n`);
 				return;
 			}
-			startInAllScope = true;
 		}
 		pauseStartupWatchdog();
 		const selected = await logger.time("selectSession", selectSession, folderSessions, {
 			allSessions: preloadedAllSessions,
-			startInAllScope,
 		});
 		resumeStartupWatchdog();
 		if (!selected) {
