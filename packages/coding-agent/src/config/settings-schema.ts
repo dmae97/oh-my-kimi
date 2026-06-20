@@ -413,7 +413,7 @@ export const SETTINGS_SCHEMA = {
 	},
 	"advisor.immuneTurns": {
 		type: "number",
-		default: 1,
+		default: 3,
 		ui: {
 			tab: "model",
 			group: "Advisor",
@@ -422,9 +422,9 @@ export const SETTINGS_SCHEMA = {
 				"After an advisor concern or blocker interrupts, route further concerns/blockers non-interruptingly for this many primary turns.",
 			options: [
 				{ value: "0", label: "0 turns", description: "Allow every concern/blocker to interrupt." },
-				{ value: "1", label: "1 turn", description: "Default." },
+				{ value: "1", label: "1 turn" },
 				{ value: "2", label: "2 turns" },
-				{ value: "3", label: "3 turns" },
+				{ value: "3", label: "3 turns", description: "Default." },
 				{ value: "4", label: "4 turns" },
 				{ value: "5", label: "5 turns" },
 			],
@@ -1653,7 +1653,7 @@ export const SETTINGS_SCHEMA = {
 	"compaction.strategy": {
 		type: "enum",
 		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
-		default: "context-full",
+		default: "snapcompact",
 		ui: {
 			tab: "context",
 			group: "Compaction",

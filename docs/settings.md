@@ -198,7 +198,7 @@ tools:
     bash: prompt
 
 compaction:
-  strategy: context-full
+  strategy: snapcompact
   thresholdPercent: 80
 
 theme:
@@ -329,7 +329,7 @@ See [Advisor and WATCHDOG.md](./advisor-watchdog.md) for runtime behavior, `WATC
 | `advisor.enabled` | boolean | `false` | Enable the advisor runtime when `modelRoles.advisor` resolves to an available model. |
 | `advisor.subagents` | boolean | `false` | Also enable advisor runtimes for spawned task/eval subagents. |
 | `advisor.syncBacklog` | enum | `off` | Bounded advisor catch-up delay: `off`, `1`, `3`, or `5`. The primary waits up to 30 seconds only while advisor backlog is at or above the threshold. |
-| `advisor.immuneTurns` | number | `1` | After a `concern`/`blocker` interrupts, route further concerns/blockers as non-interrupting asides for this many completed primary turns. |
+| `advisor.immuneTurns` | number | `3` | After a `concern`/`blocker` interrupts, route further concerns/blockers as non-interrupting asides for this many completed primary turns. |
 
 ### Thinking
 
@@ -503,7 +503,7 @@ contextPromotion:
 
 compaction:
   enabled: true
-  strategy: context-full     # context-full, handoff, shake, snapcompact, off
+  strategy: snapcompact     # context-full, handoff, shake, snapcompact, off
   thresholdPercent: -1       # -1 = default reserve-based behavior
   thresholdTokens: -1        # fixed token limit when > 0
   remoteEnabled: true
@@ -516,7 +516,7 @@ memory:
 |---|---|---|---|
 | `contextPromotion.enabled` | boolean | `true` | Promote relevant earlier context. |
 | `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
-| `compaction.strategy` | enum | `context-full` | `context-full`, `handoff`, `shake`, `snapcompact`, `off`. |
+| `compaction.strategy` | enum | `snapcompact` | `context-full`, `handoff`, `shake`, `snapcompact`, `off`. |
 | `compaction.thresholdPercent` | number | `-1` | Percent-of-context trigger; `-1` = reserve-based default. |
 | `compaction.thresholdTokens` | number | `-1` | Fixed token trigger when `> 0`. |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for the next turn. |
