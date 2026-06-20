@@ -142,10 +142,12 @@ interface WireToolConfig {
 	toolChoice?: WireToolChoice;
 }
 
+const NO_TOOLS_SENTINEL_NAME = "__no_tools__";
+
 const NO_TOOLS_SENTINEL: WireToolSpec = {
 	toolSpec: {
-		name: "__no_tools__",
-		description: "Placeholder required when Bedrock replays prior tool history with tools disabled.",
+		name: NO_TOOLS_SENTINEL_NAME,
+		description: "Placeholder required by Bedrock validation. Do not call; answer with text.",
 		inputSchema: { json: { type: "object", properties: {} } },
 	},
 };
@@ -389,7 +391,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					}
 					case "messageStop": {
 						const ev = payload as MessageStopEvent;
-						output.stopReason = mapStopReason(ev.stopReason);
+						output.stopReason =
+							isNoToolsSentinelConfig(toolConfig) && ev.stopReason === "tool_use"
+								? "stop"
+								: mapStopReason(ev.stopReason);
 						if (output.stopReason === "error") {
 							output.errorMessage = `Generation failed with stop reason: ${ev.stopReason ?? "unknown"}`;
 						}
@@ -471,6 +476,8 @@ function handleContentBlockStart(
 ): void {
 	const index = event.contentBlockIndex;
 	const start = event.start;
+
+	if (start?.toolUse?.name === NO_TOOLS_SENTINEL_NAME) return;
 
 	if (start?.toolUse) {
 		const block: Block = {
@@ -843,6 +850,10 @@ function convertToolConfig(
 	}
 
 	return { tools: bedrockTools, toolChoice: bedrockToolChoice };
+}
+
+function isNoToolsSentinelConfig(toolConfig: WireToolConfig | undefined): boolean {
+	return toolConfig?.tools.length === 1 && toolConfig.tools[0]?.toolSpec.name === NO_TOOLS_SENTINEL_NAME;
 }
 
 function mapStopReason(reason: string | undefined): StopReason {
