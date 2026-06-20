@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `skill://`, `local://`, `memory://`, and `vault://` directory paths so read lists them and search/find can walk their backing directories. ([#3116](https://github.com/can1357/oh-my-pi/issues/3116))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

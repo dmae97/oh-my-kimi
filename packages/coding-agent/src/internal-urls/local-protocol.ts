@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
+import { buildDirectoryResource } from "./filesystem-resource";
 import { parseInternalUrl } from "./parse";
 import { validateRelativePath } from "./skill-protocol";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, UrlCompletion } from "./types";
@@ -279,8 +280,13 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		ensureWithinRoot(realTargetPath, resolvedRoot);
 
 		const stat = await fs.stat(realTargetPath);
+		if (stat.isDirectory()) {
+			return buildDirectoryResource(url.href, realTargetPath, [
+				"Use write path local://<file> to persist large intermediate artifacts across turns.",
+			]);
+		}
 		if (!stat.isFile()) {
-			throw new Error(`local:// URL must resolve to a file: ${url.href}`);
+			throw new Error(`local:// URL must resolve to a file or directory: ${url.href}`);
 		}
 
 		const content = await Bun.file(realTargetPath).text();

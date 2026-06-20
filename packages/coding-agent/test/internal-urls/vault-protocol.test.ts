@@ -223,6 +223,23 @@ describe("VaultProtocolHandler", () => {
 		});
 	});
 
+	it("lists existing folder paths even without a trailing slash", async () => {
+		await withTempDir(async tempDir => {
+			const root = path.join(tempDir, "vault");
+			await fs.mkdir(path.join(root, "Folder", "Sub"), { recursive: true });
+			await Bun.write(path.join(root, "Folder", "note.md"), "note");
+			VaultProtocolHandler.setVaultDirectoryForTests({ Work: root });
+			const handler = new VaultProtocolHandler({ resolveObsidianBinary: () => null });
+
+			const resource = await handler.resolve(resourceUrl("vault://Work/Folder"));
+
+			expect(resource.contentType).toBe("text/markdown");
+			expect(resource.sourcePath).toBe(await fs.realpath(path.join(root, "Folder")));
+			expect(resource.content).toContain("[note.md](vault://Work/Folder/note.md)");
+			expect(resource.content).toContain("[Sub/](vault://Work/Folder/Sub/)");
+		});
+	});
+
 	it("reports the documented binary-missing error for CLI-backed operations", async () => {
 		const handler = new VaultProtocolHandler({ resolveObsidianBinary: () => null });
 
