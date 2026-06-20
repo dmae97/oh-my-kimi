@@ -13,7 +13,7 @@ import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-opt
  * overflow whatever ctx the embedding server was started with — llama.cpp
  * rejects oversized requests with `request (N tokens) exceeds the available
  * context size`, OpenAI silently right-truncates. `embed()` now caps each
- * input to `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 32000) before the
+ * input to `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 8192) before the
  * provider sees it.
  */
 function captureProvider(): {
@@ -57,7 +57,7 @@ describe("embed() input cap (#3126)", () => {
 		expect(provider.calls).toHaveLength(1);
 		const [seenShort, seenHuge] = provider.calls[0] ?? [];
 		expect(seenShort).toBe("short");
-		expect(seenHuge?.length).toBe(32_000);
+		expect(seenHuge?.length).toBe(8192);
 	});
 
 	it("honors MNEMOPI_EMBEDDING_MAX_INPUT_CHARS env override", async () => {

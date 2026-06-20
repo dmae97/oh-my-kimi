@@ -124,7 +124,7 @@ export function embeddingsDisabled(): boolean {
  * Resolved per-input character cap for {@link embed}.
  *
  * Reads (in order): the active runtime scope's `embeddings.maxInputChars`, then
- * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `32000` default. `0`
+ * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `8192` default. `0`
  * disables the cap entirely.
  */
 function effectiveMaxInputChars(): number {
@@ -132,7 +132,7 @@ function effectiveMaxInputChars(): number {
 	if (override !== undefined) return Math.max(0, Math.trunc(override));
 	const envValue = Number.parseInt($env.MNEMOPI_EMBEDDING_MAX_INPUT_CHARS ?? "", 10);
 	if (Number.isFinite(envValue) && envValue >= 0) return envValue;
-	return 32000;
+	return 8192;
 }
 
 /**

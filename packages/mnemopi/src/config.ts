@@ -110,13 +110,13 @@ export function embeddingsDisabled(env: Env = process.env): boolean {
  * source gives both backends deterministic behavior and prevents the silent
  * recall degradation we saw in issue #3126.
  *
- * Default `32000` ≈ 8k English tokens (4 chars/token) or ~16k–32k CJK tokens —
- * fits 8k-context models (bge-m3, text-embedding-3) for English and most CJK
- * content. Lower it for 512-token models like `BAAI/bge-small-en-v1.5`, raise
- * it for larger contexts. `0` disables the cap.
+ * Default `8192` chars is intentionally conservative for 8192-token embedding
+ * contexts (bge-m3, OpenAI text-embedding-3) and CJK-heavy transcripts. Raise
+ * it for larger local contexts (for example Qwen3-Embedding with 32k ctx).
+ * `0` disables the cap.
  */
 export function embeddingMaxInputChars(env: Env = process.env): number {
-	return Math.max(0, envInt("MNEMOPI_EMBEDDING_MAX_INPUT_CHARS", 32000, env));
+	return Math.max(0, envInt("MNEMOPI_EMBEDDING_MAX_INPUT_CHARS", 8192, env));
 }
 
 export function isApiEmbeddingModel(model = embeddingModel(), env: Env = process.env): boolean {
