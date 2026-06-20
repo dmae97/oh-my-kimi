@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Fixed a TypeError in `EventController` tests where a missing `settings` property in the `InteractiveModeContext` mock object led to calling `.get` on undefined when streaming tool-call args.
 - Fixed side-channel turns failing to correctly obfuscate secrets and tools when inheriting prompt cache layout
 - Fixed MCP startup status to live-update from "Connecting…" to connected, still-connecting, or failed server states so completed connections do not leave a stale banner. ([#3150](https://github.com/can1357/oh-my-pi/issues/3150))
 - Fixed session history becoming desynchronized when using the `rewind` tool
