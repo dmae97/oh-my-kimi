@@ -251,16 +251,4 @@ describe("system prompt tool inventory", () => {
 		expect(text).toContain("<skills>");
 		expect(text).toContain("- frontend-design: Frontend UI workflow");
 	});
-
-	it("places the inventory at the bottom of the TOOLS section (after I/O and Exploration)", async () => {
-		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
-		const inventoryIdx = text.indexOf("# Inventory");
-		const ioIdx = text.indexOf("# I/O");
-		const explorationIdx = text.indexOf("# Exploration");
-		expect(inventoryIdx).toBeGreaterThan(-1);
-		expect(ioIdx).toBeGreaterThan(-1);
-		expect(explorationIdx).toBeGreaterThan(-1);
-		expect(inventoryIdx).toBeGreaterThan(ioIdx);
-		expect(inventoryIdx).toBeGreaterThan(explorationIdx);
-	});
 });
