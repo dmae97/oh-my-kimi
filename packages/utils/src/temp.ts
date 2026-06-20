@@ -95,7 +95,7 @@ async function removeWithRetries(target: string): Promise<void> {
 	}
 }
 
-function removeSyncWithRetries(target: string): void {
+export function removeSyncWithRetries(target: string): void {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			fs.rmSync(target, kRemoveOptions);
