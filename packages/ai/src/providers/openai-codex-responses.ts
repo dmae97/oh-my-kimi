@@ -729,25 +729,12 @@ async function buildTransformedCodexRequestBody(
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
 	// `max_output_tokens`/`max_completion_tokens` (the Codex backend rejects
-	// caller-supplied output caps).
-	if (options?.temperature !== undefined) {
-		params.temperature = options.temperature;
-	}
-	if (options?.topP !== undefined) {
-		params.top_p = options.topP;
-	}
-	if (options?.topK !== undefined) {
-		params.top_k = options.topK;
-	}
-	if (options?.minP !== undefined) {
-		params.min_p = options.minP;
-	}
-	if (options?.presencePenalty !== undefined) {
-		params.presence_penalty = options.presencePenalty;
-	}
-	if (options?.repetitionPenalty !== undefined) {
-		params.repetition_penalty = options.repetitionPenalty;
-	}
+	// caller-supplied output caps). Sampling controls (`temperature`, `top_p`,
+	// `top_k`, `min_p`, `presence_penalty`, `repetition_penalty`,
+	// `frequency_penalty`, `stop`) are likewise refused with
+	// `{"detail":"Unsupported parameter: temperature"}` etc., so we drop
+	// everything from `StreamOptions` rather than forwarding any of them.
+	// (#3117 — codex-rs sends none of these either.)
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 	if (context.tools && context.tools.length > 0) {
 		params.tools = convertOpenAICodexResponsesTools(context.tools, model);

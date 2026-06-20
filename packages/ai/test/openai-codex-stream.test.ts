@@ -1586,6 +1586,56 @@ describe("openai-codex streaming", () => {
 		expect(capturedBody?.prompt_cache_key).toBe(promptCacheKey);
 	});
 
+	it("omits unsupported sampling keys (temperature/top_p/top_k/min_p/penalties) from the Codex Responses body", async () => {
+		// Regression for #3117 — Codex backend returns
+		// `{"detail":"Unsupported parameter: temperature"}` 400 for any of
+		// these keys, so the provider MUST drop them even when the caller's
+		// `StreamOptions` carries non-default values.
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+
+		const token = createCodexTestToken();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		let capturedBody: Record<string, unknown> | undefined;
+
+		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				capturedBody =
+					typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+				return new Response(createCompletedCodexSse("Hello"), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		});
+
+		await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			temperature: 0.2,
+			topP: 0.9,
+			topK: 40,
+			minP: 0.05,
+			presencePenalty: 0.1,
+			frequencyPenalty: 0.1,
+			repetitionPenalty: 1.1,
+			stopSequences: ["STOP"],
+		}).result();
+
+		expect(capturedBody).toBeDefined();
+		expect(capturedBody?.temperature).toBeUndefined();
+		expect(capturedBody?.top_p).toBeUndefined();
+		expect(capturedBody?.top_k).toBeUndefined();
+		expect(capturedBody?.min_p).toBeUndefined();
+		expect(capturedBody?.presence_penalty).toBeUndefined();
+		expect(capturedBody?.frequency_penalty).toBeUndefined();
+		expect(capturedBody?.repetition_penalty).toBeUndefined();
+		expect(capturedBody?.stop).toBeUndefined();
+		expect(capturedBody?.stop_sequences).toBeUndefined();
+	});
+
 	it("rejects gpt-5.3-codex minimal reasoning effort instead of clamping", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
