@@ -372,6 +372,37 @@ describe("trySyncSlashCompletion", () => {
 		expect(result!.items.map(i => i.value)).toContain("md");
 	});
 
+	it("uses dynamic descriptions for slash command suggestions", async () => {
+		let enabled = false;
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{
+					name: "fast",
+					description: "Toggle fast mode",
+					getAutocompleteDescription: () => `Fast: ${enabled ? "on" : "off"}`,
+				},
+			],
+			"/tmp",
+		);
+
+		const off = await provider.getSuggestions(["/fa"], 0, 3);
+		expect(off?.items[0]).toMatchObject({ value: "fast", label: "fast", description: "Fast: off" });
+
+		enabled = true;
+		const on = await provider.getSuggestions(["/fa"], 0, 3);
+		expect(on?.items[0]).toMatchObject({ value: "fast", label: "fast", description: "Fast: on" });
+	});
+
+	it("keeps static slash descriptions as the search corpus", async () => {
+		const provider = new CombinedAutocompleteProvider(
+			[{ name: "fast", description: "Toggle fast mode", getAutocompleteDescription: () => "Fast: enabled" }],
+			"/tmp",
+		);
+
+		expect(await provider.getSuggestions(["/toggle"], 0, "/toggle".length)).not.toBeNull();
+		expect(await provider.getSuggestions(["/enabled"], 0, "/enabled".length)).toBeNull();
+	});
+
 	it("handles AutocompleteItem-shaped commands (no 'name' property)", () => {
 		const provider = new CombinedAutocompleteProvider([{ value: "model", label: "Switch model" }], "/tmp");
 		const result = provider.trySyncSlashCompletion("/mod");
