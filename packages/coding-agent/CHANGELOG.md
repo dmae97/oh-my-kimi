@@ -28,6 +28,10 @@
 
 - Stopped Mnemopi retention from overflowing the embedding model's context window: `embed()` now caps each input at `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 8192 chars) and clips with a head/tail split so a long multi-turn `MnemopiSessionState.retainMessages` transcript can't make llama.cpp's `/embeddings` server reject the request with `request (N tokens) exceeds the available context size` and silently drop vector recall for that memory. The head/tail clip keeps both the opening setup and the most recent turns so later episodes don't collapse onto the same prefix vector ([#3126](https://github.com/can1357/oh-my-pi/issues/3126)).
 
+### Changed
+
+- Changed the temporary model picker to label Alt+P selections as session-only and point users to Alt+M or `/model` for role model assignment. ([#2952](https://github.com/can1357/oh-my-pi/issues/2952))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
