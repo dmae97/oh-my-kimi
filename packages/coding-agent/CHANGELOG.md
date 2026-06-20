@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed first-turn memory recall invalidating append-only prompt caches by promoting injected memory into the stable session prompt before the next turn. ([#3111](https://github.com/can1357/oh-my-pi/issues/3111))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

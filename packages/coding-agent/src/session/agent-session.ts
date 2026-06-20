@@ -4885,7 +4885,28 @@ export class AgentSession {
 		try {
 			const injected = await backend.beforeAgentStartPrompt(this, promptText);
 			if (!injected) return this.#baseSystemPrompt;
-			return [...this.#baseSystemPrompt, injected];
+
+			const previousBaseSystemPrompt = this.#baseSystemPrompt;
+			try {
+				await this.refreshBaseSystemPrompt();
+			} catch (refreshErr) {
+				logger.debug("Memory backend prompt refresh after beforeAgentStartPrompt failed", {
+					backend: backend.id,
+					error: String(refreshErr),
+				});
+			}
+
+			if (
+				this.#baseSystemPrompt.length !== previousBaseSystemPrompt.length ||
+				this.#baseSystemPrompt.some((part, index) => part !== previousBaseSystemPrompt[index])
+			) {
+				return this.#baseSystemPrompt;
+			}
+
+			const stablePrompt = [...previousBaseSystemPrompt, injected];
+			this.#baseSystemPrompt = stablePrompt;
+			this.agent.setSystemPrompt(stablePrompt);
+			return stablePrompt;
 		} catch (err) {
 			logger.debug("Memory backend beforeAgentStartPrompt failed", {
 				backend: backend.id,

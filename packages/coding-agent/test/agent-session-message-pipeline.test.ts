@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, AppendOnlyContextManager } from "@oh-my-pi/pi-agent-core";
 import {
 	type Api,
 	type Context,
@@ -15,6 +15,8 @@ import {
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -515,5 +517,79 @@ describe("AgentSession message pipeline", () => {
 
 		resolve();
 		await Bun.sleep(0);
+	});
+
+	it("keeps first-turn memory in the stable prompt on the next turn", async () => {
+		const api = "test-injected-memory-append-only-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		const injected = "<memories>remember blue</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false, "provider.appendOnlyContext": "on" }),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+
+		await session.sendUserMessage("first");
+		await session.sendUserMessage("second");
+
+		expect(contexts).toHaveLength(2);
+		const firstSystemPrompt = contexts[0]!.systemPrompt;
+		expect(firstSystemPrompt).toBeDefined();
+		expect(firstSystemPrompt!.join("\n")).toContain(injected);
+		expect(contexts[1]!.systemPrompt).toEqual(firstSystemPrompt);
 	});
 });
