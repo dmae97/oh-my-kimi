@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed Markdown component to strip inline `<span>` and `<text>` tags while preserving their contents and unescaping nested HTML entities (`&lt;`, `&gt;`, `&quot;`, `&apos;`, `&amp;`), preventing raw LLM block/inline formatting residues from leaking into rendered TUI output.
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

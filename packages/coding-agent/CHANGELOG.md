@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added "Prose Only Thinking" setting to opt-out of rendering code blocks within AI thinking traces
@@ -8,47 +9,31 @@
 - Added a live tokens-per-second readout to the thinking pulse, counting only provider-reported tokens (no character estimate, which undercounts a summarized reasoning trace) and hiding itself whenever the rate is zero. Live numbers therefore appear only for providers that report usage mid-turn; otherwise the bare pulse keeps signalling that the model is thinking.
 - Updated the thinking pulse to a faster starburst whose rotation eases across each cycle (instead of ticking at a fixed rate), with a speed badge that fades from gray to the theme accent as the rate climbs.
 
-### Fixed
-
-- Fixed `read` against a SQLite table with many columns (e.g. 33) rendering every cell as an ellipsis and chopping the right edge. The ASCII table shrinker bottomed out at `MIN_COLUMN_WIDTH=1` so every multi-char cell collapsed to `…`, and the final line truncation then cut off the right side. The renderer now bumps the per-column floor to 3 and falls back to a vertical `column: value` block layout per row when the column count exceeds the horizontal width budget. ([#3107](https://github.com/can1357/oh-my-pi/issues/3107))
-
-### Fixed
-
-- Fixed `skill://`, `local://`, `memory://`, and `vault://` directory paths so read lists them and search/find can walk their backing directories. ([#3116](https://github.com/can1357/oh-my-pi/issues/3116))
-
-### Fixed
-
-- Fixed local tiny-model inference failures respawning `__omp_worker_tiny_inference` for the same failed model, and blocked the unsupported Qwen3 1.7B ONNX memory model before load. ([#3132](https://github.com/can1357/oh-my-pi/issues/3132))
-
-### Fixed
-
-- Fixed `/join` failing with `timed out waiting for the host's welcome` on collab sessions whose existing transcript was more than a few MB. The host now sends a small `welcome` frame (header + state + agents + `entryCount`) followed by a train of `snapshot-chunk` frames (`SNAPSHOT_CHUNK_BYTES = 512 KB`), and the guest accumulates them under a per-chunk progress timeout that resets on each chunk arrival. The first welcome lands well under one second on the default relay, so the guest's 30s first-welcome budget is no longer spent transferring the snapshot. Requires the new `COLLAB_PROTO = 2` on both sides; older hosts/guests are rejected with the existing protocol-mismatch error. ([#3144](https://github.com/can1357/oh-my-pi/issues/3144))
-
-### Fixed
-
-- Stopped Mnemopi retention from overflowing the embedding model's context window: `embed()` now caps each input at `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 8192 chars) and clips with a head/tail split so a long multi-turn `MnemopiSessionState.retainMessages` transcript can't make llama.cpp's `/embeddings` server reject the request with `request (N tokens) exceeds the available context size` and silently drop vector recall for that memory. The head/tail clip keeps both the opening setup and the most recent turns so later episodes don't collapse onto the same prefix vector ([#3126](https://github.com/can1357/oh-my-pi/issues/3126)).
-
 ### Changed
 
 - Changed the temporary model picker to label Alt+P selections as session-only and point users to Alt+M or `/model` for role model assignment. ([#2952](https://github.com/can1357/oh-my-pi/issues/2952))
 
 ### Fixed
 
+- Fixed `read` against a SQLite table with many columns (e.g. 33) rendering every cell as an ellipsis and chopping the right edge. The ASCII table shrinker bottomed out at `MIN_COLUMN_WIDTH=1` so every multi-char cell collapsed to `…`, and the final line truncation then cut off the right side. The renderer now bumps the per-column floor to 3 and falls back to a vertical `column: value` block layout per row when the column count exceeds the horizontal width budget. ([#3107](https://github.com/can1357/oh-my-pi/issues/3107))
+- Fixed `skill://`, `local://`, `memory://`, and `vault://` directory paths so read lists them and search/find can walk their backing directories. ([#3116](https://github.com/can1357/oh-my-pi/issues/3116))
+- Fixed local tiny-model inference failures respawning `__omp_worker_tiny_inference` for the same failed model, and blocked the unsupported Qwen3 1.7B ONNX memory model before load. ([#3132](https://github.com/can1357/oh-my-pi/issues/3132))
+- Fixed `/join` failing with `timed out waiting for the host's welcome` on collab sessions whose existing transcript was more than a few MB. The host now sends a small `welcome` frame (header + state + agents + `entryCount`) followed by a train of `snapshot-chunk` frames (`SNAPSHOT_CHUNK_BYTES = 512 KB`), and the guest accumulates them under a per-chunk progress timeout that resets on each chunk arrival. The first welcome lands well under one second on the default relay, so the guest's 30s first-welcome budget is no longer spent transferring the snapshot. Requires the new `COLLAB_PROTO = 2` on both sides; older hosts/guests are rejected with the existing protocol-mismatch error. ([#3144](https://github.com/can1357/oh-my-pi/issues/3144))
+- Stopped Mnemopi retention from overflowing the embedding model's context window: `embed()` now caps each input at `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS` (default 8192 chars) and clips with a head/tail split so a long multi-turn `MnemopiSessionState.retainMessages` transcript can't make llama.cpp's `/embeddings` server reject the request with `request (N tokens) exceeds the available context size` and silently drop vector recall for that memory. The head/tail clip keeps both the opening setup and the most recent turns so later episodes don't collapse onto the same prefix vector ([#3126](https://github.com/can1357/oh-my-pi/issues/3126)).
 - Fixed `/goal` continuation turns that end with a successful `yield` skipping threshold auto-compaction while the active goal remains over `compaction.thresholdTokens`. ([#3146](https://github.com/can1357/oh-my-pi/issues/3146))
-
-### Fixed
-
 - Fixed first-turn memory recall invalidating append-only prompt caches by promoting injected memory into the stable session prompt before the next turn. ([#3111](https://github.com/can1357/oh-my-pi/issues/3111))
+- `/resume` and `omp --resume` no longer auto-switch to the "all projects" picker when the current folder has no sessions. The picker now stays scoped to the cwd and surfaces the existing "No sessions in current folder. Press Tab to view all." hint, so users in an empty project never see other projects' session history without asking. ([#3099](https://github.com/can1357/oh-my-pi/issues/3099))
+- Fixed `/todo export` and `/todo import` in ACP/text and TUI modes to resolve paths from the active session cwd, accept quoted paths with spaces, and report invalid path schemes without crashing.
+- Fixed the SDK `buildSystemPrompt` helper to render caller-provided tools instead of falling back to the default prompt inventory, and to keep no-tools-map skills visible when `read` is available through the fallback.
+- Fixed `/omfg` saved-state copy to advertise `Esc dismiss` after saving and registering the rule live.
+- Fixed legacy Pi extensions importing `getModel`/`getModels` from the `@oh-my-pi/pi-ai` package root failing to load, by restoring them as compatibility aliases for `@oh-my-pi/pi-catalog`'s `getBundledModel`/`getBundledModels`. The root `StringEnum` compatibility shim also accepts TypeScript enum objects in addition to value arrays ([#2907](https://github.com/can1357/oh-my-pi/pull/2907)).
+- Fixed the Alt+M model-configuration menu so role assignment remains selectable for models whose context window is smaller than the current session; the context-size disabling still applies to the Alt+P temporary active-model switch ([#2861](https://github.com/can1357/oh-my-pi/issues/2861)).
 
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
 
 - Fixed custom `models.yml` providers rejecting the `compat.supportsImageDetailOriginal` override, so Responses-compatible proxies that reject snapcompact's native-resolution image hint can clamp frames to `detail: "auto"`. ([#3092](https://github.com/can1357/oh-my-pi/issues/3092))
-
-### Fixed
-
-- `/resume` and `omp --resume` no longer auto-switch to the "all projects" picker when the current folder has no sessions. The picker now stays scoped to the cwd and surfaces the existing "No sessions in current folder. Press Tab to view all." hint, so users in an empty project never see other projects' session history without asking. ([#3099](https://github.com/can1357/oh-my-pi/issues/3099))
 
 ## [16.1.6] - 2026-06-20
 
@@ -189,8 +174,6 @@
 
 - Fixed memory-leaking stale transcripts in the agent viewer when underlying files are deleted
 - Fixed the Agent Hub transcript viewer rendering the transcript body one column right of the "Agent Hub" title (and the title appearing to shift when scrolled to the top): the fullscreen viewer added its own outer gutter on top of the transcript rows, which already carry a 1-column left pad, so the header and body no longer shared a gutter. The viewer now renders the scroll body at full width without the extra gutter, and the file-mention row carries the same 1-column pad as every other row.
-- Fixed `/todo export` and `/todo import` in ACP/text and TUI modes to resolve paths from the active session cwd, accept quoted paths with spaces, and report invalid path schemes without crashing.
-- Fixed the SDK `buildSystemPrompt` helper to render caller-provided tools instead of falling back to the default prompt inventory, and to keep no-tools-map skills visible when `read` is available through the fallback.
 - Fixed the bash tool failing with `pi-natives:command: syntax error at end of input` on a valid `&&`/`;` chain whose later pipeline stage is a compound command, e.g. `echo x && git log | while read h; do …; done | head`. The minimizer's segmented-chain runner rebuilds each chain segment from the brush AST via `pipeline.to_string()` and re-executes that string, but `simple_segment` only validated the *first* pipeline stage — so a compound later stage (`while`/`for`/`if`/subshell) was re-serialized without its terminator and re-run as broken shell. Every stage is now required to be a Display-safe simple command, and — as a general guard against the recurring class of brush `Display` round-trip divergences (previously: quoted here-doc close tags, multi-byte char/byte offsets) — each reconstructed segment is now re-parsed and must match the original pipeline shape before the chain runner executes it; any divergence runs the command whole, unsegmented, instead of corrupting it.
 - Fixed `Ctrl+T` (toggle thinking blocks) and the `/settings` "Hide Thinking Blocks" toggle only collapsing/expanding thinking in the live region: blocks that had scrolled into committed native scrollback on ED3-risk terminals kept their pre-toggle snapshot, so scrolling up showed the old thinking state. Both paths now `resetDisplay()` after flipping each block's flag, forcing a full clear + replay of the whole transcript (matching the tool-output expansion toggle) so every block above the fold re-renders at its new height.
 - Fixed ACP mobile voice settings being unable to call `speech.models.list` by exposing the local STT/TTS model and voice catalog without triggering setup or downloads ([#3011](https://github.com/can1357/oh-my-pi/issues/3011)).
@@ -233,10 +216,6 @@
 
 - Fixed active `/goal` mode being paused by internal compaction and session-switch lifecycle aborts, and made those switches persist wall-clock goal usage without charging time spent in another session to a preserved goal.
 
-### Fixed
-
-- Fixed `/omfg` saved-state copy to advertise `Esc dismiss` after saving and registering the rule live.
-
 ## [16.0.8] - 2026-06-18
 
 ### Changed
@@ -274,10 +253,6 @@
 
 - Fixed `/model` in the TUI to open the model setup picker again, leaving `/switch` as the temporary session model switcher ([#2933](https://github.com/can1357/oh-my-pi/issues/2933)).
 - Fixed OpenCode Go sessions recording per-request cost history so `/usage` can show local cap utilization. ([#2942](https://github.com/can1357/oh-my-pi/issues/2942))
-
-### Fixed
-
-- Fixed legacy Pi extensions importing `getModel`/`getModels` from the `@oh-my-pi/pi-ai` package root failing to load, by restoring them as compatibility aliases for `@oh-my-pi/pi-catalog`'s `getBundledModel`/`getBundledModels`. The root `StringEnum` compatibility shim also accepts TypeScript enum objects in addition to value arrays ([#2907](https://github.com/can1357/oh-my-pi/pull/2907)).
 
 ## [16.0.6] - 2026-06-18
 
@@ -372,10 +347,6 @@
 - Fixed the `tools.format` setting schema so `minimax` can be selected as an owned tool-calling dialect, and taught auto mode to route tool-less MiniMax-family models to the MiniMax owned dialect. ([#2759](https://github.com/can1357/oh-my-pi/issues/2759))
 - Fixed WSL2 TUI stutter by adding a `git.enabled` setting and skipping footer/status-line git probes when disabled or when no git-backed status segment is visible ([#2847](https://github.com/can1357/oh-my-pi/issues/2847)).
 - Fixed JSON-mode startup notices (export/resume/session-picker messages) writing to stdout before the JSON event stream; they now route to stderr so stdout remains newline-delimited JSON.
-
-### Fixed
-
-- Fixed the Alt+M model-configuration menu so role assignment remains selectable for models whose context window is smaller than the current session; the context-size disabling still applies to the Alt+P temporary active-model switch ([#2861](https://github.com/can1357/oh-my-pi/issues/2861)).
 
 ## [16.0.4] - 2026-06-17
 
