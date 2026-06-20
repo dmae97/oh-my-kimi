@@ -15,6 +15,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
@@ -901,6 +902,71 @@ describe("openai-completions compatibility", () => {
 		expect(assistantObject).toBeDefined();
 		expect(assistantObject?.reasoning_text).toBe("inspect tool output");
 		expect(assistantObject?.reasoning_content).toBeUndefined();
+	});
+
+	it("maps MiMo unsupported reasoning efforts to opencode-go accepted wire values", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			id: "mimo-v2.5-pro",
+			name: "MiMo V2.5 Pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+
+		const minimalPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "minimal" }),
+		);
+		const xhighPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" }),
+		);
+
+		expect(minimalPayload ? Reflect.get(minimalPayload, "reasoning_effort") : undefined).toBe("low");
+		expect(xhighPayload ? Reflect.get(xhighPayload, "reasoning_effort") : undefined).toBe("high");
+		const collapsedModel: Model<"openai-completions"> = buildModel({
+			id: "mimo-v2.5-pro",
+			name: "MiMo V2.5 Pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			requestModelId: "mimo-v2.5-pro",
+			reasoning: true,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "mimo-v2.5-pro",
+					[Effort.Low]: "mimo-v2.5-pro-thinking",
+					[Effort.Medium]: "mimo-v2.5-pro-thinking",
+					[Effort.High]: "mimo-v2.5-pro-thinking",
+				},
+			},
+			compat: { reasoningEffortMap: { minimal: "low", xhigh: "high" } },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+		const collapsedMinimalPayload = toObject(
+			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "minimal" }),
+		);
+		const collapsedXhighPayload = toObject(
+			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "xhigh" }),
+		);
+		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "model") : undefined).toBe(
+			"mimo-v2.5-pro-thinking",
+		);
+		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "reasoning_effort") : undefined).toBe(
+			"low",
+		);
+		expect(collapsedXhighPayload ? Reflect.get(collapsedXhighPayload, "model") : undefined).toBe(
+			"mimo-v2.5-pro-thinking",
+		);
+		expect(collapsedXhighPayload ? Reflect.get(collapsedXhighPayload, "reasoning_effort") : undefined).toBe("high");
 	});
 });
 

@@ -94,6 +94,56 @@ describe("model thinking derivation", () => {
 		expect(gptOss.thinking?.effortMap).toBeUndefined();
 	});
 
+	it("stores MiMo OpenAI-compatible effort limits in model metadata", () => {
+		const mimo = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+		});
+		const openRouterMimo = createModel({
+			id: "xiaomi/mimo-v2.5-pro",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		const staleMimo = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "nanogpt",
+			baseUrl: "https://nano-gpt.com/api/v1",
+			compat: { reasoningEffortMap: {} },
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "low", xhigh: "high" },
+			},
+		});
+		const nativeXiaomi = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "xiaomi",
+			baseUrl: "https://api.xiaomimimo.com/v1",
+		});
+
+		const expectedThinking = {
+			mode: "effort" as const,
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		};
+		expect(mimo.thinking).toEqual(expectedThinking);
+		expect(openRouterMimo.thinking).toEqual(expectedThinking);
+		expect(staleMimo.thinking).toEqual(expectedThinking);
+		expect(mimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(openRouterMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(staleMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(requireSupportedEffort(mimo, Effort.High)).toBe(Effort.High);
+		expect(() => requireSupportedEffort(mimo, Effort.XHigh)).toThrow(/Supported efforts: low, medium, high/);
+		expect(clampThinkingLevelForModel(mimo, Effort.Minimal)).toBe(Effort.Low);
+		expect(clampThinkingLevelForModel(mimo, Effort.XHigh)).toBe(Effort.High);
+
+		expect(nativeXiaomi.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]);
+	});
+
 	it("normalizes stale explicit MiniMax M2 / GPT-OSS effort metadata from caches", () => {
 		const staleMinimax = createModel({
 			id: "minimax-m2.7",

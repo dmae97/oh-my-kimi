@@ -24,6 +24,7 @@ import {
 	findThinkingVariantToken,
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
+	isMimoModelIdOrName,
 	isMinimaxM2FamilyModelId,
 	isMinimaxM3FamilyModelId,
 	isOpenAIGptOssModelId,
@@ -88,6 +89,10 @@ const ZAI_GLM_52_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
 };
 const GLM_52_XHIGH_MAX_EFFORT_MAP: Readonly<EffortMap> = {
 	[Effort.XHigh]: "max",
+};
+const MIMO_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
+	[Effort.Minimal]: "low",
+	[Effort.XHigh]: "high",
 };
 
 /**
@@ -296,7 +301,10 @@ function getModelDefinedEfforts<TApi extends Api>(
 			return GLM_52_HIGH_MAX_REASONING_EFFORTS;
 		}
 	}
-	return isOpenAICompatReasoningApi(spec.api) && (isMinimaxM2FamilyModelId(spec.id) || isOpenAIGptOssModelId(spec.id))
+	return isOpenAICompatReasoningApi(spec.api) &&
+		(isMinimaxM2FamilyModelId(spec.id) ||
+			isOpenAIGptOssModelId(spec.id) ||
+			isOpenAICompatMimoReasoningEffortModel(spec, compat))
 		? LOW_MEDIUM_HIGH_REASONING_EFFORTS
 		: undefined;
 }
@@ -307,6 +315,19 @@ function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpe
 
 function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
 	return spec.api === "anthropic-messages" && (isMinimaxM2FamilyModelId(spec.id) || isMinimaxM3FamilyModelId(spec.id));
+}
+
+function isOpenAICompatMimoReasoningEffortModel<TApi extends Api>(
+	spec: ModelSpec<TApi>,
+	compat: CompatOf<TApi>,
+): boolean {
+	if (!isOpenAICompatReasoningApi(spec.api)) return false;
+	if (!isMimoModelIdOrName(spec.id) && !isMimoModelIdOrName(spec.name ?? "")) return false;
+	const resolved = compat as ResolvedOpenAICompat | undefined;
+	return (
+		(resolved?.thinkingFormat === "openai" || resolved?.thinkingFormat === "openrouter") &&
+		resolved.supportsReasoningEffort
+	);
 }
 
 function readCompatEffortMap(compat: CompatOf<Api>): EffortMap | undefined {
@@ -364,6 +385,8 @@ function inferDetectedEffortMap<TApi extends Api>(
 		map = GROQ_QWEN3_32B_REASONING_EFFORT_MAP;
 	} else if (isDeepseekReasoningModel(spec)) {
 		map = DEEPSEEK_REASONING_EFFORT_MAP;
+	} else if (isOpenAICompatMimoReasoningEffortModel(spec, compat)) {
+		map = MIMO_REASONING_EFFORT_MAP;
 	} else if (modelMatchesHost(spec, "openrouter")) {
 		map = getOpenRouterAnthropicReasoningEffortMap(spec.id);
 	} else if (modelMatchesHost(spec, "fireworks")) {
@@ -485,6 +508,8 @@ function inferAnthropicSupportedEfforts<TApi extends Api>(
 }
 
 function inferFallbackEfforts<TApi extends Api>(spec: ModelSpec<TApi>, compat: CompatOf<TApi>): readonly Effort[] {
+	const modelDefinedEfforts = getModelDefinedEfforts(spec, compat);
+	if (modelDefinedEfforts !== undefined) return modelDefinedEfforts;
 	if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
 		return LOW_MEDIUM_HIGH_REASONING_EFFORTS;
 	}

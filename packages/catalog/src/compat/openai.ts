@@ -131,6 +131,16 @@ const OPENCODE_WHEN_THINKING: NonNullable<OpenAICompat["whenThinking"]> = {
 	reasoningContentField: "reasoning_content",
 };
 
+const MIMO_REASONING_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]> = {
+	minimal: "low",
+	xhigh: "high",
+};
+
+function mergeMimoReasoningEffortMap(compat: ResolvedOpenAISharedCompat, enabled: boolean): void {
+	if (!enabled) return;
+	compat.reasoningEffortMap = { ...MIMO_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
+}
+
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	if (
 		provider === "openai" ||
@@ -185,6 +195,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const lowerName = (spec.name ?? "").toLowerCase();
 	const isXiaomiHost = modelMatchesHost(hostModel, "xiaomi");
 	const isXiaomiMimo = isXiaomiHost && (isMimoModelIdOrName(spec.id) || isMimoModelIdOrName(spec.name ?? ""));
+	const isMimoReasoningEffortModel =
+		!isXiaomiHost && (isMimoModelIdOrName(spec.id) || isMimoModelIdOrName(spec.name ?? ""));
 	// OpenCode Zen's `big-pickle` is a DeepSeek reasoning alias; the upstream
 	// 400s come from DeepSeek and require exact reasoning_content replay.
 	const isOpenCodeDeepseekAlias =
@@ -319,7 +331,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsReasoningEffort: !isGrok && !isXiaomiMimo && (!(isZai || isZhipu) || supportsZaiReasoningEffort),
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
-		reasoningEffortMap: {},
+		reasoningEffortMap: isMimoReasoningEffortModel ? MIMO_REASONING_EFFORT_MAP : {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
 		// family classifier so OpenAI-compat proxies serving Gemini are covered.
@@ -411,6 +423,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		compat.omitReasoningEffort = true;
 	}
 	mergeOllamaReasoningEffortMap(compat, provider, spec.reasoning);
+	mergeMimoReasoningEffortMap(compat, isMimoReasoningEffortModel);
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);
@@ -424,6 +437,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			variant.omitReasoningEffort = true;
 		}
 		mergeOllamaReasoningEffortMap(variant, provider, spec.reasoning);
+		mergeMimoReasoningEffortMap(variant, isMimoReasoningEffortModel);
 		compat.whenThinking = variant;
 	}
 

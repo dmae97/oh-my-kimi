@@ -673,6 +673,30 @@ function mapOpenAiToolChoice(choice?: ToolChoice): OpenAICompletionsOptions["too
 	return undefined;
 }
 
+type ReasoningEffortMapCompat = {
+	reasoningEffortMap?: Partial<Record<Effort, string>>;
+};
+
+function getCompatReasoningEffortMap<TApi extends Api>(
+	model: Model<TApi>,
+): Partial<Record<Effort, string>> | undefined {
+	const compat = model.compat;
+	if (compat === undefined || typeof compat !== "object" || !("reasoningEffortMap" in compat)) {
+		return undefined;
+	}
+	return (compat as ReasoningEffortMapCompat).reasoningEffortMap;
+}
+
+function resolveSupportedMappedReasoningEffort<TApi extends Api>(
+	model: Model<TApi>,
+	reasoning: Effort,
+): Effort | undefined {
+	const mapped = getCompatReasoningEffortMap(model)?.[reasoning];
+	if (!mapped) return undefined;
+	const mappedEffort = mapped as Effort;
+	return model.thinking?.efforts.includes(mappedEffort) ? mappedEffort : undefined;
+}
+
 function resolveOpenAiReasoningEffort<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
@@ -687,6 +711,11 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 	// defeat the gate and surface a confusing "Compaction failed: Thinking effort
 	// high is not supported by..." to the user.
 	if (!model.thinking) return undefined;
+	if (model.thinking.efforts.includes(reasoning)) return reasoning;
+	const mappedReasoning = resolveSupportedMappedReasoningEffort(model, reasoning);
+	if (mappedReasoning) return mappedReasoning;
+	if (getCompatReasoningEffortMap(model)?.[reasoning] !== undefined) return reasoning;
+	if (model.thinking.effortMap?.[reasoning] !== undefined) return reasoning;
 	return requireSupportedEffort(model, reasoning);
 }
 
