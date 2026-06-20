@@ -57,6 +57,7 @@ const OpenAICompatFields = {
 	"supportsReasoningParams?": "boolean",
 	"alwaysSendMaxTokens?": "boolean",
 	"strictResponsesPairing?": "boolean",
+	"supportsImageDetailOriginal?": "boolean",
 	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
 	"requiresToolResultId?": "boolean",
 	"replayUnsignedThinking?": "boolean",

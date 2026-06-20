@@ -6,6 +6,19 @@
 
 - Changed the temporary model picker to label Alt+P selections as session-only and point users to Alt+M or `/model` for role model assignment. ([#2952](https://github.com/can1357/oh-my-pi/issues/2952))
 
+## [16.1.7] - 2026-06-20
+
+### Fixed
+
+- Fixed custom `models.yml` providers rejecting the `compat.supportsImageDetailOriginal` override, so Responses-compatible proxies that reject snapcompact's native-resolution image hint can clamp frames to `detail: "auto"`. ([#3092](https://github.com/can1357/oh-my-pi/issues/3092))
+
+## [16.1.6] - 2026-06-20
+
+### Added
+
+- Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
+- Added support for compound duration formats in `/loop` (e.g., `1h30m`)
+
 ## [16.1.5] - 2026-06-19
 
 ### Changed

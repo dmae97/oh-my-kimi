@@ -17786,13 +17786,7 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortRouting": {
-					"minimal": "claude-opus-4-6-thinking",
-					"low": "claude-opus-4-6-thinking",
-					"medium": "claude-opus-4-6-thinking",
-					"high": "claude-opus-4-6-thinking"
-				}
+				]
 			}
 		},
 		"claude-sonnet-4-5": {
@@ -17851,7 +17845,6 @@
 			},
 			"contextWindow": 250000,
 			"maxTokens": 64000,
-			"requestModelId": "claude-sonnet-4-6",
 			"thinking": {
 				"mode": "budget",
 				"efforts": [
@@ -17859,14 +17852,7 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortRouting": {
-					"off": "claude-sonnet-4-6",
-					"minimal": "claude-sonnet-4-6",
-					"low": "claude-sonnet-4-6",
-					"medium": "claude-sonnet-4-6",
-					"high": "claude-sonnet-4-6"
-				}
+				]
 			}
 		},
 		"gemini-2.5-flash": {
@@ -32139,7 +32125,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 512000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"compat": {
 				"supportsStore": false,
@@ -32448,7 +32434,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 512000,
+			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"compat": {
 				"supportsStore": false,
@@ -35892,6 +35878,44 @@
 		"command-a-reasoning-08-2025": {
 			"id": "command-a-reasoning-08-2025",
 			"name": "command-a-reasoning-08-2025",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
+		},
+		"crofai/greg-2-super": {
+			"id": "crofai/greg-2-super",
+			"name": "crofai/greg-2-super",
+			"api": "openai-completions",
+			"provider": "nanogpt",
+			"baseUrl": "https://nano-gpt.com/api/v1",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null
+		},
+		"crofai/greg-2-ultra": {
+			"id": "crofai/greg-2-ultra",
+			"name": "crofai/greg-2-ultra",
 			"api": "openai-completions",
 			"provider": "nanogpt",
 			"baseUrl": "https://nano-gpt.com/api/v1",
@@ -62930,13 +62954,13 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.74,
-				"output": 3.5,
-				"cacheRead": 0.15,
+				"input": 0.612,
+				"output": 3.0690000000000004,
+				"cacheRead": 0.1296,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 16384,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -72323,13 +72347,13 @@
 				"text"
 			],
 			"cost": {
-				"input": 1.75,
-				"output": 5.5,
-				"cacheRead": 0.325,
+				"input": 1.4,
+				"output": 4.4,
+				"cacheRead": 0.26,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1000000,
-			"maxTokens": 24000,
+			"maxTokens": 131072,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -76427,7 +76451,7 @@
 			"cost": {
 				"input": 0.09,
 				"output": 0.3,
-				"cacheRead": 0,
+				"cacheRead": 0.02,
 				"cacheWrite": 0.02
 			},
 			"contextWindow": 262114,

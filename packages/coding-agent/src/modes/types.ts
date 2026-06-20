@@ -362,7 +362,7 @@ export interface InteractiveModeContext {
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
 	handleGoalModeCommand(rest?: string): Promise<void>;
 	handleGuidedGoalCommand(rest?: string): Promise<void>;
-	handleLoopCommand(args?: string): Promise<void>;
+	handleLoopCommand(args?: string): Promise<string | undefined>;
 	disableLoopMode(): void;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
