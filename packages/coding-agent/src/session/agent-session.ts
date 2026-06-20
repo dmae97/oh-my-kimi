@@ -159,7 +159,7 @@ import {
 import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import type { Settings, SkillsSettings } from "../config/settings";
-import { onAppendOnlyModeChanged } from "../config/settings";
+import { getDefault, onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
@@ -9654,29 +9654,50 @@ export class AgentSession {
 			// summarizer path.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
-				snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-				});
-				const ctxWindow = this.model?.contextWindow ?? 0;
-				const budget =
-					ctxWindow > 0
-						? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
-						: Number.POSITIVE_INFINITY;
-				const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
-				if (projected > budget) {
-					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+				const text = snapcompact.serializeConversation(
+					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+				);
+				const renderScan = snapcompact.scanRenderability(text);
+				if (renderScan.isSafe) {
+					snapcompactResult = await snapcompact.compact(preparation, {
+						convertToLlm,
+						model: this.model,
+						shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+					});
+				} else {
+					logger.warn("Snapcompact disabled: high non-ASCII rate detected; falling back to an LLM summary", {
 						model: this.model?.id,
-						projected,
-						budget,
+						unrenderableRatio: renderScan.unrenderableRatio,
 					});
 					this.emitNotice(
 						"warning",
-						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						`snapcompact disabled: high non-ASCII rate detected (${(renderScan.unrenderableRatio * 100).toFixed(1)}%). Falling back to an LLM summary to prevent data loss.`,
 						"compaction",
 					);
 					action = "context-full";
-					snapcompactResult = undefined;
+				}
+
+				if (snapcompactResult) {
+					const ctxWindow = this.model?.contextWindow ?? 0;
+					const budget =
+						ctxWindow > 0
+							? ctxWindow - effectiveReserveTokens(ctxWindow, compactionSettings)
+							: Number.POSITIVE_INFINITY;
+					const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
+					if (projected > budget) {
+						logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+							model: this.model?.id,
+							projected,
+							budget,
+						});
+						this.emitNotice(
+							"warning",
+							"snapcompact could not bring the context under the limit — using an LLM summary instead",
+							"compaction",
+						);
+						action = "context-full";
+						snapcompactResult = undefined;
+					}
 				}
 			}
 
@@ -10081,7 +10102,8 @@ export class AgentSession {
 				result: undefined,
 				aborted: false,
 				willRetry: false,
-				errorMessage: `Auto-shake failed: ${message}`,
+				errorMessage: message,
+				skipped: false,
 			});
 			// Overflow still needs recovery even if shake threw.
 			return reason === "overflow" ? "fallback" : COMPACTION_CHECK_NONE;

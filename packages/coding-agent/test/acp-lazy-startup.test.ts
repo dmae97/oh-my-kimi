@@ -323,7 +323,7 @@ describe("ACP lazy startup", () => {
 				enabled: false,
 				subagents: false,
 				syncBacklog: "off",
-				immuneTurns: 1,
+				immuneTurns: 3,
 			});
 		}
 	});
