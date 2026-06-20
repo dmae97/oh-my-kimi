@@ -235,6 +235,16 @@
         "@oh-my-pi/pi-coding-agent": "^13",
       },
     },
+    "packages/terminal-bench": {
+      "name": "@oh-my-pi/terminal-bench",
+      "version": "0.0.1",
+      "bin": {
+        "tb2": "src/runner.ts",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+      },
+    },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
       "version": "16.1.7",
@@ -746,6 +756,8 @@
     "@oh-my-pi/snapcompact": ["@oh-my-pi/snapcompact@workspace:packages/snapcompact"],
 
     "@oh-my-pi/swarm-extension": ["@oh-my-pi/swarm-extension@workspace:packages/swarm-extension"],
+
+    "@oh-my-pi/terminal-bench": ["@oh-my-pi/terminal-bench@workspace:packages/terminal-bench"],
 
     "@oh-my-pi/typescript-edit-benchmark": ["@oh-my-pi/typescript-edit-benchmark@workspace:packages/typescript-edit-benchmark"],
 
