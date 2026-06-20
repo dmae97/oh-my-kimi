@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Added
 
 - Exported `removeSyncWithRetries()` as a standalone function so tests that manage their own temp dirs can use the same retry-on-EBUSY cleanup logic as `TempDir.removeSync()`.

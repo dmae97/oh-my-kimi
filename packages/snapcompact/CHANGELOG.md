@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Breaking Changes
 
 - Changed core rendering functions `render` and `renderMany` to be asynchronous

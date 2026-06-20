@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Breaking Changes
 
 - Changed renderSnapcompactPng to return a promise instead of a string value

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Added
 
 - Added "Prose Only Thinking" setting to opt-out of rendering code blocks within AI thinking traces

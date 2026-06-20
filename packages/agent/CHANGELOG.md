@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Breaking Changes
 
 - Changed `transformProviderContext` and `buildSideRequestContext` to return a Promise

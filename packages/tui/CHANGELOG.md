@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.8] - 2026-06-20
+
 ### Added
 
 - Added an optional synchronous dynamic description hook for slash-command autocomplete items.
