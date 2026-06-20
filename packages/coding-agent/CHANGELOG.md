@@ -8,6 +8,7 @@
 - Replaced code blocks in AI thinking traces with an ellipsis when "Prose Only Thinking" is enabled
 - Added a live tokens-per-second readout to the thinking pulse, counting only provider-reported tokens (no character estimate, which undercounts a summarized reasoning trace) and hiding itself whenever the rate is zero. Live numbers therefore appear only for providers that report usage mid-turn; otherwise the bare pulse keeps signalling that the model is thinking.
 - Updated the thinking pulse to a faster starburst whose rotation eases across each cycle (instead of ticking at a fixed rate), with a speed badge that fades from gray to the theme accent as the rate climbs.
+- Added live state previews for high-value built-in slash commands in TUI autocomplete.
 
 ### Changed
 
@@ -120,10 +121,6 @@
 - Resuming a session whose project directory no longer exists (deleted or renamed worktree) no longer crashes with an unhandled `ENOENT … chdir` rejection. The resume now keeps the current working directory instead of trying to `chdir` into the missing path, across the in-session selector, the `--resume` startup picker, and `SessionManager.open`/`continueRecent`.
 - Fixed streaming reflowing Markdown — a fenced mermaid diagram or a GFM table — stranding stale fragments in native scrollback once the reply scrolled past the viewport (cleared only by a full repaint / Ctrl+L). While streaming, the assistant block defaulted to commit-stable, so the transcript advertised its scrolled-off rows as durable snapshot content and the renderer committed an intermediate layout to immutable terminal history; the later re-layout (a diagram reshaping, a table re-aligning its columns) then froze that superseded fragment in scrollback. A still-streaming reply whose Markdown carries a mermaid fence or a table — detected outside fenced code blocks so ordinary code snippets are unaffected — is now commit-unstable, so it stays wholly in the repaintable live region and commits once, at its final layout, when the turn finalizes.
 - Fixed `SYSTEM.md` prompt customization going through the raw system prompt override path, which dropped sections rendered by `custom-system-prompt.md` such as skills and rules ([#3014](https://github.com/can1357/oh-my-pi/issues/3014)).
-
-### Added
-
-- Added live state previews for high-value built-in slash commands in TUI autocomplete.
 
 ## [16.1.1] - 2026-06-19
 

@@ -1,17 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `buildSideRequestContext` to the `Agent` class to build prompt-cache-friendly provider Contexts for side-channels or ephemeral requests.
+- Added `compactionContextTokens(providerContextTokens, storedConversationEstimate)`: floors the provider-reported context tokens by a local estimate of the stored conversation for the compaction decision, so a `before_provider_request` payload transform (a compression extension, obfuscator, or inline snapcompact) that shrinks the request can no longer deflate provider usage below the true history size and suppress auto-compaction.
 
 ### Changed
 
 - Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
-
-### Added
-
-- Added `compactionContextTokens(providerContextTokens, storedConversationEstimate)`: floors the provider-reported context tokens by a local estimate of the stored conversation for the compaction decision, so a `before_provider_request` payload transform (a compression extension, obfuscator, or inline snapcompact) that shrinks the request can no longer deflate provider usage below the true history size and suppress auto-compaction.
 
 ## [16.1.5] - 2026-06-19
 
