@@ -142,6 +142,28 @@ interface WireToolConfig {
 	toolChoice?: WireToolChoice;
 }
 
+/**
+ * Bedrock validates that requests carrying any `toolUse`/`toolResult` history
+ * include a `toolConfig`. For no-tool ephemeral turns (`/btw`, IRC auto-replies)
+ * we have nothing real to send, so we inject this placeholder. Its presence is
+ * tracked by a per-request flag — never the wire name — so callers who happen
+ * to register a real tool literally called `__no_tools__` are not affected.
+ */
+const NO_TOOLS_SENTINEL_NAME = "__no_tools__";
+
+const NO_TOOLS_SENTINEL: WireToolSpec = {
+	toolSpec: {
+		name: NO_TOOLS_SENTINEL_NAME,
+		description: "Placeholder required by Bedrock validation. Do not call; answer with text.",
+		inputSchema: { json: { type: "object", properties: {} } },
+	},
+};
+
+interface BedrockToolPlan {
+	toolConfig: WireToolConfig | undefined;
+	sentinelInjected: boolean;
+}
+
 interface ConverseStreamRequest {
 	messages: WireMessage[];
 	system?: SystemContent[];
@@ -222,10 +244,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
-			const historyHasToolBlocks = context.messages.some(
-				m => m.role === "toolResult" || (m.role === "assistant" && m.content.some(b => b.type === "toolCall")),
-			);
-			const toolConfig = convertToolConfig(context.tools, options.toolChoice, historyHasToolBlocks);
+			const convertedMessages = convertMessages(context, model, cacheRetention);
+			const toolPlan = planToolConfig(context.tools, options.toolChoice, convertedMessages);
+			const toolConfig = toolPlan.toolConfig;
+			const sentinelInjected = toolPlan.sentinelInjected;
 			let additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
 
 			// Bedrock rejects thinking + forced tool_choice ("any" or specific tool).
@@ -236,7 +258,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			}
 
 			const commandInput: ConverseStreamRequest = {
-				messages: convertMessages(context, model, cacheRetention),
+				messages: convertedMessages,
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: {
 					maxTokens: options.maxTokens,
@@ -369,7 +391,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					}
 					case "contentBlockStart": {
 						if (!firstTokenTime) firstTokenTime = Date.now();
-						handleContentBlockStart(payload as ContentBlockStartEvent, blocks, output, stream);
+						handleContentBlockStart(payload as ContentBlockStartEvent, blocks, output, stream, sentinelInjected);
 						break;
 					}
 					case "contentBlockDelta": {
@@ -383,7 +405,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 					}
 					case "messageStop": {
 						const ev = payload as MessageStopEvent;
-						output.stopReason = mapStopReason(ev.stopReason);
+						// A sentinel-only request must never surface a tool-use stop:
+						// no real tool exists for the agent to dispatch.
+						output.stopReason =
+							sentinelInjected && ev.stopReason === "tool_use" ? "stop" : mapStopReason(ev.stopReason);
 						if (output.stopReason === "error") {
 							output.errorMessage = `Generation failed with stop reason: ${ev.stopReason ?? "unknown"}`;
 						}
@@ -462,9 +487,15 @@ function handleContentBlockStart(
 	blocks: Block[],
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
+	sentinelInjected: boolean,
 ): void {
 	const index = event.contentBlockIndex;
 	const start = event.start;
+
+	// Drop the sentinel call only when we injected it ourselves. A caller that
+	// registers a real tool named `__no_tools__` would otherwise lose its
+	// legitimate tool-use events on normal turns.
+	if (sentinelInjected && start?.toolUse?.name === NO_TOOLS_SENTINEL_NAME) return;
 
 	if (start?.toolUse) {
 		const block: Block = {
@@ -784,28 +815,48 @@ function convertMessages(
 	return result;
 }
 
-function convertToolConfig(
-	tools: Tool[] | undefined,
-	toolChoice: BedrockOptions["toolChoice"],
-	historyHasToolBlocks: boolean,
-): WireToolConfig | undefined {
-	if (!tools?.length) return undefined;
+function messagesHaveToolBlocks(messages: WireMessage[]): boolean {
+	for (const message of messages) {
+		for (const block of message.content) {
+			if ("toolUse" in block || "toolResult" in block) return true;
+		}
+	}
+	return false;
+}
 
-	const bedrockTools: WireToolSpec[] = tools.map(tool => ({
+function convertToolSpec(tool: Tool): WireToolSpec {
+	return {
 		toolSpec: {
 			name: tool.name,
 			description: tool.description || "",
 			inputSchema: { json: toolWireSchema(tool) },
 		},
-	}));
+	};
+}
 
-	// Bedrock rejects requests whose history contains toolUse/toolResult blocks without a
-	// toolConfig. With prior tool use we must keep the tool specs and merely omit the choice
-	// (there is no "none" choice on Converse); dropping toolConfig entirely would 400.
+function planToolConfig(
+	tools: Tool[] | undefined,
+	toolChoice: BedrockOptions["toolChoice"],
+	messages: WireMessage[],
+): BedrockToolPlan {
+	const activeTools = tools ?? [];
+	const hasTools = activeTools.length > 0;
+	const historyHasToolBlocks = messagesHaveToolBlocks(messages);
+
 	if (toolChoice === "none") {
-		return historyHasToolBlocks ? { tools: bedrockTools } : undefined;
+		if (!historyHasToolBlocks) return { toolConfig: undefined, sentinelInjected: false };
+		if (!hasTools) {
+			return {
+				toolConfig: { tools: [NO_TOOLS_SENTINEL], toolChoice: { auto: {} } },
+				sentinelInjected: true,
+			};
+		}
+		return { toolConfig: { tools: activeTools.map(convertToolSpec) }, sentinelInjected: false };
 	}
 
+	if (!hasTools) return { toolConfig: undefined, sentinelInjected: false };
+
+	const bedrockTools = activeTools.map(convertToolSpec);
 	let bedrockToolChoice: WireToolChoice | undefined;
 	switch (toolChoice) {
 		case "auto":
@@ -820,7 +871,7 @@ function convertToolConfig(
 			}
 	}
 
-	return { tools: bedrockTools, toolChoice: bedrockToolChoice };
+	return { toolConfig: { tools: bedrockTools, toolChoice: bedrockToolChoice }, sentinelInjected: false };
 }
 
 function mapStopReason(reason: string | undefined): StopReason {
