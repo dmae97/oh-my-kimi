@@ -70,6 +70,8 @@ python/robomp/data/
 python/robomp/.cache/
 python/robomp/src/robomp/static/
 python/robomp/web/dist/
+python/robomp/web/verify-out/
+/verify-out/
 python/robomp/.env
 
 # Local, machine-specific boot perf baseline (see packages/coding-agent/scripts/bench-guard.ts)
