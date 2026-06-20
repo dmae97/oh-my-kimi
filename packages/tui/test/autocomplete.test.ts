@@ -61,6 +61,22 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("slash commands", () => {
+		it("surfaces skill commands before built-ins for an empty slash query", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[
+					{ name: "settings", description: "Open settings" },
+					{ name: "model", description: "Switch model" },
+					{ name: "skill:reviewer", description: "Review code" },
+				],
+				"/tmp",
+			);
+
+			const result = await provider.getSuggestions(["/"], 0, 1);
+
+			expect(result?.items.map(item => item.value).slice(0, 3)).toEqual(["skill:reviewer", "settings", "model"]);
+		});
+	});
 	describe("applyCompletion", () => {
 		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
 			const provider = new CombinedAutocompleteProvider([], "/tmp");

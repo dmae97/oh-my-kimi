@@ -249,7 +249,9 @@ function buildSlashCommandCompletions(commands: CommandEntry[], lowerPrefix: str
 			const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
 			const candidates: Array<AutocompleteItem & { score: number }> = [];
 
-			const nameScore = scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
+			const isSkillCommand = name.startsWith("skill:");
+			const nameScore =
+				lowerPrefix.length === 0 && isSkillCommand ? 950 : scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
 			const lowerDesc = desc.toLowerCase();
 			const descScore =
 				lowerDesc && fuzzyMatch(lowerPrefix, lowerDesc) ? fuzzyScore(lowerPrefix, lowerDesc) * 0.5 : 0;
