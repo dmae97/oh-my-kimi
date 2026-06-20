@@ -1485,6 +1485,10 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 	return /stream event order|before message_start/i.test(error.message);
 }
 
+function isAnthropicTransientTransportMessage(message: string): boolean {
+	return message.includes("tls: bad record mac") || message.includes("type=server_error");
+}
+
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
 	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
@@ -1501,6 +1505,7 @@ export function isProviderRetryableError(error: unknown, provider?: string): boo
 	const msg = error.message.toLowerCase();
 	if (
 		isUnexpectedSocketCloseMessage(msg) ||
+		isAnthropicTransientTransportMessage(msg) ||
 		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
 			msg,
 		) ||
