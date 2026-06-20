@@ -268,27 +268,27 @@ export function autoMigrateEnabled(env: Env = process.env): boolean {
 	return envString("MNEMOPI_AUTO_MIGRATE", "1", env) !== "0";
 }
 
-export function proactiveLinkingEnabled(env: Env = process.env): boolean {
-	return envString("MNEMOPI_PROACTIVE_LINKING", "0", env) === "1";
-}
-
 export interface RecallFeatureFlags {
 	polyphonicRecall?: boolean;
 	enhancedRecall?: boolean;
+	proactiveLinking?: boolean;
 }
 
 let polyphonicRecallDefault = false;
 let enhancedRecallDefault = false;
+let proactiveLinkingDefault = false;
 
 /**
  * Sets process-wide defaults for the env-gated recall features. Host configuration
- * (e.g. the coding-agent `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall`
- * settings) lands here; the `MNEMOPI_POLYPHONIC_RECALL` / `MNEMOPI_ENHANCED_RECALL`
- * environment variables still win whenever they are set.
+ * (e.g. the coding-agent `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall` /
+ * `mnemopi.proactiveLinking` settings) lands here; the `MNEMOPI_POLYPHONIC_RECALL` /
+ * `MNEMOPI_ENHANCED_RECALL` / `MNEMOPI_PROACTIVE_LINKING` environment variables still
+ * win whenever they are set.
  */
 export function configureRecallFeatures(flags: RecallFeatureFlags): void {
 	if (flags.polyphonicRecall !== undefined) polyphonicRecallDefault = flags.polyphonicRecall;
 	if (flags.enhancedRecall !== undefined) enhancedRecallDefault = flags.enhancedRecall;
+	if (flags.proactiveLinking !== undefined) proactiveLinkingDefault = flags.proactiveLinking;
 }
 
 export function polyphonicRecallEnabled(env: Env = process.env): boolean {
@@ -303,6 +303,11 @@ export function temporalHalflifeHours(env: Env = process.env): number {
 export function enhancedRecallEnabled(env: Env = process.env): boolean {
 	const value = envOptionalString("MNEMOPI_ENHANCED_RECALL", env);
 	return value === undefined ? enhancedRecallDefault : value === "1";
+}
+
+export function proactiveLinkingEnabled(env: Env = process.env): boolean {
+	const value = envOptionalString("MNEMOPI_PROACTIVE_LINKING", env);
+	return value === undefined ? proactiveLinkingDefault : value === "1";
 }
 
 export function llmEnabled(env: Env = process.env): boolean {

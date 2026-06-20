@@ -187,13 +187,18 @@ function addTemporalAnnotations(beam: BeamMemoryState, memoryId: string, timesta
 	}
 }
 
+function proactiveLinkingAllowed(beam: BeamMemoryState): boolean {
+	const override = process.env.MNEMOPI_PROACTIVE_LINKING;
+	return override === undefined ? beam.config.proactiveLinking === true : override === "1";
+}
+
 function proactiveLinkIfEnabled(
 	beam: BeamMemoryState,
 	memoryId: string,
 	content: string,
 	extractEntities: boolean,
 ): void {
-	if (process.env.MNEMOPI_PROACTIVE_LINKING !== "1") return;
+	if (!proactiveLinkingAllowed(beam)) return;
 	try {
 		const graph =
 			beam.episodicGraph instanceof EpisodicGraph

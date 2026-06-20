@@ -268,6 +268,9 @@
 ### Added
 
 - Added a copy affordance for completed `/btw` answers so users can copy the visible side-answer text before branching or dismissing the panel.
+### Fixed
+
+- Fixed mnemopi proactive linking being configurable only through the `MNEMOPI_PROACTIVE_LINKING` environment variable, unlike the sibling `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall` settings: added a `mnemopi.proactiveLinking` config.yml setting (off by default, `/settings` → Memory → Mnemopi) that ingests new memories into the episodic graph as they are stored, linking them to related entities and memories; `MNEMOPI_PROACTIVE_LINKING` still overrides the configured value when set ([#2440](https://github.com/can1357/oh-my-pi/issues/2440)).
 
 ## [16.0.6] - 2026-06-18
 

@@ -129,6 +129,7 @@ function makeMnemopiConfig(
 		autoRetain: true,
 		polyphonicRecall: false,
 		enhancedRecall: false,
+		proactiveLinking: false,
 		retainEveryNTurns: 3,
 		recallLimit: 10,
 		recallContextTurns: 1,
