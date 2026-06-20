@@ -314,9 +314,8 @@ export class SelectorController {
 					}
 				}
 				break;
-			case "hideThinking":
+			case "hideThinkingBlock":
 				this.ctx.hideThinkingBlock = value as boolean;
-				this.ctx.session.agent.hideThinkingSummary = value as boolean;
 				for (const child of this.ctx.chatContainer.children) {
 					if (child instanceof AssistantMessageComponent) {
 						child.setHideThinkingBlock(value as boolean);
@@ -326,6 +325,9 @@ export class SelectorController {
 				// ED3-risk terminals retire their stale snapshots too (see
 				// InputController.toggleThinkingBlockVisibility).
 				this.ctx.ui.resetDisplay();
+				break;
+			case "omitThinking":
+				this.ctx.session.agent.hideThinkingSummary = value as boolean;
 				break;
 			case "display.cacheMissMarker":
 				// Rebuild re-runs the usage-based detection under the new setting so

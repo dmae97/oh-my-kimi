@@ -900,6 +900,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	omitThinking: {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Omit Thinking summaries",
+			description:
+				"Instruct upstream providers to completely omit thinking summaries from responses (where supported)",
+		},
+	},
+
 	"model.loopGuard.enabled": {
 		type: "boolean",
 		default: true,

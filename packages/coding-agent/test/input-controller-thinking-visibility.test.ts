@@ -33,7 +33,7 @@ describe("InputController thinking visibility", () => {
 
 		expect(ctx.hideThinkingBlock).toBe(true);
 		expect(set).toHaveBeenCalledWith("hideThinkingBlock", true);
-		expect(ctx.session.agent.hideThinkingSummary).toBe(true);
+		expect(ctx.session.agent.hideThinkingSummary).toBe(false);
 		expect(chatContainer.children).toEqual([pendingUserMessage, assistant, loadingIndicator]);
 		expect(clear).not.toHaveBeenCalled();
 		expect(addChild).not.toHaveBeenCalled();

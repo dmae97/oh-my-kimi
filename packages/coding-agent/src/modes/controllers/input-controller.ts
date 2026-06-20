@@ -1524,7 +1524,6 @@ export class InputController {
 	toggleThinkingBlockVisibility(): void {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		this.ctx.settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
-		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
 		for (const child of this.ctx.chatContainer.children) {
 			if (child instanceof AssistantMessageComponent) {
