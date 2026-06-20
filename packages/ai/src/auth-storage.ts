@@ -1825,10 +1825,6 @@ export class AuthStorage {
 			onPrompt: (prompt: { message: string; placeholder?: string }) => Promise<string>;
 		},
 	): Promise<void> {
-		const saveApiKeyCredential = async (apiKey: string): Promise<void> => {
-			const newCredential: ApiKeyCredential = { type: "api_key", key: apiKey };
-			await this.set(provider, newCredential);
-		};
 		const manualCodeInput = () => ctrl.onPrompt({ message: "Paste the authorization code (or full redirect URL):" });
 		// Built-in registry first, then runtime-registered extension providers.
 		const def = getProviderDefinition(provider) ?? getOAuthProvider(provider);
@@ -1848,7 +1844,20 @@ export class AuthStorage {
 			if (!result) {
 				return;
 			}
-			await saveApiKeyCredential(result);
+			const newCredential: ApiKeyCredential = { type: "api_key", key: result };
+			const appendApiKeyLogin = "appendApiKeyLogin" in def && def.appendApiKeyLogin === true;
+			const stored = appendApiKeyLogin
+				? this.#store.upsertAuthCredentialRemote
+					? await this.#store.upsertAuthCredentialRemote(provider, newCredential)
+					: this.#store.upsertAuthCredentialForProvider(provider, newCredential)
+				: this.#store.replaceAuthCredentialsRemote
+					? await this.#store.replaceAuthCredentialsRemote(provider, [newCredential])
+					: this.#store.replaceAuthCredentialsForProvider(provider, [newCredential]);
+			this.#setStoredCredentials(
+				provider,
+				stored.map(entry => ({ id: entry.id, credential: entry.credential })),
+			);
+			this.#resetProviderAssignments(provider);
 			return;
 		}
 		const newCredential: OAuthCredential = { type: "oauth", ...result };

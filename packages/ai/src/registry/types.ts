@@ -44,6 +44,8 @@ export interface ProviderDefinition {
 	readonly envKeys?: KeyResolver;
 	// --- interactive login (OAuthProviderInterface-compatible) ---
 	readonly login?: (callbacks: OAuthLoginCallbacks) => Promise<OAuthCredentials | string>;
+	/** String-returning login appends API keys instead of replacing the provider's existing key. */
+	readonly appendApiKeyLogin?: boolean;
 	readonly refreshToken?: (credentials: OAuthCredentials) => Promise<OAuthCredentials>;
 	readonly getApiKey?: (credentials: OAuthCredentials) => string;
 	/** Store OAuth credentials under a different provider id (e.g. `openai-codex-device` ⇒ `openai-codex`). */
