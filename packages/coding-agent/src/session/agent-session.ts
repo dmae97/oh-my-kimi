@@ -8153,10 +8153,15 @@ export class AgentSession {
 	 * suppress it.
 	 */
 	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
+		// Exclude encrypted reasoning (thinkingSignature / redactedThinking): its
+		// local byte size diverges from what the provider bills, so counting it here
+		// would let a thinking-heavy turn falsely trip the floor. The provider usage
+		// (the other arm of compactionContextTokens) already accounts for it.
+		const opts = { excludeEncryptedReasoning: true } as const;
 		return (
 			computeNonMessageTokens(this) +
-			this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0) +
-			pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
+			this.messages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0) +
+			pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0)
 		);
 	}
 

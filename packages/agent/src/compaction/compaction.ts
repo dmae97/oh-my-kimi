@@ -278,8 +278,15 @@ const IMAGE_TOKEN_ESTIMATE = 1200;
  * Estimate token count for a message using cl100k_base via the native
  * tokenizer. This is not Claude's first-party tokenizer (Anthropic doesn't
  * publish one) but is within ~5–10% across English/code text.
+ *
+ * `excludeEncryptedReasoning` drops opaque provider reasoning payloads
+ * (`thinkingSignature`, `redactedThinking`) from the estimate. Those are billed
+ * by the provider on replay, so the default counts them — but their *local*
+ * byte size can diverge wildly from what the provider charges, so the
+ * compaction floor (which only needs the reliably-countable, on-wire-compressible
+ * content) excludes them to avoid false triggers on thinking-heavy turns.
  */
-export function estimateTokens(message: AgentMessage): number {
+export function estimateTokens(message: AgentMessage, options?: { excludeEncryptedReasoning?: boolean }): number {
 	const fragments: string[] = [];
 	let extra = 0;
 	if ((message as { role?: string }).role === "bashExecution") {
@@ -315,14 +322,18 @@ export function estimateTokens(message: AgentMessage): number {
 					// reasoning items, Anthropic signed thinking blocks, etc.). Without
 					// counting it, this estimator can read ~half of the provider-reported
 					// usage on thinking-heavy turns — see #2275 for the resulting
-					// compaction-trigger / post-check metric divergence.
-					if (block.thinkingSignature) fragments.push(block.thinkingSignature);
+					// compaction-trigger / post-check metric divergence. The compaction
+					// floor excludes it (its local byte size diverges from provider billing).
+					if (block.thinkingSignature && !options?.excludeEncryptedReasoning) {
+						fragments.push(block.thinkingSignature);
+					}
 				} else if (block.type === "toolCall") {
 					fragments.push(block.name);
 					fragments.push(JSON.stringify(block.arguments));
 				} else if (block.type === "redactedThinking") {
-					// Encrypted reasoning blob the provider still bills for on replay.
-					fragments.push(block.data);
+					// Encrypted reasoning blob the provider still bills for on replay;
+					// excluded from the compaction floor for the same reason as above.
+					if (!options?.excludeEncryptedReasoning) fragments.push(block.data);
 				}
 			}
 			break;
