@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/mcp enable` and `/mcp disable` reconnecting unrelated MCP servers by scoping toggle reconnect/disconnect work to the named server. ([#3157](https://github.com/can1357/oh-my-pi/issues/3157))
+
 ## [16.1.8] - 2026-06-20
 
 ### Added
