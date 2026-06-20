@@ -4051,7 +4051,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Fireworks",
 			label: "Fireworks Tier",
 			description:
-				"Serving path for Fireworks requests. Priority sends `service_tier: \"priority\"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.",
+				'Serving path for Fireworks requests. Priority sends `service_tier: "priority"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.',
 			options: [
 				{ value: "standard", label: "Standard", description: "Default serving path (no service_tier)" },
 				{

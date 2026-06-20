@@ -296,9 +296,11 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 				? "openrouter"
 				: isQwen && isNvidiaNim
 					? "qwen-chat-template"
-					: isAlibaba || isQwen
-						? "qwen"
-						: "openai";
+					: isQwen && isFireworks
+						? "openai"
+						: isAlibaba || isQwen
+							? "qwen"
+							: "openai";
 
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,

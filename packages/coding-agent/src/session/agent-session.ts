@@ -10310,6 +10310,12 @@ export class AgentSession {
 		return false;
 	}
 
+	/** The active model when it is a Fireworks Fast (`-fast`) variant, else undefined. */
+	#activeFireworksFastModel(): Model | undefined {
+		const model = this.model;
+		return model?.provider === "fireworks" && isFireworksFastModelId(model.id) ? model : undefined;
+	}
+
 	/**
 	 * True when the current turn failed on a Fireworks Fast (`-fast`) model in a
 	 * way that should degrade to the reliable base (Standard) model. Fast is a
@@ -10321,10 +10327,13 @@ export class AgentSession {
 	 * duplicate work). Requires the base model to exist in the registry.
 	 */
 	#isFireworksFastFallbackEligible(message: AssistantMessage): boolean {
-		const model = this.model;
-		if (!model || model.provider !== "fireworks" || !isFireworksFastModelId(model.id)) return false;
+		const model = this.#activeFireworksFastModel();
+		if (!model) return false;
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 		if (message.content.some(block => block.type === "toolCall")) return false;
+		// A content refusal/sensitivity stop is the model's decision, not a route
+		// failure — switching to the base model would just re-trigger it.
+		if (this.#isClassifierRefusal(message)) return false;
 		if (isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		const err = message.errorMessage;
 		if (isUsageLimitError(err)) return false;
@@ -10344,8 +10353,8 @@ export class AgentSession {
 	 * model is not a fast variant, the base id is missing, or it has no key.
 	 */
 	async #tryFireworksFastFallback(currentSelector: string): Promise<boolean> {
-		const model = this.model;
-		if (!model || model.provider !== "fireworks" || !isFireworksFastModelId(model.id)) return false;
+		const model = this.#activeFireworksFastModel();
+		if (!model) return false;
 		const baseModel = this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id));
 		if (!baseModel) return false;
 		const apiKey = await this.#modelRegistry.getApiKey(baseModel, this.sessionId);
@@ -10468,7 +10477,10 @@ export class AgentSession {
 		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean },
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
-		if (!retrySettings.enabled) return false;
+		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
+		// not a retry loop, so it runs even when the user disabled retries: it switches
+		// the model once and lets the base turn proceed.
+		if (!retrySettings.enabled && !options?.fireworksFastFallback) return false;
 		const classifierRefusal = this.#isClassifierRefusal(message);
 
 		const generation = this.#promptGeneration;
@@ -10577,6 +10589,15 @@ export class AgentSession {
 			}
 		}
 		if (classifierRefusal && !switchedModel) {
+			this.#retryAttempt = 0;
+			this.#resolveRetry();
+			return false;
+		}
+		// Fast→base was requested but the base switch could not happen (e.g. the
+		// base model has no credential). Don't fall through to backing-off and
+		// retrying the failing fast model for a hard router error that the generic
+		// classifier wouldn't retry — surface it instead.
+		if (options?.fireworksFastFallback && !switchedModel && !this.#isRetryableError(message)) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			return false;
