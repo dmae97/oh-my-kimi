@@ -232,7 +232,7 @@ describe("collab chunked welcome (#3144)", () => {
 		const welcomeIdx = frames.findIndex(f => f.t === "welcome");
 		expect(welcomeIdx).toBeGreaterThanOrEqual(0);
 		const welcome = frames[welcomeIdx];
-		if (!welcome || welcome.t !== "welcome") throw new Error("expected welcome frame");
+		if (welcome?.t !== "welcome") throw new Error("expected welcome frame");
 
 		expect(welcome.entryCount).toBe(snapshot.entries.length);
 		expect(welcome.header.id).toBe(snapshot.header.id);
@@ -248,7 +248,7 @@ describe("collab chunked welcome (#3144)", () => {
 		const chunks: { entries: SessionEntry[]; final: boolean }[] = [];
 		for (let i = welcomeIdx + 1; i < frames.length; i++) {
 			const f = frames[i];
-			if (!f || f.t !== "snapshot-chunk") {
+			if (f?.t !== "snapshot-chunk") {
 				throw new Error(`unexpected ${f?.t ?? "missing"} between welcome and final chunk`);
 			}
 			chunks.push({ entries: f.entries, final: f.final });
