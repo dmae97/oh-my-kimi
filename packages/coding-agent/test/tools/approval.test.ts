@@ -145,7 +145,7 @@ describe("MCP fallback and prompt formatting", () => {
 
 	it("truncates prompt details without touching short strings", () => {
 		expect(truncateForPrompt("hello", 10)).toBe("hello");
-		expect(truncateForPrompt("abcdefgh", 5)).toBe("abcde… (3 chars truncated)");
+		expect(truncateForPrompt("abcdefgh", 5)).toBe("abcde[…3ch elided…]");
 	});
 });
 

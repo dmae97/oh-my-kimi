@@ -3,6 +3,7 @@ import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } fro
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
 import { tinyWorkerEnvOverlay } from "../tiny/title-client";
+import { safeSend } from "../utils/ipc";
 import type { SttProgressEvent, SttWorkerInbound, SttWorkerOutbound } from "./asr-protocol";
 import type { SttModelKey } from "./models";
 
@@ -181,13 +182,7 @@ export function createSttSubprocess(): SpawnedSubprocess {
 function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			try {
-				proc.send(message);
-			} catch (error) {
-				logger.debug("stt: send to subprocess failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			safeSend(proc, message, "stt");
 		},
 		onMessage(handler) {
 			inbound.add(handler);

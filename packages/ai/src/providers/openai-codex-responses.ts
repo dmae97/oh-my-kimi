@@ -729,25 +729,12 @@ async function buildTransformedCodexRequestBody(
 
 	// `maxTokens` is intentionally not forwarded: transformRequestBody strips
 	// `max_output_tokens`/`max_completion_tokens` (the Codex backend rejects
-	// caller-supplied output caps).
-	if (options?.temperature !== undefined) {
-		params.temperature = options.temperature;
-	}
-	if (options?.topP !== undefined) {
-		params.top_p = options.topP;
-	}
-	if (options?.topK !== undefined) {
-		params.top_k = options.topK;
-	}
-	if (options?.minP !== undefined) {
-		params.min_p = options.minP;
-	}
-	if (options?.presencePenalty !== undefined) {
-		params.presence_penalty = options.presencePenalty;
-	}
-	if (options?.repetitionPenalty !== undefined) {
-		params.repetition_penalty = options.repetitionPenalty;
-	}
+	// caller-supplied output caps). Sampling controls (`temperature`, `top_p`,
+	// `top_k`, `min_p`, `presence_penalty`, `repetition_penalty`,
+	// `frequency_penalty`, `stop`) are likewise refused with
+	// `{"detail":"Unsupported parameter: temperature"}` etc., so we drop
+	// everything from `StreamOptions` rather than forwarding any of them.
+	// (#3117 — codex-rs sends none of these either.)
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 	if (context.tools && context.tools.length > 0) {
 		params.tools = convertOpenAICodexResponsesTools(context.tools, model);
@@ -1192,6 +1179,7 @@ async function processCodexResponseStream(
 			if (!recovered) {
 				throw error;
 			}
+			stream.push({ type: "start", partial: output });
 		}
 	}
 }
@@ -1663,9 +1651,10 @@ function dropTrailingDegenerateToolCall(output: AssistantMessage, runtime: Codex
  * scratch — bounded by {@link CODEX_WHITESPACE_LOOP_RETRY_LIMIT}. Sampling
  * nondeterminism usually breaks the loop on a fresh attempt; once the budget is
  * exhausted the original error is surfaced (now without the junk tool call
- * polluting the message). Replay is refused once a toolcall_end was already
- * delivered to the consumer (`canSafelyReplayWebsocketOverSse`) — it would
- * re-emit the same tool calls.
+ * polluting the message). Replay is refused once any visible content was already
+ * delivered to the consumer — a finished tool call (`canSafelyReplayWebsocketOverSse`),
+ * or any streamed text/commentary block still in `output.content` after the degenerate
+ * tool call is dropped — because replaying re-emits already-streamed deltas.
  */
 async function tryRecoverCodexWhitespaceToolCallLoop(
 	context: CodexStreamProcessingContext,
@@ -1681,6 +1670,7 @@ async function tryRecoverCodexWhitespaceToolCallLoop(
 	if (
 		runtime.whitespaceLoopRetries >= CODEX_WHITESPACE_LOOP_RETRY_LIMIT ||
 		!runtime.canSafelyReplayWebsocketOverSse ||
+		context.output.content.some(block => block.type !== "thinking") ||
 		context.options?.signal?.aborted
 	) {
 		return false;
@@ -3250,7 +3240,15 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 		}
 
 		if (msg.role === "toolResult") {
-			appendResponsesToolResultMessages(messages, msg, model, false, knownCallIds, customCallIds);
+			appendResponsesToolResultMessages(
+				messages,
+				msg,
+				model,
+				false,
+				model.compat.supportsImageDetailOriginal,
+				knownCallIds,
+				customCallIds,
+			);
 		}
 
 		msgIndex += 1;
@@ -3268,7 +3266,10 @@ function normalizeInputMessageContent(
 		return [{ type: "input_text", text: content.toWellFormed() }];
 	}
 
-	return convertResponsesInputContent(content, model.input.includes("image")) ?? [];
+	return (
+		convertResponsesInputContent(content, model.input.includes("image"), model.compat.supportsImageDetailOriginal) ??
+		[]
+	);
 }
 
 /** @internal Exported for tests. */
@@ -3412,7 +3413,7 @@ export function createCodexProviderStreamError(rawEvent: Record<string, unknown>
 		return new CodexProviderStreamError("Codex response failed", false);
 	}
 	const nestedError = event.error ?? event.response?.error;
-	const code = event.code ?? nestedError?.code ?? nestedError?.type ?? "";
+	const code = nestedError?.code ?? nestedError?.type ?? event.code ?? "";
 	const message = event.message ?? "";
 	const formattedMessage =
 		event.type === "error"

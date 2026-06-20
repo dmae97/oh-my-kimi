@@ -152,6 +152,7 @@ function arkJsonAstToWire(value: unknown): unknown {
 const kZodWireSchema = Symbol("pi.schema.zod.wire");
 const kJsonWireSchema = Symbol("pi.schema.json.wire");
 const kArkWireSchema = Symbol("pi.schema.ark.wire");
+const kStrippedSchema = Symbol("pi.schema.descriptions.stripped");
 
 /**
  * Post-process Zod-emitted JSON Schema so it matches the wire shape providers
@@ -344,6 +345,49 @@ function isEmptyObject(val: unknown): val is Record<string, never> {
 	return Object.keys(val).length === 0;
 }
 
+/**
+ * The single JSON Schema scalar `type` that describes every member of a
+ * homogeneous primitive enum, or `undefined` when the members are mixed,
+ * non-scalar (`null`/object/array), or the list is empty.
+ */
+function homogeneousEnumScalarType(values: readonly unknown[]): string | undefined {
+	if (values.length === 0) return undefined;
+	let inferred: string | undefined;
+	for (const value of values) {
+		let scalar: string | undefined;
+		switch (typeof value) {
+			case "string":
+				scalar = "string";
+				break;
+			case "boolean":
+				scalar = "boolean";
+				break;
+			case "number":
+				scalar = "number";
+				break;
+			default:
+				return undefined; // null / object / array — not a single scalar type
+		}
+		if (inferred === undefined) inferred = scalar;
+		else if (inferred !== scalar) return undefined; // mixed primitives
+	}
+	return inferred;
+}
+
+/**
+ * ArkType emits string-literal unions (and raw JSON-Schema tools can declare
+ * enums) as a bare `{ enum: [...] }` with no `type`. That is valid JSON Schema
+ * and accepted by OpenAI/Anthropic, but Gemini/Vertex — including the
+ * OpenAI-compatible gateways fronting it — reject a function-declaration enum
+ * that omits `type` ("schema didn't specify the schema type field"). Complete
+ * the node by inferring the scalar `type` when every member shares one.
+ */
+function inferBareEnumScalarType(obj: Record<string, unknown>): void {
+	if ("type" in obj || !Array.isArray(obj.enum)) return;
+	const inferred = homogeneousEnumScalarType(obj.enum);
+	if (inferred !== undefined) obj.type = inferred;
+}
+
 function walk(node: unknown, zodCleanup: boolean): void {
 	if (Array.isArray(node)) {
 		for (const child of node) walk(child, zodCleanup);
@@ -352,6 +396,7 @@ function walk(node: unknown, zodCleanup: boolean): void {
 	if (!node || typeof node !== "object") return;
 	const obj = node as Record<string, unknown>;
 	rewriteNullableScalarAnyOf(obj);
+	inferBareEnumScalarType(obj);
 
 	if (zodCleanup) {
 		// Drop noise injected for `z.number().int()`.
@@ -589,4 +634,88 @@ export function toolWireSchema(tool: Tool): Record<string, unknown> {
 		const upgraded = upgradeJsonSchemaTo202012(raw) as Record<string, unknown>;
 		return postProcessJsonSchema(upgraded);
 	});
+}
+
+/**
+ * Schema-valued keywords whose value is a single subschema (or an array of
+ * subschemas — the recursion dispatches on array-ness, so tuple forms like
+ * draft-07 `items: []` are handled too). Covers the draft 2020-12 surface plus
+ * the legacy `additionalItems` that may survive an incomplete upgrade.
+ */
+const STRIP_SCHEMA_VALUE_KEYS = [
+	"additionalProperties",
+	"unevaluatedProperties",
+	"unevaluatedItems",
+	"items",
+	"additionalItems",
+	"contains",
+	"propertyNames",
+	"contentSchema",
+	"if",
+	"then",
+	"else",
+	"not",
+	"anyOf",
+	"oneOf",
+	"allOf",
+	"prefixItems",
+] as const;
+
+/** Keywords whose value is a `{ name: Schema }` map — names are NOT annotations. */
+const STRIP_SCHEMA_MAP_KEYS = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"] as const;
+
+/**
+ * Recursively strip human-readable `description` annotations from a JSON Schema,
+ * descending only through schema-valued keywords so a property literally named
+ * `"description"` inside a `properties`/`$defs` map keeps its schema (only its own
+ * annotation is dropped), and data-bearing keywords (`default`/`const`/`examples`)
+ * are never traversed. Mutates `node` in place — callers pass a clone.
+ */
+function stripSchemaDescriptionsInPlace(node: unknown): void {
+	if (Array.isArray(node)) {
+		for (const child of node) stripSchemaDescriptionsInPlace(child);
+		return;
+	}
+	if (!isSchemaRecord(node)) return;
+	delete node.description;
+	for (const key of STRIP_SCHEMA_VALUE_KEYS) {
+		if (Object.hasOwn(node, key)) stripSchemaDescriptionsInPlace(node[key]);
+	}
+	for (const mapKey of STRIP_SCHEMA_MAP_KEYS) {
+		const map = node[mapKey];
+		if (isSchemaRecord(map)) {
+			for (const key in map) stripSchemaDescriptionsInPlace(map[key]);
+		}
+	}
+}
+
+/**
+ * Return a deep clone of `schema` with every `description` annotation removed.
+ * The result is memoized on the input via a non-enumerable symbol (`stamp`) so
+ * repeated provider requests reuse the same stripped object; the input is never
+ * mutated, so the stamped `toolWireSchema` cache stays intact for
+ * system-prompt/UI rendering.
+ */
+export function stripSchemaDescriptions(schema: Record<string, unknown>): Record<string, unknown> {
+	return stamp(schema, kStrippedSchema, source => {
+		const clone = structuredClone(source);
+		stripSchemaDescriptionsInPlace(clone);
+		return clone;
+	});
+}
+
+/**
+ * Strip a tool's human-readable text from its provider-bound spec: empties the
+ * top-level `description` and removes nested schema `description` annotations.
+ * Used when the full tool catalog is rendered into the system prompt instead, so
+ * the descriptions ride the wire once (in the prompt) rather than duplicated on
+ * every tool definition. Parameters are resolved to wire JSON Schema and cloned,
+ * leaving the original tool objects and the stamped schema cache untouched.
+ */
+export function stripToolDescriptions(tools: readonly Tool[]): Tool[] {
+	return tools.map(tool => ({
+		...tool,
+		description: "",
+		parameters: stripSchemaDescriptions(toolWireSchema(tool)),
+	}));
 }

@@ -72,6 +72,21 @@ export interface ScopedModel {
 	explicitThinkingLevel: boolean;
 }
 
+interface ThinkingSuffixOptions {
+	allowMaxAlias?: boolean;
+}
+
+interface ModelStringParseOptions extends ThinkingSuffixOptions {
+	isLiteralModelId?: (provider: string, id: string) => boolean;
+}
+const MAX_THINKING_SUFFIX_OPTIONS: ThinkingSuffixOptions = { allowMaxAlias: true };
+
+function parseThinkingSuffix(value: string, options?: ThinkingSuffixOptions): ThinkingLevel | undefined {
+	const level = parseThinkingLevel(value);
+	if (level !== undefined) return level;
+	return options?.allowMaxAlias === true && value === "max" ? ThinkingLevel.XHigh : undefined;
+}
+
 /**
  * Split a trailing `:<level>` thinking selector off a model pattern.
  *
@@ -81,11 +96,63 @@ export interface ScopedModel {
  * role-alias callers pass `PREFIX_MODEL_ROLE.length` so the base is at least
  * as long as the `pi/` prefix.
  */
-function splitThinkingSuffix(pattern: string, minColonIndex = -1): { base: string; level?: ThinkingLevel } {
+function splitThinkingSuffix(
+	pattern: string,
+	minColonIndex = -1,
+	options?: ThinkingSuffixOptions,
+): { base: string; level?: ThinkingLevel } {
 	const colonIdx = pattern.lastIndexOf(":");
 	if (colonIdx <= minColonIndex) return { base: pattern };
-	const level = parseThinkingLevel(pattern.slice(colonIdx + 1));
+	const level = parseThinkingSuffix(pattern.slice(colonIdx + 1), options);
 	return level ? { base: pattern.slice(0, colonIdx), level } : { base: pattern };
+}
+
+function hasExactModelPattern(pattern: string, availableModels: readonly Model<Api>[]): boolean {
+	const normalized = pattern.toLowerCase();
+	return availableModels.some(
+		model => model.id.toLowerCase() === normalized || `${model.provider}/${model.id}`.toLowerCase() === normalized,
+	);
+}
+
+function matchingGlobModels(pattern: string, availableModels: readonly Model<Api>[]): Model<Api>[] {
+	const glob = new Bun.Glob(pattern.toLowerCase());
+	return availableModels.filter(model => {
+		const fullId = `${model.provider}/${model.id}`;
+		return glob.match(fullId.toLowerCase()) || glob.match(model.id.toLowerCase());
+	});
+}
+
+function resolveGlobScopePattern(
+	pattern: string,
+	availableModels: readonly Model<Api>[],
+): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } {
+	const strictSuffix = splitThinkingSuffix(pattern);
+	if (strictSuffix.level !== undefined) {
+		return {
+			models: matchingGlobModels(strictSuffix.base, availableModels),
+			thinkingLevel: strictSuffix.level,
+			explicitThinkingLevel: true,
+		};
+	}
+
+	const maxSuffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+	if (maxSuffix.level !== undefined) {
+		const literalMatches = matchingGlobModels(pattern, availableModels);
+		if (literalMatches.length > 0) {
+			return { models: literalMatches, thinkingLevel: undefined, explicitThinkingLevel: false };
+		}
+		return {
+			models: matchingGlobModels(maxSuffix.base, availableModels),
+			thinkingLevel: maxSuffix.level,
+			explicitThinkingLevel: true,
+		};
+	}
+
+	return {
+		models: matchingGlobModels(pattern, availableModels),
+		thinkingLevel: undefined,
+		explicitThinkingLevel: false,
+	};
 }
 
 /**
@@ -94,14 +161,24 @@ function splitThinkingSuffix(pattern: string, minColonIndex = -1): { base: strin
  */
 export function parseModelString(
 	modelStr: string,
+	options?: ModelStringParseOptions,
 ): { provider: string; id: string; thinkingLevel?: ThinkingLevel } | undefined {
 	const slashIdx = modelStr.indexOf("/");
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
 	const provider = modelStr.slice(0, slashIdx);
-	// Strip valid thinking level suffix (e.g., "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high")
-	const { base, level } = splitThinkingSuffix(id);
-	return level ? { provider, id: base, thinkingLevel: level } : { provider, id };
+	// Strip strict thinking level suffixes first (e.g. "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high").
+	const strict = splitThinkingSuffix(id);
+	if (strict.level) return { provider, id: strict.base, thinkingLevel: strict.level };
+	// `max` is a provider-facing alias for xhigh, but real model IDs can end in
+	// `:max`. Context-aware callers pass a literal lookup so those models win.
+	const maxAlias = splitThinkingSuffix(id, -1, options);
+	if (maxAlias.level) {
+		return options?.isLiteralModelId?.(provider, id) === true
+			? { provider, id }
+			: { provider, id: maxAlias.base, thinkingLevel: maxAlias.level };
+	}
+	return { provider, id };
 }
 
 /**
@@ -149,7 +226,10 @@ function getOpenRouterRouteSuffix(modelId: string): { baseId: string; suffix: st
 	}
 
 	const suffix = modelId.slice(colonIdx + 1).trim();
-	if (!suffix || parseThinkingLevel(suffix)) {
+	// `max` is a thinking-level alias (xhigh), never an OpenRouter route suffix, so
+	// `openrouter/<id>:max` falls through to the max-aware selector split instead of
+	// being cloned into a literal `<id>:max` model id with the reasoning level lost.
+	if (!suffix || parseThinkingSuffix(suffix, MAX_THINKING_SUFFIX_OPTIONS)) {
 		return undefined;
 	}
 
@@ -194,6 +274,50 @@ function cloneModelWithRequestedId(model: Model<Api>, requestedId: string): Mode
 		id: requestedId,
 		...(model.name === model.id ? { name: requestedId } : {}),
 	};
+}
+
+const AMAZON_BEDROCK_PROVIDER = "amazon-bedrock";
+const BEDROCK_INFERENCE_PROFILE_ARN =
+	/^arn:aws(?:-[a-z]+)*:bedrock:[a-z0-9-]+:[0-9]*:(?:application-inference-profile|inference-profile)\/[a-z0-9][a-z0-9._:-]*$/i;
+
+function hasBedrockInferenceProfileThinkingSuffix(modelId: string): boolean {
+	const { base, level } = splitThinkingSuffix(modelId);
+	return level !== undefined && BEDROCK_INFERENCE_PROFILE_ARN.test(base.trim());
+}
+
+function resolveBedrockInferenceProfileModelId(
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	const requestedId = modelId.trim();
+	if (hasBedrockInferenceProfileThinkingSuffix(requestedId) || !BEDROCK_INFERENCE_PROFILE_ARN.test(requestedId)) {
+		return undefined;
+	}
+
+	const template = availableModels.find(model => model.provider.toLowerCase() === AMAZON_BEDROCK_PROVIDER);
+	if (!template) return undefined;
+
+	return buildModel({
+		id: requestedId,
+		name: "Bedrock inference profile",
+		api: "bedrock-converse-stream",
+		provider: AMAZON_BEDROCK_PROVIDER,
+		baseUrl: template.baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: null,
+		maxTokens: null,
+	});
+}
+
+function resolveBedrockInferenceProfileReference(
+	provider: string,
+	modelId: string,
+	availableModels: readonly Model<Api>[],
+): Model<Api> | undefined {
+	if (provider.toLowerCase() !== AMAZON_BEDROCK_PROVIDER) return undefined;
+	return resolveBedrockInferenceProfileModelId(modelId, availableModels);
 }
 
 const UPSTREAM_ROUTING_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
@@ -287,6 +411,11 @@ export function resolveProviderModelReference(
 		if (aliased) {
 			return aliased;
 		}
+	}
+
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileReference(provider, modelId, availableModels);
+	if (bedrockInferenceProfile) {
+		return bedrockInferenceProfile;
 	}
 
 	if (normalizedProvider !== "openrouter") {
@@ -427,6 +556,27 @@ function isAlias(id: string): boolean {
 	return !datePattern.test(id);
 }
 
+function includeSyntheticAllowedModels(available: Model<Api>[], allowedModels: Iterable<Model<Api>>): Model<Api>[] {
+	const allowedByKey = new Map<string, Model<Api>>();
+	for (const model of allowedModels) {
+		const key = formatModelString(model);
+		if (!allowedByKey.has(key)) {
+			allowedByKey.set(key, model);
+		}
+	}
+	if (allowedByKey.size === 0) return [];
+
+	const result: Model<Api>[] = [];
+	for (const model of available) {
+		if (allowedByKey.delete(formatModelString(model))) {
+			result.push(model);
+		}
+	}
+
+	result.push(...allowedByKey.values());
+	return result;
+}
+
 /**
  * Find an exact explicit provider/model match.
  * Bare model ids are handled separately so canonical ids can coalesce variants.
@@ -470,6 +620,7 @@ function findExactCanonicalModelMatch(
  * The single model-matching engine. Tries, in order:
  * 1. exact `provider/id` reference (variant-alias and OpenRouter routed/date
  *    fallbacks included),
+
  * 2. exact canonical id (coalesces provider variants),
  * 3. exact bare id (preference-ranked),
  * 4. retired effort-tier variant alias (collapsed catalog entries),
@@ -500,6 +651,11 @@ function matchModel(
 	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
+	}
+
+	const bedrockInferenceProfile = resolveBedrockInferenceProfileModelId(modelPattern, availableModels);
+	if (bedrockInferenceProfile) {
+		return bedrockInferenceProfile;
 	}
 
 	// Retired effort-tier variant ids (bare, no provider prefix) resolve to
@@ -625,8 +781,10 @@ function parseModelPatternWithContext(
 		return { model: exactMatch, thinkingLevel: undefined, warning: undefined, explicitThinkingLevel: false };
 	}
 
-	// No match - try stripping a valid thinking suffix and recursing
-	const { base, level } = splitThinkingSuffix(pattern);
+	// No match - try stripping a valid thinking suffix and recursing.
+	// `max` is accepted only after the full pattern failed, so literal model IDs
+	// ending in `:max` keep winning over the alias.
+	const { base, level } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	if (level) {
 		const result = parseModelPatternWithContext(base, availableModels, context, options);
 		if (result.model) {
@@ -730,7 +888,11 @@ function resolveDefaultInheritedPatterns(
 
 	const resolved: string[] = [];
 	for (const pattern of normalizeModelPatternList(configuredDefault)) {
-		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(pattern, PREFIX_MODEL_ROLE.length);
+		const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
+			pattern,
+			PREFIX_MODEL_ROLE.length,
+			MAX_THINKING_SUFFIX_OPTIONS,
+		);
 		const aliasRole = getModelRoleAlias(aliasCandidate);
 		if (aliasRole === role) {
 			// Self-alias (e.g. modelRoles.default = "pi/smol") would loop back to the
@@ -765,7 +927,11 @@ function resolveConfiguredRolePattern(
 	const normalized = value.trim();
 	if (!normalized) return undefined;
 
-	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(normalized, PREFIX_MODEL_ROLE.length);
+	const { base: aliasCandidate, level: thinkingLevel } = splitThinkingSuffix(
+		normalized,
+		PREFIX_MODEL_ROLE.length,
+		MAX_THINKING_SUFFIX_OPTIONS,
+	);
 	const role = getModelRoleAlias(aliasCandidate);
 	if (!role) return [normalized];
 	if (visited.has(role)) return undefined;
@@ -888,9 +1054,19 @@ export function resolveModelRoleValue(
 	return { model: undefined, thinkingLevel: undefined, explicitThinkingLevel: false, warning };
 }
 
+interface ExplicitThinkingSelectorOptions {
+	isLiteralModelId?: (provider: string, id: string) => boolean;
+}
+
+function isLiteralModelSelector(value: string, options?: ExplicitThinkingSelectorOptions): boolean {
+	const parsed = parseModelString(value);
+	return parsed !== undefined && options?.isLiteralModelId?.(parsed.provider, parsed.id) === true;
+}
+
 export function extractExplicitThinkingSelector(
 	value: string | undefined,
 	settings?: Settings,
+	options?: ExplicitThinkingSelectorOptions,
 ): ThinkingLevel | undefined {
 	if (!value) return undefined;
 	const normalized = value.trim();
@@ -900,9 +1076,13 @@ export function extractExplicitThinkingSelector(
 	let current = normalized;
 	while (!visited.has(current)) {
 		visited.add(current);
-		const thinkingSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length).level;
-		if (thinkingSelector) {
-			return thinkingSelector;
+		const strictSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length).level;
+		if (strictSelector) {
+			return strictSelector;
+		}
+		const maxSelector = splitThinkingSuffix(current, PREFIX_MODEL_ROLE.length, MAX_THINKING_SUFFIX_OPTIONS).level;
+		if (maxSelector && (current.startsWith(PREFIX_MODEL_ROLE) || !isLiteralModelSelector(current, options))) {
+			return maxSelector;
 		}
 		const expanded = expandRoleAlias(current, settings).trim();
 		if (!expanded || expanded === current) break;
@@ -922,10 +1102,15 @@ export function resolveModelFromString(
 	matchPreferences?: ModelMatchPreferences,
 	modelRegistry?: CanonicalModelRegistry,
 ): Model<Api> | undefined {
-	const parsed = parseModelString(value);
+	const exact = available.find(model => `${model.provider}/${model.id}` === value);
+	if (exact) return exact;
+	const parsed = parseModelString(value, {
+		...MAX_THINKING_SUFFIX_OPTIONS,
+		isLiteralModelId: (provider, id) => available.some(model => model.provider === provider && model.id === id),
+	});
 	if (parsed) {
-		const exact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
-		if (exact) return exact;
+		const parsedExact = available.find(model => model.provider === parsed.provider && model.id === parsed.id);
+		if (parsedExact) return parsedExact;
 	}
 	return parseModelPattern(value, available, matchPreferences, { modelRegistry }).model;
 }
@@ -1065,7 +1250,10 @@ function resolveExactCanonicalScopePattern(
 	modelRegistry: Pick<ModelRegistry, "getCanonicalVariants">,
 	availableModels: Model<Api>[],
 ): { models: Model<Api>[]; thinkingLevel?: ThinkingLevel; explicitThinkingLevel: boolean } | undefined {
-	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern);
+	if (pattern.endsWith(":max") && hasExactModelPattern(pattern, availableModels)) {
+		return undefined;
+	}
+	const { base: canonicalId, level: thinkingLevel } = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
 	const explicitThinkingLevel = thinkingLevel !== undefined;
 
 	const variants = modelRegistry
@@ -1111,17 +1299,13 @@ export async function resolveModelScope(
 	for (const pattern of patterns) {
 		// Check if pattern contains glob characters
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			// Extract optional thinking level suffix (e.g., "provider/*:high")
-			const { base: globPattern, level: thinkingLevel } = splitThinkingSuffix(pattern);
-			const explicitThinkingLevel = thinkingLevel !== undefined;
-
-			// Match against "provider/modelId" format OR just model ID
-			// This allows "*sonnet*" to match without requiring "anthropic/*sonnet*"
-			const matchingModels = availableModels.filter(m => {
-				const fullId = `${m.provider}/${m.id}`;
-				const glob = new Bun.Glob(globPattern.toLowerCase());
-				return glob.match(fullId.toLowerCase()) || glob.match(m.id.toLowerCase());
-			});
+			// Extract optional thinking level suffix (e.g., "provider/*:high") only
+			// after literal `:max` globs had a chance to match real model IDs.
+			const {
+				models: matchingModels,
+				thinkingLevel,
+				explicitThinkingLevel,
+			} = resolveGlobScopePattern(pattern, availableModels);
 
 			if (matchingModels.length === 0) {
 				logger.warn(`No models match pattern "${pattern}"`);
@@ -1172,9 +1356,9 @@ export async function resolveModelScope(
  * the result to models matching those patterns.
  *
  * Returns the unfiltered available list when `enabledModels` is empty.
- * Returns an empty list when `enabledModels` is configured but no available
- * model matches any pattern — callers MUST treat this as "no usable model"
- * rather than falling back to the global default (see issue #1022).
+ * Returns an empty list when `enabledModels` is configured but no model matches
+ * any pattern — callers MUST treat this as "no usable model" rather than
+ * falling back to the global default (see issue #1022).
  */
 export async function resolveAllowedModels(
 	modelRegistry: Pick<ModelRegistry, "getAvailable" | "getCanonicalVariants">,
@@ -1190,8 +1374,10 @@ export async function resolveAllowedModels(
 	if (scoped.length === 0) {
 		return [];
 	}
-	const allowed = new Set(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`));
-	return available.filter(model => allowed.has(`${model.provider}/${model.id}`));
+	return includeSyntheticAllowedModels(
+		available,
+		scoped.map(entry => entry.model),
+	);
 }
 
 /**
@@ -1219,20 +1405,15 @@ export function filterAvailableModelsByEnabledPatterns(
 	if (patterns.length === 0) return available;
 
 	const context = buildPreferenceContext(available, undefined);
-	const allowed = new Set<string>();
+	const allowedModels: Model<Api>[] = [];
 	const addAllowed = (model: Model<Api>) => {
-		allowed.add(`${model.provider}/${model.id}`);
+		allowedModels.push(model);
 	};
 
 	for (const pattern of patterns) {
 		if (pattern.includes("*") || pattern.includes("?") || pattern.includes("[")) {
-			const { base: globPattern } = splitThinkingSuffix(pattern);
-			const glob = new Bun.Glob(globPattern.toLowerCase());
-			for (const model of available) {
-				const fullId = `${model.provider}/${model.id}`.toLowerCase();
-				if (glob.match(fullId) || glob.match(model.id.toLowerCase())) {
-					addAllowed(model);
-				}
+			for (const model of resolveGlobScopePattern(pattern, available).models) {
+				addAllowed(model);
 			}
 			continue;
 		}
@@ -1251,7 +1432,7 @@ export function filterAvailableModelsByEnabledPatterns(
 		}
 	}
 
-	return allowed.size === 0 ? [] : available.filter(model => allowed.has(`${model.provider}/${model.id}`));
+	return includeSyntheticAllowedModels(available, allowedModels);
 }
 
 export interface ResolveCliModelResult {

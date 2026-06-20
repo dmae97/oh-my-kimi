@@ -323,12 +323,25 @@ export type HostFrame =
 			t: "welcome";
 			proto: number;
 			header: SessionHeader;
-			entries: SessionEntry[];
 			state: SessionState;
 			agents: AgentSnapshot[];
+			/**
+			 * Total number of `SessionEntry` items the host will deliver in the
+			 * `snapshot-chunk` frames that follow. Guests stay in the loading
+			 * phase until they have accumulated all of them (or a chunk arrives
+			 * with `final: true`).
+			 */
+			entryCount: number;
 			/** True when this peer joined through a read-only (view) link. */
 			readOnly?: boolean;
 	  }
+	/**
+	 * Targeted snapshot fragment delivered after `welcome`. Hosts split the
+	 * transcript into chunks bounded by byte size so a multi-MB session is not
+	 * forced through one giant frame the relay may stall on. The last chunk
+	 * carries `final: true`; guests finalize the replica on that frame.
+	 */
+	| { t: "snapshot-chunk"; entries: SessionEntry[]; final: boolean }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentEvent }
 	| { t: "state"; state: SessionState }
@@ -342,8 +355,19 @@ export type HostFrame =
 
 export type WireFrame = GuestFrame | HostFrame;
 
-/** Wire protocol version carried in `hello`; the host rejects mismatches. */
-export const COLLAB_PROTO = 1;
+/**
+ * Wire protocol version carried in `hello`; the host rejects mismatches.
+ *
+ * - `1` (legacy): `welcome` carried the full `entries` array inline.
+ * - `2`: `welcome` carries only metadata (header/state/agents/entryCount);
+ *   transcript entries follow in `snapshot-chunk` frames, so multi-MB
+ *   sessions are not gated on a single welcome frame fitting under the
+ *   guest's first-welcome timeout.
+ */
+export const COLLAB_PROTO = 2;
+
+/** Parameter key used for intent tracing (e.g. prompt explanation/reasoning) */
+export const INTENT_FIELD = "i";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Envelope & link constants

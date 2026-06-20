@@ -13,9 +13,19 @@ export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;
  * with an opaque HTTP 400. Detect those models so the resize pipeline encodes
  * to PNG/JPEG instead — the automatic equivalent of `OMP_NO_WEBP=1`.
  */
-export function modelLacksWebpSupport(model: Pick<Model, "provider" | "api"> | undefined): boolean {
+export function modelLacksWebpSupport(
+	model: Pick<Model, "provider" | "api" | "imageInputDecoder"> | undefined,
+): boolean {
 	if (!model) return false;
-	return model.provider === "ollama" || model.provider === "ollama-cloud" || model.api === "ollama-chat";
+	return (
+		model.imageInputDecoder === "stb" ||
+		model.provider === "ollama" ||
+		model.provider === "ollama-cloud" ||
+		model.provider === "llama.cpp" ||
+		model.provider === "lm-studio" ||
+		model.provider === "local-server" ||
+		model.api === "ollama-chat"
+	);
 }
 
 /**
@@ -34,6 +44,17 @@ export interface LoadImageInputOptions {
 	maxBytes?: number;
 	resolvedPath?: string;
 	detectedMimeType?: string;
+	/** Force non-WebP output (e.g. for Ollama). Leave unset to honor `OMP_NO_WEBP`. */
+	excludeWebP?: boolean;
+}
+
+/** Options for loading an in-memory chat image attachment as a vision-model input. */
+export interface LoadImageAttachmentInputOptions {
+	image: ImageContent;
+	label: string;
+	uri: string;
+	autoResize: boolean;
+	maxBytes?: number;
 	/** Force non-WebP output (e.g. for Ollama). Leave unset to honor `OMP_NO_WEBP`. */
 	excludeWebP?: boolean;
 }
@@ -154,6 +175,53 @@ export async function loadImageInput(options: LoadImageInputOptions): Promise<Lo
 
 	return {
 		resolvedPath,
+		mimeType: outputMimeType,
+		data: outputData,
+		textNote,
+		dimensionNote,
+		bytes: outputBytes,
+	};
+}
+
+/** Loads a chat attachment image through the same size and encoder policy as file-backed image inputs. */
+export async function loadImageAttachmentInput(
+	options: LoadImageAttachmentInputOptions,
+): Promise<LoadedImageInput | null> {
+	const maxBytes = options.maxBytes ?? MAX_IMAGE_INPUT_BYTES;
+	if (!SUPPORTED_INPUT_IMAGE_MIME_TYPES.has(options.image.mimeType)) {
+		return null;
+	}
+
+	const inputBytes = Buffer.byteLength(options.image.data, "base64");
+	if (inputBytes > maxBytes) {
+		throw new ImageInputTooLargeError(inputBytes, maxBytes);
+	}
+
+	let outputData = options.image.data;
+	let outputMimeType = options.image.mimeType;
+	let outputBytes = inputBytes;
+	let dimensionNote: string | undefined;
+
+	const shouldReencodeWebP = options.excludeWebP === true && options.image.mimeType === "image/webp";
+	if (options.autoResize || shouldReencodeWebP) {
+		try {
+			const resized = await resizeImage(options.image, { excludeWebP: options.excludeWebP });
+			outputData = resized.data;
+			outputMimeType = resized.mimeType;
+			outputBytes = resized.buffer.byteLength;
+			dimensionNote = formatDimensionNote(resized);
+		} catch {
+			// keep original image when resize fails
+		}
+	}
+
+	let textNote = `Read image attachment ${options.label} [${outputMimeType}]`;
+	if (dimensionNote) {
+		textNote += `\n${dimensionNote}`;
+	}
+
+	return {
+		resolvedPath: options.uri,
 		mimeType: outputMimeType,
 		data: outputData,
 		textNote,

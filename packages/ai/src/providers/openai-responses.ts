@@ -21,6 +21,7 @@ import {
 	sanitizeOpenAIResponsesHistoryItemsForReplay,
 } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
@@ -38,8 +39,23 @@ import {
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
-import { mapToOpenAIResponsesToolChoice, type OpenAIResponsesToolChoice } from "../utils/tool-choice";
+import {
+	isForcedToolChoice,
+	mapToOpenAIResponsesToolChoice,
+	type OpenAIResponsesToolChoice,
+} from "../utils/tool-choice";
 import { compactGrammarDefinition } from "./grammar";
+import {
+	applyOpenAIReasoningEffortFallback,
+	clearOpenAIReasoningEffortFallbackState,
+	createOpenAIReasoningEffortFallbackKey,
+	createOpenAIReasoningEffortFallbackState,
+	getOpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallback,
+	type OpenAIReasoningEffortFallbackState,
+	rememberOpenAIReasoningEffortFallback,
+	resolveOpenAIReasoningEffortFallback,
+} from "./openai-reasoning-fallback";
 import type {
 	Tool as OpenAITool,
 	ResponseCreateParamsStreaming,
@@ -136,7 +152,10 @@ const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 /** Consecutive stale-previous-response failures before chaining is disabled for the session. */
 const OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT = 3;
 
-interface OpenAIResponsesProviderSessionState extends ProviderSessionState, OpenAIStrictToolsState {
+interface OpenAIResponsesProviderSessionState
+	extends ProviderSessionState,
+		OpenAIStrictToolsState,
+		OpenAIReasoningEffortFallbackState {
 	nativeHistoryReplayWarmed: boolean;
 	/** Stateful `previous_response_id` chain baselines, keyed by baseUrl/model/session. */
 	chains: Map<string, OpenAIResponsesChainState>;
@@ -160,14 +179,17 @@ interface OpenAIResponsesChainState {
 
 function createOpenAIResponsesProviderSessionState(): OpenAIResponsesProviderSessionState {
 	const strictToolsState = createOpenAIStrictToolsState();
+	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
 	const state: OpenAIResponsesProviderSessionState = {
 		...strictToolsState,
+		...reasoningEffortFallbackState,
 		nativeHistoryReplayWarmed: false,
 		chains: new Map(),
 		close: () => {
 			state.nativeHistoryReplayWarmed = false;
 			state.chains.clear();
 			clearOpenAIStrictToolsState(state);
+			clearOpenAIReasoningEffortFallbackState(state);
 		},
 	};
 	return state;
@@ -317,7 +339,7 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 /**
  * Generate function for OpenAI Responses API
  */
-export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
+const streamOpenAIResponsesOnce = (
 	model: Model<"openai-responses">,
 	context: Context,
 	options?: OpenAIResponsesOptions,
@@ -329,11 +351,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 		const startTime = Date.now();
 		let firstTokenTime: number | undefined;
 
-		const output: AssistantMessage = createInitialResponsesAssistantMessage(
-			"openai-responses",
-			model.provider,
-			model.id,
-		);
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		let chainState: OpenAIResponsesChainState | undefined;
 		let sentPreviousResponseId: string | undefined;
@@ -385,6 +403,26 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			const { trailingScaffoldingItems } = builtParams;
 			let activeParams = params;
 			let activeTrailingScaffoldingItems = trailingScaffoldingItems;
+			const resolvedBaseUrl = (baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+			const requestReasoningEffortFallbacks = new Map<string, OpenAIReasoningEffortFallback>();
+			const attemptedReasoningEffortFallbacks = new Set<string>();
+			let pendingReasoningEffortFallback: { key: string; fallback: OpenAIReasoningEffortFallback } | undefined;
+			let activeReasoningEffortFallbackKey: string | undefined;
+			let activeRequestParams: OpenAIResponsesSamplingParams | undefined;
+			const applyReasoningEffortFallbackForRequest = (requestParams: OpenAIResponsesSamplingParams): string => {
+				const fallbackKey = createOpenAIReasoningEffortFallbackKey(
+					"responses",
+					resolvedBaseUrl,
+					typeof requestParams.model === "string" ? requestParams.model : model.id,
+				);
+				const requestReasoningEffortFallback = requestReasoningEffortFallbacks.has(fallbackKey)
+					? requestReasoningEffortFallbacks.get(fallbackKey)
+					: getOpenAIReasoningEffortFallback(providerSessionState, fallbackKey);
+				if (requestReasoningEffortFallback !== undefined) {
+					applyOpenAIReasoningEffortFallback(requestParams, requestReasoningEffortFallback);
+				}
+				return fallbackKey;
+			};
 			if (isOpenAIResponsesStatefulEnabled(options, baseUrl) && routingSessionId && providerSessionState) {
 				chainState = getOpenAIResponsesChainState(providerSessionState, model, baseUrl, routingSessionId);
 				if (!chainState.disabled) {
@@ -392,6 +430,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					params.store = true;
 				}
 			}
+			applyReasoningEffortFallbackForRequest(params);
 			let chained: OpenAIResponsesChainedParams =
 				chainState && !chainState.disabled
 					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
@@ -402,12 +441,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
-			const requestUrl = `${(baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "")}/responses`;
+			const requestUrl = `${resolvedBaseUrl}/responses`;
 			const applyPayloadReplacement = async (requestParams: OpenAIResponsesSamplingParams) => {
 				const replacementPayload = await options?.onPayload?.(requestParams, model);
-				return replacementPayload !== undefined
-					? (replacementPayload as OpenAIResponsesSamplingParams)
-					: requestParams;
+				const payload =
+					replacementPayload !== undefined ? (replacementPayload as OpenAIResponsesSamplingParams) : requestParams;
+				applyReasoningEffortFallbackForRequest(payload);
+				return payload;
 			};
 			chained = { ...chained, params: await applyPayloadReplacement(chained.params) };
 			rawRequestDump = {
@@ -418,8 +458,14 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				url: requestUrl,
 				body: chained.params,
 			};
-			const openResponsesStream = (requestParams: OpenAIResponsesSamplingParams) =>
-				callWithCopilotModelRetry(
+			const openResponsesStream = (requestParams: OpenAIResponsesSamplingParams) => {
+				activeReasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
+					"responses",
+					resolvedBaseUrl,
+					typeof requestParams.model === "string" ? requestParams.model : model.id,
+				);
+				activeRequestParams = requestParams;
+				return callWithCopilotModelRetry(
 					async () => {
 						let requestTimeout: NodeJS.Timeout | undefined;
 						if (requestTimeoutMs !== undefined) {
@@ -458,6 +504,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					},
 					{ provider: model.provider, signal: requestSignal },
 				);
+			};
 			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			let strictRetryAvailable = true;
 			let activeStrictToolsApplied = builtParams.strictToolsApplied;
@@ -465,9 +512,37 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 			while (true) {
 				try {
 					openaiStream = await openResponsesStream(chained.params);
+					if (pendingReasoningEffortFallback) {
+						rememberOpenAIReasoningEffortFallback(
+							providerSessionState,
+							pendingReasoningEffortFallback.key,
+							pendingReasoningEffortFallback.fallback,
+						);
+						pendingReasoningEffortFallback = undefined;
+					}
 					break;
 				} catch (error) {
 					const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
+					const reasoningEffortFallback =
+						activeReasoningEffortFallbackKey && activeRequestParams && !requestSignal.aborted
+							? resolveOpenAIReasoningEffortFallback(error, capturedErrorResponse, activeRequestParams, {
+									explicitDisable: options?.disableReasoning === true && options.reasoning === undefined,
+								})
+							: undefined;
+					if (reasoningEffortFallback !== undefined && activeReasoningEffortFallbackKey) {
+						const retryMarker = `${activeReasoningEffortFallbackKey}:${String(reasoningEffortFallback)}`;
+						if (attemptedReasoningEffortFallbacks.has(retryMarker)) throw error;
+						attemptedReasoningEffortFallbacks.add(retryMarker);
+						requestReasoningEffortFallbacks.set(activeReasoningEffortFallbackKey, reasoningEffortFallback);
+						applyOpenAIReasoningEffortFallback(chained.params, reasoningEffortFallback);
+						applyOpenAIReasoningEffortFallback(activeParams, reasoningEffortFallback);
+						rawRequestDump.body = chained.params;
+						pendingReasoningEffortFallback = {
+							key: activeReasoningEffortFallbackKey,
+							fallback: reasoningEffortFallback,
+						};
+						continue;
+					}
 					const compiledGrammarTooLarge =
 						isOpenRouterAnthropicModel(model) &&
 						isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse);
@@ -484,9 +559,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 					if (canRetryWithoutStrictTools) {
 						strictRetryAvailable = false;
 						forceDisableStrictTools = true;
-						const strictFallbackError = compiledGrammarTooLarge
-							? await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse)
-							: undefined;
 						disableStrictToolsForScope(providerSessionState, strictToolsScope);
 						const fallbackBuilt = buildParams(
 							model,
@@ -516,7 +588,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 						activeParams = fallbackParams;
 						activeTrailingScaffoldingItems = fallbackBuilt.trailingScaffoldingItems;
 						activeStrictToolsApplied = fallbackBuilt.strictToolsApplied;
-						if (strictFallbackError) output.errorMessage = strictFallbackError;
 						continue;
 					}
 					if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
@@ -589,6 +660,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				onCompleted: () => {
 					sawTerminalResponseEvent = true;
 				},
+				requestServiceTier: options?.serviceTier,
 			});
 
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
@@ -666,6 +738,15 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 	return stream;
 };
 
+/**
+ * Public entry: wrap the single-attempt Responses streamer with bounded
+ * empty-completion retries — a `response.completed` carrying no content/usage
+ * would otherwise stall the agent loop. Shared with the OpenAI-completions and
+ * Anthropic providers via `withEmptyCompletionRetry`.
+ */
+export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamOpenAIResponsesOnce);
+
 export function buildParams(
 	model: Model<"openai-responses">,
 	context: Context,
@@ -690,6 +771,7 @@ export function buildParams(
 		model,
 		context,
 		strictResponsesPairing,
+		supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
 		nativeHistory: {
 			replay: shouldReplayNativeHistory,
 			filterReasoning: policy.reasoning.filterReasoningHistory,
@@ -833,6 +915,10 @@ export function mapOpenAIResponsesToolChoiceForTools(
 	tools: Tool[],
 	model: Model<"openai-responses">,
 ): OpenAIResponsesToolChoice {
+	if (!model.compat.supportsToolChoice) return undefined;
+	if (isForcedToolChoice(choice) && !model.compat.supportsForcedToolChoice) {
+		return "auto";
+	}
 	const mapped = mapToOpenAIResponsesToolChoice(choice);
 	if (!mapped || typeof mapped === "string" || mapped.type !== "function") {
 		return mapped;

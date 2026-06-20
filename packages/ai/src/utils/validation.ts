@@ -764,10 +764,13 @@ function normalizeOptionalNullsForSchema(
 		if (!(key in nextValue)) continue;
 		const currentValue = nextValue[key];
 		const isNullish = currentValue === null || currentValue === "null";
+		const isInvalidEmptyString =
+			currentValue === "" && !required.has(key) && !branchMatchesSchema(propertySchema, currentValue);
 
-		// Strip null and the string "null" from optional fields.
-		// The LLM sometimes outputs string "null" to mean "no value".
-		if (isNullish && !required.has(key)) {
+		// Strip null/string "null" from optional fields, and strip empty
+		// strings only when the property schema would reject the explicit value.
+		// LLMs sometimes output these placeholders to mean "no value".
+		if ((isNullish || isInvalidEmptyString) && !required.has(key)) {
 			if (!changed) {
 				nextValue = { ...nextValue };
 				changed = true;
@@ -1281,18 +1284,32 @@ function truncateArgsForError(value: unknown): unknown {
 /**
  * Validates tool call arguments against the tool's schema (Zod or plain JSON
  * Schema). Applies LLM-quirk coercions (numeric strings, JSON-string
- * containers, null-for-optional, null-for-default) before declaring failure.
+ * containers, null/invalid-empty-string-for-optional, null-for-default) before
+ * declaring failure.
  *
  * @throws Error with a formatted message when validation cannot be reconciled.
  */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall["arguments"] {
 	const originalArgs = toolCall.arguments;
+	if (originalArgs && typeof originalArgs === "object" && "__parseError" in originalArgs) {
+		const parseError = originalArgs.__parseError;
+		const rawJson = String(originalArgs.__rawJson ?? "");
+		const maxLen = 512;
+		const truncatedRawJson =
+			rawJson.length <= maxLen
+				? rawJson
+				: `${rawJson.slice(0, maxLen)}… [truncated ${rawJson.length - maxLen} chars]`;
+		throw new Error(
+			`Validation failed for tool "${toolCall.name}": Tool call arguments are not valid JSON.\nParse Error: ${parseError}\nRaw JSON:\n${truncatedRawJson}`,
+		);
+	}
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 
-	// Always normalize first — strip null and string "null" from optional
-	// fields and substitute defaults. Handles LLM outputting string "null"
-	// to mean "no value" even when validation would otherwise pass.
+	// Always normalize first — strip null/string "null" from optional fields,
+	// strip optional empty strings only when their property schema rejects the
+	// explicit value, and substitute defaults. Handles LLM outputting
+	// placeholders for "no value" even when validation would otherwise pass.
 	let normalizedArgs: unknown = originalArgs;
 	let changed = false;
 	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);

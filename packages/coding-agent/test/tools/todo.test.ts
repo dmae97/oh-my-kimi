@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
+	resolveTodoMarkdownPath,
 	selectStickyTodoWindow,
 	TODO_STRIKE_HOLD_FRAMES,
 	type TodoItem,
@@ -12,6 +14,7 @@ import {
 	todoMatchesAnyDescription,
 	todoToolRenderer,
 } from "@oh-my-pi/pi-coding-agent/tools";
+import type { Component } from "@oh-my-pi/pi-tui";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -30,6 +33,26 @@ function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 
 beforeAll(async () => {
 	await initTheme();
+});
+
+describe("resolveTodoMarkdownPath", () => {
+	it("defaults to TODO.md under cwd", () => {
+		const cwd = path.resolve("tmp", "todo-workspace");
+
+		expect(resolveTodoMarkdownPath("", cwd)).toBe(path.join(cwd, "TODO.md"));
+	});
+
+	it("strips surrounding double quotes before resolving", () => {
+		const cwd = path.resolve("tmp", "todo-workspace");
+
+		expect(resolveTodoMarkdownPath('"my todos.md"', cwd)).toBe(path.join(cwd, "my todos.md"));
+	});
+
+	it("rejects internal URL schemes", () => {
+		const cwd = path.resolve("tmp", "todo-workspace");
+
+		expect(() => resolveTodoMarkdownPath("artifact://todo", cwd)).toThrow("internal scheme");
+	});
 });
 
 describe("TodoTool auto-start behavior", () => {
@@ -435,7 +458,7 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		// Beta and Gamma untouched by this update.
 		return tool.execute("done", { ops: [{ op: "done", task: "a1" }] });
 	}
-	function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {
+	function innerLines(component: Component): string[] {
 		const lines = Bun.stripANSI(component.render(100).join("\n")).split("\n");
 		return lines.slice(1, -1).map(line => line.replace(/^│/, "").replace(/│\s*$/, "").trim());
 	}

@@ -317,6 +317,7 @@ async function loadPipeline(
 ): Promise<TextGenerationPipeline> {
 	const spec = getTinyLocalModelSpec(modelKey);
 	if (!spec) throw new Error(`Unknown tiny local model: ${modelKey}`);
+	if (spec.unsupportedReason) throw new Error(`${modelKey} is unavailable: ${spec.unsupportedReason}`);
 	const cached = pipelines.get(modelKey);
 	if (cached) {
 		void cached

@@ -11,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import type { EmbeddingModel } from "fastembed";
 import { LRUCache } from "lru-cache/raw";
+import { ensureFastembedModelSidecars } from "./fastembed-model-cache";
 import { loadFastembed } from "./fastembed-runtime";
 import {
 	type EmbeddingOutput,
@@ -30,19 +31,19 @@ export interface EmbeddingProvider {
 	available?(): boolean | Promise<boolean>;
 }
 
-type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
+export type StandardEmbeddingModel = Exclude<EmbeddingModel, EmbeddingModel.CUSTOM>;
 
-interface LocalEmbeddingModel {
+export interface LocalEmbeddingModel {
 	embed(texts: string[], batchSize?: number): EmbeddingOutput;
 	queryEmbed?(query: string): Promise<number[]>;
 }
 
-type LocalModelInitOptions = {
+export type LocalModelInitOptions = {
 	model: StandardEmbeddingModel;
 	cacheDir?: string;
 	showDownloadProgress?: boolean;
 };
-type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
+export type LocalModelInitializer = (options: LocalModelInitOptions) => Promise<LocalEmbeddingModel>;
 
 const QUERY_CACHE_MAX = 512;
 
@@ -62,7 +63,20 @@ let nextProviderId = 1;
 
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
-	return FlagEmbedding.init(options);
+	try {
+		return await FlagEmbedding.init(options);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "";
+		if (
+			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
+				message,
+			)
+		) {
+			throw error;
+		}
+		if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
+		return FlagEmbedding.init(options);
+	}
 }
 
 function activeEmbeddingOptions() {
@@ -104,6 +118,79 @@ export function embeddingsDisabled(): boolean {
 		return active.disabled;
 	}
 	return $flag("MNEMOPI_NO_EMBEDDINGS");
+}
+
+/**
+ * Resolved per-input character cap for {@link embed}.
+ *
+ * Reads (in order): the active runtime scope's `embeddings.maxInputChars`, then
+ * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `8192` default. `0`
+ * disables the cap entirely.
+ */
+function effectiveMaxInputChars(): number {
+	const override = activeEmbeddingOptions()?.maxInputChars;
+	if (override !== undefined) return Math.max(0, Math.trunc(override));
+	const envValue = Number.parseInt($env.MNEMOPI_EMBEDDING_MAX_INPUT_CHARS ?? "", 10);
+	if (Number.isFinite(envValue) && envValue >= 0) return envValue;
+	return 8192;
+}
+
+/** Elision marker injected between the retained head and tail of an oversized input. */
+const EMBEDDING_ELISION_MARKER = "\n\n[...]\n\n";
+
+/**
+ * Right-clip a single oversized input to {@link max} chars while preserving
+ * both ends. Retention transcripts are chronological (oldest → newest), so a
+ * naive `slice(0, max)` would drop the most recent — and most semantically
+ * loaded — turns once a session passed the cap, leaving every later retained
+ * episode with essentially the same prefix vector. Keeping a head/tail split
+ * lets the embedding capture the topic setup at the start AND the latest
+ * exchanges at the end. Falls back to a tail-only clip when `max` is too
+ * small to fit the elision marker plus a useful slice on either side.
+ */
+function clipToWindow(text: string, max: number): string {
+	if (text.length <= max) return text;
+	if (max <= EMBEDDING_ELISION_MARKER.length + 16) return text.slice(text.length - max);
+	const budget = max - EMBEDDING_ELISION_MARKER.length;
+	const headLen = budget >>> 1;
+	const tailLen = budget - headLen;
+	return text.slice(0, headLen) + EMBEDDING_ELISION_MARKER + text.slice(text.length - tailLen);
+}
+
+/**
+ * Clip every input to {@link effectiveMaxInputChars} so a runaway retention
+ * transcript can't blow past the embedding model's context window. Uses a
+ * head/tail split via {@link clipToWindow} so the embedding still sees the
+ * tail of the conversation (where the latest topic shifts live) and not just
+ * the stale prefix. Returns the original array when no input needs trimming
+ * (the common case); the new array is allocated only when at least one input
+ * is oversized so we don't churn arrays for the typical short-query path
+ * through `embedQuery`. Emits one debug-or-warn log per call summarizing how
+ * many inputs were trimmed and by how much — silent truncation was the
+ * original bug (#3126).
+ */
+function capInputs(texts: readonly string[]): readonly string[] {
+	const max = effectiveMaxInputChars();
+	if (max === 0) return texts;
+	let trimmed: string[] | null = null;
+	let trimmedCount = 0;
+	let maxOriginalLen = 0;
+	for (let i = 0; i < texts.length; i++) {
+		const text = texts[i] ?? "";
+		if (text.length <= max) continue;
+		if (trimmed === null) trimmed = texts.slice() as string[];
+		trimmed[i] = clipToWindow(text, max);
+		trimmedCount++;
+		if (text.length > maxOriginalLen) maxOriginalLen = text.length;
+	}
+	if (trimmed === null) return texts;
+	logger[mnemopiDebugEnabled() ? "warn" : "debug"]("mnemopi: embedding input truncated", {
+		inputCount: texts.length,
+		trimmedCount,
+		maxOriginalLen,
+		maxInputChars: max,
+	});
+	return trimmed;
 }
 
 function embeddingApiKey(): ApiKey {
@@ -324,6 +411,16 @@ export function setLocalModelInitializerForTests(initializer: LocalModelInitiali
 	queryCache.clear();
 }
 
+/**
+ * Override the function used to construct the local fastembed model the next
+ * time `embed()` is called. Lets a host (e.g. the agent CLI) keep
+ * `onnxruntime-node` out of its own address space by routing every fastembed
+ * load + inference through a dedicated subprocess. Same wipe semantics as the
+ * `*ForTests` form: clears the cached model promise and the query cache so
+ * subsequent embeds run through the new initializer immediately.
+ */
+export const setLocalModelInitializer = setLocalModelInitializerForTests;
+
 export function resetEmbeddingProviderForTests(): void {
 	providerOverride = null;
 	localModelPromise = null;
@@ -384,6 +481,7 @@ export async function embed(texts: readonly string[]): Promise<EmbeddingMatrix |
 	if (texts.length === 0 || embeddingsDisabled()) {
 		return null;
 	}
+	texts = capInputs(texts);
 	const activeProvider = resolveEmbeddingProvider(activeEmbeddingOptions()?.provider);
 	if (activeProvider !== undefined) {
 		try {

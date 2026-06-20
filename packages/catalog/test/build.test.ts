@@ -6,8 +6,10 @@ import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isOfficialAnthropicApiUrl } from "@oh-my-pi/pi-catalog/compat/anthropic";
 import { buildOpenAICompat, buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { openrouterModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 function completionsSpec(overrides: Partial<ModelSpec<"openai-completions">> = {}): ModelSpec<"openai-completions"> {
@@ -144,6 +146,49 @@ describe("buildModel", () => {
 	});
 });
 
+describe("xAI-OAuth Responses reasoning-effort suppression", () => {
+	const grokResponsesSpec = (id: string): ModelSpec<"openai-responses"> => ({
+		id,
+		name: id,
+		api: "openai-responses",
+		provider: "xai-oauth",
+		baseUrl: "https://api.x.ai/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 512_000,
+		maxTokens: 512_000,
+	});
+
+	it("omits the effort dial for a custom grok-build spec (off the allowlist)", () => {
+		const compat = buildOpenAIResponsesCompat(grokResponsesSpec("grok-build"));
+		expect(compat.supportsReasoningEffort).toBe(false);
+		expect(compat.omitReasoningEffort).toBe(true);
+		expect(buildModel(grokResponsesSpec("grok-build")).thinking).toBeUndefined();
+	});
+
+	it("keeps the effort dial for a custom grok-4.3 spec (on the allowlist)", () => {
+		expect(buildOpenAIResponsesCompat(grokResponsesSpec("grok-4.3")).supportsReasoningEffort).toBe(true);
+	});
+
+	it("lets an explicit compat.supportsReasoningEffort override the allowlist default", () => {
+		const compat = buildOpenAIResponsesCompat({
+			...grokResponsesSpec("grok-build"),
+			compat: { supportsReasoningEffort: true },
+		});
+		expect(compat.supportsReasoningEffort).toBe(true);
+	});
+
+	it("does not suppress effort for a non-xai-oauth provider with a grok-like id", () => {
+		const compat = buildOpenAIResponsesCompat({
+			...grokResponsesSpec("grok-build"),
+			provider: "openai",
+			baseUrl: "https://api.openai.com/v1",
+		});
+		expect(compat.supportsReasoningEffort).toBe(true);
+	});
+});
+
 describe("openai-completions wire-quirk compat detection", () => {
 	it("derives wireModelIdMode from provider/host", () => {
 		expect(buildOpenAICompat(completionsSpec({ provider: "firepass" })).wireModelIdMode).toBe("firepass");
@@ -151,6 +196,16 @@ describe("openai-completions wire-quirk compat detection", () => {
 			buildOpenAICompat(completionsSpec({ provider: "fireworks", baseUrl: "https://api.fireworks.ai/inference/v1" }))
 				.wireModelIdMode,
 		).toBe("fireworks");
+		// Fireworks "Fast" variants route through the router namespace (like Fire Pass).
+		expect(
+			buildOpenAICompat(
+				completionsSpec({
+					provider: "fireworks",
+					id: "kimi-k2.6-fast",
+					baseUrl: "https://api.fireworks.ai/inference/v1",
+				}),
+			).wireModelIdMode,
+		).toBe("firepass");
 		expect(
 			buildOpenAICompat(completionsSpec({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }))
 				.wireModelIdMode,
@@ -192,6 +247,32 @@ describe("openai-completions wire-quirk compat detection", () => {
 					baseUrl: "https://integrate.api.nvidia.com/v1",
 				}),
 			).stripDeepseekSpecialTokens,
+		).toBe(false);
+	});
+
+	it("requires a synthetic assistant bridge after tool results only for Mistral hosts", () => {
+		// Mistral/Devstral reject a user message directly after a tool result; the chat
+		// builder bridges it with a synthetic assistant turn, keyed on the Mistral host.
+		expect(
+			buildOpenAICompat(
+				completionsSpec({ provider: "mistral", id: "devstral-latest", baseUrl: "https://api.mistral.ai/v1" }),
+			).requiresAssistantAfterToolResult,
+		).toBe(true);
+		// URL-only match (custom provider fronting Mistral).
+		expect(
+			buildOpenAICompat(
+				completionsSpec({
+					provider: "custom",
+					id: "mistral-large",
+					baseUrl: "https://proxy.example/mistral.ai/v1",
+				}),
+			).requiresAssistantAfterToolResult,
+		).toBe(true);
+		// Non-Mistral hosts must not insert the bridge.
+		expect(buildOpenAICompat(completionsSpec()).requiresAssistantAfterToolResult).toBe(false);
+		expect(
+			buildOpenAICompat(completionsSpec({ provider: "openai", id: "gpt-5", baseUrl: "https://api.openai.com/v1" }))
+				.requiresAssistantAfterToolResult,
 		).toBe(false);
 	});
 
@@ -238,6 +319,91 @@ describe("openai-completions wire-quirk compat detection", () => {
 		});
 		expect(openrouterResponses.supportsObfuscationOptOut).toBe(false);
 		expect(openrouterResponses.wireModelIdMode).toBe("openrouter");
+	});
+});
+
+describe("OpenRouter model discovery", () => {
+	it("keeps refreshed OpenRouter models on the OpenRouter pseudo API", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-openrouter-refresh-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const routing = { only: ["anthropic"], order: ["anthropic"] };
+		const staticModel = openrouterSpec({ compat: { openRouterRouting: routing } });
+		const options = openrouterModelManagerOptions({
+			fetch: async () =>
+				new Response(
+					JSON.stringify({
+						data: [
+							{
+								id: staticModel.id,
+								name: "Anthropic: Claude Sonnet 4",
+								supported_parameters: ["tools", "tool_choice", "reasoning"],
+								architecture: { modality: "text+image" },
+								pricing: {
+									prompt: "0.000003",
+									completion: "0.000015",
+									input_cache_read: "0.0000003",
+									input_cache_write: "0.00000375",
+								},
+								top_provider: { max_completion_tokens: 32_000 },
+								context_length: 180_000,
+							},
+						],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		});
+
+		try {
+			const dynamicModels = await options.fetchDynamicModels?.();
+			expect(dynamicModels?.[0]?.api).toBe("openrouter");
+
+			const online = await resolveProviderModels<"openrouter">(
+				{
+					...options,
+					staticModels: [staticModel],
+					cacheDbPath: dbPath,
+				},
+				"online",
+			);
+
+			const model = online.models.find(candidate => candidate.id === staticModel.id);
+			expect(model?.api).toBe("openrouter");
+			expect(model?.provider).toBe("openrouter");
+			expect(model?.compat.isOpenRouterHost).toBe(true);
+			expect(model?.compat.openRouterRouting).toEqual(routing);
+			expect(model?.input).toEqual(["text", "image"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores legacy OpenRouter chat-completions cache rows", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-openrouter-legacy-cache-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const legacyModel = buildModel(
+			completionsSpec({
+				id: "anthropic/claude-sonnet-4",
+				provider: "openrouter",
+				baseUrl: "https://openrouter.ai/api/v1",
+				reasoning: true,
+			}),
+		);
+		try {
+			writeModelCache("openrouter", Date.now(), [legacyModel], true, "", dbPath);
+
+			const offline = await resolveProviderModels<"openrouter">(
+				{
+					...openrouterModelManagerOptions(),
+					staticModels: [],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+
+			expect(offline.models).toEqual([]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 });
 

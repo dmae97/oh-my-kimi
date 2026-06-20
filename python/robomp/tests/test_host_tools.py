@@ -172,6 +172,110 @@ def test_run_repo_command_uses_slot_identity_kwargs(
     assert kwargs["env"]["BUN_INSTALL_CACHE_DIR"].endswith("/.omp-xdg/cache/bun-install")
 
 
+def _write_bun_repo(repo_dir: Path) -> None:
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "package.json").write_text('{"name":"x"}', encoding="utf-8")
+    (repo_dir / "bun.lock").write_text("{}", encoding="utf-8")
+
+
+def test_ensure_workspace_dependencies_installs_when_missing(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    bindings, loop, thread = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    _write_bun_repo(bindings.workspace.repo_dir)
+    captured: list[tuple[str, ...]] = []
+
+    def fake_run_repo_command(
+        _b: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        captured.append(tuple(cmd))
+        return subprocess.CompletedProcess(list(cmd), 0, "449 packages installed", "")
+
+    monkeypatch.setattr(host_tools, "_run_repo_command", fake_run_repo_command)
+    try:
+        host_tools.ensure_workspace_dependencies(bindings)
+    finally:
+        _stop_loop(loop, thread)
+
+    assert captured == [("bun", "install", "--frozen-lockfile", "--ignore-scripts")]
+
+
+def test_ensure_workspace_dependencies_reinstalls_when_node_modules_present(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A bare node_modules/ dir is NOT a "fully installed" sentinel: a prior
+    # install that timed out or crashed half-way leaves a partial tree. The
+    # frozen install must still run so bun re-links anything missing, instead
+    # of skipping forever and leaving the resolver broken.
+    import subprocess
+
+    bindings, loop, thread = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    _write_bun_repo(bindings.workspace.repo_dir)
+    (bindings.workspace.repo_dir / "node_modules").mkdir()
+    captured: list[tuple[str, ...]] = []
+
+    def fake_run_repo_command(
+        _b: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        captured.append(tuple(cmd))
+        return subprocess.CompletedProcess(list(cmd), 0, "Checked 449 packages", "")
+
+    monkeypatch.setattr(host_tools, "_run_repo_command", fake_run_repo_command)
+    try:
+        host_tools.ensure_workspace_dependencies(bindings)
+    finally:
+        _stop_loop(loop, thread)
+
+    assert captured == [("bun", "install", "--frozen-lockfile", "--ignore-scripts")]
+
+
+def test_ensure_workspace_dependencies_skips_non_bun_repo(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # repo_dir exists (created by _stub_workspace) but has no package.json/bun.lock.
+    bindings, loop, thread = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    called = False
+
+    def fail_run(*_a: Any, **_k: Any) -> Any:
+        nonlocal called
+        called = True
+        raise AssertionError("must not install in a non-bun repo")
+
+    monkeypatch.setattr(host_tools, "_run_repo_command", fail_run)
+    try:
+        host_tools.ensure_workspace_dependencies(bindings)
+    finally:
+        _stop_loop(loop, thread)
+
+    assert called is False
+
+
+def test_ensure_workspace_dependencies_swallows_install_failure(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    bindings, loop, thread = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    _write_bun_repo(bindings.workspace.repo_dir)
+
+    def failing_run(
+        _b: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(list(cmd), 1, "", "lockfile out of date")
+
+    monkeypatch.setattr(host_tools, "_run_repo_command", failing_run)
+    try:
+        # A stale frozen lockfile (e.g. a PR that bumped deps) must not raise —
+        # the agent can still install itself or report the gap.
+        host_tools.ensure_workspace_dependencies(bindings)
+    finally:
+        _stop_loop(loop, thread)
+
+    assert not (bindings.workspace.repo_dir / "node_modules").exists()
+
+
 def test_guarded_push_branch_rev_parse_runs_via_repo_command_and_passes_slot_uid(
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

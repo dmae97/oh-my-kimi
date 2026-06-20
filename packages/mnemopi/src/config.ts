@@ -99,6 +99,26 @@ export function embeddingsDisabled(env: Env = process.env): boolean {
 	return envString("MNEMOPI_NO_EMBEDDINGS", "", env) !== "";
 }
 
+/**
+ * Per-input character cap applied inside `embed()` before any provider sees the text.
+ *
+ * Long retention transcripts (full multi-turn session windows) routinely outgrow
+ * embedding model context windows: BGE/E5 defaults are 512 tokens, bge-m3 is
+ * 8192, and OpenAI's text-embedding-3-* is 8192. llama.cpp's `/embeddings`
+ * server rejects oversized requests with `request (N tokens) exceeds the
+ * available context size`; OpenAI silently right-truncates. Capping at the
+ * source gives both backends deterministic behavior and prevents the silent
+ * recall degradation we saw in issue #3126.
+ *
+ * Default `8192` chars is intentionally conservative for 8192-token embedding
+ * contexts (bge-m3, OpenAI text-embedding-3) and CJK-heavy transcripts. Raise
+ * it for larger local contexts (for example Qwen3-Embedding with 32k ctx).
+ * `0` disables the cap.
+ */
+export function embeddingMaxInputChars(env: Env = process.env): number {
+	return Math.max(0, envInt("MNEMOPI_EMBEDDING_MAX_INPUT_CHARS", 8192, env));
+}
+
 export function isApiEmbeddingModel(model = embeddingModel(), env: Env = process.env): boolean {
 	if (model.startsWith("openai/") || model.includes("text-embedding") || model.startsWith("text-embedding"))
 		return true;

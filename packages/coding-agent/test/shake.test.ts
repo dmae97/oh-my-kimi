@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -192,6 +193,52 @@ describe("AgentSession shake", () => {
 			expect(end[0]).toMatchObject({ type: "auto_compaction_end", action: "shake" });
 		});
 
+		it("has isCompacting true when the shake auto_compaction_start event fires", async () => {
+			// Defect 1 parity for the shake strategy: the controller backing isCompacting
+			// must be installed before auto_compaction_start is emitted, so a message
+			// typed as the loader appears is queued safely rather than mis-routed.
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdPercent", 1);
+			session.settings.set("contextPromotion.enabled", false);
+
+			let capturedIsCompacting: boolean | undefined;
+			const { promise: shakeStarted, resolve: onShakeStarted } = Promise.withResolvers<void>();
+			session.subscribe(event => {
+				if (event.type === "auto_compaction_start" && event.action === "shake") {
+					capturedIsCompacting = session.isCompacting;
+					onShakeStarted();
+				}
+			});
+
+			vi.spyOn(session, "shake").mockResolvedValue({
+				mode: "elide",
+				toolResultsDropped: 1,
+				blocksDropped: 0,
+				tokensFreed: 10_000,
+			});
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "trigger" }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 10_000,
+					output: 1_000,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 11_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+			await shakeStarted;
+
+			expect(capturedIsCompacting).toBe(true);
+		});
+
 		it("falls back to context-full when shake cannot drop context below the threshold (regression #2119)", async () => {
 			session.settings.set("compaction.strategy", "shake");
 			session.settings.set("compaction.thresholdPercent", 1);
@@ -296,6 +343,61 @@ describe("AgentSession shake", () => {
 
 			const fullStart = events.find(
 				e => e.type === "auto_compaction_start" && (e as { action?: string }).action === "context-full",
+			);
+			expect(fullStart).toBeDefined();
+		});
+
+		it("falls back after pre-prompt shake when the floored stored conversation remains over threshold", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdTokens", 8_000);
+			session.settings.set("compaction.keepRecentTokens", 1);
+			session.settings.set("contextPromotion.enabled", false);
+
+			const seedUser: AgentMessage = {
+				role: "user",
+				content: [{ type: "text", text: "seed" }],
+				timestamp: Date.now() - 2,
+			};
+			const bulkText = "alpha beta gamma delta epsilon ".repeat(3_000);
+			const seedAssistant: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: bulkText }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 1_000,
+					output: 10,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1_010,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now() - 1,
+			};
+			sessionManager.appendMessage(seedUser);
+			sessionManager.appendMessage(seedAssistant);
+			session.agent.replaceMessages([seedUser, seedAssistant]);
+
+			const shakeSpy = vi
+				.spyOn(session, "shake")
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 10 });
+			const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+				summary: "pre-prompt shake fallback compacted",
+				shortSummary: undefined,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			}));
+			vi.spyOn(session.agent, "prompt").mockImplementation(async () => {});
+
+			expect(session.getContextUsage({ contextWindow: 200_000 })?.tokens).toBe(1_000);
+
+			await session.prompt("small pending prompt", { skipCompactionCheck: true });
+
+			expect(shakeSpy).toHaveBeenCalledTimes(1);
+			expect(compactSpy).toHaveBeenCalled();
+			const fullStart = events.find(
+				event => event.type === "auto_compaction_start" && (event as { action?: string }).action === "context-full",
 			);
 			expect(fullStart).toBeDefined();
 		});

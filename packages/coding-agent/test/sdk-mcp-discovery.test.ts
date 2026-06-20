@@ -177,60 +177,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("task");
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		// `preferred` renders the soft delegation nudge, not the hard MUST/ONLY wording.
-		expect(prompt).toContain("Delegation is preferred here");
-		expect(prompt).toContain("batch them into one parallel");
-		expect(prompt).not.toContain("you MUST fan the work out");
-		await session.dispose();
-	});
-
-	it("uses hard delegation wording in the Eager Tasks section when task.eager is always", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "task.eager": "always" }),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		expect(prompt).toContain("you MUST fan the work out");
-		expect(prompt).toContain("Batch independent slices");
-		expect(prompt).not.toContain("Delegation is preferred here");
-		await session.dispose();
-	});
-
-	it("omits batch guidance from the Eager Tasks section when task.batch is disabled", async () => {
-		const { session } = await createAgentSession({
-			cwd: tempDir,
-			agentDir: tempDir,
-			modelRegistry,
-			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "task.eager": "preferred", "task.batch": false }),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			disableExtensionDiscovery: true,
-			skills: [],
-			contextFiles: [],
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
-			enableLsp: false,
-		});
-
-		const prompt = session.systemPrompt.join("\n");
-		expect(prompt).toContain("# Eager Tasks");
-		expect(prompt).not.toContain("batch them into one parallel");
 		await session.dispose();
 	});
 
@@ -252,7 +198,6 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		});
 
 		expect(session.getActiveToolNames()).not.toContain("task");
-		expect(session.systemPrompt.join("\n")).not.toContain("# Eager Tasks");
 		await session.dispose();
 	});
 

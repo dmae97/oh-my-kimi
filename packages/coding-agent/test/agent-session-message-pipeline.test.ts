@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool, AppendOnlyContextManager } from "@oh-my-pi/pi-agent-core";
 import {
 	type Api,
 	type Context,
 	clearCustomApis,
+	type ImageContent,
 	type Message,
 	type Model,
 	type ModelSpec,
@@ -14,10 +15,14 @@ import {
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
+import * as memoryBackend from "@oh-my-pi/pi-coding-agent/memory-backend";
+import type { MemoryBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/types";
+import { type MnemopiSessionState, setMnemopiSessionState } from "@oh-my-pi/pi-coding-agent/mnemopi/state";
+import { obfuscateProviderContext, SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 function createAgent(): Agent {
@@ -49,6 +54,20 @@ function getConvertedUserText(message: Message | undefined): string {
 		throw new Error("Expected converted text content");
 	}
 	return text.text;
+}
+
+async function withNativeDialectEnv<T>(fn: () => Promise<T>): Promise<T> {
+	const previous = Bun.env.PI_DIALECT;
+	delete Bun.env.PI_DIALECT;
+	try {
+		return await fn();
+	} finally {
+		if (previous === undefined) {
+			delete Bun.env.PI_DIALECT;
+		} else {
+			Bun.env.PI_DIALECT = previous;
+		}
+	}
 }
 
 describe("AgentSession message pipeline", () => {
@@ -120,6 +139,34 @@ describe("AgentSession message pipeline", () => {
 		expect(queued.steering).toBe(true);
 		expect(queued.content).toEqual([{ type: "text", text: "raw <steer> &" }]);
 		session.clearQueue();
+	});
+
+	it("resolves image attachments from submitted messages, not tool-result images", () => {
+		const userImage: ImageContent = { type: "image", data: "user-image", mimeType: "image/png" };
+		const toolImage: ImageContent = { type: "image", data: "tool-image", mimeType: "image/png" };
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+		});
+		sessions.push(session);
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "inspect this" }, userImage],
+			timestamp: Date.now(),
+		});
+		session.agent.appendMessage({
+			role: "toolResult",
+			toolCallId: "eval-1",
+			toolName: "eval",
+			content: [{ type: "text", text: "plot output" }, toolImage],
+			timestamp: Date.now(),
+			isError: false,
+		});
+
+		expect(session.getImageAttachments()).toEqual([{ label: "Image #1", uri: "attachment://1", image: userImage }]);
 	});
 
 	it("keeps stored steering text raw while pre-LLM conversion wraps it", async () => {
@@ -399,6 +446,83 @@ describe("AgentSession message pipeline", () => {
 		expect(JSON.stringify(capturedContext)).not.toContain(secret);
 	});
 
+	it("keeps obfuscated side-channel stable prefix byte-identical to the main turn", async () => {
+		await withNativeDialectEnv(async () => {
+			const api = "test-ephemeral-obfuscated-prefix-parity";
+			const secret = "PREFIX_SECRET_TOKEN_12345";
+			let callCount = 0;
+			let mainContext: Context | undefined;
+			let sideContext: Context | undefined;
+			registerCustomApi(api, (_model, context, _options) => {
+				if (callCount === 0) {
+					mainContext = context;
+				} else {
+					sideContext = context;
+				}
+				callCount += 1;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage("Answer");
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "Answer", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			});
+
+			const model = buildModel({
+				id: "side-model-prefix-parity",
+				name: "Side Model Prefix Parity",
+				api,
+				provider: "test-provider",
+				baseUrl: "",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>;
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const tool: AgentTool = {
+				name: "secret_probe",
+				label: "Secret Probe",
+				description: `Tool description ${secret}`,
+				parameters: {
+					type: "object",
+					properties: {
+						value: { type: "string", description: `Schema description ${secret}` },
+					},
+					required: ["value"],
+				},
+				execute: async () => ({ content: [], details: {} }),
+			};
+			const agent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: [`system prompt with ${secret}`],
+					messages: [],
+					tools: [tool],
+				},
+				transformProviderContext: context => obfuscateProviderContext(obfuscator, context),
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: createModelRegistryStub() as never,
+				obfuscator,
+			});
+			sessions.push(session);
+
+			await agent.prompt("Main Question?");
+			await session.runEphemeralTurn({ promptText: `Side Question ${secret}?` });
+
+			expect(JSON.stringify(mainContext?.systemPrompt)).toBe(JSON.stringify(sideContext?.systemPrompt));
+			expect(JSON.stringify(mainContext?.tools)).toBe(JSON.stringify(sideContext?.tools));
+			expect(JSON.stringify(sideContext?.systemPrompt)).not.toContain(secret);
+			expect(JSON.stringify(sideContext?.tools)).not.toContain(secret);
+		});
+	});
+
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
 		const requestOnSseEvent = vi.fn();
 		const session = new AgentSession({
@@ -433,6 +557,7 @@ describe("AgentSession message pipeline", () => {
 			settings: Settings.isolated({ "compaction.enabled": false }),
 			modelRegistry: {} as never,
 			extensionRunner: {
+				hasHandlers: () => true,
 				emit: extensionEmit,
 			} as never,
 		});
@@ -485,5 +610,492 @@ describe("AgentSession message pipeline", () => {
 
 		resolve();
 		await Bun.sleep(0);
+	});
+
+	it("keeps first-turn memory in the stable prompt on the next turn", async () => {
+		const api = "test-injected-memory-append-only-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		const injected = "<memories>remember blue</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false, "provider.appendOnlyContext": "on" }),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+
+		await session.sendUserMessage("first");
+		await session.sendUserMessage("second");
+
+		expect(contexts).toHaveLength(2);
+		const firstSystemPrompt = contexts[0]!.systemPrompt;
+		expect(firstSystemPrompt).toBeDefined();
+		expect(firstSystemPrompt!.join("\n")).toContain(injected);
+		expect(contexts[1]!.systemPrompt).toEqual(firstSystemPrompt);
+	});
+
+	it("clears promoted memory from the base prompt when switching sessions", async () => {
+		using tempDir = TempDir.createSync("@pi-injected-memory-switch-");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		const firstSessionFile = sessionManager.getSessionFile();
+		expect(firstSessionFile).toBeString();
+		await sessionManager.flush();
+		const nextSessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		const nextSessionFile = nextSessionManager.getSessionFile();
+		expect(nextSessionFile).toBeString();
+		await nextSessionManager.flush();
+
+		const api = "test-injected-memory-switch-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		let recallAvailable = true;
+		const injected = "<memories>session A only</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered || !recallAvailable) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "mnemopi",
+				"provider.appendOnlyContext": "on",
+			}),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+		setMnemopiSessionState(session, {
+			aliasOf: undefined,
+			setSessionId(_sessionId: string) {},
+			resetConversationTracking() {
+				remembered = false;
+			},
+			async dispose() {},
+		} as unknown as MnemopiSessionState);
+
+		await session.sendUserMessage("first");
+		expect(session.systemPrompt.join("\n")).toContain(injected);
+		recallAvailable = false;
+
+		await session.switchSession(nextSessionFile!);
+		await session.sendUserMessage("second");
+
+		expect(session.systemPrompt.join("\n")).not.toContain(injected);
+		expect(contexts).toHaveLength(2);
+		expect(contexts[1]!.systemPrompt?.join("\n")).not.toContain(injected);
+	});
+
+	it("clears promoted memory from the base prompt when starting a new session", async () => {
+		const api = "test-injected-memory-new-session-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		let recallAvailable = true;
+		const injected = "<memories>previous session only</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered || !recallAvailable) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "mnemopi",
+				"provider.appendOnlyContext": "on",
+			}),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+		setMnemopiSessionState(session, {
+			aliasOf: undefined,
+			setSessionId(_sessionId: string) {},
+			resetConversationTracking() {
+				remembered = false;
+			},
+			async dispose() {},
+		} as unknown as MnemopiSessionState);
+
+		await session.sendUserMessage("first");
+		expect(session.systemPrompt.join("\n")).toContain(injected);
+		recallAvailable = false;
+
+		await session.newSession();
+		await session.sendUserMessage("second");
+
+		expect(session.systemPrompt.join("\n")).not.toContain(injected);
+		expect(contexts).toHaveLength(2);
+		expect(contexts[1]!.systemPrompt?.join("\n")).not.toContain(injected);
+	});
+
+	it("does not duplicate promoted memory in the base prompt when forking", async () => {
+		using tempDir = TempDir.createSync("@pi-injected-memory-fork-");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		expect(sessionManager.getSessionFile()).toBeString();
+		await sessionManager.flush();
+
+		const api = "test-injected-memory-fork-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		const injected = "<memories>forked recall</memories>";
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${injected}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered) return undefined;
+				remembered = true;
+				return injected;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["base", "static memory instructions"],
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "mnemopi",
+				"provider.appendOnlyContext": "on",
+			}),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt: remembered
+					? ["base", `static memory instructions\n\n${injected}`]
+					: ["base", "static memory instructions"],
+			}),
+		});
+		sessions.push(session);
+		setMnemopiSessionState(session, {
+			aliasOf: undefined,
+			setSessionId(_sessionId: string) {},
+			resetConversationTracking() {
+				remembered = false;
+			},
+			async dispose() {},
+		} as unknown as MnemopiSessionState);
+
+		await session.sendUserMessage("first");
+		expect(session.systemPrompt.join("\n")).toContain(injected);
+
+		await session.fork();
+		await session.sendUserMessage("second");
+
+		const forkedPrompt = contexts[1]!.systemPrompt?.join("\n") ?? "";
+		const occurrences = forkedPrompt.split(injected).length - 1;
+		expect(occurrences).toBe(1);
+	});
+
+	it("ephemeral side-channel forwards native tools, injects developer reminder, leaves toolChoice auto", async () => {
+		await withNativeDialectEnv(async () => {
+			const api = "test-ephemeral-tools-warm-cache";
+			let capturedContext: Context | undefined;
+			let capturedOptions: SimpleStreamOptions | undefined;
+			registerCustomApi(api, (_model, context, options) => {
+				capturedContext = context;
+				capturedOptions = options;
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					const message = createAssistantMessage("Not using tools");
+					stream.push({ type: "text_delta", contentIndex: 0, delta: "Not using tools", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			});
+
+			const model = buildModel({
+				id: "side-model-with-tools",
+				name: "Side Model with Tools",
+				api,
+				provider: "test-provider",
+				baseUrl: "",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>;
+
+			const tool: AgentTool = {
+				name: "side_tool",
+				label: "Side Tool",
+				description: "A tool in side channel",
+				parameters: { type: "object", properties: {} },
+				execute: async () => ({ content: [], details: {} }),
+			};
+
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: {
+						model,
+						systemPrompt: ["system prompt"],
+						messages: [],
+						tools: [tool],
+					},
+				}),
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry: createModelRegistryStub() as never,
+			});
+			sessions.push(session);
+
+			const result = await session.runEphemeralTurn({ promptText: "Side Question?" });
+
+			expect(result.replyText).toBe("Not using tools");
+			expect(capturedContext).toBeDefined();
+			expect(capturedContext!.tools).toBeDefined();
+			expect(capturedContext!.tools!.length).toBe(1);
+			expect(capturedContext!.tools![0].name).toBe("side_tool");
+
+			// Developer reminder injected immediately before user prompt
+			const messages = capturedContext!.messages;
+			expect(messages.length).toBeGreaterThanOrEqual(2);
+			const lastMessage = messages.at(-1);
+			const secondToLast = messages.at(-2);
+
+			expect(lastMessage?.role).toBe("user");
+			expect(getConvertedUserText(lastMessage)).toBe("Side Question?");
+
+			expect(secondToLast?.role).toBe("developer");
+			expect(secondToLast?.content).toBeDefined();
+			const textContent = secondToLast?.content as { text?: string }[];
+			expect(textContent[0].text).toContain("tool catalog stays attached");
+
+			// Tool choice must be undefined (not "none") for cache hits
+			expect(capturedOptions?.toolChoice).toBeUndefined();
+		});
+	});
+
+	it("ephemeral side-channel discards any emitted tool calls", async () => {
+		const api = "test-ephemeral-tools-discard";
+		registerCustomApi(api, (_model, _context, _options) => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Here is text");
+				message.content.push({
+					type: "toolCall",
+					id: "call_123",
+					name: "side_tool",
+					arguments: {},
+				});
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Here is text", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "side-model-discard",
+			name: "Side Model Discard",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+		});
+		sessions.push(session);
+
+		const result = await session.runEphemeralTurn({ promptText: "Side Question?" });
+
+		expect(result.replyText).toBe("Here is text");
+		expect(result.assistantMessage.content.some(block => block.type === "toolCall")).toBe(false);
+		expect(result.assistantMessage.content.every(block => block.type !== "toolCall")).toBe(true);
 	});
 });

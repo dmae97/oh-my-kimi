@@ -1,6 +1,6 @@
 //! Conservative text filters for system-style commands.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Write as _};
 
 use super::git;
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
@@ -358,9 +358,7 @@ fn render_counted_lines(lines: &[LogLine], head: usize, tail: usize) -> String {
 	for line in lines.iter().take(head) {
 		push_counted_line(&mut out, &line.original, line.count);
 	}
-	out.push_str("… ");
-	out.push_str(&(lines.len() - head - tail).to_string());
-	out.push_str(" unique lines omitted …\n");
+	let _ = writeln!(out, "[…{} unique lines elided…]", lines.len() - head - tail);
 	for line in lines.iter().skip(lines.len() - tail) {
 		push_counted_line(&mut out, &line.original, line.count);
 	}
@@ -750,9 +748,7 @@ fn compact_format_output(input: &str) -> String {
 			out.push('\n');
 		}
 		if files.len() > 50 {
-			out.push_str("… ");
-			out.push_str(&(files.len() - 50).to_string());
-			out.push_str(" more files\n");
+			let _ = writeln!(out, "[…{} files elided…]", files.len() - 50);
 		}
 	}
 	if errors.is_empty() && summary.is_empty() && files.is_empty() {
@@ -1073,7 +1069,7 @@ Time        0.42s
 		assert!(out.text.contains("errors:"));
 		assert!(out.text.contains("failed to parse src/bad.py"));
 		assert!(out.text.contains("files:"));
-		assert!(out.text.contains("more files"));
+		assert!(out.text.contains("[…50 files elided…]"));
 	}
 
 	#[test]

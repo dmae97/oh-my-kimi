@@ -72,17 +72,15 @@ describe("snapshot store fusion via canonical keys", () => {
 
 describe("parseSeenLinesFromHashlineBody", () => {
 	it("collects single NN: line numbers and skips the header and footer rows", () => {
-		const body = ["[src/x.ts#1A2B]", "300:function f() {", "301:\treturn 1;", "302:}", "[2 lines elided; …]"].join(
-			"\n",
-		);
+		const body = ["[src/x.ts#1A2B]", "300:function f() {", "301:\treturn 1;", "302:}", "[…2ln elided; …]"].join("\n");
 		expect(parseSeenLinesFromHashlineBody(body)).toEqual([300, 301, 302]);
 	});
 
 	it("adds only the boundary lines of a collapsed NN-MM: summary row, never the interior", () => {
 		const body = [
-			"30-39:export interface Snapshot { .. }",
+			"30-39:export interface Snapshot { … }",
 			"40:",
-			"46-61:export abstract class SnapshotStore { .. }",
+			"46-61:export abstract class SnapshotStore { … }",
 		].join("\n");
 		expect(parseSeenLinesFromHashlineBody(body)).toEqual([30, 39, 40, 46, 61]);
 	});
@@ -92,7 +90,7 @@ describe("parseSeenLinesFromHashlineBody", () => {
 	});
 
 	it("tolerates grep `*`/space match markers before the line number (search/ast-grep output)", () => {
-		const body = ["*73:matched line", " 74:context line", "...", " 75:more context"].join("\n");
+		const body = ["*73:matched line", " 74:context line", "…", " 75:more context"].join("\n");
 		expect(parseSeenLinesFromHashlineBody(body)).toEqual([73, 74, 75]);
 	});
 });

@@ -437,7 +437,7 @@ export class ProcessTerminal implements Terminal {
 	#reportedRows?: number;
 	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
-	#progressTimer?: ReturnType<typeof setInterval>;
+	#progressTimer?: Timer;
 
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;

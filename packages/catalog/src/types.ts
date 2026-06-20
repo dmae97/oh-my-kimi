@@ -259,6 +259,16 @@ export interface OpenAICompat {
 	/** Whether the provider supports the `strict` field in tool definitions. Default: auto-detected per provider/baseUrl (conservative for unknown providers). */
 	supportsStrictMode?: boolean;
 	/**
+	 * Tool-schema dialect the endpoint validates `tools.function.parameters`
+	 * against. `"moonshot-mfjs"` triggers Moonshot Flavored JSON Schema
+	 * normalization (collapse `const`→`enum`, infer `type` on bare enums, strip
+	 * unsupported validators/`prefixItems`) because Moonshot/Kimi native hosts
+	 * reject standard JSON Schema constructs with HTTP 400. Default:
+	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com). Set
+	 * `"none"` to opt a custom Moonshot-compatible host out.
+	 */
+	toolSchemaFlavor?: "moonshot-mfjs" | "none";
+	/**
 	 * Stream-watchdog idle-timeout floor in ms for slow reasoning hosts.
 	 * Default: auto-detected (GLM coding-plan hosts, direct DeepSeek reasoning).
 	 */
@@ -273,6 +283,8 @@ export interface OpenAICompat {
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
 	strictResponsesPairing?: boolean;
+	/** Whether the Responses API accepts the `detail: "original"` image hint. Default: auto-detected (false for GitHub Copilot, which rejects it with a 400). */
+	supportsImageDetailOriginal?: boolean;
 	/**
 	 * Append a trailing `# Juice: 0 !important` developer item when the caller
 	 * did not request reasoning, suppressing default reasoning on models that
@@ -489,10 +501,12 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "vercelGatewayRouting"
 			| "extraBody"
 			| "toolStrictMode"
+			| "toolSchemaFlavor"
 			| "streamIdleTimeoutMs"
 			| "cacheControlFormat"
 			| "thinkingKeep"
 			| "strictResponsesPairing"
+			| "supportsImageDetailOriginal"
 			| "requiresJuiceZeroHack"
 			| "enableGeminiThinkingLoopGuard"
 			| "whenThinking"
@@ -504,6 +518,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 		thinkingKeep?: OpenAICompat["thinkingKeep"];
 		streamIdleTimeoutMs?: number;
 		toolStrictMode: ResolvedToolStrictMode;
+		toolSchemaFlavor?: OpenAICompat["toolSchemaFlavor"];
 		/** The model sits behind Vercel AI Gateway. */
 		isVercelGatewayHost: boolean;
 		dropThinkingWhenReasoningEffort: boolean;
@@ -515,6 +530,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompat {
 	supportsLongPromptCacheRetention: boolean;
 	strictResponsesPairing: boolean;
+	supportsImageDetailOriginal: boolean;
 	requiresJuiceZeroHack: boolean;
 	supportsObfuscationOptOut: boolean;
 }
@@ -578,6 +594,11 @@ export interface Model<TApi extends Api = Api> {
 	baseUrl: string;
 	reasoning: boolean;
 	input: ("text" | "image")[];
+	/**
+	 * Decoder family used for image inputs when it has narrower format support
+	 * than OMP's general image pipeline. `stb` local backends reject WebP.
+	 */
+	imageInputDecoder?: "stb";
 	/**
 	 * Native provider tool-call support. `false` is the only unsupported signal:
 	 * `true` and `undefined` both mean callers may use native tools. Catalog and

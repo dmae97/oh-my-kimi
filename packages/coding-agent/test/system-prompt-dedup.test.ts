@@ -6,12 +6,24 @@ import {
 	buildSystemPrompt,
 	loadProjectContextFiles,
 	loadSystemPromptFiles,
+	type SystemPromptToolMetadata,
 } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const READ_TOOL = new Map<string, SystemPromptToolMetadata>([
+	[
+		"read",
+		{
+			label: "Read",
+			description: "Reads files from disk.",
+			parameters: { type: "object", properties: { path: { type: "string" } } },
+		},
+	],
+]);
 
 describe("SYSTEM.md prompt assembly", () => {
 	let tempDir = "";
@@ -38,9 +50,18 @@ describe("SYSTEM.md prompt assembly", () => {
 			cwd: projectDir,
 			customPrompt: systemPrompt,
 			contextFiles: [],
-			skills: [],
+			skills: [
+				{
+					name: "focused-work",
+					description: "Focused work instructions",
+					filePath: "skills/focused-work/SKILL.md",
+					baseDir: "skills/focused-work",
+					source: "test",
+				},
+			],
 			rules: [],
-			toolNames: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
 			workspaceTree: {
 				rootPath: projectDir,
 				rendered: "",
@@ -53,6 +74,71 @@ describe("SYSTEM.md prompt assembly", () => {
 		const promptText = renderedPrompt.join("\n\n");
 		const matches = promptText.match(new RegExp(escapeRegExp(systemPrompt), "g")) ?? [];
 		expect(matches).toHaveLength(1);
+		expect(promptText).toContain('<skill name="focused-work">');
+	});
+
+	it("does not resolve already-loaded prompt text as a path", async () => {
+		const projectDir = path.join(tempDir, "project");
+		const readablePromptText = path.join(projectDir, "README.md");
+		fs.mkdirSync(projectDir, { recursive: true });
+		fs.writeFileSync(readablePromptText, "File content that must not replace the prompt.");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			resolvedCustomPrompt: readablePromptText,
+			resolvedAppendSystemPrompt: readablePromptText,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		expect(promptText).toContain(readablePromptText);
+		expect(promptText).not.toContain("File content that must not replace the prompt.");
+	});
+
+	it("suppresses discovered SYSTEM.md while preserving the project footer", async () => {
+		const projectDir = path.join(tempDir, "project");
+		const appendPrompt = "Extra append instructions";
+		fs.mkdirSync(path.join(projectDir, ".omp"), { recursive: true });
+		fs.writeFileSync(path.join(projectDir, ".omp", "SYSTEM.md"), "Discovered project SYSTEM prompt");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: projectDir,
+			resolvedCustomPrompt: "CLI custom prompt",
+			resolvedAppendSystemPrompt: appendPrompt,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read"],
+			tools: READ_TOOL,
+			workspaceTree: {
+				rootPath: projectDir,
+				rendered: ".\n  - nested/",
+				truncated: false,
+				totalLines: 2,
+				agentsMdFiles: ["nested/AGENTS.md"],
+			},
+		});
+
+		const promptText = systemPrompt.join("\n\n");
+		const appendMatches = promptText.match(new RegExp(escapeRegExp(appendPrompt), "g")) ?? [];
+		expect(systemPrompt).toHaveLength(2);
+		expect(promptText).toContain("CLI custom prompt");
+		expect(promptText).toContain("<workspace-tree>");
+		expect(promptText).toContain("<dir-context>");
+		expect(promptText).toContain(`current working directory is '${projectDir}'`);
+		expect(appendMatches).toHaveLength(1);
+		expect(promptText).not.toContain("Discovered project SYSTEM prompt");
 	});
 
 	it("prefers project SYSTEM.md over user SYSTEM.md", async () => {

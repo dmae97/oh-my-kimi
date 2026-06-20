@@ -6,6 +6,7 @@ import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } fro
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
 	isGeminiThinkingLoopModel,
+	isLoopGuardedModel,
 	THINKING_LOOP_ERROR_MARKER,
 	ThinkingLoopDetector,
 	withGeminiThinkingLoopGuard,
@@ -115,6 +116,75 @@ describe("ThinkingLoopDetector", () => {
 			detail = detector.push(text.slice(i, i + 23));
 		}
 		// flush the trailing paragraph too
+		detail ??= detector.flush();
+		expect(detail).toBeNull();
+	});
+
+	test("does not collapse distinct per-file assignment templates into a loop", () => {
+		const detector = new ThinkingLoopDetector();
+		const text = [
+			`1. Subagent ApprovalModeTest:
+  - target: packages/coding-agent/test/tools/approval-mode.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/approval-mode.test.ts
+
+      # Change
+      Replace the type annotation:
+      \`let session: Awaited<ReturnType<typeof createAgentSession>>["session"];\`
+      with \`AgentSession\`.
+      Verify where \`AgentSession\` is imported from.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`2. Subagent GhTest:
+  - target: packages/coding-agent/test/tools/gh.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/gh.test.ts
+
+      # Change
+      Replace the type annotations:
+      \`let tempHome: Awaited<ReturnType<typeof setupTempHome>>;\`
+      with \`TempDir\`.
+      Verify where \`TempDir\` is imported from.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`3. Subagent TodoTest:
+  - target: packages/coding-agent/test/tools/todo.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/tools/todo.test.ts
+
+      # Change
+      Locate line 438 containing:
+      \`function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {\`
+      Replace \`ReturnType<typeof todoToolRenderer.renderResult>\` with the explicit return type.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+			`4. Subagent HookEditorTest:
+  - target: packages/coding-agent/test/hook-editor.test.ts
+  - role: "Test-file refactoring specialist"
+  - assignment:
+    \`\`\`markdown
+      # Target
+      packages/coding-agent/test/hook-editor.test.ts
+
+      # Change
+      Replace \`setFocus: ReturnType<typeof vi.fn>;\` and \`requestRender: ReturnType<typeof vi.fn>;\`
+      with Bun's explicit mock type from \`bun:test\`.
+      Run \`biome check --write --unsafe\` on the file.
+    \`\`\``,
+		].join("\n\n");
+		let detail: string | null = null;
+		for (let i = 0; i < text.length && !detail; i += 37) {
+			detail = detector.push(text.slice(i, i + 37));
+		}
 		detail ??= detector.flush();
 		expect(detail).toBeNull();
 	});
@@ -278,5 +348,84 @@ describe("withGeminiThinkingLoopGuard (Vertex transport)", () => {
 		expect(result.content.length).toBe(0);
 		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
 		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
+	});
+});
+describe("isLoopGuardedModel", () => {
+	test("guards Gemini and DeepSeek models by default, respects overrides", () => {
+		const gemini = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" }).model;
+		const deepseek = createMockModel({ provider: "deepseek", id: "deepseek-reasoner" }).model;
+		const other = createMockModel({ provider: "openai", id: "gpt-4o" }).model;
+
+		expect(isLoopGuardedModel(gemini)).toBe(true);
+		expect(isLoopGuardedModel(deepseek)).toBe(true);
+		expect(isLoopGuardedModel(other)).toBe(false);
+
+		// enabled: false disables even for target models
+		expect(isLoopGuardedModel(gemini, { loopGuard: { enabled: false } })).toBe(false);
+		expect(isLoopGuardedModel(deepseek, { loopGuard: { enabled: false } })).toBe(false);
+
+		// force enabled for other models — but disabled overall unless it is Gemini/DeepSeek
+		expect(isLoopGuardedModel(other, { loopGuard: { enabled: true } })).toBe(false);
+	});
+});
+
+describe("loop guard assistant prose/text loops", () => {
+	test("trips on assistant text/prose loop when checkAssistantContent is enabled", async () => {
+		const model = {
+			api: "openai-completions",
+			provider: "deepseek",
+			id: "deepseek-reasoner",
+		} as unknown as Model<Api>;
+		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
+		const options = { loopGuard: { checkAssistantContent: true } };
+
+		const guarded = withGeminiThinkingLoopGuard(model, options, () => {
+			const inner = new AssistantMessageEventStream();
+			const events: AssistantMessageEvent[] = [
+				{ type: "start", partial },
+				{ type: "text_start", contentIndex: 0, partial },
+				{ type: "text_delta", contentIndex: 0, delta: "First healthy text sentence. ", partial },
+				{ type: "text_delta", contentIndex: 0, delta: nearDuplicateLoop(12), partial },
+				{ type: "done", reason: "stop", message: partial },
+			];
+			for (const event of events) inner.push(event);
+			inner.end({ ...partial, stopReason: "stop" });
+			return inner;
+		});
+
+		const result = await guarded.result();
+		expect(result.stopReason).toBe("error");
+		// Loop-guard output is replay garbage even when it came through text_delta:
+		// drop it so AgentSession can retry with a clean assistant turn.
+		expect(result.content).toEqual([]);
+		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		expect(result.errorMessage).toContain("stream stall");
+		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
+	});
+
+	test("does not trip on assistant text loop when checkAssistantContent is false", async () => {
+		const model = {
+			api: "openai-completions",
+			provider: "deepseek",
+			id: "deepseek-reasoner",
+		} as unknown as Model<Api>;
+		const partial = { role: "assistant", content: [], stopReason: "stop" } as unknown as AssistantMessage;
+		const options = { loopGuard: { checkAssistantContent: false } };
+
+		const guarded = withGeminiThinkingLoopGuard(model, options, () => {
+			const inner = new AssistantMessageEventStream();
+			const events: AssistantMessageEvent[] = [
+				{ type: "start", partial },
+				{ type: "text_start", contentIndex: 0, partial },
+				{ type: "text_delta", contentIndex: 0, delta: nearDuplicateLoop(12), partial },
+				{ type: "done", reason: "stop", message: partial },
+			];
+			for (const event of events) inner.push(event);
+			inner.end({ ...partial, stopReason: "stop" });
+			return inner;
+		});
+
+		const result = await guarded.result();
+		expect(result.stopReason).toBe("stop");
 	});
 });

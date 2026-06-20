@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Effort } from "@oh-my-pi/pi-ai";
 import {
@@ -12,27 +11,25 @@ import {
 	type SettingPath,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 describe("Settings", () => {
 	let settingsState: SettingsTestState | undefined;
-	let testDir = "";
+	let tempDir: TempDir;
 	let agentDir: string;
 	let projectDir: string;
 
 	beforeEach(() => {
 		settingsState = beginSettingsTest();
 
-		// Use snowflake to isolate parallel test runs (SQLite files can't be shared)
-		testDir = path.join(os.tmpdir(), "test-settings-tmp", Snowflake.next());
-		agentDir = path.join(testDir, "agent");
-		projectDir = path.join(testDir, "project");
+		// Use TempDir for Windows-safe cleanup (retries on EBUSY from SQLite
+		// file handle release delays).
+		tempDir = TempDir.createSync("@pi-settings-test-");
+		agentDir = tempDir.join("agent");
+		projectDir = tempDir.join("project");
 
-		if (fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.mkdirSync(getProjectAgentDir(projectDir), { recursive: true });
 	});
@@ -55,10 +52,7 @@ describe("Settings", () => {
 	afterEach(() => {
 		restoreSettingsTestState(settingsState);
 		settingsState = undefined;
-		if (testDir && fs.existsSync(testDir)) {
-			fs.rmSync(testDir, { recursive: true, force: true });
-		}
-		testDir = "";
+		tempDir?.removeSync();
 	});
 	describe("defaults", () => {
 		it("keeps eight inline images live by default", async () => {
@@ -124,7 +118,7 @@ describe("Settings", () => {
 		});
 
 		it("re-resolves path-scoped arrays when cwd changes", async () => {
-			const otherDir = path.join(testDir, "other-project");
+			const otherDir = path.join(tempDir.toString(), "other-project");
 			fs.mkdirSync(otherDir, { recursive: true });
 
 			const settings = await Settings.init({
@@ -493,6 +487,103 @@ describe("Settings", () => {
 			await Settings.init({ cwd: projectDir, agentDir });
 
 			expect(fs.readFileSync(path.join(agentDir, "last-changelog-version"), "utf8")).toBe("0.41.0");
+		});
+
+		it("migrates from settings.json containing comments", async () => {
+			const jsonPath = path.join(agentDir, "settings.json");
+			await fs.promises.writeFile(
+				jsonPath,
+				`{
+					// This is a comment
+					"display": {
+						/* Multiline comment */
+						"showTokenUsage": true
+					}
+				}`,
+			);
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("display.showTokenUsage")).toBe(true);
+			expect(fs.existsSync(jsonPath)).toBe(false);
+			expect(fs.existsSync(`${jsonPath}.bak`)).toBe(true);
+		});
+		it("migrates legacy power booleans with system=true to system level", async () => {
+			await writeSettings({
+				power: {
+					preventIdleSleep: true,
+					preventSystemSleep: true,
+					declareUserActive: false,
+					preventDisplaySleep: false,
+				},
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("system");
+		});
+
+		it("migrates legacy power booleans with display=true to display level", async () => {
+			await writeSettings({
+				power: {
+					preventIdleSleep: true,
+					preventSystemSleep: false,
+					declareUserActive: false,
+					preventDisplaySleep: true,
+				},
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("display");
+		});
+
+		it("migrates legacy power booleans with declareUserActive=true to system level", async () => {
+			await writeSettings({
+				power: {
+					preventIdleSleep: true,
+					preventSystemSleep: false,
+					declareUserActive: true,
+					preventDisplaySleep: false,
+				},
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("system");
+		});
+
+		it("preserves old idle default when only non-idle keys are set", async () => {
+			// Old default was preventIdleSleep=true; user only set display=false.
+			// Migration should yield "idle", not "off".
+			await writeSettings({
+				power: { preventDisplaySleep: false },
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("idle");
+		});
+
+		it("migrates all-false power booleans to off", async () => {
+			await writeSettings({
+				power: {
+					preventIdleSleep: false,
+					preventSystemSleep: false,
+					declareUserActive: false,
+					preventDisplaySleep: false,
+				},
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("off");
+		});
+
+		it("migrates flat-key power booleans to the enum", async () => {
+			await writeSettings({
+				"power.preventIdleSleep": true,
+				"power.preventDisplaySleep": true,
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("display");
+		});
+
+		it("does not overwrite an explicit power.sleepPrevention", async () => {
+			await writeSettings({
+				power: { sleepPrevention: "off", preventIdleSleep: true },
+			});
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("power.sleepPrevention")).toBe("off");
 		});
 	});
 });

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed multi-hunk delimiter-balance repair so a `SWAP` that drops a structural closer no longer keeps it when another hunk already removed the matching opener (a deliberate wrapper removal); the missing-closer repair now weighs each group against the whole patch's residual delimiter balance — summed per hunk so quote/comment state never bleeds across non-contiguous hunks — and consumes that residual per repair so a genuine missing closer elsewhere still fires. ([#3142](https://github.com/can1357/oh-my-pi/issues/3142))
+
+## [16.1.2] - 2026-06-19
+
+### Changed
+
+- Refined documentation and prompt instructions for clarity and brevity
+
 ## [16.0.2] - 2026-06-16
 
 ### Fixed

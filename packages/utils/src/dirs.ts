@@ -185,6 +185,20 @@ export function setProjectDir(dir: string): void {
 	process.chdir(projectDir);
 }
 
+/**
+ * Whether `dir` resolves to an existing directory. Any stat failure — a deleted
+ * path (ENOENT), permission error, or a non-directory — returns `false`, so
+ * callers can decide whether a directory is safe to `chdir` into or adopt as a
+ * working directory before {@link setProjectDir} throws on it.
+ */
+export async function directoryExists(dir: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(dir)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 /** Get the config directory name relative to home (e.g. ".omp" or PI_CONFIG_DIR override). */
 export function getConfigDirName(): string {
 	return process.env.PI_CONFIG_DIR || CONFIG_DIR_NAME;

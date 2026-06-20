@@ -6,11 +6,13 @@ import type { CanonicalModelVariant } from "@oh-my-pi/pi-coding-agent/config/mod
 import {
 	type CanonicalModelRegistry,
 	expandRoleAlias,
+	extractExplicitThinkingSelector,
 	filterAvailableModelsByEnabledPatterns,
 	parseModelPattern,
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAgentModelPatterns,
+	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelFromString,
 	resolveModelOverride,
@@ -106,6 +108,37 @@ const mockOpenRouterModels: Model<Api>[] = [
 		reasoning: true,
 		input: ["text"],
 		cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+];
+
+const mockMaxSuffixModels: Model<Api>[] = [
+	buildModel({
+		id: "coding-router",
+		name: "NanoGPT Coding Router",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+	buildModel({
+		id: "coding-router:max",
+		name: "NanoGPT Coding Router Max",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128000,
 		maxTokens: 8192,
 	}),
@@ -215,6 +248,21 @@ const codexCanonicalRegistry: CanonicalModelRegistry = {
 	},
 	getCanonicalId: (model: Model<Api>) => (model.id === "gpt-5.5" ? "gpt-5.5" : undefined),
 };
+
+function createBedrockDefaultModel(): Model<"bedrock-converse-stream"> {
+	return buildModel({
+		id: "us.anthropic.claude-opus-4-8",
+		name: "Claude Opus 4.8 (US)",
+		api: "bedrock-converse-stream",
+		provider: "amazon-bedrock",
+		baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		contextWindow: 1000000,
+		maxTokens: 128000,
+	});
+}
 
 function createOpusModel(provider: string, id: string, name: string): Model<"anthropic-messages"> {
 	return buildModel({
@@ -403,6 +451,21 @@ describe("parseModelPattern", () => {
 				expect(result.warning).toBeUndefined();
 			}
 		});
+		test("max aliases the highest thinking level after the literal pattern misses", () => {
+			const result = parseModelPattern("gpt-5.3-codex:max", allModels);
+			expect(result.model?.id).toBe("gpt-5.3-codex");
+			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.explicitThinkingLevel).toBe(true);
+			expect(result.warning).toBeUndefined();
+		});
+
+		test("literal model ids ending in max win over the thinking alias", () => {
+			const result = parseModelPattern("nanogpt/coding-router:max", mockMaxSuffixModels);
+			expect(result.model?.id).toBe("coding-router:max");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
+			expect(result.warning).toBeUndefined();
+		});
 	});
 
 	describe("patterns with invalid thinking levels", () => {
@@ -483,6 +546,16 @@ describe("parseModelPattern", () => {
 			expect(result.thinkingLevel).toBe(Effort.High);
 			expect(result.explicitThinkingLevel).toBe(true);
 			expect(result.warning).toBeUndefined();
+		});
+
+		test("openrouter/<id>:max applies xhigh through the exact-selector path, not an OpenRouter route", () => {
+			// `max` is a thinking alias, never an OpenRouter route suffix: the request must
+			// resolve the base model and carry xhigh, not clone a literal `z-ai/glm-4.7:max`.
+			const result = parseModelPattern("openrouter/z-ai/glm-4.7:max", allModels);
+			expect(result.model?.provider).toBe("openrouter");
+			expect(result.model?.id).toBe("z-ai/glm-4.7");
+			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.explicitThinkingLevel).toBe(true);
 		});
 	});
 
@@ -568,6 +641,19 @@ describe("resolveModelRoleValue", () => {
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
 		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
+	test("resolves pi/<role>:max by expanding role alias before parsing thinking", () => {
+		const settings = {
+			getModelRole: (role: string) => (role === "smol" ? "openai-codex/gpt-5.3-codex" : undefined),
+		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
+
+		const result = resolveModelRoleValue("pi/smol:max", allModels, { settings });
+
+		expect(result.model?.provider).toBe("openai-codex");
+		expect(result.model?.id).toBe("gpt-5.3-codex");
+		expect(result.thinkingLevel).toBe(Effort.XHigh);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
@@ -883,6 +969,40 @@ describe("resolveCliModel", () => {
 		expect(result.model?.id).toBe("z-ai/glm-4.7-20251222:nitro");
 	});
 
+	test("accepts Bedrock inference profile ARNs and preserves thinking suffixes", () => {
+		const defaultBedrockModel = createBedrockDefaultModel();
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+
+		const baseResult = resolveCliModel({
+			cliProvider: "amazon-bedrock",
+			cliModel: profileArn,
+			modelRegistry: {
+				getAll: () => [defaultBedrockModel],
+			},
+		});
+		const offResult = resolveCliModel({
+			cliProvider: "amazon-bedrock",
+			cliModel: `${profileArn}:off`,
+			modelRegistry: {
+				getAll: () => [defaultBedrockModel],
+			},
+		});
+
+		expect(baseResult.error).toBeUndefined();
+		expect(baseResult.model?.provider).toBe("amazon-bedrock");
+		expect(baseResult.model?.api).toBe("bedrock-converse-stream");
+		expect(baseResult.model?.id).toBe(profileArn);
+		expect(baseResult.model?.name).toBe("Bedrock inference profile");
+		expect(baseResult.model?.reasoning).toBe(false);
+		expect(baseResult.model?.thinking).toBeUndefined();
+		expect(baseResult.model?.contextWindow).toBeNull();
+		expect(baseResult.model?.maxTokens).toBeNull();
+		expect(baseResult.thinkingLevel).toBeUndefined();
+		expect(offResult.error).toBeUndefined();
+		expect(offResult.model?.id).toBe(profileArn);
+		expect(offResult.thinkingLevel).toBe("off");
+	});
+
 	test("returns a clear error when there are no models", () => {
 		const registry = {
 			getAll: () => [],
@@ -981,6 +1101,49 @@ describe("resolveModelScope", () => {
 		expect(scoped[0].model.provider).toBe("openai");
 		expect(scoped[0].model.id).toBe("gpt-5.5");
 	});
+
+	test("expands exact canonical ids with max thinking aliases", async () => {
+		const scoped = await resolveModelScope(["claude-sonnet-4-5:max"], {
+			getAvailable: () => canonicalVariantModels,
+			getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) =>
+				canonicalRegistry.getCanonicalVariants!(canonicalId, options),
+		} as unknown as Parameters<typeof resolveModelScope>[1]);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped.map(entry => `${entry.model.provider}/${entry.model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"github-copilot/anthropic/claude-sonnet-4.5",
+		]);
+		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.High, Effort.High]);
+		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("applies max thinking aliases to glob scopes when no literal max ids match", async () => {
+		const registry = {
+			getAvailable: () => mockCodexOverlapModels,
+			getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+		};
+
+		const scoped = await resolveModelScope(["openai-codex/*:max"], registry);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.XHigh, Effort.XHigh]);
+		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("preserves literal :max in scoped-model globs", async () => {
+		const registry = {
+			getAvailable: () => mockMaxSuffixModels,
+			getCanonicalVariants: (_id: string, _opts?: unknown): CanonicalModelVariant[] => [],
+		};
+
+		const scoped = await resolveModelScope(["nanogpt/*:max"], registry);
+
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].model.id).toBe("coding-router:max");
+		expect(scoped[0].thinkingLevel).toBeUndefined();
+		expect(scoped[0].explicitThinkingLevel).toBe(false);
+	});
 });
 
 describe("parseModelString", () => {
@@ -1029,6 +1192,23 @@ describe("parseModelString", () => {
 			});
 		});
 
+		test("extracts max when explicitly enabled for provider id selectors", () => {
+			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxAlias: true });
+			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.XHigh });
+		});
+
+		test("preserves literal max model ids when the caller can prove they exist", () => {
+			const result = parseModelString("nanogpt/coding-router:max", {
+				allowMaxAlias: true,
+				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+			});
+			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
+		});
+
+		test("does not strip inherited object keys as thinking suffixes", () => {
+			const result = parseModelString("anthropic/claude-sonnet-4-5:constructor");
+			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:constructor" });
+		});
 		test("does not extract thinking level from model ID with invalid suffix", () => {
 			const result = parseModelString("openrouter/openai/gpt-4o:extended");
 			// :extended is not a valid thinking level, so it stays as part of the ID
@@ -1040,6 +1220,20 @@ describe("parseModelString", () => {
 			// Empty string is not a valid thinking level, so colon stays as part of ID
 			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:" });
 		});
+	});
+});
+
+describe("resolveModelFromString", () => {
+	test("applies max as a provider model selector alias after literal lookup misses", () => {
+		const result = resolveModelFromString("nanogpt/coding-router:max", [mockMaxSuffixModels[0]]);
+		expect(result?.provider).toBe("nanogpt");
+		expect(result?.id).toBe("coding-router");
+	});
+
+	test("preserves literal max provider model ids before alias parsing", () => {
+		const result = resolveModelFromString("nanogpt/coding-router:max", mockMaxSuffixModels);
+		expect(result?.provider).toBe("nanogpt");
+		expect(result?.id).toBe("coding-router:max");
 	});
 });
 
@@ -1056,6 +1250,31 @@ describe("expandRoleAlias", () => {
 		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 
 		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
+	});
+});
+
+describe("extractExplicitThinkingSelector", () => {
+	test("does not carry max from literal role model ids", () => {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+		});
+		expect(result).toBeUndefined();
+	});
+
+	test("treats max as an explicit selector when the model id is not literal", () => {
+		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
+			isLiteralModelId: () => false,
+		});
+		expect(result).toBe(Effort.XHigh);
+	});
+
+	test("treats max on pi role aliases as an explicit selector before expansion", () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("smol", "nanogpt/coding-router:max");
+		const result = extractExplicitThinkingSelector("pi/smol:max", settings, {
+			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
+		});
+		expect(result).toBe(Effort.XHigh);
 	});
 });
 
@@ -1210,6 +1429,22 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});
 
+	test("expands canonical enabledModels entries with max thinking aliases", () => {
+		const registry = {
+			getCanonicalVariants: (canonicalId: string, options?: { candidates?: Model<"anthropic-messages">[] }) =>
+				canonicalRegistry.getCanonicalVariants!(canonicalId, options),
+		};
+		const result = filterAvailableModelsByEnabledPatterns(
+			canonicalVariantModels,
+			["claude-sonnet-4-5:max"],
+			registry,
+		);
+		expect(result.map(model => `${model.provider}/${model.id}`).sort()).toEqual([
+			"anthropic/claude-sonnet-4-5",
+			"github-copilot/anthropic/claude-sonnet-4.5",
+		]);
+	});
+
 	test("strips :thinkingLevel suffix before matching", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["anthropic/claude-sonnet-4-5:high"], registry);
 		expect(result).toHaveLength(1);
@@ -1240,6 +1475,11 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].provider).toBe("anthropic");
 	});
+	test("preserves literal :max in enabledModels globs", () => {
+		const result = filterAvailableModelsByEnabledPatterns(mockMaxSuffixModels, ["nanogpt/*:max"], registry);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("coding-router:max");
+	});
 
 	test("evaluates glob patterns against bare model id", () => {
 		const result = filterAvailableModelsByEnabledPatterns(models, ["claude-*"], registry);
@@ -1266,6 +1506,36 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 		expect(result).toHaveLength(2);
 	});
 
+	test("keeps synthetic Bedrock inference profile matches", () => {
+		const bedrockModels = [createBedrockDefaultModel()];
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+
+		const result = filterAvailableModelsByEnabledPatterns(bedrockModels, [`amazon-bedrock/${profileArn}`], registry);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("amazon-bedrock");
+		expect(result[0].id).toBe(profileArn);
+		expect(result[0].reasoning).toBe(false);
+	});
+
+	test("resolveAllowedModels keeps synthetic Bedrock inference profile matches", async () => {
+		const bedrockModels = [createBedrockDefaultModel()];
+		const profileArn = "arn:aws:bedrock:us-east-2:1234567890:application-inference-profile/company-opus-48";
+		const settings = Settings.isolated({ enabledModels: [profileArn] });
+
+		const result = await resolveAllowedModels(
+			{
+				getAvailable: () => bedrockModels,
+				getCanonicalVariants: registry.getCanonicalVariants,
+			},
+			settings,
+		);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].provider).toBe("amazon-bedrock");
+		expect(result[0].id).toBe(profileArn);
+		expect(result[0].reasoning).toBe(false);
+	});
 	test("does not coalesce explicit provider/id patterns to Codex (regression for enabledModels)", () => {
 		const result = filterAvailableModelsByEnabledPatterns(openaiGpt55Models, ["openai/gpt-5.5"], registry);
 		expect(result).toHaveLength(1);

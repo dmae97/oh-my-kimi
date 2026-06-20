@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { GALLERY_STATES, renderGalleryState, resolveFixture } from "@oh-my-pi/pi-coding-agent/cli/gallery-cli";
 import type { GalleryFixture } from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
 
 beforeAll(async () => {
@@ -63,7 +63,7 @@ describe("gallery harness", () => {
 		const lines = await renderGalleryState("task", task, "error", 100);
 		const stripped = lines.map(line => Bun.stripANSI(line).trim());
 		// The framed result header carries the label inside the box border...
-		expect(stripped.some(line => line.startsWith("┌") && line.includes("Task"))).toBe(true);
+		expect(stripped.some(line => line.startsWith(theme.boxRound.topLeft) && line.includes("Task"))).toBe(true);
 		// ...but no standalone "Task" label line precedes it.
 		expect(stripped).not.toContain("Task");
 	});

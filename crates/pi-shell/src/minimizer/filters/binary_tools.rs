@@ -73,7 +73,7 @@ mod tests {
 		// 50 head + 20 tail + 1 marker = 71 lines
 		let line_count = out.text.lines().count();
 		assert_eq!(line_count, HEAD_LINES + TAIL_LINES + 1, "got {line_count} lines: {out:?}");
-		assert!(out.text.contains("lines omitted"));
+		assert!(out.text.contains("ln elided…]"));
 		// Head anchor preserved.
 		assert!(out.text.starts_with("00000000: 00000000"));
 	}
@@ -95,7 +95,7 @@ mod tests {
 		let context = ctx("strings", "strings /bin/ls", &cfg);
 		let out = filter(&context, &input, 0);
 		assert!(out.changed);
-		assert!(out.text.contains("lines omitted"));
+		assert!(out.text.contains("ln elided…]"));
 	}
 
 	#[test]
@@ -105,7 +105,7 @@ mod tests {
 		let context = ctx("od", "od -c /bin/ls", &cfg);
 		let out = filter(&context, &input, 0);
 		assert!(out.changed);
-		assert!(out.text.contains("lines omitted"));
+		assert!(out.text.contains("ln elided…]"));
 	}
 
 	#[test]

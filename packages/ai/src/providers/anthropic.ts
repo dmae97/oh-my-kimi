@@ -46,11 +46,12 @@ import type {
 import { resolveServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
-import { parseStreamingJsonThrottled } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
@@ -1003,7 +1004,8 @@ function convertContentBlocks(
 	return blocks;
 }
 
-export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicOutputEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicEffort = AnthropicOutputEffort | "adaptive";
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 export interface AnthropicOptions extends StreamOptions {
@@ -1026,11 +1028,13 @@ export interface AnthropicOptions extends StreamOptions {
 	requestModelId?: string;
 	/**
 	 * Effort level for adaptive thinking.
-	 * Controls how much thinking Claude allocates:
+	 * Controls how much Claude allocates, or uses "adaptive" for MiniMax's
+	 * binary adaptive-thinking tag:
 	 * - "max": Always thinks with no constraints
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
+	 * - "adaptive": Sends `thinking.type: "adaptive"` without `output_config.effort`
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
@@ -1481,6 +1485,10 @@ function isProviderRetryableStreamEnvelopeError(error: unknown): boolean {
 	return /stream event order|before message_start/i.test(error.message);
 }
 
+function isAnthropicTransientTransportMessage(message: string): boolean {
+	return message.includes("tls: bad record mac") || message.includes("type=server_error");
+}
+
 export function isProviderRetryableError(error: unknown, provider?: string): boolean {
 	if (!(error instanceof Error)) return false;
 	if (provider === "github-copilot" && isCopilotTransientModelError(error)) return true;
@@ -1497,7 +1505,8 @@ export function isProviderRetryableError(error: unknown, provider?: string): boo
 	const msg = error.message.toLowerCase();
 	if (
 		isUnexpectedSocketCloseMessage(msg) ||
-		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
+		isAnthropicTransientTransportMessage(msg) ||
+		/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|server_error|bad record mac|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i.test(
 			msg,
 		) ||
 		isTransientStreamParseError(error) ||
@@ -1572,7 +1581,7 @@ export function applyAnthropicUsageExtras(usage: Usage, source: AnthropicUsageLi
 	}
 }
 
-export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+const streamAnthropicOnce = (
 	model: Model<"anthropic-messages">,
 	context: Context,
 	options?: AnthropicOptions,
@@ -1650,13 +1659,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				// `output_config.effort` ships on thinking-on requests AND on the
 				// thinking-off adaptive pin (adaptive-only models get effort:"low" so
 				// the toggle cannot 400); the beta must accompany the field in both.
+				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
+				// so the sentinel "adaptive" value intentionally sends no output_config.
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
-					!model.compat.disableAdaptiveThinking;
+					!model.compat.disableAdaptiveThinking &&
+					!usesAdaptiveThinkingTagOnly(model);
 				if (
 					model.reasoning &&
-					(options?.thinkingEnabled || sendsAdaptiveEffortPin) &&
+					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
 					extraBetas.push(effortBeta);
@@ -1746,14 +1758,25 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					const finalJson =
 						block.partialJson.length > 0 ? block.partialJson : JSON.stringify(block.arguments ?? {});
 					try {
-						block.arguments = JSON.parse(finalJson) as ToolCall["arguments"];
+						block.arguments = parseJsonWithRepair(finalJson) as ToolCall["arguments"];
 					} catch (parseError) {
 						// Non-fatal: keep the best-effort arguments recovered by the throttled streaming
 						// parser instead of failing the turn on malformed/truncated tool-argument JSON.
 						reportAnthropicEnvelopeAnomaly(
 							`tool_use ${block.id} arguments are not valid JSON: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
 						);
-						block.arguments = (block.arguments ?? {}) as ToolCall["arguments"];
+						const recoveredKeys = Object.keys(block.arguments ?? {});
+						if (recoveredKeys.length === 0) {
+							const maxLen = 512;
+							const truncatedJson =
+								finalJson.length <= maxLen
+									? finalJson
+									: `${finalJson.slice(0, maxLen)}… [truncated ${finalJson.length - maxLen} chars]`;
+							block.arguments = {
+								__parseError: parseError instanceof Error ? parseError.message : String(parseError),
+								__rawJson: truncatedJson,
+							};
+						}
 					}
 					delete (block as { partialJson?: string }).partialJson;
 					delete (block as { lastParseLen?: number }).lastParseLen;
@@ -2292,6 +2315,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 	return stream;
 };
 
+/**
+ * Public entry: wrap the single-attempt streamer with bounded empty-completion
+ * retries (a benign terminal stop carrying no content/usage would otherwise
+ * stall the agent loop). The inner attempt keeps its own provider-failure retry
+ * loop; this layer only re-issues a fresh request on an empty success. Shared
+ * with the OpenAI-completions provider via `withEmptyCompletionRetry`.
+ */
+export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, context, options) =>
+	withEmptyCompletionRetry(model, context, options, streamAnthropicOnce);
+
 export type AnthropicSystemBlock = {
 	type: "text";
 	text: string;
@@ -2783,11 +2816,22 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 	}
 }
 
+function usesAdaptiveThinkingTagOnly(model: Model<"anthropic-messages">): boolean {
+	const thinking = model.thinking;
+	if (thinking?.mode !== "anthropic-adaptive") return false;
+	const effortMap = thinking.effortMap;
+	if (!effortMap) return false;
+	for (const effort of thinking.efforts) {
+		if (effortMap[effort] !== "adaptive") return false;
+	}
+	return thinking.efforts.length > 0;
+}
+
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
 ): AnthropicEffort | undefined {
-	if (options.effort) return options.effort;
+	if (options.effort) return usesAdaptiveThinkingTagOnly(model) ? "adaptive" : options.effort;
 	const requestedEffort = options.reasoning;
 	if (!requestedEffort) return undefined;
 	return mapEffortToAnthropicAdaptiveEffort(model, requestedEffort);
@@ -2854,7 +2898,7 @@ function buildParams(
 
 	// Pre-compute thinking + output_config effort.
 	let thinking: MessageCreateParamsStreaming["thinking"] | undefined;
-	let outputConfigEffort: AnthropicEffort | undefined;
+	let outputConfigEffort: AnthropicOutputEffort | undefined;
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			const mode = model.thinking?.mode;
@@ -2872,18 +2916,22 @@ function buildParams(
 					adaptive.display = options.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
-				if (effort) outputConfigEffort = effort;
+				if (effort && effort !== "adaptive") outputConfigEffort = effort;
 			} else {
 				thinking = {
 					type: "enabled",
 					budget_tokens: options.thinkingBudgetTokens || 1024,
 					display: options.thinkingDisplay ?? "summarized",
 				};
-				if (mode === "anthropic-budget-effort" && effort) outputConfigEffort = effort;
+				if (mode === "anthropic-budget-effort" && effort && effort !== "adaptive") outputConfigEffort = effort;
 			}
 		} else if (options?.thinkingEnabled === false) {
 			const compat = model.compat;
-			if (model.thinking?.mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
+			if (
+				model.thinking?.mode === "anthropic-adaptive" &&
+				!compat.disableAdaptiveThinking &&
+				!usesAdaptiveThinkingTagOnly(model)
+			) {
 				// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 				// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 				// Omit the thinking field (the API defaults to adaptive) and pin the

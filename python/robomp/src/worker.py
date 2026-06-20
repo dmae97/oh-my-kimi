@@ -484,6 +484,9 @@ def _run_rpc_blocking(
     rpc_env.update(_prepare_slot_runtime_env(inputs.workspace, inputs.slot_uid))
     rpc_env.update(_safe_directory_env(bindings.workspace.repo_dir))
     rpc_env.update(_git_identity_env(inputs.settings.resolved_author_name, inputs.settings.git_author_email))
+    # Bare worktrees have no node_modules; install (idempotently) so the agent
+    # can resolve workspace packages (@oh-my-pi/pi-*) and actually run tests.
+    host_tools.ensure_workspace_dependencies(bindings)
     resuming = _has_prior_session(bindings.workspace.session_dir)
     extra_args: tuple[str, ...] = ("--continue",) if resuming else ()
     log.info(

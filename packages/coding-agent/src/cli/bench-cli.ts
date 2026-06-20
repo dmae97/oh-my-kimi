@@ -11,7 +11,7 @@ import type {
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
-import type { CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
+import { buildModelProviderPriorityRank, type CanonicalModelVariant } from "@oh-my-pi/pi-catalog/identity";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
@@ -25,7 +25,7 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
-import { discoverAuthStorage } from "../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 import { resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const DEFAULT_RUNS = 1;
@@ -50,6 +50,7 @@ export interface BenchModelRegistry {
 	resolveCanonicalModel?(canonicalId: string, options?: CanonicalModelQueryOptions): Model<Api> | undefined;
 	getCanonicalVariants?(canonicalId: string, options?: CanonicalModelQueryOptions): CanonicalModelVariant[];
 	getCanonicalId?(model: Model<Api>): string | undefined;
+	hasConfiguredAuth?(model: Model<Api>): boolean;
 }
 
 export interface BenchRuntime {
@@ -144,6 +145,23 @@ function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
 	}
 }
 
+/** Final message carries visible output — non-empty text/thinking or a tool call. */
+function hasVisibleFinalContent(message: AssistantMessage): boolean {
+	return message.content.some(block => {
+		switch (block.type) {
+			case "text":
+				return block.text.length > 0;
+			case "thinking":
+				return block.thinking.length > 0;
+			case "redactedThinking":
+			case "toolCall":
+				return true;
+			default:
+				return false;
+		}
+	});
+}
+
 /**
  * Tokens/s over the generation window (duration minus TTFT) so queue/prefill
  * latency does not dilute throughput. Falls back to total duration when the
@@ -231,6 +249,18 @@ async function runBenchRequest(
 		const rawTtft = message.ttft ?? (firstTokenAt === undefined ? durationMs : firstTokenAt - startedAt);
 		const ttftMs = Number.isFinite(rawTtft) && rawTtft > 0 ? rawTtft : 0;
 		const outputTokens = Number.isFinite(message.usage.output) && message.usage.output > 0 ? message.usage.output : 0;
+		// A run that streamed no content (no delta/end event set firstTokenAt),
+		// carries no visible final content, and measured no output tokens
+		// benchmarked nothing — a genuinely empty stream (e.g. a gateway that 200s
+		// with an empty body). Surface it as a failure instead of a misleading
+		// 0-token "✓". Streaming and buffered providers that produce content keep
+		// passing even when usage is omitted.
+		if (firstTokenAt === undefined && outputTokens === 0 && !hasVisibleFinalContent(message)) {
+			return {
+				ok: false,
+				error: `provider returned no output (0 tokens, empty stream; stop reason: ${message.stopReason ?? "unknown"})`,
+			};
+		}
 		return {
 			ok: true,
 			ttftMs,
@@ -327,8 +357,10 @@ export function formatBenchTable(summary: BenchSummary): string {
 async function createDefaultRuntime(): Promise<BenchRuntime> {
 	const authStorage = await discoverAuthStorage();
 	try {
-		const settings = await Settings.init({ cwd: getProjectDir() });
+		const cwd = getProjectDir();
+		const settings = await Settings.init({ cwd });
 		const modelRegistry = new ModelRegistry(authStorage);
+		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 		return {
 			modelRegistry,
 			settings,
@@ -344,6 +376,56 @@ interface BenchTarget {
 	selector: string;
 	model: Model<Api>;
 	thinking: ResolvedThinkingLevel | undefined;
+}
+
+/** Highest-priority provider variant: native/OAuth transports outrank mirrors. */
+function pickHighestPriorityProvider(models: Model<Api>[], providerOrder?: readonly string[]): Model<Api> | undefined {
+	if (models.length <= 1) return models[0];
+	const priority = buildModelProviderPriorityRank(providerOrder);
+	return [...models].sort((a, b) => {
+		const aRank = priority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		const bRank = priority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
+		return aRank - bRank;
+	})[0];
+}
+
+/**
+ * Bench resolves selectors against the entire catalog (credentials are ignored),
+ * so an ambiguous id shared by several providers can land on one the user never
+ * authenticated. For non-pinned selectors, redirect to an equivalent model under
+ * a provider with configured auth. An explicit `provider/id` selector is honored
+ * verbatim — even unauthenticated — so forced benchmarking keeps working.
+ */
+function resolveAuthenticatedAlternative(
+	selector: string,
+	model: Model<Api>,
+	modelRegistry: BenchModelRegistry,
+	providerOrder?: readonly string[],
+): Model<Api> | undefined {
+	if (!modelRegistry.hasConfiguredAuth) return undefined;
+	// A pinned `provider/...` selector is authoritative; never redirect off it.
+	if (selector.trim().toLowerCase().startsWith(`${model.provider.toLowerCase()}/`)) return undefined;
+	if (modelRegistry.hasConfiguredAuth(model)) return undefined;
+
+	const seen = new Set<string>();
+	const authenticated: Model<Api>[] = [];
+	const consider = (candidate: Model<Api>): void => {
+		const key = `${candidate.provider}/${candidate.id}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		if (modelRegistry.hasConfiguredAuth?.(candidate)) authenticated.push(candidate);
+	};
+	// Canonical variants link the same logical model across providers even when
+	// ids differ (e.g. fireworks `gpt-oss-20b` <-> openrouter `openai/gpt-oss-20b`).
+	const canonicalId = modelRegistry.getCanonicalId?.(model);
+	if (canonicalId) {
+		for (const variant of modelRegistry.getCanonicalVariants?.(canonicalId) ?? []) consider(variant.model);
+	}
+	// Same-id fallback for entries outside the canonical index.
+	for (const candidate of modelRegistry.getAll()) {
+		if (candidate.id === model.id) consider(candidate);
+	}
+	return pickHighestPriorityProvider(authenticated, providerOrder);
 }
 
 function resolveBenchModels(
@@ -366,10 +448,20 @@ function resolveBenchModels(
 			continue;
 		}
 		if (result.warning) writeStderr(`${chalk.yellow(`Warning: ${result.warning}`)}\n`);
+		let model = result.model;
+		const authenticated = resolveAuthenticatedAlternative(selector, model, modelRegistry, preferences.providerOrder);
+		if (authenticated) {
+			writeStderr(
+				`${chalk.yellow(
+					`Warning: no credentials for "${model.provider}"; benchmarking ${formatModelString(authenticated)} instead. Pin "${formatModelString(model)}" to force it.`,
+				)}\n`,
+			);
+			model = authenticated;
+		}
 		resolved.push({
 			selector,
-			model: result.model,
-			thinking: resolveThinkingLevelForModel(result.model, result.thinkingLevel),
+			model,
+			thinking: resolveThinkingLevelForModel(model, result.thinkingLevel),
 		});
 	}
 	if (errors.length > 0) {

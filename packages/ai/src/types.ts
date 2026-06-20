@@ -141,18 +141,25 @@ export function resolveServiceTier(
 }
 
 /**
- * True when the (possibly scoped) tier should be sent as OpenAI's
- * `service_tier` request field for the given provider. Non-OpenAI
- * providers, unsupported tiers (`"auto"`, `"default"`), and scope
- * mismatches all return false.
+ * True when the (possibly scoped) tier should be sent on the wire as the
+ * `service_tier` request field for the given provider. OpenAI / OpenAI-Codex
+ * accept `flex`/`scale`/`priority`; Fireworks Serverless realizes only its
+ * Priority serving path (`service_tier: "priority"`) on the OpenAI-compatible
+ * chat-completions endpoint. Unsupported tiers (`"auto"`, `"default"`), other
+ * providers, and scope mismatches all return false.
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
 	provider: Provider | undefined,
 ): boolean {
-	if (provider !== "openai" && provider !== "openai-codex") return false;
 	const resolved = resolveServiceTier(serviceTier, provider);
-	return resolved === "flex" || resolved === "scale" || resolved === "priority";
+	if (provider === "openai" || provider === "openai-codex") {
+		return resolved === "flex" || resolved === "scale" || resolved === "priority";
+	}
+	if (provider === "fireworks") {
+		return resolved === "priority";
+	}
+	return false;
 }
 
 /**
@@ -236,6 +243,13 @@ export interface StreamOptions {
 	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
 	 */
 	metadata?: Record<string, unknown>;
+	/**
+	 * Config options for the thinking/response loop guard.
+	 */
+	loopGuard?: {
+		enabled?: boolean;
+		checkAssistantContent?: boolean;
+	};
 	/**
 	 * Advisory token budget for a full agentic loop. Anthropic encodes this as
 	 * `output_config.task_budget` with the `task-budgets-2026-03-13` beta header.
@@ -649,8 +663,8 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 	 * Illustrative calls/notes; the AI layer renders them into an `<examples>`
 	 * block in the model's native tool-call syntax and appends to the wire
 	 * description. Author `call`/`bad`/`good` as plain argument objects WITHOUT
-	 * `_i` — when intent tracing injects `_i` into the schema, the renderer adds
-	 * a placeholder `_i` automatically. Type each tool's `examples` against its
+	 * `i` — when intent tracing injects `i` into the schema, the renderer adds
+	 * a placeholder `i` automatically. Type each tool's `examples` against its
 	 * own schema (e.g. `readonly ToolExample<typeof schema["type"]>[]`).
 	 */
 	examples?: readonly ToolExample[];

@@ -387,7 +387,7 @@ export function diffMentalModelContent(previous: string | null, current: string,
 
 	if (out.length > maxLines) {
 		const dropped = out.length - maxLines;
-		return `${out.slice(0, maxLines).join("\n")}\n… ${dropped} more line${dropped === 1 ? "" : "s"} elided`;
+		return `${out.slice(0, maxLines).join("\n")}\n[…${dropped}ln elided…]`;
 	}
 	return out.join("\n");
 }

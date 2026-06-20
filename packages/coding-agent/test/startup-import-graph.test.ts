@@ -31,4 +31,24 @@ describe("startup import graph", () => {
 		expect(mainSource).not.toContain('from "./extensibility/plugins/marketplace"');
 		expect(starterSource).toContain('await import("./marketplace")');
 	});
+
+	it("keeps puppeteer-core/@puppeteer/browsers off the eager startup graph", async () => {
+		// The builtin tool registry (tools/index.ts) statically imports BrowserTool, which
+		// reaches attach.ts -> registry.ts -> launch.ts -> tab-supervisor.ts. A *value*
+		// import from puppeteer-core (e.g. the TargetType enum) executes puppeteer-core's
+		// barrel at boot, which re-exports the node launchers + BrowserConnector and pulls in
+		// @puppeteer/browsers (the Chromium downloader). A packaging quirk in that subtree then
+		// becomes a hard startup crash (e.g. `Cannot find module './browser-data/browser-data.js'`)
+		// instead of a recoverable ToolError on first browser use. These modules must therefore
+		// import puppeteer packages as `import type` only. tab-worker.ts is excluded: it runs
+		// solely inside the spawned browser worker, off the main startup graph.
+		const browserDir = path.join(sourceRoot, "tools", "browser");
+		const eagerFiles = ["attach.ts", "registry.ts", "launch.ts", "tab-supervisor.ts"];
+		const valueImportRe = /^import\s+(?!type\b)[^;]*?from\s+["'](?:puppeteer-core|@puppeteer\/browsers)["']/gm;
+		for (const file of eagerFiles) {
+			const src = await Bun.file(path.join(browserDir, file)).text();
+			const offenders = src.match(valueImportRe) ?? [];
+			expect(offenders, `${file} value-imports puppeteer; use \`import type\``).toEqual([]);
+		}
+	});
 });

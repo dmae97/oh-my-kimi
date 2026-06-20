@@ -39,6 +39,7 @@ export async function loginNvidia(options: OAuthController): Promise<string> {
 			baseUrl: API_BASE_URL,
 			model: VALIDATION_MODEL,
 			signal: options.signal,
+			fetch: options.fetch,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -57,4 +58,5 @@ export const nvidiaProvider = {
 	id: "nvidia",
 	name: "NVIDIA",
 	login: (cb: OAuthLoginCallbacks) => loginNvidia(cb),
+	appendApiKeyLogin: true,
 } as const satisfies ProviderDefinition;

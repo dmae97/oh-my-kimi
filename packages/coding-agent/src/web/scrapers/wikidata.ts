@@ -169,7 +169,7 @@ export const handleWikidata: SpecialHandler = async (
 				if (values.length > 0) {
 					// Limit values shown per property
 					const displayValues = values.slice(0, 10);
-					const overflow = values.length > 10 ? ` (+${values.length - 10} more)` : "";
+					const overflow = values.length > 10 ? ` […${values.length - 10} values elided…]` : "";
 					processedProperties.push(`- **${propLabel}:** ${displayValues.join(", ")}${overflow}`);
 				}
 			}
@@ -187,7 +187,7 @@ export const handleWikidata: SpecialHandler = async (
 			const maxProps = 50;
 			md += processedProperties.slice(0, maxProps).join("\n");
 			if (processedProperties.length > maxProps) {
-				md += `\n\n*...and ${processedProperties.length - maxProps} more properties*`;
+				md += `\n\n[…${processedProperties.length - maxProps} properties elided…]`;
 			}
 			md += "\n";
 		}

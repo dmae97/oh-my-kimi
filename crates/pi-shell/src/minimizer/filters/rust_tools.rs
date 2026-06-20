@@ -79,7 +79,7 @@ fn condense_rustfmt(input: &str, exit_code: i32) -> String {
 		out.push('\n');
 	}
 	if total > 3 {
-		let _ = writeln!(out, "  … {} more", total - 3);
+		let _ = writeln!(out, "  […{} files elided…]", total - 3);
 	}
 	out
 }
@@ -125,7 +125,7 @@ mod tests {
 		assert!(out.changed);
 		assert!(out.text.contains("50 files reformatted"));
 		assert!(out.text.contains("src/file_0.rs"));
-		assert!(out.text.contains("… 47 more"));
+		assert!(out.text.contains("[…47 files elided…]"));
 		// Diff bodies must be elided.
 		assert!(!out.text.contains("old line"));
 		// Savings ratio ≥ 0.7
@@ -154,7 +154,7 @@ mod tests {
 		let out = filter(&context, &input, 1);
 		assert!(out.changed);
 		// head_tail_lines(input, 80, 40) keeps 120 lines + marker.
-		assert!(out.text.contains("lines omitted"));
+		assert!(out.text.contains("ln elided…]"));
 	}
 
 	#[test]

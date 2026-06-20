@@ -563,10 +563,16 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 	} as ModelSpec<Api>);
 }
 
-function normalizeSuppressedSelector(selector: string): string {
+function normalizeSuppressedSelector(
+	selector: string,
+	hasLiveModel?: (provider: string, id: string) => boolean,
+): string {
 	const trimmed = selector.trim();
 	if (!trimmed) return trimmed;
-	const parsed = parseModelString(trimmed);
+	const parsed = parseModelString(trimmed, {
+		allowMaxAlias: true,
+		isLiteralModelId: (provider, id) => hasLiveModel?.(provider, id) === true,
+	});
 	if (!parsed) return trimmed;
 	// Retired effort-tier variant ids normalize to their collapsed logical id
 	// so persisted suppressions keyed by raw member ids still bind.
@@ -894,6 +900,7 @@ export class ModelRegistry {
 				...replacementModel,
 				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
 				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
+				omitMaxOutputTokens: replacementModel.omitMaxOutputTokens ?? existing.omitMaxOutputTokens,
 				...(supportsTools !== undefined ? { supportsTools } : {}),
 			};
 		});
@@ -1017,12 +1024,21 @@ export class ModelRegistry {
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+		const withDecoderMetadata =
+			providerConfig.discovery.type === "ollama" ||
+			providerConfig.discovery.type === "llama.cpp" ||
+			providerConfig.discovery.type === "lm-studio"
+				? models.map(model =>
+						buildModel({ ...model, imageInputDecoder: "stb", compat: model.compatConfig } as ModelSpec<Api>),
+					)
+				: models;
+
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
-			return models;
+			return withDecoderMetadata;
 		}
 
 		const contextLengthOverride = getOllamaContextLengthOverride();
-		return models.map(model => {
+		return withDecoderMetadata.map(model => {
 			const normalized =
 				model.api === "openai-completions"
 					? buildModel({
@@ -1263,7 +1279,12 @@ export class ModelRegistry {
 					models: cached?.models.map(model => model.id) ?? [],
 				});
 				this.#lastDiscoveryWarnings.delete(providerConfig.provider);
-				return cached ? cached.models.map(model => buildModel(model)) : [];
+				return cached
+					? this.#normalizeDiscoverableModels(
+							providerConfig,
+							cached.models.map(model => buildModel(model)),
+						)
+					: [];
 			}
 		}
 
@@ -1563,6 +1584,9 @@ export class ModelRegistry {
 	}
 	#applyHardcodedModelPolicies(models: Model<Api>[]): Model<Api>[] {
 		return models.map(model => {
+			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
+				model = applyModelOverride(model, { omitMaxOutputTokens: true });
+			}
 			if (model.id !== "gpt-5.4" || model.provider === "github-copilot") {
 				return model;
 			}
@@ -2155,14 +2179,20 @@ export class ModelRegistry {
 	 * Suppress a specific model selector (e.g., "provider/id") until a specific timestamp.
 	 */
 	suppressSelector(selector: string, untilMs: number): void {
-		this.#suppressedSelectors.set(normalizeSuppressedSelector(selector), untilMs);
+		this.#suppressedSelectors.set(
+			normalizeSuppressedSelector(selector, (provider, id) => this.find(provider, id) !== undefined),
+			untilMs,
+		);
 	}
 
 	/**
 	 * Check if a model selector is currently suppressed due to rate limits.
 	 */
 	isSelectorSuppressed(selector: string): boolean {
-		const normalizedSelector = normalizeSuppressedSelector(selector);
+		const normalizedSelector = normalizeSuppressedSelector(
+			selector,
+			(provider, id) => this.find(provider, id) !== undefined,
+		);
 		const suppressedUntil = this.#suppressedSelectors.get(normalizedSelector);
 		if (!suppressedUntil) return false;
 		if (suppressedUntil <= Date.now()) {

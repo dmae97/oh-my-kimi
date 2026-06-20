@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { agentLoop, agentLoopContinue, agentLoopDetailed, INTENT_FIELD } from "@oh-my-pi/pi-agent-core/agent-loop";
+import { agentLoop, agentLoopContinue, agentLoopDetailed } from "@oh-my-pi/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -12,6 +12,7 @@ import type {
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
@@ -500,6 +501,68 @@ describe("agentLoop with AgentMessage", () => {
 		if (toolEnd?.type === "tool_execution_end") {
 			expect(toolEnd.isError).toBeFalsy();
 		}
+	});
+
+	it("surfaces validation error for malformed JSON parse sentinels without leaking __rawJson", async () => {
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute() {
+				return { content: [] };
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+
+		const rawJsonPayload = `{"i": Finding getAvailable definition, "value": "hello"}${"A".repeat(1000)}`;
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "tool-1",
+							name: "echo",
+							arguments: {
+								__parseError: "Unexpected token F in JSON at position 6",
+								__rawJson: rawJsonPayload,
+							},
+						},
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("run echo")], context, config, undefined, mock.stream);
+
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Validation should have failed and reported the parse error & truncated JSON
+		const toolResultMsg = events.find(e => e.type === "message_start" && e.message.role === "toolResult") as any;
+		expect(toolResultMsg).toBeDefined();
+		const resultText = toolResultMsg.message.content[0].text;
+		expect(resultText).toContain("Tool call arguments are not valid JSON.");
+		expect(resultText).toContain("Unexpected token F");
+		expect(resultText).toContain("[truncated");
+
+		// Should have paired start and end events
+		const toolStart = events.find(e => e.type === "tool_execution_start") as any;
+		const toolEnd = events.find(e => e.type === "tool_execution_end") as any;
+		expect(toolStart).toBeDefined();
+		expect(toolEnd).toBeDefined();
+
+		// Start args must not include __rawJson
+		expect(toolStart.args).toBeDefined();
+		expect(toolStart.args.__rawJson).toBeUndefined();
+		expect(toolStart.args.__parseError).toBeDefined(); // keeps __parseError for visibility of parse failure
 	});
 
 	it("injects and strips intent when intent tracing is enabled", async () => {
@@ -1336,6 +1399,102 @@ it("refreshes tools and system prompt between same-turn model calls", async () =
 	expect(mock.calls[1]?.context.tools?.map(tool => tool.name)).toEqual(["alpha", "beta"]);
 });
 
+it("recovers from provider whitespace loop recovery without duplicating assistant messages", async () => {
+	const context: AgentContext = {
+		systemPrompt: ["You are helpful."],
+		messages: [],
+		tools: [],
+	};
+
+	const customStreamFn = (model: any, _context: any, _options: any) => {
+		const stream = new AssistantMessageEventStream();
+		const run = async () => {
+			try {
+				const mockAssistantMsg = (): AssistantMessage => ({
+					role: "assistant",
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				});
+
+				// First Attempt
+				const output1 = mockAssistantMsg();
+				stream.push({ type: "start", partial: output1 });
+
+				output1.content.push({ type: "thinking", thinking: "stale thoughts" });
+				stream.push({ type: "thinking_start", contentIndex: 0, partial: output1 });
+				stream.push({ type: "thinking_delta", contentIndex: 0, delta: "stale thoughts", partial: output1 });
+				stream.push({ type: "thinking_end", contentIndex: 0, content: "stale thoughts", partial: output1 });
+
+				output1.content.push({ type: "toolCall", id: "fc_1", name: "todo", arguments: {} });
+				stream.push({ type: "toolcall_start", contentIndex: 1, partial: output1 });
+
+				// Wait a tick to simulate async stream delivery
+				await Promise.resolve();
+
+				// Recovery event: push a start with reset content!
+				const output2 = mockAssistantMsg();
+				stream.push({ type: "start", partial: output2 });
+
+				// Second Attempt
+				output2.content.push({ type: "text", text: "Hello!" });
+				stream.push({ type: "text_start", contentIndex: 0, partial: output2 });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello!", partial: output2 });
+				stream.push({ type: "text_end", contentIndex: 0, content: "Hello!", partial: output2 });
+
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: output2,
+				});
+			} catch (err) {
+				stream.fail(err);
+			}
+		};
+		void run();
+		return stream;
+	};
+
+	const mock = createMockModel();
+	const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+	const events: AgentEvent[] = [];
+	const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, customStreamFn as any);
+
+	for await (const event of stream) {
+		events.push(event);
+	}
+
+	const messages = await stream.result();
+
+	// The final messages list should only contain one assistant message!
+	const assistantMessages = messages.filter(m => m.role === "assistant");
+	expect(assistantMessages).toHaveLength(1);
+	expect(assistantMessages[0].content).toHaveLength(1);
+	expect(assistantMessages[0].content[0].type).toBe("text");
+
+	// Event sequence checks
+	const messageStarts = events.filter(e => e.type === "message_start");
+	// Should only have 1 message_start for the user message and 1 for the assistant message
+	expect(messageStarts).toHaveLength(2);
+	expect(messageStarts[0].message.role).toBe("user");
+	expect(messageStarts[1].message.role).toBe("assistant");
+
+	// Should have message_updates
+	const updates = events.filter(e => e.type === "message_update");
+	expect(updates.length).toBeGreaterThan(0);
+});
+
 describe("agentLoop useless-flag propagation", () => {
 	async function runProbe(toolReturn: unknown): Promise<ToolResultMessage> {
 		const toolSchema = type({});
@@ -1997,5 +2156,140 @@ describe("agentLoopContinue with AgentMessage", () => {
 		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");
 		expect(finalMessage.stopReason).toBe("aborted");
 		expect(finalMessage.errorMessage).toBe("Deadline exceeded");
+	});
+});
+
+describe("agentLoop streaming snapshots", () => {
+	it("deep-clones tool-call arguments into message_update snapshots, copying only own enumerable properties", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		// Arguments carry a nested object, a nested array, primitives, and an
+		// INHERITED enumerable property. The snapshot must deep-clone the own
+		// nested structures (fresh references), pass primitives through by value,
+		// and carry only OWN enumerable data — the inherited key must never leak
+		// into the immutable view subscribers receive.
+		const inheritedProto = { inheritedKey: "from-prototype" };
+		const innerArray = [2, 3];
+		const base: Record<string, unknown> = Object.create(inheritedProto);
+		const sourceArgs: Record<string, unknown> = Object.assign(base, {
+			nestedObj: { a: 1, b: "two" },
+			nestedArr: [1, innerArray, { c: 4 }],
+			num: 42,
+			str: "hi",
+			flag: true,
+			nul: null,
+		});
+		const toolCall = { type: "toolCall" as const, id: "tc-clone", name: "noop", arguments: sourceArgs };
+
+		// Turn 0 streams the tool call; the unknown tool produces an error result
+		// and the loop calls the model again — turn 1 returns plain text so the
+		// loop terminates instead of spinning forever.
+		let turn = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			if (turn++ === 0) {
+				const partial = createAssistantMessage([toolCall], "toolUse");
+				stream.push({ type: "start", partial });
+				stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+				stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "{}", partial });
+				stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+				stream.push({ type: "done", reason: "toolUse", message: partial });
+			} else {
+				const partial = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+				stream.push({ type: "start", partial });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+				stream.push({ type: "done", reason: "stop", message: partial });
+			}
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("call noop")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const toolUpdate = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_update" }> =>
+				e.type === "message_update" &&
+				e.message.role === "assistant" &&
+				e.message.content.some(c => c.type === "toolCall"),
+		);
+		expect(toolUpdate).toBeDefined();
+		if (toolUpdate?.message.role !== "assistant") throw new Error("missing tool-call update");
+		const block = toolUpdate.message.content.find(c => c.type === "toolCall");
+		if (block?.type !== "toolCall") throw new Error("missing tool-call block");
+		const cloned: Record<string, unknown> = block.arguments;
+
+		// Fresh top-level object, not the source reference.
+		expect(cloned).not.toBe(sourceArgs);
+		// Own enumerable keys only — the inherited property must not appear.
+		expect("inheritedKey" in cloned).toBe(false);
+		expect(Object.hasOwn(cloned, "inheritedKey")).toBe(false);
+		// Nested object: deep-cloned (equal value, distinct reference).
+		expect(cloned.nestedObj).toEqual({ a: 1, b: "two" });
+		expect(cloned.nestedObj).not.toBe(sourceArgs.nestedObj);
+		// Nested array: deep-cloned recursively (distinct references at every level).
+		expect(Array.isArray(cloned.nestedArr)).toBe(true);
+		expect(cloned.nestedArr).toEqual([1, [2, 3], { c: 4 }]);
+		expect(cloned.nestedArr).not.toBe(sourceArgs.nestedArr);
+		expect((cloned.nestedArr as unknown[])[1]).not.toBe(innerArray);
+		// Primitives pass through by value.
+		expect(cloned.num).toBe(42);
+		expect(cloned.str).toBe("hi");
+		expect(cloned.flag).toBe(true);
+		expect(cloned.nul).toBeNull();
+	});
+
+	it("shares one immutable snapshot between message and assistantMessageEvent.partial on message_update", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		const livePartial = createAssistantMessage([{ type: "text", text: "Hi" }], "stop");
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			stream.push({ type: "start", partial: livePartial });
+			stream.push({ type: "text_start", contentIndex: 0, partial: livePartial });
+			stream.push({ type: "text_delta", contentIndex: 0, delta: "Hi", partial: livePartial });
+			stream.push({ type: "text_end", contentIndex: 0, content: "Hi", partial: livePartial });
+			stream.push({ type: "done", reason: "stop", message: livePartial });
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("say hi")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const update = events.find(
+			(e): e is Extract<AgentEvent, { type: "message_update" }> => e.type === "message_update",
+		);
+		expect(update).toBeDefined();
+		if (!update) throw new Error("missing message_update");
+		const ame = update.assistantMessageEvent;
+		expect("partial" in ame).toBe(true);
+		if (!("partial" in ame)) throw new Error("expected a partial-bearing assistant event");
+		// Alias contract: `message` and `assistantMessageEvent.partial` are ONE
+		// shared snapshot...
+		expect(update.message).toBe(ame.partial);
+		// ...and that snapshot is an independent deep clone of the live streaming
+		// partial, never the mutable partial object itself.
+		expect(update.message).not.toBe(livePartial);
 	});
 });

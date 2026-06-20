@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -542,6 +543,120 @@ describe("wave 3 commands", () => {
 		expect(session._todoPhases[0]?.tasks[0]?.content).toBe("Wire setup");
 		expect(fakeSessionManager._customEntries).toHaveLength(1);
 		expect(fakeSessionManager._customEntries[0]?.customType).toBe("user_todo_edit");
+	});
+
+	it("/todo export: writes the default file under the active session cwd", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-"));
+		try {
+			const { output, session, fakeSessionManager, runtime } = createRuntime();
+			fakeSessionManager._cwd = tempRoot;
+			session._todoPhases = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+
+			const result = await executeAcpBuiltinSlashCommand("/todo export", runtime);
+
+			const target = path.join(tempRoot, "TODO.md");
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Wrote todos to ${target}`);
+			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
+		} finally {
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("/todo export: writes a quoted path with spaces", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-export-quoted-"));
+		try {
+			const { output, session, runtime } = createRuntime();
+			const target = path.join(tempRoot, "todo file.md");
+			session._todoPhases = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+
+			const result = await executeAcpBuiltinSlashCommand(`/todo export "${target}"`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Wrote todos to ${target}`);
+			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
+		} finally {
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("/todo import: reads a quoted absolute path", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-import-"));
+		try {
+			const target = path.join(tempRoot, "todo file.md");
+			await fs.writeFile(target, "# Imported\n- [/] Active task\n", "utf8");
+			const { output, session, runtime } = createRuntime();
+
+			const result = await executeAcpBuiltinSlashCommand(`/todo import "${target}"`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Imported 1 phase(s), 1 task(s) from ${target}.`);
+			expect(session._todoPhases).toEqual([
+				{ name: "Imported", tasks: [{ content: "Active task", status: "in_progress" }] },
+			]);
+		} finally {
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("/todo import: reads the default file under the active session cwd", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-import-default-"));
+		try {
+			const target = path.join(tempRoot, "TODO.md");
+			await fs.writeFile(target, "# Default\n- [ ] From cwd\n", "utf8");
+			const { output, session, fakeSessionManager, runtime } = createRuntime();
+			fakeSessionManager._cwd = tempRoot;
+
+			const result = await executeAcpBuiltinSlashCommand("/todo import", runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toBe(`Imported 1 phase(s), 1 task(s) from ${target}.`);
+			expect(session._todoPhases).toEqual([
+				{ name: "Default", tasks: [{ content: "From cwd", status: "in_progress" }] },
+			]);
+		} finally {
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("/todo import: reports parse errors without committing", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pi-todo-import-invalid-"));
+		try {
+			const target = path.join(tempRoot, "TODO.md");
+			await fs.writeFile(target, "# Imported\nnot a todo\n", "utf8");
+			const { output, session, fakeSessionManager, runtime } = createRuntime();
+			fakeSessionManager._cwd = tempRoot;
+
+			const result = await executeAcpBuiltinSlashCommand("/todo import", runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toContain(`Could not parse ${target}:`);
+			expect(session._todoPhases).toEqual([]);
+		} finally {
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("/todo export: reports invalid internal-scheme paths", async () => {
+		const { output, session, runtime } = createRuntime();
+		session._todoPhases = [{ name: "Work", tasks: [{ content: "Ship it", status: "pending" }] }];
+
+		const result = await executeAcpBuiltinSlashCommand("/todo export artifact://1", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Failed to write todos:");
+		expect(output[0]).toContain("internal scheme");
+	});
+
+	it("/todo import: reports invalid internal-scheme paths", async () => {
+		const { output, session, runtime } = createRuntime();
+
+		const result = await executeAcpBuiltinSlashCommand("/todo import artifact://1", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Failed to read todos:");
+		expect(output[0]).toContain("internal scheme");
+		expect(session._todoPhases).toEqual([]);
 	});
 
 	it("/todo edit: returns TUI-only usage message", async () => {

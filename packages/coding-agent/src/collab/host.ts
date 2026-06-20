@@ -17,7 +17,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { BusChannel, AgentEvent as WireAgentEvent, SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { AgentRegistry } from "../registry/agent-registry";
+import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
@@ -94,6 +94,13 @@ function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEn
 const CONNECT_TIMEOUT_MS = 15_000;
 /** Max bytes served per fetch-transcript reply (guest re-requests from `newSize`). */
 const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
+/**
+ * Soft byte cap per `snapshot-chunk` frame. The first MB of a snapshot takes
+ * ~3s through the default relay, so a 512 KB chunk lands well under the
+ * guest's 30 s per-chunk progress timeout; oversized single entries still
+ * ship in a chunk of their own.
+ */
+const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
 
 /** Display name for this process's user in collab sessions. */
 export function collabDisplayName(ctx: InteractiveModeContext): string {
@@ -133,7 +140,7 @@ export class CollabHost {
 		return this.#link;
 	}
 
-	/** Browser deep link (`https://<relay>/#<link>`) — the relay serves the web client at `/`. */
+	/** Browser deep link for the configured collab web UI. */
 	get webLink(): string {
 		return this.#webLink;
 	}
@@ -156,15 +163,15 @@ export class CollabHost {
 		return list;
 	}
 
-	async start(relayUrl: string): Promise<void> {
+	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
 		this.#writeToken = writeToken;
 		this.#link = formatCollabLink(relayUrl, roomId, rawKey, writeToken);
-		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken);
+		this.#webLink = formatCollabWebLink(relayUrl, roomId, rawKey, writeToken, webUrl);
 		this.#viewLink = formatCollabLink(relayUrl, roomId, rawKey);
-		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey);
+		this.#webViewLink = formatCollabWebLink(relayUrl, roomId, rawKey, undefined, webUrl);
 		const parsed = parseCollabLink(this.#link);
 		if ("error" in parsed) throw new Error(parsed.error);
 		const key = await importRoomKey(rawKey);
@@ -323,9 +330,10 @@ export class CollabHost {
 		const canWrite = this.#verifyWriteToken(writeToken);
 		this.#peers.set(fromPeer, { name: cleanName, canWrite });
 
-		// Snapshot and send synchronously: no awaits between snapshot and send, so
-		// later entries/events queue behind the welcome on the same socket and the
-		// guest never sees a gap.
+		// Snapshot and send synchronously: no awaits between snapshot, welcome,
+		// and chunk sends, so subsequent broadcast frames (entry/event/state/bus)
+		// queue behind the snapshot on the same socket and the guest can't
+		// observe a gap between the snapshot fragment and live traffic.
 		const snapshot = this.#ctx.sessionManager.snapshotForReplication();
 		if (JSON.stringify(snapshot).length > WELCOME_IMAGE_STRIP_THRESHOLD) {
 			let stripped = 0;
@@ -335,18 +343,21 @@ export class CollabHost {
 			logger.info("collab welcome exceeded size threshold; stripped images", { stripped });
 		}
 		const entries = snapshot.entries.filter(isWireSessionEntry);
-		this.#socket?.send(
+		const socket = this.#socket;
+		if (!socket) return;
+		socket.send(
 			{
 				t: "welcome",
 				proto: COLLAB_PROTO,
 				header: snapshot.header,
-				entries,
 				state: this.#buildState(),
 				agents: this.#snapshotAgents(),
+				entryCount: entries.length,
 				readOnly: canWrite ? undefined : true,
 			},
 			fromPeer,
 		);
+		this.#sendSnapshotChunks(entries, fromPeer);
 		this.#ctx.session.emitNotice(
 			"info",
 			`${cleanName} joined the collab session${canWrite ? "" : " (read-only)"}`,
@@ -354,6 +365,37 @@ export class CollabHost {
 		);
 		this.#updateStatusSegment();
 		this.#scheduleStateBroadcast();
+	}
+
+	/**
+	 * Slice {@link entries} into byte-bounded `snapshot-chunk` frames targeted
+	 * at {@link fromPeer}. Every batch carries at least one entry (a single
+	 * oversize entry ships alone), and the last batch is tagged `final: true`
+	 * so the guest can finalize the replica. An empty snapshot still emits one
+	 * `final` chunk so the guest never blocks on a missing terminator.
+	 */
+	#sendSnapshotChunks(entries: (StoredSessionEntry & WireSessionEntry)[], fromPeer: number): void {
+		const socket = this.#socket;
+		if (!socket) return;
+		if (entries.length === 0) {
+			socket.send({ t: "snapshot-chunk", entries: [], final: true }, fromPeer);
+			return;
+		}
+		let i = 0;
+		while (i < entries.length) {
+			const batch: (StoredSessionEntry & WireSessionEntry)[] = [];
+			let batchBytes = 0;
+			while (i < entries.length) {
+				const entry = entries[i];
+				if (!entry) break;
+				const entryBytes = JSON.stringify(entry).length;
+				if (batch.length > 0 && batchBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) break;
+				batch.push(entry);
+				batchBytes += entryBytes;
+				i++;
+			}
+			socket.send({ t: "snapshot-chunk", entries: batch, final: i >= entries.length }, fromPeer);
+		}
 	}
 
 	#handlePrompt(text: string, images: ImageContent[] | undefined, fromPeer: number): void {
@@ -445,18 +487,24 @@ export class CollabHost {
 	}
 
 	#snapshotAgents(): AgentSnapshot[] {
-		return AgentRegistry.global()
-			.list()
-			.map(ref => ({
-				id: ref.id,
-				displayName: ref.displayName,
-				kind: ref.kind,
-				parentId: ref.parentId,
-				status: ref.status,
-				hasSessionFile: !!ref.sessionFile,
-				createdAt: ref.createdAt,
-				lastActivity: ref.lastActivity,
-			}));
+		return (
+			AgentRegistry.global()
+				.list()
+				// Advisor transcripts are local observability only; never mirror them to
+				// guests (the wire AgentSnapshot kind has no `advisor`, and guests must not
+				// be able to chat/kill/revive them).
+				.filter((ref): ref is AgentRef & { kind: "main" | "sub" } => ref.kind !== "advisor")
+				.map(ref => ({
+					id: ref.id,
+					displayName: ref.displayName,
+					kind: ref.kind,
+					parentId: ref.parentId,
+					status: ref.status,
+					hasSessionFile: !!ref.sessionFile,
+					createdAt: ref.createdAt,
+					lastActivity: ref.lastActivity,
+				}))
+		);
 	}
 
 	#scheduleAgentsBroadcast(): void {
@@ -470,6 +518,12 @@ export class CollabHost {
 	#handleAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text: string | undefined, fromPeer: number): void {
 		if (!this.#peers.get(fromPeer)?.canWrite) {
 			this.#rejectReadOnly("agent control", fromPeer);
+			return;
+		}
+		// Advisor refs are excluded from snapshots, but reject control by id defensively:
+		// a stale/malicious client must never chat/kill/revive a read-only advisor transcript.
+		if (AgentRegistry.global().get(agentId)?.kind === "advisor") {
+			this.#socket?.send({ t: "error", message: `agent ${agentId}: advisor transcripts are read-only` }, fromPeer);
 			return;
 		}
 		const fail = (err: unknown) => {

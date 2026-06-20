@@ -45,7 +45,7 @@ const limitsOnly: OutputMeta = {
 
 describe("stripOutputNotice", () => {
 	it("removes the exact notice appended by the wrapper for middle elision", () => {
-		const body = "line1\nline2\n[… 4 lines elided (215B) …]\nline7\nline8";
+		const body = "line1\nline2\n[…4ln elided…]\nline7\nline8";
 		const notice = formatOutputNotice(truncation);
 		const combined = body + notice;
 

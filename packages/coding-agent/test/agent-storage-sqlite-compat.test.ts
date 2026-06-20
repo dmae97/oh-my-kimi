@@ -1,9 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { readTableSql } from "./helpers/sqlite-inspect";
 
 const LEGACY_TIMESTAMP = 1_700_000_000;
@@ -34,18 +33,21 @@ function readSettingsRows(dbPath: string): Array<{ key: string; value: string; u
 }
 
 describe("AgentStorage SQLite compatibility", () => {
-	let tempDir = "";
+	let tempDir: TempDir;
 
 	afterEach(async () => {
+		AgentStorage.resetInstance();
 		if (tempDir) {
-			await fs.rm(tempDir, { recursive: true, force: true });
-			tempDir = "";
+			try {
+				await tempDir.remove();
+			} catch {}
+			tempDir = undefined as unknown as TempDir;
 		}
 	});
 
 	it("creates fresh storage without unixepoch defaults", async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-storage-fresh-"));
-		const dbPath = path.join(tempDir, "agent.db");
+		tempDir = TempDir.createSync("omp-agent-storage-fresh-");
+		const dbPath = path.join(tempDir.path(), "agent.db");
 
 		const storage = await AgentStorage.open(dbPath);
 		storage.recordModelUsage("openai/gpt-5");
@@ -59,8 +61,8 @@ describe("AgentStorage SQLite compatibility", () => {
 	});
 
 	it("migrates legacy settings and model usage schemas away from unixepoch defaults", async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-agent-storage-legacy-"));
-		const dbPath = path.join(tempDir, "agent.db");
+		tempDir = TempDir.createSync("omp-agent-storage-legacy-");
+		const dbPath = path.join(tempDir.path(), "agent.db");
 		const legacyDb = new Database(dbPath);
 		legacyDb.exec(`
 			CREATE TABLE schema_version (version INTEGER PRIMARY KEY);

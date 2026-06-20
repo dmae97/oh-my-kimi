@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { completeSimple, Model } from "@oh-my-pi/pi-ai";
+import { AuthStorage, type completeSimple, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { InspectImageTool } from "@oh-my-pi/pi-coding-agent/tools/inspect-image";
 import { inspectImageToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/inspect-image-renderer";
@@ -39,6 +42,7 @@ interface CreateSessionOptions {
 	availableModels?: Model<"openai-responses">[];
 	activeModel?: Model<"openai-responses">;
 	configureVisionRole?: boolean;
+	imageAttachments?: { label: string; uri: string; image: ImageContent }[];
 }
 
 interface CompleteSimpleStub {
@@ -59,7 +63,7 @@ function createSession(
 		settings.setModelRole("vision", `${model.provider}/${model.id}`);
 	}
 
-	return {
+	const session: ToolSession = {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
@@ -75,6 +79,10 @@ function createSession(
 			resolver: () => async () => apiKey,
 		} as unknown as NonNullable<ToolSession["modelRegistry"]>,
 	};
+	if (options.imageAttachments) {
+		session.getImageAttachments = () => options.imageAttachments ?? [];
+	}
+	return session;
 }
 
 function createCompleteSimpleSuccessStub(text: string): CompleteSimpleStub {
@@ -146,6 +154,126 @@ describe("InspectImageTool", () => {
 		const contentParts = (Array.isArray(content) ? content : []) as Array<{ type: string; text?: string }>;
 		expect(contentParts[0]?.type).toBe("image");
 		expect(contentParts[1]).toEqual({ type: "text", text: "Extract visible UI labels." });
+	});
+
+	it("resolves pasted image labels from current attachments without using cwd", async () => {
+		const image: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const stub = createCompleteSimpleSuccessStub("Attached image inspected");
+		const missingCwd = path.join(testDir, "missing-cwd");
+		const tool = new InspectImageTool(
+			createSession(missingCwd, visionModel, "test-key", Settings.isolated(), {
+				imageAttachments: [{ label: "Image #1", uri: "attachment://1", image }],
+			}),
+			stub.fn,
+		);
+
+		const result = await tool.execute("call-attachment-label", {
+			path: "Image #1",
+			question: "Describe the pasted image.",
+		});
+
+		expect(result.details?.imagePath).toBe("attachment://1");
+		expect(stub.calls).toHaveLength(1);
+		const request = stub.calls[0]?.[1] as { messages?: Array<{ content?: unknown }> } | undefined;
+		const attachmentContent = request?.messages?.[0]?.content;
+		const attachmentParts = (Array.isArray(attachmentContent) ? attachmentContent : []) as Array<{
+			type: string;
+			data?: string;
+		}>;
+		expect(attachmentParts[0]).toMatchObject({ type: "image", data: TINY_PNG_BASE64 });
+	});
+
+	it("resolves bracketed labels and attachment URIs deterministically", async () => {
+		const first: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const second: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const attachments = [
+			{ label: "Image #1", uri: "attachment://1", image: first },
+			{ label: "Image #2", uri: "attachment://2", image: second },
+		];
+
+		const bracketStub = createCompleteSimpleSuccessStub("First");
+		const bracketTool = new InspectImageTool(
+			createSession(testDir, visionModel, "test-key", Settings.isolated(), { imageAttachments: attachments }),
+			bracketStub.fn,
+		);
+		const bracketResult = await bracketTool.execute("call-bracket-label", {
+			path: "[Image #1, 1568x784]",
+			question: "Describe the first attachment.",
+		});
+
+		const uriStub = createCompleteSimpleSuccessStub("Second");
+		const uriTool = new InspectImageTool(
+			createSession(testDir, visionModel, "test-key", Settings.isolated(), { imageAttachments: attachments }),
+			uriStub.fn,
+		);
+		const uriResult = await uriTool.execute("call-uri-label", {
+			path: "attachment://2",
+			question: "Describe the second attachment.",
+		});
+
+		expect(bracketResult.details?.imagePath).toBe("attachment://1");
+		expect(uriResult.details?.imagePath).toBe("attachment://2");
+	});
+
+	it("reports attachment-aware errors for missing image labels", async () => {
+		const image: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const stub = createCompleteSimpleForbiddenStub();
+		const tool = new InspectImageTool(
+			createSession(testDir, visionModel, "test-key", Settings.isolated(), {
+				imageAttachments: [{ label: "Image #1", uri: "attachment://1", image }],
+			}),
+			stub.fn,
+		);
+
+		await expect(tool.execute("call-missing-label", { path: "Image #2", question: "Describe it." })).rejects.toThrow(
+			/Available image attachments: Image #1 -> attachment:\/\/1/,
+		);
+		expect(stub.calls).toHaveLength(0);
+	});
+
+	it("wires createAgentSession tool sessions to live image attachments", async () => {
+		const image: ImageContent = { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" };
+		const authStorage = await AuthStorage.create(path.join(testDir, "auth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const settings = Settings.isolated({ "compaction.enabled": false, "inspect_image.enabled": true });
+		settings.setModelRole("vision", `${visionModel.provider}/${visionModel.id}`);
+
+		try {
+			const { session } = await createAgentSession({
+				cwd: testDir,
+				agentDir: testDir,
+				sessionManager: SessionManager.inMemory(testDir),
+				settings,
+				model: visionModel,
+				modelRegistry,
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				toolNames: ["inspect_image"],
+			});
+			try {
+				session.agent.appendMessage({
+					role: "user",
+					content: [{ type: "text", text: "inspect this" }, image],
+					timestamp: Date.now(),
+				});
+
+				const tool = session.getToolByName("inspect_image");
+				expect(tool).toBeDefined();
+				const wiredToolSession = (tool as unknown as { session?: ToolSession }).session;
+				expect(wiredToolSession?.getImageAttachments?.()).toEqual([
+					{ label: "Image #1", uri: "attachment://1", image },
+				]);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			authStorage.close();
+		}
 	});
 
 	it("sends question text unchanged", async () => {

@@ -150,7 +150,7 @@ async function handleModuleUrl(
 			md += `| ${input.name} | \`${type}\` | ${required} | ${desc} |\n`;
 		}
 		if (inputs.length > 30) {
-			md += `\n*... and ${inputs.length - 30} more inputs*\n`;
+			md += `\n[…${inputs.length - 30} inputs elided…]\n`;
 		}
 		md += "\n";
 	}
@@ -165,7 +165,7 @@ async function handleModuleUrl(
 			md += "\n";
 		}
 		if (outputs.length > 20) {
-			md += `\n*... and ${outputs.length - 20} more outputs*\n`;
+			md += `\n[…${outputs.length - 20} outputs elided…]\n`;
 		}
 		md += "\n";
 	}
@@ -180,7 +180,7 @@ async function handleModuleUrl(
 			md += "\n";
 		}
 		if (deps.length > 15) {
-			md += `\n*... and ${deps.length - 15} more dependencies*\n`;
+			md += `\n[…${deps.length - 15} dependencies elided…]\n`;
 		}
 		md += "\n";
 	}
@@ -193,7 +193,7 @@ async function handleModuleUrl(
 			md += `- \`${res.type}\` (${res.name})\n`;
 		}
 		if (resources.length > 20) {
-			md += `\n*... and ${resources.length - 20} more resources*\n`;
+			md += `\n[…${resources.length - 20} resources elided…]\n`;
 		}
 		md += "\n";
 	}
@@ -205,7 +205,7 @@ async function handleModuleUrl(
 			md += `- **${sub.name}**: \`${sub.path}\`\n`;
 		}
 		if (mod.submodules.length > 10) {
-			md += `\n*... and ${mod.submodules.length - 10} more submodules*\n`;
+			md += `\n[…${mod.submodules.length - 10} submodules elided…]\n`;
 		}
 	}
 
@@ -267,7 +267,7 @@ async function handleProviderUrl(
 				md += `- [${doc.title}](https://registry.terraform.io/providers/${namespace}/${type}/latest/docs/${doc.category}/${doc.slug})\n`;
 			}
 			if (docs.length > 15) {
-				md += `\n*... and ${docs.length - 15} more*\n`;
+				md += `\n[…${docs.length - 15} documents elided…]\n`;
 			}
 			md += "\n";
 		}

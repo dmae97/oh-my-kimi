@@ -1,4 +1,11 @@
-import { type } from "arktype";
+import { scope } from "arktype";
+
+// Config schemas validate at most a handful of times per process (on config
+// load), so the eager JIT codegen ArkType runs at definition time is pure
+// startup tax. A local jitless scope skips that codegen and falls back to
+// interpreted traversal — ~65% cheaper to construct, validation correctness
+// unchanged. (No `name`: duplicate module instances would collide.)
+const { type } = scope({}, { jitless: true });
 
 const OpenRouterRoutingSchema = type({
 	"only?": "string[]",
@@ -50,6 +57,7 @@ const OpenAICompatFields = {
 	"supportsReasoningParams?": "boolean",
 	"alwaysSendMaxTokens?": "boolean",
 	"strictResponsesPairing?": "boolean",
+	"supportsImageDetailOriginal?": "boolean",
 	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
 	"requiresToolResultId?": "boolean",
 	"replayUnsignedThinking?": "boolean",

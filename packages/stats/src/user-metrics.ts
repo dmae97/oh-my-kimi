@@ -68,7 +68,7 @@ export interface UserMessageMetrics {
  * Words considered profane/aggressive. Word-boundary, case-insensitive.
  *
  * Broad English coverage: f-/s-word families and their censored variants,
- * mild swears, intelligence-based insults, body-part epithets, British/
+ * mild swears, intelligence-based insults, body-part insults, British/
  * Australian/Irish slang, religious exclamations, chat acronyms, and
  * frustration interjections. Curated to exclude racial, homophobic, and
  * other identity slurs.

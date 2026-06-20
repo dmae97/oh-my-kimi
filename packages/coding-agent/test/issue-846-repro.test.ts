@@ -11,14 +11,13 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { startMemoryStartupTask } from "@oh-my-pi/pi-coding-agent/memories";
 import * as memoryStorage from "@oh-my-pi/pi-coding-agent/memories/storage";
-import { getAgentDbPath, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, logger, Snowflake, TempDir } from "@oh-my-pi/pi-utils";
 
 interface SessionLike {
 	sessionManager: {
@@ -40,13 +39,12 @@ interface ModelRegistryLike {
 	resolver: (...args: unknown[]) => () => Promise<string>;
 }
 
-const createdDirs = new Set<string>();
+const tempDirs: TempDir[] = [];
 
-async function makeTempDir(prefix: string): Promise<string> {
-	const dir = path.join(os.tmpdir(), `${prefix}-${Snowflake.next()}`);
-	await fs.mkdir(dir, { recursive: true });
-	createdDirs.add(dir);
-	return dir;
+function makeTempDir(prefix: string): string {
+	const dir = TempDir.createSync(`@${prefix}-${Snowflake.next()}`);
+	tempDirs.push(dir);
+	return dir.path();
 }
 
 function createModel(): Model {
@@ -83,10 +81,10 @@ describe("issue #846: phase1 stage1 failures must be logged", () => {
 		vi.restoreAllMocks();
 		process.env.XDG_DATA_HOME = savedXdgData;
 		process.env.XDG_STATE_HOME = savedXdgState;
-		for (const dir of createdDirs) {
-			await fs.rm(dir, { recursive: true, force: true });
+		await Bun.sleep(0);
+		for (const dir of tempDirs.splice(0)) {
+			await dir.remove();
 		}
-		createdDirs.clear();
 	});
 
 	test("emits logger.error per failed stage1 claim with the underlying reason", async () => {

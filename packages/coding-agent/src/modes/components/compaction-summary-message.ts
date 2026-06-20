@@ -1,6 +1,6 @@
 import { Box, type Component, Markdown } from "@oh-my-pi/pi-tui";
 import { getMarkdownTheme, theme } from "../../modes/theme/theme";
-import type { CompactionSummaryMessage, CustomMessage } from "../../session/messages";
+import type { BranchSummaryMessage, CompactionSummaryMessage, CustomMessage } from "../../session/messages";
 
 interface SummaryDividerOptions {
 	label: () => string;
@@ -154,6 +154,34 @@ export function createHandoffSummaryMessageComponent(
 	const component = new HandoffSummaryMessageComponent(message);
 	component.setExpanded(expanded);
 	return component;
+}
+
+/**
+ * A branch summary collapses a side branch back into the main line. Render it
+ * with the same slim divider as `/compact` and handoff rather than a `[branch]`
+ * box, so every history-collapse point reads as one consistent banner.
+ */
+export class BranchSummaryMessageComponent implements Component {
+	#divider: SummaryDividerComponent;
+
+	constructor(private readonly message: BranchSummaryMessage) {
+		this.#divider = new SummaryDividerComponent({
+			label: () => `${theme.icon.branch} branch`,
+			detailMarkdown: () => `**Branch summary**\n\n${this.message.summary}`,
+		});
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.#divider.setExpanded(expanded);
+	}
+
+	invalidate(): void {
+		this.#divider.invalidate();
+	}
+
+	render(width: number): readonly string[] {
+		return this.#divider.render(width);
+	}
 }
 
 function getCustomMessageText(message: CustomMessage<unknown>): string {

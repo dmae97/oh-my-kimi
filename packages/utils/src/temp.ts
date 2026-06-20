@@ -78,8 +78,8 @@ function normalizePrefix(prefix?: string): string {
 }
 
 const kRemoveOptions = { recursive: true, force: true } as const;
-const kRemoveRetries = 4;
-const kRemoveRetryDelayMs = 10;
+const kRemoveRetries = 40;
+const kRemoveRetryDelayMs = 25;
 const kRetryableRemoveErrorCodes = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
 const kSleepBuffer = new Int32Array(new SharedArrayBuffer(4));
 
@@ -95,7 +95,7 @@ async function removeWithRetries(target: string): Promise<void> {
 	}
 }
 
-function removeSyncWithRetries(target: string): void {
+export function removeSyncWithRetries(target: string): void {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			fs.rmSync(target, kRemoveOptions);

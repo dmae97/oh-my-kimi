@@ -2,6 +2,7 @@
  * Tool card chrome + per-tool dispatch. Works in the collab-web app and inside
  * the `<omp-tool-view>` web component embedded in HTML session exports.
  */
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { resolveToolRenderer } from "./registry";
@@ -15,7 +16,7 @@ export interface ToolViewProps {
 	result?: ToolResultLike;
 	/** Tool is still executing (live collab view). */
 	running?: boolean;
-	/** Model-provided intent (`_i`), shown atop the body. */
+	/** Model-provided intent (`i`), shown atop the body. */
 	intent?: string;
 	/** Streaming partial output tail while running. */
 	partial?: string;
@@ -26,11 +27,11 @@ export interface ToolViewProps {
 
 function normalizeArgs(raw: unknown): { args: Record<string, unknown>; intent: string | undefined } {
 	if (!isRecord(raw)) return { args: {}, intent: undefined };
-	const intent = typeof raw._i === "string" ? raw._i.trim() : undefined;
-	if (!("_i" in raw)) return { args: raw, intent };
+	const intent = typeof raw[INTENT_FIELD] === "string" ? (raw[INTENT_FIELD] as string).trim() : undefined;
+	if (!(INTENT_FIELD in raw)) return { args: raw, intent };
 	const args: Record<string, unknown> = {};
 	for (const k in raw) {
-		if (k !== "_i") args[k] = raw[k];
+		if (k !== INTENT_FIELD) args[k] = raw[k];
 	}
 	return { args, intent };
 }

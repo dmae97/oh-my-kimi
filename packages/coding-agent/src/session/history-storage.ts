@@ -38,24 +38,23 @@ class AsyncDrain<T> {
 		let queue = this.#queue;
 		if (!queue) {
 			this.#queue = queue = [];
-			this.#promise = new Promise((resolve, reject) => {
-				const exec = () => {
-					try {
-						if (this.#queue === queue) {
-							this.#queue = undefined;
-						}
-						resolve(hnd(queue!));
-					} catch (error) {
-						reject(error);
+			const { promise, resolve, reject } = Promise.withResolvers<void>();
+			const exec = (): void => {
+				try {
+					if (this.#queue === queue) {
+						this.#queue = undefined;
 					}
-				};
-
-				if (this.delayMs > 0) {
-					setTimeout(exec, this.delayMs);
-				} else {
-					queueMicrotask(exec);
+					resolve(hnd(queue!));
+				} catch (error) {
+					reject(error);
 				}
-			});
+			};
+			if (this.delayMs > 0) {
+				setTimeout(exec, this.delayMs);
+			} else {
+				queueMicrotask(exec);
+			}
+			this.#promise = promise;
 		}
 		queue.push(value);
 		return this.#promise;
@@ -145,9 +144,21 @@ CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 		return HistoryStorage.#instance;
 	}
 
-	/** @internal Reset the singleton — test-only. */
+	/** @internal Reset the singleton and close its database — test-only. */
 	static resetInstance(): void {
+		const instance = HistoryStorage.#instance;
 		HistoryStorage.#instance = undefined;
+		if (instance) instance.#close();
+	}
+
+	#close(): void {
+		for (const stmt of this.#substringStmts.values()) stmt.finalize();
+		this.#substringStmts.clear();
+		this.#insertRowStmt.finalize();
+		this.#recentStmt.finalize();
+		this.#searchStmt.finalize();
+		this.#lastPromptStmt.finalize();
+		this.#db.close();
 	}
 
 	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {

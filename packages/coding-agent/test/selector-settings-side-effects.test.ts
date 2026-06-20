@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
+import {
+	formatTemporaryModelStatus,
+	SelectorController,
+} from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -16,6 +19,12 @@ afterEach(() => {
 });
 
 describe("selector setting side effects", () => {
+	it("formats temporary model status with role assignment guidance", () => {
+		expect(formatTemporaryModelStatus("openai/gpt-5.1", "alt+m")).toBe(
+			"Temporary model selection is session-only: openai/gpt-5.1. Use alt+m or /model for role models (default/smol/plan/task/slow/custom roles).",
+		);
+	});
+
 	it("refreshes the status line when git integration changes at runtime", () => {
 		const updateSettings = vi.fn();
 		const updateEditorTopBorder = vi.fn();

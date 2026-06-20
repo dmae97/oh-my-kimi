@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { HookEditorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/hook-editor";
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
@@ -67,8 +67,8 @@ function createControllerContext() {
 		stop: vi.fn(),
 		terminal: { columns: 120 },
 	} as unknown as TestContext["ui"] & {
-		setFocus: ReturnType<typeof vi.fn>;
-		requestRender: ReturnType<typeof vi.fn>;
+		setFocus: Mock<any>;
+		requestRender: Mock<any>;
 	};
 	const ctx = {
 		editor,

@@ -10,6 +10,7 @@
 import { describe, expect, it } from "bun:test";
 import type { Model, Usage } from "@oh-my-pi/pi-ai";
 import { formatSessionDumpText } from "@oh-my-pi/pi-coding-agent/session/session-dump-format";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 
 const ZERO_USAGE: Usage = {
@@ -93,6 +94,39 @@ describe("formatSessionDumpText tool parameters", () => {
 		expect(out).toContain("<examples>");
 		expect(out).toContain('<invoke name="find">');
 	});
+
+	it("omits the Available Tools section if inlineToolDescriptors is true", () => {
+		const out = formatSessionDumpText({
+			messages: [],
+			inlineToolDescriptors: true,
+			tools: [
+				{
+					name: "web_search",
+					description: "Searches the web.",
+					parameters: { type: "object" },
+				},
+			],
+		});
+
+		expect(out).not.toContain("## Available Tools");
+	});
+
+	it("does not falsely omit the Available Tools section even if systemPrompt contains tool headings", () => {
+		const out = formatSessionDumpText({
+			messages: [],
+			systemPrompt: ["# Inventory\nThis is a rule discussing # Tool: web_search.\nNever call it directly."],
+			inlineToolDescriptors: false,
+			tools: [
+				{
+					name: "web_search",
+					description: "Searches the web.",
+					parameters: { type: "object" },
+				},
+			],
+		});
+
+		expect(out).toContain("## Available Tools");
+	});
 });
 
 describe("formatSessionDumpText markdown-headings transcript", () => {
@@ -109,7 +143,7 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 							type: "toolCall",
 							id: "c1",
 							name: "read",
-							arguments: { _i: "Reading the file", path: "src/foo.ts" },
+							arguments: { [INTENT_FIELD]: "Reading the file", path: "src/foo.ts" },
 						},
 					],
 					api: "mock",
@@ -136,9 +170,9 @@ describe("formatSessionDumpText markdown-headings transcript", () => {
 		expect(out).toContain("### Tool Result: read");
 		expect(out).toContain("### Tool Call: read");
 		expect(out).toContain("path: src/foo.ts");
-		// The `_i` intent renders as a `//` comment under the heading, never inside the YAML args.
+		// The `i` intent renders as a `//` comment under the heading, never inside the YAML args.
 		expect(out).toContain("// Reading the file");
-		expect(out).not.toContain("_i:");
+		expect(out).not.toContain(`${INTENT_FIELD}:`);
 		// Tool calls render as a readable heading + YAML, never the <invoke>/<parameter> XML.
 		expect(out).not.toContain("<invoke ");
 		expect(out).not.toContain("<parameter ");

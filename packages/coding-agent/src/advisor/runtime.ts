@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { logger } from "@oh-my-pi/pi-utils";
-import { formatSessionHistoryMarkdown } from "../session/session-history-format";
+import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
 
 /** Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core `Agent`. */
 export interface AdvisorAgent {
@@ -42,12 +42,23 @@ interface CatchupWaiter {
 
 export class AdvisorRuntime {
 	#lastCount = 0;
+	/** Last-shown body, keyed by primary-context customType (plan/goal mode rules,
+	 *  approved plan). These prompts are re-injected verbatim every primary turn;
+	 *  this lets {@link #renderDelta} collapse an unchanged copy to a one-line
+	 *  marker so the advisor isn't re-fed the full ~1k-token rules each turn.
+	 *  Cleared on every re-prime/seed and when a failed batch is dropped. */
+	#seenContext = new Map<string, string>();
 	#pending: PendingDelta[] = [];
 	#busy = false;
 	#backlog = 0;
 	#consecutiveFailures = 0;
 	#latestMessages?: AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
+	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
+	 *  captures it before its awaits; a mismatch on resume means a reset aborted
+	 *  the in-flight advisor prompt, so the stale batch is dropped instead of
+	 *  being retried/requeued into the post-reset conversation. */
+	#epoch = 0;
 	disposed = false;
 
 	constructor(
@@ -95,6 +106,7 @@ export class AdvisorRuntime {
 
 	dispose(): void {
 		this.disposed = true;
+		this.#epoch++;
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
@@ -108,6 +120,7 @@ export class AdvisorRuntime {
 		this.#lastCount = 0;
 		this.#pending = [];
 		this.#consecutiveFailures = 0;
+		this.#seenContext.clear();
 		if (clearBacklog) {
 			this.#backlog = 0;
 		}
@@ -130,6 +143,7 @@ export class AdvisorRuntime {
 	 * leaving it blind to everything before the rewrite.
 	 */
 	reset(): void {
+		this.#epoch++;
 		this.#resetAdvisorContext(true, true);
 	}
 
@@ -143,6 +157,7 @@ export class AdvisorRuntime {
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
+		this.#seenContext.clear();
 		this.#wakeAllWaiters();
 	}
 
@@ -150,20 +165,44 @@ export class AdvisorRuntime {
 		const all = messages ?? this.#latestMessages ?? this.host.snapshotMessages();
 		if (all.length < this.#lastCount) {
 			this.#lastCount = all.length;
+			this.#seenContext.clear();
 			return null;
 		}
 		const delta = all
 			.slice(this.#lastCount)
-			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"));
+			.filter(m => !(m.role === "custom" && (m as { customType?: string }).customType === "advisor"))
+			.map(m => this.#dedupContextMessage(m));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
 		const md = formatSessionHistoryMarkdown(delta, {
 			includeThinking: true,
 			includeToolIntent: true,
 			watchedRoles: true,
+			expandPrimaryContext: true,
 		});
 		if (!md.trim()) return null;
 		return `### Session update\n\n${md}`;
+	}
+
+	/**
+	 * Collapse a re-injected primary-context prompt (plan/goal mode rules, the
+	 * approved plan) to a short marker when its body is byte-identical to the
+	 * copy already shown to the advisor since the last re-prime. The primary
+	 * re-injects these verbatim every turn; without this the advisor re-reads the
+	 * full rules (~1k tokens) each turn. Returns a CLONE when collapsing — the
+	 * input shares the live primary transcript and must never be mutated.
+	 */
+	#dedupContextMessage(msg: AgentMessage): AgentMessage {
+		if (msg.role !== "custom") return msg;
+		const type = (msg as { customType?: string }).customType;
+		if (!type || !PRIMARY_CONTEXT_CUSTOM_TYPES.has(type)) return msg;
+		const content = (msg as { content?: unknown }).content;
+		if (typeof content !== "string") return msg;
+		if (this.#seenContext.get(type) === content) {
+			return { ...(msg as object), content: "(unchanged — still in effect)" } as AgentMessage;
+		}
+		this.#seenContext.set(type, content);
+		return msg;
 	}
 
 	#notifyWaiters(): void {
@@ -187,6 +226,7 @@ export class AdvisorRuntime {
 		try {
 			while (!this.disposed && this.#pending.length) {
 				const popped = this.#pending.splice(0);
+				const epoch = this.#epoch;
 				// Each delta already opens with a `### Session update` heading, so
 				// join with a blank line rather than a `---` rule.
 				const candidateBatch = popped.map(b => b.text).join("\n\n");
@@ -205,6 +245,8 @@ export class AdvisorRuntime {
 						logger.debug("advisor context maintenance failed", { err: String(err) });
 					}
 				}
+				// A reset/dispose during context maintenance invalidates this batch.
+				if (this.#epoch !== epoch) continue;
 
 				let batch: string | null;
 				let finalTurns: number;
@@ -231,11 +273,20 @@ export class AdvisorRuntime {
 					success = true;
 					this.#consecutiveFailures = 0;
 				} catch (err) {
+					// reset()/dispose() aborts the in-flight prompt; the rejection is the
+					// reset itself, not a transient advisor failure. Drop the stale batch
+					// (reset already cleared #pending and rewound the cursor) instead of
+					// requeuing it into the post-reset conversation.
+					if (this.#epoch !== epoch) continue;
 					logger.debug("advisor turn failed", { err: String(err) });
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
 						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
 						this.#consecutiveFailures = 0;
+						// The dropped batch may carry primary-context we never delivered; drop
+						// the seen-state too so the next turn re-expands it instead of marking
+						// it "unchanged" against content the advisor never received.
+						this.#seenContext.clear();
 						success = true;
 					} else {
 						this.#pending.unshift({ text: batch, turns: finalTurns });
@@ -243,7 +294,7 @@ export class AdvisorRuntime {
 					}
 				}
 
-				if (success) {
+				if (success && this.#epoch === epoch) {
 					this.#backlog = Math.max(0, this.#backlog - finalTurns);
 					this.#notifyWaiters();
 				}

@@ -25,15 +25,15 @@
  *    13.5k non-loop thinking blocks (zero false positives; hardest negative
  *    scored 3 against the trigger of 4).
  *
- * Scope is deliberately narrow: **thinking only**. Answer text is left
- * untouched so the guard can never discard already-streamed visible output. The
- * guard is gated to Gemini models and wraps the provider stream, so it works
- * across every Gemini transport (OpenRouter `openai-completions`, direct
- * `google-generative-ai` / `google-gemini-cli`, Vertex). Disable with
+ * Scope is narrow: guarded Gemini/DeepSeek streams before any tool call. Native
+ * thinking is checked first; assistant text can also be checked for providers
+ * that surface reasoning as visible prose. On a hit, the failed turn is emitted
+ * as an empty retryable stream-stall error so the session drops and re-samples
+ * it instead of committing the runaway transcript. Disable with
  * `PI_NO_THINKING_LOOP_GUARD=1`.
  */
 import { logger } from "@oh-my-pi/pi-utils";
-import type { Api, AssistantMessage, Model } from "../types";
+import type { Api, AssistantMessage, Model, StreamOptions } from "../types";
 import { AssistantMessageEventStream } from "./event-stream";
 
 /** Stable lead phrase of the guard's error message; exported for tests. The
@@ -71,22 +71,32 @@ const OPENAI_COMPAT_GUARDED_APIS: Partial<Record<Api, true>> = {
 };
 
 /**
- * True when `model` should be guarded for thinking loops (Gemini only).
+ * True when `model` should be guarded for thinking/response loops (Gemini & DeepSeek).
  *
- * OpenAI-compat transports can serve Gemini under an arbitrary provider/id, so
- * for those we trust the family-derived (and user-overridable)
- * `compat.enableGeminiThinkingLoopGuard` flag set by the catalog. Direct Google
- * transports always carry a clearly gemini-shaped id/provider, so a string
- * match is sufficient (and works for hand-built models without a compat record).
+ * OpenAI-compat transports can serve Gemini or DeepSeek under an arbitrary provider/id.
+ * Direct Gemini/DeepSeek transports carry a clearly shaped id/provider, so a string match
+ * is sufficient.
  */
-export function isGeminiThinkingLoopModel(model: Model<Api>): boolean {
+export function isLoopGuardedModel(model: Model<Api>, options?: StreamOptions): boolean {
+	const optEnabled = options?.loopGuard?.enabled;
+	if (optEnabled === false) return false;
+
+	let isTargetModel = false;
 	if (OPENAI_COMPAT_GUARDED_APIS[model.api]) {
-		return (
-			(model.compat as { enableGeminiThinkingLoopGuard?: boolean } | undefined)?.enableGeminiThinkingLoopGuard ===
-			true
-		);
+		const compat = model.compat as { enableGeminiThinkingLoopGuard?: boolean } | undefined;
+		const isGemini = compat?.enableGeminiThinkingLoopGuard === true;
+		const isDeepseek = /deepseek/i.test(`${model.provider}/${model.id}`);
+		isTargetModel = isGemini || isDeepseek;
+	} else {
+		isTargetModel = /gemini|deepseek/i.test(`${model.provider}/${model.id}`);
 	}
-	return /gemini/i.test(`${model.provider}/${model.id}`);
+
+	return isTargetModel;
+}
+
+/** @deprecated Use isLoopGuardedModel instead. */
+export function isGeminiThinkingLoopModel(model: Model<Api>): boolean {
+	return isLoopGuardedModel(model);
 }
 
 /**
@@ -188,42 +198,52 @@ export function guardThinkingLoopStream(
 	inner: AssistantMessageEventStream,
 	model: Model<Api>,
 	controller: AbortController,
+	options?: StreamOptions,
 ): AssistantMessageEventStream {
 	const outer = new AssistantMessageEventStream();
-	const detector = new ThinkingLoopDetector();
+	const thinkingDetector = new ThinkingLoopDetector();
+	const textDetector = new ThinkingLoopDetector();
+	const checkAssistantContent = options?.loopGuard?.checkAssistantContent !== false;
 
 	void (async () => {
-		// Once any visible answer text or tool call starts, disarm: some providers
-		// (e.g. openai-completions with cumulative `reasoning_content`) re-emit
-		// fresh thinking deltas after `</think>`, and tripping the retriable path
-		// then would discard already-streamed observable output.
-		let armed = true;
+		let thinkingArmed = true;
+		let textArmed = checkAssistantContent;
 		try {
 			for await (const event of inner) {
 				let detail: string | null = null;
-				if (armed && event.type === "thinking_delta") {
-					detail = detector.push(event.delta);
-				} else if (armed && (event.type === "thinking_end" || event.type === "done")) {
-					// Final paragraph of the block has no trailing blank line; flush it
-					// so the segment that completes a cluster is not dropped. `done`
-					// is the backstop for providers that omit a trailing thinking_end.
-					detail = detector.flush();
-				} else if (
-					event.type === "text_start" ||
-					event.type === "text_delta" ||
-					event.type === "toolcall_start" ||
-					event.type === "toolcall_delta"
-				) {
-					armed = false;
+				if (thinkingArmed && event.type === "thinking_delta") {
+					detail = thinkingDetector.push(event.delta);
+				} else if (thinkingArmed && event.type === "thinking_end") {
+					detail = thinkingDetector.flush();
+					thinkingArmed = false;
+				} else if (event.type === "text_start" || event.type === "text_delta") {
+					thinkingArmed = false;
+					if (textArmed && event.type === "text_delta") {
+						detail = textDetector.push(event.delta);
+					}
+				} else if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
+					thinkingArmed = false;
+					textArmed = false;
+				} else if (event.type === "done") {
+					if (thinkingArmed) {
+						detail = thinkingDetector.flush();
+					}
+					if (textArmed) {
+						detail = detail || textDetector.flush();
+					}
 				}
 				if (detail) {
-					logger.warn("Gemini thinking loop detected; aborting stream for retry.", {
+					logger.warn("Thinking loop detected; aborting stream for retry.", {
 						model: model.id,
 						provider: model.provider,
 						detail,
 					});
 					controller.abort(new Error(THINKING_LOOP_ERROR_MARKER));
-					outer.push({ type: "error", reason: "error", error: buildThinkingLoopError(model, detail) });
+					outer.push({
+						type: "error",
+						reason: "error",
+						error: buildThinkingLoopError(model, detail),
+					});
 					return;
 				}
 				outer.push(event);
@@ -245,31 +265,34 @@ export function guardThinkingLoopStream(
 }
 
 /**
- * Apply the Gemini loop guard around a provider dispatch. For non-Gemini models
- * (or when disabled) this is a transparent pass-through. For Gemini it injects a
+ * Apply the loop guard around a provider dispatch. For non-guarded models
+ * (or when disabled) this is a transparent pass-through. For guarded models it injects a
  * guard abort signal into the provider call so a detected loop tears down the
  * upstream, then wraps the returned stream.
  */
-export function withGeminiThinkingLoopGuard<O extends { signal?: AbortSignal }>(
+export function withGeminiThinkingLoopGuard<
+	O extends { signal?: AbortSignal; loopGuard?: { enabled?: boolean; checkAssistantContent?: boolean } },
+>(
 	model: Model<Api>,
 	options: O | undefined,
 	dispatch: (options: O | undefined) => AssistantMessageEventStream,
 ): AssistantMessageEventStream {
-	if (process.env.PI_NO_THINKING_LOOP_GUARD === "1" || !isGeminiThinkingLoopModel(model)) {
+	if (process.env.PI_NO_THINKING_LOOP_GUARD === "1" || !isLoopGuardedModel(model, options)) {
 		return dispatch(options);
 	}
 	const controller = new AbortController();
 	const caller = options?.signal;
 	const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
 	const merged = { ...(options ?? {}), signal } as O;
-	return guardThinkingLoopStream(dispatch(merged), model, controller);
+	return guardThinkingLoopStream(dispatch(merged), model, controller, options);
 }
 
 function buildThinkingLoopError(model: Model<Api>, detail: string): AssistantMessage {
 	return {
 		role: "assistant",
-		// Empty content is load-bearing: a contentful error stop is replay-unsafe
-		// and would NOT be auto-retried by the session.
+		// Empty content is load-bearing: loop-guard output is replay garbage, even
+		// when it arrived as assistant text instead of native thinking. Keeping it
+		// would persist the failed attempt before AgentSession retries.
 		content: [],
 		api: model.api,
 		provider: model.provider,
@@ -285,7 +308,7 @@ function buildThinkingLoopError(model: Model<Api>, detail: string): AssistantMes
 		stopReason: "error",
 		// "stream stall" makes the transport/session retry classifiers treat this
 		// as a transient (retryable) failure with no bespoke rule.
-		errorMessage: `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical reasoning (${detail}). Treating as a stream stall and retrying.`,
+		errorMessage: `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content (${detail}). Treating as a stream stall and retrying.`,
 		timestamp: Date.now(),
 	};
 }
@@ -320,14 +343,15 @@ function detectVerbatimRepetition(text: string): [unit: string, count: number] |
 	return null;
 }
 
-/** Lowercase, drop code spans / paths / digits, keep only letter words. */
+/** Lowercase and tokenize prose plus code/path payloads, dropping pure numbers. */
 function normalizeSegment(segment: string): string {
 	return segment
 		.toLowerCase()
-		.replace(/`[^`]*`/g, " ")
-		.replace(/\/[^\s`]+/g, " ")
-		.replace(/\d+/g, " ")
-		.replace(/[^a-z]+/g, " ")
+		.replace(/`([^`]*)`/g, " $1 ")
+		.replace(/[^a-z0-9]+/g, " ")
+		.split(/\s+/)
+		.filter(token => /[a-z]/.test(token))
+		.join(" ")
 		.trim();
 }
 

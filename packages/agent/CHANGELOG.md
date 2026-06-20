@@ -1,6 +1,55 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `buildSideRequestContext` to the `Agent` class to build prompt-cache-friendly provider Contexts for side-channels or ephemeral requests.
+
+### Changed
+
+- Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
+
+### Added
+
+- Added `compactionContextTokens(providerContextTokens, storedConversationEstimate)`: floors the provider-reported context tokens by a local estimate of the stored conversation for the compaction decision, so a `before_provider_request` payload transform (a compression extension, obfuscator, or inline snapcompact) that shrinks the request can no longer deflate provider usage below the true history size and suppress auto-compaction.
+
+## [16.1.5] - 2026-06-19
+
+### Fixed
+
+- Wire-encoded `normalizeTools` parameters unconditionally so tools whose `intent` resolves to `"omit"` (function intent or `intent: "omit"`, e.g. builtin `eval` / `resolve`) no longer leak raw arktype/zod schema objects in `parameters` ([#3074](https://github.com/can1357/oh-my-pi/issues/3074))
+
+## [16.1.2] - 2026-06-19
+
+### Fixed
+
+- Prevented sensitive raw JSON payloads from leaking into agent events during tool validation
+- Ensured tool validation errors are handled correctly for malformed JSON parse inputs
+- Ensure deep-cloning of tool-call arguments respects own enumerable properties
+- Prevent direct object references between agent message snapshots and streaming events
+
+## [16.1.0] - 2026-06-19
+
+### Added
+
+- Added `SoftToolRequirement` support to `getToolChoice`: a host can require a tool by returning a soft requirement instead of a hard `ToolChoice`. The loop injects the supplied reminder once (leaving `tool_choice` on auto), and escalates to a one-turn forced choice — skipping any detour tool batch — only if the model fails to call the required tool, avoiding the provider message-cache invalidation of forcing every turn.
+- Added `pruneToolDescriptions` option to reduce token usage by stripping tool descriptions from provider-bound specs
+
+### Fixed
+
+- Improved token estimation accuracy for compaction summaries containing multi-block content
+
+## [16.0.11] - 2026-06-19
+
+### Changed
+
+- Updated the display format for truncated file operation summaries
+
+## [16.0.8] - 2026-06-18
+
+### Fixed
+
+- Stopped the compaction `<files>` summary from tracking `scheme://` URLs — internal URIs (`conflict://`, `artifact://`, `local://`, `history://`, …) and web URLs are no longer recorded as files, and legacy entries rehydrated from older compaction summaries are dropped.
 
 ## [16.0.6] - 2026-06-18
 

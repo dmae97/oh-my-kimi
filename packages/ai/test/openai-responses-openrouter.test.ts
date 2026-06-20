@@ -2,7 +2,15 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { Context, FetchImpl, Model, ModelSpec, OpenAICompat, StreamOptions } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Context,
+	FetchImpl,
+	Model,
+	ModelSpec,
+	OpenAICompat,
+	StreamOptions,
+} from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 
@@ -13,18 +21,30 @@ const context: Context = {
 
 function createSseResponse(): Response {
 	return new Response(
-		`data: ${JSON.stringify({
-			type: "response.completed",
-			response: {
-				status: "completed",
-				usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0 } },
-			},
-		})}\n\n`,
+		`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}\n\n` +
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n` +
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 1,
+						output_tokens: 1,
+						total_tokens: 2,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			})}\n\n`,
 		{ status: 200, headers: { "content-type": "text/event-stream" } },
 	);
 }
 function createChatDoneResponse(): Response {
-	return new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+	return new Response(
+		`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }] })}\n\n` +
+			`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n` +
+			`data: [DONE]\n\n`,
+		{ status: 200, headers: { "content-type": "text/event-stream" } },
+	);
 }
 
 function buildOpenRouterModel(
@@ -323,6 +343,82 @@ describe("OpenRouter Responses request shape", () => {
 		expect(headers.get("X-OpenRouter-Title")).toBe("Caller App");
 		expect(headers.get("X-OpenRouter-Cache")).toBe("false");
 		expect(headers.get("X-OpenRouter-Cache-TTL")).toBe("7");
+	});
+
+	it("replays native Responses history after a pseudo OpenRouter turn", async () => {
+		const nativeItem = {
+			type: "reasoning",
+			id: "rs_1",
+			encrypted_content: "encrypted-reasoning",
+			summary: [],
+		};
+		const replayItem = {
+			type: nativeItem.type,
+			encrypted_content: nativeItem.encrypted_content,
+			summary: nativeItem.summary,
+		};
+		const firstResponse = new Response(
+			`${[
+				`data: ${JSON.stringify({ type: "response.output_item.done", item: nativeItem })}`,
+				`data: ${JSON.stringify({
+					type: "response.completed",
+					response: {
+						status: "completed",
+						usage: {
+							input_tokens: 1,
+							output_tokens: 1,
+							total_tokens: 2,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				})}`,
+			].join("\n\n")}\n\n`,
+			{ status: 200, headers: { "content-type": "text/event-stream" } },
+		);
+		const bodies: Record<string, unknown>[] = [];
+		const fetchMock: FetchImpl = vi
+			.fn()
+			.mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
+				bodies.push(typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {});
+				return firstResponse;
+			})
+			.mockImplementationOnce(async (_input: string | URL | Request, init?: RequestInit) => {
+				bodies.push(typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {});
+				return createSseResponse();
+			}) as FetchImpl;
+		const model = buildOpenRouterModel({ id: "anthropic/claude-sonnet-4", reasoning: true });
+		const responseModel = model as unknown as Model<"openai-responses">;
+
+		let firstMessage: AssistantMessage | undefined;
+		const firstStream = streamOpenAIResponses(responseModel, context, { apiKey: "test-key", fetch: fetchMock });
+		for await (const event of firstStream) {
+			if (event.type === "done") {
+				firstMessage = event.message;
+				break;
+			}
+			if (event.type === "error") throw event.error;
+		}
+
+		expect(firstMessage?.api).toBe("openrouter");
+		expect(firstMessage?.providerPayload).toMatchObject({
+			type: "openaiResponsesHistory",
+			provider: "openrouter",
+			items: [nativeItem],
+		});
+
+		const followup: Context = {
+			messages: [firstMessage!, { role: "user", content: "continue", timestamp: 1 }],
+		};
+		const secondStream = streamOpenAIResponses(responseModel, followup, { apiKey: "test-key", fetch: fetchMock });
+		for await (const event of secondStream) {
+			if (event.type === "done") break;
+			if (event.type === "error") throw event.error;
+		}
+
+		expect(bodies[1]?.input).toEqual([
+			replayItem,
+			{ role: "user", content: [{ type: "input_text", text: "continue" }] },
+		]);
 	});
 });
 

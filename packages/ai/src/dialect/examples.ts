@@ -9,7 +9,7 @@ export function renderToolExamples(tool: InbandTool, dialect: Dialect, intentFie
 	if (!examples?.length) return "";
 	const definition = getDialectDefinition(dialect);
 	const renderCall = (args: Record<string, unknown>): string => {
-		// When intent tracing injects `_i` into the schema, examples must show a
+		// When intent tracing injects `i` into the schema, examples must show a
 		// placeholder so the model learns to emit it. Keep it first, matching the
 		// schema injection order.
 		const finalArgs = intentField ? { [intentField]: INTENT_PLACEHOLDER, ...args } : args;

@@ -15,6 +15,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
@@ -541,6 +542,29 @@ describe("openai-completions compatibility", () => {
 			{ role: "user", content: "hello" },
 		]);
 	});
+	it("coalesces system blocks for the bundled Fireworks Qwen model (Qwen template rejects multiple)", () => {
+		// Repro of the live `fireworks/qwen3.7-plus` 500: the Qwen 3.5+ chat
+		// template `internal_server_error`s when more than one leading system
+		// block is present, and Fireworks was previously on the multi-system
+		// allowlist. The bundled entry must auto-detect single-system.
+		const model = getBundledModel<"openai-completions">("fireworks", "qwen3.7-plus");
+		expect(model.compat.supportsMultipleSystemMessages).toBe(false);
+
+		const messages = convertMessages(
+			model,
+			{
+				systemPrompt: ["stable instructions", "cacheable policy"],
+				messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+			},
+			model.compat,
+		);
+
+		expect(messages.filter(m => m.role === "system")).toHaveLength(1);
+		expect(messages.slice(0, 2)).toEqual([
+			{ role: "system", content: "stable instructions\n\ncacheable policy" },
+			{ role: "user", content: "hello" },
+		]);
+	});
 
 	it("reads usage from choice usage fallback", async () => {
 		const model: Model<"openai-completions"> = buildModel({
@@ -878,6 +902,71 @@ describe("openai-completions compatibility", () => {
 		expect(assistantObject).toBeDefined();
 		expect(assistantObject?.reasoning_text).toBe("inspect tool output");
 		expect(assistantObject?.reasoning_content).toBeUndefined();
+	});
+
+	it("maps MiMo unsupported reasoning efforts to opencode-go accepted wire values", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			id: "mimo-v2.5-pro",
+			name: "MiMo V2.5 Pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+
+		const minimalPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "minimal" }),
+		);
+		const xhighPayload = toObject(
+			await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" }),
+		);
+
+		expect(minimalPayload ? Reflect.get(minimalPayload, "reasoning_effort") : undefined).toBe("low");
+		expect(xhighPayload ? Reflect.get(xhighPayload, "reasoning_effort") : undefined).toBe("high");
+		const collapsedModel: Model<"openai-completions"> = buildModel({
+			id: "mimo-v2.5-pro",
+			name: "MiMo V2.5 Pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+			requestModelId: "mimo-v2.5-pro",
+			reasoning: true,
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.Medium, Effort.High],
+				effortRouting: {
+					off: "mimo-v2.5-pro",
+					[Effort.Low]: "mimo-v2.5-pro-thinking",
+					[Effort.Medium]: "mimo-v2.5-pro-thinking",
+					[Effort.High]: "mimo-v2.5-pro-thinking",
+				},
+			},
+			compat: { reasoningEffortMap: { minimal: "low", xhigh: "high" } },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 32000,
+		});
+		const collapsedMinimalPayload = toObject(
+			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "minimal" }),
+		);
+		const collapsedXhighPayload = toObject(
+			await captureOpenAICompletionsPayload(collapsedModel, baseContext(), { reasoning: "xhigh" }),
+		);
+		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "model") : undefined).toBe(
+			"mimo-v2.5-pro-thinking",
+		);
+		expect(collapsedMinimalPayload ? Reflect.get(collapsedMinimalPayload, "reasoning_effort") : undefined).toBe(
+			"low",
+		);
+		expect(collapsedXhighPayload ? Reflect.get(collapsedXhighPayload, "model") : undefined).toBe(
+			"mimo-v2.5-pro-thinking",
+		);
+		expect(collapsedXhighPayload ? Reflect.get(collapsedXhighPayload, "reasoning_effort") : undefined).toBe("high");
 	});
 });
 
@@ -2005,5 +2094,102 @@ describe("openrouterVariant request integration", () => {
 		});
 		const payload = await promise;
 		expect((payload as { model?: string }).model).toBe(model.id);
+	});
+});
+
+describe("Moonshot Flavored JSON Schema tool normalization", () => {
+	const mfjsProbeTools: Tool[] = [
+		{
+			name: "github",
+			description: "gh",
+			parameters: {
+				type: "object",
+				properties: {
+					op: {
+						anyOf: [
+							{ const: "pr_checkout", description: "github operation" },
+							{ const: "pr_create", description: "github operation" },
+						],
+						description: "github operation",
+					},
+				},
+				required: ["op"],
+				additionalProperties: false,
+			},
+		},
+		{
+			name: "find",
+			description: "find",
+			parameters: {
+				type: "object",
+				properties: {
+					paths: { type: "array", description: "globs", minItems: 1, items: { type: "string" } },
+				},
+				required: ["paths"],
+				additionalProperties: false,
+			},
+		},
+	];
+
+	function toolParameters(payload: unknown, toolName: string): Record<string, unknown> {
+		const tools = toObject(payload)?.tools;
+		if (!Array.isArray(tools)) throw new Error("payload tools missing");
+		for (const entry of tools) {
+			const fn = getNestedObject(entry, "function");
+			if (fn?.name === toolName) {
+				const params = toObject(fn.parameters);
+				if (!params) throw new Error(`tool ${toolName} has no parameters`);
+				return params;
+			}
+		}
+		throw new Error(`tool ${toolName} not in payload`);
+	}
+
+	function probeProperty(payload: unknown, toolName: string, prop: string): Record<string, unknown> {
+		const properties = toObject(toolParameters(payload, toolName).properties);
+		const node = toObject(properties?.[prop]);
+		if (!node) throw new Error(`property ${prop} missing on ${toolName}`);
+		return node;
+	}
+
+	function moonshotKimiModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			id: "kimi-k2.5",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	function genericNonStrictModel(): Model<"openai-completions"> {
+		return buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+			provider: "vllm",
+			baseUrl: "http://localhost:8000/v1",
+			id: "local-model",
+		} as ModelSpec<"openai-completions">);
+	}
+
+	it("rewrites tool schemas to MFJS on native Moonshot hosts", async () => {
+		const model = moonshotKimiModel();
+		expect(model.compat.toolSchemaFlavor).toBe("moonshot-mfjs");
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const op = probeProperty(payload, "github", "op");
+		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
+		const paths = probeProperty(payload, "find", "paths");
+		expect(paths.minItems).toBeUndefined();
+		expect(paths.type).toBe("array");
+	});
+
+	it("leaves raw JSON Schema untouched on non-Moonshot hosts (flag-gated)", async () => {
+		const model = genericNonStrictModel();
+		expect(model.compat.toolSchemaFlavor).toBeUndefined();
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		const op = probeProperty(payload, "github", "op");
+		expect(Array.isArray(op.anyOf)).toBe(true);
+		const paths = probeProperty(payload, "find", "paths");
+		expect(paths.minItems).toBe(1);
 	});
 });

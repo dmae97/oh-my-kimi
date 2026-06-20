@@ -262,7 +262,7 @@ width models in measure-vs-slice produced crashes.
 
 - Fast path: printable ASCII is one cell per code unit.
 - Anything past the ASCII prefix measures through `Bun.stringWidth` (CSI/OSC
-  stripped to zero); tabs are added back at `getDefaultTabWidth()` columns.
+  stripped to zero); tabs are added back at the fixed `DEFAULT_TAB_WIDTH` columns.
 - OSC 66 sized spans are added back as `scale × (explicit w ?? payload width)` —
   `Bun.stringWidth` would otherwise strip the whole span to zero.
 

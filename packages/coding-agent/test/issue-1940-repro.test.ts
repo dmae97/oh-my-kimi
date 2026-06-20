@@ -5,6 +5,7 @@ import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "@oh-my-pi/
 class FakeTinyWorker {
 	terminated = false;
 	#messageHandlers = new Set<(message: TinyTitleWorkerOutbound) => void>();
+	#errorHandlers = new Set<(error: Error) => void>();
 	#onSend: (message: TinyTitleWorkerInbound, worker: FakeTinyWorker) => void;
 
 	constructor(onSend: (message: TinyTitleWorkerInbound, worker: FakeTinyWorker) => void) {
@@ -20,8 +21,9 @@ class FakeTinyWorker {
 		return () => this.#messageHandlers.delete(handler);
 	}
 
-	onError(): () => void {
-		return () => {};
+	onError(handler: (error: Error) => void): () => void {
+		this.#errorHandlers.add(handler);
+		return () => this.#errorHandlers.delete(handler);
 	}
 
 	async terminate(): Promise<void> {
@@ -30,6 +32,10 @@ class FakeTinyWorker {
 
 	emit(message: TinyTitleWorkerOutbound): void {
 		for (const handler of this.#messageHandlers) handler(message);
+	}
+
+	emitError(error: Error): void {
+		for (const handler of this.#errorHandlers) handler(error);
 	}
 }
 
@@ -63,31 +69,23 @@ describe("tiny title client prompt options", () => {
 });
 
 describe("issue #1940 — local model failures release the worker process", () => {
-	it("recycles the tiny-model worker after model execution returns an error", async () => {
+	it("releases the failed worker and suppresses repeated local model attempts", async () => {
 		const first = new FakeTinyWorker((message, worker) => {
 			if (message.type === "complete") {
 				worker.emit({ type: "error", id: message.id, error: "Error: Unknown failure" });
 			}
 		});
-		const second = new FakeTinyWorker((message, worker) => {
-			if (message.type === "complete") {
-				worker.emit({ type: "completion", id: message.id, text: "recovered" });
-			}
-		});
-		const workers = [first, second];
-		let nextWorker = 0;
+		let spawnCount = 0;
 		const client = new TinyTitleClient(() => {
-			const worker = workers[nextWorker];
-			if (!worker) throw new Error("unexpected worker spawn");
-			nextWorker += 1;
-			return worker;
+			spawnCount += 1;
+			return first;
 		});
 
 		try {
 			expect(await client.complete("qwen3-1.7b", "long prompt")).toBeNull();
 			expect(first.terminated).toBe(true);
-			expect(await client.complete("qwen3-1.7b", "retry prompt")).toBe("recovered");
-			expect(nextWorker).toBe(2);
+			expect(await client.complete("qwen3-1.7b", "retry prompt")).toBeNull();
+			expect(spawnCount).toBe(1);
 		} finally {
 			await client.terminate();
 		}
@@ -109,6 +107,37 @@ describe("issue #1940 — local model failures release the worker process", () =
 			expect(await first).toBeNull();
 			expect(await second).toBeNull();
 			expect(worker.terminated).toBe(true);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("does not suppress unrelated queued models after a worker crash", async () => {
+		const first = new FakeTinyWorker(() => {});
+		const second = new FakeTinyWorker((message, worker) => {
+			if (message.type === "generate") {
+				worker.emit({ type: "title", id: message.id, title: "recovered title" });
+			}
+		});
+		const workers = [first, second];
+		let nextWorker = 0;
+		const client = new TinyTitleClient(() => {
+			const worker = workers[nextWorker];
+			if (!worker) throw new Error("unexpected worker spawn");
+			nextWorker += 1;
+			return worker;
+		});
+
+		try {
+			const crashedMemory = client.complete("qwen3-1.7b", "first prompt");
+			const queuedTitle = client.generate("lfm2-350m", "title prompt");
+			first.emitError(new Error("tiny model subprocess exited with signal SIGKILL"));
+
+			expect(await crashedMemory).toBeNull();
+			expect(await queuedTitle).toBeNull();
+			expect(first.terminated).toBe(true);
+			expect(await client.generate("lfm2-350m", "retry title")).toBe("recovered title");
+			expect(nextWorker).toBe(2);
 		} finally {
 			await client.terminate();
 		}

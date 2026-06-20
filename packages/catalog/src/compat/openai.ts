@@ -7,12 +7,14 @@
  * complete alternate views. Request handlers read `model.compat` fields and
  * never detect, resolve, or allocate.
  */
+import { isFireworksFastModelId } from "../fireworks-model-id";
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
 import {
 	isAnthropicNamespacedModelId,
 	isClaudeModelId,
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
+	isGrokReasoningEffortCapable,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
@@ -48,6 +50,32 @@ const DSML_HEALING_PROVIDERS = new Set([
 	"opencode-go",
 	"openrouter",
 ]);
+
+/**
+ * Ollama's OpenAI-compatible `reasoning.effort` only accepts
+ * `high|medium|low|max|none`; OMP's `minimal`/`xhigh` levels make the server
+ * reject the turn with HTTP 400 `invalid reasoning value`. Map the two
+ * unsupported levels onto the closest accepted ones. Stamped in the compat
+ * builder (not only at discovery) so stale-cached and custom `ollama`-provider
+ * specs are backfilled on every `buildModel`, not just on a fresh
+ * `omp models refresh`. Custom OpenAI-compatible providers pointed at a local
+ * Ollama port under a different provider id are not covered — they must set
+ * `compat.reasoningEffortMap` themselves.
+ */
+const OLLAMA_REASONING_EFFORT_MAP: ResolvedOpenAISharedCompat["reasoningEffortMap"] = { minimal: "low", xhigh: "max" };
+
+/**
+ * Merge the Ollama default effort map under any explicit overrides (overrides
+ * win). No-op off the local `ollama` provider or for non-reasoning models.
+ */
+function mergeOllamaReasoningEffortMap(
+	compat: ResolvedOpenAISharedCompat,
+	provider: string,
+	reasoning: boolean | undefined,
+): void {
+	if (provider !== "ollama" || !reasoning) return;
+	compat.reasoningEffortMap = { ...OLLAMA_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
+}
 
 function resolveReasoningDisableMode(
 	thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"],
@@ -103,6 +131,16 @@ const OPENCODE_WHEN_THINKING: NonNullable<OpenAICompat["whenThinking"]> = {
 	reasoningContentField: "reasoning_content",
 };
 
+const MIMO_REASONING_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]> = {
+	minimal: "low",
+	xhigh: "high",
+};
+
+function mergeMimoReasoningEffortMap(compat: ResolvedOpenAISharedCompat, enabled: boolean): void {
+	if (!enabled) return;
+	compat.reasoningEffortMap = { ...MIMO_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
+}
+
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 	if (
 		provider === "openai" ||
@@ -157,6 +195,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const lowerName = (spec.name ?? "").toLowerCase();
 	const isXiaomiHost = modelMatchesHost(hostModel, "xiaomi");
 	const isXiaomiMimo = isXiaomiHost && (isMimoModelIdOrName(spec.id) || isMimoModelIdOrName(spec.name ?? ""));
+	const isMimoReasoningEffortModel =
+		!isXiaomiHost && (isMimoModelIdOrName(spec.id) || isMimoModelIdOrName(spec.name ?? ""));
 	// OpenCode Zen's `big-pickle` is a DeepSeek reasoning alias; the upstream
 	// 400s come from DeepSeek and require exact reasoning_content replay.
 	const isOpenCodeDeepseekAlias =
@@ -211,17 +251,21 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isGroqHost = modelMatchesHost(hostModel, "groq");
 	const isCopilotHost = provider === "github-copilot";
 	const isZenmuxHost = provider === "zenmux";
-	// Endpoints that MUST receive a single system block. MiniMax's OpenAI
-	// endpoint returns error 2013 on multiple system messages; Alibaba's
-	// Dashscope and Qwen Portal serve Qwen models whose chat template
-	// raises "System message must be at the beginning" if any system
-	// message appears past index 0.
+	// Endpoints/models that MUST receive a single system block. MiniMax's OpenAI
+	// endpoint returns error 2013 on multiple system messages; the Qwen 3.5+ chat
+	// template raises "System message must be at the beginning" / 500s with an
+	// internal_server_error when any system block appears past index 0. That
+	// template ships with the weights, so every Qwen-serving vLLM/SGLang host
+	// hits it — confirmed on Alibaba Dashscope, Qwen Portal, and Fireworks
+	// (`fireworks/qwen3.7-plus` 500'd on two leading system blocks). Gate on the
+	// Qwen family itself, not per-host: coalescing only trades away KV-cache reuse.
 	const isMiniMaxHost = modelMatchesHost(hostModel, "minimax");
 	const isQwenPortal = modelMatchesHost(hostModel, "qwenPortal");
 	const supportsMultipleSystemMessagesDefault =
 		!isMiniMaxHost &&
 		!isAlibaba &&
 		!isQwenPortal &&
+		!isQwen &&
 		(isOpenAIHost ||
 			isAzureHost ||
 			isOpenRouter ||
@@ -249,8 +293,12 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 					? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
 					: undefined;
 
+	// Fireworks "Fast" variants (`<id>-fast`) are served from the router
+	// namespace (`accounts/fireworks/routers/<id>-fast`), like Fire Pass, rather
+	// than the `models/` namespace the rest of the `fireworks` provider uses.
+	const isFireworksFastRouter = provider === "fireworks" && isFireworksFastModelId(spec.id);
 	const wireModelIdMode: ResolvedOpenAISharedCompat["wireModelIdMode"] =
-		provider === "firepass"
+		provider === "firepass" || isFireworksFastRouter
 			? "firepass"
 			: provider === "fireworks"
 				? "fireworks"
@@ -264,9 +312,11 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 				? "openrouter"
 				: isQwen && isNvidiaNim
 					? "qwen-chat-template"
-					: isAlibaba || isQwen
-						? "qwen"
-						: "openai";
+					: isQwen && isFireworks
+						? "openai"
+						: isAlibaba || isQwen
+							? "qwen"
+							: "openai";
 
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,
@@ -281,7 +331,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsReasoningEffort: !isGrok && !isXiaomiMimo && (!(isZai || isZhipu) || supportsZaiReasoningEffort),
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
-		reasoningEffortMap: {},
+		reasoningEffortMap: isMimoReasoningEffortModel ? MIMO_REASONING_EFFORT_MAP : {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
 		// family classifier so OpenAI-compat proxies serving Gemini are covered.
@@ -300,7 +350,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsForcedToolChoice: true,
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
-		requiresAssistantAfterToolResult: false,
+		requiresAssistantAfterToolResult: isMistral,
 		requiresThinkingAsText: isMistral,
 		requiresMistralToolIds: isMistral,
 		// Only Kimi's native hosts (Moonshot / Kimi-code, matched by `isMoonshotKimi`)
@@ -352,6 +402,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
 		extraBody: isDirectDeepseekReasoning ? { thinking: { type: "enabled" } } : undefined,
 		toolStrictMode: isCerebras ? "all_strict" : "mixed",
+		toolSchemaFlavor: isMoonshotNative ? "moonshot-mfjs" : undefined,
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens:
 			isDeepseekModelIdOrName(spec.id) && (provider === "nvidia" || provider === "deepseek"),
@@ -371,6 +422,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;
 	}
+	mergeOllamaReasoningEffortMap(compat, provider, spec.reasoning);
+	mergeMimoReasoningEffortMap(compat, isMimoReasoningEffortModel);
 
 	const whenThinkingPolicy =
 		spec.compat?.whenThinking ?? (isOpenCodeProvider && spec.reasoning ? OPENCODE_WHEN_THINKING : undefined);
@@ -383,6 +436,8 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		if (whenThinkingPolicy.omitReasoningEffort === undefined && !variant.supportsReasoningEffort) {
 			variant.omitReasoningEffort = true;
 		}
+		mergeOllamaReasoningEffortMap(variant, provider, spec.reasoning);
+		mergeMimoReasoningEffortMap(variant, isMimoReasoningEffortModel);
 		compat.whenThinking = variant;
 	}
 
@@ -424,11 +479,17 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
 		supportsStrictMode:
 			spec.provider === "openai" || isAzure || spec.provider === "github-copilot" || isOpenRouter || isOpenAIUrl,
-		supportsReasoningEffort: true,
+		supportsReasoningEffort: spec.provider !== "xai-oauth" || isGrokReasoningEffortCapable(id),
 		supportsLongPromptCacheRetention: isOpenAIUrl,
 		// Azure OpenAI and GitHub Copilot Responses paths require tool results
 		// to strictly match prior tool calls when building Responses inputs.
 		strictResponsesPairing: isAzure || spec.provider === "github-copilot",
+		// GitHub Copilot's Responses endpoint rejects the `detail: "original"`
+		// image hint with a 400; every other host preserves native-resolution
+		// frames (snapcompact relies on `original`). Detect Copilot by provider id
+		// or base-URL host (mirroring the Anthropic compat builder) so a model
+		// pointed at the Copilot host under a different provider id still clamps.
+		supportsImageDetailOriginal: !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		requiresJuiceZeroHack: spec.name.toLowerCase().startsWith("gpt-5"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
@@ -474,6 +535,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;
 	}
+	mergeOllamaReasoningEffortMap(compat, spec.provider, spec.reasoning);
 	return compat;
 }
 
@@ -483,6 +545,7 @@ function pickResponsesOnly(compat: ResolvedOpenAIResponsesCompat): ResponsesOnly
 	return {
 		supportsLongPromptCacheRetention: compat.supportsLongPromptCacheRetention,
 		strictResponsesPairing: compat.strictResponsesPairing,
+		supportsImageDetailOriginal: compat.supportsImageDetailOriginal,
 		requiresJuiceZeroHack: compat.requiresJuiceZeroHack,
 		supportsObfuscationOptOut: compat.supportsObfuscationOptOut,
 	} satisfies ResponsesOnlyCompat;

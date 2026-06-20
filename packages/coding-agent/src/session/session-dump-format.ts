@@ -7,9 +7,9 @@
  * args), `### Tool Result: <name>`, and the execution/summary sections.
  */
 import type { AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderDelimitedThinking, renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
+import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { YAML } from "bun";
 import { canonicalizeMessage } from "../utils/thinking-display";
 import {
@@ -38,6 +38,7 @@ export interface FormatSessionDumpTextOptions {
 	model?: Model | null;
 	thinkingLevel?: ThinkingLevel | string | null;
 	tools?: readonly SessionDumpToolInfo[];
+	inlineToolDescriptors?: boolean;
 }
 
 interface InventoryTool {
@@ -78,7 +79,8 @@ function renderDumpHeader(options: FormatSessionDumpTextOptions, inventoryTools:
 	lines.push(`Thinking Level: ${options.thinkingLevel ?? ""}`);
 	lines.push("\n");
 
-	if (inventoryTools.length > 0) {
+	const hasSystemPromptToolInventory = options.inlineToolDescriptors === true;
+	if (inventoryTools.length > 0 && !hasSystemPromptToolInventory) {
 		lines.push("## Available Tools\n");
 		lines.push(renderToolInventory(inventoryTools, model?.id ?? ""));
 		lines.push("\n");

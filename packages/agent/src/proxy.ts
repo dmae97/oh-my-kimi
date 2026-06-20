@@ -210,6 +210,18 @@ function processProxyEvent(
 ): AssistantMessageEvent | undefined {
 	switch (proxyEvent.type) {
 		case "start":
+			partial.content.length = 0;
+			partial.usage = {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			delete (partial as { stopReason?: string }).stopReason;
+			delete (partial as { errorMessage?: string }).errorMessage;
+			delete (partial as { duration?: number }).duration;
 			return { type: "start", partial };
 
 		case "text_start":

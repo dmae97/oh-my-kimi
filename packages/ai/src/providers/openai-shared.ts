@@ -219,6 +219,54 @@ export function applyOpenAIServiceTier(
 	}
 }
 
+/**
+ * Standard OpenAI Responses service-tier cost multipliers. The non-Codex
+ * Responses path bills the tier it was served (or requested): Flex processing is
+ * half price; Priority is a 2x premium. Codex bills the same tiers with its own
+ * table (Priority is 2.5x on gpt-5.5) and applies that separately.
+ */
+function getOpenAIResponsesServiceTierCostMultiplier(tier: string | null | undefined): number {
+	switch (tier) {
+		case "flex":
+			return 0.5;
+		case "priority":
+			return 2;
+		default:
+			return 1;
+	}
+}
+
+/**
+ * Adjust resolved cost by the service tier OpenAI actually billed — parity with
+ * Codex (`applyCodexServiceTierPricing`), but with the standard (non-Codex)
+ * multipliers. The served tier comes from the response echo, falling back to the
+ * resolved request tier. Scoped to `provider: "openai"` (the only standard
+ * Responses biller) so an echoed `service_tier` from an Azure/OpenRouter/Copilot
+ * proxy can never skew those costs.
+ */
+export function applyOpenAIResponsesServiceTierCost(
+	model: Pick<Model, "provider">,
+	usage: AssistantMessage["usage"],
+	responseServiceTier: unknown,
+	requestServiceTier: ServiceTier | null | undefined,
+): void {
+	if (model.provider !== "openai") return;
+	// The response echo is authoritative when present (OpenAI may downgrade a
+	// requested priority/flex turn to default under load); only fall back to the
+	// requested tier when the response omits the echo entirely.
+	const served =
+		typeof responseServiceTier === "string"
+			? responseServiceTier
+			: resolveServiceTier(requestServiceTier, model.provider);
+	const multiplier = getOpenAIResponsesServiceTierCostMultiplier(served);
+	if (multiplier === 1) return;
+	usage.cost.input *= multiplier;
+	usage.cost.output *= multiplier;
+	usage.cost.cacheRead *= multiplier;
+	usage.cost.cacheWrite *= multiplier;
+	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+}
+
 export interface OpenAIUsageAccountingInput {
 	promptTokens: number;
 	outputTokens: number;
@@ -1130,9 +1178,24 @@ export function repairOrphanResponsesToolCalls(input: ResponseInput): ResponseIn
 	return repaired;
 }
 
+/**
+ * Some Responses backends (notably GitHub Copilot) reject the OpenAI image
+ * `detail: "original"` value with a 400. When the model does not advertise
+ * support for it, degrade `"original"` to `"auto"` so the request still goes
+ * through with the closest valid fidelity instead of failing outright. See #2822.
+ */
+function clampResponsesImageDetail(
+	detail: ImageContent["detail"],
+	supportsImageDetailOriginal: boolean,
+): ResponseInputImage["detail"] {
+	const resolved = detail ?? "auto";
+	return resolved === "original" && !supportsImageDetailOriginal ? "auto" : resolved;
+}
+
 export function convertResponsesInputContent(
 	content: string | Array<TextContent | ImageContent>,
 	supportsImages: boolean,
+	supportsImageDetailOriginal: boolean,
 ): ResponseInputContent[] | undefined {
 	if (typeof content === "string") {
 		if (content.trim().length === 0) return undefined;
@@ -1152,7 +1215,7 @@ export function convertResponsesInputContent(
 	for (const item of imageBlocks) {
 		normalizedContent.push({
 			type: "input_image",
-			detail: item.detail ?? "auto",
+			detail: clampResponsesImageDetail(item.detail, supportsImageDetailOriginal),
 			image_url: `data:${item.mimeType};base64,${item.data}`,
 		} satisfies ResponseInputImage);
 	}
@@ -1169,6 +1232,7 @@ export interface BuildResponsesInputOptions<TApi extends Api> {
 	model: Model<TApi>;
 	context: Context;
 	strictResponsesPairing: boolean;
+	supportsImageDetailOriginal: boolean;
 	systemRole?: "system" | "developer";
 	nativeHistory?: {
 		replay: boolean;
@@ -1219,7 +1283,11 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				msgIndex++;
 				continue;
 			}
-			const content = convertResponsesInputContent(msg.content, options.model.input.includes("image"));
+			const content = convertResponsesInputContent(
+				msg.content,
+				options.model.input.includes("image"),
+				options.supportsImageDetailOriginal,
+			);
 			if (!content) continue;
 			messages.push({
 				role: "user",
@@ -1270,6 +1338,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				msg,
 				options.model,
 				options.strictResponsesPairing,
+				options.supportsImageDetailOriginal,
 				knownCallIds,
 				customCallIds,
 			);
@@ -1371,6 +1440,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	toolResult: ToolResultMessage,
 	model: Model<TApi>,
 	strictResponsesPairing: boolean,
+	supportsImageDetailOriginal: boolean,
 	knownCallIds: ReadonlySet<string>,
 	customCallIds?: ReadonlySet<string>,
 ): void {
@@ -1427,7 +1497,7 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		if (block.type === "image") {
 			contentParts.push({
 				type: "input_image",
-				detail: block.detail ?? "auto",
+				detail: clampResponsesImageDetail(block.detail, supportsImageDetailOriginal),
 				image_url: `data:${block.mimeType};base64,${block.data}`,
 			} satisfies ResponseInputImage);
 		}
@@ -1583,6 +1653,11 @@ export interface ProcessResponsesStreamOptions {
 	 * without a recognized terminal event).
 	 */
 	onCompleted?: () => void;
+	/**
+	 * Caller-requested service tier, used to bill the served tier when the
+	 * response omits the `service_tier` echo. Only applied for `provider: "openai"`.
+	 */
+	requestServiceTier?: ServiceTier;
 }
 
 export async function processResponsesStream<TApi extends Api>(
@@ -1989,6 +2064,12 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			populateResponsesUsageFromResponse(output, response?.usage);
 			calculateCost(model, output.usage);
+			applyOpenAIResponsesServiceTierCost(
+				model,
+				output.usage,
+				(response as { service_tier?: unknown } | undefined)?.service_tier,
+				options?.requestServiceTier,
+			);
 			output.stopReason = mapOpenAIResponsesStopReason(response?.status);
 			if (response?.status === "failed" || response?.status === "cancelled") {
 				const error = response?.error ?? (response as any)?.status_details?.error;

@@ -94,6 +94,56 @@ describe("model thinking derivation", () => {
 		expect(gptOss.thinking?.effortMap).toBeUndefined();
 	});
 
+	it("stores MiMo OpenAI-compatible effort limits in model metadata", () => {
+		const mimo = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+		});
+		const openRouterMimo = createModel({
+			id: "xiaomi/mimo-v2.5-pro",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		const staleMimo = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "nanogpt",
+			baseUrl: "https://nano-gpt.com/api/v1",
+			compat: { reasoningEffortMap: {} },
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+				effortMap: { minimal: "low", xhigh: "high" },
+			},
+		});
+		const nativeXiaomi = createModel({
+			id: "mimo-v2.5-pro",
+			api: "openai-completions",
+			provider: "xiaomi",
+			baseUrl: "https://api.xiaomimimo.com/v1",
+		});
+
+		const expectedThinking = {
+			mode: "effort" as const,
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+		};
+		expect(mimo.thinking).toEqual(expectedThinking);
+		expect(openRouterMimo.thinking).toEqual(expectedThinking);
+		expect(staleMimo.thinking).toEqual(expectedThinking);
+		expect(mimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(openRouterMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(staleMimo.compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
+		expect(requireSupportedEffort(mimo, Effort.High)).toBe(Effort.High);
+		expect(() => requireSupportedEffort(mimo, Effort.XHigh)).toThrow(/Supported efforts: low, medium, high/);
+		expect(clampThinkingLevelForModel(mimo, Effort.Minimal)).toBe(Effort.Low);
+		expect(clampThinkingLevelForModel(mimo, Effort.XHigh)).toBe(Effort.High);
+
+		expect(nativeXiaomi.thinking?.efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High]);
+	});
+
 	it("normalizes stale explicit MiniMax M2 / GPT-OSS effort metadata from caches", () => {
 		const staleMinimax = createModel({
 			id: "minimax-m2.7",
@@ -176,6 +226,45 @@ describe("model thinking derivation", () => {
 			high: "xhigh",
 			xhigh: "max",
 		});
+	});
+
+	it("maps GLM-5.2 reasoning effort per host dialect", () => {
+		const zai = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/paas/v4",
+		});
+		const fireworks = createModel({
+			id: "glm-5.2",
+			api: "openai-completions",
+			provider: "fireworks",
+			baseUrl: "https://api.fireworks.ai/inference/v1",
+		});
+		const openRouter = createModel({
+			id: "z-ai/glm-5.2",
+			api: "openrouter",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+
+		// Z.ai dialect: the model only does none/high/max, so the lower tiers
+		// collapse and the top `xhigh` tier reaches `max`.
+		expect(zai.thinking?.effortMap).toEqual({
+			minimal: "none",
+			low: "high",
+			medium: "high",
+			high: "high",
+			xhigh: "max",
+		});
+		// Fireworks keeps its distinct lower tiers and the `minimal -> none` quirk;
+		// only the top `xhigh` UI tier remaps onto the genuine `max` budget.
+		expect(getSupportedEfforts(fireworks)).toContain(Effort.XHigh);
+		expect(fireworks.thinking?.effortMap).toEqual({ minimal: "none", xhigh: "max" });
+		// OpenRouter rejects `max` and treats `xhigh` as its max tier: expose the
+		// `xhigh` tier and pass it through unmapped.
+		expect(getSupportedEfforts(openRouter)).toContain(Effort.XHigh);
+		expect(openRouter.thinking?.effortMap).toBeUndefined();
 	});
 
 	it("encodes the Gemini 3 Pro effort gap and mandatory reasoning in metadata", () => {
@@ -284,12 +373,33 @@ describe("model thinking derivation", () => {
 			api: "bedrock-converse-stream",
 			provider: "amazon-bedrock",
 		});
+		const minimaxM2 = createModel({ id: "MiniMax-M2.7", api: "anthropic-messages", provider: "minimax" });
+		const minimaxM3 = createModel({ id: "MiniMax-M3", api: "anthropic-messages", provider: "minimax" });
 
 		expect(opus45.thinking?.mode).toBe("anthropic-budget-effort");
 		expect(opus46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(sonnet46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(mythosBedrock.thinking?.mode).toBe("anthropic-adaptive");
-
+		expect(minimaxM2.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortMap: {
+				low: "adaptive",
+				medium: "adaptive",
+				high: "adaptive",
+			},
+			requiresEffort: true,
+		});
+		expect(minimaxM3.thinking).toEqual({
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High],
+			effortMap: {
+				low: "adaptive",
+				medium: "adaptive",
+				high: "adaptive",
+			},
+		});
+		expect(mapEffortToAnthropicAdaptiveEffort(minimaxM3, Effort.High)).toBe("adaptive");
 		// Opus 4.6 has no real xhigh level — the baked 4-tier map aliases XHigh to "max".
 		expect(opus46.thinking?.effortMap).toEqual({ minimal: "low", xhigh: "max" });
 		expect(mapEffortToAnthropicAdaptiveEffort(opus46, Effort.XHigh)).toBe("max");

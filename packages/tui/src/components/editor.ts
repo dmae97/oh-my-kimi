@@ -1,6 +1,10 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import type { AutocompleteProvider, CombinedAutocompleteProvider } from "../autocomplete";
-import { BracketedPasteHandler } from "../bracketed-paste";
+import {
+	type AutocompleteProvider,
+	type CombinedAutocompleteProvider,
+	findLeadingSlashCommandStart,
+} from "../autocomplete";
+import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey } from "../keys";
 import { KillRing } from "../kill-ring";
@@ -1116,7 +1120,10 @@ export class Editor implements Component, Focusable {
 				}
 
 				// If Enter was pressed on a slash command, apply completion and submit
-				if ((kb.matches(data, "tui.input.submit") || data === "\n") && this.#autocompletePrefix.startsWith("/")) {
+				if (
+					(kb.matches(data, "tui.input.submit") || data === "\n") &&
+					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null
+				) {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
@@ -1263,7 +1270,7 @@ export class Editor implements Component, Focusable {
 				const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 				if (
-					textBeforeCursor.startsWith("/") &&
+					findLeadingSlashCommandStart(textBeforeCursor) !== null &&
 					this.#isInSubmittedSlashCommandContext() &&
 					this.#autocompleteProvider?.trySyncSlashCompletion
 				) {
@@ -1843,20 +1850,14 @@ export class Editor implements Component, Focusable {
 		});
 	}
 
-	/** Normalize raw pasted text: decode tmux CSI-u re-encoded control bytes, normalize CRLF and
+	/** Normalize raw pasted text: decode tmux re-encoded control bytes (both extended-keys formats),
+	 *  normalize CRLF and
 	 *  NFC (macOS NFD filename drag-drops), expand tabs, and strip control characters except newline. */
 	#sanitizePastedText(pastedText: string): string {
-		// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
-		// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
-		// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
-		// per-char filter below preserves newlines instead of stripping ESC and
-		// leaking the printable tail (e.g. "[106;5u") into the editor.
-		const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
-			const cp = Number(code);
-			if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
-			if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
-			return match;
-		});
+		// Decode tmux's re-encoded control bytes (both extended-keys formats) back to
+		// their literal byte so the per-char filter below preserves newlines instead of
+		// stripping ESC and leaking the printable tail into the editor. See the decoder.
+		const decodedText = decodeReencodedPasteControls(pastedText);
 
 		// Clean the pasted text. NFC-normalize so macOS Finder drag-drops of
 		// Korean filenames (which arrive as NFD: e.g. `ᄒ`+`ᅪ` instead of `화`)

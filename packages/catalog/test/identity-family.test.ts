@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	isClaudeModelId,
 	isGlmVisionModelId,
+	isGrokReasoningEffortCapable,
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMinimaxM2FamilyModelId,
@@ -195,5 +196,22 @@ describe("modelFamilyToken", () => {
 
 	test("returns an empty token for unclassifiable ids so callers fall back to provider", () => {
 		expect(modelFamilyToken("some-unknown-model")).toBe("");
+	});
+});
+
+describe("isGrokReasoningEffortCapable", () => {
+	test("matches effort-capable Grok SKUs across namespaces", () => {
+		expect(isGrokReasoningEffortCapable("grok-4.3")).toBe(true);
+		expect(isGrokReasoningEffortCapable("grok-3-mini")).toBe(true);
+		expect(isGrokReasoningEffortCapable("grok-4.20-multi-agent")).toBe(true);
+		expect(isGrokReasoningEffortCapable("xai-oauth/grok-4.3")).toBe(true);
+		expect(isGrokReasoningEffortCapable("openrouter/xai/grok-3-mini")).toBe(true);
+	});
+
+	test("rejects effort-dial-less Grok SKUs and non-Grok ids", () => {
+		expect(isGrokReasoningEffortCapable("grok-build")).toBe(false);
+		expect(isGrokReasoningEffortCapable("grok-4.20-0309-reasoning")).toBe(false);
+		expect(isGrokReasoningEffortCapable("gpt-5")).toBe(false);
+		expect(isGrokReasoningEffortCapable("")).toBe(false);
 	});
 });

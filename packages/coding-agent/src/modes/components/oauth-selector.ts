@@ -10,12 +10,27 @@ import {
 	Spacer,
 	TruncatedText,
 } from "@oh-my-pi/pi-tui";
+import { settings } from "../../config/settings";
 import { theme } from "../../modes/theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
 import type { AuthStorage, CredentialOriginKind } from "../../session/auth-storage";
 import { DynamicBorder } from "./dynamic-border";
 
 const OAUTH_SELECTOR_MAX_VISIBLE = 10;
+
+/**
+ * Provider ids the user has disabled via settings. `/login` (login mode) hides
+ * these so a disabled provider's models stay out of reach end-to-end, mirroring
+ * the model picker's `disabledProviders` filtering. Reads the settings singleton
+ * defensively: it throws before `Settings.init()`, in which case nothing is disabled.
+ */
+function getDisabledProviderIds(): ReadonlySet<string> {
+	try {
+		return new Set(settings.get("disabledProviders"));
+	} catch {
+		return new Set();
+	}
+}
 
 /**
  * Rendered lines before the provider rows: top border, spacer, title, spacer
@@ -102,8 +117,22 @@ export class OAuthSelectorComponent extends Container {
 
 	#loadProviders(): void {
 		const providers = getOAuthProviders();
-		this.#allProviders =
-			this.#mode === "logout" ? providers.filter(provider => this.#hasSelectableAuth(provider.id)) : providers;
+		if (this.#mode === "logout") {
+			// Logout stays unfiltered by `disabledProviders`: a now-disabled
+			// provider may still hold stored credentials worth removing.
+			this.#allProviders = providers.filter(provider => this.#hasSelectableAuth(provider.id));
+		} else {
+			const disabled = getDisabledProviderIds();
+			// Hide a login entry when either its own id or the provider id it
+			// stores credentials under is disabled, so alias logins (e.g.
+			// `openai-codex-device` ⇒ `openai-codex`) disappear alongside the
+			// model provider they authenticate.
+			this.#allProviders = providers.filter(
+				provider =>
+					!disabled.has(provider.id) &&
+					!(provider.storeCredentialsAs && disabled.has(provider.storeCredentialsAs)),
+			);
+		}
 		this.#filteredProviders = this.#allProviders;
 	}
 

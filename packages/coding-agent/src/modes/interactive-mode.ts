@@ -12,7 +12,7 @@ import {
 	ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type {
 	Component,
@@ -70,7 +70,12 @@ import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
-import { formatMCPConnectingMessage, isMcpConnectingEvent, MCP_CONNECTING_EVENT_CHANNEL } from "../mcp/startup-events";
+import {
+	formatMCPConnectionStatusMessage,
+	isMcpConnectionStatusEvent,
+	MCP_CONNECTION_STATUS_EVENT_CHANNEL,
+	type McpConnectionStatusEvent,
+} from "../mcp/startup-events";
 import {
 	humanizePlanTitle,
 	type PlanApprovalDetails,
@@ -82,12 +87,13 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 	type: "text",
 };
 import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
+import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext } from "../session/session-context";
 import { getRecentSessions } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
-import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, BUILTIN_SLASH_COMMANDS } from "../slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
@@ -400,6 +406,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
+	proseOnlyThinking = true;
 	pendingImages: ImageContent[] = [];
 	pendingImageLinks: (string | undefined)[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -411,6 +418,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	isPythonMode = false;
 	streamingComponent: AssistantMessageComponent | undefined = undefined;
 	streamingMessage: AssistantMessage | undefined = undefined;
+	lastAssistantUsage: Usage | undefined = undefined;
 	loadingAnimation: Loader | undefined = undefined;
 	autoCompactionLoader: Loader | undefined = undefined;
 	retryLoader: Loader | undefined = undefined;
@@ -511,6 +519,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
+		this.lastAssistantUsage = undefined;
 		this.pendingTools.clear();
 	}
 	readonly #uiHelpers: UiHelpers;
@@ -523,6 +532,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
+	#mcpStatusOrder: string[] = [];
+	#mcpPendingServers = new Set<string>();
+	#mcpConnectedServers = new Set<string>();
+	#mcpFailedServers = new Map<string, string>();
 	#welcomeComponent?: WelcomeComponent;
 	readonly #chatHost: ChatBlockHost = { requestRender: () => this.ui.requestRender() };
 
@@ -556,13 +569,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 			);
 			this.#eventBusUnsubscribers.push(
-				eventBus.on(MCP_CONNECTING_EVENT_CHANNEL, data => {
-					if (!isMcpConnectingEvent(data)) {
-						logger.warn("Ignoring malformed mcp:connecting event", { data });
+				eventBus.on(MCP_CONNECTION_STATUS_EVENT_CHANNEL, data => {
+					if (!isMcpConnectionStatusEvent(data)) {
+						logger.warn("Ignoring malformed mcp:connection-status event", { data });
 						return;
 					}
-					if (this.settings.get("startup.quiet")) return;
-					this.showStatus(formatMCPConnectingMessage(data.serverNames));
+					this.#handleMcpConnectionStatusEvent(data);
 				}),
 			);
 		}
@@ -615,6 +627,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
+		this.proseOnlyThinking = settings.get("proseOnlyThinking");
 
 		const hookCommands: SlashCommand[] = (
 			this.session.extensionRunner?.getRegisteredCommands(BUILTIN_SLASH_COMMAND_RESERVED_NAMES) ?? []
@@ -640,8 +653,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		}
 
+		const builtinCommands = buildTuiBuiltinSlashCommands({ ctx: this });
 		// Store pending commands for init() where file commands are loaded async
-		this.#pendingSlashCommands = [...BUILTIN_SLASH_COMMANDS, ...hookCommands, ...customCommands, ...skillCommandList];
+		this.#pendingSlashCommands = [...builtinCommands, ...hookCommands, ...customCommands, ...skillCommandList];
 
 		this.#uiHelpers = new UiHelpers(this);
 		this.#btwController = new BtwController(this);
@@ -655,6 +669,54 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.#observerRegistry = new SessionObserverRegistry();
+	}
+
+	#handleMcpConnectionStatusEvent(event: McpConnectionStatusEvent): void {
+		if (this.settings.get("startup.quiet")) return;
+		if (event.type === "connecting") {
+			this.#mcpStatusOrder = [];
+			this.#mcpPendingServers.clear();
+			this.#mcpConnectedServers.clear();
+			this.#mcpFailedServers.clear();
+			for (const serverName of event.serverNames) {
+				this.#trackMcpStatusServer(serverName);
+				this.#mcpPendingServers.add(serverName);
+			}
+		} else if (event.type === "connected") {
+			this.#trackMcpStatusServer(event.serverName);
+			this.#mcpPendingServers.delete(event.serverName);
+			this.#mcpFailedServers.delete(event.serverName);
+			this.#mcpConnectedServers.add(event.serverName);
+		} else {
+			this.#trackMcpStatusServer(event.serverName);
+			this.#mcpPendingServers.delete(event.serverName);
+			this.#mcpConnectedServers.delete(event.serverName);
+			this.#mcpFailedServers.set(event.serverName, event.error);
+		}
+
+		const message = formatMCPConnectionStatusMessage({
+			pendingServers: this.#orderedMcpStatusServers(this.#mcpPendingServers),
+			connectedServers: this.#orderedMcpStatusServers(this.#mcpConnectedServers),
+			failedServers: this.#orderedMcpStatusFailures(),
+		});
+		if (message) this.showStatus(message);
+	}
+
+	#trackMcpStatusServer(serverName: string): void {
+		if (!this.#mcpStatusOrder.includes(serverName)) {
+			this.#mcpStatusOrder.push(serverName);
+		}
+	}
+
+	#orderedMcpStatusServers(servers: ReadonlySet<string>): string[] {
+		return this.#mcpStatusOrder.filter(serverName => servers.has(serverName));
+	}
+
+	#orderedMcpStatusFailures(): Array<{ serverName: string; error: string }> {
+		return this.#mcpStatusOrder.flatMap(serverName => {
+			const error = this.#mcpFailedServers.get(serverName);
+			return error === undefined ? [] : [{ serverName, error }];
+		});
 	}
 
 	playWelcomeIntro(): void {
@@ -797,7 +859,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.initHooksAndCustomTools();
 
 		// Restore mode from session (e.g. plan mode on resume)
-		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession());
+		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
 		await this.#reconcileModeFromSession();
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
@@ -1125,27 +1187,33 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 	}
 
-	async handleLoopCommand(args = ""): Promise<void> {
+	async handleLoopCommand(args = ""): Promise<string | undefined> {
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
-			return;
+			return undefined;
 		}
-		const parsedLimit = parseLoopLimitArgs(args);
-		if (typeof parsedLimit === "string") {
-			this.showError(parsedLimit);
-			return;
+		const parsed = parseLoopLimitArgs(args);
+		if (typeof parsed === "string") {
+			this.showError(parsed);
+			return undefined;
 		}
 		this.loopModeEnabled = true;
 		this.loopPrompt = undefined;
-		this.loopLimit = createLoopLimitRuntime(parsedLimit);
+		this.loopLimit = createLoopLimitRuntime(parsed.limit);
 		this.statusLine.setLoopModeStatus({ enabled: true });
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
-		const limitSuffix = parsedLimit ? ` Limited to ${describeLoopLimit(parsedLimit)}.` : "";
+		const limitSuffix = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
+		const tail = parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix} Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix} ${tail} Esc cancels the current iteration; /loop again to disable.`,
 		);
+		// Hand any inline prompt back to the dispatcher so the normal submit flow
+		// runs the first iteration — it records the text as the loop prompt and
+		// auto-resubmits it after each yield, identical to typing the prompt right
+		// after enabling loop mode.
+		return parsed.prompt;
 	}
 
 	recordLocalSubmission(text: string, imageCount = 0): () => void {
@@ -1783,11 +1851,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Reconcile mode state from session entries on resume/switch. */
-	async #reconcileModeFromSession(): Promise<void> {
+	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
 		await this.#clearTransientModeState();
 		const sessionContext = this.sessionManager.buildSessionContext();
 		const goalEnabled = this.session.settings.get("goal.enabled");
 		if (!goalEnabled && (sessionContext.mode === "goal" || sessionContext.mode === "goal_paused")) {
+			this.session.goalRuntime.clearAccounting();
 			this.sessionManager.appendModeChange("none");
 			return;
 		}
@@ -1802,7 +1871,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				mode: "active",
 				goal,
 			});
-			const restored = await this.session.goalRuntime.onThreadResumed();
+			const restored = await this.session.goalRuntime.onThreadResumed({
+				preserveActiveGoal: options?.preserveActiveGoal,
+			});
 			this.goalModeEnabled = restored?.enabled === true;
 			this.goalModePaused = restored?.enabled !== true && restored?.goal.status === "paused";
 			// sdk.ts excludes "goal" from the initial active tool set unconditionally.
@@ -1815,6 +1886,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 			return;
 		}
+		this.session.goalRuntime.clearAccounting();
 		if (!this.session.settings.get("plan.enabled")) {
 			// Clear stale plan/plan_paused mode so re-enabling the setting
 			// later doesn't unexpectedly restore an old plan session.
@@ -1853,6 +1925,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#planModePreviousTools = previousTools;
 		this.planModePlanFilePath = planFilePath;
 		this.planModeEnabled = true;
+		// Suppress cache-miss marker on the next turn: plan mode changes the system
+		// prompt, which predictably invalidates the cache.
+		this.lastAssistantUsage = undefined;
 
 		await this.session.setActiveToolsByName(uniquePlanTools);
 		this.session.setPlanModeState({
@@ -1970,6 +2045,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setStandingResolveHandler?.(null);
 		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
+		// Suppress cache-miss marker on the next turn: plan exit changes the system
+		// prompt, which predictably invalidates the cache.
+		this.lastAssistantUsage = undefined;
 		this.planModePaused = options?.paused ?? false;
 		this.planModePlanFilePath = undefined;
 		this.#planModePreviousTools = undefined;
@@ -2309,7 +2387,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Branchless mark+clear when !compactBeforeExecute: mark is gated; clear
 		// is unconditional and idempotent.
 		if (options.compactBeforeExecute) {
-			this.session.markPlanCompactAbortPending();
+			this.session.markPlanInternalAbortPending();
 		}
 		let compactOutcome: CompactionOutcome | undefined;
 		try {
@@ -2346,7 +2424,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the try/finally is idempotent and kept for the !compactBeforeExecute
 				// branch.
 				this.session.setPlanReferencePath(options.planFilePath);
-				compactOutcome = await this.handleCompactCommand(compactionPrompt, outcome =>
+				compactOutcome = await this.handleCompactCommand(compactionPrompt, undefined, outcome =>
 					this.#applyDeferredPlanModelTransition(outcome, options.executionModel),
 				);
 			}
@@ -2355,7 +2433,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// (i.e., the !compactBeforeExecute branch), and a no-op when the flag
 			// was already consumed by AgentSession.#handleAgentEvent's aborted
 			// message_end stamping. Guarantees the flag is dead at every exit.
-			this.session.clearPlanCompactAbortPending();
+			this.session.clearPlanInternalAbortPending();
 		}
 
 		// Tool restoration runs on every path — the plan mode tools must be
@@ -2421,9 +2499,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		// in-flight turn first — abort() bumps the prompt generation and cancels pending
 		// continuations, so nothing re-streams in the synchronous gap before prompt().
 		if (this.session.isStreaming) {
-			await this.session.abort();
+			await this.#abortPlanApprovalTurnSilently();
 		}
 		await this.session.prompt(planModePrompt, { synthetic: true });
+	}
+	async #abortPlanApprovalTurnSilently(): Promise<void> {
+		this.session.markPlanInternalAbortPending();
+		try {
+			await this.session.abort();
+		} finally {
+			this.session.clearPlanInternalAbortPending();
+		}
 	}
 
 	async handlePlanModeCommand(initialPrompt?: string): Promise<void> {
@@ -2807,7 +2893,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// plan) while the popup is showing. The event listener fires asynchronously
 		// (agent's #emit is fire-and-forget), so without this the model sees
 		// "Plan ready for approval." and immediately re-invokes `resolve` in a loop.
-		await this.session.abort();
+		// This abort is an internal UI transition, not operator cancellation.
+		await this.#abortPlanApprovalTurnSilently();
 
 		const planFilePath = details.planFilePath || this.planModePlanFilePath || (await this.#getPlanFilePath());
 		this.planModePlanFilePath = planFilePath;
@@ -2912,11 +2999,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (choice === "Refine plan") {
-			// Section annotations entered in the overlay become a refinement prompt
-			// re-submitted to the model. With no annotations, fall back to today's
-			// behavior: close the overlay and let the operator type their own.
-			if (feedback.trim() && this.onInputCallback) {
-				this.onInputCallback(this.startPendingSubmission({ text: feedback }));
+			const refinement = feedback.trim();
+			try {
+				if (refinement) {
+					if (this.onInputCallback) {
+						this.onInputCallback(this.startPendingSubmission({ text: feedback }));
+					} else {
+						await this.session.prompt(feedback);
+					}
+				} else {
+					this.showStatus("Refine plan: enter a follow-up prompt.");
+				}
+			} catch (error) {
+				this.showError(`Failed to refine plan: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -3595,9 +3690,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleCompactCommand(
 		customInstructions?: string,
+		mode?: CompactMode,
 		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
 	): Promise<CompactionOutcome> {
-		return this.#commandController.handleCompactCommand(customInstructions, beforeFlush);
+		return this.#commandController.handleCompactCommand(customInstructions, mode, beforeFlush);
 	}
 
 	handleHandoffCommand(customInstructions?: string): Promise<void> {

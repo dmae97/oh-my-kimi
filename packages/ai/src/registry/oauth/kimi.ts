@@ -75,15 +75,20 @@ let getDeviceId = (): string => {
 	return deviceId;
 };
 
+function sanitizeHeaderValue(value: string, fallback = ""): string {
+	const sanitized = value.replace(/[^\x20-\x7E]/g, "").trim();
+	return sanitized || fallback;
+}
+
 export let getKimiCommonHeaders = () => {
 	const headers = Object.freeze({
 		"User-Agent": `KimiCLI/${packageJson.version}`,
 		"X-Msh-Platform": "kimi_cli",
 		"X-Msh-Version": packageJson.version,
-		"X-Msh-Device-Name": os.hostname(),
-		"X-Msh-Device-Model": getDeviceModel(),
-		"X-Msh-Os-Version": os.version(),
-		"X-Msh-Device-Id": getDeviceId(),
+		"X-Msh-Device-Name": sanitizeHeaderValue(os.hostname(), "unknown"),
+		"X-Msh-Device-Model": sanitizeHeaderValue(getDeviceModel(), "unknown"),
+		"X-Msh-Os-Version": sanitizeHeaderValue(os.version(), "unknown"),
+		"X-Msh-Device-Id": sanitizeHeaderValue(getDeviceId(), "unknown"),
 	});
 	getKimiCommonHeaders = () => headers;
 	return headers;

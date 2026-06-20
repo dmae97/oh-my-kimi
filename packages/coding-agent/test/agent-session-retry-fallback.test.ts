@@ -1451,6 +1451,10 @@ describe("AgentSession retry fallback", () => {
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(true);
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:low")).toBe(true);
 
+		modelRegistry.suppressSelector("openai/gpt-4o:max", future);
+		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:xhigh")).toBe(true);
+		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o:max")).toBe(true);
+
 		await modelRegistry.refresh("offline");
 		expect(modelRegistry.isSelectorSuppressed("openai/gpt-4o")).toBe(false);
 	});
@@ -1465,7 +1469,17 @@ describe("AgentSession retry fallback", () => {
 		const requestedModels: string[] = [];
 
 		const mock = createMockModel({
-			responses: [{ throw: malformedError }, { content: ["Recovered after Gemini malformed function call"] }],
+			responses: [
+				{
+					content: [
+						{ type: "thinking", thinking: "Thinking before malformed function call..." },
+						{ type: "text", text: "Text before malformed function call..." },
+					],
+					stopReason: "error",
+					errorMessage: malformedError,
+				},
+				{ content: ["Recovered after Gemini malformed function call"] },
+			],
 		});
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,

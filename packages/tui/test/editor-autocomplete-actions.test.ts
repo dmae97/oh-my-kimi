@@ -3,6 +3,7 @@ import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
 	CombinedAutocompleteProvider,
+	findLeadingSlashCommandStart,
 } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { defaultEditorTheme } from "./test-themes";
@@ -90,12 +91,14 @@ class SyncSlashProvider implements AutocompleteProvider {
 
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
 		this.callCount += 1;
-		if (!textBeforeCursor.startsWith("/")) return null;
-		if (textBeforeCursor.length <= 1) return null;
-		if (textBeforeCursor.includes(" ")) return null;
+		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
+		if (slashStart === null) return null;
+		const commandText = textBeforeCursor.slice(slashStart);
+		if (commandText.length <= 1) return null;
+		if (commandText.includes(" ")) return null;
 		// Only match known slash commands: /mo or /model
-		const prefix = textBeforeCursor.slice(1);
-		if (prefix === "mo" || prefix === "model") {
+		const name = commandText.slice(1);
+		if (name === "mo" || name === "model") {
 			return {
 				prefix: textBeforeCursor,
 				items: [{ value: "model", label: "/model" }],
@@ -112,14 +115,18 @@ class SyncSlashProvider implements AutocompleteProvider {
 		prefix: string,
 	): { lines: string[]; cursorLine: number; cursorCol: number; onApplied?: () => void } {
 		const line = lines[cursorLine] || "";
-		const beforePrefix = line.slice(0, cursorCol - prefix.length);
+		const slashStart = findLeadingSlashCommandStart(prefix);
+		// Anchor the replacement at the slash so leading whitespace survives,
+		// matching CombinedAutocompleteProvider's behavior.
+		const replaceStart = slashStart === null ? cursorCol - prefix.length : cursorCol - prefix.length + slashStart;
+		const beforeSlash = line.slice(0, replaceStart);
 		const afterCursor = line.slice(cursorCol);
 		const nextLines = [...lines];
-		nextLines[cursorLine] = `${beforePrefix}/${_item.value} ${afterCursor}`;
+		nextLines[cursorLine] = `${beforeSlash}/${_item.value} ${afterCursor}`;
 		return {
 			lines: nextLines,
 			cursorLine,
-			cursorCol: beforePrefix.length + _item.value.length + 2,
+			cursorCol: beforeSlash.length + _item.value.length + 2,
 		};
 	}
 
@@ -176,6 +183,24 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.setText("\n/mo");
 		editor.handleInput("\r");
 
+		expect(submitted).toBe("/model");
+		expect(provider.callCount).toBe(1);
+	});
+
+	it("completes slash command after leading spaces", () => {
+		const provider = new SyncSlashProvider();
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(provider);
+		let submitted = "";
+		editor.onSubmit = text => {
+			submitted = text;
+		};
+
+		editor.handleInput("  /mo");
+		editor.handleInput("\r");
+
+		// `#submitValue` trims the joined lines, so the leading spaces survive
+		// the apply but the submitted command itself is the trimmed `/model`.
 		expect(submitted).toBe("/model");
 		expect(provider.callCount).toBe(1);
 	});
@@ -258,5 +283,23 @@ describe("Editor Enter handler sync slash completion", () => {
 		// then cancels autocomplete and submits the completed text.
 		expect(submitted).toBe("/model");
 		expect(suggestionsCallCount).toBeGreaterThan(0);
+	});
+
+	it("applies the popup slash completion on Enter when slash is preceded by spaces", async () => {
+		const provider = new CombinedAutocompleteProvider([{ name: "model", description: "Switch AI model" }], "/tmp");
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(provider);
+		let submitted = "";
+		editor.onSubmit = text => {
+			submitted = text;
+		};
+
+		editor.handleInput("  /mo");
+		await Bun.sleep(0);
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("\r");
+
+		expect(submitted).toBe("/model");
 	});
 });

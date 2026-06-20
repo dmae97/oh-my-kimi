@@ -178,8 +178,8 @@ export class GoalRuntime {
 		}
 	}
 
-	#markActiveAccounting(goal: Goal): void {
-		if (this.#wallClock.activeGoalId !== goal.id) {
+	#markActiveAccounting(goal: Goal, resetWallClock = false): void {
+		if (resetWallClock || this.#wallClock.activeGoalId !== goal.id) {
 			this.#wallClock = { lastAccountedAt: this.#now(), activeGoalId: goal.id };
 		}
 		if (this.#turnSnapshot) {
@@ -193,6 +193,12 @@ export class GoalRuntime {
 		if (this.#turnSnapshot) {
 			this.#turnSnapshot.activeGoalId = undefined;
 		}
+	}
+
+	clearAccounting(): void {
+		this.#turnSnapshot = undefined;
+		this.#clearActiveAccounting();
+		this.#budgetReportedFor = undefined;
 	}
 
 	onTurnStart(turnId: string, baselineUsage: GoalTokenUsage): void {
@@ -235,7 +241,7 @@ export class GoalRuntime {
 			return;
 		}
 		await this.#withAccounting(async () => {
-			await this.#flushUsageLocked("suppressed");
+			await this.#flushUsageLocked("suppressed", undefined, options?.reason === "internal");
 			this.#turnSnapshot = undefined;
 			if (options?.reason !== "interrupted") return;
 			const cloned = this.#getStateClone();
@@ -249,9 +255,14 @@ export class GoalRuntime {
 		});
 	}
 
-	async onThreadResumed(): Promise<GoalModeState | undefined> {
+	async onThreadResumed(options?: { preserveActiveGoal?: boolean }): Promise<GoalModeState | undefined> {
 		const state = this.#getStateClone();
 		if (!state) return undefined;
+		if (options?.preserveActiveGoal && state.enabled && state.goal.status === "active") {
+			this.#markActiveAccounting(state.goal, true);
+			await this.#commitState(state, { emit: true });
+			return state;
+		}
 		if (state.goal.status === "active") {
 			state.enabled = false;
 			state.goal.status = "paused";
@@ -301,6 +312,7 @@ export class GoalRuntime {
 	async #flushUsageLocked(
 		steering: GoalBudgetSteering,
 		currentUsage: GoalTokenUsage = this.#host.getCurrentUsage(),
+		persistWallClock = false,
 	): Promise<void> {
 		const state = this.#getStateClone();
 		if (!state?.enabled || !isAccountingStatus(state.goal)) return;
@@ -333,10 +345,10 @@ export class GoalRuntime {
 		if (this.#wallClock.activeGoalId === state.goal.id && wallSeconds > 0) {
 			this.#wallClock.lastAccountedAt += wallSeconds * 1000;
 		}
-
 		// Persisting wall-clock-only accounting on every tool event bloats /goal sessions with full
-		// objective snapshots. Keep the in-memory/UI state fresh, but persist only token/budget changes.
-		const shouldPersistUsage = tokenDelta > 0 || flippedToBudgetLimited;
+		// objective snapshots. Keep normal tool flushes in memory/UI only, but make wall-clock
+		// usage durable before internal session switches because the active runtime is leaving.
+		const shouldPersistUsage = tokenDelta > 0 || flippedToBudgetLimited || (persistWallClock && wallSeconds > 0);
 		await this.#commitState(state, { persist: shouldPersistUsage ? "goal" : undefined });
 
 		if (state.goal.status !== "budget-limited") {

@@ -44,6 +44,7 @@ import type * as PiCodingAgent from "../../index";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
+import type { CompactMode } from "../../session/compact-modes";
 import type { CustomMessage } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
 import type {
@@ -287,6 +288,12 @@ export interface ContextUsage {
 export interface CompactOptions {
 	onComplete?: (result: CompactionResult) => void;
 	onError?: (error: Error) => void;
+	/**
+	 * Force a one-off compaction mode for this invocation, overriding the
+	 * configured `compaction.strategy` / `remoteEnabled` (the `/compact`
+	 * subcommands: `soft` | `remote` | `snapcompact`). Omitted = configured behavior.
+	 */
+	mode?: CompactMode;
 }
 
 /**

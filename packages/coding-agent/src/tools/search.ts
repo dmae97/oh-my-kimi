@@ -28,13 +28,8 @@ import {
 	uriHyperlink,
 } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
+import { type ArchiveReader, type ExtractedArchiveFile, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import type { ToolSession } from ".";
-import {
-	type ArchiveReader,
-	type ExtractedArchiveFile,
-	openArchive,
-	parseArchivePathCandidates,
-} from "./archive-reader";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
@@ -75,7 +70,7 @@ const searchSchema = type({
 		.describe(
 			'file, directory, glob, internal URL, or array of those to search; append `:<lines>` to scope a file to specific line ranges. Omitted or empty -> searches the workspace root (".")',
 		),
-	"i?": type("boolean").describe("case-insensitive search"),
+	"case?": type("boolean").describe("case-sensitive search"),
 	"gitignore?": type("boolean").describe("respect gitignore"),
 	"skip?": type("number")
 		.or("null")
@@ -281,6 +276,15 @@ interface InternalSearchInputResolution {
 	virtualInputIndexes: Set<number>;
 	immutableSourcePaths: Set<string>;
 	virtualScopePath?: string;
+}
+
+function isImmutableSourcePath(filePath: string, immutableSourcePaths: ReadonlySet<string>): boolean {
+	for (const immutablePath of immutableSourcePaths) {
+		if (filePath === immutablePath || filePath.startsWith(`${immutablePath}${path.sep}`)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 interface IndexedContentLines {
@@ -685,7 +689,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<SearchToolDetails>> {
-		const { pattern, paths: rawPaths, i, gitignore, skip } = params;
+		const { pattern, paths: rawPaths, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
 			// Preserve the pattern verbatim — leading/trailing whitespace is
@@ -768,7 +772,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				const normalizedContextBefore = this.session.settings.get("search.contextBefore");
 				const normalizedContextAfter = this.session.settings.get("search.contextAfter");
-				const ignoreCase = i ?? false;
+				const ignoreCase = !(caseSensitive ?? true);
 				const useGitignore = gitignore ?? true;
 				const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
 				const effectiveMultiline = patternHasNewline;
@@ -1136,7 +1140,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					for (const relativePath of fileList) {
 						if (archiveDisplaySet.has(relativePath) || virtualPathSet.has(relativePath)) continue;
 						const absoluteFilePath = path.resolve(this.session.cwd, relativePath);
-						if (immutableSourcePaths.has(absoluteFilePath)) continue;
+						if (isImmutableSourcePath(absoluteFilePath, immutableSourcePaths)) continue;
 						// Mint a whole-file content tag so any anchor validates while the
 						// file is unchanged; over-cap / unreadable files get no tag (and
 						// therefore plain, non-editable line output).
@@ -1277,7 +1281,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 interface SearchRenderArgs {
 	pattern: string;
 	paths?: string | string[];
-	i?: boolean;
+	case?: boolean;
 	gitignore?: boolean;
 	skip?: number;
 }
@@ -1448,7 +1452,7 @@ export const searchToolRenderer = {
 		const paths = toPathList(args.paths);
 		const meta: string[] = [];
 		if (paths.length) meta.push(`in ${paths.join(", ")}`);
-		if (args.i) meta.push("case:insensitive");
+		if (args.case === false) meta.push("case:insensitive");
 		if (args.gitignore === false) meta.push("gitignore:false");
 		if (args.skip !== undefined && args.skip > 0) meta.push(`skip:${args.skip}`);
 

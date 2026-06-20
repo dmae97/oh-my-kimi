@@ -100,3 +100,18 @@ describe("issue #2299 — NVIDIA NIM qwen thinking format", () => {
 		expect(parsed.chat_template_kwargs).toEqual({ enable_thinking: true });
 	});
 });
+
+describe("issue #2299-adj — Fireworks Qwen thinking format", () => {
+	it("resolves the bundled Fireworks Qwen model to the openai thinking format (reasoning_effort)", () => {
+		// The raw 400 came from `fireworks/qwen3.7-plus`: Fireworks hosts Qwen3
+		// with controllable thinking via OpenAI-style `reasoning_effort`, and its
+		// strict request schema rejects the top-level `enable_thinking` boolean
+		// that Alibaba DashScope speaks. Pin the real bundled id/metadata that
+		// produced the failing request, not a synthetic spec.
+		const model = getBundledModel<"openai-completions">("fireworks", "qwen3.7-plus");
+		expect(model.provider).toBe("fireworks");
+		expect(model.baseUrl).toContain("fireworks.ai");
+		expect(model.compat.thinkingFormat).toBe("openai");
+		expect(model.compat.reasoningDisableMode).toBe("lowest-effort");
+	});
+});

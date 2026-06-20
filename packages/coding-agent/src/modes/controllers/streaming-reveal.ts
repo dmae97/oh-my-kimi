@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getSegmenter } from "@oh-my-pi/pi-tui";
 import { LRUCache } from "lru-cache/raw";
-import { canonicalizeMessage } from "../../utils/thinking-display";
+import { formatThinkingForDisplay, hasDisplayableThinking } from "../../utils/thinking-display";
 import type { AssistantMessageComponent } from "../components/assistant-message";
 
 export const STREAMING_REVEAL_FRAME_MS = 1000 / 30;
@@ -9,11 +9,13 @@ export const MIN_STEP = 3;
 export const CATCHUP_FRAMES = 8;
 
 type AssistantContentBlock = AssistantMessage["content"][number];
+type DisplayThinkingContentBlock = Extract<AssistantContentBlock, { type: "thinking" }> & { rawThinking?: string };
 type StreamingRevealComponent = Pick<AssistantMessageComponent, "updateContent">;
 
 type StreamingRevealControllerOptions = {
 	getSmoothStreaming(): boolean;
 	getHideThinkingBlock(): boolean;
+	getProseOnlyThinking(): boolean;
 	requestRender(): void;
 };
 
@@ -83,13 +85,16 @@ function sliceGraphemes(text: string, units: number): string {
 	return text;
 }
 
-export function visibleUnits(message: AssistantMessage, hideThinking: boolean): number {
+export function visibleUnits(message: AssistantMessage, hideThinking: boolean, proseOnly = true): number {
 	let total = 0;
 	for (const block of message.content) {
 		if (block.type === "text") {
 			total += countGraphemes(block.text);
-		} else if (block.type === "thinking" && !hideThinking && canonicalizeMessage(block.thinking)) {
-			total += countGraphemes(block.thinking);
+		} else if (block.type === "thinking" && !hideThinking) {
+			const formatted = formatThinkingForDisplay(block.thinking, proseOnly);
+			if (hasDisplayableThinking(block.thinking, formatted)) {
+				total += countGraphemes(formatted);
+			}
 		}
 	}
 	return total;
@@ -119,6 +124,7 @@ export function buildDisplayMessage(
 	target: AssistantMessage,
 	revealed: number,
 	hideThinking: boolean,
+	proseOnly = true,
 	countOf: (index: number, text: string) => number = (_index, text) => countGraphemes(text),
 ): AssistantMessage {
 	let remaining = Math.max(0, Math.floor(revealed));
@@ -129,10 +135,20 @@ export function buildDisplayMessage(
 			const units = countOf(i, block.text);
 			content.push(revealTextBlock(block, remaining, units));
 			remaining = Math.max(0, remaining - units);
-		} else if (block.type === "thinking" && !hideThinking && canonicalizeMessage(block.thinking)) {
-			const units = countOf(i, block.thinking);
-			content.push(revealThinkingBlock(block, remaining, units));
-			remaining = Math.max(0, remaining - units);
+		} else if (block.type === "thinking" && !hideThinking) {
+			const formatted = formatThinkingForDisplay(block.thinking, proseOnly);
+			if (hasDisplayableThinking(block.thinking, formatted)) {
+				const units = countOf(i, formatted);
+				const displayBlock: DisplayThinkingContentBlock = {
+					...block,
+					thinking: formatted,
+					rawThinking: block.thinking,
+				};
+				content.push(revealThinkingBlock(displayBlock, remaining, units));
+				remaining = Math.max(0, remaining - units);
+			} else {
+				content.push(block);
+			}
 		} else {
 			content.push(block);
 		}
@@ -147,12 +163,14 @@ export function nextStep(backlog: number): number {
 export class StreamingRevealController {
 	readonly #getSmoothStreaming: () => boolean;
 	readonly #getHideThinkingBlock: () => boolean;
+	readonly #getProseOnlyThinking: () => boolean;
 	readonly #requestRender: () => void;
 	#target: AssistantMessage | undefined;
 	#component: StreamingRevealComponent | undefined;
 	#timer: NodeJS.Timeout | undefined;
 	#revealed = 0;
 	#hideThinkingBlock = false;
+	#proseOnlyThinking = true;
 	#smoothStreaming = true;
 	readonly #unitCounter = new BlockUnitCounter();
 	readonly #countOf = (index: number, text: string): number => this.#unitCounter.count(index, text);
@@ -160,6 +178,7 @@ export class StreamingRevealController {
 	constructor(options: StreamingRevealControllerOptions) {
 		this.#getSmoothStreaming = options.getSmoothStreaming;
 		this.#getHideThinkingBlock = options.getHideThinkingBlock;
+		this.#getProseOnlyThinking = options.getProseOnlyThinking;
 		this.#requestRender = options.requestRender;
 	}
 
@@ -169,9 +188,14 @@ export class StreamingRevealController {
 		this.#target = message;
 		this.#revealed = 0;
 		this.#hideThinkingBlock = this.#getHideThinkingBlock();
+		this.#proseOnlyThinking = this.#getProseOnlyThinking();
 		this.#smoothStreaming = this.#getSmoothStreaming();
 		if (!this.#smoothStreaming) {
-			component.updateContent(message, { transient: true });
+			const total = this.#visibleUnits(message);
+			component.updateContent(
+				buildDisplayMessage(message, total, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+				{ transient: true },
+			);
 			return;
 		}
 		const total = this.#visibleUnits(message);
@@ -179,9 +203,18 @@ export class StreamingRevealController {
 			// A tool call is a transcript-order boundary: finish any leading
 			// assistant text before EventController renders the separate tool card.
 			this.#revealed = total;
-			component.updateContent(buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock, this.#countOf), {
-				transient: true,
-			});
+			component.updateContent(
+				buildDisplayMessage(
+					message,
+					this.#revealed,
+					this.#hideThinkingBlock,
+					this.#proseOnlyThinking,
+					this.#countOf,
+				),
+				{
+					transient: true,
+				},
+			);
 			return;
 		}
 		this.#renderCurrent();
@@ -190,9 +223,16 @@ export class StreamingRevealController {
 
 	setTarget(message: AssistantMessage): void {
 		this.#target = message;
+		this.#hideThinkingBlock = this.#getHideThinkingBlock();
+		this.#proseOnlyThinking = this.#getProseOnlyThinking();
+		this.#smoothStreaming = this.#getSmoothStreaming();
 		if (!this.#component) return;
 		if (!this.#smoothStreaming) {
-			this.#component.updateContent(message, { transient: true });
+			const total = this.#visibleUnits(message);
+			this.#component.updateContent(
+				buildDisplayMessage(message, total, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+				{ transient: true },
+			);
 			return;
 		}
 		const total = this.#visibleUnits(message);
@@ -202,7 +242,13 @@ export class StreamingRevealController {
 			this.#revealed = total;
 			this.#stopTimer();
 			this.#component.updateContent(
-				buildDisplayMessage(message, this.#revealed, this.#hideThinkingBlock, this.#countOf),
+				buildDisplayMessage(
+					message,
+					this.#revealed,
+					this.#hideThinkingBlock,
+					this.#proseOnlyThinking,
+					this.#countOf,
+				),
 				{
 					transient: true,
 				},
@@ -231,8 +277,11 @@ export class StreamingRevealController {
 			const block = message.content[i]!;
 			if (block.type === "text") {
 				total += this.#unitCounter.count(i, block.text);
-			} else if (block.type === "thinking" && !this.#hideThinkingBlock && canonicalizeMessage(block.thinking)) {
-				total += this.#unitCounter.count(i, block.thinking);
+			} else if (block.type === "thinking" && !this.#hideThinkingBlock) {
+				const formatted = formatThinkingForDisplay(block.thinking, this.#proseOnlyThinking);
+				if (hasDisplayableThinking(block.thinking, formatted)) {
+					total += this.#unitCounter.count(i, formatted);
+				}
 			}
 		}
 		return total;
@@ -244,7 +293,13 @@ export class StreamingRevealController {
 		// smooth reveal has temporarily caught up to the current target. The
 		// message_end handler performs the only stable non-transient render.
 		this.#component.updateContent(
-			buildDisplayMessage(this.#target, this.#revealed, this.#hideThinkingBlock, this.#countOf),
+			buildDisplayMessage(
+				this.#target,
+				this.#revealed,
+				this.#hideThinkingBlock,
+				this.#proseOnlyThinking,
+				this.#countOf,
+			),
 			{ transient: true },
 		);
 	}
@@ -284,9 +339,12 @@ export class StreamingRevealController {
 			return;
 		}
 		this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
-		component.updateContent(buildDisplayMessage(target, this.#revealed, this.#hideThinkingBlock, this.#countOf), {
-			transient: true,
-		});
+		component.updateContent(
+			buildDisplayMessage(target, this.#revealed, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+			{
+				transient: true,
+			},
+		);
 		this.#requestRender();
 		if (this.#revealed >= total) {
 			this.#stopTimer();

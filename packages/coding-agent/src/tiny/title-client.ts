@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import { settings } from "../config/settings";
+import { safeSend } from "../utils/ipc";
 import { tinyModelDeviceSettingToEnv } from "./device";
 import { tinyModelDtypeSettingToEnv } from "./dtype";
 import {
@@ -216,13 +217,7 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess {
 function wrapSubprocess({ proc, inbound, errors, intentionalExit }: SpawnedSubprocess): WorkerHandle {
 	return {
 		send(message) {
-			try {
-				proc.send(message);
-			} catch (error) {
-				logger.debug("tiny-title: send to subprocess failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			safeSend(proc, message, "tiny-title");
 		},
 		onMessage(handler) {
 			inbound.add(handler);
@@ -301,6 +296,7 @@ export class TinyTitleClient {
 	#unsubscribeMessage: (() => void) | null = null;
 	#unsubscribeError: (() => void) | null = null;
 	#pending = new Map<string, PendingRequest>();
+	#failedModels = new Set<TinyLocalModelKey>();
 	#progressListeners = new Set<(event: TinyTitleProgressEvent) => void>();
 	#nextRequestId = 0;
 	#spawnWorker: () => WorkerHandle;
@@ -323,7 +319,7 @@ export class TinyTitleClient {
 	): Promise<string | null> {
 		const options = normalizeTinyTitleGenerateOptions(optionsOrSignal);
 		if (!isTinyTitleLocalModelKey(modelKey)) return null;
-		if (options.signal?.aborted) return null;
+		if (options.signal?.aborted || this.#failedModels.has(modelKey)) return null;
 
 		try {
 			const worker = this.#ensureWorker();
@@ -362,7 +358,7 @@ export class TinyTitleClient {
 		options: { maxTokens?: number; signal?: AbortSignal } = {},
 	): Promise<string | null> {
 		if (!isTinyMemoryLocalModelKey(modelKey)) return null;
-		if (options.signal?.aborted) return null;
+		if (options.signal?.aborted || this.#failedModels.has(modelKey)) return null;
 
 		try {
 			const worker = this.#ensureWorker();
@@ -483,10 +479,15 @@ export class TinyTitleClient {
 			return;
 		}
 		logger.debug("tiny-title: worker returned error", { error: message.error });
+		this.#markFailedModel(pending);
 		this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
 		if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 		else pending.resolve(false);
 		void this.terminate();
+	}
+
+	#markFailedModel(pending: PendingRequest): void {
+		if (pending.kind === "generate" || pending.kind === "complete") this.#failedModels.add(pending.modelKey);
 	}
 
 	#emitProgress(event: TinyTitleProgressEvent): void {

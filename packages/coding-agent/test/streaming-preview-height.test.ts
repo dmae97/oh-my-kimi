@@ -386,11 +386,11 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		const width = 80;
 		const { lines } = renderPending("bash", { command: "echo hi" });
 		const strippedLines = lines.map(line => Bun.stripANSI(line));
-		const topBorder = strippedLines.find(line => line.includes(activeTheme.boxSharp.topLeft));
+		const topBorder = strippedLines.find(line => line.includes(activeTheme.boxRound.topLeft));
 
 		expect(topBorder).toBeDefined();
-		expect(topBorder?.[0]).toBe(activeTheme.boxSharp.topLeft);
-		expect(topBorder?.endsWith(activeTheme.boxSharp.topRight)).toBe(true);
+		expect(topBorder?.[0]).toBe(activeTheme.boxRound.topLeft);
+		expect(topBorder?.endsWith(activeTheme.boxRound.topRight)).toBe(true);
 		expect(visibleWidth(topBorder ?? "")).toBe(width);
 	});
 

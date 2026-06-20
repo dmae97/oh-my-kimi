@@ -7,7 +7,7 @@ import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { canonicalSnapshotKey } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
-import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
+import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tree-selector";
 import type {
 	ObservableSession,
@@ -354,16 +354,20 @@ describe("tool path arrays", () => {
 			status: "parked",
 		});
 
-		const hub = new AgentHubOverlayComponent({
-			observers,
-			hubKeys: ["ctrl+s"],
-			onDone: () => {},
-			requestRender: () => {},
+		const viewer = new AgentTranscriptViewer({
+			agentId: "search-overlay-session",
 			registry: agents,
+			observers,
+			ui: { requestRender: () => {}, requestComponentRender: () => {} } as never,
+			cwd: tmp,
+			expandKeys: ["ctrl+o"],
+			hubKeys: ["ctrl+s"],
+			requestRender: () => {},
+			onClose: () => {},
+			onHubClose: () => {},
 		});
-		hub.openChat("search-overlay-session");
-		const rendered = Bun.stripANSI(hub.render(120).join("\n"));
-		hub.dispose();
+		const rendered = Bun.stripANSI(viewer.render(120).join("\n"));
+		viewer.dispose();
 
 		// The hub chat now renders through searchToolRenderer.renderCall; the
 		// single-string `paths` arg shows up as the "in <paths>" scope meta on the
@@ -634,8 +638,7 @@ describe("tool path arrays", () => {
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
 
-		queue.nextToolChoice();
-		const invoker = queue.peekInFlightInvoker();
+		const invoker = queue.peekPendingInvoker();
 		if (!invoker) throw new Error("Expected pending resolve invoker");
 		await invoker({ action: "apply", reason: "apply multi-path ast edit" });
 

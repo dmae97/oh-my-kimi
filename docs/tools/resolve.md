@@ -34,9 +34,8 @@
 ## Flow
 1. Preview-producing code can call `queueResolveHandler(...)` with a label, source tool name, `apply(reason, extra?)` callback, and optional `reject(reason, extra?)` callback.
 2. Modes can also register a standing resolve handler through `session.setStandingResolveHandler(...)`; `resolve.execute()` consults it only when no queued invoker is active.
-3. `queueResolveHandler(...)` asks the session for a forced `resolve` tool choice and pushes it into the tool-choice queue with `pushOnce(...)`.
-4. The queued entry is marked `now: true`; if the model rejects that forced tool choice, `onRejected` returns `requeue`, so the reminder comes back.
-5. `queueResolveHandler(...)` also injects a `resolve-reminder` steering message:
+3. `queueResolveHandler(...)` registers a non-forcing pending invoker on the session's tool-choice queue under a unique `pending-action:<sourceTool>:<seq>` id. It does NOT force a tool choice and does NOT steer a reminder.
+4. While a preview is pending, the session's `getToolChoice` (`nextToolChoiceDirective`) returns a `SoftToolRequirement` (`toolName: "resolve"`) carrying the resolve reminder — a non-consuming peek. The agent runtime injects the reminder once and forces `tool_choice: resolve` for one turn only if the model declines (see `docs/resolve-tool-runtime.md`). The reminder text is:
 
 ```text
 <system-reminder>
@@ -44,27 +43,27 @@ This is a preview. Call the `resolve` tool to apply or discard these changes.
 </system-reminder>
 ```
 
-6. When `resolve.execute()` runs, it wraps the call in `untilAborted(...)` and fetches `session.peekQueueInvoker?.() ?? session.peekStandingResolveHandler?.()`.
-7. If no invoker exists, `apply` throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`; `discard` instead returns a success payload `Nothing to discard; no pending action remains.` because the desired end-state (no staged change) already holds.
-8. Otherwise it invokes the current handler with the full params object.
-9. `runResolveInvocation(...)` builds base details from `action`, `reason`, `extra`, `sourceToolName`, and `label`.
-10. For `apply`, it calls the producer's `apply(reason, extra)` callback.
-11. If `apply` throws, `runResolveInvocation(...)` calls `onApplyError` when present. The queued preview integration uses this to re-push the resolve directive and steering reminder so the action remains pending. Non-`ToolError` exceptions are wrapped as `ToolError("Apply failed: <message>")`.
-12. For `discard`, it calls `reject(reason, extra)` when provided. If no reject callback exists or it returns `undefined`, `resolve` fabricates the default discard message.
-13. Before returning callback results, it merges resolve metadata into `result.details` so renderer/UI code can show the action, label, and originating tool.
+5. When `resolve.execute()` runs, it wraps the call in `untilAborted(...)` and dispatches via `session.peekQueueInvoker?.() ?? session.peekPendingInvoker?.() ?? session.peekStandingResolveHandler?.()`.
+6. If no invoker exists, `apply` throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`; `discard` instead returns a success payload `Nothing to discard; no pending action remains.` because the desired end-state (no staged change) already holds.
+7. Otherwise it invokes the current handler with the full params object.
+8. `runResolveInvocation(...)` builds base details from `action`, `reason`, `extra`, `sourceToolName`, and `label`.
+9. For `apply`, it calls the producer's `apply(reason, extra)` callback.
+10. If `apply` throws, `runResolveInvocation(...)` calls `onApplyError` when present. The pending-preview integration uses this to re-register the same pending invoker (same id) so the action remains pending for discard or retry. Non-`ToolError` exceptions are wrapped as `ToolError("Apply failed: <message>")`.
+11. For `discard`, it calls `reject(reason, extra)` when provided. If no reject callback exists or it returns `undefined`, `resolve` fabricates the default discard message.
+12. Before returning callback results, it merges resolve metadata into `result.details` so renderer/UI code can show the action, label, and originating tool.
 
 ## Modes / Variants
 - `apply`: runs the pending action's `apply(reason, extra?)` callback and returns its content.
 - `discard` with reject callback: runs `reject(reason, extra?)` and returns that callback's content when non-`undefined`.
 - `discard` without reject callback, or with a reject callback returning `undefined`: returns the built-in `Discarded: ...` text payload.
 - `discard` with no pending action at all: returns `Nothing to discard; no pending action remains.` as a success result.
-- Queued handler: one in-flight tool-choice queue invoker, used by preview producers such as `ast_edit`.
+- Pending invoker: a non-forcing preview invoker in the pending-invoker registry (separate from the consuming directive queue), used by preview producers such as `ast_edit`.
 - Standing handler: long-lived mode-owned handler, used as a fallback when no queue invoker is active.
 
 ## Side Effects
 - Session state
-  - Consumes or invokes the current pending action through the session tool-choice queue or standing handler; `resolve` does not maintain its own stack.
-  - Adds a `resolve-reminder` steering message when a queued preview is registered.
+  - Consumes or invokes the current pending action through the pending invoker, tool-choice queue, or standing handler; `resolve` does not maintain its own stack.
+  - Does not steer a reminder or force a tool choice for previews — the reminder rides a non-forcing `SoftToolRequirement` and the agent runtime forces `resolve` only on non-compliance.
   - On queued apply failure, requeues the same pending action before rethrowing so the model can discard or retry instead of losing the pending preview.
 - User-visible prompts / interactive UI
   - The visible effect depends on the preview-producing tool and the resolve renderer.
@@ -74,8 +73,8 @@ This is a preview. Call the `resolve` tool to apply or discard these changes.
 
 ## Limits & Caps
 - Hidden tool: `ResolveTool.hidden = true`, and normal requested-tool filtering removes `resolve`; `createTools(...)` adds it separately as a hidden tool.
-- Exactly one active queue invoker is consulted per call via `session.peekQueueInvoker()`; if none exists, one standing handler may be consulted via `session.peekStandingResolveHandler()`.
-- There is no independent queue depth cap in this tool; ordering follows the shared tool-choice queue and mode-owned standing handler lifecycle.
+- Per call, `resolve` consults the in-flight hard-directive queue invoker (`session.peekQueueInvoker()`), then the non-forcing pending-preview invoker (`session.peekPendingInvoker()`), then a standing handler (`session.peekStandingResolveHandler()`).
+- There is no independent depth cap in this tool; pending previews stack as unique-keyed invokers (resolved head-first), separate from the consuming directive queue and the mode-owned standing handler lifecycle.
 
 ## Errors
 - `apply` with no pending action or standing handler: throws `ToolError("No pending action to resolve. Nothing to apply or discard.")`. `discard` in the same situation succeeds with `Nothing to discard; no pending action remains.` instead of erroring.

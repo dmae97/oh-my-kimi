@@ -32,26 +32,45 @@ const THINKING_LEVEL_METADATA: Record<ThinkingLevel, ThinkingLevelMetadata> = {
 	[ThinkingLevel.High]: { value: ThinkingLevel.High, label: "high", description: "Deep reasoning (~16k tokens)" },
 	[ThinkingLevel.XHigh]: {
 		value: ThinkingLevel.XHigh,
-		label: "xhigh",
+		label: "max",
 		description: "Maximum reasoning (~32k tokens)",
 	},
 };
 
-const THINKING_LEVELS = new Set<string>([ThinkingLevel.Inherit, ThinkingLevel.Off, ...THINKING_EFFORTS]);
-const EFFORT_LEVELS = new Set<string>(THINKING_EFFORTS);
+const EFFORT_BY_SELECTOR: Readonly<Record<string, Effort>> = {
+	[Effort.Minimal]: Effort.Minimal,
+	[Effort.Low]: Effort.Low,
+	[Effort.Medium]: Effort.Medium,
+	[Effort.High]: Effort.High,
+	[Effort.XHigh]: Effort.XHigh,
+	max: Effort.XHigh,
+};
+const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
+	[ThinkingLevel.Inherit]: ThinkingLevel.Inherit,
+	[ThinkingLevel.Off]: ThinkingLevel.Off,
+	[ThinkingLevel.Minimal]: ThinkingLevel.Minimal,
+	[ThinkingLevel.Low]: ThinkingLevel.Low,
+	[ThinkingLevel.Medium]: ThinkingLevel.Medium,
+	[ThinkingLevel.High]: ThinkingLevel.High,
+	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
+};
+
+function getOwnSelector<T>(selectors: Readonly<Record<string, T>>, value: string | null | undefined): T | undefined {
+	return value === undefined || value === null || !Object.hasOwn(selectors, value) ? undefined : selectors[value];
+}
 
 /**
  * Parses a provider-facing effort value.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
-	return value !== undefined && value !== null && EFFORT_LEVELS.has(value) ? (value as Effort) : undefined;
+	return getOwnSelector(EFFORT_BY_SELECTOR, value);
 }
 
 /**
  * Parses an agent-local thinking selector.
  */
 export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
-	return value !== undefined && value !== null && THINKING_LEVELS.has(value) ? (value as ThinkingLevel) : undefined;
+	return getOwnSelector(THINKING_LEVEL_BY_SELECTOR, value);
 }
 
 /**
@@ -125,6 +144,7 @@ const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
  */
 export function parseConfiguredThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
 	if (value === AUTO_THINKING) return AUTO_THINKING;
+	if (value === "max") return ThinkingLevel.XHigh;
 	return parseThinkingLevel(value);
 }
 

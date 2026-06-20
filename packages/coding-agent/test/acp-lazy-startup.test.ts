@@ -248,6 +248,8 @@ describe("ACP lazy startup", () => {
 		type ObservedAdvisorSettings = {
 			enabled: boolean;
 			subagents: boolean;
+			syncBacklog: "off" | "1" | "3" | "5";
+			immuneTurns: number;
 		};
 
 		const runProtocolStartup = async (mode: "rpc" | "rpc-ui" | "acp"): Promise<ObservedAdvisorSettings> => {
@@ -257,6 +259,8 @@ describe("ACP lazy startup", () => {
 			const settings = Settings.isolated({
 				"advisor.enabled": true,
 				"advisor.subagents": true,
+				"advisor.syncBacklog": "5",
+				"advisor.immuneTurns": 3,
 			});
 			let observed: ObservedAdvisorSettings | undefined;
 			const stopMessage = "stop test protocol mode";
@@ -284,6 +288,8 @@ describe("ACP lazy startup", () => {
 							observed = {
 								enabled: settings.get("advisor.enabled"),
 								subagents: settings.get("advisor.subagents"),
+								syncBacklog: settings.get("advisor.syncBacklog"),
+								immuneTurns: settings.get("advisor.immuneTurns"),
 							};
 							throw new Error(stopMessage);
 						},
@@ -291,6 +297,8 @@ describe("ACP lazy startup", () => {
 							observed = {
 								enabled: settings.get("advisor.enabled"),
 								subagents: settings.get("advisor.subagents"),
+								syncBacklog: settings.get("advisor.syncBacklog"),
+								immuneTurns: settings.get("advisor.immuneTurns"),
 							};
 							throw new Error(stopMessage);
 						},
@@ -314,6 +322,8 @@ describe("ACP lazy startup", () => {
 			await expect(runProtocolStartup(mode)).resolves.toEqual({
 				enabled: false,
 				subagents: false,
+				syncBacklog: "off",
+				immuneTurns: 1,
 			});
 		}
 	});

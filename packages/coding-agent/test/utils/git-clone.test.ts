@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as url from "node:url";
 
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
 
@@ -44,7 +45,7 @@ describe("git.clone with options.sha", () => {
 
 		// `file://` is required: local-path clones ignore `--depth`, which would
 		// mask the bug. See git-clone(1) "GIT URLS" / "LOCAL PROTOCOL".
-		upstreamUrl = `file://${upstream}`;
+		upstreamUrl = url.pathToFileURL(upstream).href;
 
 		gitRun(upstream, ["init", "-q", "-b", "main"]);
 		gitRun(upstream, ["commit", "-q", "--allow-empty", "-m", "first"]);

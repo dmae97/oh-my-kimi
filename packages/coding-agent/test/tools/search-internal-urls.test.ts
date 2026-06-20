@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetActiveSkillsForTests, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import {
 	type InternalResource,
 	type InternalUrl,
@@ -13,6 +14,7 @@ import {
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
 
 function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -89,6 +91,7 @@ describe("SearchTool internal URL resolution", () => {
 		AgentRegistry.resetGlobalForTests();
 		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();
+		resetActiveSkillsForTests();
 	});
 
 	function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -101,6 +104,57 @@ describe("SearchTool internal URL resolution", () => {
 			...overrides,
 		};
 	}
+
+	async function registerSkillDirectory(): Promise<string> {
+		const skillDir = path.join(tmpDir, "skills", "demo");
+		await fs.mkdir(path.join(skillDir, "references", "docs"), { recursive: true });
+		await Bun.write(path.join(skillDir, "SKILL.md"), "# Demo\n");
+		await Bun.write(path.join(skillDir, "references", "index.md"), "install needle\n");
+		await Bun.write(path.join(skillDir, "references", "docs", "guide.md"), "deep needle\n");
+		setActiveSkills([
+			{
+				name: "demo",
+				description: "demo skill",
+				filePath: path.join(skillDir, "SKILL.md"),
+				baseDir: skillDir,
+				source: "test",
+			},
+		]);
+		return skillDir;
+	}
+
+	it("lists skill:// directory subpaths through the read tool", async () => {
+		const skillDir = await registerSkillDirectory();
+		const session = createSession();
+		const tool = new ReadTool(session);
+
+		const result = await tool.execute("test-call", { path: "skill://demo/references" });
+
+		const text = getResultText(result);
+		expect(text).toContain("index.md");
+		expect(text).toContain("docs/");
+		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "references"));
+	});
+
+	it("walks skill:// directory subpaths for search and find", async () => {
+		await registerSkillDirectory();
+		const session = createSession({ hasEditTool: true });
+		const searchTool = new SearchTool(session);
+		const findTool = new FindTool(session);
+
+		const searchResult = await searchTool.execute("test-search", {
+			pattern: "deep needle",
+			paths: ["skill://demo/references"],
+		});
+		const findResult = await findTool.execute("test-find", {
+			paths: ["skill://demo/references"],
+		});
+
+		const searchText = getResultText(searchResult);
+		expect(searchText).toContain("deep needle");
+		expect(searchText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
+		expect(getResultText(findResult)).toContain("guide.md");
+	});
 
 	it("resolves artifact:// URL to backing file and greps it", async () => {
 		const content = "line one\nfound the needle here\nline three\n";
@@ -271,6 +325,28 @@ describe("SearchTool internal URL resolution", () => {
 
 		const text = getResultText(result);
 		expect(text).toContain("PLAN.md");
+	});
+
+	it("walks local:// directory subpaths for read and find", async () => {
+		const localRoot = path.join(artifactsDir, "local");
+		await fs.mkdir(path.join(localRoot, "notes"), { recursive: true });
+		await Bun.write(path.join(localRoot, "notes", "PLAN.md"), "# Plan\n");
+
+		LocalProtocolHandler.setOverride({ getArtifactsDir: () => artifactsDir, getSessionId: () => "session" });
+
+		const session = createSession({ hasEditTool: true });
+		const readResult = await new ReadTool(session).execute("test-read", { path: "local://notes" });
+		const findResult = await new FindTool(session).execute("test-find", {
+			paths: ["local://notes"],
+		});
+		const dirResource = await InternalUrlRouter.instance().resolve("local://notes");
+
+		const readText = getResultText(readResult);
+		expect(readText).toContain("PLAN.md");
+		// Directory listings must stay immutable so hashline edit anchors never key on a directory path.
+		expect(readText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
+		expect(dirResource.immutable).toBe(true);
+		expect(getResultText(findResult)).toContain("PLAN.md");
 	});
 
 	it("keeps hashline anchors when searching mutable local:// sources", async () => {

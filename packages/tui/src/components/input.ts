@@ -1,4 +1,4 @@
-import { BracketedPasteHandler } from "../bracketed-paste";
+import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings } from "../keybindings";
 import { extractPrintableText } from "../keys";
 import { KillRing } from "../kill-ring";
@@ -375,8 +375,12 @@ export class Input implements Component, Focusable {
 		this.#lastAction = null;
 		this.#pushUndo();
 
-		// Clean the pasted text — remove newlines and carriage returns, normalize
-		// tabs, AND normalize Unicode to NFC.
+		// Clean the pasted text — decode tmux's re-encoded control bytes (both
+		// extended-keys formats, e.g. Ctrl+J → "\n") back to literal bytes so the escape
+		// tail does not leak in, remove newlines/carriage returns, expand tabs, NFC-normalize,
+		// then strip any remaining control bytes. The decoder can synthesize Ctrl+A..Ctrl+Z
+		// (0x01..0x1A) from a paste, and a single-line value must hold none of them — newlines
+		// are already gone and tabs are already spaces by the time the C0/DEL strip runs.
 		//
 		// NFC normalization rationale: macOS Finder drag-drops file paths in NFD
 		// (Conjoining Jamo, U+1100..U+11FF). `Bun.stringWidth` counts each
@@ -387,9 +391,11 @@ export class Input implements Component, Focusable {
 		// as cursor drift past the visible filename — N×~1.5 cells for a path
 		// with N Korean syllables. NFC normalization at paste time stores the
 		// value in the same form everything else in the codebase assumes.
-		const cleanText = replaceTabs(pastedText.replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "")).normalize(
-			"NFC",
-		);
+		const cleanText = replaceTabs(
+			decodeReencodedPasteControls(pastedText).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, ""),
+		)
+			.normalize("NFC")
+			.replace(/[\x00-\x1F\x7F]/g, "");
 
 		// Insert at cursor position
 		this.#value = this.#value.slice(0, this.#cursor) + cleanText + this.#value.slice(this.#cursor);

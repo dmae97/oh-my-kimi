@@ -159,6 +159,7 @@ export function ollamaCloudModelManagerOptions(
 							discoveredContextWindow !== null && discoveredContextWindow !== undefined
 								? (providerReference?.maxTokens ?? Math.min(contextWindow, 8192))
 								: Math.min(contextWindow, 8192),
+						omitMaxOutputTokens: true,
 					};
 				}),
 			);

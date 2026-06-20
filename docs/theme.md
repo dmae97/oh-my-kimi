@@ -95,6 +95,16 @@ Runtime precedence:
 
 Invalid override keys are ignored and logged (`logger.debug`).
 
+#### Box-drawing borders
+
+All outlined chrome — tool-result frames, overlays, code fences, the editor, the welcome banner — draws with the `boxRound.*` tokens: rounded corners (`╭╮╰╯`) plus tee/cross junctions (`├┤┬┴┼`, which have no rounded Unicode form, so they are sourced from the `boxSharp.*` tokens). Markdown tables are the sole exception and keep the fully sharp `boxSharp.*` set (`┌┐└┘`).
+
+Override behavior follows from that split:
+
+- `boxRound.{topLeft,topRight,bottomLeft,bottomRight,horizontal,vertical}` restyle every border's corners and edges.
+- `boxSharp.{cross,teeDown,teeUp,teeRight,teeLeft}` restyle dividers/junctions everywhere (rounded frames and tables alike).
+- `boxSharp.{topLeft,topRight,bottomLeft,bottomRight}` now affect markdown table corners only.
+
 ## Built-in vs custom theme sources
 
 Theme lookup order (`loadThemeJson`):

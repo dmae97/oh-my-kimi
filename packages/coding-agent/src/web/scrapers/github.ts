@@ -468,7 +468,7 @@ async function renderGitHubRepo(
 			md += `${prefix}${item.path}\n`;
 		}
 		if (tree.length > 100) {
-			md += `... and ${tree.length - 100} more files\n`;
+			md += `[…${tree.length - 100} files elided…]\n`;
 		}
 		md += "```\n\n";
 	}

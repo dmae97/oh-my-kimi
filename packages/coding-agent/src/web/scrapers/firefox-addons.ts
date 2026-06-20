@@ -173,7 +173,7 @@ export const handleFirefoxAddons: SpecialHandler = async (
 				md += `- ${permission}\n`;
 			}
 			if (permissions.length > preview.length) {
-				md += `\n*...and ${permissions.length - preview.length} more*\n`;
+				md += `\n[…${permissions.length - preview.length} permissions elided…]\n`;
 			}
 		}
 

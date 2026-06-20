@@ -7,12 +7,5 @@ Use a single `op` field:
 - `complete` marks the goal complete after you have verified every deliverable against current evidence.
 - `drop` discards the current goal without completing it.
 
-Examples:
-- `goal({"op":"create","objective":"Implement feature X","token_budget":50000})`
-- `goal({"op":"get"})`
-- `goal({"op":"resume"})`
-- `goal({"op":"complete"})`
-- `goal({"op":"drop"})`
-
 NEVER call `complete` because a budget is low or a turn is ending. Call it only when the goal is actually done and verified.
 If `get` shows a paused goal, call `resume` before continuing work on it.

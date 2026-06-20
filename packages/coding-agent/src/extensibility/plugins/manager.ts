@@ -248,11 +248,29 @@ export class PluginManager {
 	}
 
 	async #rollbackFailedInstall(
-		actualName: string,
+		actualName: string | undefined,
 		packageJsonBefore: string,
+		bunLockBefore: string | null,
 		snapshot: PluginPackageSnapshot | null,
 	): Promise<void> {
 		await Bun.write(getPluginsPackageJson(), packageJsonBefore);
+
+		// Restore (or remove) bun's lockfile. Without this, a `bun install` +
+		// `bun update` pair that successfully rewrote `bun.lock` would leave the
+		// rejected commit pinned even when validation rolls everything else back.
+		const bunLockPath = path.join(getPluginsDir(), "bun.lock");
+		if (bunLockBefore === null) {
+			await fs.promises.rm(bunLockPath, { force: true });
+		} else {
+			await Bun.write(bunLockPath, bunLockBefore);
+		}
+
+		// `actualName` may be undefined when the install failed before the dep
+		// key was resolved — package.json + bun.lock restoration above is the
+		// complete rollback in that case.
+		if (!actualName) {
+			return;
+		}
 		const packagePath = path.join(getPluginsNodeModules(), actualName);
 		await fs.promises.rm(packagePath, { recursive: true, force: true });
 		if (!snapshot) {
@@ -343,6 +361,19 @@ export class PluginManager {
 		}
 		const pkgJsonPath = getPluginsPackageJson();
 		const packageJsonBefore = await Bun.file(pkgJsonPath).text();
+		// Snapshot bun's lockfile so the rollback path can restore the pin. Every
+		// step below — `bun install`, `bun update`, feature/extension validation,
+		// runtime-config save — must either complete entirely or leave the
+		// lockfile pointing at its pre-install state. Absent before install means
+		// "remove on rollback".
+		const bunLockPath = path.join(getPluginsDir(), "bun.lock");
+		let bunLockBefore: string | null;
+		try {
+			bunLockBefore = await Bun.file(bunLockPath).text();
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+			bunLockBefore = null;
+		}
 		const depsBefore = await this.#readDeps(pkgJsonPath);
 		const packageInstallSpec = gitSource ? gitInstallSpec(spec.packageName, gitSource) : spec.packageName;
 		const existingActualName = gitSource
@@ -350,24 +381,26 @@ export class PluginManager {
 			: extractPackageName(spec.packageName);
 		const packageSnapshot = await this.#snapshotInstalledPackage(existingActualName);
 
+		// `actualName` is hoisted so the rollback handler can clean up the right
+		// node_modules entry even if a step between `bun install` and the final
+		// validation throws.
+		let actualName: string | undefined;
 		try {
-			// Run npm install
-			const proc = Bun.spawn(["bun", "install", packageInstallSpec], {
+			// Step 1: write the spec into plugins/package.json + node_modules.
+			const installProc = Bun.spawn(["bun", "install", packageInstallSpec], {
 				cwd: getPluginsDir(),
 				stdin: "ignore",
 				stdout: "pipe",
 				stderr: "pipe",
 				windowsHide: true,
 			});
-
-			const exitCode = await proc.exited;
-			if (exitCode !== 0) {
-				const stderr = await new Response(proc.stderr).text();
-				throw new Error(`npm install failed: ${stderr}`);
+			const installExit = await installProc.exited;
+			if (installExit !== 0) {
+				const stderr = await new Response(installProc.stderr).text();
+				throw new Error(`bun install failed: ${stderr}`);
 			}
 			// Resolve actual package name. npm specs encode the name (strip version);
 			// git specs do not, so diff plugins/package.json deps to find the new entry.
-			let actualName: string;
 			if (gitSource) {
 				const depsAfter = await this.#readDeps(pkgJsonPath);
 				let resolved: string | undefined;
@@ -393,8 +426,32 @@ export class PluginManager {
 			} else {
 				actualName = extractPackageName(spec.packageName);
 			}
-			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 
+			// Step 2: refresh the git lockfile pin when re-installing an existing
+			// git plugin. `bun install <spec>` is a no-op when the spec matches the
+			// lockfile entry — it never re-resolves the remote ref — so re-running
+			// `omp plugin install github:owner/repo` would silently keep the user on
+			// the original resolved commit even after upstream moved (#3063).
+			// `bun update <name>` re-resolves the ref against the remote and
+			// rewrites the pin; SHA-pinned refs stay put because the commit can't
+			// move. First-time installs skip this — the initial `bun install` already
+			// fetched HEAD. Rollback is handled by the outer catch.
+			if (gitSource && existingActualName) {
+				const updateProc = Bun.spawn(["bun", "update", actualName], {
+					cwd: getPluginsDir(),
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+					windowsHide: true,
+				});
+				const updateExit = await updateProc.exited;
+				if (updateExit !== 0) {
+					const stderr = await new Response(updateProc.stderr).text();
+					throw new Error(`bun update ${actualName} failed: ${stderr}`);
+				}
+			}
+
+			const pkgPath = path.join(getPluginsNodeModules(), actualName, "package.json");
 			let pkg: { name: string; version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
 				pkg = await Bun.file(pkgPath).json();
@@ -441,18 +498,7 @@ export class PluginManager {
 				enabled: true,
 			};
 
-			try {
-				await this.#validateInstalledExtensions(installedPlugin);
-			} catch (err) {
-				try {
-					await this.#rollbackFailedInstall(actualName, packageJsonBefore, packageSnapshot);
-				} catch (rollbackErr) {
-					const message = err instanceof Error ? err.message : String(err);
-					const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
-					throw new Error(`${message}\nRollback failed: ${rollbackMessage}`);
-				}
-				throw err;
-			}
+			await this.#validateInstalledExtensions(installedPlugin);
 
 			// Update runtime config
 			const config = await this.#ensureConfigLoaded();
@@ -464,6 +510,20 @@ export class PluginManager {
 			await this.#saveRuntimeConfig();
 
 			return installedPlugin;
+		} catch (err) {
+			try {
+				await this.#rollbackFailedInstall(
+					actualName ?? existingActualName,
+					packageJsonBefore,
+					bunLockBefore,
+					packageSnapshot,
+				);
+			} catch (rollbackErr) {
+				const message = err instanceof Error ? err.message : String(err);
+				const rollbackMessage = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+				throw new Error(`${message}\nRollback failed: ${rollbackMessage}`);
+			}
+			throw err;
 		} finally {
 			await this.#cleanupSnapshot(packageSnapshot);
 		}

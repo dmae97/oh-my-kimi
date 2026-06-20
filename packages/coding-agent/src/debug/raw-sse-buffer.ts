@@ -119,9 +119,16 @@ export class RawSseDebugBuffer {
 	#records: RawSseDebugRecord[] = [];
 	// Parallel to `#records`: `#recordChars[i]` is the precomputed char count
 	// for `#records[i]`. Kept in lockstep by `#append` (push both) and
-	// `#enforceLimits` (shift both). See the comment above the class for why
-	// this is a sidecar array instead of a per-record property.
+	// `#enforceLimits` (advance `#head` to evict, then `slice` both together
+	// when compacting). See the comment above the class for why this is a
+	// sidecar array instead of a per-record property.
 	#recordChars: number[] = [];
+	// Head-index ring over `#records`/`#recordChars`: index of the oldest live
+	// record. Eviction advances `#head` (amortized O(1)) rather than an O(n)
+	// front `shift()`; the dead `[0, #head)` prefix is reclaimed lazily by
+	// `#enforceLimits`. Live count is `#records.length - #head`; the live
+	// records are `#records[#head ..]`.
+	#head = 0;
 	#totalChars = 0;
 	#droppedRecords = 0;
 	#droppedChars = 0;
@@ -181,7 +188,7 @@ export class RawSseDebugBuffer {
 
 	snapshot(): RawSseDebugSnapshot {
 		return {
-			records: [...this.#records],
+			records: this.#records.slice(this.#head),
 			droppedRecords: this.#droppedRecords,
 			droppedChars: this.#droppedChars,
 			totalEvents: this.#totalEvents,
@@ -190,9 +197,12 @@ export class RawSseDebugBuffer {
 	}
 
 	toRawText(): string {
-		// Reads the live array directly: `rawRecordText` only computes a string
-		// from each record, so no caller-visible mutation is possible.
-		const body = this.#records.map(rawRecordText).join("\n");
+		// Reads the live window directly: `rawRecordText` only computes a string
+		// from each record, so no caller-visible mutation is possible. With a
+		// non-empty dead prefix we map a slice past `#head`; `#head === 0` (the
+		// common case) maps `#records` in place with no extra copy.
+		const live = this.#head === 0 ? this.#records : this.#records.slice(this.#head);
+		const body = live.map(rawRecordText).join("\n");
 		if (this.#droppedRecords === 0) return body;
 		const dropped = `: omp-debug-dropped records=${this.#droppedRecords} chars=${this.#droppedChars}\n\n`;
 		return body.length > 0 ? `${dropped}${body}` : dropped;
@@ -208,13 +218,24 @@ export class RawSseDebugBuffer {
 	}
 
 	#enforceLimits(): void {
-		while (this.#records.length > MAX_RAW_SSE_EVENTS || this.#totalChars > MAX_RAW_SSE_CHARS) {
-			if (this.#records.length === 0) return;
-			this.#records.shift();
-			const chars = this.#recordChars.shift() ?? 0;
+		while (this.#records.length - this.#head > MAX_RAW_SSE_EVENTS || this.#totalChars > MAX_RAW_SSE_CHARS) {
+			if (this.#records.length - this.#head === 0) break;
+			const chars = this.#recordChars[this.#head] ?? 0;
+			this.#head += 1;
 			this.#totalChars = Math.max(0, this.#totalChars - chars);
 			this.#droppedRecords += 1;
 			this.#droppedChars += chars;
+		}
+		// Reclaim the consumed `[0, #head)` prefix once it grows large: one O(n)
+		// memmove amortized over many O(1) evictions, bounding the backing arrays
+		// to ~2x the live window. `#head >= MAX_RAW_SSE_EVENTS` covers the
+		// full-record-count steady state; `#head > liveCount` covers a small live
+		// window held by a few large records under the char budget.
+		const liveCount = this.#records.length - this.#head;
+		if (this.#head >= MAX_RAW_SSE_EVENTS || this.#head > liveCount) {
+			this.#records = this.#records.slice(this.#head);
+			this.#recordChars = this.#recordChars.slice(this.#head);
+			this.#head = 0;
 		}
 	}
 

@@ -17,4 +17,44 @@ describe("renderWelcomeTip", () => {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});
+
+	it("replaces a trailing [NEW] marker with a rainbow NEW! tag", () => {
+		const lines = renderWelcomeTip("Try the shiny advisor [NEW]", 60);
+		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
+		const styled = lines.join("\n");
+
+		expect(plain).toContain("Try the shiny advisor");
+		expect(plain).not.toContain("[NEW]"); // literal marker stripped
+		expect(plain).toContain("NEW!"); // replaced by the visible tag
+		expect(styled).toContain("\x1b[1m"); // tag is bold
+		expect(styled).not.toBe(plain); // tag carries SGR color escapes
+	});
+
+	it("keeps the NEW! tag within the box width", () => {
+		// A width that leaves the wrapped body ending near the right edge forces
+		// the tag onto its own continuation line rather than overflowing.
+		for (const width of [24, 40, 60]) {
+			const lines = renderWelcomeTip("Turn on the advisor to review every turn [NEW]", width);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+			expect(lines.map(l => Bun.stripANSI(l)).join("\n")).toContain("NEW!");
+		}
+	});
+
+	it("shimmers the tag across phases without changing visible text", () => {
+		const tip = "Fresh feature here [NEW]";
+		const still = renderWelcomeTip(tip, 60, 0);
+		const shifted = renderWelcomeTip(tip, 60, 0.5);
+
+		expect(shifted.join("\n")).not.toBe(still.join("\n")); // hues rotate
+		expect(shifted.map(l => Bun.stripANSI(l))).toEqual(still.map(l => Bun.stripANSI(l)));
+	});
+
+	it("leaves tips without the marker untouched", () => {
+		const lines = renderWelcomeTip("Plain old tip", 60);
+		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
+		expect(plain).not.toContain("NEW!");
+		expect(plain).toContain("Tip: Plain old tip");
+	});
 });
