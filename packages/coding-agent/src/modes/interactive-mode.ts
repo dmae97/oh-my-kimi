@@ -512,6 +512,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
+		if (this.autoCompactionLoader) {
+			this.autoCompactionLoader.stop();
+			this.autoCompactionLoader = undefined;
+		}
+		if (this.retryLoader) {
+			this.retryLoader.stop();
+			this.retryLoader = undefined;
+		}
 		this.statusContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.#cancelModelCycleClearTimer();

@@ -433,6 +433,47 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
+	it("returns focused subagent view to main on Esc without aborting its active maintenance (#2819)", () => {
+		const { ctx, editor, spies } = createContext();
+		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
+		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
+		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
+		(ctx.viewSession as { isRetrying: boolean }).isRetrying = true;
+		(ctx.viewSession as unknown as { abortCompaction: Spy }).abortCompaction = vi.fn();
+		(ctx.viewSession as unknown as { abortHandoff: Spy }).abortHandoff = spies.abortHandoff;
+		(ctx.viewSession as unknown as { abortRetry: Spy }).abortRetry = vi.fn();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
+		expect(ctx.viewSession.abortCompaction as unknown as Spy).not.toHaveBeenCalled();
+		expect(spies.abortHandoff).not.toHaveBeenCalled();
+		expect(ctx.viewSession.abortRetry as unknown as Spy).not.toHaveBeenCalled();
+	});
+
+	it("aborts main-view maintenance on Esc normally", () => {
+		const { ctx, editor, spies } = createContext();
+		// Not focused:
+		expect(ctx.focusedAgentId).toBeUndefined();
+		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
+		(ctx.viewSession as { isGeneratingHandoff: boolean }).isGeneratingHandoff = true;
+		(ctx.viewSession as { isRetrying: boolean }).isRetrying = true;
+		(ctx.viewSession as unknown as { abortCompaction: Spy }).abortCompaction = vi.fn();
+		(ctx.viewSession as unknown as { abortHandoff: Spy }).abortHandoff = spies.abortHandoff;
+		(ctx.viewSession as unknown as { abortRetry: Spy }).abortRetry = vi.fn();
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(ctx.unfocusSession).not.toHaveBeenCalled();
+		expect(ctx.viewSession.abortCompaction as unknown as Spy).toHaveBeenCalledTimes(1);
+		expect(spies.abortHandoff).toHaveBeenCalledTimes(1);
+		expect(ctx.viewSession.abortRetry as unknown as Spy).toHaveBeenCalledTimes(1);
+	});
+
 	it("routes a focused double-← through the global input listener like Esc", () => {
 		const now = vi.spyOn(Date, "now");
 		const { ctx, inputListeners } = createContext();

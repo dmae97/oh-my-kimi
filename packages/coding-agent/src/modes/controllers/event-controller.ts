@@ -922,6 +922,17 @@ export class EventController {
 		}
 	}
 
+	/**
+	 * Trailing Esc hint for live maintenance loaders. While a subagent is
+	 * focused, Esc returns to main instead of cancelling its maintenance
+	 * (#2819), so the loader drops the hint entirely rather than advertise a
+	 * cancel that no longer happens. Includes the leading space so the focused
+	 * label carries no dangling whitespace.
+	 */
+	#maintenanceEscHint(): string {
+		return this.ctx.focusedAgentId ? "" : " (esc to cancel)";
+	}
+
 	async #handleAutoCompactionStart(
 		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
@@ -946,7 +957,7 @@ export class EventController {
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
 			text => theme.fg("muted", text),
-			`${reasonText}${actionLabel}… (esc to cancel)`,
+			`${reasonText}${actionLabel}…${this.#maintenanceEscHint()}`,
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.statusContainer.addChild(this.ctx.autoCompactionLoader);
@@ -1029,7 +1040,7 @@ export class EventController {
 			this.ctx.ui,
 			spinner => theme.fg("warning", spinner),
 			text => theme.fg("muted", text),
-			`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s… (esc to cancel)`,
+			`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s…${this.#maintenanceEscHint()}`,
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.statusContainer.addChild(this.ctx.retryLoader);

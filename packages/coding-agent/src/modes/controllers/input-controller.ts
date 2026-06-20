@@ -195,27 +195,37 @@ export class InputController {
 			// to clobber the single saved-handler slot (auto-compaction start
 			// → /compact → auto end → manual finally), leaving Esc wired to a
 			// stale no-op closure until restart.
-			const viewSession = this.ctx.viewSession;
-			let aborted = false;
-			if (viewSession.isCompacting) {
-				try {
-					viewSession.abortCompaction();
-				} catch {}
-				aborted = true;
+			//
+			// While a subagent is focused, Esc honors the advertised view action
+			// ("Esc returns to main") instead of cancelling maintenance —
+			// accidentally killing a focused subagent's compaction on the way out
+			// was #2819. The auto-maintenance loaders relabel their hint to match
+			// (see EventController). Main-session maintenance still owns Esc and
+			// stays cancellable from the main view (focused submit gates /compact
+			// and handoff, so manual maintenance is main-only anyway).
+			if (!this.ctx.focusedAgentId) {
+				const viewSession = this.ctx.viewSession;
+				let aborted = false;
+				if (viewSession.isCompacting) {
+					try {
+						viewSession.abortCompaction();
+					} catch {}
+					aborted = true;
+				}
+				if (viewSession.isGeneratingHandoff) {
+					try {
+						viewSession.abortHandoff();
+					} catch {}
+					aborted = true;
+				}
+				if (viewSession.isRetrying) {
+					try {
+						viewSession.abortRetry();
+					} catch {}
+					aborted = true;
+				}
+				if (aborted) return;
 			}
-			if (viewSession.isGeneratingHandoff) {
-				try {
-					viewSession.abortHandoff();
-				} catch {}
-				aborted = true;
-			}
-			if (viewSession.isRetrying) {
-				try {
-					viewSession.abortRetry();
-				} catch {}
-				aborted = true;
-			}
-			if (aborted) return;
 
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
