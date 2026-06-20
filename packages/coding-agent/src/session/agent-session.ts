@@ -8201,7 +8201,10 @@ export class AgentSession {
 			contextWindow,
 			model: `${model.provider}/${model.id}`,
 		});
-		await this.#runAutoCompaction("threshold", false, false, false, { autoContinue: false });
+		await this.#runAutoCompaction("threshold", false, false, false, {
+			autoContinue: false,
+			triggerContextTokens: contextTokens,
+		});
 	}
 
 	/**
