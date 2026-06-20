@@ -105,6 +105,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { stripToolDescriptions } from "@oh-my-pi/pi-ai/utils/schema";
 import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
+import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
@@ -1537,6 +1538,10 @@ export class AgentSession {
 		this.#customCommands = config.customCommands ?? [];
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
+		// Resolve the wire service-tier per request so the Fireworks Priority
+		// toggle scopes priority to Fireworks alone, without mutating the shared
+		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
+		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
 		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
@@ -2789,6 +2794,16 @@ export class AgentSession {
 				this.#resetSessionStopContinuationState();
 				await emitAgentEndNotification();
 				return;
+			}
+			// Fireworks Fast variants degrade to their base model on a failed turn —
+			// including hard router errors the generic retry classifier rejects — so
+			// run this gate before the standard retryability check.
+			if (this.#isFireworksFastFallbackEligible(msg)) {
+				const didRetry = await this.#handleRetryableError(msg, { fireworksFastFallback: true });
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
@@ -7279,7 +7294,25 @@ export class AgentSession {
 	 * no model is selected.
 	 */
 	isFastModeActive(): boolean {
-		return resolveServiceTier(this.serviceTier, this.model?.provider) === "priority";
+		return resolveServiceTier(this.#effectiveServiceTier(), this.model?.provider) === "priority";
+	}
+
+	/**
+	 * Effective wire service-tier for a request to `model`. Fireworks models
+	 * take the Priority serving path only when the Providers › Fireworks Tier
+	 * setting is `"priority"` — that toggle is the sole opt-in, so a global
+	 * `serviceTier: "priority"` (for OpenAI/Anthropic) never silently incurs
+	 * Fireworks priority costs — and never for `-fast` variants, whose Fast
+	 * serving path is mutually exclusive with Priority. Every other provider
+	 * uses the session `serviceTier` unchanged.
+	 */
+	#effectiveServiceTier(model: Model | undefined = this.model): ServiceTier | undefined {
+		if (model?.provider === "fireworks") {
+			return this.settings.get("providers.fireworksTier") === "priority" && !isFireworksFastModelId(model.id)
+				? "priority"
+				: undefined;
+		}
+		return this.serviceTier;
 	}
 
 	setServiceTier(serviceTier: ServiceTier | undefined): void {
@@ -10277,6 +10310,59 @@ export class AgentSession {
 		return false;
 	}
 
+	/**
+	 * True when the current turn failed on a Fireworks Fast (`-fast`) model in a
+	 * way that should degrade to the reliable base (Standard) model. Fast is a
+	 * speed-optimized router with no SLA, so any *pre-content* failure — a
+	 * transient overload/5xx or a hard "router/model not found / unsupported" —
+	 * is worth retrying on the base id. Skips failures the base model shares:
+	 * context overflow (compaction's job), usage limits and auth errors (same
+	 * account/key), and turns that already emitted a tool call (replaying would
+	 * duplicate work). Requires the base model to exist in the registry.
+	 */
+	#isFireworksFastFallbackEligible(message: AssistantMessage): boolean {
+		const model = this.model;
+		if (!model || model.provider !== "fireworks" || !isFireworksFastModelId(model.id)) return false;
+		if (message.stopReason !== "error" || !message.errorMessage) return false;
+		if (message.content.some(block => block.type === "toolCall")) return false;
+		if (isContextOverflow(message, model.contextWindow ?? 0)) return false;
+		const err = message.errorMessage;
+		if (isUsageLimitError(err)) return false;
+		if (
+			/\b(?:401|403|unauthorized|forbidden|authentication|auth[_ ]?unavailable|no auth available|(?:invalid|no)[_ ]?api[_ ]?key)\b/i.test(
+				err,
+			)
+		)
+			return false;
+		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
+	}
+
+	/**
+	 * Switch the active model from a Fireworks Fast (`-fast`) variant to its base
+	 * (Standard) id and stick there for the rest of the session — the auto
+	 * fallback that makes Fast a safe default. Returns false when the current
+	 * model is not a fast variant, the base id is missing, or it has no key.
+	 */
+	async #tryFireworksFastFallback(currentSelector: string): Promise<boolean> {
+		const model = this.model;
+		if (!model || model.provider !== "fireworks" || !isFireworksFastModelId(model.id)) return false;
+		const baseModel = this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id));
+		if (!baseModel) return false;
+		const apiKey = await this.#modelRegistry.getApiKey(baseModel, this.sessionId);
+		if (!apiKey) return false;
+		const baseSelector = formatModelStringWithRouting(baseModel);
+		this.#setModelWithProviderSessionReset(baseModel);
+		this.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		this.settings.getStorage()?.recordModelUsage(baseSelector);
+		await this.#emitSessionEvent({
+			type: "retry_fallback_applied",
+			from: currentSelector,
+			to: baseSelector,
+			role: "fireworks-fast",
+		});
+		return true;
+	}
+
 	async #maybeRestoreRetryFallbackPrimary(): Promise<void> {
 		if (!this.#activeRetryFallback) return;
 		if (this.#activeRetryFallback.pinned) return;
@@ -10379,7 +10465,7 @@ export class AgentSession {
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean },
+		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean },
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		if (!retrySettings.enabled) return false;
@@ -10476,6 +10562,13 @@ export class AgentSession {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
 				switchedModel = await this.#tryRetryModelFallback(currentSelector, { pinFallback: classifierRefusal });
+			}
+			// Auto fallback from a Fireworks Fast variant to its base model. Independent
+			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
+			// best-effort, degrade to Standard on failure) and triggers on hard router
+			// errors the generic retry classifier would otherwise reject.
+			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
+				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
 			}
 			if (switchedModel) {
 				delayMs = 0;
@@ -11084,7 +11177,7 @@ export class AgentSession {
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				disableReasoning: shouldDisableReasoning(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
-				serviceTier: this.serviceTier,
+				serviceTier: this.#effectiveServiceTier(model),
 				signal: args.signal,
 				toolChoice: "none",
 			},

@@ -141,18 +141,25 @@ export function resolveServiceTier(
 }
 
 /**
- * True when the (possibly scoped) tier should be sent as OpenAI's
- * `service_tier` request field for the given provider. Non-OpenAI
- * providers, unsupported tiers (`"auto"`, `"default"`), and scope
- * mismatches all return false.
+ * True when the (possibly scoped) tier should be sent on the wire as the
+ * `service_tier` request field for the given provider. OpenAI / OpenAI-Codex
+ * accept `flex`/`scale`/`priority`; Fireworks Serverless realizes only its
+ * Priority serving path (`service_tier: "priority"`) on the OpenAI-compatible
+ * chat-completions endpoint. Unsupported tiers (`"auto"`, `"default"`), other
+ * providers, and scope mismatches all return false.
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
 	provider: Provider | undefined,
 ): boolean {
-	if (provider !== "openai" && provider !== "openai-codex") return false;
 	const resolved = resolveServiceTier(serviceTier, provider);
-	return resolved === "flex" || resolved === "scale" || resolved === "priority";
+	if (provider === "openai" || provider === "openai-codex") {
+		return resolved === "flex" || resolved === "scale" || resolved === "priority";
+	}
+	if (provider === "fireworks") {
+		return resolved === "priority";
+	}
+	return false;
 }
 
 /**

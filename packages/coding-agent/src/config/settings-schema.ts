@@ -134,7 +134,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Developer",
 	],
 	tasks: ["Modes", "Subagents", "Isolation", "Commands & Skills"],
-	providers: ["Services", "Tiny Model", "Protocol", "Privacy"],
+	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Privacy"],
 };
 
 /** Status line segment identifiers */
@@ -4039,6 +4039,26 @@ export const SETTINGS_SCHEMA = {
 				},
 				{ value: "gemini", label: "Gemini", description: "Requires GEMINI_API_KEY" },
 				{ value: "openrouter", label: "OpenRouter", description: "Requires OPENROUTER_API_KEY" },
+			],
+		},
+	},
+	"providers.fireworksTier": {
+		type: "enum",
+		values: ["standard", "priority"] as const,
+		default: "standard",
+		ui: {
+			tab: "providers",
+			group: "Fireworks",
+			label: "Fireworks Tier",
+			description:
+				"Serving path for Fireworks requests. Priority sends `service_tier: \"priority\"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.",
+			options: [
+				{ value: "standard", label: "Standard", description: "Default serving path (no service_tier)" },
+				{
+					value: "priority",
+					label: "Priority",
+					description: "Priority serving path: higher reliability, premium per-token pricing",
+				},
 			],
 		},
 	},

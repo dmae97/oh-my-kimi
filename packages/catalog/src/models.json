@@ -14801,6 +14801,38 @@
 				}
 			}
 		},
+		"glm-5.1-fast": {
+			"id": "glm-5.1-fast",
+			"name": "GLM-5.1 Fast",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 2.8,
+				"output": 8.8,
+				"cacheRead": 0.52,
+				"cacheWrite": 0
+			},
+			"contextWindow": 202752,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
 		"glm-5.2": {
 			"id": "glm-5.2",
 			"name": "GLM-5.2",
@@ -14947,6 +14979,39 @@
 				}
 			}
 		},
+		"kimi-k2.6-fast": {
+			"id": "kimi-k2.6-fast",
+			"name": "Kimi K2.6 Fast",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 8,
+				"cacheRead": 0.3,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
 		"kimi-k2.7-code": {
 			"id": "kimi-k2.7-code",
 			"name": "Kimi K2.7 Code",
@@ -14962,6 +15027,39 @@
 				"input": 0.95,
 				"output": 4,
 				"cacheRead": 0.19,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 32768,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "none"
+				}
+			}
+		},
+		"kimi-k2.7-code-fast": {
+			"id": "kimi-k2.7-code-fast",
+			"name": "Kimi K2.7 Code Fast",
+			"api": "openai-completions",
+			"provider": "fireworks",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 1.9,
+				"output": 8,
+				"cacheRead": 0.38,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,

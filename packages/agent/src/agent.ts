@@ -197,6 +197,13 @@ export interface AgentOptions {
 	repetitionPenalty?: number;
 	serviceTier?: ServiceTier;
 	/**
+	 * Per-call effective service-tier resolver. When set, it authoritatively
+	 * supplies the request's tier (replacing the static `serviceTier` and its
+	 * telemetry) per model — used to scope a provider/model into a priority
+	 * serving path without mutating the shared session `serviceTier`.
+	 */
+	serviceTierResolver?: (model: Model) => ServiceTier | undefined;
+	/**
 	 * If true, request that the underlying provider omit reasoning/thinking summaries
 	 * from the response. The model still reasons internally; only the human-readable
 	 * summary stream is suppressed. Useful when the UI hides thinking blocks anyway.
@@ -333,6 +340,7 @@ export class Agent {
 	#presencePenalty?: number;
 	#repetitionPenalty?: number;
 	#serviceTier?: ServiceTier;
+	#serviceTierResolver?: (model: Model) => ServiceTier | undefined;
 	#hideThinkingSummary?: boolean;
 	#maxRetryDelayMs?: number;
 	#getToolContext?: (toolCall?: ToolCallContext) => AgentToolContext | undefined;
@@ -403,6 +411,7 @@ export class Agent {
 		this.#presencePenalty = opts.presencePenalty;
 		this.#repetitionPenalty = opts.repetitionPenalty;
 		this.#serviceTier = opts.serviceTier;
+		this.#serviceTierResolver = opts.serviceTierResolver;
 		this.#hideThinkingSummary = opts.hideThinkingSummary;
 		this.#maxRetryDelayMs = opts.maxRetryDelayMs;
 		this.getApiKey = opts.getApiKey;
@@ -608,6 +617,14 @@ export class Agent {
 
 	set serviceTier(value: ServiceTier | undefined) {
 		this.#serviceTier = value;
+	}
+
+	get serviceTierResolver(): ((model: Model) => ServiceTier | undefined) | undefined {
+		return this.#serviceTierResolver;
+	}
+
+	set serviceTierResolver(value: ((model: Model) => ServiceTier | undefined) | undefined) {
+		this.#serviceTierResolver = value;
 	}
 
 	get hideThinkingSummary(): boolean | undefined {
@@ -1087,6 +1104,7 @@ export class Agent {
 			getToolChoice,
 			getReasoning: () => this.#state.thinkingLevel,
 			getDisableReasoning: () => this.#state.disableReasoning,
+			getServiceTier: this.#serviceTierResolver,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
 					skipInitialSteeringPoll = false;

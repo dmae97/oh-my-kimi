@@ -29,6 +29,7 @@ import {
 import { PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import {
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
+	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
 	clampKimiK27CodeMaxTokens,
@@ -487,6 +488,11 @@ async function generateModels() {
 	// Mythos 5). Deduped behind upstream entries; metadata is pinned in
 	// applyAnthropicCatalogPolicy.
 	allModels.push(...ANTHROPIC_CURATED_FALLBACK_MODELS);
+	// Seed Fireworks "Fast" serving-path variants (`<id>-fast`). Fast routers are
+	// not enumerated by the serverless control-plane list, so discovery never
+	// surfaces them; the seed projects each base entry into a fast variant.
+	// Deduped behind any identical previous-snapshot entry.
+	allModels.push(...buildFireworksFastSeed());
 
 	const specialDiscoverySources = [
 		{ label: "Antigravity", fetch: fetchAntigravityModels },

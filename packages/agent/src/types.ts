@@ -8,6 +8,7 @@ import type {
 	ImageContent,
 	Message,
 	Model,
+	ServiceTier,
 	SimpleStreamOptions,
 	Static,
 	streamSimple,
@@ -314,6 +315,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * to the next provider call.
 	 */
 	getDisableReasoning?: () => boolean | undefined;
+
+	/**
+	 * Per-call effective service-tier resolver. Unlike {@link getReasoning},
+	 * this is *authoritative*: when set, its return value (including
+	 * `undefined`) fully replaces the static `serviceTier` for the request and
+	 * its telemetry. The resolver receives the model being requested so the
+	 * caller can scope the tier per provider/model without mutating the shared
+	 * session `serviceTier` (e.g. opting a Fireworks model into the Priority
+	 * serving path while leaving the OpenAI/Anthropic tier untouched).
+	 */
+	getServiceTier?: (model: Model) => ServiceTier | undefined;
 
 	/**
 	 * Called after a tool call has been validated and is about to execute.

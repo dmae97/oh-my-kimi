@@ -7,6 +7,7 @@
  * complete alternate views. Request handlers read `model.compat` fields and
  * never detect, resolve, or allocate.
  */
+import { isFireworksFastModelId } from "../fireworks-model-id";
 import { hostMatchesUrl, modelMatchesHost } from "../hosts";
 import {
 	isAnthropicNamespacedModelId,
@@ -276,8 +277,12 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 					? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
 					: undefined;
 
+	// Fireworks "Fast" variants (`<id>-fast`) are served from the router
+	// namespace (`accounts/fireworks/routers/<id>-fast`), like Fire Pass, rather
+	// than the `models/` namespace the rest of the `fireworks` provider uses.
+	const isFireworksFastRouter = provider === "fireworks" && isFireworksFastModelId(spec.id);
 	const wireModelIdMode: ResolvedOpenAISharedCompat["wireModelIdMode"] =
-		provider === "firepass"
+		provider === "firepass" || isFireworksFastRouter
 			? "firepass"
 			: provider === "fireworks"
 				? "fireworks"

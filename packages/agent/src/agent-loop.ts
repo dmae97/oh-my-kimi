@@ -1182,6 +1182,10 @@ async function streamAssistantResponse(
 
 	const dynamicReasoning = config.getReasoning?.();
 	const dynamicDisableReasoning = config.getDisableReasoning?.();
+	// `getServiceTier` is authoritative when present (replaces the static tier
+	// for both the wire request and telemetry), so callers can scope priority
+	// per model without touching the shared session `serviceTier`.
+	const effectiveServiceTier = config.getServiceTier ? config.getServiceTier(config.model) : config.serviceTier;
 	const harmonyMitigationEnabled = isHarmonyLeakMitigationTarget(config.model);
 	const harmonyAbortController = harmonyMitigationEnabled ? new AbortController() : undefined;
 	const requestSignal = harmonyAbortController
@@ -1229,7 +1233,7 @@ async function streamAssistantResponse(
 			topP: config.topP,
 			topK: config.topK,
 			presencePenalty: config.presencePenalty,
-			serviceTier: config.serviceTier,
+			serviceTier: effectiveServiceTier,
 			reasoningEffort: typeof effectiveReasoning === "string" ? effectiveReasoning : undefined,
 			toolChoice: effectiveToolChoice,
 			tools: llmContext.tools,
@@ -1251,7 +1255,7 @@ async function streamAssistantResponse(
 	const finishChat = async (message: AssistantMessage): Promise<void> => {
 		await finishChatSpan(telemetry, chatSpan, message, {
 			stepNumber: chatStepNumber,
-			serviceTier: config.serviceTier,
+			serviceTier: effectiveServiceTier,
 			responseHeaders: capturedHeaders,
 			baseUrl: config.model.baseUrl,
 		});
@@ -1267,6 +1271,7 @@ async function streamAssistantResponse(
 				reasoning: effectiveReasoning,
 				disableReasoning: effectiveDisableReasoning,
 				temperature: effectiveTemperature,
+				serviceTier: effectiveServiceTier,
 				signal: finalRequestSignal,
 				onResponse: captureOnResponse,
 			});
