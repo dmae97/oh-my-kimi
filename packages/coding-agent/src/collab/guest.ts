@@ -20,6 +20,7 @@ import type { AgentHubRemote } from "../modes/components/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
+import type { SessionEntry } from "../session/session-entries";
 import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
 import { setSessionTerminalTitle } from "../utils/title-generator";
 import { importRoomKey } from "./crypto";
@@ -47,10 +48,35 @@ export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
 	exit: true,
 	quit: true,
 };
+/**
+ * How long the guest waits for the host's small `welcome` frame before giving
+ * up on the join. The welcome carries metadata only (`entryCount`, header,
+ * state, agents), so it lands well under one second on any working relay.
+ */
 const WELCOME_TIMEOUT_MS = 30_000;
+/**
+ * How long the guest waits between `snapshot-chunk` frames during the initial
+ * sync. Resets on each chunk arrival, so a multi-MB snapshot only fails when
+ * the relay genuinely stalls — not because the total wall-clock crossed the
+ * welcome budget. The default relay sustains ~350 KB/s; a 512 KB chunk lands
+ * in under two seconds with comfortable headroom.
+ */
+const SNAPSHOT_PROGRESS_TIMEOUT_MS = 30_000;
 const TRANSCRIPT_TIMEOUT_MS = 20_000;
 
 type WelcomeFrame = Extract<CollabFrame, { t: "welcome" }>;
+type SnapshotChunkFrame = Extract<CollabFrame, { t: "snapshot-chunk" }>;
+
+/** Accumulator for an in-flight chunked welcome — see {@link CollabGuestLink}. */
+interface PendingSnapshot {
+	header: WelcomeFrame["header"];
+	state: WelcomeFrame["state"];
+	agents: AgentSnapshot[];
+	readOnly: boolean;
+	entryCount: number;
+	entries: SessionEntry[];
+	isResync: boolean;
+}
 
 export class CollabGuestLink {
 	#ctx: InteractiveModeContext;
@@ -60,8 +86,24 @@ export class CollabGuestLink {
 	#returnSessionFile: string | null = null;
 	/** Frames apply strictly in arrival order through this chain. */
 	#applyChain: Promise<void> = Promise.resolve();
+	/** True after the initial snapshot has been written to disk and resumed. */
 	#welcomed = false;
 	#left = false;
+	/**
+	 * Buffer for the in-flight chunked welcome. Set by the small `welcome`
+	 * frame, accumulated by every `snapshot-chunk`, drained when the final
+	 * chunk lands (or the snapshot-progress timer fires).
+	 */
+	#pendingSnapshot: PendingSnapshot | null = null;
+	/**
+	 * Fires `firstWelcome.reject` from a stalled welcome/snapshot during the
+	 * initial join. Set in {@link join}, cleared on resolve/reject; arming a
+	 * timer after that point is a no-op so reconnect-time stalls fall through
+	 * to the normal socket close handling instead of aborting the live session.
+	 */
+	#joinReject: ((err: Error) => void) | null = null;
+	#welcomeTimer: Timer | null = null;
+	#snapshotProgressTimer: Timer | null = null;
 	/** base64url write token from a full link; absent when joined via a view link. */
 	#writeToken: string | undefined;
 	/** True when the host marked this peer read-only (view link). */
@@ -143,11 +185,23 @@ export class CollabGuestLink {
 
 		const firstWelcome = Promise.withResolvers<void>();
 		let joined = false;
+		this.#joinReject = err => firstWelcome.reject(err);
+
+		const finishJoin = (): void => {
+			if (joined) return;
+			joined = true;
+			firstWelcome.resolve();
+		};
 
 		socket.onOpen = () => {
 			// (Re)connect: re-introduce ourselves; the host answers with a fresh
-			// welcome which (re)syncs the replica.
+			// welcome which (re)syncs the replica. Discard any partially-streamed
+			// snapshot from a prior connection: the host will resend the full
+			// chunk train.
 			this.#welcomed = false;
+			this.#pendingSnapshot = null;
+			this.#clearSnapshotProgressTimer();
+			this.#armWelcomeTimer();
 			socket.send({
 				t: "hello",
 				proto: COLLAB_PROTO,
@@ -159,19 +213,35 @@ export class CollabGuestLink {
 			this.#applyChain = this.#applyChain
 				.then(async () => {
 					if (frame.t === "welcome") {
-						await this.#applyWelcome(frame, joined);
-						if (!joined) {
-							joined = true;
-							firstWelcome.resolve();
+						this.#clearWelcomeTimer();
+						this.#beginWelcome(frame, joined);
+						if (frame.entryCount === 0) {
+							await this.#finalizeSnapshot();
+							finishJoin();
+						}
+						return;
+					}
+					if (frame.t === "snapshot-chunk") {
+						const ready = this.#accumulateSnapshotChunk(frame);
+						if (ready) {
+							await this.#finalizeSnapshot();
+							finishJoin();
 						}
 						return;
 					}
 					if (!this.#welcomed || this.#left) return;
 					this.#applyFrame(frame);
 				})
-				.catch(err => logger.warn("collab guest frame apply failed", { type: frame.t, error: String(err) }));
+				.catch(err => {
+					logger.warn("collab guest frame apply failed", { type: frame.t, error: String(err) });
+					if (!joined && (frame.t === "welcome" || frame.t === "snapshot-chunk")) {
+						firstWelcome.reject(err instanceof Error ? err : new Error(String(err)));
+					}
+				});
 		};
 		socket.onClose = (reason, willReconnect) => {
+			this.#clearWelcomeTimer();
+			this.#clearSnapshotProgressTimer();
 			this.#flushPendingTranscripts();
 			if (this.#left) return;
 			if (!joined) {
@@ -187,10 +257,6 @@ export class CollabGuestLink {
 		};
 		socket.connect();
 
-		const timeout = setTimeout(
-			() => firstWelcome.reject(new Error("timed out waiting for the host's welcome")),
-			WELCOME_TIMEOUT_MS,
-		);
 		try {
 			await firstWelcome.promise;
 		} catch (err) {
@@ -199,7 +265,9 @@ export class CollabGuestLink {
 			this.#socket = null;
 			throw err;
 		} finally {
-			clearTimeout(timeout);
+			this.#joinReject = null;
+			this.#clearWelcomeTimer();
+			this.#clearSnapshotProgressTimer();
 		}
 
 		this.#ctx.collabGuest = this;
@@ -222,11 +290,56 @@ export class CollabGuestLink {
 		this.#socket?.send({ t: "abort" });
 	}
 
-	/** Write the welcome snapshot to the replica file and (re)load it through the resume machinery. */
-	async #applyWelcome(frame: WelcomeFrame, isResync: boolean): Promise<void> {
+	/**
+	 * Latch the welcome metadata and prime the snapshot accumulator. The
+	 * heavy resume work (file write, `switchSession`, render) only happens in
+	 * {@link #finalizeSnapshot}, so the small welcome frame clears the join
+	 * timeout immediately even when the transcript still has to stream in.
+	 */
+	#beginWelcome(frame: WelcomeFrame, isResync: boolean): void {
 		if (this.#left) return;
+		this.#pendingSnapshot = {
+			header: frame.header,
+			state: frame.state,
+			agents: frame.agents,
+			readOnly: frame.readOnly === true,
+			entryCount: frame.entryCount,
+			entries: [],
+			isResync,
+		};
+		this.#armSnapshotProgressTimer();
+	}
+
+	/**
+	 * Append a chunk to the pending snapshot. Returns `true` when the
+	 * accumulator has gathered every entry the welcome promised, or the host
+	 * tagged this chunk as `final`. The caller is responsible for invoking
+	 * {@link #finalizeSnapshot} on the same applyChain microtask.
+	 */
+	#accumulateSnapshotChunk(frame: SnapshotChunkFrame): boolean {
+		const pending = this.#pendingSnapshot;
+		if (!pending) {
+			logger.debug("collab guest dropping orphan snapshot-chunk");
+			return false;
+		}
+		pending.entries.push(...frame.entries);
+		const complete = frame.final || pending.entries.length >= pending.entryCount;
+		if (complete) {
+			this.#clearSnapshotProgressTimer();
+		} else {
+			this.#armSnapshotProgressTimer();
+		}
+		return complete;
+	}
+
+	/** Write the accumulated welcome snapshot to the replica file and (re)load it through the resume machinery. */
+	async #finalizeSnapshot(): Promise<void> {
+		const pending = this.#pendingSnapshot;
+		this.#pendingSnapshot = null;
+		this.#clearSnapshotProgressTimer();
+		if (!pending || this.#left) return;
 		const replicaPath = path.join(getConfigRootDir(), "collab", `${this.#roomId}.jsonl`);
-		const lines = [frame.header, ...frame.entries].map(entry => JSON.stringify(entry)).join("\n");
+		const lines = [pending.header, ...pending.entries].map(entry => JSON.stringify(entry)).join("\n");
 		await Bun.write(replicaPath, `${lines}\n`);
 
 		// Resume sequence (selector-controller.handleResumeSession) minus
@@ -235,20 +348,54 @@ export class CollabGuestLink {
 		this.#clearTransientUi();
 		this.#clearAgentMirror();
 		await this.#ctx.session.switchSession(replicaPath);
-		this.state = frame.state;
-		this.#applyHostState(frame.state);
+		this.state = pending.state;
+		this.#applyHostState(pending.state);
 		this.#ctx.resetObserverRegistry();
-		this.#applyAgentSnapshots(frame.agents);
+		this.#applyAgentSnapshots(pending.agents);
 		this.#assistantStreamSynced = false;
-		setSessionTerminalTitle(frame.state.sessionName ?? frame.header.title, frame.state.cwd);
+		setSessionTerminalTitle(pending.state.sessionName ?? pending.header.title, pending.state.cwd);
 		this.#ctx.chatContainer.clear();
 		this.#ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.#ctx.reloadTodos();
 		this.#updateStatusSegment();
-		this.#readOnly = frame.readOnly === true;
+		this.#readOnly = pending.readOnly;
 		this.#welcomed = true;
 		const suffix = this.#readOnly ? " (read-only)" : "";
-		this.#ctx.showStatus(isResync ? `Reconnected to collab session${suffix}` : `Joined collab session${suffix}`);
+		this.#ctx.showStatus(
+			pending.isResync ? `Reconnected to collab session${suffix}` : `Joined collab session${suffix}`,
+		);
+	}
+
+	#armWelcomeTimer(): void {
+		if (this.#joinReject === null) return;
+		this.#clearWelcomeTimer();
+		this.#welcomeTimer = setTimeout(() => {
+			this.#welcomeTimer = null;
+			this.#joinReject?.(new Error("timed out waiting for the host's welcome"));
+		}, WELCOME_TIMEOUT_MS);
+	}
+
+	#clearWelcomeTimer(): void {
+		if (this.#welcomeTimer !== null) {
+			clearTimeout(this.#welcomeTimer);
+			this.#welcomeTimer = null;
+		}
+	}
+
+	#armSnapshotProgressTimer(): void {
+		if (this.#joinReject === null) return;
+		this.#clearSnapshotProgressTimer();
+		this.#snapshotProgressTimer = setTimeout(() => {
+			this.#snapshotProgressTimer = null;
+			this.#joinReject?.(new Error("timed out waiting for the host's session snapshot"));
+		}, SNAPSHOT_PROGRESS_TIMEOUT_MS);
+	}
+
+	#clearSnapshotProgressTimer(): void {
+		if (this.#snapshotProgressTimer !== null) {
+			clearTimeout(this.#snapshotProgressTimer);
+			this.#snapshotProgressTimer = null;
+		}
 	}
 
 	#applyFrame(frame: CollabFrame): void {

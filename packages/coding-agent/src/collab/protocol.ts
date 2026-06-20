@@ -65,12 +65,27 @@ export type CollabFrame =
 			t: "welcome";
 			proto: number;
 			header: SessionHeader;
-			entries: SessionEntry[];
 			state: CollabSessionState;
 			agents: AgentSnapshot[];
+			/**
+			 * Total number of `SessionEntry` items the host will deliver in the
+			 * `snapshot-chunk` frames that follow. The guest stays in the
+			 * snapshot-loading phase until it has accumulated that many entries
+			 * (or a chunk arrives with `final: true`).
+			 */
+			entryCount: number;
 			/** True when this peer joined through a read-only (view) link. */
 			readOnly?: boolean;
 	  }
+	/**
+	 * Targeted snapshot fragment delivered after `welcome`. Splits a large
+	 * transcript across many small frames so the guest's per-chunk progress
+	 * timeout resets each time the relay delivers another batch; without
+	 * chunking, a multi-MB session has to fit one giant frame inside the
+	 * 30 s first-welcome budget. The last chunk carries `final: true` so the
+	 * guest can finalize the replica session.
+	 */
+	| { t: "snapshot-chunk"; entries: SessionEntry[]; final: boolean }
 	| { t: "entry"; entry: SessionEntry }
 	| { t: "event"; event: AgentSessionEvent }
 	| { t: "state"; state: CollabSessionState }
