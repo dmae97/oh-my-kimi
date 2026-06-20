@@ -139,7 +139,7 @@ describe("SearchTool internal URL resolution", () => {
 
 	it("walks skill:// directory subpaths for search and find", async () => {
 		await registerSkillDirectory();
-		const session = createSession();
+		const session = createSession({ hasEditTool: true });
 		const searchTool = new SearchTool(session);
 		const findTool = new FindTool(session);
 
@@ -151,7 +151,9 @@ describe("SearchTool internal URL resolution", () => {
 			paths: ["skill://demo/references"],
 		});
 
-		expect(getResultText(searchResult)).toContain("deep needle");
+		const searchText = getResultText(searchResult);
+		expect(searchText).toContain("deep needle");
+		expect(searchText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 		expect(getResultText(findResult)).toContain("guide.md");
 	});
 
