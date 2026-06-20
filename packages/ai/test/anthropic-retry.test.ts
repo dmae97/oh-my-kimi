@@ -45,6 +45,10 @@ describe("isProviderRetryableError", () => {
 		).toBe(true);
 	});
 
+	it("does not retry permanent TLS configuration failures (no server annotation)", () => {
+		expect(isProviderRetryableError(new Error("tls: failed to verify certificate"), "anthropic")).toBe(false);
+	});
+
 	it("retries Bun socket closure errors", () => {
 		expect(
 			isProviderRetryableError(
