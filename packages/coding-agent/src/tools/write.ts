@@ -1068,14 +1068,12 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath) ?? "text";
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
-		// Static pending icon, never the animated glyph: the header is the head
-		// row of the framed block, and native-scrollback commits are prefix-only
-		// — an animating head row would pin the commit boundary at the top and
-		// keep a tall expanded preview from scroll-appending mid-stream. The
-		// liveness cue rides the trailing "(streaming)" line instead.
+		// No status icon on the head row: it's the head of the framed block, and
+		// native-scrollback commits are prefix-only — an animated glyph would pin
+		// the commit boundary at the top, and the pending hourglass just adds
+		// noise. The liveness cue rides the trailing "(streaming)" line instead.
 		const header = renderStatusLine(
 			{
-				icon: "pending",
 				title: "Write",
 				description: `${langIcon} ${pathDisplay}`,
 			},

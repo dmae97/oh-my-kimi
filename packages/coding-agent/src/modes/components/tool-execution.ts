@@ -31,7 +31,13 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	renderJsonTreeLines,
 } from "../../tools/json-tree";
-import { formatExpandHint, replaceTabs, resolveImageOptions, truncateToWidth } from "../../tools/render-utils";
+import {
+	formatExpandHint,
+	formatStatusIcon,
+	replaceTabs,
+	resolveImageOptions,
+	truncateToWidth,
+} from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES } from "../../tools/todo";
 import { isFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
@@ -865,9 +871,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					this.#multiFileBoxes.push(pendingSpacer);
 					this.addChild(pendingSpacer);
 					const pendingBox = new Box(0, 0);
+					const spinner =
+						this.#spinnerFrame !== undefined ? formatStatusIcon("running", theme, this.#spinnerFrame) : "";
 					const pendingText = renderStatusLine(
 						{
-							icon: "pending",
+							iconOverride: spinner,
 							title: "Edit",
 							description: theme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
 						},

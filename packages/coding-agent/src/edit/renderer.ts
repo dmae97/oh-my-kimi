@@ -283,7 +283,7 @@ function renderEditHeader(
 	width: number,
 	uiTheme: Theme,
 	options: {
-		icon: "pending" | "success" | "error";
+		icon?: "pending" | "success" | "error";
 		iconOverride?: string;
 		op?: Operation;
 		rawPath: string;
@@ -614,14 +614,12 @@ export const editToolRenderer = {
 		}
 		const callPreviewCaches: RenderedStringCache[] = [];
 		return framedBlock(uiTheme, width => {
-			// Static pending icon, never the animated glyph: the header is the
-			// head row of the framed block, and native-scrollback commits are
-			// prefix-only — an animating head row would pin the commit boundary
-			// at the top and keep a tall expanded preview from scroll-appending
-			// mid-stream. The liveness cue rides the trailing "(preview)" /
+			// No status icon on the head row: it's the head of the framed block,
+			// and native-scrollback commits are prefix-only — an animated glyph
+			// would pin the commit boundary at the top, and the pending hourglass
+			// just adds noise. The liveness cue rides the trailing "(preview)" /
 			// "(streaming)" line instead.
 			const header = renderEditHeader(width, uiTheme, {
-				icon: "pending",
 				op,
 				rawPath,
 				rename,
@@ -796,20 +794,18 @@ function renderMultiFileResult(
 				if (allLines.length > 0) allLines.push("");
 				const spinnerFrame = options.spinnerFrame;
 				const spinner = spinnerFrame !== undefined ? formatStatusIcon("running", uiTheme, spinnerFrame) : "";
+				// Spinner while actively rendering, otherwise no icon — never the
+				// pending hourglass on the head row.
 				allLines.push(
 					renderStatusLine(
 						{
-							icon: "pending",
+							iconOverride: spinner,
 							title: "Edit",
 							description: uiTheme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
 						},
 						uiTheme,
 					),
 				);
-				if (spinner) {
-					// Replace the pending icon with spinner on the last line
-					allLines[allLines.length - 1] = allLines[allLines.length - 1].replace(/^(?:\x1b\[[^m]*m)*./u, spinner);
-				}
 			}
 
 			cached = { key, lines: allLines };
