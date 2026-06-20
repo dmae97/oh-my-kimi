@@ -56,16 +56,16 @@ function isTokenStart(text: string, index: number): boolean {
 	return index === 0 || PATH_DELIMITERS.has(text[index - 1] ?? "");
 }
 
-function isCommandLeadingWhitespace(code: number): boolean {
-	return code === 0x20 || (code >= 0x09 && code <= 0x0d);
-}
-
-function findLeadingSlashCommandStart(text: string): number | null {
-	let index = 0;
-	while (index < text.length && isCommandLeadingWhitespace(text.charCodeAt(index))) {
-		index += 1;
-	}
-	return text.charCodeAt(index) === 0x2f ? index : null;
+/**
+ * Locate the slash that opens a slash command on the line, allowing leading
+ * whitespace. Returns the index of the `/` or `null` when the line is not a
+ * slash command. Aligns with `trimStart` semantics so the editor and provider
+ * agree on which prefixes count.
+ */
+export function findLeadingSlashCommandStart(text: string): number | null {
+	const trimmed = text.trimStart();
+	if (!trimmed.startsWith("/")) return null;
+	return text.length - trimmed.length;
 }
 
 function extractQuotedPrefix(text: string): string | null {
@@ -366,7 +366,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 				return {
 					items: matches,
-					prefix: commandText,
+					// Preserve the full text-before-cursor (incl. leading
+					// whitespace) so the editor's Enter-staleness check
+					// (`autocompletePrefix !== currentTextBeforeCursor`)
+					// still applies the completion for `  /sk`.
+					prefix: textBeforeCursor,
 				};
 			} else {
 				// Space found - complete command arguments
@@ -434,7 +438,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		// Slash command suggestions can be accepted before the debounced refresh
 		// catches up to newly typed characters. Replace the live command token,
 		// not only the prefix captured when the suggestion list was rendered.
-		if (prefix.startsWith("/") && slashStart !== null) {
+		if (findLeadingSlashCommandStart(prefix) !== null && slashStart !== null) {
 			const slashPrefix = textBeforeCursor.slice(slashStart);
 			if (!slashPrefix.includes(" ") && !slashPrefix.slice(1).includes("/")) {
 				const beforeSlash = currentLine.slice(0, slashStart);
@@ -897,6 +901,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const matches = buildSlashCommandCompletions(this.#commands, lowerPrefix);
 
 		if (matches.length === 0) return null;
-		return { items: matches, prefix: commandText };
+		// Mirror `getSuggestions`: preserve leading whitespace so the editor's
+		// sync apply path passes the full text-before-cursor through.
+		return { items: matches, prefix: textBeforeCursor };
 	}
 }

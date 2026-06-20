@@ -68,7 +68,7 @@ describe("CombinedAutocompleteProvider", () => {
 
 			const result = await provider.getSuggestions([line], 0, line.length);
 
-			expect(result?.prefix).toBe("/sk");
+			expect(result?.prefix).toBe("  /sk");
 			expect(result?.items.map(item => item.value)).toEqual(["skill"]);
 		});
 
@@ -108,6 +108,14 @@ describe("CombinedAutocompleteProvider", () => {
 
 			expect(result.lines[0]).toBe("  /skills:fix-bug ");
 			expect(result.cursorCol).toBe("  /skills:fix-bug ".length);
+		});
+
+		it("applies a slash completion whose prefix carries leading whitespace", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(["  /sk"], 0, 5, { value: "skill", label: "skill" }, "  /sk");
+
+			expect(result.lines[0]).toBe("  /skill ");
+			expect(result.cursorCol).toBe("  /skill ".length);
 		});
 
 		it("preserves earlier slash command arguments when completing a path inside the last argument", () => {
@@ -325,7 +333,7 @@ describe("trySyncSlashCompletion", () => {
 		);
 		const result = provider.trySyncSlashCompletion("  /mo");
 		expect(result).not.toBeNull();
-		expect(result!.prefix).toBe("/mo");
+		expect(result!.prefix).toBe("  /mo");
 		expect(result!.items.map(i => i.value)).toEqual(["model"]);
 	});
 
