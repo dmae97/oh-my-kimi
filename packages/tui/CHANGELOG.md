@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.7] - 2026-06-20
+
 ### Fixed
 
 - Fixed slash command autocomplete, inline hints, and Enter completion when the slash command is preceded by leading whitespace ([#3095](https://github.com/can1357/oh-my-pi/issues/3095)).
