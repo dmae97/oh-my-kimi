@@ -497,7 +497,6 @@ export class TinyTitleClient {
 	#handleWorkerError(error: Error): void {
 		logger.warn("tiny-title: worker error", { error: error.message });
 		for (const pending of this.#pending.values()) {
-			this.#markFailedModel(pending);
 			this.#emitProgress({ modelKey: pending.modelKey, status: "error" });
 			if (pending.kind === "generate" || pending.kind === "complete") pending.resolve(null);
 			else pending.resolve(false);
