@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Restyled the collab shell with the stats dashboard theme tokens and added the persisted system/light/dark theme toggle.
 ### Breaking Changes
 
 - Bumped `COLLAB_PROTO` to `2`: the `welcome` frame now carries metadata only (header/state/agents/`entryCount`) and the transcript follows in a train of targeted `snapshot-chunk` frames terminated by `final: true`. Old guests speaking proto v1 are rejected with the existing protocol-mismatch error.
