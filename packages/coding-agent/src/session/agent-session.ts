@@ -1252,6 +1252,7 @@ export class AgentSession {
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
+	#baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
 	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
 	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
@@ -4104,18 +4105,34 @@ export class AgentSession {
 	}
 
 	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
-	#resetHindsightConversationTrackingIfHindsight(): void {
-		if (this.settings.get("memory.backend") !== "hindsight") return;
+	#resetHindsightConversationTrackingIfHindsight(): boolean {
+		if (this.settings.get("memory.backend") !== "hindsight") return false;
 		const state = this.getHindsightSessionState();
-		if (!state || state.aliasOf) return;
+		if (!state || state.aliasOf) return false;
 		state.resetConversationTracking();
+		return true;
 	}
 
-	#resetMnemopiConversationTrackingIfMnemopi(): void {
-		if (this.settings.get("memory.backend") !== "mnemopi") return;
+	#resetMnemopiConversationTrackingIfMnemopi(): boolean {
+		if (this.settings.get("memory.backend") !== "mnemopi") return false;
 		const state = this.getMnemopiSessionState();
-		if (!state || state.aliasOf) return;
+		if (!state || state.aliasOf) return false;
 		state.resetConversationTracking();
+		return true;
+	}
+
+	async #resetMemoryContextForNewTranscript(): Promise<void> {
+		const hadPromotedMemoryPrompt = this.#baseSystemPromptBeforeMemoryPromotion !== undefined;
+		const resetHindsight = this.#resetHindsightConversationTrackingIfHindsight();
+		const resetMnemopi = this.#resetMnemopiConversationTrackingIfMnemopi();
+		if (hadPromotedMemoryPrompt) {
+			this.#baseSystemPrompt = this.#baseSystemPromptBeforeMemoryPromotion!;
+			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+		}
+		if (resetHindsight || resetMnemopi || hadPromotedMemoryPrompt) {
+			await this.refreshBaseSystemPrompt();
+		}
 	}
 
 	/** True once dispose() has begun; deferred background work (e.g. the deferred
@@ -4803,6 +4820,7 @@ export class AgentSession {
 			if (signature !== this.#lastAppliedToolSignature) {
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
+				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
 				this.agent.setSystemPrompt(this.#baseSystemPrompt);
 				this.#lastAppliedToolSignature = signature;
 				this.#promptModelKey = this.#currentPromptModelKey();
@@ -4887,6 +4905,7 @@ export class AgentSession {
 		const activeToolNames = this.getActiveToolNames();
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
+		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
 		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
@@ -4905,7 +4924,29 @@ export class AgentSession {
 		try {
 			const injected = await backend.beforeAgentStartPrompt(this, promptText);
 			if (!injected) return this.#baseSystemPrompt;
-			return [...this.#baseSystemPrompt, injected];
+
+			const previousBaseSystemPrompt = this.#baseSystemPrompt;
+			try {
+				await this.refreshBaseSystemPrompt();
+			} catch (refreshErr) {
+				logger.debug("Memory backend prompt refresh after beforeAgentStartPrompt failed", {
+					backend: backend.id,
+					error: String(refreshErr),
+				});
+			}
+
+			if (
+				this.#baseSystemPrompt.length !== previousBaseSystemPrompt.length ||
+				this.#baseSystemPrompt.some((part, index) => part !== previousBaseSystemPrompt[index])
+			) {
+				return this.#baseSystemPrompt;
+			}
+
+			this.#baseSystemPromptBeforeMemoryPromotion ??= previousBaseSystemPrompt;
+			const stablePrompt = [...previousBaseSystemPrompt, injected];
+			this.#baseSystemPrompt = stablePrompt;
+			this.agent.setSystemPrompt(stablePrompt);
+			return stablePrompt;
 		} catch (err) {
 			logger.debug("Memory backend beforeAgentStartPrompt failed", {
 				backend: backend.id,
@@ -6765,8 +6806,7 @@ export class AgentSession {
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
-		this.#resetHindsightConversationTrackingIfHindsight();
-		this.#resetMnemopiConversationTrackingIfMnemopi();
+		await this.#resetMemoryContextForNewTranscript();
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
@@ -8029,8 +8069,7 @@ export class AgentSession {
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
-			this.#resetHindsightConversationTrackingIfHindsight();
-			this.#resetMnemopiConversationTrackingIfMnemopi();
+			await this.#resetMemoryContextForNewTranscript();
 			this.#pendingNextTurnMessages = [];
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#todoReminderCount = 0;
@@ -11379,6 +11418,7 @@ export class AgentSession {
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
+		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousFallbackSelectedMCPToolNames = previousSessionFile
 			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
@@ -11487,8 +11527,7 @@ export class AgentSession {
 					: configuredServiceTier;
 
 			if (switchingToDifferentSession) {
-				this.#resetHindsightConversationTrackingIfHindsight();
-				this.#resetMnemopiConversationTrackingIfMnemopi();
+				await this.#resetMemoryContextForNewTranscript();
 			}
 			this.#reconnectToAgent();
 			try {
@@ -11524,6 +11563,7 @@ export class AgentSession {
 				this.agent.setSystemPrompt(previousSystemPrompt);
 			}
 			this.#baseSystemPrompt = previousBaseSystemPrompt;
+			this.#baseSystemPromptBeforeMemoryPromotion = previousBaseSystemPromptBeforeMemoryPromotion;
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
@@ -11602,8 +11642,7 @@ export class AgentSession {
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
-		this.#resetHindsightConversationTrackingIfHindsight();
-		this.#resetMnemopiConversationTrackingIfMnemopi();
+		await this.#resetMemoryContextForNewTranscript();
 
 		// Reload messages from entries (works for both file and in-memory mode)
 		const sessionContext = this.buildDisplaySessionContext();
@@ -11695,8 +11734,7 @@ export class AgentSession {
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
-		this.#resetHindsightConversationTrackingIfHindsight();
-		this.#resetMnemopiConversationTrackingIfMnemopi();
+		await this.#resetMemoryContextForNewTranscript();
 
 		const sessionContext = this.buildDisplaySessionContext();
 		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
