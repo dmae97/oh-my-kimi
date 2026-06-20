@@ -61,6 +61,16 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 	});
 
+	describe("slash commands", () => {
+		it("does not suggest slash commands after prose", async () => {
+			const provider = new CombinedAutocompleteProvider([{ name: "skill", description: "Manage skills" }], "/tmp");
+			const line = "run /sk";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).toBeNull();
+		});
+	});
 	describe("applyCompletion", () => {
 		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
 			const provider = new CombinedAutocompleteProvider([], "/tmp");
@@ -74,6 +84,28 @@ describe("CombinedAutocompleteProvider", () => {
 
 			expect(result.lines[0]).toBe("/skills:fix-bug ");
 			expect(result.cursorCol).toBe("/skills:fix-bug ".length);
+		});
+
+		it("preserves leading whitespace when applying a slash command completion", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["  /ski"],
+				0,
+				6,
+				{ value: "skills:fix-bug", label: "/skills:fix-bug" },
+				"/s",
+			);
+
+			expect(result.lines[0]).toBe("  /skills:fix-bug ");
+			expect(result.cursorCol).toBe("  /skills:fix-bug ".length);
+		});
+
+		it("applies a slash completion whose prefix carries leading whitespace", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(["  /sk"], 0, 5, { value: "skill", label: "skill" }, "  /sk");
+
+			expect(result.lines[0]).toBe("  /skill ");
+			expect(result.cursorCol).toBe("  /skill ".length);
 		});
 
 		it("preserves earlier slash command arguments when completing a path inside the last argument", () => {
@@ -284,6 +316,17 @@ describe("trySyncSlashCompletion", () => {
 		expect(result!.items.map(i => i.value)).toEqual(["model"]);
 	});
 
+	it("returns matching items when slash is the first non-whitespace token", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[{ name: "model", description: "Switch AI model", value: "model" }],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("  /mo");
+		expect(result).not.toBeNull();
+		expect(result!.prefix).toBe("  /mo");
+		expect(result!.items.map(i => i.value)).toEqual(["model"]);
+	});
+
 	it("matches multiple commands and sorts by relevance", () => {
 		const provider = new CombinedAutocompleteProvider(
 			[
@@ -405,5 +448,6 @@ describe("trySyncSlashCompletion", () => {
 			"/tmp",
 		);
 		expect(provider.getInlineHint(["/onboarding pro"], 0, "/onboarding pro".length)).toBe("viders");
+		expect(provider.getInlineHint(["  /onboarding pro"], 0, "  /onboarding pro".length)).toBe("viders");
 	});
 });

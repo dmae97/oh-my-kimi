@@ -306,11 +306,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "loop",
 		description:
 			"Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Esc cancels the current iteration; /loop again to disable.",
-		inlineHint: "[count|duration]",
+		inlineHint: "[count|duration] [prompt]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
-			await runtime.ctx.handleLoopCommand(command.args);
+			const prompt = await runtime.ctx.handleLoopCommand(command.args);
 			runtime.ctx.editor.setText("");
+			// Surface any inline prompt so the dispatcher returns it and the normal
+			// submit flow runs the first loop iteration (recording it as the loop prompt).
+			if (prompt) return { prompt };
 		},
 	},
 	{

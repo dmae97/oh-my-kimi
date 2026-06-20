@@ -716,6 +716,7 @@ describe("ModelRegistry", () => {
 		let providerCompat: ModelRegistry;
 		let customCompat: ModelRegistry;
 		let customModelCompat: ModelRegistry;
+		let customResponsesCompat: ModelRegistry;
 		beforeAll(() => {
 			providerCompat = readonlyRegistry({
 				providers: {
@@ -749,6 +750,28 @@ describe("ModelRegistry", () => {
 								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 								contextWindow: 1000,
 								maxTokens: 100,
+							},
+						],
+					},
+				},
+			});
+			customResponsesCompat = readonlyRegistry({
+				providers: {
+					"cc-switch": {
+						baseUrl: "http://127.0.0.1:8080/v1",
+						apiKey: "CC_SWITCH_KEY",
+						api: "openai-codex-responses",
+						compat: {
+							supportsImageDetailOriginal: false,
+						},
+						models: [
+							{
+								id: "gpt-5.5",
+								reasoning: true,
+								input: ["text", "image"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+								contextWindow: 200_000,
+								maxTokens: 100_000,
 							},
 						],
 					},
@@ -801,6 +824,12 @@ describe("ModelRegistry", () => {
 			expect(compat?.supportsUsageInStreaming).toBe(false);
 			expect(compat?.maxTokensField).toBe("max_tokens");
 			expect(compat?.cacheControlFormat).toBe("anthropic");
+		});
+
+		test("custom Responses providers can disable original image detail", () => {
+			const model = customResponsesCompat.find("cc-switch", "gpt-5.5");
+			const compat = getOpenAICompat(model);
+			expect(compat?.supportsImageDetailOriginal).toBe(false);
 		});
 
 		test("model-level compat overrides provider-level compat for custom models", () => {

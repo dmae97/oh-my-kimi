@@ -1128,27 +1128,33 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 	}
 
-	async handleLoopCommand(args = ""): Promise<void> {
+	async handleLoopCommand(args = ""): Promise<string | undefined> {
 		if (this.loopModeEnabled) {
 			this.disableLoopMode();
-			return;
+			return undefined;
 		}
-		const parsedLimit = parseLoopLimitArgs(args);
-		if (typeof parsedLimit === "string") {
-			this.showError(parsedLimit);
-			return;
+		const parsed = parseLoopLimitArgs(args);
+		if (typeof parsed === "string") {
+			this.showError(parsed);
+			return undefined;
 		}
 		this.loopModeEnabled = true;
 		this.loopPrompt = undefined;
-		this.loopLimit = createLoopLimitRuntime(parsedLimit);
+		this.loopLimit = createLoopLimitRuntime(parsed.limit);
 		this.statusLine.setLoopModeStatus({ enabled: true });
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
-		const limitSuffix = parsedLimit ? ` Limited to ${describeLoopLimit(parsedLimit)}.` : "";
+		const limitSuffix = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
+		const tail = parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix} Your next prompt will repeat after each turn. Esc cancels the current iteration; /loop again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix} ${tail} Esc cancels the current iteration; /loop again to disable.`,
 		);
+		// Hand any inline prompt back to the dispatcher so the normal submit flow
+		// runs the first iteration — it records the text as the loop prompt and
+		// auto-resubmits it after each yield, identical to typing the prompt right
+		// after enabling loop mode.
+		return parsed.prompt;
 	}
 
 	recordLocalSubmission(text: string, imageCount = 0): () => void {
