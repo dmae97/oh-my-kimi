@@ -236,8 +236,10 @@ export class GuestClient {
 	#applyFrame(frame: HostFrame): void {
 		switch (frame.t) {
 			case "welcome":
+				// Reset accumulator: a fresh welcome arriving mid-load (reconnect)
+				// supersedes any partially-streamed snapshot from the prior session.
 				this.#header = frame.header;
-				this.#entries = [...frame.entries];
+				this.#entries = [];
 				this.#state = frame.state;
 				this.#agents = [...frame.agents];
 				this.#stream = null;
@@ -246,12 +248,20 @@ export class GuestClient {
 				this.#progress = new Map();
 				this.#lifecycle = new Map();
 				this.#working = frame.state.isStreaming;
-				this.#phase = "live";
-				this.#endedReason = null;
 				this.#readOnly = frame.readOnly === true;
 				this.#welcomed = true;
 				this.#clearWelcomeTimer();
+				if (frame.entryCount === 0) this.#phase = "live";
+				this.#endedReason = null;
 				break;
+			case "snapshot-chunk": {
+				// Stream transcript fragments into the live snapshot. The host
+				// always closes the train with `final: true`; that flip is what
+				// moves the guest from "waiting" to "live".
+				this.#entries = [...this.#entries, ...frame.entries];
+				if (frame.final) this.#phase = "live";
+				break;
+			}
 			case "entry":
 				this.#entries = [...this.#entries, frame.entry];
 				if (this.#streamDone && frame.entry.type === "message" && frame.entry.message.role === "assistant") {
