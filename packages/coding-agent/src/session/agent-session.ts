@@ -312,6 +312,22 @@ import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 
+// A side-channel assistant response is signed for the hidden prompt/history that
+// produced it. If we persist that response under a different user turn, native
+// replay anchors become invalid; keep only visible, non-cryptographic content.
+function sanitizeAssistantForReparentedHistory(message: AssistantMessage): AssistantMessage {
+	const content: AssistantMessage["content"] = [];
+	for (const block of message.content) {
+		if (block.type === "redactedThinking") continue;
+		if (block.type === "thinking") {
+			content.push({ type: "thinking", thinking: block.thinking });
+			continue;
+		}
+		content.push(block);
+	}
+	return { ...message, content, providerPayload: undefined };
+}
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
@@ -1580,6 +1596,11 @@ export class AgentSession {
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.agent.setOnTurnEnd(async (messages, signal) => {
 			if (signal?.aborted) return;
+			const rewindReport = this.#extractRewindReport(messages);
+			if (rewindReport) {
+				this.#pendingRewindReport = undefined;
+				await this.#applyRewind(rewindReport, messages);
+			}
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisorRuntime && !this.#advisorRuntime.disposed) {
 				this.#advisorRuntime.onTurnEnd(messages);
@@ -2521,11 +2542,6 @@ export class AgentSession {
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
 			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
-		}
-		if (event.type === "turn_end" && this.#pendingRewindReport) {
-			const report = this.#pendingRewindReport;
-			this.#pendingRewindReport = undefined;
-			await this.#applyRewind(report);
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -8504,14 +8520,29 @@ export class AgentSession {
 		return true;
 	}
 
-	async #applyRewind(report: string): Promise<void> {
+	#extractRewindReport(messages: AgentMessage[]): string | undefined {
+		if (!this.#checkpointState) return undefined;
+		if (this.#pendingRewindReport) return this.#pendingRewindReport;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message?.role !== "toolResult" || message.toolName !== "rewind" || message.isError) continue;
+			const details = message.details;
+			const detailReport =
+				details && typeof details === "object" && "report" in details && typeof details.report === "string"
+					? details.report.trim()
+					: "";
+			const textReport = message.content.find(part => part.type === "text")?.text.trim() ?? "";
+			const report = detailReport || textReport;
+			return report.length > 0 ? report : undefined;
+		}
+		return undefined;
+	}
+
+	async #applyRewind(report: string, activeMessages?: AgentMessage[]): Promise<void> {
 		const checkpointState = this.#checkpointState;
 		if (!checkpointState) {
 			return;
 		}
-		const safeCount = Math.max(0, Math.min(checkpointState.checkpointMessageCount, this.agent.state.messages.length));
-		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
-		this.#advisorRuntime?.reset();
 		try {
 			this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
 				startedAt: checkpointState.startedAt,
@@ -8523,16 +8554,17 @@ export class AgentSession {
 			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
 		}
 		const details = { startedAt: checkpointState.startedAt, rewoundAt: new Date().toISOString() };
-		this.agent.appendMessage({
-			role: "custom",
-			customType: "rewind-report",
-			content: report,
-			display: false,
-			details,
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
 		this.sessionManager.appendCustomMessageEntry("rewind-report", report, false, details, "agent");
+
+		const sessionContext = this.buildDisplaySessionContext();
+		if (activeMessages) {
+			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
+		}
+		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
+		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
+		this.#resetAdvisorSessionState();
+		this.#syncTodoPhasesFromBranch();
+		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
 	}
@@ -11728,7 +11760,7 @@ export class AgentSession {
 			content: [{ type: "text", text: question }],
 			timestamp: Date.now(),
 		});
-		this.sessionManager.appendMessage(assistantMessage);
+		this.sessionManager.appendMessage(sanitizeAssistantForReparentedHistory(assistantMessage));
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
 		this.#syncAgentSessionId();

@@ -1,10 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Changed
-
-- Changed `/btw`, `/tan`, `/omfg`, `/memory`, `/rename`, and `/move` to save the typed command text to TUI prompt history so they can be recalled with the up arrow.
-
 
 ### Added
 
@@ -15,11 +11,14 @@
 
 ### Changed
 
+- Changed `/btw`, `/tan`, `/omfg`, `/memory`, `/rename`, and `/move` to save the typed command text to TUI prompt history so they can be recalled with the up arrow.
 - Changed the temporary model picker to label Alt+P selections as session-only and point users to Alt+M or `/model` for role model assignment. ([#2952](https://github.com/can1357/oh-my-pi/issues/2952))
 - Replaced `new Promise((resolve, reject) => ...)` in `AsyncDrain` with `Promise.withResolvers()` per the repo's promise-construction convention
 
 ### Fixed
 
+- Fixed session history becoming desynchronized when using the `rewind` tool
+- Fixed `rewind` tool output and temporary assistant side-channel data polluting the prompt cache
 - Fixed `read` against a SQLite table with many columns (e.g. 33) rendering every cell as an ellipsis and chopping the right edge. The ASCII table shrinker bottomed out at `MIN_COLUMN_WIDTH=1` so every multi-char cell collapsed to `…`, and the final line truncation then cut off the right side. The renderer now bumps the per-column floor to 3 and falls back to a vertical `column: value` block layout per row when the column count exceeds the horizontal width budget. ([#3107](https://github.com/can1357/oh-my-pi/issues/3107))
 - Fixed `skill://`, `local://`, `memory://`, and `vault://` directory paths so read lists them and search/find can walk their backing directories. ([#3116](https://github.com/can1357/oh-my-pi/issues/3116))
 - Fixed local tiny-model inference failures respawning `__omp_worker_tiny_inference` for the same failed model, and blocked the unsupported Qwen3 1.7B ONNX memory model before load. ([#3132](https://github.com/can1357/oh-my-pi/issues/3132))
