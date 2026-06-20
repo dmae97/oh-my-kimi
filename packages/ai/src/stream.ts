@@ -687,6 +687,16 @@ function getCompatReasoningEffortMap<TApi extends Api>(
 	return (compat as ReasoningEffortMapCompat).reasoningEffortMap;
 }
 
+function resolveSupportedMappedReasoningEffort<TApi extends Api>(
+	model: Model<TApi>,
+	reasoning: Effort,
+): Effort | undefined {
+	const mapped = getCompatReasoningEffortMap(model)?.[reasoning];
+	if (!mapped) return undefined;
+	const mappedEffort = mapped as Effort;
+	return model.thinking?.efforts.includes(mappedEffort) ? mappedEffort : undefined;
+}
+
 function resolveOpenAiReasoningEffort<TApi extends Api>(
 	model: Model<TApi>,
 	options?: SimpleStreamOptions,
@@ -702,6 +712,8 @@ function resolveOpenAiReasoningEffort<TApi extends Api>(
 	// high is not supported by..." to the user.
 	if (!model.thinking) return undefined;
 	if (model.thinking.efforts.includes(reasoning)) return reasoning;
+	const mappedReasoning = resolveSupportedMappedReasoningEffort(model, reasoning);
+	if (mappedReasoning) return mappedReasoning;
 	if (getCompatReasoningEffortMap(model)?.[reasoning] !== undefined) return reasoning;
 	if (model.thinking.effortMap?.[reasoning] !== undefined) return reasoning;
 	return requireSupportedEffort(model, reasoning);
