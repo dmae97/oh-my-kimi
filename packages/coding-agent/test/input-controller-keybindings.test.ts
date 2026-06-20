@@ -359,6 +359,19 @@ describe("InputController keybinding setup", () => {
 		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
 	});
 
+	it("lets b fall through while another input is focused", async () => {
+		const { InputController, ctx, setFocused, spies } = await createContext();
+		(ctx.canBranchBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
+		setFocused({ pasteText: vi.fn() });
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		const result = dispatchInput(registeredInputListeners(spies.addInputListener), "b");
+
+		expect(result).toBeUndefined();
+		expect(spies.handleBtwBranchKey).not.toHaveBeenCalled();
+	});
+
 	it("routes c to copy a copyable /btw panel when the editor is empty", async () => {
 		const { InputController, ctx, spies } = await createContext();
 		(ctx.canCopyBtw as unknown as { mockReturnValue(value: boolean): void }).mockReturnValue(true);
