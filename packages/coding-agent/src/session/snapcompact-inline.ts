@@ -414,7 +414,7 @@ export class SnapcompactInlineTransformer {
 		private readonly onToolResultSavings?: SnapcompactSavingsSink,
 	) {}
 
-	transform(context: Context, model: Model): Context {
+	async transform(context: Context, model: Model): Promise<Context> {
 		// Vision gate: providers silently DROP images on text-only models —
 		// rendering would lose the content entirely.
 		if (!model.input.includes("image")) return context;
@@ -482,7 +482,7 @@ export class SnapcompactInlineTransformer {
 		for (const swap of plan.toolResults) {
 			const target = targets.get(swap.id);
 			if (!target) continue;
-			const frames = this.#framesFor(this.#toolCache, swap.id, target.text, shape);
+			const frames = await this.#framesFor(this.#toolCache, swap.id, target.text, shape);
 			messages[target.index] = { ...target.message, content: [{ type: "text", text: toolResultNote }, ...frames] };
 			changed = true;
 			savings.push({
@@ -506,7 +506,10 @@ export class SnapcompactInlineTransformer {
 			if (!cached || cached.hash !== hash) {
 				cached = {
 					hash,
-					frames: snapcompact.renderMany(systemPromptTarget.text, { shape, maxFrames: MAX_SYSTEM_PROMPT_FRAMES }),
+					frames: await snapcompact.renderMany(systemPromptTarget.text, {
+						shape,
+						maxFrames: MAX_SYSTEM_PROMPT_FRAMES,
+					}),
 				};
 				this.#systemCache = cached;
 			}
@@ -526,16 +529,16 @@ export class SnapcompactInlineTransformer {
 		return { ...context, systemPrompt, messages };
 	}
 
-	#framesFor(
+	async #framesFor(
 		cache: Map<string, FrameCacheEntry>,
 		key: string,
 		text: string,
 		shape: snapcompact.Shape,
-	): ImageContent[] {
+	): Promise<ImageContent[]> {
 		const hash = Bun.hash(text);
 		const cached = cache.get(key);
 		if (cached && cached.hash === hash) return cached.frames;
-		const frames = snapcompact.renderMany(text, { shape });
+		const frames = await snapcompact.renderMany(text, { shape });
 		cache.set(key, { hash, frames });
 		return frames;
 	}

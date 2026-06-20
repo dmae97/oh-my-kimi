@@ -2416,9 +2416,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				: undefined;
 		const transformProviderContext =
 			obfuscator || snapcompactInline
-				? (context: Context, transformModel: Model): Context => {
+				? async (context: Context, transformModel: Model): Promise<Context> => {
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
-						if (snapcompactInline) transformed = snapcompactInline.transform(transformed, transformModel);
+						if (snapcompactInline) transformed = await snapcompactInline.transform(transformed, transformModel);
 						return transformed;
 					}
 				: undefined;

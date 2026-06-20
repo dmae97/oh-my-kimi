@@ -265,6 +265,7 @@ describe("AgentSession handoff", () => {
 	});
 
 	it("obfuscates previous compaction summary and preserve data before forwarding to compact()", async () => {
+		session.settings.set("compaction.strategy", "context-full");
 		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
 		const entries = sessionManager.getBranch();
 		const lastEntryId = entries[entries.length - 1]?.id;
@@ -307,6 +308,7 @@ describe("AgentSession handoff", () => {
 	});
 
 	it("runs context maintenance before sending an oversized pending prompt", async () => {
+		session.settings.set("compaction.strategy", "context-full");
 		session.settings.set("compaction.thresholdTokens", 50);
 		session.settings.set("compaction.keepRecentTokens", 1);
 		session.settings.set("contextPromotion.enabled", false);
@@ -336,6 +338,7 @@ describe("AgentSession handoff", () => {
 	});
 
 	it("falls back after one auto-compaction timeout instead of retrying the same model", async () => {
+		session.settings.set("compaction.strategy", "context-full");
 		session.settings.set("compaction.thresholdTokens", 50);
 		session.settings.set("compaction.keepRecentTokens", 1);
 		session.settings.set("contextPromotion.enabled", false);

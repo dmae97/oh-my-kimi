@@ -155,7 +155,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * normalization, and append-only context handling, but before telemetry capture
 	 * and provider send.
 	 */
-	transformProviderContext?: (context: Context, model: Model) => Context;
+	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 
 	/**
 	 * Resolves the API key or resolver for the current model before each LLM call.

@@ -110,7 +110,7 @@ export interface AgentOptions {
 	 * Optional transform applied after provider context assembly and before
 	 * telemetry capture/provider send.
 	 */
-	transformProviderContext?: (context: Context, model: Model) => Context;
+	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 
 	/**
 	 * Steering mode: "all" = send all steering messages at once, "one-at-a-time" = one per turn
@@ -328,7 +328,7 @@ export class Agent {
 	#abortController?: AbortController;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
-	#transformProviderContext?: (context: Context, model: Model) => Context;
+	#transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 	#steeringQueue: AgentMessage[] = [];
 	#followUpQueue: AgentMessage[] = [];
 	#steeringMode: "all" | "one-at-a-time";
@@ -678,7 +678,7 @@ export class Agent {
 	 * shape and avoiding tool-markup leakage). `llmMessages` is already converted
 	 * (and, in production, obfuscated) by the caller.
 	 */
-	buildSideRequestContext(llmMessages: Message[]): Context {
+	async buildSideRequestContext(llmMessages: Message[]): Promise<Context> {
 		const model = this.#state.model;
 		if (!model) throw new Error("No active model on agent");
 		const ownedDialect = this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
@@ -692,7 +692,7 @@ export class Agent {
 					this.#pruneToolDescriptions,
 				) ?? []);
 		let context: Context = { systemPrompt: this.#state.systemPrompt, messages, tools };
-		if (this.#transformProviderContext) context = this.#transformProviderContext(context, model);
+		if (this.#transformProviderContext) context = await this.#transformProviderContext(context, model);
 		return context;
 	}
 

@@ -11327,7 +11327,7 @@ export class AgentSession {
 		const cacheSessionId = this.sessionId;
 		const snapshot = this.#buildEphemeralSnapshot(args.promptText);
 		const llmMessages = await this.convertMessagesToLlm(snapshot, args.signal);
-		const context = this.agent.buildSideRequestContext(llmMessages);
+		const context = await this.agent.buildSideRequestContext(llmMessages);
 		const options = this.prepareSimpleStreamOptions(
 			{
 				apiKey: this.#modelRegistry.resolver(model, cacheSessionId),

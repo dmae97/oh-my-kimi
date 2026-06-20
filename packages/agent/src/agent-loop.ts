@@ -1161,7 +1161,7 @@ async function streamAssistantResponse(
 		};
 	}
 	if (config.transformProviderContext) {
-		llmContext = config.transformProviderContext(llmContext, config.model);
+		llmContext = await config.transformProviderContext(llmContext, config.model);
 	}
 
 	// Owned tool calling: take tool calls away from the provider and run them

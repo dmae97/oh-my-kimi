@@ -50,7 +50,7 @@ describe("Agent — buildSideRequestContext", () => {
 	};
 
 	it("forwards the tool catalog for native providers", async () => {
-		await withNativeDialectEnv(() => {
+		await withNativeDialectEnv(async () => {
 			const agent = new Agent({
 				initialState: {
 					model,
@@ -59,7 +59,7 @@ describe("Agent — buildSideRequestContext", () => {
 				},
 			});
 
-			const context = agent.buildSideRequestContext([
+			const context = await agent.buildSideRequestContext([
 				{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
 			]);
 
@@ -100,7 +100,7 @@ describe("Agent — buildSideRequestContext", () => {
 					tools: [tool],
 				},
 			});
-			const sideContext = sideAgent.buildSideRequestContext([
+			const sideContext = await sideAgent.buildSideRequestContext([
 				{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
 			]);
 
@@ -109,7 +109,7 @@ describe("Agent — buildSideRequestContext", () => {
 		});
 	});
 
-	it("returns empty tools when owned dialect is active", () => {
+	it("returns empty tools when owned dialect is active", async () => {
 		const agent = new Agent({
 			initialState: {
 				model,
@@ -119,7 +119,7 @@ describe("Agent — buildSideRequestContext", () => {
 			dialect: "glm",
 		});
 
-		const context = agent.buildSideRequestContext([
+		const context = await agent.buildSideRequestContext([
 			{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
 		]);
 
@@ -127,7 +127,7 @@ describe("Agent — buildSideRequestContext", () => {
 		expect(context.systemPrompt).toEqual(["system"]);
 	});
 
-	it("invokes transformProviderContext filter if present", () => {
+	it("invokes transformProviderContext filter if present", async () => {
 		const transformSpy = mock((ctx: Context): Context => {
 			return {
 				...ctx,
@@ -144,7 +144,7 @@ describe("Agent — buildSideRequestContext", () => {
 			transformProviderContext: transformSpy,
 		});
 
-		const context = agent.buildSideRequestContext([
+		const context = await agent.buildSideRequestContext([
 			{ role: "user", content: [{ type: "text", text: "Q?" }], timestamp: Date.now() },
 		]);
 

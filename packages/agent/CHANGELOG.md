@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Breaking Changes
+
+- Changed `transformProviderContext` and `buildSideRequestContext` to return a Promise
 
 ### Added
 
