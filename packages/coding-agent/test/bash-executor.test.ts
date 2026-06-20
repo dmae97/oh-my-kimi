@@ -8,6 +8,7 @@ import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-o
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 import type { Shell } from "@oh-my-pi/pi-natives";
 import * as piNatives from "@oh-my-pi/pi-natives";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // Matches the schema default for `tools.artifactHeadBytes` (20 KB) used by
 // OutputSink when bash-executor pulls settings via resolveOutputSinkHeadBytes.
@@ -72,7 +73,7 @@ describe("executeBash", () => {
 		resetSettingsForTest();
 		vi.restoreAllMocks();
 		if (fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 
@@ -201,7 +202,7 @@ exit 64
 			expect(result.output.trim()).toBe("shell-ok");
 			expect(fs.readFileSync(marker, "utf8")).toContain("-l -c");
 		} finally {
-			fs.rmSync(shellDir, { recursive: true, force: true });
+			removeSyncWithRetries(shellDir);
 		}
 	});
 
@@ -262,7 +263,7 @@ exit 64
 			} else {
 				Bun.env.SHELL = originalShell;
 			}
-			fs.rmSync(shellDir, { recursive: true, force: true });
+			removeSyncWithRetries(shellDir);
 		}
 	});
 
@@ -304,7 +305,7 @@ exit 64
 			expect(result.exitCode).toBe(0);
 			expect(result.output.trim()).toBe("zsh-alias-ok");
 		} finally {
-			fs.rmSync(shellDir, { recursive: true, force: true });
+			removeSyncWithRetries(shellDir);
 		}
 	});
 
