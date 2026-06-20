@@ -92,12 +92,18 @@ describe("SessionSelectorComponent scope toggle", () => {
 
 	it("starts in current-folder scope even when the cwd is empty and a global list is preloaded (#3099)", () => {
 		const global = [createSession("remote", "Remote", "/work/other-project")];
+		// `startInAllScope` was the toggle behind #3099 (an empty folder auto-opened
+		// the picker in all-projects scope). The fix removes the option, so force it
+		// via a cast to prove the component now ignores it and stays folder-scoped —
+		// without this, the test would pass against the buggy code too.
+		const opts = { allSessions: global, loadAllSessions: async () => global };
+		(opts as { startInAllScope?: boolean }).startInAllScope = true;
 		const selector = new SessionSelectorComponent(
 			[],
 			() => {},
 			() => {},
 			() => {},
-			{ allSessions: global, loadAllSessions: async () => global },
+			opts,
 		);
 
 		const rendered = selector.render(120).join("\n");
