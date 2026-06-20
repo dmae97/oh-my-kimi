@@ -7610,22 +7610,25 @@ export class AgentSession {
 			const effectiveSettings = compactMode
 				? { ...compactionSettings, ...compactMode.overrides }
 				: compactionSettings;
-			if (compactMode?.requiresRemote) {
-				const compactionTarget = this.#resolveCompactionConfiguredTarget(
-					this.model,
-					this.#modelRegistry.getAvailable(),
+			// /compact remote demands provider-native compaction. When no remote
+			// endpoint is configured (one would override per-model gating in
+			// compact()), drop fallback candidates that aren't remote-capable so the
+			// engine never silently runs a local summary on a configured-but-non-
+			// remote compactionModel. If filtering empties the chain, warn and fall
+			// back to the full chain so the operation still completes.
+			const availableModels = this.#modelRegistry.getAvailable();
+			const requireProviderRemote = Boolean(compactMode?.requiresRemote && !effectiveSettings.remoteEndpoint);
+			let compactionCandidates = this.#getCompactionModelCandidates(
+				availableModels,
+				requireProviderRemote ? shouldUseOpenAiRemoteCompaction : undefined,
+			);
+			if (requireProviderRemote && compactionCandidates.length === 0) {
+				this.emitNotice(
+					"warning",
+					`remote compaction is unavailable for ${this.model.id} (no remote endpoint configured and no provider-native remote-capable model in the fallback chain) — using a local summary instead`,
+					"compaction",
 				);
-				const remoteReady =
-					Boolean(effectiveSettings.remoteEndpoint) ||
-					shouldUseOpenAiRemoteCompaction(this.model) ||
-					(compactionTarget ? shouldUseOpenAiRemoteCompaction(compactionTarget) : false);
-				if (!remoteReady) {
-					this.emitNotice(
-						"warning",
-						`remote compaction is unavailable for ${this.model.id} (no remote endpoint configured) — using a local summary instead`,
-						"compaction",
-					);
-				}
+				compactionCandidates = this.#getCompactionModelCandidates(availableModels);
 			}
 			const pathEntries = this.sessionManager.getBranch();
 			const preparation = prepareCompaction(pathEntries, effectiveSettings);
@@ -7759,6 +7762,7 @@ export class AgentSession {
 							remoteInstructions: this.#obfuscateForProvider(this.#baseSystemPrompt.join("\n\n")),
 							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						},
+						compactionCandidates,
 					);
 					summary = result.summary;
 					shortSummary = result.shortSummary;
@@ -9104,11 +9108,15 @@ export class AgentSession {
 		});
 	}
 
-	#getCompactionModelCandidates(availableModels: Model[]): Model[] {
-		return this.#resolveCompactionModelCandidates(this.model, availableModels);
+	#getCompactionModelCandidates(availableModels: Model[], filter?: (model: Model) => boolean): Model[] {
+		return this.#resolveCompactionModelCandidates(this.model, availableModels, filter);
 	}
 
-	#resolveCompactionModelCandidates(preferredModel: Model | null | undefined, availableModels: Model[]): Model[] {
+	#resolveCompactionModelCandidates(
+		preferredModel: Model | null | undefined,
+		availableModels: Model[],
+		filter?: (model: Model) => boolean,
+	): Model[] {
 		const candidates: Model[] = [];
 		const seen = new Set<string>();
 
@@ -9117,6 +9125,10 @@ export class AgentSession {
 			const key = this.#getModelKey(model);
 			if (seen.has(key)) return;
 			seen.add(key);
+			// `seen` still tracks rejected models so the largest-context fallback
+			// scan below doesn't reintroduce them; the filter just suppresses
+			// inclusion in this caller's candidate chain.
+			if (filter && !filter(model)) return;
 			candidates.push(model);
 		};
 
@@ -9169,8 +9181,10 @@ export class AgentSession {
 		customInstructions: string | undefined,
 		signal: AbortSignal,
 		options?: SummaryOptions,
+		precomputedCandidates?: Model[],
 	): Promise<CompactionResult> {
-		const candidates = this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
+		const candidates =
+			precomputedCandidates ?? this.#getCompactionModelCandidates(this.#modelRegistry.getAvailable());
 		const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 
 		for (const candidate of candidates) {
