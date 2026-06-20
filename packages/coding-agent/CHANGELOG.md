@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed advisor and status-line context when the session cwd is a parent of a single child git repo, so nested-repo work is surfaced before missing parent-cwd paths are treated as destroyed. ([#3130](https://github.com/can1357/oh-my-pi/issues/3130))
+
 ## [16.1.8] - 2026-06-20
 
 ### Added

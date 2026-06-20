@@ -46,6 +46,7 @@ function createPathContext(): SegmentContext {
 		autoCompactEnabled: false,
 		subagentCount: 0,
 		sessionStartTime: Date.now(),
+		activeRepo: null,
 		git: {
 			branch: null,
 			status: null,
@@ -58,6 +59,14 @@ function createPathContext(): SegmentContext {
 afterEach(() => {
 	setProjectDir(originalProjectDir);
 });
+
+function expectContentToContainPath(content: string, expected: string): void {
+	if (process.platform === "win32") {
+		expect(content.toLowerCase()).toContain(expected.toLowerCase());
+		return;
+	}
+	expect(content).toContain(expected);
+}
 
 describe("status line path segment", () => {
 	it("strips the Projects root for symlink-equivalent aliases", () => {
@@ -86,6 +95,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain("home-link");
 			expect(rendered.content).not.toContain(`${path.sep}Projects${path.sep}`);
 		} finally {
+			setProjectDir(originalProjectDir);
 			fs.rmSync(aliasRoot, { recursive: true, force: true });
 			fs.rmSync(realProjectDir, { recursive: true, force: true });
 		}
@@ -101,9 +111,10 @@ describe("status line path segment", () => {
 			expect(rendered.content).toContain(theme.icon.scratchFolder);
 			expect(rendered.content).not.toContain(theme.icon.folder);
 			// Display is just the scratch-relative tail — no leading tmpdir, no ancestor segments.
-			expect(rendered.content).toContain(path.basename(scratchDir));
+			expectContentToContainPath(rendered.content, path.basename(getProjectDir()));
 			expect(rendered.content).not.toContain(os.tmpdir());
 		} finally {
+			setProjectDir(originalProjectDir);
 			fs.rmSync(scratchDir, { recursive: true, force: true });
 		}
 	});
@@ -116,11 +127,12 @@ describe("status line path segment", () => {
 			setProjectDir(nested);
 
 			const rendered = renderSegment("path", createPathContext());
-			const tail = `${path.basename(scratchDir)}${path.sep}sub${path.sep}deep`;
+			const tail = `${path.basename(path.dirname(path.dirname(getProjectDir())))}${path.sep}sub${path.sep}deep`;
 			expect(rendered.content).toContain(theme.icon.scratchFolder);
-			expect(rendered.content).toContain(tail);
+			expectContentToContainPath(rendered.content, tail);
 			expect(rendered.content).not.toContain(os.tmpdir());
 		} finally {
+			setProjectDir(originalProjectDir);
 			fs.rmSync(scratchDir, { recursive: true, force: true });
 		}
 	});
@@ -137,6 +149,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).toContain(theme.icon.folder);
 			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
 		} finally {
+			setProjectDir(originalProjectDir);
 			fs.rmSync(scratchDir, { recursive: true, force: true });
 		}
 	});
@@ -153,7 +166,33 @@ describe("status line path segment", () => {
 			expect(rendered.content).toContain(theme.icon.folder);
 			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
 		} finally {
+			setProjectDir(originalProjectDir);
 			fs.rmSync(realProjectDir, { recursive: true, force: true });
+		}
+	});
+
+	it("renders the active nested repo suffix after the parent cwd", () => {
+		const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-parent-"));
+		const repoDir = path.join(parentDir, "pr-workspace");
+		fs.mkdirSync(repoDir);
+		try {
+			setProjectDir(parentDir);
+			const ctx = createPathContext();
+			ctx.activeRepo = {
+				cwd: parentDir,
+				repoRoot: repoDir,
+				relativeRepoRoot: "pr-workspace",
+				source: "single-direct-child-repo",
+			};
+
+			const rendered = renderSegment("path", ctx);
+			const expected = `${path.basename(getProjectDir())} ↳ pr-workspace`;
+			expect(rendered.visible).toBe(true);
+			expectContentToContainPath(rendered.content, expected);
+			expect(rendered.content).not.toContain(os.tmpdir());
+		} finally {
+			setProjectDir(originalProjectDir);
+			fs.rmSync(parentDir, { recursive: true, force: true });
 		}
 	});
 });

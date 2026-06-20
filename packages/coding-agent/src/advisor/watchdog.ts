@@ -1,8 +1,22 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { expandAtImports } from "../discovery/at-imports";
+import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
+import type { ActiveRepoContext } from "../utils/active-repo-context";
 import { repo } from "../utils/git";
+
+function normalizePromptPath(value: string): string {
+	return value.replace(/\\/g, "/");
+}
+
+export function formatActiveRepoWatchdogPrompt(activeRepoContext: ActiveRepoContext): string {
+	return prompt
+		.render(activeRepoWatchdogTemplate, {
+			relativeRepoRoot: normalizePromptPath(activeRepoContext.relativeRepoRoot),
+		})
+		.trim();
+}
 
 /**
  * Discover and load WATCHDOG.md files walking up from cwd, project .omp folder, and user agent dir.
