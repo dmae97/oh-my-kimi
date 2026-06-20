@@ -805,6 +805,7 @@ export interface BuildSystemPromptOptions {
  * as separate entries so providers can cache prompt prefixes without concatenating blocks.
  */
 export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}): Promise<BuildSystemPromptResult> {
+	const toolMap = options.tools ? new Map(options.tools.map(tool => [tool.name, tool])) : undefined;
 	return await buildSystemPromptInternal({
 		cwd: options.cwd,
 		customPrompt: options.customPrompt,
@@ -812,6 +813,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
 		inlineToolDescriptors: options.inlineToolDescriptors,
+		toolNames: options.tools?.map(tool => tool.name),
+		tools: toolMap ? buildSystemPromptToolMetadata(toolMap) : undefined,
 	});
 }
 
