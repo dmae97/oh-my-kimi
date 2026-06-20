@@ -82,9 +82,8 @@ describe("system prompt tool inventory", () => {
 		// Tolerate either prompt layout: the merge-base "# Inventory" / "ENV" framing and the
 		// reordered "# Tool Inventory" / "TOOL POLICY" framing on current main. The slice just
 		// needs to isolate the rendered tool list from the rest of the prompt.
-		const inventoryStart = ["# Tool Inventory", "# Inventory"]
-			.map(header => text.indexOf(header))
-			.find(index => index >= 0) ?? -1;
+		const inventoryStart =
+			["# Tool Inventory", "# Inventory"].map(header => text.indexOf(header)).find(index => index >= 0) ?? -1;
 		expect(inventoryStart).toBeGreaterThan(-1);
 		const sectionEnds = ["\nENV\n", "\nTOOL POLICY", "\n# "]
 			.map(marker => text.indexOf(marker, inventoryStart + 1))
