@@ -2195,6 +2195,7 @@ export class ModelRegistry {
 			config.headers ||
 			config.apiKey ||
 			config.authHeader !== undefined ||
+			config.remoteCompaction !== undefined ||
 			config.transport !== undefined
 		) {
 			const transportOverride = {
@@ -2202,6 +2203,7 @@ export class ModelRegistry {
 				headers: config.headers,
 				apiKey: config.apiKey,
 				authHeader: config.authHeader,
+				remoteCompaction: config.remoteCompaction,
 				transport: config.transport,
 			};
 			const nextRuntimeOverride = this.#mergeProviderOverride(
