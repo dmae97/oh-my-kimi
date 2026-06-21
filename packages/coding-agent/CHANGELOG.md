@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed partial SSH result rendering switching to the final SSH glyph before the tool settled, which could leave a stale pending SSH header above the final header in terminal scrollback ([#3177](https://github.com/can1357/oh-my-pi/issues/3177))
+- Fixed long-running SSH command boxes leaving a stale `⏳ SSH: [host]` header above the final `⇄ SSH: [host]` header in terminal scrollback. The SSH renderer now keeps its partial-result chrome on the pending icon/state and opts the block out of stream-commit while `isPartial` holds (via the new `ToolRenderer.provisionalPartialResult` flag honored by `ToolExecutionComponent.isTranscriptBlockCommitStable`), so the stable-prefix ratchet can't promote the partial header to native scrollback only to have the final render strand it above the settled frame ([#3177](https://github.com/can1357/oh-my-pi/issues/3177)).
 
 ## [16.1.10] - 2026-06-21
 

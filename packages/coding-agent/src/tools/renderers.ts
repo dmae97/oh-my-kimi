@@ -52,6 +52,17 @@ export type ToolRenderer = {
 	 * streams rows the result render preserves.
 	 */
 	provisionalPendingPreview?: boolean | "collapsed";
+	/**
+	 * Whether the partial-result render is provisional: chrome rows (header
+	 * glyph, frame state) that change between `options.isPartial === true` and
+	 * the final result render. When `true`, the block is treated as
+	 * commit-unstable while a partial result is in flight, so the
+	 * stable-prefix ratchet in `deriveLiveCommitState` cannot promote the
+	 * partial chrome to native scrollback only to have the final render strand
+	 * it above the settled frame. Absent = the partial render is byte-stable
+	 * with the final render and may commit like any settled stream.
+	 */
+	provisionalPartialResult?: boolean;
 };
 
 export const toolRenderers: Record<string, ToolRenderer> = {
