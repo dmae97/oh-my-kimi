@@ -22,6 +22,7 @@ import { kagiProvider } from "./kagi";
 import { kiloProvider } from "./kilo";
 import { kimiCodeProvider } from "./kimi-code";
 import { litellmProvider } from "./litellm";
+import { llamaCppProvider } from "./llama-cpp";
 import { lmStudioProvider } from "./lm-studio";
 import { minimaxProvider } from "./minimax";
 import { minimaxCodeProvider } from "./minimax-code";
@@ -122,6 +123,7 @@ const ALL = [
 	ollamaProvider,
 	ollamaCloudProvider,
 	lmStudioProvider,
+	llamaCppProvider,
 	vllmProvider,
 	openaiProvider,
 	googleProvider,
