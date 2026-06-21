@@ -278,13 +278,6 @@ export interface Scenario {
 	// fixed-line components never produced. Wrapped content must agree with the
 	// real Ghostty-backed terminal's cell widths.
 	reflow: boolean;
-	// Models a commit-unstable barrier (a provisional tool preview, a displaceable
-	// `job` poll) pinned at row 0: the main component reports a live-region seam at
-	// 0 with no commit-safe/snapshot-safe end, so every committed row is a
-	// forced-overflow row. Exercises the engine's no-loss commit floor on the seam
-	// path — where durableBoundary collapses below windowTop — which the
-	// seam-agnostic shadow ledger covers without modification.
-	barrierSeam: boolean;
 	tags: readonly ScenarioTag[];
 	replayOperations?: readonly OperationKind[];
 }
@@ -994,12 +987,10 @@ class StressComponent implements Component, Focusable {
 	focused = false;
 	#model: StressModel;
 	#reflow: boolean;
-	#barrierSeam: boolean;
 
-	constructor(model: StressModel, reflow = false, barrierSeam = false) {
+	constructor(model: StressModel, reflow = false) {
 		this.#model = model;
 		this.#reflow = reflow;
-		this.#barrierSeam = barrierSeam;
 	}
 
 	invalidate(): void {}
@@ -1007,16 +998,6 @@ class StressComponent implements Component, Focusable {
 	render(width: number): string[] {
 		const lines = this.#model.renderedLines(width, this.focused);
 		return this.#reflow ? reflowToWidth(lines, width) : lines;
-	}
-
-	// Commit-unstable barrier seam: live region from row 0, no commit-safe or
-	// snapshot-safe end. Collapses durableBoundary to 0, so the whole committed
-	// prefix is forced-overflow — the engine must still commit every scrolled-off
-	// row (no-loss floor). A regression to a min(durableBoundary, windowTop) clamp
-	// would commit nothing here and diverge from the shadow tape (chunkTo =
-	// windowTop), tripping the native-scrollback fidelity oracle.
-	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return this.#barrierSeam ? 0 : undefined;
 	}
 }
 
@@ -1184,7 +1165,7 @@ class StressDriver {
 		this.#scheduler = new StressRenderScheduler();
 		const maxHeight = maxOf(scenario.heightChoices);
 		this.#model = new StressModel(this.#streams.content, maxHeight + 12, scenario.uniqueContent, "root-");
-		this.#component = new StressComponent(this.#model, scenario.reflow, scenario.barrierSeam);
+		this.#component = new StressComponent(this.#model, scenario.reflow);
 		this.#children = [0, 1].map(id => {
 			const model = new StressModel(
 				this.#streams.children,
@@ -3447,7 +3428,6 @@ function materializeScenario(
 		template.envMode !== "tmux" && template.terminalMode === "normal" && template.platform !== "win32";
 	const foregroundStream = template.foregroundStream ?? false;
 	const reflow = template.reflow ?? false;
-	const barrierSeam = template.barrierSeam ?? false;
 	return {
 		...template,
 		seed,
@@ -3459,7 +3439,6 @@ function materializeScenario(
 		uniqueContent: template.uniqueContent ?? false,
 		foregroundStream,
 		reflow,
-		barrierSeam,
 		tags: scenarioTags(template, strictScrollback, foregroundStream),
 		replayOperations,
 	};
@@ -3565,13 +3544,11 @@ type ScenarioTemplate = Omit<
 	| "reflow"
 	| "tags"
 	| "replayOperations"
-	| "barrierSeam"
 > & {
 	scrollbackRows?: number;
 	uniqueContent?: boolean;
 	foregroundStream?: boolean;
 	reflow?: boolean;
-	barrierSeam?: boolean;
 };
 
 function writeReplayLog(scenario: Scenario, operations: readonly OperationLogEntry[]): string {
@@ -3808,26 +3785,6 @@ function coreTemplates(): ScenarioTemplate[] {
 			scrollbackRows: 10_000,
 			reflow: true,
 			foregroundStream: true,
-		},
-		{
-			// Commit-unstable barrier (provisional tool preview / displaceable poll)
-			// pinned at row 0 over content that overflows the viewport. The engine's
-			// commit floor must push every scrolled-off row into native scrollback
-			// even though the barrier is never byte-stable, driving the seam path
-			// where durableBoundary collapses below windowTop — the exact gap that
-			// silently dropped rows. A regression to a min(durableBoundary,
-			// windowTop) clamp makes the engine diverge from the seam-agnostic
-			// shadow ledger and trips the native-scrollback fidelity oracle.
-			name: "darwin-normal-barrier-seam-small",
-			platform: "darwin",
-			terminalMode: "normal",
-			envMode: "plain",
-			geometryMode: "small",
-			columns: 32,
-			rows: 4,
-			widthChoices: [8, 16, 24, 32],
-			heightChoices: [3, 4, 6],
-			barrierSeam: true,
 		},
 	];
 }

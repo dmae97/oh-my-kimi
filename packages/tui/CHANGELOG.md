@@ -3,9 +3,7 @@
 ## [Unreleased]
 ### Fixed
 
-- Fixed an issue where output was lost when a commit-unstable barrier at the top of the viewport was removed or modified
-- Fixed race conditions in the committed prefix audit that could cause content to be incorrectly dropped during streaming updates
-- Improved the commit fidelity of forced-overflow rows to ensure they are consistently committed to the terminal scrollback buffer
+- Fixed streaming output being lost from native scrollback below a commit-unstable "barrier" block (a provisional/collapsed tool preview, a displaceable `job` poll, or a reflowing-markdown reply) once the content under it overflowed the viewport. The engine committed native scrollback only up to the barrier's seam, so rows that scrolled above the window under the barrier were committed nowhere and repainted nowhere — they vanished, and a later shift/finalize/removal of the barrier silently dropped the rows beneath it. The append-only commit floor is now `windowTop` in every non-frozen paint path (ordinary update, shrink re-slice, full paint), so whatever scrolls above the window always reaches history; the seam boundaries now only classify which committed rows stay byte-stable-audited vs. durable-exempt. The committed-prefix audit is range-aware: it audits the forced-overflow suffix in full (re-anchoring — duplication, never loss — when a barrier finalizes), exempts the durable middle (a streaming table re-aligning its columns) from re-anchor spray, and runs a full hard scan of rows a frame newly marks permanent so a single-row finalize edit far above the commit boundary still re-anchors instead of being dropped.
 
 ## [16.1.8] - 2026-06-20
 

@@ -1037,4 +1037,54 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 			tui.stop();
 		}
 	});
+
+	it("does not spray when a commit-unstable barrier becomes durable and a scrolled row drifts", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(20, 4);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const root = new SeamComponent();
+
+		try {
+			tui.addChild(root);
+			tui.start();
+			await settle(term);
+			const writes = capture(term);
+
+			// Phase 1: a commit-unstable barrier (no commit/snapshot end) overflows
+			// the viewport, force-committing its head as forced-overflow rows.
+			root.lines = rows("tbl-", 12);
+			root.liveStart = 0;
+			tui.requestRender();
+			await settle(term);
+
+			// Phase 2: the block becomes DURABLE (reports a snapshot-safe end over its
+			// whole body) while a scrolled-off INTERIOR committed row re-lays-out in
+			// place every frame — a streaming table that re-aligns its columns after it
+			// stops being provisional. An interior row (not row 0) is the load-bearing
+			// case: re-anchoring there leaves preDurable < preCommit, so without the
+			// hard-audit durableRows advance the durable-rise gate re-fires the full
+			// scan AND re-anchors on the drift every frame, ballooning native
+			// scrollback with duplicate snapshots (spray). With the advance, the
+			// durable row is exempt after the one transition re-anchor.
+			for (let n = 0; n < 30; n++) {
+				const lines = rows("tbl-", 12);
+				lines[5] = `tbl-5 [w${n}]`; // scrolled-off interior durable row drifts
+				root.lines = lines;
+				root.liveStart = 0;
+				root.snapSafe = 12; // durable through the whole body
+				tui.requestRender();
+				await settle(term);
+			}
+
+			const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+			// Bounded: ~12 logical rows + at most one transition re-anchor's stale
+			// copy. Spray would push this far past 40.
+			expect(buffer.length).toBeLessThan(40);
+			expect(buffer.join("\n")).toContain("tbl-11");
+			expect(eraseScrollbackCount(writes)).toBe(0);
+		} finally {
+			tui.stop();
+		}
+	});
 });

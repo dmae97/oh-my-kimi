@@ -821,25 +821,24 @@ const RESYNC_TAIL_SAMPLES = 8;
  *
  * Two detectors run over the audited rows:
  *
- * 1. Hard scan of the forced suffix [exemptTo, byteStableEnd): forced-overflow
- *    rows that THIS frame asserts are now permanent (index < byteStableEnd —
- *    the barrier above them finalized or cleared). A content change there is
- *    real finalized content, so ANY mismatch re-anchors. Scanned in FULL, not
- *    sampled, so a single edit far above the commit boundary with an unchanged
- *    tail still re-anchors (duplication, never loss) instead of being committed
- *    nowhere and painted nowhere.
+ * 1. Hard scan of the now-permanent forced suffix [exemptTo, permanentEnd):
+ *    forced-overflow rows that THIS frame asserts are durable/permanent (index <
+ *    permanentEnd — the barrier above them finalized or cleared, so durableBoundary
+ *    rose past them). A content change there is real finalized content, so ANY
+ *    mismatch re-anchors. Scanned in FULL, not sampled, so a single edit far above
+ *    the commit boundary with an unchanged tail still re-anchors (duplication,
+ *    never loss) instead of being committed nowhere and painted nowhere.
  * 2. Tail sample (only when the hard scan is clean): exploits the asymmetry
  *    between the two mutation classes — an in-place edit/restyle of a committed
  *    row disturbs only the touched rows (alignment below intact; the stale copy
  *    in history is the long-accepted artifact), while an insertion/deletion
  *    shifts EVERY row below it. So up to 8 non-blank rows within the last 24
  *    audited rows are compared SGR-stripped (theme changes stay quiet),
- *    tolerating one mismatch for a legitimate single-row edit of a row that is
- *    still volatile (index >= byteStableEnd): aligned ⇒ no resync; misaligned ⇒
- *    resync at the first non-equivalent audited row. The tolerance keeps an
- *    offscreen still-live barrier (a ticking spinner) from spraying duplicate
- *    snapshots every frame; the hard scan above is what forbids it from
- *    swallowing a finalized row.
+ *    tolerating a SINGLE non-hard mismatch (a legitimate one-row edit): aligned ⇒
+ *    no resync; misaligned ⇒ resync at the first non-equivalent audited row. The
+ *    tolerance keeps both an offscreen still-live barrier (a ticking spinner) and
+ *    a no-seam in-place row edit from spraying duplicate snapshots every frame;
+ *    the hard scan above is what forbids it from swallowing a finalized row.
  *
  * Highly repetitive tails (identical filler rows) can mask a shift in the tail
  * sample, in which case the skipped rows are content-identical to the committed
@@ -852,7 +851,7 @@ export function findCommittedPrefixResync(
 	auditTo: number = prefix.length,
 	exemptFrom: number = auditTo,
 	exemptTo: number = exemptFrom,
-	byteStableEnd = 0,
+	permanentEnd = 0,
 ): number {
 	const committed = Math.min(prefix.length, Math.max(0, Math.trunc(auditTo)));
 	if (committed === 0) return -1;
@@ -864,7 +863,7 @@ export function findCommittedPrefixResync(
 	if (frame.length >= committed) {
 		// 1. Hard scan: forced-overflow rows now asserted permanent. Full scan, no
 		// tolerance — a finalized row that changed must re-anchor.
-		const hardEnd = Math.min(committed, Math.max(0, Math.trunc(byteStableEnd)));
+		const hardEnd = Math.min(committed, Math.max(0, Math.trunc(permanentEnd)));
 		let hardMismatch = false;
 		for (let i = exTo; i < hardEnd; i++) {
 			if (!rowsEquivalent(frame[i]!, prefix[i]!)) {
@@ -2633,22 +2632,28 @@ export class TUI extends Container {
 		// that provably did not change since the last (aligned) frame cannot
 		// have diverged.
 		let committedRowsResynced = false;
-		// Audit covers [0, auditRows) and the forced-overflow suffix
-		// [durableRows, committedRows); the durable middle is exempt. The gate
-		// fires only when the stable prefix does not already cover every audited
-		// row: the upper audited bound is committedRows when a forced suffix
-		// exists, else the byte-stable auditRows — so a wholly durable/exempt
-		// prefix (a tall snapshot block) never pays the resync walk.
+		// Audit covers [0, auditRows) and the forced suffix [durableRows,
+		// committedRows); the durable middle [auditRows, durableRows) is exempt
+		// (in-place drift). Two reasons to run the audit this frame:
+		//  - the stable prefix does not cover every audited row (auditUpper); or
+		//  - a forced-overflow row this frame became durable/permanent
+		//    (committedPrefixDurableRows < hardAuditEnd): the barrier above it
+		//    finalized, so its committed bytes must be re-checked even though the
+		//    stable prefix says nothing moved — a stale committed copy there would
+		//    silently drop the row. The hard scan in findCommittedPrefixResync
+		//    covers [durableRows, hardAuditEnd) in full (no tail-sample miss).
 		const auditUpper =
 			this.#committedPrefixDurableRows < this.#committedRows ? this.#committedRows : this.#committedPrefixAuditRows;
-		if (
+		const hardAuditEnd = Math.min(this.#committedRows, durableBoundary);
+		const needHardAudit = this.#committedPrefixDurableRows < hardAuditEnd;
+		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
-			this.#renderStablePrefixRows < auditUpper
-		) {
+			(this.#renderStablePrefixRows < auditUpper || needHardAudit);
+		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
-			this.#auditCommittedPrefix(rawFrame, byteStableBoundary);
+			this.#auditCommittedPrefix(rawFrame, durableBoundary);
 			committedRowsResynced = this.#committedRows !== committedRowsBeforeAudit;
 		}
 		// Committed-prefix state this frame's commit math extends from (post-audit).
@@ -2785,6 +2790,7 @@ export class TUI extends Container {
 				preCommitDurableRows,
 				byteStableBoundary,
 				durableBoundary,
+				false,
 			);
 			this.#clearScrollbackOnNextRender = false;
 			this.#hasEverRendered = true;
@@ -2811,6 +2817,7 @@ export class TUI extends Container {
 			preCommitDurableRows,
 			byteStableBoundary,
 			durableBoundary,
+			auditRan,
 		);
 	}
 
@@ -2821,7 +2828,7 @@ export class TUI extends Container {
 	 * restyles keep their alignment and are left alone (stale styling in
 	 * history was always the accepted artifact).
 	 */
-	#auditCommittedPrefix(rawFrame: readonly string[], byteStableBoundary: number): void {
+	#auditCommittedPrefix(rawFrame: readonly string[], permanentEnd: number): void {
 		const prefix = this.#committedPrefix;
 		if (prefix.length === 0) return;
 		const resyncTo = findCommittedPrefixResync(
@@ -2830,7 +2837,7 @@ export class TUI extends Container {
 			prefix.length,
 			this.#committedPrefixAuditRows,
 			this.#committedPrefixDurableRows,
-			byteStableBoundary,
+			permanentEnd,
 		);
 		if (resyncTo < 0) return;
 		this.#committedRows = resyncTo;
@@ -2863,14 +2870,20 @@ export class TUI extends Container {
 		preDurableRows: number,
 		byteStableBoundary: number,
 		durableBoundary: number,
+		hardAudited: boolean,
 	): void {
 		const committed = this.#committedRows;
 		const auditRows =
 			resliced || preAuditRows >= preCommittedRows
 				? Math.min(committed, byteStableBoundary)
 				: Math.min(preAuditRows, committed);
+		// durableRows also advances when a hard audit ran this frame: the resync's
+		// full hard scan verified the forced suffix [durableRows, min(committed,
+		// durableBoundary)) (re-anchoring on any divergence), so those rows are now
+		// proven durable and may leave the audited set — otherwise the durable-rise
+		// gate would re-fire the full scan every frame (and spray on later drift).
 		const durableRows =
-			resliced || preDurableRows >= preCommittedRows
+			resliced || preDurableRows >= preCommittedRows || hardAudited
 				? Math.min(committed, durableBoundary)
 				: Math.min(preDurableRows, committed);
 		this.#committedPrefixAuditRows = auditRows;
