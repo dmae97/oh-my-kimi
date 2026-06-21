@@ -2664,6 +2664,59 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(eventTypes).toEqual(["toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
 	});
 
+	it("rejects a runMCPTool action frame missing requestID instead of synthesizing one", async () => {
+		const sent: string[] = [];
+		const stream = new AssistantMessageEventStream();
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send(data) {
+				sent.push(data);
+			},
+			close() {},
+		};
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const streamPromise = runGitLabDuoWorkflowSocket(
+			socket,
+			buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+			{ stream, output, started: true },
+			{ apiKey: "[REDACTED]" },
+		);
+
+		socket.onopen?.(new Event("open"));
+		// Action frame with no requestID at any level. A synthesized id here would be
+		// silently discarded by the DWS outbox, stalling the tool call; fail fast.
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "src/index.ts" }) },
+				}),
+			}),
+		);
+
+		await expect(streamPromise).rejects.toThrow(/missing requestID/);
+		// No tool call was committed: the turn fails instead of emitting a synthetic id.
+		expect(output.content).toEqual([]);
+	});
+
 	it("merges a burst of parallel tool-call actions into one assistant message", async () => {
 		const sent: string[] = [];
 		const stream = new AssistantMessageEventStream();
@@ -3005,6 +3058,271 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		// The fresh workflow's START request goal transcript carries the steer instruction
 		// (inline flows send the transcript over the socket, not in the create body).
 		expect(sent[1]?.some(data => data.includes("startRequest") && data.includes("stop and summarize"))).toBe(true);
+	});
+
+	it("stops the stranded workflow and re-seeds a fresh one when a pending action's requestID has no matching tool result", async () => {
+		// Reproduce the exact gap behind the observed tool-call repetition: a workflow
+		// streamed a runMCPTool action (requestID "req-srv-1"), but the persisted tool
+		// result the agent loop wrote back is keyed to a DIFFERENT toolCallId. The
+		// resume turn therefore cannot resolve the pending batch.
+		const patchedWorkflows: string[] = [];
+		let createCount = 0;
+		const createBodies: string[] = [];
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "workflow-token" } }), { status: 201 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Default", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (/\/workflows\/[^/]+$/.test(url.split("?")[0] ?? url)) {
+				if (init?.method === "PATCH") patchedWorkflows.push(url);
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/workflows")) {
+				createCount++;
+				if (typeof init?.body === "string") createBodies.push(init.body);
+				return new Response(JSON.stringify({ id: `workflow-${createCount}` }), { status: 201 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const sockets: GitLabDuoWorkflowWebSocketLike[] = [];
+		const sent: string[][] = [];
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			const mySent: string[] = [];
+			sent.push(mySent);
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send(data) {
+					mySent.push(data);
+				},
+				close() {},
+			};
+			sockets.push(socket);
+			return socket;
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+
+		const firstStream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			fetch: fetchImpl,
+			rootNamespaceId: "gid://gitlab/Group/root",
+			providerSessionState,
+			webSocketFactory,
+		});
+		for (let attempt = 0; attempt < 10 && sockets.length < 1; attempt++) {
+			await Bun.sleep(0);
+		}
+		sockets[0]?.onopen?.(new Event("open"));
+		sockets[0]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-srv-1",
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "README.md" }) },
+				}),
+			}),
+		);
+		const firstAssistant = await firstStream.result();
+		if (firstAssistant.role !== "assistant") throw new Error("Expected assistant message");
+		// The pending batch was committed under the server requestID.
+		const firstSession = [...providerSessionState.values()][0] as ProviderSessionState & {
+			active?: { pendingActions?: { requestID: string }[] };
+		};
+		expect(firstSession.active?.pendingActions?.map(a => a.requestID)).toEqual(["req-srv-1"]);
+
+		// The agent loop wrote a tool result, but keyed to a DIFFERENT id than the
+		// server's action requestID — so the resume cannot match it.
+		const mismatchedToolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "client-local-9",
+			toolName: "read",
+			content: [{ type: "text", text: "README file text" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const secondStream = streamGitLabDuoWorkflow(
+			model,
+			{ messages: [...context.messages, firstAssistant, mismatchedToolResult] },
+			{
+				apiKey: "[REDACTED]",
+				fetch: fetchImpl,
+				rootNamespaceId: "gid://gitlab/Group/root",
+				providerSessionState,
+				webSocketFactory,
+			},
+		);
+		for (let attempt = 0; attempt < 30 && sockets.length < 2; attempt++) {
+			await Bun.sleep(0);
+		}
+		sockets[1]?.onopen?.(new Event("open"));
+		sockets[1]?.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
+		await secondStream.result();
+
+		// With the fix, an unresolvable pending batch is treated like a steer: the
+		// provider abandons the stranded workflow rather than silently leaving it
+		// running. It creates a SECOND workflow AND stops the first server-side.
+		expect(createCount).toBe(2);
+		expect(sockets).toHaveLength(2);
+		// The old socket still never received an actionResponse (the mismatched id
+		// could not be paired), but the stranded workflow is now stopped instead of
+		// left pending — so the server no longer treats the tool call as in-flight.
+		expect(sent[0]?.some(data => data.includes("actionResponse"))).toBe(false);
+		const stoppedFirst = patchedWorkflows.some(url => url.includes("workflow-1"));
+		expect(stoppedFirst).toBe(true);
+		// The fresh workflow's goal transcript carries the full prior history,
+		// including the tool result the model never saw answered on the old socket,
+		// so the new workflow continues with the result in context.
+		const startFrame = sent[1]?.find(data => data.includes("startRequest"));
+		expect(startFrame).toBeDefined();
+		expect(startFrame).toContain("README file text");
+	});
+
+	it("re-seeds a fresh workflow goal with the entire conversation history including prior tool results", async () => {
+		// A multi-turn conversation: user asked, the agent called a tool, the tool
+		// returned, the agent answered, then the user asks a follow-up. When a fresh
+		// workflow is created (no live session to resume), its goal MUST replay every
+		// prior turn — user/assistant text, the tool call, AND the tool result — so the
+		// model is not blind to what already happened.
+		let createCount = 0;
+		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "workflow-token" } }), { status: 201 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Default", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/workflows")) {
+				createCount++;
+				return new Response(JSON.stringify({ id: `workflow-${createCount}` }), { status: 201 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		let socket: GitLabDuoWorkflowWebSocketLike | undefined;
+		const sent: string[] = [];
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			socket = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send(data) {
+					sent.push(data);
+				},
+				close() {},
+			};
+			return socket;
+		};
+		// No pending session: this is a brand-new run that nonetheless carries a full
+		// prior conversation in context.messages (e.g. the previous DWS turn ended
+		// terminal, clearing `active`).
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "Let me read the file." },
+				{ type: "toolCall", id: "req-prior-1", name: "read", arguments: { path: "a.ts" } },
+			],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const priorToolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "req-prior-1",
+			toolName: "read",
+			content: [{ type: "text", text: "ALPHA_FILE_CONTENT" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const messages: Message[] = [
+			{ role: "user", content: "Read a.ts please.", timestamp: Date.now() },
+			priorAssistant,
+			priorToolResult,
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "It contains ALPHA." }],
+				api: "gitlab-duo-agent",
+				provider: "gitlab-duo-agent",
+				model: model.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+			{ role: "user", content: "Now summarize it.", timestamp: Date.now() },
+		];
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const stream = streamGitLabDuoWorkflow(
+			model,
+			{ messages },
+			{
+				apiKey: "[REDACTED]",
+				fetch: fetchImpl,
+				rootNamespaceId: "gid://gitlab/Group/root",
+				providerSessionState,
+				webSocketFactory,
+			},
+		);
+		for (let attempt = 0; attempt < 20 && sent.length < 1; attempt++) {
+			await Bun.sleep(0);
+		}
+		socket?.onopen?.(new Event("open"));
+		socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
+		await stream.result();
+
+		const startFrame = sent.find(data => data.includes("startRequest"));
+		expect(startFrame).toBeDefined();
+		const goal = (JSON.parse(startFrame ?? "{}").startRequest as { goal?: string }).goal ?? "";
+		// The goal transcript carries EVERY prior turn, equal-weight.
+		expect(goal).toContain("Read a.ts please.");
+		expect(goal).toContain("Let me read the file.");
+		expect(goal).toContain("ALPHA_FILE_CONTENT"); // the prior tool RESULT is present
+		expect(goal).toContain("It contains ALPHA.");
+		expect(goal).toContain("Now summarize it.");
+		// The prior tool call and its result are paired by id in the transcript.
+		expect(goal).toContain("req-prior-1");
 	});
 
 	it("finalizes the resumed stream when the socket closes without a terminal status", async () => {

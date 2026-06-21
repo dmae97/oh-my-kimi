@@ -823,10 +823,26 @@ async function runGitLabDuoWorkflow(
 		return;
 	}
 	const fetchImpl = options.fetch ?? fetch;
-	// A mid-batch steer abandons the live workflow: close its socket, stop it server
-	// side, and drop the resumable session so the fresh workflow below owns `active`.
-	if (steeredMidBatch && pendingSession) {
-		traceGitLabDuoWorkflow("workflow.steer_restart", { workflowId: pendingSession.workflowId });
+	// Two cases reach here with a live `pendingSession` that must be abandoned before
+	// seeding a fresh workflow:
+	//  1. A mid-batch steer (resolvedBatch present, user message after it).
+	//  2. Pending actions that did NOT resolve to tool results (resolvedBatch
+	//     undefined): the requestID↔toolResult.toolCallId pairing broke, so the live
+	//     socket can never be answered. Silently creating a fresh workflow while
+	//     leaving the old one running strands it server-side — its LangGraph still
+	//     treats the tool call as pending, so the model never sees the result and
+	//     re-issues the same tool call (the observed "repeats the same tool, ignores
+	//     the result" loop). Both cases need the same cleanup: close the socket, stop
+	//     the workflow server-side, and drop the resumable session so the fresh
+	//     workflow below owns `active`. The accumulated history (including the
+	//     unanswered tool's result) replays through the new goal transcript.
+	const abandonStaleSession = Boolean(
+		pendingSession && (steeredMidBatch || (pendingActions && pendingActions.length > 0 && !resolvedBatch)),
+	);
+	if (abandonStaleSession && pendingSession) {
+		traceGitLabDuoWorkflow(steeredMidBatch ? "workflow.steer_restart" : "workflow.stale_action_restart", {
+			workflowId: pendingSession.workflowId,
+		});
 		pendingSession.pendingActions = undefined;
 		try {
 			pendingSession.ws.close();
@@ -2450,20 +2466,40 @@ function extractGitLabDuoWorkflowAction(event: Record<string, unknown>): GitLabD
 			getRecordString(wrappedAction, "requestId") ??
 			getRecordString(wrappedAction, "id") ??
 			getRecordString(event, "requestID") ??
-			getRecordString(event, "requestId") ??
-			crypto.randomUUID();
+			getRecordString(event, "requestId");
+		const resolvedRequestID = requireGitLabDuoWorkflowRequestID(requestID, name, wrappedAction);
 		const args = getRecord(wrappedAction, "args") ?? getRecord(wrappedAction, "arguments") ?? wrappedAction;
-		return { requestID, name, args: withGitLabDuoWorkflowToolCallId(args, requestID) };
+		return { requestID: resolvedRequestID, name, args: withGitLabDuoWorkflowToolCallId(args, resolvedRequestID) };
 	}
 	for (const name of GITLAB_DUO_WORKFLOW_ACTION_NAMES) {
 		const args = getRecord(event, name);
 		if (args) {
-			const requestID =
-				getRecordString(event, "requestID") ?? getRecordString(event, "requestId") ?? crypto.randomUUID();
-			return { requestID, name, args: withGitLabDuoWorkflowToolCallId(args, requestID) };
+			const requestID = getRecordString(event, "requestID") ?? getRecordString(event, "requestId");
+			const resolvedRequestID = requireGitLabDuoWorkflowRequestID(requestID, name, event);
+			return { requestID: resolvedRequestID, name, args: withGitLabDuoWorkflowToolCallId(args, resolvedRequestID) };
 		}
 	}
 	return undefined;
+}
+
+// DWS assigns every executor Action a non-empty `requestID` (contract.proto Action
+// field 1; emitted verbatim by Workhorse's proto->JSON relay). The client MUST echo
+// that exact id back in `actionResponse.requestID` or the server's outbox silently
+// discards the response (outbox.set_action_response: a non-empty id that misses the
+// awaiting-futures map hits the "doesn't expect responses, discarding" branch) and
+// the tool call's future never resolves — the model then re-issues the same tool
+// call, looping. A synthesized id is therefore never correct: it is either redundant
+// (the real id was present) or actively harmful (guaranteed-discarded). Fail fast so
+// the socket loop surfaces a protocol drift instead of stalling.
+function requireGitLabDuoWorkflowRequestID(
+	requestID: string | undefined,
+	actionName: string,
+	source: Record<string, unknown>,
+): string {
+	if (requestID) return requestID;
+	throw new Error(
+		`GitLab Duo Workflow action "${actionName}" missing requestID (keys: ${Object.keys(source).slice(0, 20).join(", ")})`,
+	);
 }
 
 function withGitLabDuoWorkflowToolCallId(args: unknown, requestID: string): unknown {
