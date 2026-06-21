@@ -396,7 +396,7 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedOptions?.openrouterVariant).toBe("nitro");
 	});
 
-	it("obfuscates the system prompt and messages on ephemeral side-channel requests", async () => {
+	it("obfuscates user messages on ephemeral side-channel requests", async () => {
 		const api = "test-ephemeral-secret-redaction";
 		const secret = "EPHEMERAL_SECRET_TOKEN_12345";
 		let capturedContext: Context | undefined;
@@ -427,7 +427,7 @@ describe("AgentSession message pipeline", () => {
 			agent: new Agent({
 				initialState: {
 					model,
-					systemPrompt: [`system prompt with ${secret}`],
+					systemPrompt: ["system prompt"],
 					messages: [],
 					tools: [],
 				},
@@ -443,6 +443,7 @@ describe("AgentSession message pipeline", () => {
 
 		expect(result.replyText).toBe("Answer");
 		expect(capturedContext).toBeDefined();
+		// The secret entered only via the user prompt, which the opt-in obfuscator redacts.
 		expect(JSON.stringify(capturedContext)).not.toContain(secret);
 	});
 
@@ -516,10 +517,12 @@ describe("AgentSession message pipeline", () => {
 			await agent.prompt("Main Question?");
 			await session.runEphemeralTurn({ promptText: `Side Question ${secret}?` });
 
+			// The static prefix (system prompt + tools) is left untouched, so it stays byte-identical
+			// between the main turn and the side turn and the prompt cache prefix survives.
 			expect(JSON.stringify(mainContext?.systemPrompt)).toBe(JSON.stringify(sideContext?.systemPrompt));
 			expect(JSON.stringify(mainContext?.tools)).toBe(JSON.stringify(sideContext?.tools));
-			expect(JSON.stringify(sideContext?.systemPrompt)).not.toContain(secret);
-			expect(JSON.stringify(sideContext?.tools)).not.toContain(secret);
+			// The side turn's user prompt secret is redacted from the outbound messages.
+			expect(JSON.stringify(sideContext?.messages)).not.toContain(secret);
 		});
 	});
 

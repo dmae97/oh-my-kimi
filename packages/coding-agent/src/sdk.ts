@@ -97,6 +97,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "./registry/agent-registry";
 import {
 	collectEnvSecrets,
 	deobfuscateSessionContext,
+	deobfuscateToolArguments,
 	loadSecrets,
 	obfuscateMessages,
 	obfuscateProviderContext,
@@ -2535,7 +2536,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					result = { ...result, timeout: Math.min(result.timeout, maxTimeout) };
 				}
 				if (obfuscator?.hasSecrets()) {
-					result = obfuscator.deobfuscateObject(result);
+					result = deobfuscateToolArguments(obfuscator, result);
 				}
 				return result;
 			},

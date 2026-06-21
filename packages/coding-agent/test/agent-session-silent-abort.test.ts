@@ -157,7 +157,7 @@ describe("AgentSession silent-abort marker stamping", () => {
 	});
 
 	it("A4: marker is stamped on event.message BEFORE the obfuscator's displayEvent copy", async () => {
-		// Build a real obfuscator with a `plain` secret so `deobfuscateObject(content)`
+		// Build a real obfuscator with a `plain` secret so `deobfuscateAssistantContent(content)`
 		// returns a NEW content array — that's the only path that triggers the
 		// `displayEvent = { ...event, message: { ...message, content } }` spread copy
 		// in `#handleAgentEvent`. The marker must be stamped BEFORE that spread so
