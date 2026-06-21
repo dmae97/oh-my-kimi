@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import pytest
 
 from robomp.github_events import (
     extract_mention,
@@ -137,6 +138,23 @@ def test_route_pr_conversation_uses_handle_pr_conversation() -> None:
         },
         allowlist=ALLOWLIST,
         bot_login=BOT,
+        resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
+    )
+    assert decision.should_queue
+    assert decision.task == "handle_pr_conversation"
+
+
+def test_route_pr_conversation_normalizes_bot_author_suffix() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {"user": {"login": "alice"}, "body": "looks good"},
+            "issue": {"number": 9, "user": {"login": f"{BOT}[bot]"}, "pull_request": {"url": "x"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=f"@{BOT}[bot]",
         resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
     )
     assert decision.should_queue
@@ -511,6 +529,11 @@ def test_extract_mention_returns_body_minus_mention() -> None:
     assert extract_mention("@robomp-bot do X", "robomp-bot") == "do X"
 
 
+@pytest.mark.parametrize("configured_login", ["@roboomp", "roboomp[bot]", "@roboomp[bot]"])
+def test_extract_mention_accepts_prefixed_or_app_bot_login(configured_login: str) -> None:
+    assert extract_mention("@roboomp go ahead", configured_login) == "go ahead"
+
+
 def test_extract_mention_returns_none_without_mention() -> None:
     assert extract_mention("hello there", "robomp-bot") is None
     assert extract_mention(None, "robomp-bot") is None
@@ -614,7 +637,7 @@ def test_route_directive_authorizes_personal_repo_owner_without_author_associati
                 "body": "@robomp-bot go ahead and push",
             },
             "issue": {"number": 9},
-            "repository": {"full_name": "can1357/widget"},
+            "repository": {"full_name": "can1357/widget", "owner": {"login": "can1357", "type": "User"}},
         },
         allowlist=frozenset({"can1357/widget"}),
         bot_login=BOT,
@@ -623,6 +646,26 @@ def test_route_directive_authorizes_personal_repo_owner_without_author_associati
     assert decision.directive_body == "go ahead and push"
     assert decision.directive_author == "can1357"
     assert decision.directive_authorizes_impl is True
+    assert decision.association == "OWNER"
+
+
+def test_route_directive_does_not_authorize_org_owner_name_without_author_association() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "octo"},
+                "body": "@robomp-bot go ahead and push",
+            },
+            "issue": {"number": 9},
+            "repository": {"full_name": "octo/widget", "owner": {"login": "octo", "type": "Organization"}},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=BOT,
+    )
+    assert decision.directive is False
+    assert decision.directive_authorizes_impl is False
 
 
 def test_route_directive_from_collaborator_does_not_authorize_impl() -> None:
@@ -722,6 +765,29 @@ def test_route_directive_set_on_review_comment() -> None:
         },
         allowlist=ALLOWLIST,
         bot_login=BOT,
+        resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
+    )
+    assert decision.should_queue
+    assert decision.task == "handle_review"
+    assert decision.directive is True
+    assert decision.directive_body == "use a generator here"
+
+
+def test_route_review_comment_normalizes_bot_author_suffix() -> None:
+    decision = route(
+        "pull_request_review_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "can1357"},
+                "author_association": "OWNER",
+                "body": "@robomp-bot use a generator here",
+            },
+            "pull_request": {"number": 50, "user": {"login": f"{BOT}[bot]"}},
+            "repository": {"full_name": "octo/widget"},
+        },
+        allowlist=ALLOWLIST,
+        bot_login=f"@{BOT}[bot]",
         resolve_issue_from_pr=lambda _r, _n: "octo/widget#42",
     )
     assert decision.should_queue

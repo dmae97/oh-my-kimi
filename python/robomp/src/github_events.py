@@ -56,16 +56,62 @@ def _repo_full_name(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _login_matches_repo_owner(login: str | None, repo: str | None) -> bool:
-    """Return whether `login` is the personal-account owner in `owner/repo`."""
+def _normalize_bot_login(login: str | None) -> str:
+    if not isinstance(login, str):
+        return ""
+    cleaned = login.strip().removeprefix("@")
+    if cleaned.lower().endswith("[bot]"):
+        cleaned = cleaned[:-5]
+    return cleaned.lower()
+
+
+def _login_matches_bot(login: str | None, bot_login: str) -> bool:
+    normalized_login = _normalize_bot_login(login)
+    return bool(normalized_login) and normalized_login == _normalize_bot_login(bot_login)
+
+
+def _login_matches_personal_repo_owner(
+    login: str | None,
+    repository: Mapping[str, Any] | None,
+    repo: str | None,
+) -> bool:
+    """Return whether `login` owns this personal-account repository."""
     if not isinstance(login, str) or not login:
         return False
+    owner_login: str | None = None
+    owner_type: str | None = None
+    if isinstance(repository, Mapping):
+        owner = repository.get("owner")
+        if isinstance(owner, Mapping):
+            raw_login = owner.get("login")
+            if isinstance(raw_login, str) and raw_login:
+                owner_login = raw_login
+            raw_type = owner.get("type")
+            if isinstance(raw_type, str) and raw_type:
+                owner_type = raw_type
+    if owner_type is not None and owner_type.lower() == "organization":
+        return False
+    if owner_login:
+        return login.lower() == owner_login.lower()
     if not isinstance(repo, str):
         return False
     owner, sep, _name = repo.partition("/")
     if not sep or not owner:
         return False
     return login.lower() == owner.lower()
+
+
+def _effective_association(
+    login: str | None,
+    association: str | None,
+    repository: Mapping[str, Any] | None,
+    repo: str | None,
+) -> str | None:
+    if association:
+        return association
+    if _login_matches_personal_repo_owner(login, repository, repo):
+        return "OWNER"
+    return association
 
 
 PrIssueResolver = Callable[[str, int], str | None] | None
@@ -77,9 +123,9 @@ def _is_bot_account(user: Mapping[str, Any] | None, bot_login: str) -> bool:
     login = str(user.get("login") or "")
     if not login:
         return False
-    if login == bot_login:
+    if _login_matches_bot(login, bot_login):
         return True
-    if login.endswith("[bot]"):
+    if login.lower().endswith("[bot]"):
         return True
     if str(user.get("type") or "") == "Bot":
         return True
@@ -108,7 +154,7 @@ def extract_mention(body: str | None, bot_login: str) -> str | None:
     """
     if not isinstance(body, str) or not body:
         return None
-    login = bot_login.strip()
+    login = _normalize_bot_login(bot_login)
     if not login:
         return None
     pattern = re.compile(
@@ -233,14 +279,13 @@ def route(
                 "directive_pragmas": pragmas,
                 "directive_authorizes_impl": False,
             }
-        repo_owner_matches = _login_matches_repo_owner(login, repo)
-        if not repo_owner_matches and not is_maintainer(login, assoc, maintainers=maintainers):
+        if not is_maintainer(login, assoc, maintainers=maintainers):
             return {}
         stripped = extract_mention(body, bot_login)
         if stripped is None:
             return {}
         cleaned, pragmas = parse_pragmas(stripped)
-        authorizes_impl = repo_owner_matches or is_implementation_authorizer(login, assoc, maintainers=maintainers)
+        authorizes_impl = is_implementation_authorizer(login, assoc, maintainers=maintainers)
         return {
             "directive": True,
             "directive_body": cleaned,
@@ -283,9 +328,10 @@ def route(
             # amend-and-push workflow.
             key = _resolve_pr_key(number)
             login, assoc = _submitter_info(comment)
+            assoc = _effective_association(login, assoc, payload.get("repository"), repo)
             issue_user_raw = issue.get("user")
             issue_user = issue_user_raw if isinstance(issue_user_raw, Mapping) else {}
-            if str(issue_user.get("login") or "") == bot_login:
+            if _login_matches_bot(str(issue_user.get("login") or ""), bot_login):
                 return RouteDecision(
                     "queue",
                     "handle_pr_conversation",
@@ -299,6 +345,7 @@ def route(
             return RouteDecision("skip", None, repo, issue_key(repo, number), "incoming PR comments ignored")
         key = issue_key(repo, number)
         login, assoc = _submitter_info(comment)
+        assoc = _effective_association(login, assoc, payload.get("repository"), repo)
         return RouteDecision(
             "queue",
             "handle_comment",
@@ -343,13 +390,14 @@ def route(
             return RouteDecision("skip", None, repo, None, "bot/self review comment")
         pr = payload.get("pull_request") or {}
         pr_user = pr.get("user") or {}
-        if str(pr_user.get("login") or "") != bot_login:
+        if not _login_matches_bot(str(pr_user.get("login") or ""), bot_login):
             return RouteDecision("skip", None, repo, None, "PR not authored by bot")
         number = pr.get("number")
         if not isinstance(number, int):
             return RouteDecision("skip", None, repo, None, "PR missing number")
         key = _resolve_pr_key(number)
         login, assoc = _submitter_info(comment)
+        assoc = _effective_association(login, assoc, payload.get("repository"), repo)
         return RouteDecision(
             "queue",
             "handle_review",

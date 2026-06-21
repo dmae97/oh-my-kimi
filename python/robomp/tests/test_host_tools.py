@@ -1234,6 +1234,32 @@ def test_impl_gate_allows_authorized_proposal_to_reach_pr_validation(db: Databas
     assert "OWNER or allowlisted maintainer" not in msg
 
 
+def test_impl_gate_allows_authorized_proposal_push_to_reach_repo_commands(
+    db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    calls: list[list[str] | tuple[str, ...]] = []
+
+    def record_repo_command(_bindings: ToolBindings, cmd: list[str] | tuple[str, ...], *, timeout: float | None = None):
+        del timeout
+        calls.append(cmd)
+        raise RuntimeError("authorized proposal reached gh_push_branch repo command")
+
+    bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    db.set_issue_classification(bindings.issue_key, "proposal")
+    bindings = replace(bindings, impl_authorized=True)
+    monkeypatch.setattr(host_tools, "_run_repo_command", record_repo_command)
+    try:
+        tool = next(x for x in build(bindings) if x.name == "gh_push_branch")
+        with pytest.raises(RuntimeError, match="authorized proposal reached gh_push_branch repo command"):
+            tool.execute({}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert calls
+
+
 def test_impl_gate_allows_bug_without_directive_to_reach_pr_validation(db: Database, tmp_path: Path) -> None:
     bindings, loop, t = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
     db.set_issue_classification(bindings.issue_key, "bug")
