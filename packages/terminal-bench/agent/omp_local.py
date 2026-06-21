@@ -188,6 +188,9 @@ class OmpLocal(BaseInstalledAgent):
         # web_search auth can't route through the gateway (dedicated provider creds);
         # off by default so search-using tasks don't false-negative on 401s.
         self._web_search = _truthy(_env("OMP_TB_WEB_SEARCH", "0"))
+        # Extra env (PI_* dialect knobs, explicit --env) the runner forwards into
+        # the in-container omp run, JSON-encoded in OMP_TB_FORWARD_ENV.
+        self._forward_env = self._parse_forward_env()
         # Resolved during install(); reused by version + run commands.
         self._home = "/root"
         self._bun = "/root/.bun/bin/bun"
@@ -371,6 +374,20 @@ class OmpLocal(BaseInstalledAgent):
             ),
         )
 
+    @staticmethod
+    def _parse_forward_env() -> dict[str, str]:
+        """Extra run-time env from the runner (OMP_TB_FORWARD_ENV = JSON object)."""
+        raw = _env("OMP_TB_FORWARD_ENV")
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {str(key): str(value) for key, value in parsed.items()}
+
     def _collect_provider_keys(self, provider: str) -> dict[str, str]:
         """Host env vars for the primary + advisor providers (direct-auth mode)."""
         providers = {provider}
@@ -427,12 +444,14 @@ class OmpLocal(BaseInstalledAgent):
                 f'find "$HOME/.omp/agent/sessions" -name __advisor.jsonl -exec cat {{}} + '
                 f"> /logs/agent/{_ADVISOR_FILENAME} 2>/dev/null || true; exit $rc"
             )
-        # Direct-auth (no-gateway) mode: forward only the selected providers' keys
-        # via the exec env (never argv), mirroring harbor's built-in Pi.run().
-        run_env: dict[str, str] | None = None
+        # Exec env for the omp run. Direct-auth (no-gateway) mode contributes the
+        # selected providers' keys (via exec env, never argv); forwarded PI_* /
+        # --env knobs apply last so an explicit --env always wins.
+        run_env: dict[str, str] = {}
         if not self._gateway_on:
-            run_env = self._collect_provider_keys(provider)
-        await self.exec_as_agent(environment, command=self._wrap(run), env=run_env)
+            run_env.update(self._collect_provider_keys(provider))
+        run_env.update(self._forward_env)
+        await self.exec_as_agent(environment, command=self._wrap(run), env=run_env or None)
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:

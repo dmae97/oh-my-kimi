@@ -27,7 +27,7 @@ const AGENT_DIR = path.join(PKG_DIR, "agent");
 const CODING_AGENT_DIR = path.join(REPO_ROOT, "packages", "coding-agent");
 const AGENT_IMPORT_PATH = "omp_local:OmpLocal";
 
-interface Config {
+export interface Config {
 	models: string[];
 	dataset: string;
 	tasks: number;
@@ -58,6 +58,7 @@ interface Config {
 	cleanupForce: boolean;
 	hostNetwork: boolean;
 	passthrough: string[];
+	env: Record<string, string>;
 }
 
 function defaultConfig(): Config {
@@ -92,12 +93,16 @@ function defaultConfig(): Config {
 		cleanupForce: false,
 		hostNetwork: false,
 		passthrough: [],
+		env: {},
 	};
 }
 
 const HELP = `terminal-bench-2 runner (local omp)
 
 Usage: bun src/runner.ts [options] [-- <extra harbor args>]
+
+Commands:
+  cleanup                        Force-remove ALL leftover Harbor containers + networks, then exit
 
 Model / agent:
   -m, --model <provider/model>   Model (repeatable). Default anthropic/claude-sonnet-4-6
@@ -109,6 +114,8 @@ Model / agent:
       --advisor-sync <off|1|3|5> Advisor catch-up backlog (default 1 = accurate spend; off = faster)
       --tarball <path>           Reuse a prebuilt omp tarball (implies --no-build)
       --no-build                 Skip packing; reuse newest tarball in bench dir
+      --env <KEY[=VALUE]>        Forward env into omp container (repeatable).
+                                 KEY alone forwards host value; host PI_* auto-forwarded.
 
 Dataset / scale:
   -l, --tasks <N>                Max tasks (default 20)
@@ -138,7 +145,7 @@ Output / control:
 
 // ───────────────────────────────────────────────────────────────── arg parsing
 
-function parseArgs(argv: string[]): Config {
+export function parseArgs(argv: string[]): Config {
 	const cfg = defaultConfig();
 	for (let i = 0; i < argv.length; i++) {
 		let arg = argv[i];
@@ -273,6 +280,18 @@ function parseArgs(argv: string[]): Config {
 				process.stdout.write(HELP);
 				process.exit(0);
 				break;
+			case "-e":
+			case "--env": {
+				const spec = take(arg);
+				const eq2 = spec.indexOf("=");
+				if (eq2 === -1) {
+					const hostVal = process.env[spec];
+					if (hostVal !== undefined) cfg.env[spec] = hostVal;
+				} else {
+					cfg.env[spec.slice(0, eq2)] = spec.slice(eq2 + 1);
+				}
+				break;
+			}
 			default:
 				throw new Error(`unknown flag: ${arg} (see --help)`);
 		}
@@ -853,13 +872,44 @@ function buildHarborArgs(
 	return a;
 }
 
-function buildHarborEnv(
+const FORWARD_ENV_DENYLIST = new Set([
+	"PI_CODING_AGENT_DIR",
+	"PI_CONFIG_DIR",
+	"PI_PROFILE",
+	"PI_PACKAGE_DIR",
+	"PI_SESSION_FILE",
+	"PI_ARTIFACTS_DIR",
+	"PI_TOOL_BRIDGE_URL",
+	"PI_TOOL_BRIDGE_TOKEN",
+	"PI_TOOL_BRIDGE_SESSION",
+	"PI_EVAL_LOCAL_ROOTS",
+]);
+
+/**
+ * Env vars injected into the in-container omp run: every host `PI_*` knob (minus
+ * container-hostile dir/profile/session keys) plus explicit `--env` entries,
+ * which always win and bypass the denylist.
+ */
+export function collectForwardEnv(cfg: Config): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(process.env)) {
+		if (v === undefined || !k.startsWith("PI_") || FORWARD_ENV_DENYLIST.has(k)) continue;
+		out[k] = v;
+	}
+	for (const [k, v] of Object.entries(cfg.env)) out[k] = v;
+	return out;
+}
+
+export function buildHarborEnv(
 	cfg: Config,
 	modelsYaml: string,
 	tarball: string | null,
 	version: string,
 ): Record<string, string> {
 	const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+	// Drop any stale OMP_TB_FORWARD_ENV inherited from the caller's shell before
+	// the agent-type early return, so it never leaks (incl. into the dry-run dump).
+	delete env.OMP_TB_FORWARD_ENV;
 	if (cfg.agent !== "omp") return env;
 	const prepend = (k: string, v: string): void => {
 		env[k] = env[k] ? `${v}:${env[k]}` : v;
@@ -881,13 +931,112 @@ function buildHarborEnv(
 		env.OMP_TB_GATEWAY_TOKEN = cfg.gatewayToken;
 		env.OMP_TB_GATEWAY_PROVIDERS = deriveProviders(cfg).join(",");
 	}
+	const forward = collectForwardEnv(cfg);
+	if (Object.keys(forward).length > 0) env.OMP_TB_FORWARD_ENV = JSON.stringify(forward);
 	return env;
+}
+
+// ──────────────────────────────────────────────────────────────── docker cleanup
+
+/** Harbor names each trial's compose project `<task>__<7-char-suffix>`. */
+const HARBOR_PROJECT_RE = /^[a-z0-9_.-]+__[a-zA-Z0-9]{7}$/;
+
+interface DockerContainer {
+	id: string;
+	state: string;
+	project: string;
+	workingDir: string;
+}
+
+/** All containers belonging to a Harbor trial (by compose project or task working_dir). */
+function listHarborContainers(): DockerContainer[] {
+	const res = spawnSync(
+		"docker",
+		[
+			"ps",
+			"-a",
+			"--format",
+			'{{.ID}}\t{{.State}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.project.working_dir"}}',
+		],
+		{ encoding: "utf8" },
+	);
+	if (res.status !== 0 || !res.stdout) return [];
+	const out: DockerContainer[] = [];
+	for (const line of res.stdout.trim().split("\n")) {
+		if (!line.trim()) continue;
+		const [id, state, project, workingDir] = line.split("\t");
+		if (!id) continue;
+		const harbor = HARBOR_PROJECT_RE.test(project ?? "") || (workingDir ?? "").includes(".cache/harbor/tasks");
+		if (harbor) out.push({ id, state: state ?? "", project: project ?? "", workingDir: workingDir ?? "" });
+	}
+	return out;
+}
+
+/**
+ * Remove leftover Harbor trial Docker resources: containers in a Harbor compose
+ * trial project (or staged under `.cache/harbor/tasks`) plus the trial networks
+ * crashed runs leave behind. With `force`, running containers are killed too and
+ * every idle trial network is dropped; otherwise only exited/created/dead
+ * containers and networks with no running container are removed.
+ */
+function runDockerCleanup(force: boolean): void {
+	try {
+		process.stdout.write(dim("Running harbor-targeted Docker cleanup...\n"));
+		const containers = listHarborContainers();
+		const removable = force ? containers : containers.filter(c => ["exited", "created", "dead"].includes(c.state));
+		if (removable.length > 0) {
+			const ids = removable.map(c => c.id);
+			process.stdout.write(
+				dim(`${force ? "Force-removing" : "Removing"} ${ids.length} leftover Harbor container(s)...\n`),
+			);
+			spawnSync("docker", force ? ["rm", "-f", ...ids] : ["rm", ...ids]);
+		}
+
+		// Networks of projects that still have a running container are kept (non-force).
+		const activeProjects = new Set<string>();
+		if (!force) {
+			for (const c of containers) {
+				if (c.state === "running" && c.project) activeProjects.add(c.project);
+			}
+		}
+
+		const netInspect = spawnSync("docker", ["network", "ls", "--format", "{{.ID}}\t{{.Labels}}"], {
+			encoding: "utf8",
+		});
+		if (netInspect.status === 0 && netInspect.stdout) {
+			const netIdsToRemove: string[] = [];
+			for (const netLine of netInspect.stdout.trim().split("\n")) {
+				const [netId, labels] = netLine.split("\t");
+				if (!netId) continue;
+				const projMatch = (labels ?? "").match(/com\.docker\.compose\.project=([^,]+)/);
+				if (!projMatch) continue;
+				if (HARBOR_PROJECT_RE.test(projMatch[1]) && !activeProjects.has(projMatch[1])) {
+					netIdsToRemove.push(netId);
+				}
+			}
+			if (netIdsToRemove.length > 0) {
+				process.stdout.write(dim(`Removing ${netIdsToRemove.length} stale trial Docker network(s)...\n`));
+				for (const netId of netIdsToRemove) spawnSync("docker", ["network", "rm", netId]);
+			}
+		}
+		process.stdout.write("Docker cleanup completed.\n");
+	} catch (err: unknown) {
+		process.stdout.write(
+			`\nwarning: failed to run docker cleanup: ${err instanceof Error ? err.message : String(err)}\n`,
+		);
+	}
 }
 
 // ──────────────────────────────────────────────────────────────────────── main
 
 async function main(): Promise<void> {
-	const cfg = parseArgs(process.argv.slice(2));
+	const argv = process.argv.slice(2);
+	if (argv[0] === "cleanup") {
+		if (!which("docker")) throw new Error("docker not found on PATH (required for cleanup).");
+		runDockerCleanup(true);
+		return;
+	}
+	const cfg = parseArgs(argv);
 
 	if (!which("harbor")) {
 		throw new Error("harbor not found on PATH. Install with: uv tool install harbor");
@@ -952,115 +1101,20 @@ async function main(): Promise<void> {
 		}
 		process.stdout.write(bold("omp env:\n"));
 		for (const k in harborEnv) {
+			if (k === "OMP_TB_FORWARD_ENV") continue;
 			if (k.startsWith("OMP_TB_") || k === "PYTHONPATH") process.stdout.write(`  ${k}=${harborEnv[k]}\n`);
+		}
+		if (harborEnv.OMP_TB_FORWARD_ENV) {
+			const keys = Object.keys(JSON.parse(harborEnv.OMP_TB_FORWARD_ENV) as Record<string, string>);
+			process.stdout.write(`  OMP_TB_FORWARD_ENV=${keys.join(",")} (values hidden)\n`);
 		}
 		process.stdout.write(`\njob dir: ${jobDir}\nbench dir: ${benchDir}\n`);
 		return;
 	}
 
-	// Handle targeted cleanup if requested via --cleanup or --cleanup-force
+	// Pre-run cleanup of leftover Harbor resources, if requested.
 	if ((cfg.cleanup || cfg.cleanupForce) && which("docker")) {
-		try {
-			process.stdout.write(dim("Running safe harbor-targeted Docker cleanup...\n"));
-
-			// 1. Identify container task instances whose working_dir is within '.cache/harbor/tasks'
-			const containerArgs = ["ps", "-a"];
-			if (!cfg.cleanupForce) {
-				containerArgs.push("--filter", "status=exited");
-				containerArgs.push("--filter", "status=created");
-				containerArgs.push("--filter", "status=dead");
-			}
-			containerArgs.push(
-				"--format",
-				'{{.ID}}\t{{.Label "com.docker.compose.project.working_dir"}}\t{{.Label "com.docker.compose.project"}}',
-			);
-
-			const inspectCommand = spawnSync("docker", containerArgs, { encoding: "utf8" });
-
-			if (inspectCommand.status === 0 && inspectCommand.stdout) {
-				const lines = inspectCommand.stdout.trim().split("\n");
-				const containerIdsToRemove: string[] = [];
-
-				for (const line of lines) {
-					const parts = line.split("\t");
-					if (parts.length >= 3) {
-						const [id, workingDir] = parts;
-						if (workingDir?.includes(".cache/harbor/tasks")) {
-							containerIdsToRemove.push(id);
-						}
-					}
-				}
-
-				if (containerIdsToRemove.length > 0) {
-					if (cfg.cleanupForce) {
-						process.stdout.write(
-							dim(`Stopping and force-removing ${containerIdsToRemove.length} stale task containers...\n`),
-						);
-						spawnSync("docker", ["rm", "-f", ...containerIdsToRemove]);
-					} else {
-						process.stdout.write(
-							dim(`Removing ${containerIdsToRemove.length} exited/stale task containers...\n`),
-						);
-						spawnSync("docker", ["rm", ...containerIdsToRemove]);
-					}
-				}
-			}
-
-			// Check which projects still have running containers before deleting companion or orphan networks.
-			const activeInspect = spawnSync(
-				"docker",
-				["ps", "-a", "--filter", "status=running", "--format", '{{.Label "com.docker.compose.project"}}'],
-				{ encoding: "utf8" },
-			);
-
-			const activeProjects = new Set<string>();
-			if (activeInspect.status === 0 && activeInspect.stdout) {
-				for (const line of activeInspect.stdout.trim().split("\n")) {
-					if (line.trim()) {
-						activeProjects.add(line.trim());
-					}
-				}
-			}
-
-			// 2. Identify corresponding compose networks with matching labels to clean up.
-			// Specifically, find unattached Compose networks whose name matches typical Harbor trial patterns
-			// and which currently have no running containers. This will safely clear orphan networks leftover from prior crashed runs.
-			const netInspect = spawnSync("docker", ["network", "ls", "--format", "{{.ID}}\t{{.Labels}}"], {
-				encoding: "utf8",
-			});
-
-			if (netInspect.status === 0 && netInspect.stdout) {
-				const netLines = netInspect.stdout.trim().split("\n");
-				const netIdsToRemove: string[] = [];
-				for (const netLine of netLines) {
-					const parts = netLine.split("\t");
-					if (parts.length >= 2) {
-						const [netId, labels] = parts;
-						// extract com.docker.compose.project label
-						const projMatch = labels.match(/com\.docker\.compose\.project=([^,]+)/);
-						if (projMatch) {
-							const project = projMatch[1];
-							const isHarborProject = /^[a-z0-9_.-]+__[a-zA-Z0-9]{7}$/.test(project);
-							if (isHarborProject && !activeProjects.has(project)) {
-								netIdsToRemove.push(netId);
-							}
-						}
-					}
-				}
-
-				if (netIdsToRemove.length > 0) {
-					process.stdout.write(dim(`Removing ${netIdsToRemove.length} stale trial Docker networks...\n`));
-					for (const netId of netIdsToRemove) {
-						spawnSync("docker", ["network", "rm", netId]);
-					}
-				}
-			}
-			process.stdout.write("Docker cleanup completed successfully.\n");
-		} catch (err: unknown) {
-			process.stdout.write(
-				`\nwarning: failed to run docker cleanup: ${err instanceof Error ? err.message : String(err)}\n`,
-			);
-		}
+		runDockerCleanup(cfg.cleanupForce);
 	}
 
 	process.stdout.write(dim(`launching harbor → ${logPath}\n`));
@@ -1133,8 +1187,10 @@ async function main(): Promise<void> {
 	process.exit(exitCode);
 }
 
-main().catch((err: unknown) => {
-	if (isTTY) process.stdout.write(`${ESC}?25h${ESC}?1049l`);
-	process.stderr.write(red(`\nerror: ${err instanceof Error ? err.message : String(err)}\n`));
-	process.exit(1);
-});
+if (import.meta.main) {
+	main().catch((err: unknown) => {
+		if (isTTY) process.stdout.write(`${ESC}?25h${ESC}?1049l`);
+		process.stderr.write(red(`\nerror: ${err instanceof Error ? err.message : String(err)}\n`));
+		process.exit(1);
+	});
+}
