@@ -135,6 +135,9 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		}
 		const node = { text, output: text, handle: `agent://${details.id}`, id: details.id, agent: details.agent ?? null };
 		if (hasOwn(callArgs, "schema")) node.data = parsed;
+		for (const key of ["isolated", "patchPath", "branchName", "changesApplied", "isolationSummary"]) {
+			if (details[key] !== undefined) node[key] = details[key];
+		}
 		return node;
 	};
 

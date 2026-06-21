@@ -538,11 +538,12 @@ if "__omp_prelude_loaded__" not in globals():
         "none" errors the call instead of silently downgrading.
 
         When isolated, `apply=False` keeps captured changes inside the
-        worktree and surfaces the patch artifact / branch name in the
-        returned details so the caller can inspect or apply manually.
-        `merge=False` forces patch mode even when `task.isolation.merge` is
-        `"branch"`, avoiding the per-call git lock + repo mutation that
-        branch mode performs.
+        worktree and surfaces the patch artifact / branch name through the
+        DAG node dict (combine with `return_handle=True` to receive them
+        — see below; the bare return type stays bytes/string/parsed object
+        and has nowhere to expose the artifact). `merge=False` forces patch
+        mode even when `task.isolation.merge` is `"branch"`, avoiding the
+        per-call git lock + repo mutation that branch mode performs.
 
         Set `return_handle=True` to receive a DAG node dict instead of bare
         text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
@@ -550,8 +551,12 @@ if "__omp_prelude_loaded__" not in globals():
         ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
         in its prompt so a large transcript flows through the graph by
         reference, never re-inlined. When ``schema`` is also set the parsed
-        object lands under ``"data"``. If the bridge returns no recoverable id
-        the node still resolves with ``handle=None`` — the helper never throws.
+        object lands under ``"data"``. When the spawn ran isolated the node
+        also carries ``"isolated"`` and, when present, ``"patch_path"``,
+        ``"branch_name"``, ``"changes_applied"`` (``True``/``False``/``None``
+        — ``None`` means ``apply=False``), and ``"isolation_summary"``. If
+        the bridge returns no recoverable id the node still resolves with
+        ``handle=None`` — the helper never throws.
         """
         args = {"prompt": prompt}
         if agent_type is not None:
@@ -585,6 +590,15 @@ if "__omp_prelude_loaded__" not in globals():
         }
         if schema is not None:
             node["data"] = parsed
+        for src_key, dst_key in (
+            ("isolated", "isolated"),
+            ("patchPath", "patch_path"),
+            ("branchName", "branch_name"),
+            ("changesApplied", "changes_applied"),
+            ("isolationSummary", "isolation_summary"),
+        ):
+            if src_key in details:
+                node[dst_key] = details[src_key]
         return node
 
     def _concurrency_limit():
