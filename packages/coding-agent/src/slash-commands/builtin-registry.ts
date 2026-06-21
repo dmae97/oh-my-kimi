@@ -1,8 +1,6 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import { setNextRequestDebugPath } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { type AutocompleteItem, Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, setProjectDir } from "@oh-my-pi/pi-utils";
 import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
@@ -190,46 +188,6 @@ async function handleUsageResetCommand(
 	}
 	const outcome = await session.redeemResetCredit(target.target);
 	await output(describeRedeemOutcome(outcome, target.label));
-}
-
-const DEBUG_DUMP_NEXT_REQUEST_USAGE = "Usage: /debug dump-next-request <path>";
-
-function resolveDebugRequestDumpPath(target: string, cwd: string): string {
-	const expanded =
-		target === "~"
-			? os.homedir()
-			: target.startsWith("~/") || target.startsWith("~\\")
-				? path.join(os.homedir(), target.slice(2))
-				: target;
-	return path.resolve(cwd, expanded);
-}
-
-async function handleDebugSubcommand(
-	args: string,
-	cwd: string,
-	output: (text: string) => Promise<void> | void,
-): Promise<SlashCommandResult> {
-	const { verb, rest } = parseSubcommand(args);
-	switch (verb) {
-		case "":
-			await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
-			return commandConsumed();
-		case "dump-next-request":
-		case "dump-request":
-		case "next-request": {
-			if (!rest) {
-				await output(DEBUG_DUMP_NEXT_REQUEST_USAGE);
-				return commandConsumed();
-			}
-			const requestPath = resolveDebugRequestDumpPath(rest, cwd);
-			setNextRequestDebugPath(requestPath);
-			await output(`Next AI provider request will be dumped to ${requestPath}`);
-			return commandConsumed();
-		}
-		default:
-			await output(`Unknown /debug subcommand "${verb}". ${DEBUG_DUMP_NEXT_REQUEST_USAGE}`);
-			return commandConsumed();
-	}
 }
 
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
@@ -612,16 +570,33 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "dump",
-		description: "Copy session transcript to clipboard",
-		acpDescription: "Return full transcript as plain text",
+		description: "Copy session transcript to clipboard (and write LLM request JSON to tmp)",
+		acpDescription: "Return full transcript as plain text, with LLM request JSON path",
 		allowArgs: true,
 		handle: async (_command, runtime) => {
 			const text = runtime.session.formatSessionAsText();
-			await runtime.output(text || "No messages to dump yet.");
+			if (!text) {
+				await runtime.output("No messages to dump yet.");
+				return commandConsumed();
+			}
+			let sidecarPath: string | undefined;
+			try {
+				sidecarPath = await runtime.session.dumpLlmRequestToTmpDir();
+			} catch {
+				// Sidecar is best-effort; the transcript is still output below.
+			}
+			const lines = [text];
+			if (sidecarPath)
+				lines.push(
+					"",
+					`LLM request JSON: ${sidecarPath}`,
+					"This file persists on disk and may contain raw context/secrets — treat accordingly.",
+				);
+			await runtime.output(lines.join("\n"));
 			return commandConsumed();
 		},
-		handleTui: (_command, runtime) => {
-			runtime.ctx.handleDumpCommand();
+		handleTui: async (_command, runtime) => {
+			await runtime.ctx.handleDumpCommand();
 			runtime.ctx.editor.setText("");
 		},
 	},
@@ -1509,25 +1484,8 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "debug",
 		description: "Open debug tools selector",
-		allowArgs: true,
-		subcommands: [
-			{
-				name: "dump-next-request",
-				description: "Dump the next AI provider HTTP request as JSON",
-				usage: "<path>",
-			},
-		],
-		handle: async (command, runtime) =>
-			handleDebugSubcommand(command.args, runtime.cwd, text => runtime.output(text)),
-		handleTui: async (command, runtime) => {
-			const args = command.args.trim();
-			if (args.length === 0) {
-				runtime.ctx.showDebugSelector();
-			} else {
-				await handleDebugSubcommand(args, runtime.ctx.sessionManager.getCwd(), text =>
-					runtime.ctx.showStatus(text),
-				);
-			}
+		handleTui: async (_command, runtime) => {
+			await runtime.ctx.showDebugSelector();
 			runtime.ctx.editor.setText("");
 		},
 	},

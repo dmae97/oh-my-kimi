@@ -103,7 +103,7 @@ import {
 	resolveServiceTier,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
-import { stripToolDescriptions } from "@oh-my-pi/pi-ai/utils/schema";
+import { stripToolDescriptions, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -12604,6 +12604,41 @@ export class AgentSession {
 			tools: this.agent.state.tools,
 			inlineToolDescriptors: this.#pruneToolDescriptions,
 		});
+	}
+
+	/**
+	 * Dump the current session's LLM-facing request context as JSON to a
+	 * auto-named file in `os.tmpdir()`. This is the synchronous
+	 * `convertToLlm`-boundary snapshot — system prompt, tools (wire schemas),
+	 * thinking/service tier, and converted messages — with no network round-trip
+	 * and no arming flag, so advisor/side requests cannot intercept it.
+	 *
+	 * The file persists on disk and may contain the same raw context/secrets
+	 * as `/dump`; treat the path accordingly.
+	 *
+	 * @returns the written file path, or `undefined` when there are no messages.
+	 */
+	async dumpLlmRequestToTmpDir(): Promise<string | undefined> {
+		const messages = this.messages;
+		if (messages.length === 0) return undefined;
+		const llmMessages = await this.convertMessagesToLlm(messages);
+		const payload = {
+			model: this.agent.state.model ?? null,
+			thinkingLevel: this.#thinkingLevel ?? null,
+			serviceTier: this.agent.serviceTier ?? null,
+			systemPrompt: this.agent.state.systemPrompt,
+			tools: this.agent.state.tools.map(tool => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: toolWireSchema(tool),
+				...(tool.strict !== undefined ? { strict: tool.strict } : {}),
+				...(tool.customWireName ? { customWireName: tool.customWireName } : {}),
+			})),
+			messages: llmMessages,
+		};
+		const filePath = path.join(os.tmpdir(), `omp-llm-request-${Snowflake.next()}.json`);
+		await Bun.write(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+		return filePath;
 	}
 
 	/**

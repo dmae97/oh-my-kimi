@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added LLM request JSON export functionality to `/dump`
+
+### Removed
+
+- Removed `/debug dump-next-request` command
+- Removed Wafer Pass from CLI credential help; Wafer Serverless remains available.
 
 ### Fixed
 
@@ -8,14 +16,7 @@
 - Fixed lazy-initialized LSP servers (basedpyright/pyright, and likely gopls/rust-analyzer) hanging on the first request: the message reader matched incoming messages against pending client requests by id before checking for a `method`, so a server-originated `workspace/configuration` pull whose id collided with an in-flight request was swallowed as a bogus response, leaving the pull unanswered and the server wedged. The reader now routes any message carrying a `method` as a server request before id-matching ([#3001](https://github.com/can1357/oh-my-pi/issues/3001))
 - Fixed `omp --approval-mode=yolo acp` and other global option flags placed before a subcommand being rewritten to `launch` with the subcommand swallowed as prompt text; the CLI resolver now skips leading global flags (using the launch parser's value-consumption contract) and dispatches the real subcommand with the flags applied, so ACP mode honors the configured approval policy. ([#2970](https://github.com/can1357/oh-my-pi/issues/2970))
 - Fixed `/mcp enable` and `/mcp disable` reconnecting unrelated MCP servers by scoping toggle reconnect/disconnect work to the named server. ([#3157](https://github.com/can1357/oh-my-pi/issues/3157))
-
-### Fixed
-
 - Stopped the local llama.cpp no-auth login placeholder from being sent as a discovery bearer token.
-
-### Removed
-
-- Removed Wafer Pass from CLI credential help; Wafer Serverless remains available.
 
 ## [16.1.8] - 2026-06-20
 

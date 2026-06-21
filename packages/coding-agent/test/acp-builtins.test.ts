@@ -28,6 +28,7 @@ interface FakeAcpBuiltinSession {
 	fetchUsageReports?: () => Promise<unknown>;
 	getAsyncJobSnapshot: (opts?: { recentLimit?: number }) => { running: unknown[]; recent: unknown[] } | null;
 	formatSessionAsText: () => string;
+	dumpLlmRequestToTmpDir: () => Promise<string | undefined>;
 	getLastAssistantText: () => string | undefined;
 	messages: unknown[];
 	settings: Settings;
@@ -100,6 +101,7 @@ function createRuntime() {
 		async refreshBaseSystemPrompt() {},
 		getAsyncJobSnapshot: () => null,
 		formatSessionAsText: () => "",
+		dumpLlmRequestToTmpDir: async () => undefined,
 		getLastAssistantText: () => undefined,
 		messages: [],
 		model: undefined,
@@ -321,9 +323,25 @@ describe("ACP builtin slash commands", () => {
 	});
 
 	// /dump
-	it("dump: outputs transcript when present", async () => {
+	it("dump: outputs transcript with LLM request JSON path when sidecar succeeds", async () => {
 		const { output, runtime } = createRuntime();
 		runtime.session.formatSessionAsText = () => "Session content here";
+		runtime.session.dumpLlmRequestToTmpDir = async () => "/tmp/omp-llm-request-test.json";
+
+		const result = await executeAcpBuiltinSlashCommand("/dump", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(output[0]).toContain("Session content here");
+		expect(output[0]).toContain("LLM request JSON: /tmp/omp-llm-request-test.json");
+		expect(output[0]).toContain("persists on disk");
+	});
+
+	it("dump: outputs transcript without sidecar when dumpLlmRequestToTmpDir throws", async () => {
+		const { output, runtime } = createRuntime();
+		runtime.session.formatSessionAsText = () => "Session content here";
+		runtime.session.dumpLlmRequestToTmpDir = async () => {
+			throw new Error("convert failed");
+		};
 
 		const result = await executeAcpBuiltinSlashCommand("/dump", runtime);
 
