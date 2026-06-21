@@ -1,10 +1,14 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "bun:test";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
 	umansModelManagerOptions,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import modelsJson from "../src/models.json";
 
 interface BundledModel {
@@ -148,6 +152,66 @@ describe("umans provider catalog", () => {
 			const model = providers.umans?.[id];
 			expect(model, `${id} should be bundled`).toBeDefined();
 			expect(model.input, `${id} input should be text-only`).toEqual(["text"]);
+		}
+	});
+
+	it("drops stale cached GLM rows that predate the via-handoff static correction", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-umans-stale-cache-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const staleGlm: ModelSpec<"anthropic-messages"> = {
+			id: "umans-glm-5.2",
+			name: "Umans GLM 5.2",
+			api: "anthropic-messages",
+			provider: "umans",
+			baseUrl: "https://api.code.umans.ai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 405_504,
+			maxTokens: 131_071,
+		};
+		const correctedGlm: ModelSpec<"anthropic-messages"> = { ...staleGlm, input: ["text"] };
+
+		try {
+			await resolveProviderModels(
+				{
+					...umansModelManagerOptions({
+						fetch: async () =>
+							new Response(
+								JSON.stringify({
+									"umans-glm-5.2": {
+										display_name: "Umans GLM 5.2",
+										capabilities: {
+											context_window: 405_504,
+											recommended_max_tokens: 131_071,
+											supports_vision: true,
+											supports_tools: true,
+											reasoning: { supported: true },
+										},
+									},
+								}),
+								{ status: 200, headers: { "Content-Type": "application/json" } },
+							),
+					}),
+					staticModels: [staleGlm],
+					cacheDbPath: dbPath,
+				},
+				"online",
+			);
+
+			const offline = await resolveProviderModels(
+				{
+					...umansModelManagerOptions({ fetch: async () => new Response(null, { status: 503 }) }),
+					staticModels: [correctedGlm],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+
+			const model = offline.models.find(item => item.id === "umans-glm-5.2");
+			expect(model?.input).toEqual(["text"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
 
