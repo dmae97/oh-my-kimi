@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.9] - 2026-06-21
+
 ### Added
 
 - Added LLM request JSON export functionality to `/dump`

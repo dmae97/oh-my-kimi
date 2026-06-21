@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.9] - 2026-06-21
+
 ### Added
 
 - Added `llama.cpp` to the interactive `/login` provider list, accepting an optional API key while defaulting to local no-auth mode.

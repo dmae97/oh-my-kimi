@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.9] - 2026-06-21
+
 ### Fixed
 
 - Fixed the `moonshot` provider with no path to the Kimi China API: model discovery now honors a `MOONSHOT_BASE_URL` override (redirecting to `api.moonshot.cn`), and `KIMI_API_KEY` resolves as a fallback for `MOONSHOT_API_KEY`. ([#2883](https://github.com/can1357/oh-my-pi/issues/2883))
