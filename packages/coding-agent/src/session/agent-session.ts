@@ -2790,9 +2790,10 @@ export class AgentSession {
 				return;
 			}
 
+			const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
 			if (this.#assistantEndedWithSuccessfulYield(msg)) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
-				if (this.#goalModeState?.enabled && this.#goalModeState.goal.status === "active") {
+				if (activeGoal) {
 					const compactionTask = this.#checkCompaction(msg);
 					this.#trackPostPromptTask(compactionTask);
 					await compactionTask;
@@ -2801,6 +2802,19 @@ export class AgentSession {
 				return;
 			}
 			this.#lastSuccessfulYieldToolCallId = undefined;
+
+			let compactionResult = COMPACTION_CHECK_NONE;
+			let checkedCompaction = false;
+			if (activeGoal) {
+				const compactionTask = this.#checkCompaction(msg);
+				this.#trackPostPromptTask(compactionTask);
+				compactionResult = await compactionTask;
+				checkedCompaction = true;
+				if (compactionResult.deferredHandoff || compactionResult.continuationScheduled) {
+					await emitAgentEndNotification();
+					return;
+				}
+			}
 
 			if (await this.#handleEmptyAssistantStop(msg)) {
 				await emitAgentEndNotification();
@@ -2846,9 +2860,11 @@ export class AgentSession {
 			}
 			this.#resolveRetry();
 
-			const compactionTask = this.#checkCompaction(msg);
-			this.#trackPostPromptTask(compactionTask);
-			const compactionResult = await compactionTask;
+			if (!checkedCompaction) {
+				const compactionTask = this.#checkCompaction(msg);
+				this.#trackPostPromptTask(compactionTask);
+				compactionResult = await compactionTask;
+			}
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
@@ -8323,7 +8339,7 @@ export class AgentSession {
 		// Stale-result pass runs every turn, before any threshold gating: it is
 		// cheap (bails when no candidate) and independent of the compaction
 		// setting.
-		await this.#pruneStaleToolResults();
+		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
@@ -8331,7 +8347,10 @@ export class AgentSession {
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
 		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
-		await this.#pruneToolOutputs();
+		const pruneResult = await this.#pruneToolOutputs();
+		const maintenanceTokensFreed = (supersedeResult?.tokensSaved ?? 0) + (pruneResult?.tokensSaved ?? 0);
+		const assistantUsageContextTokens = calculateContextTokens(assistantMessage.usage);
+		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
 		// per-turn supersede/prune `tokensSaved` from the threshold input, which
@@ -8339,22 +8358,48 @@ export class AgentSession {
 		// indefinitely whenever per-turn pruning saved enough to drop the
 		// post-prune estimate below the user-configured trigger — the visible
 		// context (anchored to the same provider billing) still showed >threshold,
-		// but `shouldCompact` no-op'd (#3174). Anchor on the last turn's billed
-		// context tokens, floored by the post-prune stored-conversation estimate
-		// so a payload-compression hook still can't deflate the trigger.
-		const contextTokens = compactionContextTokens(
-			calculateContextTokens(assistantMessage.usage),
-			this.#estimateStoredContextTokens(),
+		// but `shouldCompact` no-op'd (#3174). Anchor the initial trigger on the
+		// last turn's billed context tokens, floored by the post-prune
+		// stored-conversation estimate so a payload-compression hook still can't
+		// deflate the trigger.
+		const contextTokens = compactionContextTokens(assistantUsageContextTokens, storedContextTokens);
+		const postMaintenanceContextTokens = compactionContextTokens(
+			Math.max(0, assistantUsageContextTokens - maintenanceTokensFreed),
+			storedContextTokens,
 		);
-		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
+		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+		const shouldThresholdCompact = shouldCompact(contextTokens, contextWindow, compactionSettings);
+		logger.debug("Auto-compaction threshold decision", {
+			phase: "post-agent-end",
+			goalModeEnabled: this.#goalModeState?.enabled === true,
+			goalStatus: this.#goalModeState?.goal.status,
+			stopReason: assistantMessage.stopReason,
+			sameModel: sameModel === true,
+			contextWindow,
+			strategy: compactionSettings.strategy,
+			thresholdTokens,
+			assistantUsageContextTokens,
+			storedContextTokens,
+			resolvedContextTokens: contextTokens,
+			postMaintenanceContextTokens,
+			maintenanceTokensFreed,
+			shouldCompact: shouldThresholdCompact,
+			contextPromotionEnabled: this.settings.get("contextPromotion.enabled") === true,
+		});
+		if (shouldThresholdCompact) {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (!promoted) {
 				return await this.#runAutoCompaction("threshold", false, false, allowDefer, {
 					autoContinue,
-					triggerContextTokens: contextTokens,
+					triggerContextTokens: postMaintenanceContextTokens,
 				});
 			}
+			logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
+				contextTokens,
+				contextWindow,
+				model: `${assistantMessage.provider}/${assistantMessage.model}`,
+			});
 		}
 		return COMPACTION_CHECK_NONE;
 	}
@@ -10008,15 +10053,16 @@ export class AgentSession {
 			// situation actually resolves; "idle" is exempt because its 60s+ timer
 			// re-checks usage before re-firing and cannot dead-loop on its own.
 			//
-			// #2275: the post-shake check MUST be anchored on the same metric that
-			// triggered compaction. The local estimator (`#estimatePendingPromptTokens`)
-			// undercounts thinking-signature payloads, so on thinking-heavy sessions it
-			// reads well below the provider-reported usage that fired the threshold.
-			// When that estimate slips under the threshold, the fallback never fires
-			// and the auto-continue prompt re-injects every turn. Prefer the trigger's
-			// own `contextTokens` (provider-anchored) when the caller supplies it, and
-			// add hysteresis (80% recovery band) so we don't oscillate at the boundary
-			// while shake keeps reclaiming a trickle of the previous turn's output.
+			// #2275: the post-shake check MUST stay provider-anchored when caller
+			// usage and local estimates diverge. The local estimator undercounts
+			// thinking-signature payloads, so thinking-heavy sessions can read well
+			// below the provider usage that fired the threshold. Prefer the caller's
+			// context figure when supplied, then subtract shake's own savings and add
+			// hysteresis (80% recovery band) so we don't oscillate at the boundary.
+			// Threshold callers pass the provider-billed trigger after accounting for
+			// any supersede/drop-useless pruning that already rewrote the next prompt;
+			// without that pre-shake savings, shake can fall through to context-full
+			// even though the post-prune history is already inside the recovery band.
 			const contextWindow = this.model?.contextWindow ?? 0;
 			const compactionSettings = this.settings.getGroup("compaction");
 			let stillOverThreshold = false;

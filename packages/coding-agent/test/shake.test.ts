@@ -347,6 +347,70 @@ describe("AgentSession shake", () => {
 			expect(fullStart).toBeDefined();
 		});
 
+		it("counts pre-shake prune savings when deciding whether to fall back to context-full", async () => {
+			session.settings.set("compaction.strategy", "shake");
+			session.settings.set("compaction.thresholdTokens", 76384);
+			session.settings.set("compaction.thresholdPercent", -1);
+			session.settings.set("compaction.dropUseless", true);
+			session.settings.set("contextPromotion.enabled", false);
+
+			const now = Date.now();
+			sessionManager.appendMessage({
+				role: "user",
+				content: "Investigate every module of the project.",
+				timestamp: now - 200,
+			});
+			const bigCallId = "call-big-useless-for-shake";
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "toolCall", id: bigCallId, name: "search", arguments: { pattern: "TODO" } }],
+				...apiInfo,
+				stopReason: "toolUse",
+				usage,
+				timestamp: now - 180,
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: bigCallId,
+				toolName: "search",
+				content: [{ type: "text", text: "match line\n".repeat(20000) }],
+				isError: false,
+				useless: true,
+				timestamp: now - 170,
+			});
+			session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+
+			const shakeSpy = vi
+				.spyOn(session, "shake")
+				.mockResolvedValue({ mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 100 });
+
+			const assistantMessage: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "trigger" }],
+				...apiInfo,
+				stopReason: "stop",
+				usage: {
+					input: 5000,
+					output: 1000,
+					cacheRead: 85000,
+					cacheWrite: 0,
+					totalTokens: 91000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: now,
+			};
+
+			session.agent.emitExternalEvent({ type: "message_end", message: assistantMessage });
+			session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMessage] });
+			await Bun.sleep(50);
+
+			expect(shakeSpy).toHaveBeenCalledTimes(1);
+			const fullStart = events.find(
+				event => event.type === "auto_compaction_start" && (event as { action?: string }).action === "context-full",
+			);
+			expect(fullStart).toBeUndefined();
+		});
+
 		it("falls back after pre-prompt shake when the floored stored conversation remains over threshold", async () => {
 			session.settings.set("compaction.strategy", "shake");
 			session.settings.set("compaction.thresholdTokens", 8_000);

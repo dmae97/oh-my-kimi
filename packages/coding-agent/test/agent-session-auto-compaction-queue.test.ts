@@ -8,6 +8,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import * as unexpectedStopClassifier from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getProjectAgentDir, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
@@ -418,6 +419,59 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals).toContain("compaction:start:threshold");
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
+	it("runs active-goal threshold compaction before unexpected-stop retry continuation", async () => {
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-unexpected-stop-threshold",
+				objective: "continue until compacted",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+		session.settings.set("compaction.thresholdTokens", 76384);
+		session.settings.set("compaction.thresholdPercent", -1);
+		session.settings.set("compaction.autoContinue", true);
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("features.unexpectedStopDetection", true);
+		session.settings.set("providers.unexpectedStopModel", "online");
+
+		vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(true);
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		const assistantMsg = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "I should continue investigating another module." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 5000,
+				output: 1000,
+				cacheRead: 85000,
+				cacheWrite: 0,
+				totalTokens: 91000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now,
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await session.waitForIdle();
+
+		expect(getRuntimeSignals()).toContain("compaction:start:threshold");
+	});
+
 	it("has isCompacting true when the auto_compaction_start event fires", async () => {
 		// Defect 1: the compaction AbortController (which backs isCompacting) must be
 		// installed before auto_compaction_start is emitted. If it is installed after,
