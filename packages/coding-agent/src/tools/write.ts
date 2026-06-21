@@ -293,8 +293,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	readonly parameters = writeSchema;
 	readonly strict = true;
 	readonly concurrency = "exclusive";
-	readonly loadMode = "discoverable";
-	readonly summary = "Write content to a file (creates or overwrites)";
+	readonly loadMode = "essential";
 
 	/** Stream matchers should see the real file content, not its JSON-escaped argument encoding. */
 	matcherDigest(args: unknown): string | undefined {

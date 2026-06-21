@@ -128,22 +128,22 @@ describe("filterInitialToolsForDiscoveryAll", () => {
 		read: "essential",
 		edit: "essential",
 		todo: "discoverable",
-		find: "discoverable",
+		search: "discoverable",
 	};
 	const base = {
 		loadModeOf: (name: string): BuiltinToolLoadMode | undefined => loadModes[name],
-		essentialNames: new Set(["read", "bash", "edit"]),
+		essentialNames: new Set(["read", "bash", "edit", "write", "find"]),
 		explicitlyRequested: new Set<string>(),
 		restored: new Set<string>(),
 		forceActive: new Set<string>(),
 	};
 
 	it("hides non-essential discoverable built-ins", () => {
-		expect(filterInitialToolsForDiscoveryAll(["read", "edit", "todo", "find"], base)).toEqual(["read", "edit"]);
+		expect(filterInitialToolsForDiscoveryAll(["read", "edit", "todo", "search"], base)).toEqual(["read", "edit"]);
 	});
 
 	it("keeps discoverable tools required by a forced tool_choice (eager todo)", () => {
-		const result = filterInitialToolsForDiscoveryAll(["read", "todo", "find"], {
+		const result = filterInitialToolsForDiscoveryAll(["read", "todo", "search"], {
 			...base,
 			forceActive: new Set(["todo"]),
 		});
@@ -151,15 +151,15 @@ describe("filterInitialToolsForDiscoveryAll", () => {
 	});
 
 	it("keeps explicitly requested and restored discoverable tools", () => {
-		const result = filterInitialToolsForDiscoveryAll(["todo", "find"], {
+		const result = filterInitialToolsForDiscoveryAll(["todo", "search"], {
 			...base,
-			explicitlyRequested: new Set(["find"]),
+			explicitlyRequested: new Set(["search"]),
 			restored: new Set(["todo"]),
 		});
-		expect([...result].sort()).toEqual(["find", "todo"]);
+		expect([...result].sort()).toEqual(["search", "todo"]);
 	});
 
 	it("never hides tools without a built-in loadMode (MCP/custom/extension)", () => {
-		expect(filterInitialToolsForDiscoveryAll(["mcp__server__tool", "find"], base)).toEqual(["mcp__server__tool"]);
+		expect(filterInitialToolsForDiscoveryAll(["mcp__server__tool", "search"], base)).toEqual(["mcp__server__tool"]);
 	});
 });

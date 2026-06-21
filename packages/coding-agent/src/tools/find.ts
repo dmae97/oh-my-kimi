@@ -101,8 +101,7 @@ interface FindTarget {
 export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	readonly name = "find";
 	readonly approval = "read" as const;
-	readonly summary = "Find files and directories matching a glob pattern";
-	readonly loadMode = "discoverable";
+	readonly loadMode = "essential";
 	readonly label = "Find";
 	readonly description: string;
 	readonly parameters = findSchema;

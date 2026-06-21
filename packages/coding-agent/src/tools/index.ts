@@ -375,7 +375,7 @@ export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool |
 export type BuiltinToolLoadMode = "essential" | "discoverable";
 
 /** Default essential tool names when tools.essentialOverride is empty. */
-export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = ["read", "bash", "edit"] as const;
+export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write", "find"] as const;
 
 /**
  * Resolve the active essential built-in tool names from settings.

@@ -6,6 +6,10 @@
 - Added `tab.ariaSnapshot(selector?)` to the browser tool for Playwright-format ARIA-tree YAML
 - Added `tab.ref("e5")` and support for `aria-ref=e5` selectors in all `tab` action methods
 
+### Changed
+
+- Made `write` and `find` tools essential so they are always available initially (surviving `tools.discoveryMode === "all"` hiding) to ensure instructions to write/find files are immediately executable ([#3165](https://github.com/can1357/oh-my-pi/issues/3165))
+
 ### Fixed
 
 - Fixed streamed tool-call previews freezing on their placeholder body (`$ …`, `Write: …`, an empty args tree) even after the tool finished: the pending card was created while arguments streamed, but when the closing full-arguments `message_update` never arrived (smooth-streaming disabled leaving the throttled arguments stale, an owned-dialect projector, or a superseded/aborted turn that still ran the call) nothing re-applied the final args. `tool_execution_start` — the one event every execution path emits with validated full arguments right before the result — now reconciles them onto the existing pending card and cancels any in-flight reveal so a late tick can't re-truncate the body.
