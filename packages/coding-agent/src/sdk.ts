@@ -42,7 +42,7 @@ import {
 	resolveModelRoleValue,
 } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
-import { Settings, type SkillsSettings } from "./config/settings";
+import { Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
@@ -2520,6 +2520,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					...streamOptions,
 					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 					antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
+					maxInFlightRequests: validateProviderMaxInFlightRequests(
+						streamOptions?.maxInFlightRequests ?? settings.get("providers.maxInFlightRequests"),
+					),
 					loopGuard: {
 						enabled: settings.get("model.loopGuard.enabled"),
 						checkAssistantContent: settings.get("model.loopGuard.checkAssistantContent"),

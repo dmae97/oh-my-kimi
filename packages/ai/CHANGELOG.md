@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a per-provider in-flight request limiter for LLM streams, shared across local OMP processes and configurable by callers with `maxInFlightRequests`.
+
 ## [16.1.11] - 2026-06-21
 
 ### Fixed

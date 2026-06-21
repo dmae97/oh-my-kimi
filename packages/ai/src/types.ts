@@ -273,6 +273,14 @@ export interface StreamOptions {
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
 	/**
+	 * Optional per-provider concurrent request cap for LLM stream calls. Keys are
+	 * provider ids (`model.provider`); positive numeric values cap in-flight
+	 * requests across local OMP processes that share the same config root. Omitted
+	 * providers are unlimited. Non-chat provider APIs that bypass stream helpers
+	 * are not covered.
+	 */
+	maxInFlightRequests?: Record<string, number>;
+	/**
 	 * Optional callback for inspecting or replacing provider payloads before sending.
 	 * Return undefined to keep the payload unchanged.
 	 */

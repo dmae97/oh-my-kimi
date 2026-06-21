@@ -76,4 +76,15 @@ describe("settings layout", () => {
 			expect(def.condition?.()).toBe(true);
 		}
 	});
+
+	it("shows provider request limits as a providers services submenu setting", () => {
+		const [def] = getSettingsForTab("providers").filter(item => item.path === "providers.maxInFlightRequests");
+
+		expect(def).toMatchObject({
+			path: "providers.maxInFlightRequests",
+			type: "providerLimits",
+			tab: "providers",
+			group: "Services",
+		});
+	});
 });

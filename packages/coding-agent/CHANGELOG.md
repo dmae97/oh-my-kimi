@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `providers.maxInFlightRequests` to cap concurrent LLM requests per provider across local OMP processes from settings.
+
 ## [16.1.11] - 2026-06-21
 
 ### Added
