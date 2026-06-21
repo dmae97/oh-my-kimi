@@ -292,12 +292,12 @@ function getModelDefinedEfforts<TApi extends Api>(
 ): readonly Effort[] | undefined {
 	if (isGlm52ReasoningEffortModelId(spec.id)) {
 		// Z.ai/Zhipu and OpenRouter both surface GLM-5.2's full effort ladder,
-		// including the top `xhigh` (= "max") tier; Ollama Cloud exposes only
-		// high/xhigh.
+		// including the top `xhigh` (= "max") tier; Umans and Ollama Cloud
+		// expose only high/max.
 		if (isZaiThinkingFormat(compat) || isOpenRouterThinkingFormat(compat)) {
 			return DEFAULT_REASONING_EFFORTS_WITH_XHIGH;
 		}
-		if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+		if (isUmansGlm52ReasoningEffortModel(spec) || isOllamaCloudGlm52ReasoningEffortModel(spec)) {
 			return GLM_52_HIGH_MAX_REASONING_EFFORTS;
 		}
 	}
@@ -311,6 +311,10 @@ function getModelDefinedEfforts<TApi extends Api>(
 
 function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
 	return spec.api === "ollama-chat" && spec.provider === "ollama-cloud" && isGlm52ReasoningEffortModelId(spec.id);
+}
+
+function isUmansGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return spec.api === "anthropic-messages" && spec.provider === "umans" && isGlm52ReasoningEffortModelId(spec.id);
 }
 
 function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
@@ -366,15 +370,19 @@ function inferDetectedEffortMap<TApi extends Api>(
 	//     `xhigh` 400s — collapse minimal->none, low/medium/high->high, xhigh->max.
 	//   - OpenRouter: `max` 400s and `xhigh` IS its max tier, so it passes `xhigh`
 	//     through literally (no map; the tier is exposed via getModelDefinedEfforts).
-	//   - Other openai-compat hosts (Fireworks, resellers) and Ollama Cloud keep
-	//     their distinct lower tiers and host quirks (e.g. Fireworks rejects
-	//     `minimal`, so `minimal->none` stays) and only remap the top `xhigh` UI
-	//     tier onto the genuine `max` budget. Filtered to supported efforts later.
+	//   - Umans and Ollama Cloud expose only high/max on their GLM-5.2 routes.
+	//   - Other openai-compat hosts (Fireworks, resellers) keep their distinct
+	//     lower tiers and host quirks (e.g. Fireworks rejects `minimal`, so
+	//     `minimal->none` stays) and only remap the top `xhigh` UI tier onto the
+	//     genuine `max` budget. Filtered to supported efforts later.
 	const isGlm52 = isGlm52ReasoningEffortModelId(spec.id);
 	if (isGlm52 && isZaiThinkingFormat(compat)) {
 		return ZAI_GLM_52_REASONING_EFFORT_MAP;
 	}
 	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+		return GLM_52_XHIGH_MAX_EFFORT_MAP;
+	}
+	if (isUmansGlm52ReasoningEffortModel(spec)) {
 		return GLM_52_XHIGH_MAX_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {

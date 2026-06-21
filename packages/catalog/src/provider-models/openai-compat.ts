@@ -566,8 +566,10 @@ const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
+	max: Effort.XHigh,
 };
 const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
+const UMANS_MAX_REASONING_EFFORT_MAP: ThinkingConfig["effortMap"] = { [Effort.XHigh]: "max" };
 
 export interface UmansModelManagerConfig {
 	apiKey?: string;
@@ -609,10 +611,17 @@ function mapUmansReasoningEfforts(value: unknown): readonly Effort[] {
 	return efforts.length > 0 ? efforts : UMANS_DEFAULT_REASONING_EFFORTS;
 }
 
+function umansHasMaxReasoningLevel(value: unknown): boolean {
+	return isRecord(value) && Array.isArray(value.levels) && value.levels.some(level => level === "max");
+}
+
 function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
 	if (!umansReasoningSupported(value)) return undefined;
 	const efforts = mapUmansReasoningEfforts(value);
 	const thinking: ThinkingConfig = { mode: "budget", efforts };
+	if (umansHasMaxReasoningLevel(value) && efforts.includes(Effort.XHigh)) {
+		thinking.effortMap = UMANS_MAX_REASONING_EFFORT_MAP;
+	}
 	if (isRecord(value)) {
 		if (value.can_disable === false) {
 			thinking.requiresEffort = true;
