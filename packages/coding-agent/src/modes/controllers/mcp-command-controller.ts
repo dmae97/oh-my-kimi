@@ -8,7 +8,7 @@ import { type Component, replaceTabs, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../../capability/types";
 import { expandEnvVarsDeep } from "../../discovery/helpers";
-import { analyzeAuthError, discoverOAuthEndpoints, MCPManager } from "../../mcp";
+import { analyzeAuthError, discoverOAuthEndpoints, loadAllMCPConfigs, MCPManager } from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
 	addMCPServer,
@@ -1383,7 +1383,7 @@ export class MCPCommandController {
 				}
 				await setServerDisabled(userConfigPath, name, !enabled);
 				if (enabled) {
-					await this.#reloadMCP();
+					await this.#connectEnabledMCPServer(name);
 					const state = await this.#waitForServerConnectionWithAnimation(name);
 					const status =
 						state === "connected"
@@ -1419,7 +1419,12 @@ export class MCPCommandController {
 
 			const updated: MCPServerConfig = { ...found.config, enabled };
 			await updateMCPServer(found.filePath, name, updated);
-			await this.#reloadMCP();
+			if (enabled) {
+				await this.#connectEnabledMCPServer(name);
+			} else {
+				await this.ctx.mcpManager?.disconnectServer(name);
+				await this.ctx.session.refreshMCPTools(this.ctx.mcpManager?.getTools() ?? []);
+			}
 
 			let status = "";
 			if (enabled) {
@@ -1671,6 +1676,37 @@ export class MCPCommandController {
 		}
 	}
 
+	async #connectEnabledMCPServer(name: string): Promise<void> {
+		if (!this.ctx.mcpManager) {
+			return;
+		}
+
+		const { configs, sources } = await loadAllMCPConfigs(getProjectDir());
+		const config = configs[name];
+		if (!config) {
+			await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
+			return;
+		}
+
+		const source = sources[name];
+		const result = await this.ctx.mcpManager.connectServers({ [name]: config }, source ? { [name]: source } : {});
+		await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
+		this.#showMCPConnectionErrors(result.errors);
+	}
+
+	#showMCPConnectionErrors(errors: Map<string, string>): void {
+		if (errors.size === 0) {
+			return;
+		}
+
+		const errorLines = ["", theme.fg("warning", "Some servers failed to connect:"), ""];
+		for (const [serverName, error] of errors.entries()) {
+			errorLines.push(`  ${serverName}: ${error}`);
+		}
+		errorLines.push("");
+		this.#showMessage(errorLines.join("\n"));
+	}
+
 	/**
 	 * Reload MCP manager with new configs
 	 */
@@ -1686,15 +1722,7 @@ export class MCPCommandController {
 		const result = await this.ctx.mcpManager.discoverAndConnect();
 		await this.ctx.session.refreshMCPTools(this.ctx.mcpManager.getTools());
 
-		// Show any connection errors
-		if (result.errors.size > 0) {
-			const errorLines = ["", theme.fg("warning", "Some servers failed to connect:"), ""];
-			for (const [serverName, error] of result.errors.entries()) {
-				errorLines.push(`  ${serverName}: ${error}`);
-			}
-			errorLines.push("");
-			this.#showMessage(errorLines.join("\n"));
-		}
+		this.#showMCPConnectionErrors(result.errors);
 	}
 
 	/**
