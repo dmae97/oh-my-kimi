@@ -1461,15 +1461,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.optimisticUserMessageSignature) return;
 		const submission = this.#pendingSubmittedInput;
 		if (!submission || submission.cancelled || submission.customType) return;
-		this.addMessageToChat(
-			{
-				role: "user",
-				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-				attribution: "user",
-				timestamp: Date.now(),
-			},
-			{ imageLinks: submission.imageLinks },
-		);
+		this.#optimisticUserMessageComponents = this.#captureAddedChatComponents(() => {
+			this.addMessageToChat(
+				{
+					role: "user",
+					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+					attribution: "user",
+					timestamp: Date.now(),
+				},
+				{ imageLinks: submission.imageLinks },
+			);
+		});
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {

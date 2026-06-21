@@ -116,6 +116,7 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		const addMessageSpy = vi.spyOn(mode, "addMessageToChat");
 
 		mode.startPendingSubmission({ text: "/jira-task" });
+		mode.rebuildChatFromMessages();
 		await controller.handleEvent({
 			type: "message_start",
 			message: {
@@ -135,7 +136,7 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 						.map(content => content.text)
 						.join("\n");
 		});
-		expect(renderedTexts).toEqual(["/jira-task", "Expanded Jira task prompt"]);
+		expect(renderedTexts).toEqual(["/jira-task", "/jira-task", "Expanded Jira task prompt"]);
 		expect(mode.chatContainer.children).toHaveLength(1);
 		expect(mode.optimisticUserMessageSignature).toBeUndefined();
 		expect(mode.locallySubmittedUserSignatures.has("/jira-task\u00000")).toBe(false);
