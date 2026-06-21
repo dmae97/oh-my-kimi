@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.11] - 2026-06-21
+
 ### Fixed
 
 - Fixed OpenAI Responses native history replay leaking image generation provider-only fields into the next request, which made OpenAI-compatible proxies reject `pi` tool-calling sessions with `Unknown parameter: input[1].action`. ([#3201](https://github.com/can1357/oh-my-pi/issues/3201))

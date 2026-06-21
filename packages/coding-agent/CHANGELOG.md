@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.11] - 2026-06-21
+
 ### Added
 
 - Added `tab.waitForSelector` for more robust element-wait behavior
