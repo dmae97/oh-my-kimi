@@ -10,6 +10,7 @@ import { resizeImage } from "../../../utils/image-resize";
 import { resolveToCwd } from "../../path-utils";
 import { formatScreenshot } from "../../render-utils";
 import { ToolAbortError, ToolError } from "../../tool-errors";
+import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-snapshot";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
@@ -49,7 +50,7 @@ interface RunContext {
 
 type WaitUntil = "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 type DragTarget = string | { readonly x: number; readonly y: number };
-type SelectorKind = "css" | "ref" | "text" | "aria" | "xpath" | "pierce" | "ax";
+type SelectorKind = "css" | "ref" | "aria-ref" | "text" | "aria" | "xpath" | "pierce" | "ax";
 
 interface SelectorSpec {
 	kind: SelectorKind;
@@ -124,6 +125,20 @@ const accessibleName = element =>
 const findElement = spec => {
 	if (spec.kind === "css") return document.querySelector(spec.value);
 	if (spec.kind === "pierce") return pierceQuery(document, spec.value);
+	if (spec.kind === "aria-ref") {
+		const wanted = spec.value;
+		const scan = root => {
+			for (const el of Array.from(root.querySelectorAll("*"))) {
+				if (el._ariaRef && el._ariaRef.ref === wanted) return el;
+				if (el.shadowRoot) {
+					const found = scan(el.shadowRoot);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		return scan(document);
+	}
 	if (spec.kind === "xpath") {
 		const result = document.evaluate(spec.value, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
 		return result.singleNodeValue instanceof Element ? result.singleNodeValue : null;
@@ -350,6 +365,24 @@ export class CmuxTab {
 		this.#lastTitle = observation.title;
 		this.#rememberObservedElements(observation);
 		return observation;
+	}
+
+	async ariaSnapshot(selector?: string, opts?: AriaSnapshotOptions): Promise<string> {
+		const timeoutMs = Math.min(this.#runContext?.timeoutMs ?? 30_000, 30_000);
+		const result = (await this.#request(
+			"browser.eval",
+			{ script: buildAriaSnapshotScript(selector, opts) },
+			timeoutMs,
+		)) as CmuxEvalResult;
+		return result.value as string;
+	}
+
+	async ref(id: string): Promise<CmuxElementHandle> {
+		const refId = /^e\d+$/.test(id.trim()) ? id.trim() : id.trim().replace(/^(?:aria-ref=|aria-ref\/|ariaref\/)/, "");
+		const selector = `aria-ref=${refId}`;
+		const timeoutMs = this.#runContext?.timeoutMs ?? 30_000;
+		await this.#waitForSelector(selector, timeoutMs);
+		return new CmuxElementHandle(this, selector);
 	}
 
 	async click(selector: string): Promise<void> {
@@ -893,6 +926,8 @@ export class CmuxTab {
 		else if (normalized.startsWith("p-aria/")) normalized = `aria/${normalized.slice("p-aria/".length)}`;
 		else if (normalized.startsWith("p-xpath/")) normalized = `xpath/${normalized.slice("p-xpath/".length)}`;
 		else if (normalized.startsWith("p-pierce/")) normalized = `pierce/${normalized.slice("p-pierce/".length)}`;
+		const ariaRef = /^(?:aria-ref=|aria-ref\/|ariaref\/)(e\d+)$/.exec(normalized);
+		if (ariaRef) return { kind: "aria-ref", value: ariaRef[1]!, raw };
 		const ref = /^@?e(\d+)$/.exec(normalized);
 		if (ref) return { kind: "ref", value: ref[1]!, raw, ref: `@e${ref[1]}` };
 		const slash = normalized.indexOf("/");

@@ -15,6 +15,8 @@ Drives real Chromium tab; full puppeteer access via JS.
 - `tab` helpers; drop to raw puppeteer `page` for anything uncovered:
   - `tab.goto(url, { waitUntil? })` — navigate.
   - `tab.observe({ includeAll?, viewportOnly? })` — accessibility snapshot: `{ url, title, viewport, scroll, elements: [{ id, role, name, value, states, … }] }`. Ids stable until next observe/goto.
+  - `tab.ariaSnapshot(selector?, { depth?, boxes? })` — Playwright-format ARIA-tree YAML (nested roles + accessible names + `/url`/`/placeholder`), scoped to `selector` or the whole document. Every node carries a `[ref=eN]` id; `[cursor=pointer]` flags clickables. Captures dense, hierarchical structure/text that `observe()`'s flat list flattens away. Refs renumber from e1 each call and stay valid until the next `ariaSnapshot()`.
+  - `tab.ref("e5")` — `[ref=eN]` from the last ariaSnapshot → element handle with the common action methods (`.click()`, `.type()`, `.fill()`, `.hover()`, `.evaluate()`, …); the primary way to act on a ref. For convenience `aria-ref=e5` also works inline in `tab.click`/`type`/`fill`/`waitFor`/`scrollIntoView` (e.g. `tab.click("aria-ref=e5")`).
   - `tab.id(n)` — id from last observe → `ElementHandle` (`.click()`, `.type()`, …).
   - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)`.
   - `tab.waitFor(selector)` — wait until attached; returns `ElementHandle`.

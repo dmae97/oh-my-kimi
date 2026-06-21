@@ -23,6 +23,12 @@ import { resolveToCwd } from "../path-utils";
 import { formatScreenshot } from "../render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../tool-errors";
 import {
+	type AriaSnapshotOptions,
+	captureAriaSnapshot,
+	parseAriaRefSelector,
+	resolveAriaRefHandle,
+} from "./aria/aria-snapshot";
+import {
 	applyStealthPatches,
 	applyViewport,
 	BROWSER_PROTOCOL_TIMEOUT_MS,
@@ -106,6 +112,7 @@ interface TabApi {
 		opts?: { waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2" },
 	): Promise<void>;
 	observe(opts?: { includeAll?: boolean; viewportOnly?: boolean }): Promise<Observation>;
+	ariaSnapshot(selector?: string, opts?: AriaSnapshotOptions): Promise<string>;
 	screenshot(opts?: ScreenshotOptions): Promise<ScreenshotResult>;
 	extract(format?: ReadableFormat): Promise<string>;
 	click(selector: string): Promise<void>;
@@ -128,6 +135,7 @@ interface TabApi {
 		opts?: { timeout?: number },
 	): Promise<HTTPResponse>;
 	id(n: number): Promise<ElementHandle>;
+	ref(id: string): Promise<ElementHandle>;
 }
 
 function normalizeSelector(selector: string): string {
@@ -792,6 +800,28 @@ export class WorkerCore {
 					);
 				}),
 			observe: opts => op("tab.observe()", quickOpMs, sig => this.#collectObservation({ ...opts, signal: sig })),
+			ariaSnapshot: (selector, opts) =>
+				op(
+					selector ? `tab.ariaSnapshot(${JSON.stringify(selector)})` : "tab.ariaSnapshot()",
+					quickOpMs,
+					async sig => {
+						let root: ElementHandle | null = null;
+						if (selector) {
+							root = (await untilAborted(sig, () =>
+								page.$(normalizeSelector(selector)),
+							)) as ElementHandle | null;
+							if (!root)
+								throw new ToolError(
+									`tab.ariaSnapshot: selector ${JSON.stringify(selector)} matched no element`,
+								);
+						}
+						try {
+							return await untilAborted(sig, () => captureAriaSnapshot(page, root, opts));
+						} finally {
+							await root?.dispose().catch(() => undefined);
+						}
+					},
+				),
 			screenshot: opts =>
 				op(describeScreenshot(opts), quickOpMs, sig =>
 					this.#captureScreenshot(session, displays, screenshots, sig, opts),
@@ -815,25 +845,50 @@ export class WorkerCore {
 				}),
 			click: selector =>
 				op(`tab.click(${JSON.stringify(selector)})`, INF, async sig => {
+					if (parseAriaRefSelector(selector) !== null) {
+						const handle = await this.#resolveAriaRef(selector);
+						try {
+							await untilAborted(sig, () => handle.click());
+						} finally {
+							await handle.dispose().catch(() => undefined);
+						}
+						return;
+					}
 					const resolved = normalizeSelector(selector);
 					if (resolved.startsWith("text/")) await clickQueryHandlerText(page, resolved, timeoutMs, sig);
 					else await untilAborted(sig, () => page.locator(resolved).setTimeout(timeoutMs).click());
 				}),
 			type: (selector, text) =>
 				op(`tab.type(${JSON.stringify(selector)})`, INF, async sig => {
-					const handle = (await untilAborted(sig, () =>
-						page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-					)) as ElementHandle;
+					const handle = await this.#resolveActionHandle(selector, timeoutMs, sig);
 					try {
 						await untilAborted(sig, () => handle.type(text, { delay: 0 }));
 					} finally {
-						await handle.dispose();
+						await handle.dispose().catch(() => undefined);
 					}
 				}),
 			fill: (selector, value) =>
-				op(`tab.fill(${JSON.stringify(selector)})`, INF, sig =>
-					untilAborted(sig, () => page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).fill(value)),
-				),
+				op(`tab.fill(${JSON.stringify(selector)})`, INF, async sig => {
+					if (parseAriaRefSelector(selector) !== null) {
+						const handle = await this.#resolveAriaRef(selector);
+						try {
+							await untilAborted(sig, () =>
+								handle.evaluate(el => {
+									const node = el as unknown as { value?: string; focus?: () => void };
+									node.focus?.();
+									if ("value" in node) node.value = "";
+								}),
+							);
+							await untilAborted(sig, () => handle.type(value, { delay: 0 }));
+						} finally {
+							await handle.dispose().catch(() => undefined);
+						}
+						return;
+					}
+					await untilAborted(sig, () =>
+						page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).fill(value),
+					);
+				}),
 			press: (key, opts) =>
 				op(`tab.press(${JSON.stringify(key)})`, INF, async sig => {
 					const selector = opts?.selector;
@@ -844,13 +899,8 @@ export class WorkerCore {
 				op("tab.scroll()", INF, sig => untilAborted(sig, () => page.mouse.wheel({ deltaX, deltaY }))),
 			drag: (from, to) => op("tab.drag()", INF, sig => this.#drag(from, to, sig)),
 			waitFor: selector =>
-				op(
-					`tab.waitFor(${JSON.stringify(selector)})`,
-					INF,
-					async sig =>
-						(await untilAborted(sig, () =>
-							page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-						)) as ElementHandle,
+				op(`tab.waitFor(${JSON.stringify(selector)})`, INF, sig =>
+					this.#resolveActionHandle(selector, timeoutMs, sig),
 				),
 			evaluate: (fn, ...args) =>
 				op("tab.evaluate()", INF, sig =>
@@ -862,9 +912,7 @@ export class WorkerCore {
 				) as never,
 			scrollIntoView: selector =>
 				op(`tab.scrollIntoView(${JSON.stringify(selector)})`, INF, async sig => {
-					const handle = (await untilAborted(sig, () =>
-						page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
-					)) as ElementHandle;
+					const handle = await this.#resolveActionHandle(selector, timeoutMs, sig);
 					try {
 						await untilAborted(sig, () =>
 							handle.evaluate(el => {
@@ -889,6 +937,7 @@ export class WorkerCore {
 			waitForResponse: (pattern, opts) =>
 				op("tab.waitForResponse()", INF, sig => this.#waitForResponse(pattern, opts?.timeout ?? timeoutMs, sig)),
 			id: id => this.#resolveCachedHandle(id),
+			ref: id => this.#resolveAriaRef(id),
 		};
 	}
 
@@ -1187,6 +1236,29 @@ export class WorkerCore {
 			throw new ToolError(`Element id ${id} is stale. Run tab.observe() again.`);
 		}
 		return handle;
+	}
+
+	async #resolveAriaRef(id: string): Promise<ElementHandle> {
+		const ref = parseAriaRefSelector(id) ?? id.trim();
+		const handle = await resolveAriaRefHandle(this.#requirePage(), ref);
+		if (!handle) {
+			throw new ToolError(
+				`Unknown ARIA ref ${JSON.stringify(ref)}. Run tab.ariaSnapshot() to refresh refs (they renumber each snapshot).`,
+			);
+		}
+		return handle;
+	}
+
+	/**
+	 * Resolve a selector to an ElementHandle for handle-based actions. An
+	 * `aria-ref=eN` selector resolves against the latest ariaSnapshot's refs
+	 * (main world); anything else goes through the normal locator wait.
+	 */
+	async #resolveActionHandle(selector: string, timeoutMs: number, sig: AbortSignal): Promise<ElementHandle> {
+		if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
+		return (await untilAborted(sig, () =>
+			this.#requirePage().locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle(),
+		)) as ElementHandle;
 	}
 	#clearElementCache(): void {
 		if (this.#elementCache.size === 0) {

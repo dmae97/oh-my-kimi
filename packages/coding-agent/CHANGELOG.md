@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `tab.ariaSnapshot(selector?)` to the browser tool for Playwright-format ARIA-tree YAML
+- Added `tab.ref("e5")` and support for `aria-ref=e5` selectors in all `tab` action methods
 
 ## [16.1.9] - 2026-06-21
 

@@ -14,6 +14,9 @@
   - `packages/coding-agent/src/tools/browser/attach.ts` — CDP attach/reuse, target picking, spawned-app process handling.
   - `packages/coding-agent/src/tools/browser/tab-protocol.ts` — worker init/run/result message schema.
   - `packages/coding-agent/src/tools/browser/readable.ts` — `tab.extract()` readability extraction.
+  - `packages/coding-agent/src/tools/browser/aria/aria-snapshot.ts` — `captureAriaSnapshot()` (puppeteer/CDP path) and `buildAriaSnapshotScript()` (cmux path); imports the committed `aria-snapshot.bundle.txt`.
+  - `packages/coding-agent/src/tools/browser/aria/aria-snapshot.bundle.txt` — generated, committed artifact: Playwright's injected ARIA-snapshot sources (Apache-2.0, (c) Microsoft; ARIA tree + W3C accessible-name computation) bundled to a CJS module. Upstream sources are not vendored into the repo.
+  - `packages/coding-agent/scripts/generate-aria-snapshot.ts` — fetches the pinned Playwright sources to a temp dir and bundles them into `aria-snapshot.bundle.txt` (CJS, browser target). Dev-time, network-bound; only the bundle is committed.
   - `packages/coding-agent/src/tools/browser/cmux/rpc.ts` — cmux browser-kind resolution plus snapshot/eval/wait-state helpers for the cmux backend.
   - `packages/coding-agent/src/tools/browser/cmux/socket-client.ts` — `CmuxSocketClient`: JSON-RPC over the cmux unix socket.
   - `packages/coding-agent/src/tools/browser/cmux/cmux-tab.ts` — `CmuxTab` surface helper API and `runCmuxCode()` execution path.
@@ -120,6 +123,8 @@ The tool returns one result per call; no streaming partial output is emitted fro
    - `tab.title(): Promise<string>`
    - `tab.goto(url, { waitUntil? })`
    - `tab.observe({ includeAll?, viewportOnly? })`
+   - `tab.ariaSnapshot(selector?, { depth?, boxes? })`
+   - `tab.ref(id)`
    - `tab.screenshot({ selector?, fullPage?, save?, silent? })`
    - `tab.extract(format = "markdown")`
    - `tab.click(selector)`
@@ -136,9 +141,12 @@ The tool returns one result per call; no streaming partial output is emitted fro
    - `tab.waitForUrl(pattern, { timeout? })`
    - `tab.waitForResponse(pattern, { timeout? })`
    - `tab.id(n)`
+   - `tab.ref(id)`
 14. Selector handling in `normalizeSelector()` accepts plain CSS and Puppeteer query handlers, and rewrites legacy Playwright-style prefixes `p-text/`, `p-xpath/`, `p-pierce/`, `p-aria/`; other `p-*` prefixes throw a `ToolError`.
 15. `tab.observe()` clears the element cache, takes a Puppeteer accessibility snapshot, filters to interactive nodes unless `includeAll`, optionally filters to viewport-visible nodes, assigns numeric ids, caches `ElementHandle`s, and returns URL/title/viewport/scroll metadata plus `elements`.
+15a. `tab.ariaSnapshot()` resolves the optional `selector` (via `normalizeSelector()` → `page.$`, defaulting to the whole document) and runs the generated Playwright ARIA-snapshot bundle (`src/tools/browser/aria/aria-snapshot.bundle.txt`) via `captureAriaSnapshot()`. The bundle is wrapped in a `new Function` built worker-side (so page CSP never applies) and serialized to a CDP `page.evaluate` in the page's **main world**, returning Playwright-format YAML. It always runs in `ai` mode: every node gets a `[ref=eN]` id, clickables get `[cursor=pointer]`, and matched DOM nodes are tagged with an `_ariaRef` expando. Existing `_ariaRef` expandos are cleared before each snapshot so ids renumber deterministically from e1 (the fresh module's counter resets each call); refs stay valid until the next snapshot. The cmux backend uses `buildAriaSnapshotScript()` over `browser.eval` instead (no `ElementHandle`; CSS selectors only for the root).
 16. `tab.id(n)` resolves the cached `ElementHandle`, verifies `el.isConnected`, and throws a stale-id error after cache invalidation if the DOM changed or the cache was cleared.
+16a. `tab.ref(id)` resolves a `[ref=eN]` id from the latest `ariaSnapshot()` to a live `ElementHandle` via `resolveAriaRefHandle()` (`page.evaluateHandle` in the main world, walking the document + shadow roots for the matching `_ariaRef`), throwing if no element matches; it accepts a bare `eN` or a prefixed form. For inline selector use, `parseAriaRefSelector()` recognizes only the explicit `aria-ref=eN` / `aria-ref/eN` / `ariaref/eN` forms inside `tab.click/type/fill/waitFor/scrollIntoView` — a bare `eN` is intentionally rejected there so it does not collide with cmux's native observe ids. The cmux backend resolves the same explicit forms through its `aria-ref` `SelectorSpec` kind in `findElement`.
 17. `tab.goto()` clears the cached element ids before navigating. Any new `tab.observe()` also clears and rebuilds the cache.
 18. `tab.click()` uses a custom retry loop for `text/...` selectors to find an actionable visible match; other selectors use `page.locator(...).click()` with the run timeout.
 19. `tab.screenshot()` captures either the whole page or a selector PNG, downsizes a copy for model output, chooses a persistence path, writes the image to disk, records metadata, and optionally emits text + image display entries.
