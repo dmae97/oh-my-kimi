@@ -137,6 +137,24 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(menuRendered).toContain("Set as SMOL (Quick)");
 	});
 
+	test("renders xhigh effort for OpenAI GPT-5.5 thinking options", async () => {
+		installTestTheme();
+		const model = getBundledModel("openai", "gpt-5.5");
+		if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+
+		const selector = createSelector(model, Settings.isolated({}));
+		await Bun.sleep(0);
+		installTestTheme();
+
+		selector.handleInput("\n");
+		selector.handleInput("\n");
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("Thinking for: Default (gpt-5.5)");
+		expect(rendered).toContain("low medium high xhigh");
+		expect(rendered).not.toContain("low medium high max");
+	});
+
 	test("shows compact auto badges for unconfigured role defaults", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
