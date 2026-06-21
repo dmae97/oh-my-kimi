@@ -109,6 +109,8 @@ export interface EvalAgentResult {
 		 * Omitted for non-isolated runs.
 		 */
 		changesApplied?: boolean | null;
+		/** Human-readable isolation apply/merge summary; kept out of schema-backed `text`. */
+		isolationSummary?: string;
 	};
 }
 
@@ -498,7 +500,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// coalesce over the richer one and drop those stats.
 
 	return {
-		text: result.output + mergeSummary,
+		text: structured ? result.output : result.output + mergeSummary,
 		details: {
 			agent: result.agent,
 			id: result.id,
@@ -508,6 +510,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			patchPath: result.patchPath,
 			branchName: result.branchName,
 			changesApplied: isIsolated ? changesApplied : undefined,
+			isolationSummary: mergeSummary ? mergeSummary.trim() : undefined,
 		},
 	};
 }

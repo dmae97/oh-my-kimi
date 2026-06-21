@@ -872,6 +872,40 @@ describe("runEvalAgent isolation", () => {
 		expect(result.text).toContain("Applied patches: yes");
 	});
 
+	it("keeps schema-backed isolated output parseable by moving merge text into details", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const structuredOutput = JSON.stringify({ status: "ok" });
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: structuredOutput,
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+			}),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\nNo changes to apply.",
+			changesApplied: true,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
+
+		const result = await runEvalAgent(
+			{
+				prompt: "structured",
+				schema: {
+					type: "object",
+					properties: { status: { type: "string" } },
+					required: ["status"],
+				},
+			},
+			{ session: isolatedSession() },
+		);
+
+		expect(JSON.parse(result.text)).toEqual({ status: "ok" });
+		expect(result.text).toBe(structuredOutput);
+		expect(result.details.isolationSummary).toBe("No changes to apply.");
+	});
+
 	it("skips the merge phase when apply=false and surfaces the patch artifact instead", async () => {
 		mockAgents();
 		mockIsolationContext();
