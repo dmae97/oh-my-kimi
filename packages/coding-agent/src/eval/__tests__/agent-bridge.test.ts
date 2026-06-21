@@ -774,9 +774,7 @@ describe("runEvalAgent isolation", () => {
 		vi.restoreAllMocks();
 	});
 
-	function isolatedSession(
-		overrides: Partial<Parameters<typeof Settings.isolated>[0]> = {},
-	): ToolSession {
+	function isolatedSession(overrides: Partial<Parameters<typeof Settings.isolated>[0]> = {}): ToolSession {
 		return makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
@@ -816,15 +814,18 @@ describe("runEvalAgent isolation", () => {
 	it("inherits isolation from settings by default and skips it when isolated=false explicitly", async () => {
 		mockAgents();
 		mockIsolationContext();
-		const isolatedSpy = vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
-			singleResult(opts.baseOptions, { output: "isolated-run" }),
-		);
+		const isolatedSpy = vi
+			.spyOn(isolationRunner, "runIsolatedSubprocess")
+			.mockImplementation(async opts => singleResult(opts.baseOptions, { output: "isolated-run" }));
 		const plainSpy = vi
 			.spyOn(taskExecutor, "runSubprocess")
 			.mockImplementation(async options => singleResult(options, { output: "plain-run" }));
-		const mergeSpy = vi
-			.spyOn(isolationRunner, "mergeIsolatedChanges")
-			.mockResolvedValue({ summary: "", changesApplied: true, hadAnyChanges: false, mergedBranchForNestedPatches: false });
+		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "",
+			changesApplied: true,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
 
 		// Default (no isolated arg) — settings drive isolation on.
 		const inheritResult = await runEvalAgent({ prompt: "default" }, { session: isolatedSession() });

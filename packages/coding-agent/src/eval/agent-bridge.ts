@@ -23,9 +23,9 @@ import {
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
 import { applyNestedPatches, parseIsolationMode } from "../task/worktree";
-import { generateCommitMessage } from "../utils/commit-message-generator";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
+import { generateCommitMessage } from "../utils/commit-message-generator";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 // Import review tools for side effects (registers subagent tool handlers).
@@ -307,9 +307,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	let isIsolated: boolean;
 	if (parsed.isolated === true) {
 		if (!isolationEnabledInSettings) {
-			throw new ToolError(
-				`agent(isolated=True) requires task.isolation.mode to be set; current mode is "none".`,
-			);
+			throw new ToolError(`agent(isolated=True) requires task.isolation.mode to be set; current mode is "none".`);
 		}
 		isIsolated = true;
 	} else if (parsed.isolated === false) {

@@ -50,17 +50,17 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
-import { generateTaskName } from "./name-generator";
-import { AgentOutputManager } from "./output-manager";
-import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
-import { renderResult, renderCall as renderTaskCall } from "./render";
-import { repairTaskParams } from "./repair-args";
 import {
 	type IsolationContext,
 	mergeIsolatedChanges,
 	prepareIsolationContext,
 	runIsolatedSubprocess,
 } from "./isolation-runner";
+import { generateTaskName } from "./name-generator";
+import { AgentOutputManager } from "./output-manager";
+import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
+import { renderResult, renderCall as renderTaskCall } from "./render";
+import { repairTaskParams } from "./repair-args";
 import { applyNestedPatches, parseIsolationMode } from "./worktree";
 
 function renderSubagentUserPrompt(assignment: string): string {

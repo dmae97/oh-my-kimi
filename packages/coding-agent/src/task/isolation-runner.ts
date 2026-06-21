@@ -19,7 +19,7 @@
  * before mutation); steps 2 and 3 are per-spawn.
  */
 import * as path from "node:path";
-import * as natives from "@oh-my-pi/pi-natives";
+import type * as natives from "@oh-my-pi/pi-natives";
 import * as git from "../utils/git";
 import type { ExecutorOptions } from "./executor";
 import { runSubprocess } from "./executor";
