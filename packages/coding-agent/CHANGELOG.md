@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenCode MCP discovery so array commands are normalized into a stdio executable plus arguments, `environment` is accepted as the OpenCode env key, and argument lists are omitted when empty. ([#3180](https://github.com/can1357/oh-my-pi/issues/3180))
+
 ## [16.1.10] - 2026-06-21
 
 ### Added
