@@ -8,7 +8,9 @@
 use std::{cell::RefCell, collections::HashMap, sync::OnceLock};
 
 use napi_derive::napi;
-use syntect::parsing::{ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet};
+use syntect::parsing::{
+	ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxDefinition, SyntaxReference, SyntaxSet,
+};
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 static SCOPE_MATCHERS: OnceLock<ScopeMatchers> = OnceLock::new();
@@ -18,8 +20,25 @@ thread_local! {
 	static SCOPE_COLOR_CACHE: RefCell<HashMap<Scope, usize>> = RefCell::new(HashMap::with_capacity(256));
 }
 
+/// Syntaxes bundled in addition to syntect's defaults: syntect ships neither,
+/// so we vendor their `.sublime-syntax` sources and fold them into the set.
+const EXTRA_SYNTAXES: &[&str] = &[include_str!("syntaxes/Julia.sublime-syntax")];
+
 fn get_syntax_set() -> &'static SyntaxSet {
-	SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+	SYNTAX_SET.get_or_init(build_syntax_set)
+}
+
+/// Load syntect's newline-aware defaults and add the vendored extra syntaxes.
+/// A vendored syntax that fails to parse is skipped rather than breaking all
+/// highlighting; the bundled-language tests guard against silent absence.
+fn build_syntax_set() -> SyntaxSet {
+	let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
+	for src in EXTRA_SYNTAXES {
+		if let Ok(def) = SyntaxDefinition::load_from_str(src, true, None) {
+			builder.add(def);
+		}
+	}
+	builder.build()
 }
 
 /// Pre-compiled scope patterns for fast matching.
@@ -155,6 +174,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["ts", "tsx", "typescript", "js", "jsx", "javascript", "mjs", "cjs"], "JavaScript"),
 	(&["py", "python"], "Python"),
 	(&["rb", "ruby"], "Ruby"),
+	(&["jl", "julia"], "Julia"),
 	(&["rs", "rust"], "Rust"),
 	(&["go", "golang"], "Go"),
 	(&["java"], "Java"),
