@@ -1,10 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `llama.cpp` to the interactive `/login` provider list, accepting an optional API key while defaulting to local no-auth mode.
+
+### Changed
+
+- Optimized generated AI tool schemas by collapsing verbose `anyOf` unions into standard `enum` types
 
 ### Removed
 
