@@ -1679,4 +1679,130 @@ describe("Tool argument coercion", () => {
 			expect(result.payload.paths).toEqual(["package.json"]);
 		});
 	});
+
+	describe("double-JSON-encoded object keys", () => {
+		const opsTool: Tool = {
+			name: "todo",
+			description: "",
+			parameters: z.object({
+				ops: z.array(
+					z.object({
+						op: z.string(),
+						task: z.string().optional(),
+					}),
+				),
+			}),
+		};
+
+		it("unwraps keys serialized one extra time (reported case)", () => {
+			const result = validateToolArguments(opsTool, {
+				type: "toolCall",
+				id: "dk1",
+				name: "todo",
+				arguments: {
+					ops: [
+						{ '"op"': "done", '"task"': "Resolve failures" },
+						{ '"op"': "start", '"task"': "Draft response" },
+					],
+				},
+			}) as { ops: Array<{ op: string; task?: string }> };
+			expect(result.ops).toEqual([
+				{ op: "done", task: "Resolve failures" },
+				{ op: "start", task: "Draft response" },
+			]);
+		});
+
+		it("unwraps a double-encoded key at the root", () => {
+			const tool: Tool = {
+				name: "rooted",
+				description: "",
+				parameters: z.object({ label: z.string() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk2",
+				name: "rooted",
+				arguments: { '"label"': "hi" },
+			}) as { label: string };
+			expect(result.label).toBe("hi");
+		});
+
+		it("peels multiple layers of accidental encoding off a key", () => {
+			const tool: Tool = {
+				name: "deep",
+				description: "",
+				parameters: z.object({ label: z.string() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk3",
+				name: "deep",
+				// Key serialized twice: real name `label` -> `"label"` -> `"\"label\""`.
+				arguments: { [JSON.stringify(JSON.stringify("label"))]: "hi" },
+			}) as { label: string };
+			expect(result.label).toBe("hi");
+		});
+
+		it("does not clobber an existing decoded sibling key", () => {
+			const tool: Tool = {
+				name: "clobber",
+				description: "",
+				parameters: z.object({ value: z.string() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk4",
+				name: "clobber",
+				arguments: { value: "real", '"value"': "encoded" },
+			}) as { value: string };
+			expect(result.value).toBe("real");
+		});
+
+		it("unwraps keys exposed after a JSON-string field is parsed", () => {
+			const tool: Tool = {
+				name: "wrap",
+				description: "",
+				parameters: z.object({
+					payload: z.object({ op: z.string() }),
+				}),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk5",
+				name: "wrap",
+				arguments: {
+					payload: JSON.stringify({ '"op"': "done" }),
+				},
+			}) as { payload: { op: string } };
+			expect(result.payload.op).toBe("done");
+		});
+
+		it("unwraps keys when the entire arguments payload is a JSON string", () => {
+			const result = validateToolArguments(opsTool, {
+				type: "toolCall",
+				id: "dk7",
+				name: "todo",
+				// Whole arg object stringified, with each op key double-encoded.
+				arguments: JSON.stringify({
+					ops: [{ '"op"': "done", '"task"': "Resolve failures" }],
+				}) as unknown as Record<string, unknown>,
+			}) as { ops: Array<{ op: string; task?: string }> };
+			expect(result.ops).toEqual([{ op: "done", task: "Resolve failures" }]);
+		});
+
+		it("leaves ordinary keys untouched", () => {
+			const tool: Tool = {
+				name: "plain",
+				description: "",
+				parameters: z.object({ op: z.string(), count: z.number() }),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk6",
+				name: "plain",
+				arguments: { op: "done", count: 2 },
+			}) as { op: string; count: number };
+			expect(result).toEqual({ op: "done", count: 2 });
+		});
+	});
 });
