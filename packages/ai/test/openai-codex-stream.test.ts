@@ -2261,6 +2261,102 @@ describe("openai-codex streaming", () => {
 		});
 	});
 
+	it("drops a stale terminal frame from the prior response leaking onto a reused websocket", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stale-frame-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const fetchMock = vi.fn(async () => {
+			throw new Error("SSE fallback should not be called");
+		});
+
+		// On the reused connection's second request, a trailing/duplicate
+		// `response.completed` from the previous response slips past the queue
+		// drain and arrives before this request's own frames. The transport must
+		// drop it (its `response.id` is the prior response's) rather than consume
+		// it as request 2's terminal — which would end the turn with empty output
+		// or, worse, attribute the prior turn's output to this one.
+		class StaleFrameWebSocket extends MockWebSocket {
+			#sendCount = 0;
+
+			constructor(url: string, options?: { headers?: WsHeaders }) {
+				super(url, options);
+				this.scheduleOpen();
+			}
+
+			send(): void {
+				this.#sendCount += 1;
+				if (this.#sendCount === 1) {
+					this.emitCodexResponse({
+						messageId: "msg_1",
+						responseId: "resp_1",
+						text: "First answer",
+						terminalType: "response.completed",
+						includeCreated: true,
+					});
+					return;
+				}
+				this.sendJson({
+					type: "response.completed",
+					response: { id: "resp_1", status: "completed", usage: DEFAULT_USAGE },
+				});
+				this.emitCodexResponse({
+					messageId: "msg_2",
+					responseId: "resp_2",
+					text: "Second answer",
+					terminalType: "response.completed",
+					includeCreated: true,
+				});
+			}
+		}
+
+		global.WebSocket = StaleFrameWebSocket as unknown as typeof WebSocket;
+		const model: Model<"openai-codex-responses"> = buildModel({
+			id: "gpt-5.3-codex-spark",
+			name: "GPT-5.3 Codex Spark",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			preferWebsockets: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 128000,
+		});
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const firstContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [{ role: "user", content: "First question", timestamp: Date.now() }],
+		};
+		const first = await streamOpenAICodexResponses(model, firstContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-stale-frame-session",
+			providerSessionState,
+		}).result();
+		const secondContext: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				...firstContext.messages,
+				first,
+				{ role: "user", content: "Second question", timestamp: Date.now() },
+			],
+		};
+		const second = await streamOpenAICodexResponses(model, secondContext, {
+			fetch: fetchMock as FetchImpl,
+			apiKey: token,
+			sessionId: "ws-stale-frame-session",
+			providerSessionState,
+		}).result();
+
+		const secondText = second.content
+			.filter((block): block is { type: "text"; text: string } => block.type === "text")
+			.map(block => block.text)
+			.join("");
+		expect(secondText).toBe("Second answer");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("applies onPayload to the final chained websocket frame", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-ws-payload-hook-");
 		setAgentDir(tempDir.path());

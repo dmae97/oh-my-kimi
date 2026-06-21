@@ -195,6 +195,43 @@ describe("Duplicate Tool Results Regression", () => {
 		expect((toolResults[0] as ToolResultMessage).content).toEqual([{ type: "text", text: "todo updated" }]);
 	});
 
+	it("routes a reused tool-call id to its own result, never an earlier orphaned one", () => {
+		// Compaction folded the assistant turn that originally issued `sharedId`
+		// into a summary string, but its tool result survived as an orphan. A
+		// later turn reuses the same id, and a developer note sits between that
+		// call and its real result — forcing a pending-call flush before the real
+		// result is reached. The flush must pull THIS turn's result, not the
+		// earlier orphan's output (regression: a tool call returning an earlier,
+		// unrelated command's output).
+		const sharedId = "toolu_shared_reuse_1";
+		const messages: Message[] = [
+			{ role: "user", content: "first request", timestamp: 1 },
+			// Orphaned result: its originating tool_use was compacted away.
+			makeEvalToolResult(sharedId, "OUTPUT FROM EARLIER COMMAND", 2),
+			{ role: "user", content: "second request", timestamp: 3 },
+			makeEvalAssistantMessage(sharedId, 4),
+			{ role: "developer", content: "guidance between call and result", timestamp: 5 },
+			makeEvalToolResult(sharedId, "OUTPUT FROM CURRENT COMMAND", 6),
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		const results = getToolResults(transformed).filter(result => result.toolCallId === sharedId);
+		expect(results).toHaveLength(1);
+		expect(results[0]!.content).toEqual([{ type: "text", text: "OUTPUT FROM CURRENT COMMAND" }]);
+
+		// The surviving result must land immediately after the reusing assistant turn.
+		const assistantIdx = transformed.findIndex(
+			message =>
+				message.role === "assistant" &&
+				message.content.some(block => block.type === "toolCall" && block.id === sharedId),
+		);
+		expect(transformed[assistantIdx + 1]?.role).toBe("toolResult");
+		expect((transformed[assistantIdx + 1] as ToolResultMessage).content).toEqual([
+			{ type: "text", text: "OUTPUT FROM CURRENT COMMAND" },
+		]);
+	});
+
 	it("should not duplicate tool results for aborted messages when results already exist", () => {
 		const toolCallId = "toolu_aborted_test_123";
 

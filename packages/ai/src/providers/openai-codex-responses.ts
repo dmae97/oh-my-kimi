@@ -205,6 +205,17 @@ function isCodexStreamProgressEvent(event: unknown): boolean {
 	return typeof type === "string" && CODEX_ADDITIONAL_PROGRESS_EVENT_TYPES.has(type);
 }
 
+function extractCodexFrameResponseId(frame: Record<string, unknown>): string | undefined {
+	const response = (frame as { response?: { id?: unknown } }).response;
+	const id = response?.id;
+	return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+function extractCodexFrameSequenceNumber(frame: Record<string, unknown>): number | undefined {
+	const raw = (frame as { sequence_number?: unknown }).sequence_number;
+	return typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : undefined;
+}
+
 type CodexWebSocketTimeoutDetails = {
 	lastEventAt: number;
 	lastEventType?: string;
@@ -2403,6 +2414,12 @@ class CodexWebSocketConnection {
 	#lastInboundAt = 0;
 	/** Wall-clock of the last heartbeat ping we issued; 0 if none yet. */
 	#lastPingAt = 0;
+	/**
+	 * Most recent `response.id` accepted on this socket, retained across
+	 * requests. Lets the next request drop a trailing/duplicate frame from the
+	 * previous (cleanly-completed) response that outlived the queue drain.
+	 */
+	#lastSeenResponseId?: string;
 
 	constructor(url: string, headers: Record<string, string>, options: CodexWebSocketConnectionOptions) {
 		this.#url = url;
@@ -2650,6 +2667,11 @@ class CodexWebSocketConnection {
 			let lastProgressEventType: string | undefined;
 			let lastEventAt = lastProgressAt;
 			let lastEventType: string | undefined;
+			// Cross-request frame guard: lock onto this response's id and reject
+			// frames belonging to another response interleaved on the reused socket.
+			let activeResponseId: string | undefined;
+			let lastSequence: number | undefined;
+			const priorResponseId = this.#lastSeenResponseId;
 			while (true) {
 				let timeoutMs: number | undefined;
 				let timeoutReason: string;
@@ -2691,8 +2713,51 @@ class CodexWebSocketConnection {
 				if (next === null) {
 					throw new CodexWebSocketTransportError(`websocket closed before response completion`);
 				}
-				sawFirstEvent = true;
 				const eventType = typeof next.type === "string" ? next.type : "";
+				// Cross-request frame guard. The socket is reused across turns. Upstream
+				// codex-rs leans on the protocol guarantee that nothing follows a
+				// response's terminal event, but our queue can still surface a trailing
+				// or duplicate frame from a cleanly-completed prior response after
+				// #dropStaleFrames() drained the queue at send time. Attaching such a
+				// frame to THIS turn misattributes an earlier turn's output (a stale
+				// `response.completed` ends the turn early; a stale item makes the model
+				// see an unrelated call). Only lifecycle events (created/completed/
+				// failed/incomplete) carry a `response.id` — exactly the harmful ones —
+				// so key the guard on it and let idless frames (deltas, the rate-limit/
+				// metadata preamble, created-less streams) pass through, matching
+				// upstream rather than gating on `response.created`.
+				const frameResponseId = extractCodexFrameResponseId(next);
+				const frameSequence = extractCodexFrameSequenceNumber(next);
+				if (frameResponseId !== undefined) {
+					if (activeResponseId === undefined) {
+						if (priorResponseId !== undefined && frameResponseId === priorResponseId) {
+							// Trailing/duplicate frame of the previous response that
+							// outlived the drain. Drop without locking or advancing the
+							// first-event clocks so our own response can still start.
+							continue;
+						}
+						activeResponseId = frameResponseId;
+					} else if (frameResponseId !== activeResponseId) {
+						// A different response is interleaving on the socket; the idless
+						// deltas that follow are indistinguishable, so fail closed
+						// (retryable) instead of risking misattribution.
+						this.close("stale-frame");
+						throw new CodexWebSocketTransportError(
+							`websocket frame for response ${frameResponseId} interleaved into active response ${activeResponseId}`,
+						);
+					}
+					this.#lastSeenResponseId = frameResponseId;
+				}
+				if (frameSequence !== undefined) {
+					if (activeResponseId !== undefined && lastSequence !== undefined && frameSequence < lastSequence) {
+						this.close("stale-frame");
+						throw new CodexWebSocketTransportError(
+							`websocket sequence_number ${frameSequence} regressed below ${lastSequence} within response ${activeResponseId}`,
+						);
+					}
+					lastSequence = frameSequence;
+				}
+				sawFirstEvent = true;
 				lastEventAt = Date.now();
 				lastEventType = eventType || undefined;
 				if (isCodexStreamProgressEvent(next)) {

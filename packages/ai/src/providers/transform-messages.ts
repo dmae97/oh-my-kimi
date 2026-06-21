@@ -397,12 +397,33 @@ export function transformMessages<TApi extends Api>(
 		maxNormalizedToolCallIdLength,
 		duplicateToolCallIdSuffixPrefix,
 	);
-	const realToolResultsById = new Map<string, ToolResultMessage>();
-	for (const msg of transformed) {
-		if (msg.role === "toolResult" && !realToolResultsById.has(msg.toolCallId)) {
-			realToolResultsById.set(msg.toolCallId, msg);
+	// All real tool results, keyed by id, in document order. One id can map to
+	// more than one result: compaction can fold an assistant `tool_use` into a
+	// summary string while its `tool_result` survives, and a later turn may reuse
+	// the id. `takeRealToolResult` pulls the earliest unconsumed result positioned
+	// AFTER the call's assistant turn, so an orphaned earlier result is never
+	// pulled forward onto a later call (which would surface a prior turn's output).
+	type IndexedToolResult = { index: number; msg: ToolResultMessage; consumed: boolean };
+	const realToolResultsById = new Map<string, IndexedToolResult[]>();
+	for (let index = 0; index < transformed.length; index++) {
+		const msg = transformed[index];
+		if (msg.role === "toolResult") {
+			const entry: IndexedToolResult = { index, msg, consumed: false };
+			const entries = realToolResultsById.get(msg.toolCallId);
+			if (entries) entries.push(entry);
+			else realToolResultsById.set(msg.toolCallId, [entry]);
 		}
 	}
+	const takeRealToolResult = (id: string, afterIndex: number): ToolResultMessage | undefined => {
+		const entries = realToolResultsById.get(id);
+		if (!entries) return undefined;
+		for (const entry of entries) {
+			if (entry.consumed || entry.index <= afterIndex) continue;
+			entry.consumed = true;
+			return entry.msg;
+		}
+		return undefined;
+	};
 
 	// Anthropic rejects `tool_result` blocks whose `tool_use_id` does not appear in a prior
 	// `tool_use` block. After handoff/compaction folds an assistant turn into a summary
@@ -421,8 +442,12 @@ export function transformMessages<TApi extends Api>(
 	// followed by exactly one corresponding tool result.
 	const result: Message[] = [];
 	let pendingToolCalls: ToolCall[] = [];
+	// Index of the assistant turn that declared `pendingToolCalls`; a pulled
+	// result must be positioned after it (see `takeRealToolResult`).
+	let pendingToolCallsStartIndex = -1;
 	let pendingAbortedToolCalls = new Map<string, ToolCall>();
 	let pendingAbortedTimestamp: number | undefined;
+	let pendingAbortedStartIndex = -1;
 	// Track which tool calls already have an emitted result so delayed/duplicate
 	// toolResult messages cannot create a second provider-visible result.
 	const toolCallStatus = new Map<string, ToolCallStatus>();
@@ -431,7 +456,7 @@ export function transformMessages<TApi extends Api>(
 		if (pendingToolCalls.length === 0) return;
 		for (const tc of pendingToolCalls) {
 			if (toolCallStatus.has(tc.id)) continue;
-			const realToolResult = realToolResultsById.get(tc.id);
+			const realToolResult = takeRealToolResult(tc.id, pendingToolCallsStartIndex);
 			if (realToolResult) {
 				result.push(realToolResult);
 				toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
@@ -454,7 +479,7 @@ export function transformMessages<TApi extends Api>(
 		if (pendingAbortedTimestamp === undefined) return;
 		for (const tc of pendingAbortedToolCalls.values()) {
 			if (toolCallStatus.has(tc.id)) continue;
-			const realToolResult = realToolResultsById.get(tc.id);
+			const realToolResult = takeRealToolResult(tc.id, pendingAbortedStartIndex);
 			if (realToolResult) {
 				result.push(realToolResult);
 				toolCallStatus.set(tc.id, ToolCallStatus.Resolved);
@@ -510,11 +535,13 @@ export function transformMessages<TApi extends Api>(
 				result.push(msg);
 				pendingAbortedToolCalls = new Map(toolCalls.map(toolCall => [toolCall.id, toolCall] as const));
 				pendingAbortedTimestamp = assistantMsg.timestamp;
+				pendingAbortedStartIndex = i;
 				continue;
 			}
 
 			if (toolCalls.length > 0) {
 				pendingToolCalls = toolCalls;
+				pendingToolCallsStartIndex = i;
 			}
 
 			result.push(msg);
