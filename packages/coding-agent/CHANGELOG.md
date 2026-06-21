@@ -1,9 +1,16 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added LLM request JSON export functionality to `/dump`
+
+### Changed
+
+- Improved browser stealth by suppressing common automation flags and patching property descriptors
+- Enhanced stealth for `WebGL`, `Worker`, `IFrame`, `Screen`, and `Audio` APIs to evade detection
+- Updated `toString` patching to register native function sources for improved fingerprint protection
 
 ### Removed
 

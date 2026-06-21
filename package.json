@@ -5,7 +5,8 @@
   "type": "module",
   "packageManager": "bun@1.3.14",
   "patchedDependencies": {
-    "@ark/schema@0.56.0": "patches/@ark%2Fschema@0.56.0.patch"
+    "@ark/schema@0.56.0": "patches/@ark%2Fschema@0.56.0.patch",
+    "puppeteer-core@25.1.0": "patches/puppeteer-core@25.1.0.patch"
   },
   "workspaces": {
     "packages": [
