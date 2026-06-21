@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed an issue where output was lost when a commit-unstable barrier at the top of the viewport was removed or modified
+- Fixed race conditions in the committed prefix audit that could cause content to be incorrectly dropped during streaming updates
+- Improved the commit fidelity of forced-overflow rows to ensure they are consistently committed to the terminal scrollback buffer
 
 ## [16.1.8] - 2026-06-20
 
