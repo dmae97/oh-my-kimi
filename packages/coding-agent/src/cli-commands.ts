@@ -44,10 +44,25 @@ export const commands: CommandEntry[] = [
 	{ name: "search", load: () => import("./commands/web-search").then(m => m.default), aliases: ["q"] },
 ];
 
+// Documented-looking plugin-management verbs that are NOT registered top-level
+// commands. Without a guard `resolveCliArgv` rewrites e.g. `omp list` to
+// `omp launch list`, silently forwarding the bare verb to the model as a prompt
+// instead of managing plugins (#2935; same class as the `install` leak fixed in
+// #1496/#1498). A bare (single-arg) use gets a hint pointing at the real
+// `omp plugin <action>` command; multi-word invocations still fall through to
+// `launch`, so genuine prompts that merely begin with one of these words work.
 const RESERVED_TOP_LEVEL_WORDS = new Map<string, string>([
 	[
 		"extensions",
 		'`omp extensions` is not a management command. Use `omp plugin list` / `omp plugin install`, or run `omp launch extensions` if you meant to send "extensions" as a prompt.',
+	],
+	[
+		"list",
+		'`omp list` is not a top-level command. Use `omp plugin list` to list installed plugins, or run `omp launch list` if you meant to send "list" as a prompt.',
+	],
+	[
+		"remove",
+		'`omp remove` is not a top-level command. Use `omp plugin uninstall <name>` to remove a plugin, or run `omp launch remove` if you meant to send "remove" as a prompt.',
 	],
 ]);
 
