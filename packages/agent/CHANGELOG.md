@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.10] - 2026-06-21
+
 ### Fixed
 
 - Fixed labeled user interrupts retaining incomplete streamed tool calls before `toolcall_end`, which could persist malformed tool-call IDs into replay.

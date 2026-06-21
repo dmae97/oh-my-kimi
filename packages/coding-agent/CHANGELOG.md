@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.10] - 2026-06-21
+
 ### Added
 
 - Added `tab.ariaSnapshot(selector?)` to the browser tool for Playwright-format ARIA-tree YAML
