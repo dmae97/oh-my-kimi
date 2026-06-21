@@ -25,8 +25,9 @@ import {
 } from "@oh-my-pi/pi-catalog/variant-collapse";
 
 // Sentinels for local-only OAuth tokens — declared inline to avoid loading
-// provider modules at startup. Must match packages/ai/src/registry/lm-studio.ts
-// and packages/ai/src/registry/vllm.ts.
+// provider modules at startup. Must match packages/ai/src/registry/llama-cpp.ts,
+// packages/ai/src/registry/lm-studio.ts, and packages/ai/src/registry/vllm.ts.
+const DEFAULT_LLAMA_CPP_LOCAL_TOKEN = "llama-cpp-local";
 const DEFAULT_LOCAL_TOKEN = "lm-studio-local";
 const DEFAULT_VLLM_LOCAL_TOKEN = "vllm-local";
 
@@ -85,7 +86,12 @@ export function isAuthenticated(apiKey: string | undefined | null): apiKey is st
 }
 
 function isDiscoveryBearerApiKey(apiKey: string | undefined | null): apiKey is string {
-	return isAuthenticated(apiKey) && apiKey !== DEFAULT_LOCAL_TOKEN && apiKey !== DEFAULT_VLLM_LOCAL_TOKEN;
+	return (
+		isAuthenticated(apiKey) &&
+		apiKey !== DEFAULT_LLAMA_CPP_LOCAL_TOKEN &&
+		apiKey !== DEFAULT_LOCAL_TOKEN &&
+		apiKey !== DEFAULT_VLLM_LOCAL_TOKEN
+	);
 }
 
 /** Provider override config (baseUrl, headers, apiKey, compat, transport) without custom models */

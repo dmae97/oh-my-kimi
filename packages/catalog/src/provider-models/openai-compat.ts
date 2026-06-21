@@ -1568,7 +1568,7 @@ export function firepassModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
-// 7.7 Wafer (Pass + Serverless)
+// 7.7 Wafer Serverless
 // ---------------------------------------------------------------------------
 
 export interface WaferModelManagerConfig {
@@ -1581,13 +1581,14 @@ const WAFER_DEFAULT_BASE_URL = "https://pass.wafer.ai/v1";
 const WAFER_MAX_TOKENS_CAP = 65536;
 
 /**
- * Shared mapper for Wafer's `/v1/models` records.
+ * Mapper for Wafer Serverless `/v1/models` records.
  *
- * Wafer wraps each entry with a `wafer` envelope describing tier, capabilities,
- * and cents-per-million pricing. The mapper folds that metadata into the
- * canonical `ModelSpec<"openai-completions">` shape and applies zai-family thinking
- * compat when the entry advertises reasoning support (GLM-family on the Pass
- * SKU). Cents-per-million → dollars-per-million via /100.
+ * Wafer wraps each entry with a `wafer` envelope describing capabilities and
+ * pricing. The mapper folds that metadata into the canonical
+ * `ModelSpec<"openai-completions">` shape and applies upstream-specific thinking
+ * compat when the entry advertises reasoning support. Wafer pricing is exposed
+ * through internal wholesale units; the public Serverless rate equals
+ * `cents × 125 / 10000`.
  */
 interface WaferRecord {
 	context_length?: unknown;
@@ -1608,7 +1609,7 @@ function readWaferRecord(entry: OpenAICompatibleModelRecord): WaferRecord | unde
 }
 
 function mapWaferModel(
-	providerId: "wafer-pass" | "wafer-serverless",
+	providerId: "wafer-serverless",
 	baseUrl: string,
 	entry: OpenAICompatibleModelRecord,
 	defaults: ModelSpec<"openai-completions">,
@@ -1624,25 +1625,12 @@ function mapWaferModel(
 	);
 	const maxTokens = contextWindow !== null ? Math.min(contextWindow, WAFER_MAX_TOKENS_CAP) : null;
 	const pricing = wafer?.pricing ?? {};
-	// Wafer's `/v1/models` exposes pricing through `*_cents_per_million` fields,
-	// but the values are an internal wholesale unit, not literal cents — across
-	// every published Serverless model on wafer.ai the user-facing rate equals
-	// `cents × 125 / 10000` (i.e. wholesale × 1.25 / 100; GLM-5.1's `120` →
-	// $1.50/M, Kimi-K2.6's `88` → $1.10/M, etc.). The multiply-first form keeps
-	// the result a finite dyadic for every observed value.
-	// For the Pass SKU the per-token rate is bundled in the flat-rate
-	// subscription, so we follow the convention shared with
-	// `kimi-code`/`firepass`/`alibaba-coding-plan` and seed every Pass model with
-	// `cost: 0` regardless of what the upstream envelope says.
-	const isPassSku = providerId === "wafer-pass";
-	const cost = isPassSku
-		? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-		: {
-				input: (toPositiveNumber(pricing.input_cents_per_million, 0) * 125) / 10000,
-				output: (toPositiveNumber(pricing.output_cents_per_million, 0) * 125) / 10000,
-				cacheRead: (toPositiveNumber(pricing.cache_read_cents_per_million, 0) * 125) / 10000,
-				cacheWrite: 0,
-			};
+	const cost = {
+		input: (toPositiveNumber(pricing.input_cents_per_million, 0) * 125) / 10000,
+		output: (toPositiveNumber(pricing.output_cents_per_million, 0) * 125) / 10000,
+		cacheRead: (toPositiveNumber(pricing.cache_read_cents_per_million, 0) * 125) / 10000,
+		cacheWrite: 0,
+	};
 	const name = toModelName(wafer?.display_name, defaults.name);
 	const base: ModelSpec<"openai-completions"> = {
 		...defaults,
@@ -1688,13 +1676,12 @@ function mapWaferModel(
 	};
 }
 
-function createWaferOptions(
-	providerId: "wafer-pass" | "wafer-serverless",
-	config: WaferModelManagerConfig | undefined,
+export function waferServerlessModelManagerOptions(
+	config?: WaferModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? WAFER_DEFAULT_BASE_URL;
-	const passOnly = providerId === "wafer-pass";
+	const providerId = "wafer-serverless" as const;
 	return {
 		providerId,
 		...(apiKey && {
@@ -1704,28 +1691,11 @@ function createWaferOptions(
 					provider: providerId,
 					baseUrl,
 					apiKey,
-					filterModel: entry => {
-						if (!passOnly) return true;
-						const wafer = readWaferRecord(entry);
-						return wafer?.tier === "pass_included";
-					},
 					mapModel: (entry, defaults) => mapWaferModel(providerId, baseUrl, entry, defaults),
 					fetch: config?.fetch,
 				}),
 		}),
 	};
-}
-
-export function waferPassModelManagerOptions(
-	config?: WaferModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
-	return createWaferOptions("wafer-pass", config);
-}
-
-export function waferServerlessModelManagerOptions(
-	config?: WaferModelManagerConfig,
-): ModelManagerOptions<"openai-completions"> {
-	return createWaferOptions("wafer-serverless", config);
 }
 
 // ---------------------------------------------------------------------------

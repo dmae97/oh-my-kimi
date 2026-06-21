@@ -10,6 +10,10 @@
 
 - Added `llama.cpp` to the interactive `/login` provider list, accepting an optional API key while defaulting to local no-auth mode.
 
+### Removed
+
+- Removed Wafer Pass (`wafer-pass`) login support; Wafer Serverless remains available as `wafer-serverless`.
+
 ## [16.1.8] - 2026-06-20
 
 ### Changed

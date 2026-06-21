@@ -9,6 +9,14 @@
 - Fixed `omp --approval-mode=yolo acp` and other global option flags placed before a subcommand being rewritten to `launch` with the subcommand swallowed as prompt text; the CLI resolver now skips leading global flags (using the launch parser's value-consumption contract) and dispatches the real subcommand with the flags applied, so ACP mode honors the configured approval policy. ([#2970](https://github.com/can1357/oh-my-pi/issues/2970))
 - Fixed `/mcp enable` and `/mcp disable` reconnecting unrelated MCP servers by scoping toggle reconnect/disconnect work to the named server. ([#3157](https://github.com/can1357/oh-my-pi/issues/3157))
 
+### Fixed
+
+- Stopped the local llama.cpp no-auth login placeholder from being sent as a discovery bearer token.
+
+### Removed
+
+- Removed Wafer Pass from CLI credential help; Wafer Serverless remains available.
+
 ## [16.1.8] - 2026-06-20
 
 ### Added
