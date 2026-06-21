@@ -1288,7 +1288,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
 		let level = options.thinkingLevel;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
-			level = parseThinkingLevel(existingSession.thinkingLevel);
+			level =
+				parseConfiguredThinkingLevel(existingSession.configuredThinkingLevel) ??
+				parseThinkingLevel(existingSession.thinkingLevel);
 		}
 		if (level === undefined && !hasThinkingEntry && restoredSessionThinkingLevel !== undefined) {
 			level = restoredSessionThinkingLevel;

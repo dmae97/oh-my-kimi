@@ -7,6 +7,8 @@ import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } 
 export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel?: string;
+	/** Configured thinking selector (`"auto"` or a concrete level) from the latest change. */
+	configuredThinkingLevel?: string;
 	serviceTier?: ServiceTier;
 	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
 	models: Record<string, string>;
@@ -134,6 +136,7 @@ export function buildSessionContext(
 
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
+	let configuredThinkingLevel: string | undefined;
 	let serviceTier: ServiceTier | undefined;
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
@@ -154,6 +157,7 @@ export function buildSessionContext(
 	for (const entry of path) {
 		if (entry.type === "thinking_level_change") {
 			thinkingLevel = entry.thinkingLevel ?? "off";
+			configuredThinkingLevel = entry.configured ?? entry.thinkingLevel ?? undefined;
 		} else if (entry.type === "model_change") {
 			// New format: { model: "provider/id", role?: string }
 			if (entry.model) {
@@ -388,6 +392,7 @@ export function buildSessionContext(
 		messages,
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
+		configuredThinkingLevel,
 		serviceTier,
 		models,
 		injectedTtsrRules,
