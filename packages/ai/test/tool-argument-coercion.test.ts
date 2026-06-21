@@ -1790,6 +1790,24 @@ describe("Tool argument coercion", () => {
 			expect(result.ops).toEqual([{ op: "done", task: "Resolve failures" }]);
 		});
 
+		it("unwraps keys inside a JSON-array string on a string|array union", () => {
+			const tool: Tool = {
+				name: "union",
+				description: "",
+				parameters: z.object({
+					items: z.union([z.string(), z.array(z.object({ op: z.string() }))]),
+				}),
+			};
+			const result = validateToolArguments(tool, {
+				type: "toolCall",
+				id: "dk8",
+				name: "union",
+				// Array value double-serialized AND each object key double-encoded.
+				arguments: { items: JSON.stringify([{ '"op"': "done" }]) },
+			}) as { items: Array<{ op: string }> };
+			expect(result.items).toEqual([{ op: "done" }]);
+		});
+
 		it("leaves ordinary keys untouched", () => {
 			const tool: Tool = {
 				name: "plain",

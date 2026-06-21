@@ -1021,8 +1021,15 @@ function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { v
 		if (!trimmed.startsWith("[")) return { value, changed: false };
 		try {
 			const parsed = JSON.parse(trimmed) as unknown;
-			if (Array.isArray(parsed) && parsedArrayMatchesArrayBranch(schemaObject, parsed)) {
-				return { value: parsed, changed: true };
+			if (Array.isArray(parsed)) {
+				// Unwrap any double-encoded object keys inside the parsed array
+				// before the branch-match check; otherwise an `array<object>`
+				// branch fails to validate and the value silently stays on the
+				// string branch.
+				const candidate = normalizeDoubleEncodedKeys(parsed).value as unknown[];
+				if (parsedArrayMatchesArrayBranch(schemaObject, candidate)) {
+					return { value: candidate, changed: true };
+				}
 			}
 		} catch {
 			// Not valid JSON — leave the string alone for the validator to handle.
