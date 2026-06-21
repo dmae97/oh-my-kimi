@@ -11,8 +11,8 @@ import {
 	mergeTaskBranches,
 	parseIsolationMode,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
-import * as natives from "@oh-my-pi/pi-natives";
 import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
+import * as natives from "@oh-my-pi/pi-natives";
 
 const tempDirs: string[] = [];
 

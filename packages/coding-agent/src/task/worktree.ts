@@ -5,8 +5,8 @@ import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
 import { getWorktreeDir, hashPath, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
-import { mapWithConcurrencyLimit } from "./parallel";
 import * as jj from "../utils/jj";
+import { mapWithConcurrencyLimit } from "./parallel";
 
 const { IsoBackendKind } = natives;
 type IsoBackendKind = natives.IsoBackendKind;
