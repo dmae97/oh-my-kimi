@@ -2717,7 +2717,7 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(output.content).toEqual([]);
 	});
 
-	it("merges a burst of parallel tool-call actions into one assistant message", async () => {
+	it("finalizes one assistant message per tool-call action (serial MCP dispatch)", async () => {
 		const sent: string[] = [];
 		const stream = new AssistantMessageEventStream();
 		const socket: GitLabDuoWorkflowWebSocketLike = {
@@ -2763,20 +2763,14 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		);
 
 		socket.onopen?.(new Event("open"));
-		// Two parallel tool_calls of one model turn arrive back-to-back as a burst.
+		// The DWS ToolNode dispatches MCP tool calls one at a time: it awaits each
+		// action's response before sending the next. So exactly one runMCPTool frame
+		// arrives per turn. It finalizes its own assistant message immediately.
 		socket.onmessage?.(
 			new MessageEvent("message", {
 				data: JSON.stringify({
 					requestID: "req-a",
 					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "a.ts" }) },
-				}),
-			}),
-		);
-		socket.onmessage?.(
-			new MessageEvent("message", {
-				data: JSON.stringify({
-					requestID: "req-b",
-					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "b.ts" }) },
 				}),
 			}),
 		);
@@ -2787,25 +2781,12 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 			eventTypes.push(event.type);
 		}
 
-		// Both tool_calls land in ONE assistant message with exactly one terminal `done`.
-		expect(output.content).toEqual([
-			{ type: "toolCall", id: "req-a", name: "read", arguments: { path: "a.ts" } },
-			{ type: "toolCall", id: "req-b", name: "read", arguments: { path: "b.ts" } },
-		]);
+		// One tool_call, one assistant message, exactly one terminal `done`.
+		expect(output.content).toEqual([{ type: "toolCall", id: "req-a", name: "read", arguments: { path: "a.ts" } }]);
 		expect(output.stopReason).toBe("toolUse");
-		expect(eventTypes.filter(type => type === "done")).toHaveLength(1);
-		expect(eventTypes).toEqual([
-			"toolcall_start",
-			"toolcall_delta",
-			"toolcall_end",
-			"toolcall_start",
-			"toolcall_delta",
-			"toolcall_end",
-			"done",
-		]);
-		// The whole batch is committed to the session so the next turn can answer each
-		// requestID, not just the last action.
-		expect(providerSessionState.active?.pendingActions?.map(action => action.requestID)).toEqual(["req-a", "req-b"]);
+		expect(eventTypes).toEqual(["toolcall_start", "toolcall_delta", "toolcall_end", "done"]);
+		// Exactly the single action is committed for the resume turn.
+		expect(providerSessionState.active?.pendingActions?.map(action => action.requestID)).toEqual(["req-a"]);
 	});
 
 	it("resumes the preserved GitLab socket with the Agent-produced tool result", async () => {

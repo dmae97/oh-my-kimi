@@ -59,17 +59,6 @@ const GITLAB_DUO_WORKFLOW_MAX_STEP_LIMIT_RESTARTS = 4;
  * looping on quota.
  */
 const GITLAB_DUO_WORKFLOW_MAX_GENERIC_ERROR_RETRIES = 1;
-/**
- * Quiet window (ms) used to batch parallel tool-call actions into one assistant
- * message. The server dispatches every tool_call of a single AIMessage as a burst
- * of back-to-back `runMCPTool` action frames (ToolNode loops `put_nowait` over the
- * message's tool_calls; the send loop drains them before any actionResponse). Those
- * burst frames arrive milliseconds apart, while the gap to the NEXT model turn is
- * seconds. So after an action frame, if no further frame arrives within this window
- * the batch is complete: finish ONE assistant message (N toolCalls, one usage) and
- * hand the whole batch to the agent loop, matching anthropic/openai-responses.
- */
-const GITLAB_DUO_WORKFLOW_ACTION_FLUSH_MS = 250;
 const GITLAB_DUO_WORKFLOW_LANGUAGE_SERVER_VERSION = "8.104.0";
 const GITLAB_DUO_WORKFLOW_AVAILABLE_MODELS_QUERY = `query omp_gitlabDuoWorkflowAvailableModels($rootNamespaceId: GroupID!) {
   aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
@@ -304,10 +293,6 @@ export interface GitLabDuoWorkflowStreamState {
 	pauseRequested?: boolean;
 	stepLimitRequested?: boolean;
 	retryableErrorRequested?: boolean;
-	// Parallel tool-call actions of one model turn are buffered here as they stream
-	// in; the socket loop finishes one assistant message (all toolCalls, one usage)
-	// once the burst is complete (see GITLAB_DUO_WORKFLOW_ACTION_FLUSH_MS).
-	pendingActionBatch?: GitLabDuoWorkflowActionDescriptor[];
 	providerSessionState?: GitLabDuoWorkflowProviderSessionState;
 	lastApprovalStatus?: string;
 }
@@ -550,10 +535,10 @@ function findGitLabDuoWorkflowToolResultById(
 	return undefined;
 }
 
-// Resolve every action of the buffered batch to its tool result. Returns the full
-// set of {requestID, result} pairs only when ALL are present — the agent loop runs
-// the whole batch in parallel and appends one toolResult per call, so a partial set
-// means the resume turn fired before the loop finished and must not be sent.
+// Resolve each pending action to its tool result. The serial inline flow yields a
+// single pending action per turn, but the helper stays general; it returns the
+// {requestID, result} pairs only when ALL are present, so a resume that fires
+// before the agent loop appended the tool result is held back rather than sent.
 function resolveGitLabDuoWorkflowActionBatch(
 	messages: readonly Message[],
 	actions: readonly GitLabDuoWorkflowActionDescriptor[],
@@ -600,10 +585,14 @@ function buildGitLabDuoWorkflowResponseFromToolResult(toolResult: ToolResultMess
 	return buildGitLabPlainTextFromToolResult(toolResult);
 }
 
-// Stream one tool_call into the in-flight assistant message and buffer the action.
-// Deliberately does NOT finish the message: a model turn may emit several parallel
-// tool_calls (a burst of action frames), all of which belong to one AIMessage. The
-// socket loop finishes the message once exactly via finishGitLabDuoWorkflowActionBatch.
+// Stream one tool_call into the assistant message and finalize the turn. The DWS
+// inline ambient flow dispatches MCP tool calls serially: its ToolNode runs a
+// `for tool_call ...: await tool.ainvoke(...)` loop, and each MCP `ainvoke`
+// blocks in `put_action_and_wait_for_response` until this client returns the
+// matching actionResponse. So only ONE `runMCPTool` action is ever in flight per
+// model turn — the next is not dispatched until the previous is answered. There
+// is no burst to batch; each action is its own assistant message (one `done`,
+// one usage) and the single pending action is committed for the resume turn.
 function emitGitLabDuoWorkflowActionToolCall(
 	state: GitLabDuoWorkflowStreamState,
 	action: GitLabDuoWorkflowActionDescriptor,
@@ -621,23 +610,10 @@ function emitGitLabDuoWorkflowActionToolCall(
 		partial: state.output,
 	});
 	state.stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: state.output });
-	if (!state.pendingActionBatch) state.pendingActionBatch = [];
-	state.pendingActionBatch.push(action);
-}
-
-// Finish the single assistant message carrying the whole parallel tool-call batch
-// (one `done`, one usage line), then commit the batch to the active session so the
-// next turn can return each tool result by requestID. Returns false when no action
-// was buffered (nothing to flush).
-function finishGitLabDuoWorkflowActionBatch(state: GitLabDuoWorkflowStreamState): boolean {
-	const batch = state.pendingActionBatch;
-	if (!batch || batch.length === 0) return false;
-	state.pendingActionBatch = undefined;
 	finishGitLabDuoWorkflowStream(state, "toolUse");
 	if (state.providerSessionState?.active) {
-		state.providerSessionState.active.pendingActions = batch;
+		state.providerSessionState.active.pendingActions = [action];
 	}
-	return true;
 }
 
 function buildGitLabDuoWorkflowActionToolCall(action: GitLabDuoWorkflowActionDescriptor): ToolCall {
@@ -1377,31 +1353,16 @@ export function runGitLabDuoWorkflowSocket(
 	const { promise, resolve, reject } = Promise.withResolvers<GitLabDuoWorkflowSocketResult>();
 	let settled = false;
 	let idleTimer: NodeJS.Timeout | undefined;
-	let actionFlushTimer: NodeJS.Timeout | undefined;
 	const clearIdleTimer = (): void => {
 		if (idleTimer !== undefined) {
 			clearTimeout(idleTimer);
 			idleTimer = undefined;
 		}
 	};
-	const clearActionFlushTimer = (): void => {
-		if (actionFlushTimer !== undefined) {
-			clearTimeout(actionFlushTimer);
-			actionFlushTimer = undefined;
-		}
-	};
-	// Finish the buffered parallel tool-call batch as one assistant message, then
-	// settle the turn as "action" so the agent loop runs the whole batch.
-	const flushActionBatch = (): void => {
-		clearActionFlushTimer();
-		if (settled) return;
-		if (finishGitLabDuoWorkflowActionBatch(state)) settle("action");
-	};
 	const settle = (result: GitLabDuoWorkflowSocketResult = "closed", error?: unknown): void => {
 		if (settled) return;
 		settled = true;
 		clearIdleTimer();
-		clearActionFlushTimer();
 		if (error) reject(error);
 		else resolve(result);
 	};
@@ -1451,14 +1412,12 @@ export function runGitLabDuoWorkflowSocket(
 			return false;
 		}
 		if (result === "action") {
-			// Don't settle yet: more parallel tool_calls of the same turn may still be
-			// streaming in. Re-arm the quiet window; once it elapses with no new frame
-			// the batch is flushed as one message. Keep accepting frames meanwhile.
-			clearActionFlushTimer();
-			if (!settled) {
-				actionFlushTimer = setTimeout(flushActionBatch, GITLAB_DUO_WORKFLOW_ACTION_FLUSH_MS);
-			}
-			return true;
+			// One MCP tool_call per turn: DWS ToolNode awaits each action's response
+			// before dispatching the next, so the turn is complete at this single
+			// action. Settle now (the agent loop runs the tool, then resumes by
+			// sending the actionResponse on this SAME socket — so do NOT close it).
+			settle("action");
+			return false;
 		}
 		if (result !== "continue") {
 			close();
@@ -1502,13 +1461,7 @@ export function runGitLabDuoWorkflowSocket(
 						active.pauseBuffer = [];
 						continue;
 					}
-					// Replay queue is fully drained: every available frame has been seen,
-					// so any buffered tool-call batch is complete — flush it now instead of
-					// waiting on the quiet-window timer (the timer still covers the live path).
-					if (state.pendingActionBatch && state.pendingActionBatch.length > 0) {
-						flushActionBatch();
-						return;
-					}
+					// Replay queue fully drained and no buffered frames remain.
 					break;
 				}
 				const data = pending.shift();
@@ -1529,9 +1482,10 @@ export function runGitLabDuoWorkflowSocket(
 		})();
 	} else if (resumeResponse && (!Array.isArray(resumeResponse) || resumeResponse.length > 0)) {
 		ws.onopen = null;
-		// One actionResponse per parallel tool call of the batch. DWS tracks each by
-		// requestID (independent outbox futures), so sending them back-to-back resolves
-		// every awaiting tool call of the same model turn.
+		// Resume the live socket by returning the tool result for the single pending
+		// action of this turn. (Accepts an array for forward-compat, but the serial
+		// inline flow only ever has one.) DWS matches it by requestID to the awaiting
+		// outbox future and the workflow continues on the same connection.
 		const responses = Array.isArray(resumeResponse) ? resumeResponse : [resumeResponse];
 		for (const response of responses) {
 			ws.send(JSON.stringify(response));
@@ -1676,9 +1630,9 @@ async function handleGitLabDuoWorkflowSocketMessage(
 			getRecordString(action.args as Record<string, unknown>, "tool_name"),
 		argKeys: Object.keys(action.args as Record<string, unknown>).slice(0, 20),
 	});
-	// Buffer this tool_call; do NOT commit the batch or finish the message here. The
-	// socket loop flushes the whole burst once the quiet window elapses (see the
-	// "action" branch in runGitLabDuoWorkflowSocket).
+	// Finalize this tool_call as its own assistant message and commit it as the
+	// single pending action; the socket loop settles "action" so the agent loop
+	// runs the tool and resumes.
 	emitGitLabDuoWorkflowActionToolCall(state, action);
 	return "action";
 }
