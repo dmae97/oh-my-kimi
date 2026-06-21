@@ -2187,8 +2187,10 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 		const model = genericNonStrictModel();
 		expect(model.compat.toolSchemaFlavor).toBeUndefined();
 		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: mfjsProbeTools });
+		// The const-union → enum collapse is a universal wire optimization, not MFJS,
+		// so `op` collapses identically here; MFJS gating is proven by `paths.minItems` below.
 		const op = probeProperty(payload, "github", "op");
-		expect(Array.isArray(op.anyOf)).toBe(true);
+		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
 		const paths = probeProperty(payload, "find", "paths");
 		expect(paths.minItems).toBe(1);
 	});
