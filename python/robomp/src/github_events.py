@@ -56,6 +56,18 @@ def _repo_full_name(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _login_matches_repo_owner(login: str | None, repo: str | None) -> bool:
+    """Return whether `login` is the personal-account owner in `owner/repo`."""
+    if not isinstance(login, str) or not login:
+        return False
+    if not isinstance(repo, str):
+        return False
+    owner, sep, _name = repo.partition("/")
+    if not sep or not owner:
+        return False
+    return login.lower() == owner.lower()
+
+
 PrIssueResolver = Callable[[str, int], str | None] | None
 
 
@@ -221,13 +233,14 @@ def route(
                 "directive_pragmas": pragmas,
                 "directive_authorizes_impl": False,
             }
-        if not is_maintainer(login, assoc, maintainers=maintainers):
+        repo_owner_matches = _login_matches_repo_owner(login, repo)
+        if not repo_owner_matches and not is_maintainer(login, assoc, maintainers=maintainers):
             return {}
         stripped = extract_mention(body, bot_login)
         if stripped is None:
             return {}
         cleaned, pragmas = parse_pragmas(stripped)
-        authorizes_impl = is_implementation_authorizer(login, assoc, maintainers=maintainers)
+        authorizes_impl = repo_owner_matches or is_implementation_authorizer(login, assoc, maintainers=maintainers)
         return {
             "directive": True,
             "directive_body": cleaned,

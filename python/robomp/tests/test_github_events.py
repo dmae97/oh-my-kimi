@@ -603,6 +603,28 @@ def test_route_directive_set_when_login_in_maintainers_list() -> None:
     assert decision.directive_authorizes_impl is True
 
 
+def test_route_directive_authorizes_personal_repo_owner_without_author_association() -> None:
+    decision = route(
+        "issue_comment",
+        {
+            "action": "created",
+            "comment": {
+                "user": {"login": "can1357"},
+                # Some delivery paths omit author_association even for the personal-account repo owner.
+                "body": "@robomp-bot go ahead and push",
+            },
+            "issue": {"number": 9},
+            "repository": {"full_name": "can1357/widget"},
+        },
+        allowlist=frozenset({"can1357/widget"}),
+        bot_login=BOT,
+    )
+    assert decision.directive is True
+    assert decision.directive_body == "go ahead and push"
+    assert decision.directive_author == "can1357"
+    assert decision.directive_authorizes_impl is True
+
+
 def test_route_directive_from_collaborator_does_not_authorize_impl() -> None:
     decision = route(
         "issue_comment",

@@ -93,6 +93,13 @@ def test_blank_bot_login_rejected(monkeypatch: pytest.MonkeyPatch, env: dict[str
         Settings()  # type: ignore[call-arg]
 
 
+def test_bot_login_strips_at_prefix(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
+    monkeypatch.setenv("ROBOMP_BOT_LOGIN", " @roboomp ")
+    reset_settings_cache()
+    cfg = Settings()  # type: ignore[call-arg]
+    assert cfg.bot_login == "roboomp"
+
+
 def test_model_pool_single(env: dict[str, str]) -> None:
     cfg = Settings()  # type: ignore[call-arg]
     assert cfg.model_pool == (cfg.model,)

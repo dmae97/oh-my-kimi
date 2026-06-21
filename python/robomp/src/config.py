@@ -163,7 +163,7 @@ class Settings(BaseSettings):
     @field_validator("bot_login", mode="after")
     @classmethod
     def _require_bot_login(cls, value: str) -> str:
-        cleaned = value.strip()
+        cleaned = value.strip().removeprefix("@")
         if not cleaned:
             raise ValueError("ROBOMP_BOT_LOGIN must be a non-empty GitHub login")
         return cleaned
