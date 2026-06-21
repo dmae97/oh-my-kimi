@@ -57,7 +57,6 @@ describe("sshToolRenderer", () => {
 		expect(body).toContain("do-something");
 	});
 
-
 	it("keeps partial results pending until the final SSH result", async () => {
 		const uiTheme = (await getThemeByName("dark"))!;
 		expect(uiTheme).toBeDefined();
