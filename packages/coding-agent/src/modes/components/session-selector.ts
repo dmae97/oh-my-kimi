@@ -353,6 +353,9 @@ class SessionList implements Component {
 			if (status) {
 				metadata += ` ${dot} ${status}`;
 			}
+			if (session.parentSessionPath) {
+				metadata += ` ${dot} ${dim(`${theme.icon.branch} fork`)}`;
+			}
 			if (this.#showCwd && session.cwd) {
 				metadata += ` ${dot} ${dim(shortenPath(session.cwd))}`;
 			}

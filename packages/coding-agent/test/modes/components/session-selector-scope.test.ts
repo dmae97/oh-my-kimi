@@ -3,11 +3,11 @@ import { SessionSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/compon
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
-beforeAll(() => {
-	initTheme();
+beforeAll(async () => {
+	await initTheme();
 });
 
-function createSession(id: string, title: string, cwd: string): SessionInfo {
+function createSession(id: string, title: string, cwd: string, parentSessionPath?: string): SessionInfo {
 	return {
 		path: `${cwd}/${id}.jsonl`,
 		id,
@@ -19,6 +19,7 @@ function createSession(id: string, title: string, cwd: string): SessionInfo {
 		size: 0,
 		firstMessage: `${title} first message`,
 		allMessagesText: `${title} first message`,
+		...(parentSessionPath ? { parentSessionPath } : {}),
 	};
 }
 
@@ -115,5 +116,22 @@ describe("SessionSelectorComponent scope toggle", () => {
 		// The empty-state hint must be visible so the user knows Tab is the way out.
 		expect(rendered).toContain("No sessions in current folder");
 		expect(rendered).toContain("Press Tab to view all");
+	});
+
+	it("marks forked child sessions in the rendered list", () => {
+		const parent = createSession("root", "Incident", "/work/current");
+		const child = createSession("child", "Incident", "/work/current", parent.path);
+		const selector = new SessionSelectorComponent(
+			[parent, child],
+			() => {},
+			() => {},
+			() => {},
+		);
+
+		const rendered = selector.render(120).join("\n");
+		const forkLines = rendered.split("\n").filter(line => line.includes("fork"));
+
+		expect(forkLines).toHaveLength(1);
+		expect(forkLines[0]).toContain("fork");
 	});
 });
