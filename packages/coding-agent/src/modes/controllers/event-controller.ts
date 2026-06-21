@@ -296,9 +296,10 @@ export class EventController {
 			this.#resetReadGroup();
 			this.#resolveDisplaceablePoll();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
-			const replacesOptimistic = this.ctx.optimisticUserMessageSignature !== undefined && !wasOptimistic;
-			const wasLocallySubmitted =
-				this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic || replacesOptimistic;
+			const matchedLocalSubmission = this.ctx.locallySubmittedUserSignatures.delete(signature);
+			const replacesOptimistic =
+				this.ctx.optimisticUserMessageSignature !== undefined && !wasOptimistic && !matchedLocalSubmission;
+			const wasLocallySubmitted = matchedLocalSubmission || wasOptimistic || replacesOptimistic;
 			if (wasOptimistic) {
 				this.ctx.clearOptimisticUserMessage();
 			} else if (replacesOptimistic) {

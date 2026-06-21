@@ -142,6 +142,52 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		expect(mode.locallySubmittedUserSignatures.has("/jira-task\u00000")).toBe(false);
 	});
 
+	it("does not replace a pending optimistic prompt with another local user event", async () => {
+		mode.isInitialized = true;
+		const controller = new EventController(mode);
+		const addMessageSpy = vi.spyOn(mode, "addMessageToChat");
+
+		mode.startPendingSubmission({ text: "/jira-task" });
+		mode.locallySubmittedUserSignatures.add("queued before prompt\u00000");
+
+		await controller.handleEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "queued before prompt" }],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		});
+
+		expect(mode.optimisticUserMessageSignature).toBe("/jira-task\u00000");
+		expect(mode.chatContainer.children).toHaveLength(2);
+		expect(mode.locallySubmittedUserSignatures.has("queued before prompt\u00000")).toBe(false);
+
+		await controller.handleEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Expanded Jira task prompt" }],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		});
+
+		const renderedTexts = addMessageSpy.mock.calls.map(([message]) => {
+			if (message.role !== "user") throw new Error(`Expected user message, got ${message.role}`);
+			return typeof message.content === "string"
+				? message.content
+				: message.content
+						.filter(content => content.type === "text")
+						.map(content => content.text)
+						.join("\n");
+		});
+		expect(renderedTexts).toEqual(["/jira-task", "queued before prompt", "Expanded Jira task prompt"]);
+		expect(mode.chatContainer.children).toHaveLength(2);
+		expect(mode.optimisticUserMessageSignature).toBeUndefined();
+	});
+
 	it("does not replay after the submission is cancelled", () => {
 		const addMessageSpy = vi.spyOn(mode, "addMessageToChat");
 
