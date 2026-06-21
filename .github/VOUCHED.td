@@ -50,6 +50,7 @@ habibpro1999
 handlecusion
 haosenwang1018
 hezhiyang2000
+igasmi
 infernix
 inprealpha
 itertea
@@ -77,6 +78,7 @@ nnk97
 ogrodev
 oldschoola
 parsifa1
+pgupta-git
 phanthh
 pidevxplay
 qfrtt
