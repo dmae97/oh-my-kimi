@@ -2019,18 +2019,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		);
 
 		// All built-in tools are active (conditional tools like git/ask return null from factory if disabled)
+		const builtInRegistryToolNames = new Set<string>();
 		const toolRegistry = new Map<string, Tool>();
 		for (const tool of builtinTools) {
 			toolRegistry.set(tool.name, tool);
+			builtInRegistryToolNames.add(tool.name);
 		}
 		if (!toolRegistry.has("goal") && settings.get("goal.enabled")) {
 			const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 			if (goalTool) {
 				toolRegistry.set(goalTool.name, wrapToolWithMetaNotice(goalTool));
+				builtInRegistryToolNames.add(goalTool.name);
 			}
 		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
+			builtInRegistryToolNames.delete(tool.name);
 		}
 		if (deferMCPDiscoveryForUI && mcpManager) {
 			for (const name of collectPendingMCPToolNames(options.toolNames, existingSession.selectedMCPToolNames)) {
@@ -2048,6 +2052,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		if (model?.provider === "cursor") {
 			toolRegistry.delete("edit");
+			builtInRegistryToolNames.delete("edit");
 		}
 
 		// `resolve` is hidden but must stay in the registry whenever any code path can invoke it:
@@ -2060,10 +2065,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const needsResolveTool = hasDeferrableTools || planModeAvailable;
 		if (!needsResolveTool) {
 			toolRegistry.delete("resolve");
+			builtInRegistryToolNames.delete("resolve");
 		} else if (!toolRegistry.has("resolve")) {
 			const resolveTool = await logger.time("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
 			if (resolveTool) {
 				toolRegistry.set(resolveTool.name, wrapToolWithMetaNotice(resolveTool));
+				builtInRegistryToolNames.add(resolveTool.name);
 			}
 		}
 
@@ -2080,6 +2087,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				searchTool.name,
 				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
 			);
+			builtInRegistryToolNames.add(searchTool.name);
 		}
 		let mcpDiscoveryEnabled = effectiveDiscoveryMode !== "off"; // back-compat: true when any discovery active
 
@@ -2623,6 +2631,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			skillsSettings: settings.getGroup("skills"),
 			modelRegistry,
 			toolRegistry,
+			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			onPayload,
 			onResponse,
