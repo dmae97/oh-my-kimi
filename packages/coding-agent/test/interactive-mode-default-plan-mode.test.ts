@@ -120,10 +120,9 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		// not the initial active set. Plan-mode entry must force-activate it or
 		// the agent only has `edit`, which fails on a non-existent file.
 		const writeTool = makeTool("write");
-		const created = createHarness(
-			Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }),
-			[writeTool],
-		);
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), [
+			writeTool,
+		]);
 
 		expect(session?.getActiveToolNames()).not.toContain("write");
 

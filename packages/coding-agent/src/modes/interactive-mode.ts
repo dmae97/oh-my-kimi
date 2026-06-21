@@ -1934,9 +1934,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `search_tool_bm25` — re-activate it here whenever the registry built it
 		// (issue #3165). `resolve` is hidden too; the standing handler below
 		// consumes plan-approval calls through it.
-		const planAugmentations = ["resolve", "write"].filter(
-			name => this.session.getToolByName(name) !== undefined,
-		);
+		const planAugmentations = ["resolve", "write"].filter(name => this.session.getToolByName(name) !== undefined);
 		const uniquePlanTools = [...new Set([...previousTools, ...planAugmentations])];
 
 		this.#planModePreviousTools = previousTools;
