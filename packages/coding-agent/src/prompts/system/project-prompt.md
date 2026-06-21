@@ -29,6 +29,7 @@ Before making changes within these directories, you MUST read:
 The context files above are loaded automatically. You NEVER `search`/`find` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files — the relevant ones are already in your context; any others are noise.
 {{/ifAny}}
 
+{{#if includeWorkspaceTree}}
 {{#if workspaceTree.rendered}}
 <workspace-tree>
 Working directory layout (sorted by mtime, recent first; depth ≤ 3):
@@ -37,6 +38,7 @@ Working directory layout (sorted by mtime, recent first; depth ≤ 3):
 (some entries elided to keep the tree short — use `find`/`read` to drill in)
 {{/if}}
 </workspace-tree>
+{{/if}}
 {{/if}}
 
 Today is {{date}}, and the current working directory is '{{cwd}}'.

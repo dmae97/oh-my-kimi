@@ -967,6 +967,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	includeWorkspaceTree: {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Include Workspace Tree",
+			description:
+				"Render the workspace directory tree in the system prompt. WARNING: This can bust prompt caching across sessions when files are modified.",
+		},
+	},
+
 	personality: {
 		type: "enum",
 		values: ["default", "friendly", "pragmatic", "none"] as const,

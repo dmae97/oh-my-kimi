@@ -421,6 +421,8 @@ export interface BuildSystemPromptOptions {
 	model?: string;
 	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
 	personality?: Personality;
+	/** Whether to include the workspace directory tree in the system prompt. Default: false */
+	includeWorkspaceTree?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -461,6 +463,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		memoryRootEnabled = false,
 		model,
 		personality = "default",
+		includeWorkspaceTree = false,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -523,9 +526,17 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const workspaceTreePromise =
 		providedWorkspaceTree !== undefined
 			? Promise.resolve(providedWorkspaceTree)
-			: logger.time("buildWorkspaceTree", () =>
-					buildWorkspaceTree(resolvedCwd, { timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS }),
-				);
+			: includeWorkspaceTree
+				? logger.time("buildWorkspaceTree", () =>
+						buildWorkspaceTree(resolvedCwd, { timeoutMs: SYSTEM_PROMPT_PREP_TIMEOUT_MS }),
+					)
+				: Promise.resolve({
+						rootPath: resolvedCwd,
+						rendered: "",
+						truncated: false,
+						totalLines: 0,
+						agentsMdFiles: [],
+					});
 	const skillsPromise: Promise<Skill[]> =
 		providedSkills !== undefined
 			? Promise.resolve(providedSkills)
@@ -670,6 +681,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		secretsEnabled,
 		hasMemoryRoot: memoryRootEnabled,
 		hasObsidian: hasObsidian(),
+		includeWorkspaceTree,
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

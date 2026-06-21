@@ -121,6 +121,7 @@ describe("SYSTEM.md prompt assembly", () => {
 			rules: [],
 			toolNames: ["read"],
 			tools: READ_TOOL,
+			includeWorkspaceTree: true,
 			workspaceTree: {
 				rootPath: projectDir,
 				rendered: ".\n  - nested/",

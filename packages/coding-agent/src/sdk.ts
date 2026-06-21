@@ -796,6 +796,7 @@ export interface BuildSystemPromptOptions {
 	customPrompt?: string;
 	appendPrompt?: string;
 	inlineToolDescriptors?: boolean;
+	includeWorkspaceTree?: boolean;
 }
 
 /**
@@ -813,6 +814,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		contextFiles: options.contextFiles,
 		appendSystemPrompt: options.appendPrompt,
 		inlineToolDescriptors: options.inlineToolDescriptors,
+		includeWorkspaceTree: options.includeWorkspaceTree,
 		toolNames: options.tools?.map(tool => tool.name),
 		tools: toolMap ? buildSystemPromptToolMetadata(toolMap) : undefined,
 	});
@@ -1120,9 +1122,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// startup does not perform a second recursive filesystem search. Subagents
 	// inherit the parent's resolved values via options.
 	const STARTUP_SCAN_DEADLINE_MS = 5000;
+	const includeWorkspaceTree = settings.get("includeWorkspaceTree") ?? false;
 	const workspaceTreePromise: Promise<WorkspaceTree> = options.workspaceTree
 		? Promise.resolve(options.workspaceTree)
-		: logger.time("buildWorkspaceTree", () => buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }));
+		: includeWorkspaceTree
+			? logger.time("buildWorkspaceTree", () => buildWorkspaceTree(cwd, { timeoutMs: STARTUP_SCAN_DEADLINE_MS }))
+			: Promise.resolve({ rootPath: cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] });
 	workspaceTreePromise.catch(() => {});
 
 	// Independent discoveries that depend only on cwd/agentDir — kicked off in parallel and awaited
@@ -2101,6 +2106,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const eagerTasks = settings.get("task.eager") !== "default";
 		const eagerTasksAlways = settings.get("task.eager") === "always";
 		const intentField = $flag("PI_INTENT_TRACING", settings.get("tools.intentTracing")) ? INTENT_FIELD : undefined;
+		const includeWorkspaceTree = settings.get("includeWorkspaceTree") ?? false;
 		const rebuildSystemPrompt = async (
 			toolNames: string[],
 			tools: Map<string, AgentTool>,
@@ -2194,6 +2200,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				taskBatch: settings.get("task.batch"),
 				secretsEnabled,
 				workspaceTree: workspaceTreePromise,
+				includeWorkspaceTree,
 				memoryRootEnabled: memoryBackend.id === "local",
 				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
