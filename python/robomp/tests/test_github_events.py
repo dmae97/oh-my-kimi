@@ -534,6 +534,10 @@ def test_extract_mention_accepts_prefixed_or_app_bot_login(configured_login: str
     assert extract_mention("@roboomp go ahead", configured_login) == "go ahead"
 
 
+def test_extract_mention_strips_literal_app_suffix_from_body() -> None:
+    assert extract_mention("@roboomp[bot] go ahead", "roboomp[bot]") == "go ahead"
+
+
 def test_extract_mention_returns_none_without_mention() -> None:
     assert extract_mention("hello there", "robomp-bot") is None
     assert extract_mention(None, "robomp-bot") is None

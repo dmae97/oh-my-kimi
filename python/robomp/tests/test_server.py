@@ -1598,8 +1598,16 @@ def test_webhook_maintainer_bypasses_rate_limit(
             )
             assert resp.status_code == 202
             states.append(resp.json()["state"])
+        directive_event = get_database(cfg.sqlite_path).get_event("m-3")
     close_database()
     assert states == ["queued"] * 4, states
+    assert directive_event is not None
+    assert directive_event.payload.get("_robomp_directive") == {
+        "body": "do X",
+        "author": "can1357",
+        "pragmas": [],
+        "authorizes_impl": True,
+    }
 
 
 # -------- handler-level: bootstrap + reopen ----------------------------

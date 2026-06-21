@@ -119,7 +119,7 @@ def test_maintainer_logins_normalize_csv_entries(
     monkeypatch.setenv("ROBOMP_MAINTAINER_LOGINS", " can1357, @ROBOOMP , @Alice[bot] ,, ")
     reset_settings_cache()
     cfg = Settings()  # type: ignore[call-arg]
-    assert cfg.maintainer_logins == frozenset({"can1357", "roboomp", "alice[bot]"})
+    assert cfg.maintainer_logins == frozenset({"can1357", "roboomp", "alice"})
 
 
 @pytest.mark.parametrize(
@@ -128,9 +128,9 @@ def test_maintainer_logins_normalize_csv_entries(
         ("roboomp", "roboomp"),
         (" @roboomp ", "roboomp"),
         (" @ROBOOMP ", "roboomp"),
-        ("roboomp[bot]", "roboomp[bot]"),
-        ("@roboomp[bot]", "roboomp[bot]"),
-        (" @ROBOOMP[BOT] ", "roboomp[bot]"),
+        ("roboomp[bot]", "roboomp"),
+        ("@roboomp[bot]", "roboomp"),
+        (" @ROBOOMP[BOT] ", "roboomp"),
     ],
 )
 def test_maintainer_logins_common_entry_forms(

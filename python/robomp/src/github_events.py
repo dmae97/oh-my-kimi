@@ -89,16 +89,11 @@ def _login_matches_personal_repo_owner(
             raw_type = owner.get("type")
             if isinstance(raw_type, str) and raw_type:
                 owner_type = raw_type
-    if owner_type is not None and owner_type.lower() == "organization":
+    if owner_type is None or owner_type.lower() != "user":
         return False
-    if owner_login:
-        return login.lower() == owner_login.lower()
-    if not isinstance(repo, str):
+    if not owner_login:
         return False
-    owner, sep, _name = repo.partition("/")
-    if not sep or not owner:
-        return False
-    return login.lower() == owner.lower()
+    return login.lower() == owner_login.lower()
 
 
 def _effective_association(
@@ -158,7 +153,7 @@ def extract_mention(body: str | None, bot_login: str) -> str | None:
     if not login:
         return None
     pattern = re.compile(
-        rf"(?<![A-Za-z0-9_-])@{re.escape(login)}(?![A-Za-z0-9_-])",
+        rf"(?<![A-Za-z0-9_-])@{re.escape(login)}(?:\[bot\])?(?![A-Za-z0-9_-])",
         re.IGNORECASE,
     )
     if not pattern.search(body):
