@@ -411,7 +411,7 @@ describe("lsp regressions", () => {
 			let symbolReqId: number | string | undefined;
 			let symbolsSent = false;
 
-			const server = installFakeLsp((message, srv) => {
+			installFakeLsp((message, srv) => {
 				if (message.method === "initialize") {
 					srv.send({
 						jsonrpc: "2.0",
@@ -780,7 +780,7 @@ describe("lsp regressions", () => {
 			const filePath = path.join(tempDir.path(), "symbol.ts");
 			await Bun.write(filePath, "winston.info('x');\n");
 
-			await expect(resolveSymbolColumn(filePath, 1, "nonexistent_symbol")).rejects.toThrow(
+			expect(resolveSymbolColumn(filePath, 1, "nonexistent_symbol")).rejects.toThrow(
 				'Symbol "nonexistent_symbol" not found on line 1',
 			);
 		} finally {
@@ -794,7 +794,7 @@ describe("lsp regressions", () => {
 			const filePath = path.join(tempDir.path(), "symbol.ts");
 			await Bun.write(filePath, "foo();\n");
 
-			await expect(resolveSymbolColumn(filePath, 1, "foo#2")).rejects.toThrow(
+			expect(resolveSymbolColumn(filePath, 1, "foo#2")).rejects.toThrow(
 				'Symbol "foo" occurrence 2 is out of bounds on line 1 (found 1)',
 			);
 		} finally {
@@ -1775,7 +1775,7 @@ describe("lsp regressions", () => {
 				},
 			};
 
-			await expect(applyWorkspaceEdit(workspaceEdit, tempDir.path())).rejects.toThrow(/overlapping LSP edits/);
+			expect(applyWorkspaceEdit(workspaceEdit, tempDir.path())).rejects.toThrow(/overlapping LSP edits/);
 			// The valid file must be untouched: validation runs before any write.
 			expect(fs.readFileSync(okPath, "utf8")).toBe(okContent);
 		} finally {
@@ -1941,7 +1941,7 @@ describe("lsp regressions", () => {
 			projectLoaded: Promise.resolve(),
 			resolveProjectLoaded: () => {},
 		};
-		await expect(lspClient.sendRequest(client, "test/method", {}, undefined, 25)).rejects.toThrow(/after 25ms/);
+		expect(lspClient.sendRequest(client, "test/method", {}, undefined, 25)).rejects.toThrow(/after 25ms/);
 	});
 
 	it("sendRequest uses the signal as the deadline when no explicit timeout is set", async () => {
@@ -1968,7 +1968,7 @@ describe("lsp regressions", () => {
 			resolveProjectLoaded: () => {},
 		};
 		const signal = AbortSignal.timeout(20);
-		await expect(lspClient.sendRequest(client, "test/method", {}, signal)).rejects.toThrow();
+		expect(lspClient.sendRequest(client, "test/method", {}, signal)).rejects.toThrow();
 		// If the per-request 30s timer had fired, the message would say "after 30000ms".
 		// We assert the negative: the rejection came from the signal, not the timer.
 		try {

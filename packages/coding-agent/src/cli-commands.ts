@@ -9,6 +9,7 @@
  * regression that motivated the split.
  */
 import type { CommandEntry } from "@oh-my-pi/pi-utils/cli";
+import { flagConsumesValue } from "./cli/flag-tables";
 
 export const commands: CommandEntry[] = [
 	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
@@ -85,9 +86,28 @@ export function isSubcommand(first: string | undefined): boolean {
 export type ResolvedCliArgv = { argv: string[] } | { error: string };
 
 /**
+ * Index of the first argv token that names a registered subcommand, skipping
+ * leading global option flags (and any value they consume) with the same
+ * contract as the launch parser ({@link flagConsumesValue}). Returns -1 when
+ * scanning hits a non-subcommand positional, an end-of-options `--`, or the end
+ * of argv first.
+ */
+function leadingSubcommandIndex(argv: string[]): number {
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (arg === "--") return -1;
+		if (!arg.startsWith("-")) return isSubcommand(arg) ? index : -1;
+		if (flagConsumesValue(arg, argv[index + 1])) index += 1;
+	}
+	return -1;
+}
+
+/**
  * Decide what the CLI runner should do with raw argv: reject bare reserved
- * management words, pass help/version through untouched, and route everything
- * that is not a known subcommand to `launch`.
+ * management words, pass help/version through untouched, route a recognized
+ * subcommand (even behind leading global flags like `--approval-mode=yolo`) to
+ * that command with the flags preserved, and forward everything else to
+ * `launch` (#2970).
  */
 export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	const first = argv[0];
@@ -96,5 +116,15 @@ export function resolveCliArgv(argv: string[]): ResolvedCliArgv {
 	if (first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "help") {
 		return { argv };
 	}
-	return { argv: isSubcommand(first) ? argv : ["launch", ...argv] };
+	if (isSubcommand(first)) return { argv };
+	// A subcommand can hide behind leading global option flags
+	// (`omp --approval-mode=yolo acp`). `run` dispatches strictly on argv[0], so
+	// hoist the subcommand to the front and keep the leading flags as its own
+	// argv; the command's parser then applies them. Genuine launch prompts (no
+	// trailing subcommand) are untouched.
+	const subIndex = leadingSubcommandIndex(argv);
+	if (subIndex >= 0) {
+		return { argv: [argv[subIndex], ...argv.slice(0, subIndex), ...argv.slice(subIndex + 1)] };
+	}
+	return { argv: ["launch", ...argv] };
 }
