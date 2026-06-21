@@ -104,7 +104,7 @@ import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
+import { formatPhaseDisplayName, phaseRomanNumeral, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { vocalizer } from "../tts/vocalizer";
 import type { EventBus } from "../utils/event-bus";
@@ -1631,7 +1631,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (phases.length === 0) return;
 		const indent = "  ";
 		const hook = theme.tree.hook;
-		const lines = ["", indent + theme.bold(theme.fg("accent", "Todos"))];
+
+		// Header progress so the persistent HUD reads at a glance:
+		// "Todos · 2/7 done · I/III Foundation" (collapsed) or "· 2/7 done" (expanded).
+		const allTasks = phases.flatMap(p => p.tasks);
+		const doneCount = allTasks.filter(t => t.status === "completed").length;
+		const stats = `${doneCount}/${allTasks.length} done`;
+		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
+		const activePhase = phases[activeIdx];
+		let phaseSuffix = "";
+		if (!this.todoExpanded && activePhase) {
+			phaseSuffix =
+				phases.length > 1
+					? ` · ${phaseRomanNumeral(activeIdx + 1)}/${phaseRomanNumeral(phases.length)} ${activePhase.name}`
+					: ` · ${activePhase.name}`;
+		}
+		const header = `${indent}${theme.bold(theme.fg("accent", "Todos"))}${theme.fg("muted", ` · ${stats}${phaseSuffix}`)}`;
+		const lines: string[] = [header];
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
 		// A pending todo "lights up" (accent + running glyph) when an in-flight
@@ -1640,14 +1656,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
 		if (!this.todoExpanded) {
-			const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
-			const activePhase = phases[activeIdx];
 			if (!activePhase) return;
 			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
-
-			lines.push(
-				`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(activePhase.name, activeIdx + 1)}`)}`,
-			);
 			visible.forEach((todo, index) => {
 				const prefix = `${indent}${index === 0 ? hook : " "} `;
 				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
@@ -1655,19 +1665,24 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (hiddenOpenCount > 0) {
 				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
 			}
-			this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
-			return;
+		} else {
+			phases.forEach((phase, phaseIndex) => {
+				lines.push(
+					`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`,
+				);
+				phase.tasks.forEach((todo, index) => {
+					const prefix = `${indent}${index === 0 ? hook : " "} `;
+					lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
+				});
+			});
 		}
 
-		phases.forEach((phase, phaseIndex) => {
-			lines.push(`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`);
-			phase.tasks.forEach((todo, index) => {
-				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
-			});
-		});
-
+		// Dim horizontal rules bracket the panel so the persistent HUD is
+		// visually distinct from chat scrollback above and any in-flight
+		// subagent/status rows below — mirrors `BtwPanel` / `OmfgPanel`.
+		this.todoContainer.addChild(new DynamicBorder(str => theme.fg("dim", str)));
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.todoContainer.addChild(new DynamicBorder(str => theme.fg("dim", str)));
 	}
 
 	/**

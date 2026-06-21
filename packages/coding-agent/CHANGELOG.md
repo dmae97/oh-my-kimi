@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the persistent todo HUD above the editor reading as ambient status text rather than an anchored panel — the small "Todos" block now sits inside dim horizontal rules (matching `BtwPanel` / `OmfgPanel`) and the header inlines progress and the active-phase pointer (`Todos · 2/7 done · I/III Foundation`), so the list stays self-describing without scrolling back to the tool-result block in chat ([#3213](https://github.com/can1357/oh-my-pi/issues/3213)).
+
 ## [16.1.11] - 2026-06-21
 
 ### Added
