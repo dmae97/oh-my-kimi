@@ -1539,20 +1539,6 @@ export function abortReasonText(signal: AbortSignal | undefined): string {
 	return "Request was aborted";
 }
 
-/** True when an abort carried a *deliberate*, human-meaningful reason — a string
- *  reason or a non-`AbortError` `Error` (TTSR rule match, user-interrupt label).
- *  A bare `abort()` (default `AbortError` `DOMException`) is anonymous and returns
- *  false. Used to decide whether a mid-stream tool call survives the abort: a
- *  deliberate interruption is a conscious decision made after the (partial) call
- *  was observed, so the block is retained and paired with a labeled placeholder;
- *  an anonymous abort drops incomplete calls whose args may be unsafe to replay. */
-function isExplicitAbortReason(signal: AbortSignal | undefined): boolean {
-	const reason = signal?.reason;
-	if (typeof reason === "string") return reason.trim().length > 0;
-	if (reason instanceof Error) return reason.name !== "AbortError" && reason.message.trim().length > 0;
-	return false;
-}
-
 function emitAbortedAssistantMessage(
 	partialMessage: AssistantMessage | null,
 	addedPartial: boolean,
@@ -1583,11 +1569,10 @@ function emitAbortedAssistantMessage(
 				errorMessage,
 				timestamp: Date.now(),
 			};
-	// A deliberate, labeled abort (TTSR rule match, user interrupt) keeps every
-	// committed tool-call block so the loop pairs it with a placeholder labeled by
-	// `errorMessage`; an anonymous abort still drops calls that never completed
-	// (no `toolcall_end`), whose partial args are unsafe to replay.
-	const retained = isExplicitAbortReason(requestSignal) ? base : retainCompletedToolCalls(base, completedToolCallIds);
+	// Only tool calls that reached `toolcall_end` survive abort/error replay. A
+	// labeled user interrupt still surfaces through `errorMessage`, but partial
+	// tool arguments are unsafe to keep and can carry incomplete provider IDs.
+	const retained = retainCompletedToolCalls(base, completedToolCallIds);
 	const abortedMessage = snapshotAssistantMessage(retained);
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = abortedMessage;

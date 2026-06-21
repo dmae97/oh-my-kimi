@@ -365,6 +365,8 @@ describe("Duplicate Tool Results Regression", () => {
 	it("deduplicates repeated tool call ids and preserves call/result pairing", () => {
 		const duplicateId = "functions.eval:301";
 		const distinctId = "functions.eval:302";
+		const normalizedDuplicateId = "functions_eval_301";
+		const normalizedDistinctId = "functions_eval_302";
 
 		const messages: Message[] = [
 			makeEvalAssistantMessage(duplicateId, 1),
@@ -380,17 +382,22 @@ describe("Duplicate Tool Results Regression", () => {
 		const assistantToolIds = getAssistantToolIds(transformed);
 		const toolResults = getToolResults(transformed);
 
-		expect(assistantToolIds).toEqual([duplicateId, `${duplicateId}_dup1`, `${duplicateId}_dup2`, distinctId]);
-		expect(toolResults.map(result => result.toolCallId)).toEqual([
-			duplicateId,
-			`${duplicateId}_dup1`,
-			`${duplicateId}_dup2`,
-			distinctId,
+		expect(assistantToolIds).toEqual([
+			normalizedDuplicateId,
+			`${normalizedDuplicateId}_dup1`,
+			`${normalizedDuplicateId}_dup2`,
+			normalizedDistinctId,
 		]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			normalizedDuplicateId,
+			`${normalizedDuplicateId}_dup1`,
+			`${normalizedDuplicateId}_dup2`,
+			normalizedDistinctId,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup1`)?.content).toEqual([
 			{ type: "text", text: "second" },
 		]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup2`)?.content).toEqual([
 			{ type: "text", text: "No result provided" },
 		]);
 	});
@@ -398,6 +405,8 @@ describe("Duplicate Tool Results Regression", () => {
 	it("deduplicates repeated ids without colliding with existing generated-looking ids", () => {
 		const duplicateId = "functions.eval:301";
 		const generatedLookingId = `${duplicateId}_dup1`;
+		const normalizedDuplicateId = "functions_eval_301";
+		const normalizedGeneratedLookingId = `${normalizedDuplicateId}_dup1`;
 		const messages: Message[] = [
 			makeEvalAssistantMessage(duplicateId, 1),
 			makeEvalToolResult(duplicateId, "first", 2),
@@ -411,19 +420,24 @@ describe("Duplicate Tool Results Regression", () => {
 		const assistantToolIds = getAssistantToolIds(transformed);
 		const toolResults = getToolResults(transformed);
 
-		expect(assistantToolIds).toEqual([duplicateId, generatedLookingId, `${duplicateId}_dup2`]);
-		expect(toolResults.map(result => result.toolCallId)).toEqual([
-			duplicateId,
-			generatedLookingId,
-			`${duplicateId}_dup2`,
+		expect(assistantToolIds).toEqual([
+			normalizedDuplicateId,
+			normalizedGeneratedLookingId,
+			`${normalizedDuplicateId}_dup2`,
 		]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			normalizedDuplicateId,
+			normalizedGeneratedLookingId,
+			`${normalizedDuplicateId}_dup2`,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup2`)?.content).toEqual([
 			{ type: "text", text: "second" },
 		]);
 	});
 
 	it("preserves delayed duplicate tool results across message gaps", () => {
 		const duplicateId = "functions.eval:301";
+		const normalizedDuplicateId = "functions_eval_301";
 		const developerMessage: DeveloperMessage = { role: "developer", content: "handoff summary", timestamp: 4 };
 		const messages: Message[] = [
 			makeEvalAssistantMessage(duplicateId, 1),
@@ -436,15 +450,19 @@ describe("Duplicate Tool Results Regression", () => {
 		const transformed = transformMessages(messages, model);
 		const toolResults = getToolResults(transformed);
 
-		expect(getAssistantToolIds(transformed)).toEqual([duplicateId, `${duplicateId}_dup1`]);
-		expect(toolResults.map(result => result.toolCallId)).toEqual([duplicateId, `${duplicateId}_dup1`]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+		expect(getAssistantToolIds(transformed)).toEqual([normalizedDuplicateId, `${normalizedDuplicateId}_dup1`]);
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			normalizedDuplicateId,
+			`${normalizedDuplicateId}_dup1`,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup1`)?.content).toEqual([
 			{ type: "text", text: "second" },
 		]);
 	});
 
 	it("routes the late result to the most recent duplicate call when a new turn re-emits the id across a gap", () => {
 		const duplicateId = "functions.eval:301";
+		const normalizedDuplicateId = "functions_eval_301";
 		const developerMessage: DeveloperMessage = { role: "developer", content: "handoff summary", timestamp: 4 };
 		const messages: Message[] = [
 			makeEvalAssistantMessage(duplicateId, 1),
@@ -458,16 +476,20 @@ describe("Duplicate Tool Results Regression", () => {
 		const transformed = transformMessages(messages, model);
 		const toolResults = getToolResults(transformed);
 
-		expect(getAssistantToolIds(transformed)).toEqual([duplicateId, `${duplicateId}_dup1`, `${duplicateId}_dup2`]);
-		expect(toolResults.map(result => result.toolCallId)).toEqual([
-			duplicateId,
-			`${duplicateId}_dup1`,
-			`${duplicateId}_dup2`,
+		expect(getAssistantToolIds(transformed)).toEqual([
+			normalizedDuplicateId,
+			`${normalizedDuplicateId}_dup1`,
+			`${normalizedDuplicateId}_dup2`,
 		]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup1`)?.content).toEqual([
+		expect(toolResults.map(result => result.toolCallId)).toEqual([
+			normalizedDuplicateId,
+			`${normalizedDuplicateId}_dup1`,
+			`${normalizedDuplicateId}_dup2`,
+		]);
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup1`)?.content).toEqual([
 			{ type: "text", text: "No result provided" },
 		]);
-		expect(toolResults.find(result => result.toolCallId === `${duplicateId}_dup2`)?.content).toEqual([
+		expect(toolResults.find(result => result.toolCallId === `${normalizedDuplicateId}_dup2`)?.content).toEqual([
 			{ type: "text", text: "second" },
 		]);
 	});

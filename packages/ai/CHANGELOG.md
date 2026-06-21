@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed tool call ID normalization for Anthropic-compatible models
 
 ## [16.1.9] - 2026-06-21
 
