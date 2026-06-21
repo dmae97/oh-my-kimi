@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from robomp.tasks import _directive_from_payload
+import pytest
+from robomp.tasks import _attach_thread, _directive_from_payload
+from robomp.worker import DirectiveInfo
 
 
 def test_directive_from_payload_parses_pragmas() -> None:
@@ -65,3 +67,21 @@ def test_directive_from_payload_parses_implementation_authorization() -> None:
 def test_directive_from_payload_returns_none_for_missing_directive() -> None:
     assert _directive_from_payload({}) is None
     assert _directive_from_payload({"_robomp_directive": "not-a-mapping"}) is None
+
+
+async def test_attach_thread_preserves_authorizes_impl(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_fetch_thread(*args, **kwargs):
+        return ()
+
+    monkeypatch.setattr("robomp.tasks._fetch_thread", fake_fetch_thread)
+
+    directive = DirectiveInfo(
+        body="test body",
+        author="test_author",
+        authorizes_impl=True,
+    )
+    hydrated = await _attach_thread(None, directive, "owner/repo", 42, is_pr=False)
+    assert hydrated is not None
+    assert hydrated.body == "test body"
+    assert hydrated.author == "test_author"
+    assert hydrated.authorizes_impl is True
