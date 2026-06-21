@@ -6,6 +6,10 @@
 
 - Fixed the `/model` thinking picker labeling the OpenAI GPT-5.5 top effort as `max` instead of the catalog-declared `xhigh` ([#3194](https://github.com/can1357/oh-my-pi/issues/3194)).
 
+### Fixed
+
+- Fixed session-title generation silently falling back to the online `smol` model (and billing whatever provider held the resolved API key — OpenRouter in the reporter's case) when the user had explicitly configured a **local** `providers.tinyModel`: `generateSessionTitle` raced local against online with a 10s timeout and fired the online request immediately whenever the local worker returned `null` (unknown key, model not downloaded, transformers.js failure). Now an explicit local-model choice is honored end-to-end — on local failure the session is left untitled with a `logger.warn` instead of billing the smol fallback ([#3187](https://github.com/can1357/oh-my-pi/issues/3187))
+
 ## [16.1.10] - 2026-06-21
 
 ### Added
