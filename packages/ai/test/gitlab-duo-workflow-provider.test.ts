@@ -544,6 +544,168 @@ describe("GitLab Duo Workflow namespace resolution", () => {
 	});
 });
 
+describe("GitLab Duo Workflow per-account namespace cache", () => {
+	function makeSocket(): GitLabDuoWorkflowWebSocketLike {
+		return { onopen: null, onmessage: null, onerror: null, onclose: null, send() {}, close() {} };
+	}
+
+	async function driveOneTurn(
+		apiKey: string,
+		baseUrl: string,
+		fetchImpl: FetchImpl,
+		providerSessionState: Map<string, ProviderSessionState>,
+	): Promise<void> {
+		let socket: GitLabDuoWorkflowWebSocketLike | undefined;
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			socket = makeSocket();
+			return socket;
+		};
+		const stream = streamGitLabDuoWorkflow({ ...model, baseUrl } as Model<"gitlab-duo-agent">, context, {
+			apiKey,
+			fetch: fetchImpl,
+			providerSessionState,
+			webSocketFactory,
+		});
+		for (let attempt = 0; attempt < 30 && !socket; attempt++) {
+			await Bun.sleep(0);
+		}
+		socket?.onopen?.(new Event("open"));
+		socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
+		await stream.result();
+	}
+
+	function autoDiscoveryFetch(groupHits: { count: number }, rootId: string): FetchImpl {
+		return async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/api/v4/groups") && url.includes("top_level_only")) {
+				// The account-level namespace discovery listing — this is the call the
+				// per-account cache is meant to avoid repeating.
+				groupHits.count++;
+				return new Response(JSON.stringify([{ id: rootId, full_path: "acct-group" }]), { status: 200 });
+			}
+			if (url.includes("/api/v4/groups")) {
+				// Group project-discovery listing + settings PUT/GET share this prefix
+				// but are not namespace discovery; answer them without counting.
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/api/v4/projects")) {
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/direct_access")) {
+				return new Response(
+					JSON.stringify({
+						duo_workflow_service: { base_url: "https://workflow.example.com", token: "wf-token", headers: {} },
+						gitlab_rails: { token: "rails-token" },
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 200 });
+		};
+	}
+
+	it("discovers the namespace once per account and reuses it on later turns", async () => {
+		// Unique credential + baseUrl so the module-level cache can't collide with
+		// other tests in this file.
+		const apiKey = "acct-reuse-key";
+		const baseUrl = "https://gitlab.cache-reuse.example.com";
+		const groupHits = { count: 0 };
+		const fetchImpl = autoDiscoveryFetch(groupHits, "gid://gitlab/Group/reuse-root");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, providerSessionState);
+		expect(groupHits.count).toBe(1);
+
+		// Second turn (even a brand-new provider session map = new conversation) must
+		// reuse the cached account namespace rather than re-running group discovery.
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
+		expect(groupHits.count).toBe(1);
+	});
+
+	it("re-discovers once when the cached namespace later fails", async () => {
+		const apiKey = "acct-invalidate-key";
+		const baseUrl = "https://gitlab.cache-invalidate.example.com";
+		const groupHits = { count: 0 };
+		let failNamespaceOnce = false;
+		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/api/v4/groups") && url.includes("top_level_only")) {
+				groupHits.count++;
+				// First discovery returns a root that will be poisoned on the next turn;
+				// the re-discovery returns a fresh working root.
+				const rootId = groupHits.count === 1 ? "gid://gitlab/Group/stale-root" : "gid://gitlab/Group/fresh-root";
+				return new Response(JSON.stringify([{ id: rootId, full_path: "acct-group" }]), { status: 200 });
+			}
+			if (url.includes("/api/v4/groups")) {
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/direct_access")) {
+				// On the second turn, fail direct_access for the stale cached root to
+				// trigger cache invalidation + one re-discovery.
+				if (failNamespaceOnce) {
+					failNamespaceOnce = false;
+					return new Response(JSON.stringify({ message: "namespace not found" }), { status: 404 });
+				}
+				return new Response(
+					JSON.stringify({
+						duo_workflow_service: { base_url: "https://workflow.example.com", token: "wf-token", headers: {} },
+						gitlab_rails: { token: "rails-token" },
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/projects")) {
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 200 });
+		};
+
+		// Turn 1: discover + cache.
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
+		expect(groupHits.count).toBe(1);
+
+		// Turn 2: cached root is used first, its direct_access fails, so the provider
+		// invalidates the cache and re-discovers exactly once more.
+		failNamespaceOnce = true;
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
+		expect(groupHits.count).toBe(2);
+	});
+});
+
 describe("GitLab Duo Workflow WebSocket state machine", () => {
 	it("opens WebSocket with direct_access GitLab Rails token", async () => {
 		let capturedUrl = "";

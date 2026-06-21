@@ -708,6 +708,52 @@ function getGitLabDuoWorkflowProviderSessionState(
 	return created;
 }
 
+// Per-account namespace discovery cache. The namespace is a function of the GitLab
+// credential (account root namespace), not of the conversation, cwd, or what the
+// agent is doing — the inline ambient flow never exposes namespace to the model.
+// So discover it once per account and reuse it across sessions/turns as the first
+// choice; only re-discover when a cached namespace later proves invalid. Keyed by a
+// non-reversible fingerprint of the credential + baseUrl (never the raw token).
+const gitLabDuoWorkflowNamespaceCache = new Map<string, GitLabDuoWorkflowNamespaceSelection>();
+
+function gitLabDuoWorkflowAccountKey(apiKey: string, baseUrl: string): string {
+	return `${Bun.hash(apiKey).toString(36)}\u0000${baseUrl}`;
+}
+
+function getGitLabDuoWorkflowCachedNamespace(
+	apiKey: string,
+	baseUrl: string,
+): GitLabDuoWorkflowNamespaceSelection | undefined {
+	return gitLabDuoWorkflowNamespaceCache.get(gitLabDuoWorkflowAccountKey(apiKey, baseUrl));
+}
+
+function setGitLabDuoWorkflowCachedNamespace(
+	apiKey: string,
+	baseUrl: string,
+	selection: GitLabDuoWorkflowNamespaceSelection,
+): void {
+	gitLabDuoWorkflowNamespaceCache.set(gitLabDuoWorkflowAccountKey(apiKey, baseUrl), selection);
+}
+
+function clearGitLabDuoWorkflowCachedNamespace(apiKey: string, baseUrl: string): void {
+	gitLabDuoWorkflowNamespaceCache.delete(gitLabDuoWorkflowAccountKey(apiKey, baseUrl));
+}
+
+// True when the user pinned a namespace/project explicitly (option or env). Explicit
+// configuration is authoritative and cheap to resolve, so it bypasses the account
+// cache entirely (neither read nor written).
+function hasGitLabDuoWorkflowExplicitNamespace(options: GitLabDuoWorkflowOptions): boolean {
+	return Boolean(
+		nonEmptyString(options.rootNamespaceId) ??
+			nonEmptyString(options.namespaceId) ??
+			nonEmptyString(Bun.env.GITLAB_DUO_NAMESPACE_ID) ??
+			nonEmptyString(options.projectId) ??
+			nonEmptyString(options.projectPath) ??
+			nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_ID) ??
+			nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_PATH),
+	);
+}
+
 export function gitLabDuoWorkflowErrorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -828,88 +874,168 @@ async function runGitLabDuoWorkflow(
 		if (providerSessionState) providerSessionState.active = undefined;
 		await stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, pendingSession.workflowId);
 	}
-	const namespaceSelection = await resolveGitLabDuoWorkflowNamespaceSelection(
-		model,
-		options,
-		apiKey,
-		baseUrl,
-		fetchImpl,
-	);
-	const rootNamespaceId = namespaceSelection.rootNamespaceId;
-	const restNamespaceId = toGitLabRestNamespaceId(rootNamespaceId);
-	const createNamespaceId = namespaceSelection.namespacePath ?? restNamespaceId;
-	traceGitLabDuoWorkflow("run.start", {
-		baseUrl,
-		model: model.id,
-		rootNamespaceId,
-		restNamespaceId,
-		toolCount: context.tools?.length ?? 0,
-	});
 	const workflowDefinition = resolveGitLabDuoWorkflowDefinition(options.workflowDefinition);
-	// Once per session, make sure the namespace has the Duo agent-platform + MCP + beta
-	// flags on. The inline ambient flow needs them; a fresh group ships with them off.
-	// Best-effort (PUT needs maintainer) and idempotent, so it never blocks the run.
-	if (
-		providerSessionState &&
-		!providerSessionState.settingsEnsured &&
-		isGitLabDuoWorkflowInlineFlow(workflowDefinition)
-	) {
-		providerSessionState.settingsEnsured = true;
-		await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId);
-	}
+	const explicitNamespace = hasGitLabDuoWorkflowExplicitNamespace(options);
 	const configuredProjectPath = nonEmptyString(options.projectPath) ?? nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_PATH);
 	const configuredProjectId = nonEmptyString(options.projectId) ?? nonEmptyString(Bun.env.GITLAB_DUO_PROJECT_ID);
-	// The inline `ambient` flow fails server-side without a project, and OMP has
-	// no project of its own, so auto-discover one under the resolved namespace
-	// when nothing is configured. The built-in `chat` flow runs namespace-only.
-	const discoveredProject =
-		!configuredProjectPath && !configuredProjectId && isGitLabDuoWorkflowInlineFlow(workflowDefinition)
-			? await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
-			: undefined;
-	if (discoveredProject) {
-		traceGitLabDuoWorkflow("project.discover", { projectId: discoveredProject.id, hasPath: true });
-	}
-	const projectPath = configuredProjectPath ?? discoveredProject?.path;
-	const projectId = configuredProjectId ?? discoveredProject?.id;
-	const restProjectId = configuredProjectPath ?? configuredProjectId ?? discoveredProject?.path;
-	const webSocketProjectId =
-		projectId ??
-		(projectPath
-			? await resolveGitLabDuoWorkflowNumericProjectId(fetchImpl, baseUrl, apiKey, projectPath)
-			: undefined);
 	const goal = extractLatestUserPrompt(context.messages);
-	const workflowConnection: GitLabDuoWorkflowDirectAccessConnection = options.workflowToken
-		? { token: options.workflowToken, headers: {}, serviceEndpoint: false }
-		: await requestGitLabDuoWorkflowDirectAccess(
+
+	// Resolve the namespace and everything scoped to it (settings enable, project
+	// auto-discovery, direct_access, workflow create). With auto-discovery the
+	// namespace is cached per account and reused as the first choice; only if a
+	// cached namespace turns out stale (the dependent calls fail) do we invalidate
+	// it and re-discover once. Explicit namespace/project config bypasses the cache.
+	const setupForNamespace = async (
+		namespaceSelection: GitLabDuoWorkflowNamespaceSelection,
+	): Promise<{
+		rootNamespaceId: string;
+		restNamespaceId: string;
+		createNamespaceId: string;
+		restProjectId: string | undefined;
+		startPayload: GitLabDuoWorkflowStartRequest;
+		webSocketProjectId: string | undefined;
+		workflowConnection: GitLabDuoWorkflowDirectAccessConnection;
+		workflowId: string;
+		selectedModelIdentifier: string;
+	}> => {
+		const rootNamespaceId = namespaceSelection.rootNamespaceId;
+		const restNamespaceId = toGitLabRestNamespaceId(rootNamespaceId);
+		const createNamespaceId = namespaceSelection.namespacePath ?? restNamespaceId;
+		traceGitLabDuoWorkflow("run.start", {
+			baseUrl,
+			model: model.id,
+			rootNamespaceId,
+			restNamespaceId,
+			namespaceSource: namespaceSelection.source,
+			toolCount: context.tools?.length ?? 0,
+		});
+		// Once per session, make sure the namespace has the Duo agent-platform + MCP +
+		// beta flags on. The inline ambient flow needs them; a fresh group ships with
+		// them off. Best-effort (PUT needs maintainer) and idempotent, never blocks.
+		if (
+			providerSessionState &&
+			!providerSessionState.settingsEnsured &&
+			isGitLabDuoWorkflowInlineFlow(workflowDefinition)
+		) {
+			providerSessionState.settingsEnsured = true;
+			await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId);
+		}
+		// The inline `ambient` flow fails server-side without a project, and OMP has
+		// no project of its own, so auto-discover one under the resolved namespace
+		// when nothing is configured. The built-in `chat` flow runs namespace-only.
+		const discoveredProject =
+			!configuredProjectPath && !configuredProjectId && isGitLabDuoWorkflowInlineFlow(workflowDefinition)
+				? await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
+				: undefined;
+		if (discoveredProject) {
+			traceGitLabDuoWorkflow("project.discover", { projectId: discoveredProject.id, hasPath: true });
+		}
+		const projectPath = configuredProjectPath ?? discoveredProject?.path;
+		const projectId = configuredProjectId ?? discoveredProject?.id;
+		const restProjectId = configuredProjectPath ?? configuredProjectId ?? discoveredProject?.path;
+		const webSocketProjectId =
+			projectId ??
+			(projectPath
+				? await resolveGitLabDuoWorkflowNumericProjectId(fetchImpl, baseUrl, apiKey, projectPath)
+				: undefined);
+		const workflowConnection: GitLabDuoWorkflowDirectAccessConnection = options.workflowToken
+			? { token: options.workflowToken, headers: {}, serviceEndpoint: false }
+			: await requestGitLabDuoWorkflowDirectAccess(
+					fetchImpl,
+					baseUrl,
+					apiKey,
+					rootNamespaceId,
+					restProjectId,
+					workflowDefinition,
+				);
+		const workflowId =
+			options.workflowId ??
+			(await createGitLabDuoWorkflow(
 				fetchImpl,
 				baseUrl,
 				apiKey,
-				rootNamespaceId,
+				createNamespaceId,
+				goal,
 				restProjectId,
 				workflowDefinition,
-			);
-	let workflowId =
-		options.workflowId ??
-		(await createGitLabDuoWorkflow(
-			fetchImpl,
-			baseUrl,
-			apiKey,
+				options.signal,
+			));
+		const availableModels = await fetchGitLabDuoWorkflowAvailableModels(fetchImpl, baseUrl, apiKey, rootNamespaceId);
+		const selectedModelIdentifier = selectGitLabDuoWorkflowModelRef(model.id, availableModels);
+		const startPayload = buildGitLabDuoWorkflowStartRequest(
+			workflowId,
+			model,
+			context,
+			context.tools,
+			availableModels,
+			{
+				projectId: webSocketProjectId,
+				projectPath,
+				namespaceId: restNamespaceId,
+				rootNamespaceId: restNamespaceId,
+				workflowDefinition,
+				inlineFlow: isGitLabDuoWorkflowInlineFlow(workflowDefinition),
+			},
+		);
+		return {
+			rootNamespaceId,
+			restNamespaceId,
 			createNamespaceId,
-			goal,
 			restProjectId,
-			workflowDefinition,
-			options.signal,
-		));
-	const availableModels = await fetchGitLabDuoWorkflowAvailableModels(fetchImpl, baseUrl, apiKey, rootNamespaceId);
-	const selectedModelIdentifier = selectGitLabDuoWorkflowModelRef(model.id, availableModels);
-	let startPayload = buildGitLabDuoWorkflowStartRequest(workflowId, model, context, context.tools, availableModels, {
-		projectId: webSocketProjectId,
-		projectPath,
-		namespaceId: restNamespaceId,
-		rootNamespaceId: restNamespaceId,
-		workflowDefinition,
-		inlineFlow: isGitLabDuoWorkflowInlineFlow(workflowDefinition),
-	});
+			startPayload,
+			webSocketProjectId,
+			workflowConnection,
+			workflowId,
+			selectedModelIdentifier,
+		};
+	};
+
+	const cachedNamespace = explicitNamespace ? undefined : getGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl);
+	let setup: Awaited<ReturnType<typeof setupForNamespace>>;
+	if (cachedNamespace) {
+		try {
+			setup = await setupForNamespace(cachedNamespace);
+		} catch (cachedError) {
+			// The cached account namespace no longer works (revoked access, deleted
+			// group, membership change). Drop it and re-discover once from scratch.
+			traceGitLabDuoWorkflow("namespace.cache_invalidate", {
+				rootNamespaceId: cachedNamespace.rootNamespaceId,
+				error: gitLabDuoWorkflowErrorText(cachedError),
+			});
+			clearGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl);
+			const rediscovered = await resolveGitLabDuoWorkflowNamespaceSelection(
+				model,
+				options,
+				apiKey,
+				baseUrl,
+				fetchImpl,
+			);
+			setup = await setupForNamespace(rediscovered);
+			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, rediscovered);
+		}
+	} else {
+		const namespaceSelection = await resolveGitLabDuoWorkflowNamespaceSelection(
+			model,
+			options,
+			apiKey,
+			baseUrl,
+			fetchImpl,
+		);
+		setup = await setupForNamespace(namespaceSelection);
+		// Cache the freshly discovered namespace per account so the next session/turn
+		// reuses it instead of re-discovering. Explicit config is never cached.
+		if (!explicitNamespace) {
+			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, namespaceSelection);
+		}
+	}
+	const restNamespaceId = setup.restNamespaceId;
+	const createNamespaceId = setup.createNamespaceId;
+	const restProjectId = setup.restProjectId;
+	const webSocketProjectId = setup.webSocketProjectId;
+	const workflowConnection = setup.workflowConnection;
+	const selectedModelIdentifier = setup.selectedModelIdentifier;
+	let workflowId = setup.workflowId;
+	let startPayload = setup.startPayload;
 	let lastSocketResult: GitLabDuoWorkflowSocketResult = "closed";
 	let timeoutReconnected = false;
 	let stepLimitRestarts = 0;
