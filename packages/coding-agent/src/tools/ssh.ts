@@ -281,6 +281,7 @@ export const sshToolRenderer = {
 		result: {
 			content: Array<{ type: string; text?: string }>;
 			details?: SSHToolDetails;
+			isError?: boolean;
 		},
 		options: RenderResultOptions & { renderContext?: SshRenderContext },
 		uiTheme: Theme,
@@ -289,8 +290,14 @@ export const sshToolRenderer = {
 		const details = result.details;
 		const host = args?.host || "…";
 		const command = args?.command ?? "";
+		const isError = result.isError === true;
+		const isPartial = options.isPartial === true;
 		const header = renderStatusLine(
-			{ iconOverride: uiTheme.styledSymbol("tool.ssh", "accent"), title: "SSH", description: `[${host}]` },
+			isPartial
+				? { icon: "pending", title: "SSH", description: `[${host}]` }
+				: isError
+					? { icon: "error", title: "SSH", description: `[${host}]` }
+					: { iconOverride: uiTheme.styledSymbol("tool.ssh", "accent"), title: "SSH", description: `[${host}]` },
 			uiTheme,
 		);
 		const cmdLines = formatSshCommandLines(command, uiTheme);
@@ -342,7 +349,7 @@ export const sshToolRenderer = {
 				return outputBlock.render(
 					{
 						header,
-						state: "success",
+						state: isPartial ? "pending" : isError ? "error" : "success",
 						sections: [
 							{
 								// Viewport-sized tail window in every state — streaming and final

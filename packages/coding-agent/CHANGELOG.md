@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed partial SSH result rendering switching to the final SSH glyph before the tool settled, which could leave a stale pending SSH header above the final header in terminal scrollback ([#3177](https://github.com/can1357/oh-my-pi/issues/3177))
+
 ## [16.1.10] - 2026-06-21
 
 ### Added
