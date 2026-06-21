@@ -296,8 +296,14 @@ export class EventController {
 			this.#resetReadGroup();
 			this.#resolveDisplaceablePoll();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
-			const wasLocallySubmitted = this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic;
-			if (!wasOptimistic) {
+			const replacesOptimistic = this.ctx.optimisticUserMessageSignature !== undefined && !wasOptimistic;
+			const wasLocallySubmitted =
+				this.ctx.locallySubmittedUserSignatures.delete(signature) || wasOptimistic || replacesOptimistic;
+			if (wasOptimistic) {
+				this.ctx.clearOptimisticUserMessage();
+			} else if (replacesOptimistic) {
+				this.ctx.replaceOptimisticUserMessage(event.message);
+			} else {
 				// Append synchronously: #emit dispatches to this listener fire-and-forget
 				// (see AgentSession.#emit), so any await between the user message_start and
 				// addMessageToChat lets later events (assistant message_start, tool execution
@@ -305,9 +311,6 @@ export class EventController {
 				// live-region block boundaries. addMessageToChat materializes clickable image
 				// links via the synchronous putBlobSync fallback, so no await is needed here.
 				this.ctx.addMessageToChat(event.message);
-			}
-			if (wasOptimistic) {
-				this.ctx.optimisticUserMessageSignature = undefined;
 			}
 
 			// Clear the editor only when the submission did not originate from a

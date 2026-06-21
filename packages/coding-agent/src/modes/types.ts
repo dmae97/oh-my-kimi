@@ -258,6 +258,13 @@ export interface InteractiveModeContext {
 	 * delivery error should leave the signature set untouched.
 	 */
 	withLocalSubmission<T>(text: string, fn: () => Promise<T>, options?: { imageCount?: number }): Promise<T>;
+	/** Clears bookkeeping for an optimistic local user message once the matching session event arrives. */
+	clearOptimisticUserMessage(): void;
+	/** Replaces the raw optimistic user render with the canonical message emitted by the session. */
+	replaceOptimisticUserMessage(
+		message: AgentMessage,
+		options?: { imageLinks?: readonly (string | undefined)[] },
+	): void;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(
 		message: AgentMessage,
