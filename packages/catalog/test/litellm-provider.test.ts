@@ -39,6 +39,29 @@ function makeFetchMock(expectedModelUrl: string): FetchImpl {
 	}) as FetchImpl;
 }
 
+function makeCollisionFetchMock(): FetchImpl {
+	return vi.fn(async (input: string | URL | Request) => {
+		const url = inputUrl(input);
+		if (url === MODELS_DEV_URL) {
+			return Response.json({
+				"ollama-cloud": {
+					models: {
+						"deepseek-v4-flash": {
+							name: "DeepSeek V4 Flash",
+							tool_call: true,
+							limit: { context: 64_000, output: 8_000 },
+							cost: { input: 1, output: 2 },
+						},
+					},
+				},
+			});
+		}
+
+		expect(url).toBe("http://primary:4000/v1/models");
+		return Response.json({ data: [{ id: "deepseek-v4-flash" }] });
+	}) as FetchImpl;
+}
+
 afterEach(() => {
 	restoreLiteLLMBaseUrl();
 	vi.restoreAllMocks();
@@ -82,5 +105,31 @@ describe("LiteLLM provider discovery", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		expect(models).toHaveLength(1);
 		expect(models?.[0]?.baseUrl).toBe("http://litellm-config.example:4200/v1");
+	});
+
+	test("keeps LiteLLM transport when models.dev has a colliding provider model id", async () => {
+		const fetchMock = makeCollisionFetchMock();
+
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-litellm-test",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+		const models = await options.fetchDynamicModels?.();
+
+		expect(models).toHaveLength(1);
+		expect(models?.[0]).toMatchObject({
+			id: "deepseek-v4-flash",
+			name: "DeepSeek V4 Flash",
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			contextWindow: 64_000,
+			maxTokens: 8_000,
+			cost: {
+				input: 1,
+				output: 2,
+			},
+		});
 	});
 });

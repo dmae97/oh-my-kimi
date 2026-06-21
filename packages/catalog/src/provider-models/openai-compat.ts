@@ -197,6 +197,8 @@ function mapWithBundledReference<TApi extends Api>(
 		...reference,
 		id: defaults.id,
 		name,
+		api: defaults.api,
+		provider: defaults.provider,
 		baseUrl: defaults.baseUrl,
 		contextWindow: toPositiveNumber(entry.context_length, reference.contextWindow),
 		maxTokens: toPositiveNumber(entry.max_completion_tokens, reference.maxTokens),
