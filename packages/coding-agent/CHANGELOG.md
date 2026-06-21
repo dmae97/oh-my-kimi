@@ -6,6 +6,10 @@
 
 - Fixed `omp list` and `omp remove` silently starting an interactive agent session (forwarding the bare verb to the model as a prompt) instead of surfacing the real `omp plugin list` / `omp plugin uninstall <name>` commands ([#2935](https://github.com/can1357/oh-my-pi/issues/2935))
 
+### Fixed
+
+- Fixed lazy-initialized LSP servers (basedpyright/pyright, and likely gopls/rust-analyzer) hanging on the first request: the message reader matched incoming messages against pending client requests by id before checking for a `method`, so a server-originated `workspace/configuration` pull whose id collided with an in-flight request was swallowed as a bogus response, leaving the pull unanswered and the server wedged. The reader now routes any message carrying a `method` as a server request before id-matching ([#3001](https://github.com/can1357/oh-my-pi/issues/3001))
+
 ## [16.1.8] - 2026-06-20
 
 ### Added

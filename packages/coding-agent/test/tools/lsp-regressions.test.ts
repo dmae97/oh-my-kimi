@@ -381,6 +381,110 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("drains every workspace/configuration pull during lazy cold start when a pull id collides with an in-flight request", async () => {
+		// #3001: basedpyright/pyright pull `workspace/configuration` repeatedly
+		// during cold start and gate document analysis on every pull being
+		// answered. Their pull ids live in the server's own id space and routinely
+		// coincide with the client's in-flight request ids. The reader must route a
+		// message by its `method` (a server-initiated request) BEFORE matching it
+		// against pending client requests by id -- otherwise a colliding config
+		// pull is swallowed as a bogus response, never answered, and the server
+		// wedges (the lazy `lsp symbols` call returns nothing and hangs). The
+		// eager warmup/reload path escapes this only because it issues no
+		// concurrent semantic request while the cold-start pulls drain.
+		const tempDir = TempDir.createSync("@omp-lsp-lazy-config-drain-");
+		try {
+			const symbols = [
+				{
+					name: "main",
+					kind: 12,
+					location: {
+						uri: fileToUri(path.join(tempDir.path(), "main.py")),
+						range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+					},
+				},
+			];
+
+			// Pulls the server still awaits an answer for. The gated documentSymbol
+			// response is withheld until this set drains, mirroring pyright.
+			const unansweredConfigPulls = new Set<number | string>();
+			let symbolReqId: number | string | undefined;
+			let symbolsSent = false;
+
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: { documentSymbolProvider: true } },
+					});
+					return;
+				}
+				if (message.method === "textDocument/documentSymbol") {
+					symbolReqId = message.id;
+					// Cold-start config storm issued while the request is in flight.
+					// One pull uses a fresh server id; the other reuses the request's
+					// own id (server + client id counters collide) and pulls the bare
+					// `<server>` section the report flags as dropped.
+					const pulls: Array<{ id: number | string; items: Array<{ section?: string }> }> = [
+						{ id: 8200, items: [{ section: "basedpyright" }] },
+						{ id: message.id as number, items: [{}] },
+					];
+					for (const pull of pulls) {
+						unansweredConfigPulls.add(pull.id);
+						srv.send({
+							jsonrpc: "2.0",
+							id: pull.id,
+							method: "workspace/configuration",
+							params: { items: pull.items },
+						});
+					}
+					return;
+				}
+				// Client -> server config responses: an id + result, no method.
+				if (message.method === undefined && message.id !== undefined && unansweredConfigPulls.has(message.id)) {
+					unansweredConfigPulls.delete(message.id);
+					if (unansweredConfigPulls.size === 0 && !symbolsSent && symbolReqId !== undefined) {
+						symbolsSent = true;
+						srv.send({ jsonrpc: "2.0", id: symbolReqId, result: symbols });
+					}
+					return;
+				}
+				if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["py"],
+				rootMarkers: [],
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/documentSymbol",
+				{ textDocument: { uri: fileToUri(path.join(tempDir.path(), "main.py")) } },
+				undefined,
+				2_000,
+			);
+
+			// The gated request resolves with the server's real symbols only once the
+			// client has answered every config pull -- including the one whose id
+			// collided with this request. On baseline the colliding pull is
+			// mis-routed as the documentSymbol response (resolving it with
+			// `undefined`), so the pull is never answered and the server wedges.
+			expect(result).toEqual(symbols);
+			expect(unansweredConfigPulls.size).toBe(0);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("answers defined server→client requests with spec no-op results", async () => {
 		// Same failure class as #3029: a defined server→client request
 		// (window/showMessage{Request}, window/showDocument, workspace/*/refresh)

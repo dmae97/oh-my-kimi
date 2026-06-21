@@ -327,9 +327,45 @@ async function startMessageReader(client: LspClient): Promise<void> {
 				try {
 					const message: LspJsonRpcResponse | LspJsonRpcNotification = JSON.parse(messageText);
 
-					// Route message
-					if ("id" in message && message.id !== undefined) {
-						// Response to a request
+					// Route message. A JSON-RPC message carrying a `method` is always
+					// server-originated: a request when it also has an `id`, a
+					// notification otherwise. A message with only an `id` is a response
+					// to one of our requests. Disambiguate on `method` FIRST: a
+					// server's request ids live in its own id space and routinely
+					// collide with our in-flight client request ids (e.g. a
+					// basedpyright `workspace/configuration` pull arriving while a
+					// `documentSymbol` request with the same id is pending). Matching
+					// pending requests first would swallow that pull as a bogus
+					// response -- dropping the config answer the server blocks on and
+					// resolving our request with `undefined`, wedging the lazy
+					// cold-start handshake (#3001).
+					if ("method" in message) {
+						if ("id" in message && message.id !== undefined) {
+							// Server-initiated request: must be answered.
+							await handleServerRequest(client, message as LspJsonRpcRequest);
+						} else {
+							// Server notification
+							if (message.method === "textDocument/publishDiagnostics" && message.params) {
+								const params = message.params as PublishDiagnosticsParams;
+								client.diagnostics.set(params.uri, {
+									diagnostics: params.diagnostics,
+									version: params.version ?? null,
+								});
+								client.diagnosticsVersion += 1;
+							} else if (message.method === "$/progress" && message.params) {
+								const params = message.params as { token: string | number; value?: { kind?: string } };
+								if (params.value?.kind === "begin") {
+									client.activeProgressTokens.add(params.token);
+								} else if (params.value?.kind === "end") {
+									client.activeProgressTokens.delete(params.token);
+									if (client.activeProgressTokens.size === 0) {
+										client.resolveProjectLoaded();
+									}
+								}
+							}
+						}
+					} else if ("id" in message && message.id !== undefined) {
+						// Response to one of our requests.
 						const pending = client.pendingRequests.get(message.id);
 						if (pending) {
 							client.pendingRequests.delete(message.id);
@@ -337,28 +373,6 @@ async function startMessageReader(client: LspClient): Promise<void> {
 								pending.reject(new Error(`LSP error: ${message.error.message}`));
 							} else {
 								pending.resolve(message.result);
-							}
-						} else if ("method" in message) {
-							await handleServerRequest(client, message as LspJsonRpcRequest);
-						}
-					} else if ("method" in message) {
-						// Server notification
-						if (message.method === "textDocument/publishDiagnostics" && message.params) {
-							const params = message.params as PublishDiagnosticsParams;
-							client.diagnostics.set(params.uri, {
-								diagnostics: params.diagnostics,
-								version: params.version ?? null,
-							});
-							client.diagnosticsVersion += 1;
-						} else if (message.method === "$/progress" && message.params) {
-							const params = message.params as { token: string | number; value?: { kind?: string } };
-							if (params.value?.kind === "begin") {
-								client.activeProgressTokens.add(params.token);
-							} else if (params.value?.kind === "end") {
-								client.activeProgressTokens.delete(params.token);
-								if (client.activeProgressTokens.size === 0) {
-									client.resolveProjectLoaded();
-								}
 							}
 						}
 					}
