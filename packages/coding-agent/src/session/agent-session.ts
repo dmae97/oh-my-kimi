@@ -2769,9 +2769,31 @@ export class AgentSession {
 			this.#lastAssistantMessage = undefined;
 			if (!msg) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				logger.debug("agent_end maintenance routing", {
+					reason: "no-assistant-message",
+					goalModeEnabled: this.#goalModeState?.enabled === true,
+					goalStatus: this.#goalModeState?.goal.status,
+				});
 				await emitAgentEndNotification();
 				return;
 			}
+
+			const maintenanceRoute = (route: string, extra?: Record<string, unknown>) => {
+				logger.debug("agent_end maintenance routing", {
+					route,
+					stopReason: msg.stopReason,
+					provider: msg.provider,
+					model: msg.model,
+					contentBlocks: msg.content.length,
+					hasToolCalls: msg.content.some(content => content.type === "toolCall"),
+					hasText: msg.content.some(content => content.type === "text"),
+					goalModeEnabled: this.#goalModeState?.enabled === true,
+					goalStatus: this.#goalModeState?.goal.status,
+					successfulYield: this.#assistantEndedWithSuccessfulYield(msg),
+					...extra,
+				});
+			};
+			maintenanceRoute("entered");
 
 			// Invalidate GitHub Copilot credentials on auth failure so stale tokens
 			// aren't reused on the next request
@@ -2786,6 +2808,7 @@ export class AgentSession {
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
 				this.#lastSuccessfulYieldToolCallId = undefined;
+				maintenanceRoute("skip-post-turn-maintenance");
 				await emitAgentEndNotification();
 				return;
 			}
@@ -2794,9 +2817,12 @@ export class AgentSession {
 			if (this.#assistantEndedWithSuccessfulYield(msg)) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
 				if (activeGoal) {
+					maintenanceRoute("successful-yield-active-goal-checkCompaction");
 					const compactionTask = this.#checkCompaction(msg);
 					this.#trackPostPromptTask(compactionTask);
 					await compactionTask;
+				} else {
+					maintenanceRoute("successful-yield-no-active-goal");
 				}
 				await emitAgentEndNotification();
 				return;
@@ -2811,6 +2837,7 @@ export class AgentSession {
 			// schedules its own retry, so a real empty stop never needs the
 			// active-goal threshold pre-empt below.
 			if (await this.#handleEmptyAssistantStop(msg)) {
+				maintenanceRoute("empty-stop-handled");
 				await emitAgentEndNotification();
 				return;
 			}
@@ -2818,17 +2845,23 @@ export class AgentSession {
 			let compactionResult = COMPACTION_CHECK_NONE;
 			let checkedCompaction = false;
 			if (activeGoal) {
+				maintenanceRoute("active-goal-pre-empt-checkCompaction");
 				const compactionTask = this.#checkCompaction(msg);
 				this.#trackPostPromptTask(compactionTask);
 				compactionResult = await compactionTask;
 				checkedCompaction = true;
 				if (compactionResult.deferredHandoff || compactionResult.continuationScheduled) {
+					maintenanceRoute("active-goal-pre-empt-continuation-scheduled", {
+						deferredHandoff: compactionResult.deferredHandoff,
+						continuationScheduled: compactionResult.continuationScheduled,
+					});
 					await emitAgentEndNotification();
 					return;
 				}
 			}
 
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
+				maintenanceRoute("unexpected-stop-handled");
 				await emitAgentEndNotification();
 				return;
 			}
@@ -2869,6 +2902,7 @@ export class AgentSession {
 			this.#resolveRetry();
 
 			if (!checkedCompaction) {
+				maintenanceRoute("bottom-checkCompaction");
 				const compactionTask = this.#checkCompaction(msg);
 				this.#trackPostPromptTask(compactionTask);
 				compactionResult = await compactionTask;
