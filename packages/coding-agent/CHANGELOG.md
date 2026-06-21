@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `/model` thinking picker labeling the OpenAI GPT-5.5 top effort as `max` instead of the catalog-declared `xhigh` ([#3194](https://github.com/can1357/oh-my-pi/issues/3194)).
+
 ## [16.1.10] - 2026-06-21
 
 ### Added
