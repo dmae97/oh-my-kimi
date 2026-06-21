@@ -42,7 +42,6 @@
 		"@oh-my-pi/pi-utils": "catalog:",
 		"@oh-my-pi/pi-wire": "catalog:",
 		"arktype": "catalog:",
-		"partial-json": "catalog:",
 		"zod": "catalog:"
 	},
 	"devDependencies": {

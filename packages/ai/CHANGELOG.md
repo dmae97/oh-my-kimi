@@ -1,9 +1,21 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Improved JSON robustness by replacing external dependency with a custom, high-performance parser
+- Strengthened streaming JSON parsing to prevent non-finite numbers from surfacing as `undefined/NaN`
+- Configured JSON parser to reject JS-specific `NaN` and `Infinity` values for tool arguments
+- Replaced the JSON repair/parse helpers (`parseJsonWithRepair`, `parseStreamingJson`) with a single from-scratch tolerant parser (`RelaxedJson`) that accepts single-quoted strings, unquoted object keys, trailing/stray commas, `//` and `/* */` comments, Python `True`/`False`/`None`, raw control characters, invalid escapes, and unescaped apostrophes (`'it's'`). Final parsing still throws on truncated/garbage input (so a malformed tool call is skipped rather than executed with half-formed args) and rejects JS-only `NaN`/`Infinity`; streaming parsing stays non-throwing and rolls back incomplete trailing tokens instead of surfacing `undefined`/`NaN`. The Cursor provider's ad-hoc regex + JSON5 tool-argument parser now routes through the shared parser.
+
+### Removed
+
+- Removed the `partial-json` dependency; streaming JSON parsing now uses the in-house `RelaxedJson` parser.
+
 ### Fixed
 
 - Fixed tool call ID normalization for Anthropic-compatible models
+- Fixed Anthropic Messages replay sanitizing malformed tool-call IDs, including aborted native tool calls with empty IDs, so retries no longer send invalid `tool_use.id` / `tool_result.tool_use_id` pairs.
 
 ## [16.1.9] - 2026-06-21
 

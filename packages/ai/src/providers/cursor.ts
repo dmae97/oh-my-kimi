@@ -125,7 +125,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseStreamingJson } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
@@ -1781,13 +1781,10 @@ function parseToolArgsJson(text: string): unknown {
 		return text;
 	}
 	try {
-		const normalized = trimmed
-			.replace(/\bNone\b/g, "null")
-			.replace(/\bTrue\b/g, "true")
-			.replace(/\bFalse\b/g, "false");
-		return Bun.JSON5.parse(normalized);
-	} catch {}
-	return text;
+		return parseJsonWithRepair<unknown>(trimmed);
+	} catch {
+		return text;
+	}
 }
 
 function decodeMcpArgValue(value: Uint8Array): unknown {
