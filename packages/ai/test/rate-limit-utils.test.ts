@@ -54,6 +54,12 @@ describe("parseRateLimitReason", () => {
 		).toBe("QUOTA_EXHAUSTED");
 	});
 
+	it("classifies OpenCode Go insufficient balance as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("classifies Antigravity capacity-exhausted as QUOTA_EXHAUSTED, not transient MODEL_CAPACITY", () => {
 		// Antigravity returns "You have exhausted your capacity on this model. Your
 		// quota will reset after 3h6m38s." The literal "capacity" used to win the
@@ -74,6 +80,12 @@ describe("isUsageLimitError", () => {
 			isUsageLimitError(
 				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
 			),
+		).toBe(true);
+	});
+
+	it("detects OpenCode Go insufficient balance as a credential-rotatable usage limit", () => {
+		expect(
+			isUsageLimitError("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),
 		).toBe(true);
 	});
 
