@@ -472,6 +472,85 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(getRuntimeSignals()).toContain("compaction:start:threshold");
 	});
 
+	it("removes orphan toolUse assistant before active-goal threshold compaction continuation", async () => {
+		// Codex review on #3175: when an active goal turn is over threshold AND
+		// stops with an empty `toolUse` (no tool call), the new ordering must NOT
+		// skip `#handleEmptyAssistantStop` — that handler is the only path that
+		// strips the orphan assistant from active context + session history. If a
+		// compaction continuation runs with the orphan still in place, the next
+		// Anthropic turn carries a `tool_use` block with no matching
+		// `tool_result` and corrupts the message history.
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-orphan-toolUse-threshold",
+				objective: "continue until compacted",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+		session.settings.set("compaction.thresholdTokens", 76384);
+		session.settings.set("compaction.thresholdPercent", -1);
+		session.settings.set("compaction.autoContinue", true);
+		session.settings.set("contextPromotion.enabled", false);
+
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		const orphanToolUse = {
+			role: "assistant" as const,
+			// Empty toolUse stop: stopReason says a tool was requested but the
+			// content block is empty (no toolCall). This is the case the empty-stop
+			// cleanup defends against.
+			content: [] as never[],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "toolUse" as const,
+			usage: {
+				input: 5000,
+				output: 1000,
+				cacheRead: 85000,
+				cacheWrite: 0,
+				totalTokens: 91000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now,
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: orphanToolUse });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [orphanToolUse] });
+
+		await session.waitForIdle();
+
+		// Empty-stop cleanup short-circuits before any compaction continuation, so
+		// the threshold compaction MUST NOT fire on this turn — the next turn
+		// starts from the cleaned-up branch with the retry-reminder developer
+		// message instead. The pre-fix ordering let compaction reach
+		// `auto_compaction_start` first, scheduling a continuation while the
+		// orphan `toolUse` entry was still the session leaf.
+		const signals = getRuntimeSignals();
+		expect(signals).not.toContain("compaction:start:threshold");
+
+		// `#removeEmptyStopFromActiveContext` rewinds the session leaf past the
+		// orphan via `sessionManager.branch(parentId)` / `resetLeaf()`. If the
+		// cleanup is skipped, the orphan is still the leaf when the compaction
+		// continuation runs and the next Anthropic turn sends a `tool_use` block
+		// with no matching `tool_result`.
+		const branch = sessionManager.getBranch();
+		const orphanInBranch = branch.some(entry => {
+			if (entry.type !== "message") return false;
+			const message = entry.message as { role: string; stopReason?: string };
+			return message.role === "assistant" && message.stopReason === "toolUse";
+		});
+		expect(orphanInBranch).toBe(false);
+	});
+
 	it("has isCompacting true when the auto_compaction_start event fires", async () => {
 		// Defect 1: the compaction AbortController (which backs isCompacting) must be
 		// installed before auto_compaction_start is emitted. If it is installed after,

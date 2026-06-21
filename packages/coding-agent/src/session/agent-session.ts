@@ -2803,6 +2803,18 @@ export class AgentSession {
 			}
 			this.#lastSuccessfulYieldToolCallId = undefined;
 
+			// Empty-stop cleanup MUST run before any compaction continuation: an
+			// empty toolUse stop must be stripped from active context + session
+			// history before we schedule another turn, otherwise the next
+			// Anthropic turn carries a tool_use block with no matching
+			// tool_result and corrupts message history. The handler also
+			// schedules its own retry, so a real empty stop never needs the
+			// active-goal threshold pre-empt below.
+			if (await this.#handleEmptyAssistantStop(msg)) {
+				await emitAgentEndNotification();
+				return;
+			}
+
 			let compactionResult = COMPACTION_CHECK_NONE;
 			let checkedCompaction = false;
 			if (activeGoal) {
@@ -2816,10 +2828,6 @@ export class AgentSession {
 				}
 			}
 
-			if (await this.#handleEmptyAssistantStop(msg)) {
-				await emitAgentEndNotification();
-				return;
-			}
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
 				await emitAgentEndNotification();
 				return;

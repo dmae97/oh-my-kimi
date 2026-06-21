@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `/goal` threshold auto-compaction skipping real sessions through two separate paths: per-turn supersede/drop-useless pruning no longer deflates the threshold trigger below the last provider-billed context, and active-goal text stops now attempt threshold maintenance before empty/unexpected-stop retry continuations can return from post-turn handling. The threshold decision also logs the billed, stored, resolved, and post-maintenance token counts so future no-start reports identify the exact skip path. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
+- Fixed `/goal` threshold auto-compaction skipping real sessions through three paths: per-turn supersede/drop-useless pruning no longer deflates the threshold trigger below the last provider-billed context; active-goal text stops now attempt threshold maintenance before unexpected-stop retry continuations can return from post-turn handling; and empty `toolUse` stops keep the existing cleanup pass that strips the orphan assistant from active context + session history before any compaction continuation. The threshold decision also logs the billed, stored, resolved, and post-maintenance token counts so future no-start reports identify the exact skip path. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
 
 ## [16.1.10] - 2026-06-21
 
