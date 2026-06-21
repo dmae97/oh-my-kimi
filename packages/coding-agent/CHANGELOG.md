@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.12] - 2026-06-21
+
 ### Changed
 
 - Refined secret obfuscation to only target message roles and fields containing operator secrets

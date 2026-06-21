@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.12] - 2026-06-21
+
 ### Added
 
 - Added Julia syntax highlighting to `highlightCode`/`supportsLanguage` via a vendored `Julia.sublime-syntax` folded into syntect's default set (`jl`/`julia` aliases); syntect ships no Julia grammar.
