@@ -6,7 +6,7 @@
  * (the reported "first char off / title shift"). Scrolling must also move the
  * visible window.
  */
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -104,10 +104,22 @@ function withViewer(fn: (viewer: AgentTranscriptViewer) => void): void {
 }
 
 describe("AgentTranscriptViewer", () => {
+	let rowsDesc: PropertyDescriptor | undefined;
+
 	beforeEach(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		initTheme();
+		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 24 });
+	});
+
+	afterEach(() => {
+		if (rowsDesc) {
+			Object.defineProperty(process.stdout, "rows", rowsDesc);
+		} else {
+			Object.defineProperty(process.stdout, "rows", { configurable: true, value: undefined, writable: true });
+		}
 	});
 
 	it("aligns the title and body content on the same gutter", () => {
