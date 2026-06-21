@@ -155,6 +155,16 @@ export function resolveOpenAIRequestSetup(
 
 	let copilotPremiumRequests: number | undefined;
 	let baseUrl = model.baseUrl;
+	if (model.provider === "moonshot") {
+		// Bundled `moonshot` catalog models hardcode the international endpoint
+		// (`api.moonshot.ai`). MOONSHOT_BASE_URL lets users redirect the provider
+		// at the China platform (`api.moonshot.cn`), which only accepts China keys
+		// and rejects the international host. (#2883)
+		const moonshotBaseUrl = $env.MOONSHOT_BASE_URL?.trim();
+		if (moonshotBaseUrl) {
+			baseUrl = moonshotBaseUrl;
+		}
+	}
 	if (model.provider === "github-copilot") {
 		apiKey = parseGitHubCopilotApiKey(rawApiKey).accessToken;
 		const copilot = buildCopilotDynamicHeaders({

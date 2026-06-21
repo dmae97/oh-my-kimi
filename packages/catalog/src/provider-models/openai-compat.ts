@@ -2493,7 +2493,10 @@ export function moonshotModelManagerOptions(
 	config?: MoonshotModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "https://api.moonshot.ai/v1";
+	// `MOONSHOT_BASE_URL` redirects discovery (and the streaming request that
+	// inherits this baseUrl) at the Kimi China platform `api.moonshot.cn`; an
+	// explicit `config.baseUrl` still wins. Mirrors LITELLM_BASE_URL/LM_STUDIO_BASE_URL. (#2883)
+	const baseUrl = config?.baseUrl ?? Bun.env.MOONSHOT_BASE_URL ?? "https://api.moonshot.ai/v1";
 	const references = createBundledReferenceMap<"openai-completions">("moonshot");
 	return {
 		providerId: "moonshot",
