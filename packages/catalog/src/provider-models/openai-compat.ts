@@ -586,8 +586,18 @@ function normalizeUmansBaseUrl(baseUrl: string | undefined): string {
 	return normalized.endsWith("/v1") ? normalized.slice(0, -3) : normalized;
 }
 
+/**
+ * Umans `models/info` reports `supports_vision: true` for natively
+ * vision-capable models and a non-empty string sentinel (e.g.
+ * `"via-handoff"`) for models that route image inputs through a vision
+ * handoff pre-analysis step instead of accepting raw image blocks. Only
+ * `true` means the model accepts image content directly; sentinel values
+ * MUST map to text-only so the agent's vision-handoff path runs instead
+ * of triggering an upstream HTTP 400 (`This model does not support image
+ * inputs`).
+ */
 function umansSupportsVision(value: unknown): boolean {
-	return value === true || (typeof value === "string" && value.length > 0);
+	return value === true;
 }
 
 function umansReasoningSupported(value: unknown): boolean {

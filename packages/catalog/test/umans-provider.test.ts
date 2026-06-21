@@ -101,6 +101,56 @@ describe("umans provider catalog", () => {
 		await expect(fetchDynamicModels()).rejects.toThrow("Failed to fetch Umans models info");
 	});
 
+	it('maps supports_vision sentinel values like "via-handoff" to text-only input', async () => {
+		const fetchImpl: FetchImpl = async () =>
+			new Response(
+				JSON.stringify({
+					"umans-glm-5.2": {
+						display_name: "Umans GLM 5.2",
+						capabilities: {
+							context_window: 405_504,
+							max_completion_tokens: 131_071,
+							recommended_max_tokens: 131_071,
+							supports_vision: "via-handoff",
+							supports_tools: true,
+							reasoning: { supported: true, can_disable: true, default_level: "medium" },
+						},
+					},
+					"umans-coder": {
+						display_name: "Umans Coder",
+						capabilities: {
+							context_window: 262_144,
+							max_completion_tokens: 262_144,
+							recommended_max_tokens: 32_768,
+							supports_vision: true,
+							supports_tools: true,
+							reasoning: { supported: true, can_disable: true, default_level: "medium" },
+						},
+					},
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+
+		const fetchDynamicModels = umansModelManagerOptions({ fetch: fetchImpl }).fetchDynamicModels;
+		if (!fetchDynamicModels) throw new Error("Umans dynamic discovery is not configured");
+
+		const models = await fetchDynamicModels();
+		const glm = models?.find(item => item.id === "umans-glm-5.2");
+		const coder = models?.find(item => item.id === "umans-coder");
+
+		expect(glm?.input).toEqual(["text"]);
+		expect(coder?.input).toEqual(["text", "image"]);
+	});
+
+	it("bundles Umans GLM via-handoff models as text-only", () => {
+		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
+		for (const id of ["umans-glm-5.1", "umans-glm-5.2"] as const) {
+			const model = providers.umans?.[id];
+			expect(model, `${id} should be bundled`).toBeDefined();
+			expect(model.input, `${id} input should be text-only`).toEqual(["text"]);
+		}
+	});
+
 	it("maps the models.dev Umans provider to the Anthropic endpoint", () => {
 		const models = mapModelsDevToModels(
 			{
