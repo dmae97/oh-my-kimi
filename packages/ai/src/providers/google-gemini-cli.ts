@@ -64,6 +64,181 @@ export class GeminiCliApiError extends ProviderHttpError {
 	override readonly name = "GeminiCliApiError";
 }
 
+function isPlanningLeakPrefix(text: string): boolean {
+	const trimmed = text.trimStart();
+	if (!trimmed.startsWith("{")) {
+		return false;
+	}
+	const afterBrace = trimmed.slice(1).trimStart();
+	if (afterBrace === "") {
+		return trimmed.length <= 100;
+	}
+	if (afterBrace[0] !== '"') {
+		return false;
+	}
+	const nextQuoteIndex = afterBrace.indexOf('"', 1);
+	if (nextQuoteIndex === -1) {
+		const keyPrefix = afterBrace.slice(1);
+		return "thought".startsWith(keyPrefix) && trimmed.length <= 100;
+	}
+	const key = afterBrace.slice(1, nextQuoteIndex);
+	if (key !== "thought") {
+		return false;
+	}
+	const afterKey = afterBrace.slice(nextQuoteIndex + 1).trimStart();
+	if (afterKey === "") {
+		return trimmed.length <= 100;
+	}
+	if (afterKey[0] !== ":") {
+		return false;
+	}
+	return true;
+}
+
+type BufferedPlanningResult =
+	| { kind: "incomplete" }
+	| { kind: "plain"; visibleText: string }
+	| { kind: "leak"; visibleText: string };
+
+function isPlanningLeakObject(parsed: unknown, toolNames: Set<string>): boolean {
+	if (!parsed || typeof parsed !== "object") return false;
+	const record = parsed as Record<string, unknown>;
+	const hasThought = typeof record.thought === "string";
+	const isOmpTool = typeof record.call === "string" && toolNames.has(record.call);
+	const hasToolSignature =
+		"_i" in record || "paths" in record || "command" in record || ("path" in record && "content" in record);
+	return hasThought || isOmpTool || hasToolSignature;
+}
+
+function splitLeadingJsonObject(text: string): { prefixLength: number; jsonText: string; rest: string } | undefined {
+	const prefixLength = text.length - text.trimStart().length;
+	const trimmed = text.slice(prefixLength);
+	if (!trimmed.startsWith("{")) return undefined;
+
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+
+	for (let index = 0; index < trimmed.length; index += 1) {
+		const ch = trimmed[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
+		if (ch === "{") {
+			depth += 1;
+			continue;
+		}
+		if (ch !== "}") continue;
+		depth -= 1;
+		if (depth !== 0) continue;
+
+		const jsonText = trimmed.slice(0, index + 1);
+		return {
+			prefixLength: prefixLength + index + 1,
+			jsonText,
+			rest: trimmed.slice(index + 1),
+		};
+	}
+
+	return undefined;
+}
+
+function splitLeadingJsonObjectIgnoringQuotes(
+	text: string,
+): { prefixLength: number; jsonText: string; rest: string } | undefined {
+	const prefixLength = text.length - text.trimStart().length;
+	const trimmed = text.slice(prefixLength);
+	if (!trimmed.startsWith("{")) return undefined;
+
+	let depth = 0;
+	for (let index = 0; index < trimmed.length; index += 1) {
+		const ch = trimmed[index];
+		if (ch === "{") {
+			depth += 1;
+		} else if (ch === "}") {
+			depth -= 1;
+			if (depth === 0) {
+				return {
+					prefixLength: prefixLength + index + 1,
+					jsonText: trimmed.slice(0, index + 1),
+					rest: trimmed.slice(index + 1),
+				};
+			}
+		}
+	}
+	return undefined;
+}
+
+function consumePlanningBuffer(text: string, toolNames: Set<string>, isFinal = false): BufferedPlanningResult {
+	if (!isPlanningLeakPrefix(text)) {
+		return { kind: "plain", visibleText: text };
+	}
+
+	// Try standard brace-balanced slicing first (respecting quotes and escapes)
+	let leading = splitLeadingJsonObject(text);
+
+	// If standard parsing fails (e.g. due to unescaped quotes), fall back to quote-ignoring brace-balanced slicing
+	if (!leading) {
+		leading = splitLeadingJsonObjectIgnoringQuotes(text);
+	}
+
+	if (!leading) {
+		if (isFinal) {
+			// At EOF, if the buffer has a leak signature but no closing brace at all, discard the whole buffer.
+			const trimmed = text.trim();
+			const hasThoughtKey = trimmed.includes('"thought"');
+			const hasToolKey = Array.from(toolNames).some(name => trimmed.includes(`"${name}"`));
+			const hasToolSignature =
+				trimmed.includes('"_i"') ||
+				trimmed.includes('"paths"') ||
+				trimmed.includes('"command"') ||
+				(trimmed.includes('"path"') && trimmed.includes('"content"'));
+			if (hasThoughtKey || hasToolKey || hasToolSignature) {
+				return { kind: "leak", visibleText: "" };
+			}
+			return { kind: "plain", visibleText: text };
+		}
+		return { kind: "incomplete" };
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(leading.jsonText);
+	} catch {
+		// Fallback to substring matching if JSON parsing fails due to unescaped quotes
+		const hasThoughtKey = leading.jsonText.includes('"thought"');
+		const hasToolKey = Array.from(toolNames).some(name => leading.jsonText.includes(`"${name}"`));
+		const hasToolSignature =
+			leading.jsonText.includes('"_i"') ||
+			leading.jsonText.includes('"paths"') ||
+			leading.jsonText.includes('"command"') ||
+			(leading.jsonText.includes('"path"') && leading.jsonText.includes('"content"'));
+		const isLeak = hasThoughtKey || hasToolKey || hasToolSignature;
+		if (isLeak) {
+			return { kind: "leak", visibleText: leading.rest };
+		}
+		// Unparseable leading object is not safe to strip; release it as normal text.
+		return { kind: "plain", visibleText: text };
+	}
+
+	return isPlanningLeakObject(parsed, toolNames)
+		? { kind: "leak", visibleText: leading.rest }
+		: { kind: "plain", visibleText: text };
+}
+
 export interface GoogleGeminiCliOptions extends StreamOptions {
 	/**
 	 * Tool selection mode. String forms map directly to Gemini
@@ -463,6 +638,8 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(undefined, 300_000);
 			const callerSignal = options?.signal;
+			const toolNames = new Set(context.tools?.map(t => t.name) ?? []);
+			const isFlashLeakModel = model.id.includes("flash");
 
 			let started = false;
 			let sawFinishReason = false;
@@ -503,6 +680,22 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
 				const blockIndex = () => blocks.length - 1;
+
+				let isBuffering = false;
+				let textBuffer = "";
+				let bufferedTextSignature: string | undefined;
+
+				const emitVisibleText = (delta: string, thoughtSignature?: string) => {
+					if (!delta || !currentBlock || currentBlock.type !== "text") return;
+					currentBlock.text += delta;
+					currentBlock.textSignature = retainThoughtSignature(currentBlock.textSignature, thoughtSignature);
+					stream.push({
+						type: "text_delta",
+						contentIndex: blockIndex(),
+						delta,
+						partial: output,
+					});
+				};
 
 				for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(
 					activeResponse.body!,
@@ -554,17 +747,33 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 										partial: output,
 									});
 								} else {
-									currentBlock.text += part.text;
-									currentBlock.textSignature = retainThoughtSignature(
-										currentBlock.textSignature,
-										part.thoughtSignature,
-									);
-									stream.push({
-										type: "text_delta",
-										contentIndex: blockIndex(),
-										delta: part.text,
-										partial: output,
-									});
+									if (isBuffering) {
+										textBuffer += part.text;
+										bufferedTextSignature = retainThoughtSignature(
+											bufferedTextSignature,
+											part.thoughtSignature,
+										);
+									} else if (isFlashLeakModel && part.text.trimStart().startsWith("{")) {
+										isBuffering = true;
+										textBuffer = part.text;
+										bufferedTextSignature = part.thoughtSignature;
+									} else {
+										emitVisibleText(part.text, part.thoughtSignature);
+									}
+
+									if (isBuffering) {
+										const buffered = consumePlanningBuffer(textBuffer, toolNames);
+										if (buffered.kind !== "incomplete") {
+											if (buffered.kind === "leak") {
+												sawLeak = true;
+											}
+											const visibleSignature = bufferedTextSignature;
+											isBuffering = false;
+											textBuffer = "";
+											bufferedTextSignature = undefined;
+											emitVisibleText(buffered.visibleText, visibleSignature);
+										}
+									}
 								}
 							} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
 								if (currentBlock.type === "thinking") {
@@ -585,6 +794,8 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 									pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 									currentBlock = null;
 								}
+								isBuffering = false;
+								textBuffer = "";
 
 								const providedId = part.functionCall.id;
 								const needsNewId =
@@ -645,14 +856,28 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					}
 				}
 
+				if (isBuffering && textBuffer !== "") {
+					const buffered = consumePlanningBuffer(textBuffer, toolNames, true);
+					if (buffered.kind === "leak") {
+						sawLeak = true;
+					}
+					if (buffered.kind !== "incomplete") {
+						emitVisibleText(buffered.visibleText, bufferedTextSignature);
+					}
+					bufferedTextSignature = undefined;
+					isBuffering = false;
+					textBuffer = "";
+				}
+
 				if (currentBlock) {
 					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
 				}
 
-				return hasMeaningfulGoogleContent(output);
+				return hasMeaningfulGoogleContent(output) || sawLeak;
 			};
 
 			let receivedContent = false;
+			let sawLeak = false;
 
 			for (let i = 0; i < endpoints.length; i++) {
 				const endpoint = endpoints[i];
