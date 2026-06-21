@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Umans GLM-5.2 reasoning discovery to retain the provider's `max` tier as `xhigh` and send it upstream as `"max"`, restoring the top thinking selector in dynamic and bundled catalogs. ([#3192](https://github.com/can1357/oh-my-pi/issues/3192))
+- Fixed the Umans GLM-5.2 thinking-level picker collapsing to a single `high` tier after dynamic discovery: the `max` upstream level now resolves to the internal `xhigh` effort and the picker shows both `high` and `xhigh` again, matching Umans's native `high/max` scale. ([#3192](https://github.com/can1357/oh-my-pi/issues/3192))
 
 ## [16.1.9] - 2026-06-21
 

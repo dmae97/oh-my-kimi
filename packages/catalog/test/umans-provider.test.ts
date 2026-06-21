@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effort, mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog";
+import { Effort } from "@oh-my-pi/pi-catalog";
 import {
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
@@ -112,13 +112,14 @@ describe("umans provider catalog", () => {
 			id: "umans-glm-5.2",
 			reasoning: true,
 			thinking: {
+				mode: "budget",
 				defaultLevel: "high",
 				efforts: ["high", "xhigh"],
-				effortMap: { xhigh: "max" },
 			},
 		});
 		if (!glm52) throw new Error("Umans GLM 5.2 was not discovered");
-		expect(mapEffortToAnthropicAdaptiveEffort(glm52, Effort.XHigh)).toBe("max");
+		expect(glm52.thinking?.effortMap).toBeUndefined();
+		expect(glm52.thinking?.defaultLevel).toBe(Effort.High);
 	});
 
 	it("surfaces Umans discovery fetch failures", async () => {
@@ -193,14 +194,14 @@ describe("umans provider catalog", () => {
 		});
 	});
 
-	it("bundles Umans GLM 5.2 max reasoning metadata", () => {
+	it("bundles Umans GLM 5.2 high/max reasoning metadata without dead effortMap", () => {
 		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
 		const model = providers.umans?.["umans-glm-5.2"];
 
 		expect(model).toBeDefined();
 		expect(model.thinking).toMatchObject({
 			efforts: ["high", "xhigh"],
-			effortMap: { xhigh: "max" },
 		});
+		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 });

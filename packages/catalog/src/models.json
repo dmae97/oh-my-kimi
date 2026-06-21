@@ -69321,10 +69321,7 @@
 				"efforts": [
 					"high",
 					"xhigh"
-				],
-				"effortMap": {
-					"xhigh": "max"
-				}
+				]
 			},
 			"input": [
 				"text",
