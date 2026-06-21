@@ -538,6 +538,10 @@ def test_extract_mention_strips_literal_app_suffix_from_body() -> None:
     assert extract_mention("@roboomp[bot] go ahead", "roboomp[bot]") == "go ahead"
 
 
+def test_extract_mention_rejects_extended_literal_app_suffix() -> None:
+    assert extract_mention("@roboomp[bot]-helper go ahead", "roboomp[bot]") is None
+
+
 def test_extract_mention_returns_none_without_mention() -> None:
     assert extract_mention("hello there", "robomp-bot") is None
     assert extract_mention(None, "robomp-bot") is None

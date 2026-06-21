@@ -153,7 +153,7 @@ def extract_mention(body: str | None, bot_login: str) -> str | None:
     if not login:
         return None
     pattern = re.compile(
-        rf"(?<![A-Za-z0-9_-])@{re.escape(login)}(?:\[bot\])?(?![A-Za-z0-9_-])",
+        rf"(?<![A-Za-z0-9_-])@{re.escape(login)}(?:\[bot\](?![A-Za-z0-9_-])|(?![A-Za-z0-9_\[-]))",
         re.IGNORECASE,
     )
     if not pattern.search(body):
