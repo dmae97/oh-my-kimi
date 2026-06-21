@@ -1,8 +1,9 @@
 import { $env } from "@oh-my-pi/pi-utils";
-import type { ResponseInput } from "./providers/openai-responses-wire";
+import type { ResponseInput, ResponseInputItem } from "./providers/openai-responses-wire";
 import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];
+const IMAGE_GENERATION_CALL_STATUSES = new Set<string>(["in_progress", "completed", "generating", "failed"]);
 
 export { isRecord } from "@oh-my-pi/pi-utils";
 export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {
@@ -77,6 +78,7 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 	normalizedCallIds: Map<string, string>,
 ): OpenAIResponsesReplayItem | undefined {
 	if (item.type === "item_reference") return undefined;
+	if (item.type === "image_generation_call") return sanitizeOpenAIResponsesImageGenerationCallForReplay(item);
 
 	// providerPayload stores raw output items; replay strips item ids and keeps only normalized call_id.
 	const { id: _id, ...sanitizedItem } = item;
@@ -85,6 +87,22 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 	}
 
 	return sanitizedItem as unknown as OpenAIResponsesReplayItem;
+}
+
+function sanitizeOpenAIResponsesImageGenerationCallForReplay(
+	item: Record<string, unknown>,
+): ResponseInputItem.ImageGenerationCall | undefined {
+	if (typeof item.id !== "string" || !isImageGenerationCallStatus(item.status)) return undefined;
+	return {
+		id: truncateResponseItemId(item.id, "ig"),
+		type: "image_generation_call",
+		status: item.status,
+		result: typeof item.result === "string" ? item.result : null,
+	};
+}
+
+function isImageGenerationCallStatus(status: unknown): status is ResponseInputItem.ImageGenerationCall["status"] {
+	return typeof status === "string" && IMAGE_GENERATION_CALL_STATUSES.has(status);
 }
 
 function normalizeReplayedResponsesHistoryCallId(value: string, normalizedValues: Map<string, string>): string {

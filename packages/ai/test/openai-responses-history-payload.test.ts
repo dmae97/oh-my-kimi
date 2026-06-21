@@ -439,6 +439,38 @@ describe("OpenAI responses history payload", () => {
 		]);
 	});
 
+	it("strips provider-only image generation fields from replayed native history", async () => {
+		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "first user", timestamp: Date.now() },
+				makeAssistantMessage(
+					[
+						{
+							id: "ig_history",
+							type: "image_generation_call",
+							status: "generating",
+							action: "generate",
+							background: "opaque",
+							output_format: "png",
+							quality: "medium",
+						},
+					],
+					true,
+				),
+				{ role: "user", content: "follow-up user", timestamp: Date.now() },
+			],
+		};
+		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
+
+		expect(findResponsesInputItem(payload.input, "image_generation_call")).toEqual({
+			id: "ig_history",
+			type: "image_generation_call",
+			status: "generating",
+			result: null,
+		});
+	});
+
 	it("falls back to rebuilt history on resumed same-provider sessions with fresh session state", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const providerSessionState = new Map<string, ProviderSessionState>();
