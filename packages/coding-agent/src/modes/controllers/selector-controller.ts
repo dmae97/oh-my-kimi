@@ -71,10 +71,6 @@ import { buildCopyTargets } from "../utils/copy-targets";
 
 const MANUAL_LOGIN_TIP = "Tip: You can complete pairing with /login <redirect URL>.";
 
-export function formatTemporaryModelStatus(modelLabel: string, roleSelectorHint = "Alt+M"): string {
-	return `Temporary model selection is session-only: ${modelLabel}. Use ${roleSelectorHint} or /model for role models (default/smol/plan/task/slow/custom roles).`;
-}
-
 export class SelectorController {
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -499,7 +495,9 @@ export class SelectorController {
 							this.ctx.statusLine.invalidate();
 							this.ctx.updateEditorBorderColor();
 							const roleSelectorHint = this.ctx.keybindings.getKeys("app.model.select")[0] ?? "Alt+M";
-							this.ctx.showStatus(formatTemporaryModelStatus(selector ?? model.id, roleSelectorHint));
+							this.ctx.showStatus(
+								`Session-only model: ${selector ?? model.id}. Use ${roleSelectorHint} or /model for roles.`,
+							);
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {
