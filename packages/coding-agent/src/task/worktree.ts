@@ -6,6 +6,7 @@ import * as natives from "@oh-my-pi/pi-natives";
 import { getWorktreeDir, hashPath, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
 import { mapWithConcurrencyLimit } from "./parallel";
+import * as jj from "../utils/jj";
 
 const { IsoBackendKind } = natives;
 type IsoBackendKind = natives.IsoBackendKind;
@@ -28,12 +29,19 @@ export interface WorktreeBaseline {
 }
 
 export async function getRepoRoot(cwd: string): Promise<string> {
-	const repoRoot = await git.repo.root(cwd);
-	if (!repoRoot) {
-		throw new Error("Git repository not found for isolated task execution.");
+	// Pure-jj check runs first so a jj workspace nested under an unrelated
+	// outer Git checkout is rejected at its own root rather than silently
+	// mutating the surrounding Git tree behind jj's back.
+	if (await jj.isPureJjRepo(cwd)) {
+		throw new Error(
+			"Isolated task execution requires a Git checkout, but this workspace is pure Jujutsu (`.jj/` without a colocated `.git/`). Run `jj git init --colocate` to add a Git checkout, or set `task.isolation.mode: none` to disable task isolation.",
+		);
 	}
 
-	return repoRoot;
+	const repoRoot = await git.repo.root(cwd);
+	if (repoRoot) return repoRoot;
+
+	throw new Error("Git repository not found for isolated task execution.");
 }
 
 const GIT_NO_INDEX_NULL_PATH = process.platform === "win32" ? "NUL" : "/dev/null";

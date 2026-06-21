@@ -7,10 +7,14 @@ import {
 	captureDeltaPatch,
 	ensureIsolation,
 	getGitNoIndexNullPath,
+	getRepoRoot,
 	mergeTaskBranches,
 	parseIsolationMode,
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as natives from "@oh-my-pi/pi-natives";
+import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
+
+const tempDirs: string[] = [];
 
 async function runGit(repo: string, args: string[]): Promise<string> {
 	const proc = Bun.spawn(["git", ...args], {
@@ -30,6 +34,27 @@ async function runGit(repo: string, args: string[]): Promise<string> {
 	return stdout.trim();
 }
 
+async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
+	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-"));
+	tempDirs.push(repo);
+	await runGit(repo, ["init"]);
+	await runGit(repo, ["config", "user.email", "test@example.com"]);
+	await runGit(repo, ["config", "user.name", "Test User"]);
+	await fs.writeFile(path.join(repo, "merged.txt"), "base version\n");
+	await fs.writeFile(path.join(repo, "staged.txt"), "base staged\n");
+	await runGit(repo, ["add", "."]);
+	await runGit(repo, ["commit", "-m", "initial"]);
+	return {
+		baseBranch: await runGit(repo, ["branch", "--show-current"]),
+		repo,
+	};
+}
+
+afterEach(async () => {
+	vi.restoreAllMocks();
+	jj.repo.clearRootCache();
+	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
 describe("worktree isolation helpers", () => {
 	it("returns platform-specific null path for git --no-index diffs", () => {
 		const expected = process.platform === "win32" ? "NUL" : "/dev/null";
@@ -196,5 +221,61 @@ describe("worktree isolation helpers", () => {
 				expect(delta.rootPatch).not.toContain("preexisting.txt");
 			});
 		});
+	});
+});
+
+describe("getRepoRoot", () => {
+	it("returns the git root for a plain git checkout", async () => {
+		const { repo } = await createGitRepo();
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("returns the git root for a colocated jj-git workspace", async () => {
+		const { repo } = await createGitRepo();
+		await fs.mkdir(path.join(repo, ".jj", "repo", "store"), { recursive: true });
+		expect(await getRepoRoot(repo)).toBe(repo);
+	});
+
+	it("rejects pure jj workspaces with an actionable Jujutsu message", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-purejj-"));
+		tempDirs.push(dir);
+		await fs.mkdir(path.join(dir, ".jj", "repo", "store"), { recursive: true });
+		await expect(getRepoRoot(dir)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(dir)).rejects.toThrow(/jj git init --colocate/);
+	});
+
+	it("preserves the generic git-not-found error for directories without any repo", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-norepo-"));
+		tempDirs.push(dir);
+		await expect(getRepoRoot(dir)).rejects.toThrow("Git repository not found for isolated task execution.");
+	});
+
+	it("rejects a pure jj workspace nested inside an unrelated outer git checkout", async () => {
+		// `git.repo.root(inner)` walks up and finds the outer .git — without
+		// the pure-jj check running first, isolation would silently target the
+		// surrounding git tree behind jj's back.
+		const { repo: outer } = await createGitRepo();
+		const inner = path.join(outer, "nested-jj");
+		await fs.mkdir(path.join(inner, ".jj", "repo", "store"), { recursive: true });
+
+		await expect(getRepoRoot(inner)).rejects.toThrow(/pure Jujutsu/);
+		await expect(getRepoRoot(inner)).rejects.toThrow(/jj git init --colocate/);
+	});
+
+	it("returns the nested git root when a git checkout lives under an outer jj workspace", async () => {
+		// Mirror image of the case above: `jj.repo.root(inner)` finds the outer
+		// .jj, but `git.repo.root(inner)` finds the inner .git, so Git
+		// automation targets the nested checkout safely. Isolation must keep
+		// working here exactly as it did before the pure-jj guard landed.
+		const outer = await fs.mkdtemp(path.join(os.tmpdir(), "omp-outerjj-"));
+		tempDirs.push(outer);
+		await fs.mkdir(path.join(outer, ".jj", "repo", "store"), { recursive: true });
+		const inner = path.join(outer, "vendor");
+		await fs.mkdir(inner, { recursive: true });
+		await runGit(inner, ["init", "-q", "-b", "main"]);
+		await runGit(inner, ["config", "user.email", "test@example.com"]);
+		await runGit(inner, ["config", "user.name", "Test"]);
+
+		expect(await getRepoRoot(inner)).toBe(inner);
 	});
 });

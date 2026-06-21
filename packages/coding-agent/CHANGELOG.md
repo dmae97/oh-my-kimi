@@ -1871,6 +1871,7 @@
 ### Fixed
 
 - Fixed `@`-mention auto-read injecting an unrelated, same-named file when a mention did not point at a real path — e.g. an npm scope like `@scope/`, a partial path, or a bare token. `generateFileMentionMessages` resolution previously fell back to prefix and repo-wide fuzzy matching (globbing the whole project on every such mention) and auto-read the single "best" guess. Resolution is now exact-only: a mention is auto-read only when it resolves to an existing file or directory; otherwise it is left as prose. The TUI `@`-selector already inserts the real, complete path before send, so post-send guessing was both unnecessary and the source of the wrong-file reads. Directories still resolve and are listed. Removes the per-mention `**/*` project scan.
+- Fixed Git-mutating automation silently mis-handling pure Jujutsu workspaces (`.jj/repo/` present, no colocated `.git/`). `task/worktree.ts#getRepoRoot` previously threw a generic "Git repository not found" for isolated subagent setup, and `autoresearch/git.ts#ensureAutoresearchBranch` returned a soft "Not in a git repository" warning that let `/autoresearch` proceed with no branch isolation or auto-commits. Both paths now detect a pure jj workspace via the new `jj.isPureJjRepo` helper and surface an actionable Jujutsu-specific error pointing at `jj git init --colocate`. Colocated jj-git (both `.jj/` and `.git/` at the same root) and plain Git checkouts behave exactly as before ([#1935](https://github.com/can1357/oh-my-pi/issues/1935)).
 
 ## [15.9.2] - 2026-06-05
 
