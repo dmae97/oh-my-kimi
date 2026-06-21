@@ -17,6 +17,10 @@
 - Fixed tool call ID normalization for Anthropic-compatible models
 - Fixed Anthropic Messages replay sanitizing malformed tool-call IDs, including aborted native tool calls with empty IDs, so retries no longer send invalid `tool_use.id` / `tool_result.tool_use_id` pairs.
 
+### Fixed
+
+- Fixed DashScope 429 rate-limit messages that mention authorization being classified as credential failures, preventing valid API keys from being invalidated after throttling. ([#3172](https://github.com/can1357/oh-my-pi/issues/3172))
+
 ## [16.1.9] - 2026-06-21
 
 ### Added

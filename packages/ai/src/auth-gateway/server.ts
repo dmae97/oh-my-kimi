@@ -229,11 +229,10 @@ export function classifyGatewayError(err: unknown): { status: number; type: stri
 	if (/\baborted\b|\babort signal\b/i.test(message)) {
 		return { status: 499, type: "request_aborted", message };
 	}
-	if (/\b(?:unauthorized|forbidden)\b/i.test(message)) {
-		return { status: 401, type: "authentication_error", message };
-	}
 	if (
-		// Match rate-limit phrasings without colliding with
+		// Match rate-limit phrasings before auth wording: some providers
+		// describe throttling as "unauthorized due to rate limit".
+		// Keep boundaries so this does not collide with
 		// `GenerateContentRequest`, `accelerate`, `iterate`, `deprecated`, etc.
 		/\brate[- _]?limit(?:s|ed|ing)?\b|\bquota(?:_exceeded| exceeded)?\b|\btoo[- _]many[- _]requests\b/i.test(
 			message,
@@ -248,6 +247,9 @@ export function classifyGatewayError(err: unknown): { status: number; type: stri
 		isUsageLimitError(message)
 	) {
 		return { status: 429, type: "rate_limit_error", message };
+	}
+	if (/\b(?:unauthorized|forbidden)\b/i.test(message)) {
+		return { status: 401, type: "authentication_error", message };
 	}
 	if (/\b(?:unsupported|invalid_request|invalid request|bad request|malformed)\b/i.test(message)) {
 		return { status: 400, type: "invalid_request_error", message };
