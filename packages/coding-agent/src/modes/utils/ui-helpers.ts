@@ -605,6 +605,7 @@ export class UiHelpers {
 		// dispose them (stopping any live timers/subscriptions) before clearing. When
 		// preserving, the same instances are re-added below, so detach without dispose.
 		const preservedChatChildren = options.preserveExistingChat ? this.ctx.chatContainer.children : undefined;
+		this.ctx.initialChatRendered = true;
 		if (preservedChatChildren) {
 			this.ctx.chatContainer.clear();
 		} else {

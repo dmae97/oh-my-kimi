@@ -390,6 +390,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusLine: StatusLineComponent;
 
 	isInitialized = false;
+	initialChatRendered = false;
 	isBashMode = false;
 	toolOutputExpanded = false;
 	todoExpanded = false;
