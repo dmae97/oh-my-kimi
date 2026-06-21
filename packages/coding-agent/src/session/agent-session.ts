@@ -8323,7 +8323,7 @@ export class AgentSession {
 		// Stale-result pass runs every turn, before any threshold gating: it is
 		// cheap (bails when no candidate) and independent of the compaction
 		// setting.
-		const supersedeResult = await this.#pruneStaleToolResults();
+		await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
@@ -8331,20 +8331,21 @@ export class AgentSession {
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
 		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
-		const pruneResult = await this.#pruneToolOutputs();
-		let contextTokens = calculateContextTokens(assistantMessage.usage);
-		if (supersedeResult) {
-			contextTokens = Math.max(0, contextTokens - supersedeResult.tokensSaved);
-		}
-		if (pruneResult) {
-			contextTokens = Math.max(0, contextTokens - pruneResult.tokensSaved);
-		}
-		// Floor by the real stored-conversation estimate so a payload-shrinking
-		// before_provider_request hook (e.g. a compression extension such as
-		// Headroom) can't deflate the provider-reported usage below the true
-		// history size and skip the threshold. The estimate runs after the prune
-		// passes above, so it reflects the post-prune message set.
-		contextTokens = compactionContextTokens(contextTokens, this.#estimateStoredContextTokens());
+		await this.#pruneToolOutputs();
+		// Pruning frees bytes for the NEXT prompt; it does not change the size of
+		// the prompt the LLM just billed for. Earlier revisions subtracted the
+		// per-turn supersede/prune `tokensSaved` from the threshold input, which
+		// let a long-running `/goal` session sit above `compaction.thresholdTokens`
+		// indefinitely whenever per-turn pruning saved enough to drop the
+		// post-prune estimate below the user-configured trigger — the visible
+		// context (anchored to the same provider billing) still showed >threshold,
+		// but `shouldCompact` no-op'd (#3174). Anchor on the last turn's billed
+		// context tokens, floored by the post-prune stored-conversation estimate
+		// so a payload-compression hook still can't deflate the trigger.
+		const contextTokens = compactionContextTokens(
+			calculateContextTokens(assistantMessage.usage),
+			this.#estimateStoredContextTokens(),
+		);
 		if (shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			// Try promotion first — if a larger model is available, switch instead of compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);

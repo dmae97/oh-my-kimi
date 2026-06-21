@@ -273,6 +273,151 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
+	it("triggers threshold compaction in active goals even when per-turn pruning shaves the post-prune estimate below threshold", async () => {
+		// Regression for #3174. Goal mode is the most common scenario: the agent
+		// runs many tool-result-heavy turns and the per-turn "useless" /
+		// "supersede" passes shave tokens off every check. Pre-fix
+		// `#checkCompaction` subtracted those savings from the threshold input, so
+		// with the reporter's fixed `compaction.thresholdTokens: 76384`, the
+		// threshold input fell below the trigger even when the provider-billed
+		// prompt (and the visible context anchored to it) sat above 90k tokens —
+		// auto-compaction silently no-op'd indefinitely while the loop kept
+		// running.
+		//
+		// This seeds one large `useless` tool result whose suffix sits inside the
+		// 8k cache-warm window so `#pruneStaleToolResults` actually returns ≥20k
+		// savings (well above the buggy code's mis-subtraction needed to drop
+		// 91000 below 76384). Compaction MUST still fire because the last turn's
+		// billed context tokens (91k) are above the configured threshold.
+		const now = Date.now();
+
+		// Seed: small user, small toolCall, ONE big useless tool result, then a
+		// handful of small turns that keep the suffix after the big result under
+		// the 8000-token cache-warm cutoff. The big result is the only viable
+		// prune candidate, and it alone saves well over 20k tokens — enough to
+		// drag the pre-fix threshold input from 91k well below 76384.
+		sessionManager.appendMessage({
+			role: "user",
+			content: "Investigate every module of the project.",
+			timestamp: now - 200,
+		});
+		const bigCallId = "call-big-useless";
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: bigCallId, name: "search", arguments: { pattern: "TODO" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "toolUse",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now - 180,
+		});
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: bigCallId,
+			toolName: "search",
+			content: [{ type: "text", text: "match line\n".repeat(20000) }], // ~40k+ tokens
+			isError: false,
+			useless: true,
+			timestamp: now - 170,
+		});
+		// A few small follow-up turns so the big result's suffix stays inside the
+		// 8000-token cache-warm window. Each pair is well under a hundred tokens.
+		for (let i = 0; i < 4; i++) {
+			const smallId = `call-small-${i}`;
+			const ts = now - 160 + i * 2;
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "toolCall", id: smallId, name: "read", arguments: { path: `note-${i}.md` } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "toolUse",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: ts,
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: smallId,
+				toolName: "read",
+				content: [{ type: "text", text: `tiny note ${i}` }],
+				isError: false,
+				timestamp: ts + 1,
+			});
+		}
+		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-threshold-pruneable",
+				objective: "continue until compacted",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		session.settings.set("compaction.thresholdTokens", 76384);
+		session.settings.set("compaction.thresholdPercent", -1);
+		session.settings.set("compaction.strategy", "context-full");
+		session.settings.set("compaction.dropUseless", true);
+		session.settings.set("compaction.supersedeReads", true);
+		session.settings.set("compaction.keepRecentTokens", 10000);
+		session.settings.set("compaction.reserveTokens", 16384);
+
+		// Final assistant turn: billed at ~91k context tokens, just over the
+		// reporter's threshold. The pre-fix code would have subtracted ≥20k of
+		// prune savings and dropped the threshold input below 76384, skipping
+		// compaction. Post-fix it must trigger.
+		const finalAssistant = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "Investigated module-7; continuing." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 5000,
+				output: 1000,
+				cacheRead: 85000,
+				cacheWrite: 0,
+				totalTokens: 91000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now,
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [finalAssistant] });
+
+		await session.waitForIdle();
+
+		const runtimeSignals = getRuntimeSignals();
+		expect(runtimeSignals).toContain("compaction:start:threshold");
+		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
+	});
 	it("has isCompacting true when the auto_compaction_start event fires", async () => {
 		// Defect 1: the compaction AbortController (which backs isCompacting) must be
 		// installed before auto_compaction_start is emitted. If it is installed after,

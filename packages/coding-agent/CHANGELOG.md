@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/goal` threshold auto-compaction never firing whenever the per-turn supersede/drop-useless prune saved ≥`compaction.thresholdTokens - calculateContextTokens(usage)` tokens. The pre-fix code subtracted prune savings from the threshold input, so a long-running goal session whose visible context (anchored to the same provider billing) sat above `compaction.thresholdTokens` could keep growing past it indefinitely. Threshold maintenance now triggers from the actual last-turn billed context, with the post-prune local estimate kept as a payload-compression floor. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
+
 ## [16.1.10] - 2026-06-21
 
 ### Added
