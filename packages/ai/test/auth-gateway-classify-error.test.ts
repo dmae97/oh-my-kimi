@@ -54,6 +54,12 @@ describe("auth-gateway classifyGatewayError", () => {
 		expect(c.type).toBe("rate_limit_error");
 	});
 
+	it("prefers rate-limit wording over auth wording", () => {
+		const c = classifyGatewayError(new Error("Rate limit exceeded - unauthorized due to throttling"));
+		expect(c.status).toBe(429);
+		expect(c.type).toBe("rate_limit_error");
+	});
+
 	it("classifies Codex 'You have hit your ChatGPT usage limit' as 429", () => {
 		// Verbatim shape Codex returns from the `usage_limit_reached` branch
 		// in `parseCodexError`. No embedded `HTTP NNN`/`(NNN)`/`status NNN`
