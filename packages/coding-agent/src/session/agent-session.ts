@@ -210,7 +210,7 @@ import { resolveMemoryBackend } from "../memory-backend";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
-import { getCurrentThemeName, theme } from "../modes/theme/theme";
+import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
@@ -12534,9 +12534,12 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
-		const themeName = getCurrentThemeName();
+		// Public HTML export ships in the omp brand palette (collab-web
+		// pink/purple), matching my.omp.sh — not the host's terminal theme.
+		// Callers who want a themed export can pass `palette: "theme"` with
+		// `themeName` directly to `exportSessionToHtml`.
 		const { exportSessionToHtml } = await import("../export/html");
-		return exportSessionToHtml(this.sessionManager, this.state, { outputPath, themeName });
+		return exportSessionToHtml(this.sessionManager, this.state, { outputPath, palette: "web" });
 	}
 
 	// =========================================================================

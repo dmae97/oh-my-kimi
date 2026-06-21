@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `tab.waitForSelector` for more robust element-wait behavior
@@ -8,6 +9,8 @@
 
 ### Changed
 
+- Standardized public HTML exports to use the brand web palette instead of the local TUI theme
+- Updated export logic to allow choosing between brand-web or local TUI color palettes
 - Clamped browser tool timeouts to fail fast with named errors instead of opaque cell timeouts
 - Added strict validation to block unsupported Playwright-only selector engines in browser tools
 
