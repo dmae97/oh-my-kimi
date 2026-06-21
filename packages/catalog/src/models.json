@@ -69284,8 +69284,7 @@
 			"baseUrl": "https://api.code.umans.ai",
 			"reasoning": true,
 			"input": [
-				"text",
-				"image"
+				"text"
 			],
 			"cost": {
 				"input": 0,
@@ -69327,8 +69326,7 @@
 				]
 			},
 			"input": [
-				"text",
-				"image"
+				"text"
 			],
 			"cost": {
 				"input": 0,
