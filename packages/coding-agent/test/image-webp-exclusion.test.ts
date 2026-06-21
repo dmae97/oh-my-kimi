@@ -55,6 +55,10 @@ describe("modelLacksWebpSupport", () => {
 		expect(modelLacksWebpSupport({ provider: "my-local-ollama", api: "ollama-chat" })).toBe(true);
 	});
 
+	test("flags the Codex Responses backend", () => {
+		expect(modelLacksWebpSupport({ provider: "openai-codex", api: "openai-codex-responses" })).toBe(true);
+	});
+
 	test("flags local model provider ids", () => {
 		for (const provider of ["llama.cpp", "lm-studio", "local-server"]) {
 			expect(modelLacksWebpSupport({ provider, api: "openai-completions" })).toBe(true);
@@ -128,6 +132,19 @@ describe("normalizeModelContextImages model-aware WebP exclusion", () => {
 
 		const result = await normalizeModelContextImages([webp], {
 			model: buildStbVisionModel("my-renamed-llama"),
+		});
+
+		expect(result).toHaveLength(1);
+		const mime = result![0]!.mimeType;
+		expect(mime).not.toBe("image/webp");
+		expect(["image/png", "image/jpeg"]).toContain(mime);
+	});
+
+	test("re-encodes a WebP image out of WebP for the Codex Responses backend", async () => {
+		const webp = { type: "image" as const, data: await makeRedWebP(200, 200), mimeType: "image/webp" };
+
+		const result = await normalizeModelContextImages([webp], {
+			model: buildLocalVisionModel("openai-codex", "openai-codex-responses"),
 		});
 
 		expect(result).toHaveLength(1);

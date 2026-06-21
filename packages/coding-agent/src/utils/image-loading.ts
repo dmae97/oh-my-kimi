@@ -9,9 +9,10 @@ export const SUPPORTED_INPUT_IMAGE_MIME_TYPES = SUPPORTED_IMAGE_MIME_TYPES;
 
 /**
  * Ollama and its local-backend family decode image input through llama.cpp /
- * `stb_image`, which is compiled without WebP support, so a WebP upload fails
- * with an opaque HTTP 400. Detect those models so the resize pipeline encodes
- * to PNG/JPEG instead — the automatic equivalent of `OMP_NO_WEBP=1`.
+ * `stb_image`, which is compiled without WebP support. The first-party Codex
+ * Responses backend also rejects WebP `input_image.image_url` data URLs. Detect
+ * those models so the resize pipeline encodes to PNG/JPEG instead — the
+ * automatic equivalent of `OMP_NO_WEBP=1`.
  */
 export function modelLacksWebpSupport(
 	model: Pick<Model, "provider" | "api" | "imageInputDecoder"> | undefined,
@@ -19,6 +20,8 @@ export function modelLacksWebpSupport(
 	if (!model) return false;
 	return (
 		model.imageInputDecoder === "stb" ||
+		model.api === "openai-codex-responses" ||
+		model.provider === "openai-codex" ||
 		model.provider === "ollama" ||
 		model.provider === "ollama-cloud" ||
 		model.provider === "llama.cpp" ||
