@@ -104,7 +104,12 @@ import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import { formatPhaseDisplayName, phaseRomanNumeral, selectStickyTodoWindow, todoMatchesAnyDescription } from "../tools/todo";
+import {
+	formatPhaseDisplayName,
+	phaseRomanNumeral,
+	selectStickyTodoWindow,
+	todoMatchesAnyDescription,
+} from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { vocalizer } from "../tts/vocalizer";
 import type { EventBus } from "../utils/event-bus";
