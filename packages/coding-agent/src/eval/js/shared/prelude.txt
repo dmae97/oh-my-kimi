@@ -117,7 +117,13 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 
 	const agent = async (prompt, opts, ...rest) => {
-		const o = optionsArg("agent", opts, rest, ["agentType", "model", "label", "schema"], "{ agentType, model, label, schema, returnHandle }");
+		const o = optionsArg(
+			"agent",
+			opts,
+			rest,
+			["agentType", "model", "label", "schema", "isolated", "apply", "merge"],
+			"{ agentType, model, label, schema, isolated, apply, merge, returnHandle }",
+		);
 		const { returnHandle, ...callArgs } = o;
 		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs });
 		const text = res && typeof res === "object" ? res.text : res;

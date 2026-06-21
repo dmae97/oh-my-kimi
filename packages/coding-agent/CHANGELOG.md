@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `isolated`, `apply`, and `merge` options to eval `agent()` so `workflowz`-driven fan-outs can request the same copy-on-write worktree isolation the `task` tool offers (defaults track `task.isolation.mode`; `apply: false` keeps captured patches/branches without merging back; `merge: false` forces patch mode). Extracted the task-isolation lifecycle into `task/isolation-runner.ts` so the eval bridge and `TaskTool` share one implementation ([#3196](https://github.com/can1357/oh-my-pi/issues/3196))
+
 ## [16.1.10] - 2026-06-21
 
 ### Added

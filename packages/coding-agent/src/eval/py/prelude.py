@@ -520,7 +520,7 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, return_handle=False):
+    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, isolated=None, apply=None, merge=None, return_handle=False):
         """Run a subagent and return its final output.
 
         `agent_type` selects the subagent definition (default "task"). Pass
@@ -528,6 +528,21 @@ if "__omp_prelude_loaded__" not in globals():
         id, and `schema` to request structured JSON output; when `schema` is
         supplied the parsed object is returned. Share background by writing a
         local:// file and referencing it in the prompt.
+
+        Pass `isolated=True` to run the subagent inside an isolation worktree
+        (copy-on-write of the parent repo) so parallel `agent()` spawns can
+        edit overlapping files safely. The default tracks the session's
+        `task.isolation.mode`: opt-in when isolation is enabled, off when set
+        to "none". `isolated=False` explicitly disables isolation even when
+        the setting would default it on; `isolated=True` while the mode is
+        "none" errors the call instead of silently downgrading.
+
+        When isolated, `apply=False` keeps captured changes inside the
+        worktree and surfaces the patch artifact / branch name in the
+        returned details so the caller can inspect or apply manually.
+        `merge=False` forces patch mode even when `task.isolation.merge` is
+        `"branch"`, avoiding the per-call git lock + repo mutation that
+        branch mode performs.
 
         Set `return_handle=True` to receive a DAG node dict instead of bare
         text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
@@ -547,6 +562,12 @@ if "__omp_prelude_loaded__" not in globals():
             args["label"] = label
         if schema is not None:
             args["schema"] = schema
+        if isolated is not None:
+            args["isolated"] = bool(isolated)
+        if apply is not None:
+            args["apply"] = bool(apply)
+        if merge is not None:
+            args["merge"] = bool(merge)
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         parsed = json.loads(text) if schema is not None else text

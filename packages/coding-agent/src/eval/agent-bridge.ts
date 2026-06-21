@@ -12,9 +12,18 @@ import { MCPManager } from "../mcp/manager";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import * as taskDiscovery from "../task/discovery";
+import type { ExecutorOptions } from "../task/executor";
 import * as taskExecutor from "../task/executor";
+import {
+	type IsolationContext,
+	mergeIsolatedChanges,
+	prepareIsolationContext,
+	runIsolatedSubprocess,
+} from "../task/isolation-runner";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
+import { applyNestedPatches, parseIsolationMode } from "../task/worktree";
+import { generateCommitMessage } from "../utils/commit-message-generator";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
@@ -37,6 +46,9 @@ const agentArgsSchema = type({
 	"model?": "string>0|string>0[]",
 	"label?": "string",
 	"schema?": "unknown",
+	"isolated?": "boolean",
+	"apply?": "boolean",
+	"merge?": "boolean",
 });
 
 interface EvalAgentArgs {
@@ -45,6 +57,29 @@ interface EvalAgentArgs {
 	model?: string | string[];
 	label?: string;
 	schema?: unknown;
+	/**
+	 * Run this subagent inside an isolation worktree (copy-on-write of the
+	 * parent repo). Defaults to the session's `task.isolation.mode`: opt-in
+	 * when isolation is enabled, off when `mode === "none"`. Passing `false`
+	 * explicitly overrides the inherited default; passing `true` while
+	 * `mode === "none"` errors out to match the `task` tool.
+	 */
+	isolated?: boolean;
+	/**
+	 * When isolated, apply the captured patch / merge the captured branch back
+	 * to the parent repo (default `true`). Pass `false` to keep changes in the
+	 * isolation worktree only — the patch artifact path / branch name lands in
+	 * the result so the caller can inspect or apply manually.
+	 */
+	apply?: boolean;
+	/**
+	 * When isolated, allow branch-merge mode (cherry-pick onto HEAD). Defaults
+	 * to `true`, in which case the active `task.isolation.merge` setting picks
+	 * patch vs branch. Pass `false` to force patch mode even when the setting
+	 * is `"branch"` — useful when a fan-out cannot tolerate the per-call git
+	 * lock + repo mutation that branch mode performs.
+	 */
+	merge?: boolean;
 }
 
 export interface EvalAgentBridgeOptions {
@@ -60,6 +95,20 @@ export interface EvalAgentResult {
 		id: string;
 		model?: string | string[];
 		structured: boolean;
+		/** True iff this run executed inside an isolation worktree. */
+		isolated?: boolean;
+		/** Captured patch artifact (patch mode) — surfaced regardless of `apply`. */
+		patchPath?: string;
+		/** Captured branch (branch mode) — surfaced regardless of `apply`. */
+		branchName?: string;
+		/**
+		 * Tri-state apply outcome for isolated runs:
+		 * - `true`  — apply ran (or had nothing to do) and left the repo clean.
+		 * - `false` — apply attempted and failed; artifacts preserved.
+		 * - `null`  — caller opted out via `apply=false`.
+		 * Omitted for non-isolated runs.
+		 */
+		changesApplied?: boolean | null;
 	};
 }
 
@@ -129,15 +178,24 @@ function getOutputManager(session: ToolSession): AgentOutputManager {
 	return manager;
 }
 
-async function getArtifacts(session: ToolSession): Promise<{
+interface ArtifactPaths {
 	sessionFile: string | null;
 	artifactsDir: string;
-}> {
+	/**
+	 * True when `artifactsDir` was created off the session path (no session
+	 * file). Caller is then free to `rm -rf` it once all isolated patch
+	 * artifacts have been consumed or applied.
+	 */
+	tempArtifactsDir: boolean;
+}
+
+async function getArtifacts(session: ToolSession): Promise<ArtifactPaths> {
 	const sessionFile = session.getSessionFile();
 	const sessionArtifactsDir = sessionFile ? sessionFile.slice(0, -6) : null;
+	const tempArtifactsDir = sessionArtifactsDir === null;
 	const artifactsDir = sessionArtifactsDir ?? path.join(os.tmpdir(), `omp-eval-agent-${Snowflake.next()}`);
 	await fs.mkdir(artifactsDir, { recursive: true });
-	return { sessionFile, artifactsDir };
+	return { sessionFile, artifactsDir, tempArtifactsDir };
 }
 
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
@@ -235,69 +293,203 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	};
 	const parentArtifactManager = options.session.getArtifactManager?.() ?? undefined;
 	const mcpManager = options.session.mcpManager ?? MCPManager.instance();
-	const { sessionFile, artifactsDir } = await getArtifacts(options.session);
+	const { sessionFile, artifactsDir, tempArtifactsDir } = await getArtifacts(options.session);
 	const outputManager = getOutputManager(options.session);
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
 	const assignment = parsed.prompt.trim();
+
+	// Isolation gating. Default to the session's `task.isolation.mode` — opt
+	// out only when the caller explicitly passes `isolated=False`. `isolated=True`
+	// while the mode is "none" mirrors the `task` tool: surface a clear error
+	// instead of silently downgrading.
+	const isolationMode = options.session.settings.get("task.isolation.mode");
+	const isolationEnabledInSettings = isolationMode !== "none";
+	let isIsolated: boolean;
+	if (parsed.isolated === true) {
+		if (!isolationEnabledInSettings) {
+			throw new ToolError(
+				`agent(isolated=True) requires task.isolation.mode to be set; current mode is "none".`,
+			);
+		}
+		isIsolated = true;
+	} else if (parsed.isolated === false) {
+		isIsolated = false;
+	} else {
+		isIsolated = isolationEnabledInSettings;
+	}
+	const settingsMergeMode = options.session.settings.get("task.isolation.merge");
+	const mergeMode: "patch" | "branch" = parsed.merge === false ? "patch" : settingsMergeMode;
+	const applyChanges = parsed.apply !== false;
+
+	let isolationContext: IsolationContext | null = null;
+	if (isIsolated) {
+		try {
+			isolationContext = await prepareIsolationContext(options.session.cwd);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
+		}
+	}
+	const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
+
+	const commitStyle = options.session.settings.get("task.isolation.commits");
+	const buildCommitMessage = () =>
+		commitStyle === "ai" && options.session.modelRegistry
+			? async (diff: string) => {
+					return generateCommitMessage(
+						diff,
+						options.session.modelRegistry!,
+						options.session.settings,
+						options.session.getSessionId?.() ?? undefined,
+					);
+				}
+			: undefined;
+
+	const baseRunOptions: ExecutorOptions = {
+		cwd: options.session.cwd,
+		agent: effectiveAgent,
+		task: renderSubagentPrompt(assignment),
+		assignment,
+		description: trimToUndefined(parsed.label),
+		index: 0,
+		id,
+		taskDepth: options.session.taskDepth ?? 0,
+		modelOverride,
+		parentActiveModelPattern,
+		thinkingLevel: effectiveAgent.thinkingLevel,
+		outputSchema: structured ? parsed.schema : undefined,
+		sessionFile,
+		persistArtifacts: Boolean(sessionFile),
+		artifactsDir,
+		// Eval `agent()` subagents are short-lived programmatic helpers (data
+		// collection, structured output, parallel() fan-out). LSP server
+		// cold-start costs tens of seconds and is pure overhead here, so it is
+		// forced off regardless of the `task.enableLsp` setting — that knob only
+		// governs LSP-aware delegation through the `task` tool.
+		enableLsp: false,
+		signal: options.signal,
+		eventBus: options.session.eventBus,
+		onProgress: progress => emitProgressStatus(options.emitStatus, progress),
+		authStorage: options.session.authStorage,
+		modelRegistry: options.session.modelRegistry,
+		settings: options.session.settings,
+		// Eval `agent()` subagents are never wall-clock capped: the parent
+		// cell's idle watchdog is suspended for the whole bridge call
+		// (withBridgeTimeoutPause), so a long-running phase/recovery workflow
+		// must not be killed by `task.maxRuntimeMs`. Force the limit off
+		// regardless of the inherited session setting.
+		maxRuntimeMs: 0,
+		mcpManager,
+		contextFiles,
+		skills: availableSkills,
+		autoloadSkills: resolvedAutoloadSkills,
+		workspaceTree: options.session.workspaceTree,
+		promptTemplates: options.session.promptTemplates,
+		localProtocolOptions,
+		parentArtifactManager,
+		parentHindsightSessionState: options.session.getHindsightSessionState?.(),
+		parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
+		parentTelemetry: options.session.getTelemetry?.(),
+		parentAgentId: options.session.getAgentId?.() ?? MAIN_AGENT_ID,
+		// Deliberately omit parentEvalSessionId: the parent's Python kernel is
+		// blocked on this bridge call, so sharing the eval session would deadlock
+		// (subagent queues behind the parent's in-flight execution, parent waits
+		// for subagent → circular). Each bridge-spawned subagent gets its own
+		// eval session with an independent kernel.
+	};
+
 	// Suspend eval timeout accounting while the subagent owns control. The
 	// timeout clock restarts once the bridge returns to the cell runtime.
-	const result = await withBridgeTimeoutPause(options.emitStatus, () =>
-		taskExecutor.runSubprocess({
-			cwd: options.session.cwd,
-			agent: effectiveAgent,
-			task: renderSubagentPrompt(assignment),
-			assignment,
-			description: trimToUndefined(parsed.label),
-			index: 0,
-			id,
-			taskDepth: options.session.taskDepth ?? 0,
-			modelOverride,
-			parentActiveModelPattern,
-			thinkingLevel: effectiveAgent.thinkingLevel,
-			outputSchema: structured ? parsed.schema : undefined,
-			sessionFile,
-			persistArtifacts: Boolean(sessionFile),
+	const result = await withBridgeTimeoutPause(options.emitStatus, async () => {
+		if (!isolationContext) {
+			return taskExecutor.runSubprocess(baseRunOptions);
+		}
+		const taskStart = Date.now();
+		return runIsolatedSubprocess({
+			baseOptions: baseRunOptions,
+			context: isolationContext,
+			preferredBackend,
+			agentId: id,
+			mergeMode,
 			artifactsDir,
-			// Eval `agent()` subagents are short-lived programmatic helpers (data
-			// collection, structured output, parallel() fan-out). LSP server
-			// cold-start costs tens of seconds and is pure overhead here, so it is
-			// forced off regardless of the `task.enableLsp` setting — that knob only
-			// governs LSP-aware delegation through the `task` tool.
-			enableLsp: false,
-			signal: options.signal,
-			eventBus: options.session.eventBus,
-			onProgress: progress => emitProgressStatus(options.emitStatus, progress),
-			authStorage: options.session.authStorage,
-			modelRegistry: options.session.modelRegistry,
-			settings: options.session.settings,
-			// Eval `agent()` subagents are never wall-clock capped: the parent
-			// cell's idle watchdog is suspended for the whole bridge call
-			// (withBridgeTimeoutPause), so a long-running phase/recovery workflow
-			// must not be killed by `task.maxRuntimeMs`. Force the limit off
-			// regardless of the inherited session setting.
-			maxRuntimeMs: 0,
-			mcpManager,
-			contextFiles,
-			skills: availableSkills,
-			autoloadSkills: resolvedAutoloadSkills,
-			workspaceTree: options.session.workspaceTree,
-			promptTemplates: options.session.promptTemplates,
-			localProtocolOptions,
-			parentArtifactManager,
-			parentHindsightSessionState: options.session.getHindsightSessionState?.(),
-			parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
-			parentTelemetry: options.session.getTelemetry?.(),
-			parentAgentId: options.session.getAgentId?.() ?? MAIN_AGENT_ID,
-			// Deliberately omit parentEvalSessionId: the parent's Python kernel is
-			// blocked on this bridge call, so sharing the eval session would deadlock
-			// (subagent queues behind the parent's in-flight execution, parent waits
-			// for subagent → circular). Each bridge-spawned subagent gets its own
-			// eval session with an independent kernel.
-		}),
-	);
+			description: trimToUndefined(parsed.label),
+			buildCommitMessage,
+			buildFailureResult: err => {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					index: 0,
+					id,
+					agent: effectiveAgent.name,
+					agentSource: effectiveAgent.source,
+					task: renderSubagentPrompt(assignment),
+					assignment,
+					description: trimToUndefined(parsed.label),
+					exitCode: 1,
+					output: "",
+					stderr: message,
+					truncated: false,
+					durationMs: Date.now() - taskStart,
+					tokens: 0,
+					requests: 0,
+					modelOverride,
+					error: message,
+				};
+			},
+		});
+	});
 
 	if (result.exitCode !== 0 || result.error || result.aborted) {
 		throw new ToolError(buildSubagentFailureMessage(agentName, result));
+	}
+
+	let mergeSummary = "";
+	let changesApplied: boolean | null = null;
+	if (isIsolated && isolationContext) {
+		if (applyChanges) {
+			const outcome = await mergeIsolatedChanges({
+				result,
+				repoRoot: isolationContext.repoRoot,
+				mergeMode,
+			});
+			mergeSummary = outcome.summary;
+			changesApplied = outcome.changesApplied;
+
+			// Apply nested repo patches (separate from parent git) under the same
+			// gating TaskTool uses: only when the parent merge made it through.
+			if (mergeMode === "branch" || outcome.changesApplied !== false) {
+				const nestedPatches = result.nestedPatches ?? [];
+				const eligible =
+					nestedPatches.length > 0 &&
+					result.exitCode === 0 &&
+					!result.aborted &&
+					(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
+				if (eligible) {
+					try {
+						await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
+					} catch {
+						// Nested patch failures are non-fatal to the parent merge
+						mergeSummary +=
+							"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+					}
+				}
+			}
+		} else if (result.branchName) {
+			mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
+		} else if (result.patchPath) {
+			mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
+		} else {
+			mergeSummary = "\n\nIsolation: no changes captured.";
+		}
+	}
+
+	// Clean up the temp artifacts dir we created for this call when isolation
+	// did not need to preserve the patch artifact (TaskTool follows the same
+	// invariant). A failed apply (`changesApplied === false`) keeps the dir so
+	// the caller can recover from `result.patchPath` manually.
+	const shouldCleanupTempArtifacts =
+		tempArtifactsDir && (!isIsolated || changesApplied === true || changesApplied === null);
+	if (shouldCleanupTempArtifacts) {
+		await fs.rm(artifactsDir, { recursive: true, force: true });
 	}
 
 	options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
@@ -308,12 +500,16 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// coalesce over the richer one and drop those stats.
 
 	return {
-		text: result.output,
+		text: result.output + mergeSummary,
 		details: {
 			agent: result.agent,
 			id: result.id,
 			model: result.resolvedModel ?? modelOverride,
 			structured,
+			isolated: isIsolated || undefined,
+			patchPath: result.patchPath,
+			branchName: result.branchName,
+			changesApplied: isIsolated ? changesApplied : undefined,
 		},
 	};
 }
