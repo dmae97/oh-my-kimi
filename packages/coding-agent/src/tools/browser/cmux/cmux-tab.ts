@@ -434,6 +434,12 @@ export class CmuxTab {
 		return new CmuxElementHandle(this, selector);
 	}
 
+	async waitForSelector(selector: string, opts?: { timeout?: number }): Promise<CmuxElementHandle> {
+		const timeoutMs = opts?.timeout ?? this.#runContext?.timeoutMs ?? 30_000;
+		await this.#waitForSelector(selector, timeoutMs);
+		return new CmuxElementHandle(this, selector);
+	}
+
 	async evaluate<TResult, TArgs extends unknown[]>(
 		fn: string | ((...args: TArgs) => TResult | Promise<TResult>),
 		...args: TArgs
@@ -547,6 +553,37 @@ export class CmuxTab {
 			await Bun.sleep(200);
 		}
 		throw new ToolError(`tab.waitForUrl() timed out after ${timeoutMs}ms`);
+	}
+
+	async waitForNavigation(opts?: { waitUntil?: WaitUntil; timeout?: number }): Promise<null> {
+		const timeoutMs = opts?.timeout ?? this.#runContext?.timeoutMs ?? 30_000;
+		// Cmux has no native "next navigation" wait — snapshot the current URL via a fresh
+		// `browser.url.get` (never the possibly-stale `#lastUrl`), then poll for a change
+		// from it (mirroring headless `page.waitForNavigation` intent) and optionally settle
+		// on the requested load state. Start it BEFORE the click/submit that navigates; after
+		// a completed nav it times out like puppeteer does.
+		const baseline = (await this.#request("browser.url.get", {}, Math.min(timeoutMs, 5_000))) as CmuxUrlGetResult;
+		const startUrl = typeof baseline.url === "string" && baseline.url.length > 0 ? baseline.url : this.#lastUrl;
+		if (typeof baseline.url === "string" && baseline.url.length > 0) this.#lastUrl = baseline.url;
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() <= deadline) {
+			const result = (await this.#request("browser.url.get", {}, Math.min(timeoutMs, 5_000))) as CmuxUrlGetResult;
+			if (typeof result.url === "string" && result.url.length > 0) {
+				this.#lastUrl = result.url;
+				if (result.url !== startUrl) {
+					if (opts?.waitUntil) {
+						await this.#request(
+							"browser.wait",
+							{ load_state: mapWaitUntil(opts.waitUntil), timeout_ms: timeoutMs },
+							timeoutMs,
+						);
+					}
+					return null;
+				}
+			}
+			await Bun.sleep(200);
+		}
+		throw new ToolError(`tab.waitForNavigation() timed out after ${timeoutMs}ms`);
 	}
 
 	async drag(from: DragTarget, to: DragTarget): Promise<void> {
