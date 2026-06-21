@@ -39,6 +39,10 @@ const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
 const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Xiaomi MiMo Pro on api.xiaomimimo.com can stall ~2min before the first event (issue #1770). */
+const XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Alibaba Coding Plan (coding-intl.dashscope) qwen models idle before the first event (issue #1770). */
+const ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 const MINIMAX_PROVIDER_OR_ID_PATTERN = /minimax/i;
 const DSML_HEALING_PROVIDERS = new Set([
 	"ollama",
@@ -287,11 +291,15 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const streamIdleTimeoutMs =
 		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu)
 			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
-			: spec.reasoning && isKimiK26ModelId(spec.id)
-				? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
-				: spec.reasoning && isDirectDeepseekApi
-					? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
-					: undefined;
+			: provider === "alibaba-coding-plan"
+				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
+				: isXiaomiMimo
+					? XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS
+					: spec.reasoning && isKimiK26ModelId(spec.id)
+						? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
+						: spec.reasoning && isDirectDeepseekApi
+							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
+							: undefined;
 
 	// Fireworks "Fast" variants (`<id>-fast`) are served from the router
 	// namespace (`accounts/fireworks/routers/<id>-fast`), like Fire Pass, rather
