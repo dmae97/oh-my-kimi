@@ -989,7 +989,10 @@ function runDockerCleanup(force: boolean): void {
 			process.stdout.write(
 				dim(`${force ? "Force-removing" : "Removing"} ${ids.length} leftover Harbor container(s)...\n`),
 			);
-			spawnSync("docker", force ? ["rm", "-f", ...ids] : ["rm", ...ids]);
+			const rm = spawnSync("docker", force ? ["rm", "-f", ...ids] : ["rm", ...ids], { encoding: "utf8" });
+			if (rm.status !== 0) {
+				process.stdout.write(yellow(`  docker rm failed: ${(rm.stderr ?? "").trim() || `exit ${rm.status}`}\n`));
+			}
 		}
 
 		// Networks of projects that still have a running container are kept (non-force).
@@ -1016,7 +1019,16 @@ function runDockerCleanup(force: boolean): void {
 			}
 			if (netIdsToRemove.length > 0) {
 				process.stdout.write(dim(`Removing ${netIdsToRemove.length} stale trial Docker network(s)...\n`));
-				for (const netId of netIdsToRemove) spawnSync("docker", ["network", "rm", netId]);
+				for (const netId of netIdsToRemove) {
+					const rmNet = spawnSync("docker", ["network", "rm", netId], { encoding: "utf8" });
+					if (rmNet.status !== 0) {
+						process.stdout.write(
+							yellow(
+								`  docker network rm ${netId} failed: ${(rmNet.stderr ?? "").trim() || `exit ${rmNet.status}`}\n`,
+							),
+						);
+					}
+				}
 			}
 		}
 		process.stdout.write("Docker cleanup completed.\n");
