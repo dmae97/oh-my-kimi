@@ -71,7 +71,7 @@ describe("AgentDashboard create editor", () => {
 
 		expect(rendered).toContain("> first line");
 		expect(rendered).toContain("  second line");
-		expect(rendered).toContain("Ctrl+Enter: generate");
+		expect(rendered).toContain("Ctrl+Q/Ctrl+Enter: generate");
 		expect(rendered).toContain("Enter: newline");
 		expect(rendered).not.toContain("Description is required.");
 	});
@@ -105,10 +105,51 @@ describe("AgentDashboard create editor", () => {
 
 		expect(rendered).toContain("> first line");
 		expect(rendered).toContain("  second line");
-		expect(rendered).toContain("Ctrl+Enter: generate");
+		expect(rendered).toContain("Ctrl+Q/Ctrl+Enter: generate");
 		expect(rendered).toContain("Enter: newline");
 		expect(rendered).not.toContain("Model registry unavailable in current session.");
 		expect(rendered).not.toContain("Description is required.");
+	});
+
+	test("submits new-agent descriptions on Ctrl+Q (Windows Terminal fallback for #2118)", async () => {
+		await initTheme(false);
+		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
+
+		dashboard.handleInput("n");
+		typeText(dashboard, "first line");
+		dashboard.handleInput("\r");
+		typeText(dashboard, "second line");
+		// Ctrl+Q raw byte (0x11). Windows Terminal can't deliver a distinct
+		// Ctrl+Enter event, so the app.message.followUp keybinding doubles as a
+		// portable submit chord and must apply to the create form too.
+		dashboard.handleInput("\x11");
+		await Bun.sleep(0);
+		const rendered = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
+
+		expect(rendered).toContain("Model registry unavailable in current session.");
+		expect(rendered).not.toContain("Description is required.");
+	});
+
+	test("Ctrl+Q still works after pressing Enter for a newline (Windows Terminal)", async () => {
+		await initTheme(false);
+		const dashboard = await AgentDashboard.create(await makeTempCwd(), settingsStub, 24, {});
+
+		dashboard.handleInput("n");
+		typeText(dashboard, "line one");
+		// Windows Terminal sends bare `\r` for both Enter and Ctrl+Enter; the
+		// dashboard must treat `\r` as a newline so the user can keep typing.
+		dashboard.handleInput("\r");
+		typeText(dashboard, "line two");
+		const beforeSubmit = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
+		expect(beforeSubmit).toContain("> line one");
+		expect(beforeSubmit).toContain("  line two");
+		expect(beforeSubmit).not.toContain("Model registry unavailable in current session.");
+
+		dashboard.handleInput("\x11");
+		await Bun.sleep(0);
+		const afterSubmit = dashboard.render(80).join("\n").replace(ANSI_PATTERN, "");
+
+		expect(afterSubmit).toContain("Model registry unavailable in current session.");
 	});
 });
 

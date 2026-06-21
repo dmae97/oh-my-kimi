@@ -52,7 +52,12 @@ import { discoverAgents } from "../../task/discovery";
 import type { AgentDefinition, AgentSource } from "../../task/types";
 import { shortenPath } from "../../tools/render-utils";
 import { getEditorTheme, theme } from "../theme/theme";
-import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
+import {
+	matchesAppFollowUp,
+	matchesAppInterrupt,
+	matchesSelectDown,
+	matchesSelectUp,
+} from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
 
 type SourceTabId = "all" | AgentSource;
@@ -652,11 +657,6 @@ export class AgentDashboard extends Container {
 		this.#buildLayout();
 	}
 
-	#shouldSubmitCreateDescription(data: string): boolean {
-		if (matchesKey(data, "ctrl+enter")) return true;
-		return process.platform === "win32" && data === "\n" && this.#createDescription.trim().length > 0;
-	}
-
 	async #generateAgentFromDescription(rawDescription: string): Promise<void> {
 		const description = rawDescription.trim();
 		this.#createDescription = description;
@@ -911,7 +911,7 @@ export class AgentDashboard extends Container {
 		this.addChild(new Spacer(1));
 		const hints = this.#createGenerating
 			? " Generating..."
-			: " Ctrl+Enter: generate  Enter: newline  Tab: toggle scope  Esc: cancel";
+			: " Ctrl+Q/Ctrl+Enter: generate  Enter: newline  Tab: toggle scope  Esc: cancel";
 		this.addChild(new Text(theme.fg("dim", hints), 0, 0));
 	}
 
@@ -1102,7 +1102,7 @@ export class AgentDashboard extends Container {
 				}
 				return;
 			}
-			if (!this.#createGenerating && this.#shouldSubmitCreateDescription(data)) {
+			if (!this.#createGenerating && matchesAppFollowUp(data)) {
 				this.#submitCreateDescription();
 				return;
 			}

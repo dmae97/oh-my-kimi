@@ -3,22 +3,23 @@
  * Supports Ctrl+G for external editor.
  *
  * Two modes:
- * - Default (hook): Enter inserts newline, Ctrl+Enter submits, bordered popup
+ * - Default (hook): Enter inserts newline, the `app.message.followUp` chord
+ *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
 import { Container, Editor, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { getEditorTheme, theme } from "../../modes/theme/theme";
-import { matchesAppExternalEditor, matchesAppInterrupt } from "../../modes/utils/keybinding-matchers";
+import {
+	matchesAppExternalEditor,
+	matchesAppFollowUp,
+	matchesAppInterrupt,
+} from "../../modes/utils/keybinding-matchers";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { DynamicBorder } from "./dynamic-border";
 
 export interface HookEditorOptions {
 	/** When true, use prompt-style keybindings with the legacy ask prompt chrome. */
 	promptStyle?: boolean;
-}
-
-function isCtrlEnterSubmit(keyData: string): boolean {
-	return matchesKey(keyData, "ctrl+enter") || (keyData.charCodeAt(0) === 10 && keyData.length > 1);
 }
 
 export class HookEditorComponent extends Container {
@@ -67,7 +68,7 @@ export class HookEditorComponent extends Container {
 		// Hint
 		const hint = this.#promptStyle
 			? "enter submit  esc cancel  ctrl+g external editor"
-			: "ctrl+enter submit  esc cancel  ctrl+g external editor";
+			: "ctrl+q/ctrl+enter submit  esc cancel  ctrl+g external editor";
 		this.addChild(new Text(theme.fg("dim", hint), 1, 0));
 
 		this.addChild(new Spacer(1));
@@ -118,10 +119,12 @@ export class HookEditorComponent extends Container {
 		this.#editor.handleInput(keyData);
 	}
 
-	/** Hook-style: Enter=newline, Ctrl+Enter=submit (original behavior) */
+	/** Hook-style: Enter=newline, app.message.followUp chord (Ctrl+Q/Ctrl+Enter) submits. */
 	#handleHookStyleInput(keyData: string): void {
-		// Ctrl+Enter to submit. Use key matching so lock-key and keypad Enter variants work.
-		if (isCtrlEnterSubmit(keyData)) {
+		// Submit on the follow-up chord. Uses the shared keybinding so Ctrl+Q works
+		// on Windows Terminal (#1903) and any user remap of `app.message.followUp`
+		// applies here too.
+		if (matchesAppFollowUp(keyData)) {
 			this.#submitCurrentText();
 			return;
 		}
