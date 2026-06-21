@@ -7,10 +7,19 @@
  * catalog contract and the case-sensitive id pass-through against the wire.
  */
 import { describe, expect, it } from "bun:test";
+import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { createModelManager } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { waferServerlessModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-catalog/types";
+
+function sseResponse(events: unknown[]): Response {
+	const payload = `${events.map(e => `data: ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n\n")}\n\n`;
+	return new Response(payload, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
 
 describe("Wafer Serverless provider", () => {
 	it("ships the documented Serverless catalog (GLM-5.1, Qwen3.5, Qwen3.6, Qwen3.7-Max, Kimi-K2.6, DeepSeek V4 Flash/Pro)", () => {
@@ -69,6 +78,37 @@ describe("Wafer Serverless provider", () => {
 		expect(dsPro.contextWindow).toBe(1000000);
 		expect(dsPro.reasoning).toBe(true);
 		expect(dsPro.compatConfig?.thinkingFormat).toBeUndefined();
+	});
+
+	it("preserves the catalog id verbatim on the wire (no rewrite, case-sensitive)", async () => {
+		const model = getBundledModel<"openai-completions">("wafer-serverless", "GLM-5.1");
+		const captured: { url: string | null; body: string | null } = { url: null, body: null };
+		const fetchMock: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			captured.url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			captured.body = typeof init?.body === "string" ? init.body : null;
+			return sseResponse(["[DONE]"]);
+		};
+
+		const context: Context = {
+			systemPrompt: ["t"],
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		};
+		const stream = streamOpenAICompletions(model as Model<"openai-completions">, context, {
+			apiKey: "wfr_test",
+			fetch: fetchMock,
+		});
+		for await (const _event of stream) {
+			/* drain */
+		}
+
+		expect(captured.url).toBe("https://pass.wafer.ai/v1/chat/completions");
+		expect(captured.body).not.toBeNull();
+		const parsed = JSON.parse(captured.body ?? "{}") as { model?: unknown };
+		// Wafer's docs note model names are case-insensitive on input, but the
+		// canonical id has mixed case; we must round-trip it unchanged so users
+		// who pin `GLM-5.1` don't end up with usage rows under `glm-5.1` or
+		// hitting the upstream 404 path.
+		expect(parsed.model).toBe("GLM-5.1");
 	});
 });
 

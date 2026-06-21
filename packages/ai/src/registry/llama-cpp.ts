@@ -3,7 +3,7 @@ import type { ProviderDefinition } from "./types";
 
 const PROVIDER_ID = "llama.cpp";
 const AUTH_URL = "https://github.com/ggml-org/llama.cpp#quick-start";
-const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8080/v1";
+const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8080";
 const DEFAULT_LOCAL_TOKEN = "llama-cpp-local";
 
 export async function loginLlamaCpp(options: OAuthController): Promise<string> {
