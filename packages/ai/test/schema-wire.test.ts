@@ -433,7 +433,12 @@ describe("const-union collapse", () => {
 		const param = {
 			type: "object",
 			properties: {
-				x: { anyOf: [{ const: "a", description: "lbl" }, { const: "b", description: "lbl" }] },
+				x: {
+					anyOf: [
+						{ const: "a", description: "lbl" },
+						{ const: "b", description: "lbl" },
+					],
+				},
 			},
 			required: ["x"],
 			additionalProperties: false,
@@ -470,7 +475,12 @@ describe("const-union collapse", () => {
 		const param = {
 			type: "object",
 			properties: {
-				x: { anyOf: [{ const: "a", description: "first" }, { const: "b", description: "second" }] },
+				x: {
+					anyOf: [
+						{ const: "a", description: "first" },
+						{ const: "b", description: "second" },
+					],
+				},
 			},
 			required: ["x"],
 			additionalProperties: false,
@@ -490,7 +500,10 @@ describe("const-union collapse", () => {
 			properties: {
 				x: {
 					description: "parent",
-					anyOf: [{ const: "a", description: "branch" }, { const: "b", description: "branch" }],
+					anyOf: [
+						{ const: "a", description: "branch" },
+						{ const: "b", description: "branch" },
+					],
 				},
 			},
 			required: ["x"],

@@ -436,7 +436,11 @@ function collapseConstUnionAnyOf(obj: Record<string, unknown>): void {
 	// A shared branch description that disagrees with the union root's own
 	// description would be silently dropped by the collapse — keep the anyOf so
 	// neither annotation is lost. (Equal descriptions, the ArkType case, collapse.)
-	if (describedCount === variants.length && typeof obj.description === "string" && obj.description !== branchDescription) {
+	if (
+		describedCount === variants.length &&
+		typeof obj.description === "string" &&
+		obj.description !== branchDescription
+	) {
 		return;
 	}
 
