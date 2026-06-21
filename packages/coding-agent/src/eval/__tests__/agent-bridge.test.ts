@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
@@ -945,5 +946,40 @@ describe("runEvalAgent isolation", () => {
 		expect(result.details.branchName).toMatch(/^omp\/task\//);
 		expect(result.text).toContain("omp/task/");
 		expect(result.text).toContain("apply=false");
+	});
+
+	it("preserves the temp artifacts dir when apply=false so details.patchPath remains valid", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, { output: "captured", patchPath: `/artifacts/${opts.agentId}.patch` }),
+		);
+
+		const result = await runEvalAgent({ prompt: "scout", apply: false }, { session: isolatedSession() });
+
+		expect(result.details.patchPath).toMatch(/\.patch$/);
+		const removedArtifactsDir = rmSpy.mock.calls.some(([target]) => typeof target === "string" && target.includes("omp-eval-agent-"));
+		expect(removedArtifactsDir).toBe(false);
+	});
+
+	it("still cleans the temp artifacts dir when apply succeeds", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, { output: "captured", patchPath: `/artifacts/${opts.agentId}.patch` }),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\nApplied",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: false,
+		});
+
+		await runEvalAgent({ prompt: "scout" }, { session: isolatedSession() });
+
+		const removedArtifactsDir = rmSpy.mock.calls.some(([target]) => typeof target === "string" && target.includes("omp-eval-agent-"));
+		expect(removedArtifactsDir).toBe(true);
 	});
 });

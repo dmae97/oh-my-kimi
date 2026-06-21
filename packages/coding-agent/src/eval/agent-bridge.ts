@@ -482,12 +482,14 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		}
 	}
 
-	// Clean up the temp artifacts dir we created for this call when isolation
-	// did not need to preserve the patch artifact (TaskTool follows the same
-	// invariant). A failed apply (`changesApplied === false`) keeps the dir so
-	// the caller can recover from `result.patchPath` manually.
-	const shouldCleanupTempArtifacts =
-		tempArtifactsDir && (!isIsolated || changesApplied === true || changesApplied === null);
+	// Clean up the temp artifacts dir we created for this call only when the
+	// caller will not need the captured patch later. We keep it for two cases:
+	//   * a failed apply (`changesApplied === false`) so the user can recover
+	//     from `result.patchPath` manually — matches TaskTool behavior.
+	//   * `apply=false` (`changesApplied === null`), where the caller asked us
+	//     not to merge and consumes `details.patchPath` / `details.branchName`
+	//     out of band.
+	const shouldCleanupTempArtifacts = tempArtifactsDir && (!isIsolated || changesApplied === true);
 	if (shouldCleanupTempArtifacts) {
 		await fs.rm(artifactsDir, { recursive: true, force: true });
 	}
