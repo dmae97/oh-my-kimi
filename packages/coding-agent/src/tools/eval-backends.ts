@@ -4,6 +4,8 @@ import type { ToolSession } from ".";
 export interface EvalBackendsAllowance {
 	python: boolean;
 	js: boolean;
+	ruby: boolean;
+	julia: boolean;
 }
 
 /** Read per-backend allowance from settings (defaults true). */
@@ -11,11 +13,13 @@ export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAll
 	return {
 		python: session.settings.get("eval.py") ?? true,
 		js: session.settings.get("eval.js") ?? true,
+		ruby: session.settings.get("eval.rb") ?? true,
+		julia: session.settings.get("eval.jl") ?? true,
 	};
 }
 
 /**
- * Materialize the active eval backend allowance: PI_PY / PI_JS env flags
+ * Materialize the active eval backend allowance: PI_PY / PI_JS / PI_RB env flags
  * override the per-key settings; otherwise settings (defaults true) win.
  */
 export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
@@ -23,5 +27,7 @@ export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance
 	return {
 		python: $flag("PI_PY", settings.python),
 		js: $flag("PI_JS", settings.js),
+		ruby: $flag("PI_RB", settings.ruby),
+		julia: $flag("PI_JL", settings.julia),
 	};
 }

@@ -164,12 +164,14 @@ import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
+import { disposeJuliaKernelSessionsByOwner } from "../eval/jl/executor";
 import { namespaceSessionId as namespacePythonSessionId } from "../eval/py";
 import {
 	disposeKernelSessionsByOwner,
 	executePython as executePythonCommand,
 	type PythonResult,
 } from "../eval/py/executor";
+import { disposeRubyKernelSessionsByOwner } from "../eval/rb/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
@@ -4242,6 +4244,8 @@ export class AgentSession {
 			);
 		}
 		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
+		await disposeRubyKernelSessionsByOwner(this.#evalKernelOwnerId);
+		await disposeJuliaKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		await this.sessionManager.close();

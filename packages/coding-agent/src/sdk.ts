@@ -46,7 +46,9 @@ import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
+import { disposeAllJuliaKernelSessions, disposeJuliaKernelSessionsByOwner } from "./eval/jl/executor";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
+import { disposeAllRubyKernelSessions, disposeRubyKernelSessionsByOwner } from "./eval/rb/executor";
 import { defaultEvalSessionId } from "./eval/session-id";
 import {
 	type CustomCommandsLoadResult,
@@ -872,6 +874,8 @@ function registerPythonCleanup(): void {
 	if (pythonCleanupRegistered) return;
 	pythonCleanupRegistered = true;
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
+	postmortem.register("ruby-cleanup", disposeAllRubyKernelSessions);
+	postmortem.register("julia-cleanup", disposeAllJuliaKernelSessions);
 }
 
 function customToolToDefinition(tool: CustomTool): ToolDefinition {
@@ -2913,6 +2917,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					await asyncJobManager.dispose({ timeoutMs: 3_000 });
 				}
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
+				await disposeRubyKernelSessionsByOwner(evalKernelOwnerId);
+				await disposeJuliaKernelSessionsByOwner(evalKernelOwnerId);
 				if (ownsAuthStorage) authStorage.close();
 			}
 		} catch (cleanupError) {

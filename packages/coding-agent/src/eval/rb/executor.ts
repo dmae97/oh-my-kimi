@@ -1,0 +1,678 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
+import { Settings } from "../../config/settings";
+import { OutputSink } from "../../session/streaming-output";
+import type { ToolSession } from "../../tools";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { isEvalTimeoutControlEvent } from "../bridge-timeout";
+import type { JsStatusEvent } from "../js/shared/types";
+import { ensurePyToolBridge, registerPyToolBridge } from "../py/tool-bridge";
+import {
+	checkRubyKernelAvailability,
+	type KernelDisplayOutput,
+	type KernelExecuteOptions,
+	type KernelExecuteResult,
+	type KernelRuntimeEnv,
+	RubyKernel,
+} from "./kernel";
+import { resolveExplicitRubyRuntime } from "./runtime";
+
+export interface RubyExecutorOptions {
+	/** Working directory for command execution */
+	cwd?: string;
+	/** Timeout in milliseconds */
+	timeoutMs?: number;
+	/** Absolute wall-clock deadline in milliseconds since epoch */
+	deadlineMs?: number;
+	/**
+	 * Runtime-work budget (ms). Used only for timeout-annotation text when the
+	 * caller drives cancellation via the eval watchdog `signal`. Does not arm a timer.
+	 */
+	idleTimeoutMs?: number;
+	/** Callback for streaming output chunks (already sanitized) */
+	onChunk?: (chunk: string) => Promise<void> | void;
+	/** AbortSignal for cancellation */
+	signal?: AbortSignal;
+	/** Session identifier for kernel reuse */
+	sessionId?: string;
+	/** Logical owner identifier for retained kernel cleanup */
+	kernelOwnerId?: string;
+	/** Explicit interpreter path (`ruby.interpreter`). Skips discovery when set. */
+	interpreter?: string;
+	/** Restart the kernel before executing */
+	reset?: boolean;
+	/** Session file path for accessing task outputs */
+	sessionFile?: string;
+	/** Effective artifacts directory for the current session. */
+	artifactsDir?: string;
+	/** Artifact path/id for full output storage */
+	artifactPath?: string;
+	artifactId?: string;
+	/**
+	 * On-disk roots the prelude helpers substitute for internal-URL schemes
+	 * (e.g. `{ local: "/…/artifacts/local" }`). Exported to the kernel as
+	 * `PI_EVAL_LOCAL_ROOTS` (JSON).
+	 */
+	localRoots?: Record<string, string>;
+	/**
+	 * ToolSession used to resolve host-side `tool.<name>(args)` calls. When
+	 * omitted, the bridge env vars are not injected and `tool.foo(...)` raises.
+	 */
+	toolSession?: ToolSession;
+	/** Callback for status events emitted by tool bridge invocations. */
+	emitStatus?: (event: JsStatusEvent) => void;
+	/** Live status events streamed as they are emitted. */
+	onStatus?: (event: JsStatusEvent) => void;
+	/** @internal Bridge session id, set by `executeRuby` before delegating. */
+	bridgeSessionId?: string;
+	/** @internal Bridge endpoint info, set by `executeRuby` before delegating. */
+	bridge?: { url: string; token: string };
+}
+
+export interface RubyKernelExecutor {
+	execute: (code: string, options?: KernelExecuteOptions) => Promise<KernelExecuteResult>;
+}
+
+export interface RubyResult {
+	output: string;
+	exitCode: number | undefined;
+	cancelled: boolean;
+	truncated: boolean;
+	artifactId?: string;
+	totalLines: number;
+	totalBytes: number;
+	outputLines: number;
+	outputBytes: number;
+	displayOutputs: KernelDisplayOutput[];
+	stdinRequested: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Session bookkeeping
+//
+// One RubyKernel subprocess per (session id, cwd, interpreter) tuple. The
+// runner mutates process-global cwd/$LOAD_PATH/ENV during execution, so
+// cross-directory work must never share a live kernel. Multiple agent owners can
+// register against the same tuple; the kernel stays alive until the last owner detaches.
+// ---------------------------------------------------------------------------
+
+interface RubySession {
+	sessionKey: string;
+	sessionId: string;
+	cwd: string;
+	kernel: RubyKernel;
+	ownerIds: Set<string>;
+	hasFallbackOwner: boolean;
+}
+
+const sessions = new Map<string, RubySession>();
+const startingSessions = new Map<string, Promise<RubySession>>();
+const resettingSessions = new Map<string, Promise<void>>();
+
+function normalizeSessionCwd(cwd: string): string {
+	return path.resolve(cwd);
+}
+
+function normalizeExplicitInterpreter(cwd: string, interpreter: string | undefined): string {
+	if (interpreter === undefined) return "";
+	const resolved = resolveExplicitRubyRuntime(interpreter, cwd, {}).rubyPath;
+	try {
+		return fs.realpathSync.native(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
+function buildSessionKey(sessionId: string, cwd: string, interpreter: string | undefined): string {
+	const normalizedCwd = normalizeSessionCwd(cwd);
+	return `${sessionId}\0${normalizedCwd}\0${normalizeExplicitInterpreter(normalizedCwd, interpreter)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation plumbing
+// ---------------------------------------------------------------------------
+
+class RubyExecutionCancelledError extends Error {
+	readonly timedOut: boolean;
+
+	constructor(timedOut: boolean) {
+		super(timedOut ? "Command timed out" : "Command aborted");
+		this.name = timedOut ? "TimeoutError" : "AbortError";
+		this.timedOut = timedOut;
+	}
+}
+
+function getExecutionDeadlineMs(options?: Pick<RubyExecutorOptions, "deadlineMs" | "timeoutMs">): number | undefined {
+	if (options?.deadlineMs !== undefined) return options.deadlineMs;
+	if (options?.timeoutMs === undefined) return undefined;
+	return Date.now() + options.timeoutMs;
+}
+
+function getRemainingTimeoutMs(deadlineMs?: number): number | undefined {
+	if (deadlineMs === undefined) return undefined;
+	return deadlineMs - Date.now();
+}
+
+function requireRemainingTimeoutMs(deadlineMs?: number): number | undefined {
+	const remainingMs = getRemainingTimeoutMs(deadlineMs);
+	if (remainingMs === undefined) return undefined;
+	if (remainingMs <= 0) {
+		throw new RubyExecutionCancelledError(true);
+	}
+	return remainingMs;
+}
+
+function isCancellationError(error: unknown): boolean {
+	return (
+		error instanceof RubyExecutionCancelledError ||
+		(error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) ||
+		(error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
+	);
+}
+
+function isTimedOutCancellation(error: unknown, signal?: AbortSignal): boolean {
+	if (error instanceof RubyExecutionCancelledError) return error.timedOut;
+	if (error instanceof DOMException) return error.name === "TimeoutError";
+	if (error instanceof Error && error.name === "TimeoutError") return true;
+	const reason = signal?.reason;
+	if (reason instanceof DOMException) return reason.name === "TimeoutError";
+	return reason instanceof Error ? reason.name === "TimeoutError" : false;
+}
+
+async function waitForPromiseWithCancellation<T>(
+	promise: Promise<T>,
+	options: Pick<RubyExecutorOptions, "signal" | "deadlineMs">,
+): Promise<T> {
+	if (options.signal?.aborted) {
+		throw new RubyExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
+	}
+	const remainingMs = getRemainingTimeoutMs(options.deadlineMs);
+	if (remainingMs !== undefined && remainingMs <= 0) {
+		throw new RubyExecutionCancelledError(true);
+	}
+	if (!options.signal && remainingMs === undefined) {
+		return await promise;
+	}
+
+	const { promise: resultPromise, resolve, reject } = Promise.withResolvers<T>();
+	const cleanups: Array<() => void> = [];
+	const finish = (cb: () => void): void => {
+		while (cleanups.length > 0) cleanups.pop()?.();
+		cb();
+	};
+	if (options.signal) {
+		const onAbort = (): void =>
+			finish(() =>
+				reject(new RubyExecutionCancelledError(isTimedOutCancellation(options.signal?.reason, options.signal))),
+			);
+		options.signal.addEventListener("abort", onAbort, { once: true });
+		cleanups.push(() => options.signal?.removeEventListener("abort", onAbort));
+	}
+	if (remainingMs !== undefined) {
+		const timer = setTimeout(() => finish(() => reject(new RubyExecutionCancelledError(true))), remainingMs);
+		timer.unref();
+		cleanups.push(() => clearTimeout(timer));
+	}
+	promise.then(
+		value => finish(() => resolve(value)),
+		err => finish(() => reject(err)),
+	);
+	return await resultPromise;
+}
+
+// ---------------------------------------------------------------------------
+// Result formatting
+// ---------------------------------------------------------------------------
+
+function formatTimeoutAnnotation(timeoutMs?: number): string | undefined {
+	if (timeoutMs === undefined) return "Command timed out";
+	const secs = Math.max(1, Math.round(timeoutMs / 1000));
+	return `Command timed out after ${secs} seconds`;
+}
+
+function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKilled: boolean): string {
+	const secs = timeoutMs === undefined ? undefined : Math.max(1, Math.round(timeoutMs / 1000));
+	if (kernelKilled) {
+		return "eval cell timed out and the kernel was unresponsive to interrupt; the kernel has been killed and will be recreated on the next call.";
+	}
+	const duration = secs === undefined ? "the configured timeout" : `${secs}s`;
+	return `eval cell timed out after ${duration}; kernel interrupted but remains running. Reset the kernel via { reset: true } if state appears corrupted.`;
+}
+
+function createCancelledRubyResult(timedOut: boolean, timeoutMs?: number): RubyResult {
+	const output = timedOut ? (formatTimeoutAnnotation(timeoutMs) ?? "Command timed out") : "";
+	const outputBytes = Buffer.byteLength(output, "utf-8");
+	const outputLines = output.length > 0 ? 1 : 0;
+	return {
+		output,
+		exitCode: undefined,
+		cancelled: true,
+		truncated: false,
+		totalLines: outputLines,
+		totalBytes: outputBytes,
+		outputLines,
+		outputBytes,
+		displayOutputs: [],
+		stdinRequested: false,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Kernel start helpers
+// ---------------------------------------------------------------------------
+
+const MANAGED_KERNEL_ENV_KEYS = [
+	"PI_SESSION_FILE",
+	"PI_ARTIFACTS_DIR",
+	"PI_TOOL_BRIDGE_URL",
+	"PI_TOOL_BRIDGE_TOKEN",
+	"PI_TOOL_BRIDGE_SESSION",
+	"PI_EVAL_LOCAL_ROOTS",
+] as const;
+
+function buildKernelEnvPatch(options: {
+	sessionFile?: string;
+	artifactsDir?: string;
+	bridgeSessionId?: string;
+	bridge?: { url: string; token: string };
+	localRoots?: Record<string, string>;
+}): KernelRuntimeEnv {
+	const localRoots = options.localRoots;
+	return {
+		PI_SESSION_FILE: options.sessionFile ?? null,
+		PI_ARTIFACTS_DIR: options.artifactsDir ?? null,
+		PI_TOOL_BRIDGE_URL: options.bridge?.url ?? null,
+		PI_TOOL_BRIDGE_TOKEN: options.bridge?.token ?? null,
+		PI_TOOL_BRIDGE_SESSION: options.bridge && options.bridgeSessionId ? options.bridgeSessionId : null,
+		PI_EVAL_LOCAL_ROOTS: localRoots && Object.keys(localRoots).length > 0 ? JSON.stringify(localRoots) : null,
+	};
+}
+
+function buildKernelEnv(options: {
+	sessionFile?: string;
+	artifactsDir?: string;
+	bridgeSessionId?: string;
+	bridge?: { url: string; token: string };
+	localRoots?: Record<string, string>;
+}): Record<string, string> | undefined {
+	const patch = buildKernelEnvPatch(options);
+	const env: Record<string, string> = {};
+	for (const key of MANAGED_KERNEL_ENV_KEYS) {
+		const value = patch[key];
+		if (value !== null) env[key] = value;
+	}
+	return Object.keys(env).length > 0 ? env : undefined;
+}
+
+async function startKernel(cwd: string, options: RubyExecutorOptions): Promise<RubyKernel> {
+	requireRemainingTimeoutMs(options.deadlineMs);
+	return await RubyKernel.start({
+		cwd,
+		env: buildKernelEnv(options),
+		signal: options.signal,
+		deadlineMs: options.deadlineMs,
+		interpreter: options.interpreter,
+	});
+}
+
+function attachOwner(session: RubySession, sessionId: string, ownerId: string | undefined): void {
+	if (ownerId !== undefined) {
+		if (session.hasFallbackOwner) {
+			session.ownerIds.delete(sessionId);
+			session.hasFallbackOwner = false;
+		}
+		session.ownerIds.add(ownerId);
+		return;
+	}
+	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
+		session.ownerIds.add(sessionId);
+		session.hasFallbackOwner = true;
+	}
+}
+
+async function acquireSession(
+	sessionKey: string,
+	sessionId: string,
+	cwd: string,
+	options: RubyExecutorOptions,
+): Promise<RubySession> {
+	const existing = sessions.get(sessionKey);
+	if (existing) {
+		attachOwner(existing, sessionId, options.kernelOwnerId);
+		return existing;
+	}
+	const starting = startingSessions.get(sessionKey);
+	if (starting) {
+		const session = await starting;
+		attachOwner(session, sessionId, options.kernelOwnerId);
+		return session;
+	}
+	const startup = (async () => {
+		const kernel = await startKernel(cwd, options);
+		const session: RubySession = {
+			sessionKey,
+			sessionId,
+			cwd,
+			kernel,
+			ownerIds: new Set(),
+			hasFallbackOwner: false,
+		};
+		sessions.set(sessionKey, session);
+		return session;
+	})();
+	startingSessions.set(sessionKey, startup);
+	try {
+		const session = await startup;
+		attachOwner(session, sessionId, options.kernelOwnerId);
+		return session;
+	} finally {
+		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
+	}
+}
+
+async function replaceSessionKernel(session: RubySession, cwd: string, options: RubyExecutorOptions): Promise<void> {
+	const old = session.kernel;
+	const remaining = getRemainingTimeoutMs(options.deadlineMs);
+	await old
+		.shutdown(remaining !== undefined ? { timeoutMs: Math.max(0, remaining) } : undefined)
+		.catch(() => undefined);
+	if (sessions.get(session.sessionKey) !== session) {
+		throw new RubyExecutionCancelledError(false);
+	}
+	requireRemainingTimeoutMs(options.deadlineMs);
+	const next = await startKernel(cwd, options);
+	if (sessions.get(session.sessionKey) !== session) {
+		await next.shutdown().catch(() => undefined);
+		throw new RubyExecutionCancelledError(false);
+	}
+	session.kernel = next;
+}
+
+async function resetSession(sessionKey: string): Promise<void> {
+	const existing = sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.catch(() => undefined));
+	if (!existing) return;
+	sessions.delete(sessionKey);
+	await existing.kernel.shutdown().catch(() => undefined);
+}
+
+// ---------------------------------------------------------------------------
+// Public dispose entry points
+// ---------------------------------------------------------------------------
+
+export async function disposeAllRubyKernelSessions(): Promise<void> {
+	const pending = [...startingSessions.values()];
+	startingSessions.clear();
+	const started = await Promise.allSettled(pending);
+	const all = [...sessions.entries()];
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		if (!all.some(([, session]) => session === result.value)) {
+			all.push([result.value.sessionKey, result.value]);
+		}
+	}
+	for (const [id, session] of all) {
+		if (sessions.get(id) === session) sessions.delete(id);
+	}
+	const results = await Promise.allSettled(all.map(([, session]) => session.kernel.shutdown()));
+	for (let i = 0; i < all.length; i += 1) {
+		const [id, session] = all[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) continue;
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Ruby kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: id,
+			cwd: session.cwd,
+			reason,
+		});
+		if (!sessions.has(id)) sessions.set(id, session);
+	}
+}
+
+export async function disposeRubyKernelSessionsByOwner(ownerId: string): Promise<void> {
+	const toShutdown: RubySession[] = [];
+	for (const session of [...sessions.values()]) {
+		if (!session.ownerIds.has(ownerId)) continue;
+		if (session.ownerIds.size === 1) {
+			toShutdown.push(session);
+			continue;
+		}
+		session.ownerIds.delete(ownerId);
+	}
+	for (const session of toShutdown) {
+		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+	}
+	const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
+	for (let i = 0; i < toShutdown.length; i += 1) {
+		const session = toShutdown[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) {
+			session.ownerIds.delete(ownerId);
+			continue;
+		}
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Ruby kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: session.sessionKey,
+			cwd: session.cwd,
+			reason,
+		});
+		if (!sessions.has(session.sessionKey)) sessions.set(session.sessionKey, session);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Execution
+// ---------------------------------------------------------------------------
+
+async function executeWithKernel(
+	kernel: RubyKernelExecutor,
+	code: string,
+	options: RubyExecutorOptions | undefined,
+): Promise<RubyResult> {
+	const settings = await Settings.init();
+	const sink = new OutputSink({
+		onChunk: options?.onChunk,
+		artifactPath: options?.artifactPath,
+		artifactId: options?.artifactId,
+		headBytes: resolveOutputSinkHeadBytes(settings),
+		maxColumns: resolveOutputMaxColumns(settings),
+	});
+	const displayOutputs: KernelDisplayOutput[] = [];
+	const deadlineMs = getExecutionDeadlineMs(options);
+	let executionTimeoutMs: number | undefined;
+
+	const collectDisplay = (output: KernelDisplayOutput) => {
+		if (output.type === "status") {
+			options?.onStatus?.(output.event);
+			if (isEvalTimeoutControlEvent(output.event)) return;
+		}
+		displayOutputs.push(output);
+	};
+	const emitStatus = options?.emitStatus ?? ((event: JsStatusEvent) => collectDisplay({ type: "status", event }));
+	const runId = `rb-${crypto.randomUUID()}`;
+	const unregisterBridge =
+		options?.toolSession && options?.bridgeSessionId
+			? registerPyToolBridge(options.bridgeSessionId, runId, {
+					toolSession: options.toolSession,
+					signal: options.signal,
+					emitStatus,
+				})
+			: null;
+
+	try {
+		executionTimeoutMs = requireRemainingTimeoutMs(deadlineMs);
+		const result = await kernel.execute(code, {
+			cwd: options?.cwd,
+			env: buildKernelEnvPatch(options ?? {}),
+			id: runId,
+			signal: options?.signal,
+			timeoutMs: executionTimeoutMs,
+			onChunk: text => sink.push(text),
+			onDisplay: output => collectDisplay(output),
+		});
+
+		if (result.cancelled) {
+			const annotation = result.timedOut
+				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
+				: undefined;
+			return {
+				exitCode: undefined,
+				cancelled: true,
+				displayOutputs,
+				stdinRequested: result.stdinRequested,
+				...(await sink.dump(annotation)),
+			};
+		}
+
+		if (result.stdinRequested) {
+			return {
+				exitCode: 1,
+				cancelled: false,
+				displayOutputs,
+				stdinRequested: true,
+				...(await sink.dump("Kernel requested stdin; interactive input is not supported.")),
+			};
+		}
+
+		const exitCode = result.status === "ok" ? 0 : 1;
+		return {
+			exitCode,
+			cancelled: false,
+			displayOutputs,
+			stdinRequested: false,
+			...(await sink.dump()),
+		};
+	} catch (err) {
+		if (isCancellationError(err) || options?.signal?.aborted) {
+			const timedOut = isTimedOutCancellation(err, options?.signal);
+			return {
+				exitCode: undefined,
+				cancelled: true,
+				displayOutputs,
+				stdinRequested: false,
+				...(await sink.dump(
+					timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
+				)),
+			};
+		}
+		const error = err instanceof Error ? err : new Error(String(err));
+		logger.error("Ruby execution failed", { error: error.message });
+		throw error;
+	} finally {
+		unregisterBridge?.();
+	}
+}
+
+async function ensureKernelAvailable(cwd: string, options: RubyExecutorOptions): Promise<void> {
+	const availability = await waitForPromiseWithCancellation(
+		checkRubyKernelAvailability(cwd, options.interpreter),
+		options,
+	);
+	if (!availability.ok) {
+		throw new Error(availability.reason ?? "Ruby kernel unavailable");
+	}
+}
+
+async function ensureToolBridge(options: RubyExecutorOptions): Promise<void> {
+	if (!options.toolSession || options.bridge) return;
+	try {
+		options.bridge = await ensurePyToolBridge();
+	} catch (err) {
+		logger.warn("Failed to start Ruby tool bridge", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
+
+async function executeOnSession(code: string, cwd: string, options: RubyExecutorOptions): Promise<RubyResult> {
+	const sessionId = options.sessionId ?? `session:${cwd}`;
+	const sessionKey = buildSessionKey(sessionId, cwd, options.interpreter);
+	if (options.bridge && !options.bridgeSessionId) {
+		options.bridgeSessionId = sessionId;
+	}
+	if (options.reset) {
+		const inFlight = resettingSessions.get(sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
+		else {
+			const resetPromise = resetSession(sessionKey);
+			resettingSessions.set(
+				sessionKey,
+				resetPromise.then(() => undefined),
+			);
+			try {
+				await resetPromise;
+			} finally {
+				resettingSessions.delete(sessionKey);
+			}
+		}
+	} else {
+		const inFlight = resettingSessions.get(sessionKey);
+		if (inFlight) await inFlight.catch(() => undefined);
+	}
+	const session = await acquireSession(sessionKey, sessionId, cwd, options);
+	if (options.signal?.aborted) {
+		throw new RubyExecutionCancelledError(isTimedOutCancellation(options.signal.reason, options.signal));
+	}
+	if (sessions.get(session.sessionKey) !== session) {
+		throw new RubyExecutionCancelledError(false);
+	}
+	if (!session.kernel.isAlive()) {
+		await replaceSessionKernel(session, cwd, options);
+		if (sessions.get(session.sessionKey) !== session) {
+			throw new RubyExecutionCancelledError(false);
+		}
+	}
+	const runOptions = { ...options, cwd };
+	try {
+		return await executeWithKernel(session.kernel, code, runOptions);
+	} catch (err) {
+		if (isCancellationError(err) || options.signal?.aborted) throw err;
+		if (session.kernel.isAlive()) throw err;
+		if (sessions.get(session.sessionKey) !== session) {
+			throw new RubyExecutionCancelledError(false);
+		}
+		await replaceSessionKernel(session, cwd, options);
+		if (sessions.get(session.sessionKey) !== session) {
+			throw new RubyExecutionCancelledError(false);
+		}
+		return await executeWithKernel(session.kernel, code, runOptions);
+	}
+}
+
+export async function executeRubyWithKernel(
+	kernel: RubyKernelExecutor,
+	code: string,
+	options?: RubyExecutorOptions,
+): Promise<RubyResult> {
+	return await executeWithKernel(kernel, code, options);
+}
+
+export async function executeRuby(code: string, options?: RubyExecutorOptions): Promise<RubyResult> {
+	const cwd = normalizeSessionCwd(options?.cwd ?? getProjectDir());
+	const deadlineMs = getExecutionDeadlineMs(options);
+	const executionOptions: RubyExecutorOptions = {
+		...(options ?? {}),
+		cwd,
+		deadlineMs,
+	};
+
+	try {
+		requireRemainingTimeoutMs(deadlineMs);
+		if (executionOptions.signal?.aborted) {
+			throw new RubyExecutionCancelledError(
+				isTimedOutCancellation(executionOptions.signal.reason, executionOptions.signal),
+			);
+		}
+		await ensureKernelAvailable(cwd, executionOptions);
+		await ensureToolBridge(executionOptions);
+		return await executeOnSession(code, cwd, executionOptions);
+	} catch (err) {
+		if (isCancellationError(err) || executionOptions.signal?.aborted) {
+			return createCancelledRubyResult(isTimedOutCancellation(err, executionOptions.signal));
+		}
+		throw err;
+	}
+}

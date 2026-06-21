@@ -8,6 +8,10 @@
 
 - Added Julia syntax highlighting to `highlightCode`/`supportsLanguage` via a vendored `Julia.sublime-syntax` folded into syntect's default set (`jl`/`julia` aliases); syntect ships no Julia grammar.
 
+### Fixed
+
+- Enabled full Julia syntax highlighting support in highlightCode
+
 ## [16.1.8] - 2026-06-20
 
 ### Breaking Changes

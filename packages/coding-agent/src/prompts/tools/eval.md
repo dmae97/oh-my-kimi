@@ -5,7 +5,7 @@ Cells run in array order. State persists per language across cells, tool calls, 
 
 Cell fields:
 
-- `language` — {{#if py}}`"py"` IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` persistent JavaScript VM{{/if}}.
+- `language` — {{#if py}}`"py"` IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` persistent JavaScript VM{{/if}}{{#if rb}}{{#ifAny py js}}, {{/ifAny}}`"rb"` persistent Ruby kernel{{/if}}{{#if jl}}{{#ifAny py js rb}}, {{/ifAny}}`"jl"` persistent Julia kernel{{/if}}.
 - `code` — cell body, verbatim. Newlines/quotes JSON-encoded; no fences, no headers.
 - `title` (optional) — short transcript label (e.g. `"imports"`).
 - `timeout` (optional) — per-cell seconds. Raise only for heavy compute or long non-agent tool calls.
@@ -13,11 +13,13 @@ Cell fields:
 
 Work incrementally — one logical step per cell (imports, define, test, use), many small cells per call; workflow notes in the assistant message or `title`, never in cell code.
 {{#if py}}Live event loop: use top-level `await` directly; `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
+{{#if rb}}Ruby: synchronous; helper options are keyword args (e.g. `tree(".", max_depth: 2)`); the last expression auto-displays unless it is `nil`, an assignment, or a definition (like IRB).{{/if}}
+{{#if jl}}Julia: synchronous; helper options are standard keyword args (e.g. `tree(max_depth=2)`); the last expression auto-displays unless it is an assignment or a definition (like the Julia REPL).{{/if}}
 Errors name the failing cell ("Cell 3 failed") — resubmit the fixed cell + any remaining.
 </instruction>
 
 <prelude>
-{{#ifAll py js}}Same helpers + arg order, both runtimes. Python: sync, options = trailing kwargs. JS: async/`await`able, options = ONE trailing object literal, never positional (extras throw).{{else}}{{#if py}}Sync; options = trailing kwargs.{{/if}}{{#if js}}Async/`await`able; options = ONE trailing object literal, never positional (extras throw).{{/if}}{{/ifAll}}
+{{#ifAll py js}}Same helpers + arg order, both runtimes. Python: sync, options = trailing kwargs. JS: async/`await`able, options = ONE trailing object literal, never positional (extras throw).{{else}}{{#if py}}Sync; options = trailing kwargs.{{/if}}{{#if js}}Async/`await`able; options = ONE trailing object literal, never positional (extras throw).{{/if}}{{/ifAll}}{{#if rb}} Ruby: sync, options = trailing keyword args.{{/if}}{{#if jl}} Julia: sync, options = trailing keyword args.{{/if}}
 ```
 display(value) → None
     Cell output; figures/images/dataframes shown natively.
@@ -55,13 +57,13 @@ log(message) → None
 phase(title) → None
     Phase grouping subsequent status lines.
 budget → per-turn token budget
-    {{#if py}}`budget.total` (ceiling or None), `budget.spent()`, `budget.remaining()` (math.inf when no ceiling), `budget.hard`.{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}} Ceiling: `+Nk` (advisory) or `+Nk!`/Goal Mode (hard — `agent()` won't spawn past it); spend still tracked.
+    {{#if py}}`budget.total` (ceiling or None), `budget.spent()`, `budget.remaining()` (math.inf when no ceiling), `budget.hard`.{{/if}}{{#if js}}`await budget.total()` (ceiling or null), `await budget.spent()`, `await budget.remaining()` (Infinity when no ceiling), `await budget.hard()`.{{/if}}{{#if rb}} Ruby: `budget.total` (ceiling or nil), `budget.spent`, `budget.remaining` (Float::INFINITY when no ceiling), `budget.hard`.{{/if}}{{#if jl}} Julia: `budget.total` (ceiling or nothing), `budget.spent()`, `budget.remaining()` (Inf when no ceiling), `budget.hard`.{{/if}} Ceiling: `+Nk` (advisory) or `+Nk!`/Goal Mode (hard — `agent()` won't spawn past it); spend still tracked.
 ```
 </prelude>
 {{#if spawns}}
 <dag>
 Pipe handles through stage helpers to build a dependency graph — acyclic waves:
-- **Name nodes.** Capture each `agent(…, {{#if py}}return_handle=True{{/if}}{{#if js}}{ returnHandle: true }{{/if}})` result; carries `handle` (`agent://<id>`) + `output`.
+- **Name nodes.** Capture each `agent(…, {{#if py}}return_handle=True{{/if}}{{#if js}}{ returnHandle: true }{{/if}}{{#if jl}}return_handle=true{{/if}})` result; carries `handle` (`agent://<id>`) + `output`.
 - **Wire edges by reference.** Put an upstream node's `handle`/`output` in the dependent stage's prompt — large transcript never re-inlined. Bulk: `write("local://<name>.md", …)`, pass the URI.
 - **`pipeline(items, *stages)` = staged waves**, barrier between stages (every item clears stage N before any enters N+1). **`parallel(thunks)` = one wave** of independent nodes.
 - **Isolate failure.** A raising node re-raises the lowest-index error, aborts its wave; wrap risky nodes in try/except so a failure degrades only its dependent subtree, independent branches finish.

@@ -127,7 +127,7 @@ describe("EvalTool language dispatch", () => {
 		settings.set("eval.py", false);
 		settings.set("eval.js", false);
 
-		expect(resolveEvalBackends(makeSession(settings))).toEqual({ python: true, js: false });
+		expect(resolveEvalBackends(makeSession(settings))).toEqual({ python: true, js: false, ruby: true, julia: true });
 	});
 
 	it("lets PI_JS disable js execution even when eval.js is enabled", async () => {

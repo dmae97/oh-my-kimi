@@ -2986,6 +2986,28 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"eval.rb": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "shell",
+			group: "Eval & Python",
+			label: "Ruby Eval Backend",
+			description: "Allow the eval tool to dispatch Ruby cells to the persistent Ruby kernel",
+		},
+	},
+
+	"eval.jl": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "shell",
+			group: "Eval & Python",
+			label: "Julia Eval Backend",
+			description: "Allow the eval tool to dispatch Julia cells to the persistent Julia kernel",
+		},
+	},
+
 	// Python kernel knobs (consumed by the eval py backend and the /python slash command)
 	"python.kernelMode": {
 		type: "enum",
@@ -3007,6 +3029,28 @@ export const SETTINGS_SCHEMA = {
 			label: "Python Interpreter",
 			description:
 				"Optional path to an exact Python executable. When set, automatic Python runtime discovery is skipped.",
+		},
+	},
+	"ruby.interpreter": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "shell",
+			group: "Eval & Python",
+			label: "Ruby Interpreter",
+			description:
+				"Optional path to an exact Ruby executable. When set, automatic Ruby runtime discovery is skipped.",
+		},
+	},
+	"julia.interpreter": {
+		type: "string",
+		default: "",
+		ui: {
+			tab: "shell",
+			group: "Eval & Python",
+			label: "Julia Interpreter",
+			description:
+				"Optional path to an exact Julia executable. When set, automatic Julia runtime discovery is skipped.",
 		},
 	},
 

@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a Ruby eval backend (`language: "rb"`): a persistent subprocess Ruby kernel that shares the standard agent tool bridge and evaluation model, supporting IRB-style auto-display of results in a persistent session
+- Added a Julia eval backend (`language: "jl"`): a persistent subprocess Julia kernel that shares the standard agent tool bridge and evaluation model, supporting Julia REPL-style auto-display of results in a persistent session
+- Added configuration options `eval.rb` and `eval.jl` to enable or disable the Ruby and Julia backends, as well as `ruby.interpreter` and `julia.interpreter` paths for explicit runtime control
+- Added a Ruby eval backend (`language: "rb"`): a persistent subprocess Ruby kernel modeled on the Python kernel, speaking the same NDJSON protocol with isolated frame/stdout channels, clean SIGINT cancellation that preserves kernel state, and per-owner kernel cleanup. Ships the full prelude helper surface (`display`/`read`/`write`/`append`/`tree`/`diff`/`env`/`output`/`sort`/`uniq`/`counter`, the `tool.<name>` bridge proxy, and `completion`/`agent`/`parallel`/`pipeline`/`log`/`phase`/`budget`) over the shared loopback tool bridge, honors `local://` roots, and auto-displays the last expression IRB-style (suppressing assignments/definitions). Gated by the `eval.rb` setting and `PI_RB` env flag, with an optional `ruby.interpreter` override.
+- Added a Julia eval backend (`language: "jl"`): a persistent subprocess Julia kernel with the same NDJSON/result-display/tool-bridge model as the Python and Ruby eval runtimes, including `eval.jl` / `PI_JL` gating, `julia.interpreter` override support, persistent per-session state, clean cancellation, owner-based kernel cleanup, `local://` path roots, and the shared prelude helper surface for file I/O, tool calls, subagents, concurrency helpers, and budget access.
 
 ### Changed
 

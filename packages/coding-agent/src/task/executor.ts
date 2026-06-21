@@ -1792,8 +1792,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (toolNames?.includes("exec")) {
 		const allowEvalPy = settings.get("eval.py") ?? true;
 		const allowEvalJs = settings.get("eval.js") ?? true;
+		const allowEvalRb = settings.get("eval.rb") ?? true;
+		const allowEvalJl = settings.get("eval.jl") ?? true;
 		const expanded = toolNames.filter(name => name !== "exec");
-		if (allowEvalPy || allowEvalJs) expanded.push("eval");
+		if (allowEvalPy || allowEvalJs || allowEvalRb || allowEvalJl) expanded.push("eval");
 		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}

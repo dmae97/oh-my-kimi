@@ -2,7 +2,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { ImageContent, ToolExample } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
-import { jsBackend, pythonBackend } from "../eval";
+import { jsBackend, juliaBackend, pythonBackend, rubyBackend } from "../eval";
 import type { ExecutorBackend, ExecutorBackendResult } from "../eval/backend";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../eval/bridge-timeout";
 import { IdleTimeout } from "../eval/idle-timeout";
@@ -28,8 +28,10 @@ export { EVAL_DEFAULT_PREVIEW_LINES, evalToolRenderer } from "./eval-render";
  * across cells and across tool calls.
  */
 const evalCellSchema = type({
-	language: type("'py' | 'js'").describe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM'),
-	code: type("string").describe("cell body, verbatim. Use top-level await freely."),
+	language: type("'py' | 'js' | 'rb' | 'jl'").describe(
+		'runtime: "py" for the IPython kernel, "js" for the persistent JS VM, "rb" for the persistent Ruby kernel, "jl" for the persistent Julia kernel',
+	),
+	code: type("string").describe("cell body, verbatim. Top-level `await` is available in py/js."),
 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
 	"timeout?": type("number").describe("per-cell timeout in seconds"),
 	"reset?": type("boolean").describe(
@@ -88,6 +90,8 @@ function formatDisplayOutputsForText(outputs: EvalDisplayOutput[]): string {
 export interface EvalToolDescriptionOptions {
 	py?: boolean;
 	js?: boolean;
+	rb?: boolean;
+	jl?: boolean;
 	/**
 	 * Whether `agent()` is allowed in this session. Driven by the parent's
 	 * spawn policy (`getSessionSpawns`). Defaults to `true` for backward
@@ -101,8 +105,10 @@ export interface EvalToolDescriptionOptions {
 export function getEvalToolDescription(options: EvalToolDescriptionOptions = {}): string {
 	const py = options.py ?? true;
 	const js = options.js ?? true;
+	const rb = options.rb ?? true;
+	const jl = options.jl ?? true;
 	const spawns = options.spawns ?? true;
-	return prompt.render(evalDescription, { py, js, spawns });
+	return prompt.render(evalDescription, { py, js, rb, jl, spawns });
 }
 
 export interface EvalToolOptions {
@@ -142,6 +148,7 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	const backends = resolveEvalBackends(session);
 	const allowPy = backends.python;
 	const allowJs = backends.js;
+	const allowRb = backends.ruby;
 
 	if (language === "python") {
 		if (!allowPy) throw new ToolError("Python backend is disabled (PI_PY=0 or eval.py = false).");
@@ -151,6 +158,20 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 			);
 		}
 		return { backend: pythonBackend };
+	}
+	if (language === "ruby") {
+		if (!allowRb) throw new ToolError("Ruby backend is disabled (PI_RB=0 or eval.rb = false).");
+		if (!(await rubyBackend.isAvailable(session))) {
+			throw new ToolError('Ruby backend is unavailable in this session. Pass language: "js" or install Ruby.');
+		}
+		return { backend: rubyBackend };
+	}
+	if (language === "julia") {
+		if (!backends.julia) throw new ToolError("Julia backend is disabled (PI_JL=0 or eval.jl = false).");
+		if (!(await juliaBackend.isAvailable(session))) {
+			throw new ToolError('Julia backend is unavailable in this session. Pass language: "js" or install Julia.');
+		}
+		return { backend: juliaBackend };
 	}
 	if (!allowJs) throw new ToolError("JavaScript backend is disabled (PI_JS=0 or eval.js = false).");
 	return { backend: jsBackend };
@@ -172,7 +193,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		}
 		return lines;
 	};
-	readonly summary = "Execute Python or JavaScript code in an in-process eval backend";
+	readonly summary = "Execute Python, JavaScript, Ruby, or Julia code in a persistent eval backend";
 	readonly loadMode = "discoverable";
 	readonly label = "Eval";
 	get description(): string {
@@ -180,7 +201,13 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const backends = resolveEvalBackends(this.session);
 		const sessionSpawns = this.session.getSessionSpawns?.() ?? "*";
 		const spawnsAllowed = sessionSpawns !== "" && sessionSpawns !== null;
-		return getEvalToolDescription({ py: backends.python, js: backends.js, spawns: spawnsAllowed });
+		return getEvalToolDescription({
+			py: backends.python,
+			js: backends.js,
+			rb: backends.ruby,
+			jl: backends.julia,
+			spawns: spawnsAllowed,
+		});
 	}
 	readonly examples: readonly ToolExample<typeof evalSchema.infer>[] = [
 		{
@@ -243,7 +270,14 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const cells: ResolvedEvalCell[] = [];
 		for (let i = 0; i < params.cells.length; i++) {
 			const cell = params.cells[i];
-			const language: EvalLanguage = cell.language === "py" ? "python" : "js";
+			const language: EvalLanguage =
+				cell.language === "py"
+					? "python"
+					: cell.language === "rb"
+						? "ruby"
+						: cell.language === "jl"
+							? "julia"
+							: "js";
 			const resolved = await resolveBackend(session, language);
 			cells.push({
 				index: i,

@@ -139,7 +139,8 @@ function extractEvalCode(args: unknown): { code: string; language: string } | un
 		if (typeof code !== "string" || code.length === 0) continue;
 		codeBlocks.push(code);
 		if (!languageResolved) {
-			language = (cell as { language?: unknown }).language === "js" ? "javascript" : "python";
+			const lang = (cell as { language?: unknown }).language;
+			language = lang === "js" ? "javascript" : lang === "rb" ? "ruby" : lang === "jl" ? "julia" : "python";
 			languageResolved = true;
 		}
 	}
