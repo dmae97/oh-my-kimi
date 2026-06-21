@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -470,6 +471,105 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await session.waitForIdle();
 
 		expect(getRuntimeSignals()).toContain("compaction:start:threshold");
+	});
+
+	it("resolves a pending retry before active-goal compaction continuation returns", async () => {
+		// Codex review on #3175: a retry can succeed with a non-empty text stop
+		// that is already over the active-goal compaction threshold. If the
+		// compaction pre-empt schedules its own continuation before the normal
+		// bottom-of-handler `#resolveRetry()` call runs, the session stays
+		// `isRetrying` and later prompt/idle gates remain blocked.
+		vi.useRealTimers();
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-retry-threshold",
+				objective: "recover from retry and compact",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+		session.settings.set("compaction.thresholdTokens", 76384);
+		session.settings.set("compaction.thresholdPercent", -1);
+		session.settings.set("compaction.autoContinue", true);
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("retry.enabled", true);
+		session.settings.set("retry.baseDelayMs", 5);
+		session.settings.set("retry.maxDelayMs", 5_000);
+		session.settings.set("retry.maxRetries", 1);
+		session.settings.set("retry.modelFallback", false);
+
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		const { promise: retryStarted, resolve: onRetryStarted } = Promise.withResolvers<void>();
+		const { promise: retryEnded, resolve: onRetryEnded } = Promise.withResolvers<void>();
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") onRetryStarted();
+			if (event.type === "auto_retry_end") onRetryEnded();
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const retryableError = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "Transient provider failure." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "error" as const,
+			errorMessage: "503 service unavailable: overloaded_error retry-after-ms=50",
+			usage: {
+				input: 100,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now - 1,
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: retryableError });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [retryableError] });
+
+		await withTimeout(retryStarted, 1000, "Retry start timed out");
+		expect(session.isRetrying).toBe(true);
+
+		const recoveredOverThreshold = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "Recovered; continuing the active goal." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 5000,
+				output: 1000,
+				cacheRead: 85000,
+				cacheWrite: 0,
+				totalTokens: 91000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now,
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: recoveredOverThreshold });
+		await withTimeout(retryEnded, 1000, "Retry end timed out");
+		expect(session.isRetrying).toBe(true);
+
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [recoveredOverThreshold] });
+
+		await withTimeout(compactionDone, 1000, "Compaction end timed out");
+		await session.waitForIdle();
+
+		expect(getRuntimeSignals()).toContain("compaction:start:threshold");
+		expect(session.isRetrying).toBe(false);
 	});
 
 	it("removes orphan toolUse assistant before active-goal threshold compaction continuation", async () => {

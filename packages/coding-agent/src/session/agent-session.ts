@@ -2855,6 +2855,7 @@ export class AgentSession {
 						deferredHandoff: compactionResult.deferredHandoff,
 						continuationScheduled: compactionResult.continuationScheduled,
 					});
+					this.#resolveRetry();
 					await emitAgentEndNotification();
 					return;
 				}
