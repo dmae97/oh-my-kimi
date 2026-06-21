@@ -21,7 +21,7 @@ import {
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
+import { getEnvApiKey, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type {
 	AssistantMessage,
 	Context,
@@ -109,6 +109,21 @@ function captureAnthropicPayload(
 		thinkingDisplay: options?.thinkingDisplay,
 		sessionId: options?.sessionId,
 		headers: options?.headers,
+		onPayload: payload => resolve(payload),
+	});
+	return promise;
+}
+
+function captureSimpleAnthropicPayload(
+	model: Model<"anthropic-messages">,
+	context: Context,
+	reasoning: Effort,
+): Promise<unknown> {
+	const { promise, resolve } = Promise.withResolvers<unknown>();
+	streamSimple(model, context, {
+		apiKey: "sk-ant-oat-test",
+		signal: createAbortedSignal(),
+		reasoning,
 		onPayload: payload => resolve(payload),
 	});
 	return promise;
@@ -1868,6 +1883,35 @@ describe("Anthropic request fingerprint alignment", () => {
 		};
 		expect(maxPayload.thinking).toEqual({ type: "adaptive", display: "summarized" });
 		expect(maxPayload.output_config).toEqual({ effort: "max" });
+	});
+
+	it("maps simple-stream budget-effort reasoning to Anthropic output_config effort", async () => {
+		const payload = (await captureSimpleAnthropicPayload(
+			buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "umans-glm-5.2",
+				name: "Umans GLM 5.2",
+				provider: "umans",
+				baseUrl: "https://api.code.umans.ai",
+				thinking: {
+					mode: "anthropic-budget-effort",
+					efforts: [Effort.High, Effort.XHigh],
+					effortMap: { [Effort.XHigh]: "max" },
+				},
+			}),
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			Effort.XHigh,
+		)) as {
+			thinking?: { type?: string; budget_tokens?: number };
+			output_config?: { effort?: string };
+		};
+
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.thinking?.budget_tokens).toBeGreaterThan(0);
+		expect(payload.output_config).toEqual({ effort: "max" });
 	});
 
 	it("keeps summarized adaptive thinking by default for API-key Opus 4.7+ requests", async () => {

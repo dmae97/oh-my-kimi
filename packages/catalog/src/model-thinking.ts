@@ -370,20 +370,16 @@ function inferDetectedEffortMap<TApi extends Api>(
 	//     `xhigh` 400s — collapse minimal->none, low/medium/high->high, xhigh->max.
 	//   - OpenRouter: `max` 400s and `xhigh` IS its max tier, so it passes `xhigh`
 	//     through literally (no map; the tier is exposed via getModelDefinedEfforts).
-	//   - Ollama Cloud exposes only high/max on its GLM-5.2 route.
+	//   - Umans and Ollama Cloud expose only high/max on their GLM-5.2 routes.
 	//   - Other openai-compat hosts (Fireworks, resellers) keep their distinct
 	//     lower tiers and host quirks (e.g. Fireworks rejects `minimal`, so
 	//     `minimal->none` stays) and only remap the top `xhigh` UI tier onto the
 	//     genuine `max` budget. Filtered to supported efforts later.
-	// Umans GLM-5.2 (anthropic-messages, `mode: "budget"`) encodes the selected
-	// tier through `thinking.budget_tokens`; it does not consume `effortMap`,
-	// so no entry is baked here. The picker collapse to high/xhigh happens via
-	// `getModelDefinedEfforts` above.
 	const isGlm52 = isGlm52ReasoningEffortModelId(spec.id);
 	if (isGlm52 && isZaiThinkingFormat(compat)) {
 		return ZAI_GLM_52_REASONING_EFFORT_MAP;
 	}
-	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
+	if (isUmansGlm52ReasoningEffortModel(spec) || isOllamaCloudGlm52ReasoningEffortModel(spec)) {
 		return GLM_52_XHIGH_MAX_EFFORT_MAP;
 	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
@@ -566,6 +562,9 @@ function inferThinkingControlMode<TApi extends Api>(
 		case "anthropic-messages":
 			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
 				return "anthropic-adaptive";
+			}
+			if (isUmansGlm52ReasoningEffortModel(spec)) {
+				return "anthropic-budget-effort";
 			}
 			if (parsedModel.family === "anthropic") {
 				if (semverGte(parsedModel.version, "4.6")) {

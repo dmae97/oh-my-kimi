@@ -808,10 +808,15 @@ function mapOptionsForApi<TApi extends Api>(
 				});
 			}
 
+			const thinkingMode = model.thinking?.mode;
+			const effort =
+				thinkingMode === "anthropic-adaptive" || thinkingMode === "anthropic-budget-effort"
+					? mapEffortToAnthropicAdaptiveEffort(model, reasoning)
+					: undefined;
+
 			// For Opus 4.6+ and Sonnet 4.6+: use adaptive thinking with effort level
 			// For older models: use budget-based thinking
-			if (model.thinking?.mode === "anthropic-adaptive") {
-				const effort = mapEffortToAnthropicAdaptiveEffort(model, reasoning);
+			if (thinkingMode === "anthropic-adaptive") {
 				return castApi<"anthropic-messages">({
 					...base,
 					requestModelId: resolveWireModelId(model, reasoning),
@@ -829,6 +834,7 @@ function mapOptionsForApi<TApi extends Api>(
 					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
+					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 					serviceTier: options?.serviceTier,
@@ -860,6 +866,7 @@ function mapOptionsForApi<TApi extends Api>(
 					requestModelId: resolveWireModelId(model, reasoning),
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
+					effort,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 					serviceTier: options?.serviceTier,

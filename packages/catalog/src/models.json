@@ -69317,11 +69317,14 @@
 			"baseUrl": "https://api.code.umans.ai",
 			"reasoning": true,
 			"thinking": {
-				"mode": "budget",
+				"mode": "anthropic-budget-effort",
 				"efforts": [
 					"high",
 					"xhigh"
-				]
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
 			},
 			"input": [
 				"text",

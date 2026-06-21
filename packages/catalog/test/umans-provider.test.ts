@@ -112,13 +112,14 @@ describe("umans provider catalog", () => {
 			id: "umans-glm-5.2",
 			reasoning: true,
 			thinking: {
-				mode: "budget",
+				mode: "anthropic-budget-effort",
 				defaultLevel: "high",
 				efforts: ["high", "xhigh"],
+				effortMap: { xhigh: "max" },
 			},
 		});
 		if (!glm52) throw new Error("Umans GLM 5.2 was not discovered");
-		expect(glm52.thinking?.effortMap).toBeUndefined();
+		expect(glm52.thinking?.effortMap).toEqual({ [Effort.XHigh]: "max" });
 		expect(glm52.thinking?.defaultLevel).toBe(Effort.High);
 	});
 
@@ -194,14 +195,15 @@ describe("umans provider catalog", () => {
 		});
 	});
 
-	it("bundles Umans GLM 5.2 high/max reasoning metadata without dead effortMap", () => {
+	it("bundles Umans GLM 5.2 high/max reasoning metadata with the max wire effort", () => {
 		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
 		const model = providers.umans?.["umans-glm-5.2"];
 
 		expect(model).toBeDefined();
 		expect(model.thinking).toMatchObject({
+			mode: "anthropic-budget-effort",
 			efforts: ["high", "xhigh"],
+			effortMap: { xhigh: "max" },
 		});
-		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 });
