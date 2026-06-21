@@ -1931,10 +1931,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		// agent falls back to `edit` on a non-existent file and stalls. `edit` is an
 		// essential built-in so it survives `tools.discoveryMode === "all"`, but
 		// `write` has `loadMode: "discoverable"` and is hidden behind
-		// `search_tool_bm25` — re-activate it here whenever the registry built it
-		// (issue #3165). `resolve` is hidden too; the standing handler below
-		// consumes plan-approval calls through it.
-		const planAugmentations = ["resolve", "write"].filter(name => this.session.getToolByName(name) !== undefined);
+		// `search_tool_bm25` — re-activate it here only when the current registry
+		// entry is the built-in write tool (issue #3165). A shadowing extension
+		// tool named `write` must stay inactive because plan mode's read-only
+		// guarantee relies on the built-in write/edit guard. `resolve` is hidden
+		// too; the standing handler below consumes plan-approval calls through it.
+		const planAugmentations = ["resolve"];
+		if (this.session.hasBuiltInTool("write")) {
+			planAugmentations.push("write");
+		}
 		const uniquePlanTools = [...new Set([...previousTools, ...planAugmentations])];
 
 		this.#planModePreviousTools = previousTools;
