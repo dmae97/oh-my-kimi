@@ -704,6 +704,60 @@ describe("GitLab Duo Workflow per-account namespace cache", () => {
 		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
 		expect(groupHits.count).toBe(2);
 	});
+
+	it("ensures Duo settings once per account rather than once per provider session", async () => {
+		const apiKey = "acct-settings-key";
+		const baseUrl = "https://gitlab.settings-cache.example.com";
+		const settingsPutHits = { count: 0 };
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/api/v4/groups") && url.includes("top_level_only")) {
+				return new Response(JSON.stringify([{ id: "gid://gitlab/Group/settings-root", full_path: "acct-group" }]), {
+					status: 200,
+				});
+			}
+			if (url.includes("/api/v4/groups/")) {
+				if ((init?.method ?? "GET").toUpperCase() === "PUT") settingsPutHits.count++;
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/api/v4/projects")) {
+				return new Response(JSON.stringify([{ id: 42, path_with_namespace: "acct-group/proj" }]), { status: 200 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/direct_access")) {
+				return new Response(
+					JSON.stringify({
+						duo_workflow_service: { base_url: "https://workflow.example.com", token: "wf-token", headers: {} },
+						gitlab_rails: { token: "rails-token" },
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 200 });
+		};
+
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
+		expect(settingsPutHits.count).toBe(1);
+
+		await driveOneTurn(apiKey, baseUrl, fetchImpl, new Map<string, ProviderSessionState>());
+		expect(settingsPutHits.count).toBe(1);
+	});
 });
 
 describe("GitLab Duo Workflow WebSocket state machine", () => {
@@ -1182,7 +1236,7 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(sockets).toHaveLength(1);
 	});
 
-	it("enables the namespace Duo settings once per session before running the flow", async () => {
+	it("enables the namespace Duo settings once per account before running the flow", async () => {
 		const settingsPuts: { url: string; body: unknown }[] = [];
 		let createCount = 0;
 		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
@@ -1235,13 +1289,17 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		};
 		const providerSessionState = new Map<string, ProviderSessionState>();
 
-		await streamGitLabDuoWorkflow(model, context, {
-			apiKey: "[REDACTED]",
-			rootNamespaceId: "gid://gitlab/Group/77",
-			fetch: fetchImpl,
-			webSocketFactory,
-			providerSessionState,
-		}).result();
+		await streamGitLabDuoWorkflow(
+			{ ...model, baseUrl: "https://gitlab.settings-explicit.example.com" } as Model<"gitlab-duo-agent">,
+			context,
+			{
+				apiKey: "acct-explicit-settings-key",
+				rootNamespaceId: "gid://gitlab/Group/77",
+				fetch: fetchImpl,
+				webSocketFactory,
+				providerSessionState,
+			},
+		).result();
 
 		// First run issues exactly one settings PUT with the three required flags.
 		expect(settingsPuts).toHaveLength(1);
@@ -1254,15 +1312,19 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 			},
 		});
 
-		await streamGitLabDuoWorkflow(model, context, {
-			apiKey: "[REDACTED]",
-			rootNamespaceId: "gid://gitlab/Group/77",
-			fetch: fetchImpl,
-			webSocketFactory,
-			providerSessionState,
-		}).result();
+		await streamGitLabDuoWorkflow(
+			{ ...model, baseUrl: "https://gitlab.settings-explicit.example.com" } as Model<"gitlab-duo-agent">,
+			context,
+			{
+				apiKey: "acct-explicit-settings-key",
+				rootNamespaceId: "gid://gitlab/Group/77",
+				fetch: fetchImpl,
+				webSocketFactory,
+				providerSessionState,
+			},
+		).result();
 
-		// Second turn on the same session does NOT re-issue the settings PUT.
+		// Second turn for the same account does NOT re-issue the settings PUT.
 		expect(settingsPuts).toHaveLength(1);
 	});
 

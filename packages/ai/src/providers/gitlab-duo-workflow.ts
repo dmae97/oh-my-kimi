@@ -276,9 +276,6 @@ export interface GitLabDuoWorkflowActiveSession {
 
 export interface GitLabDuoWorkflowProviderSessionState extends ProviderSessionState {
 	active?: GitLabDuoWorkflowActiveSession;
-	// Set once the namespace's Duo settings (agent platform + MCP + experiment flags)
-	// have been ensured this session, so the best-effort enable runs at most once.
-	settingsEnsured?: boolean;
 }
 
 export interface GitLabDuoWorkflowStreamState {
@@ -708,23 +705,42 @@ function getGitLabDuoWorkflowProviderSessionState(
 	return created;
 }
 
-// Per-account namespace discovery cache. The namespace is a function of the GitLab
-// credential (account root namespace), not of the conversation, cwd, or what the
-// agent is doing — the inline ambient flow never exposes namespace to the model.
-// So discover it once per account and reuse it across sessions/turns as the first
-// choice; only re-discover when a cached namespace later proves invalid. Keyed by a
-// non-reversible fingerprint of the credential + baseUrl (never the raw token).
-const gitLabDuoWorkflowNamespaceCache = new Map<string, GitLabDuoWorkflowNamespaceSelection>();
+interface GitLabDuoWorkflowAccountState {
+	namespaceSelection?: GitLabDuoWorkflowNamespaceSelection;
+	// Once the namespace's Duo settings (agent platform + MCP + experiment flags)
+	// have been ensured for this ACCOUNT, later turns and side-requests should not
+	// re-send the best-effort enablement PUT. This is account-scoped, not session-
+	// scoped: compaction/handoff are independent side-requests that must benefit from
+	// the same prepared account state without reusing the main workflow session.
+	settingsEnsured?: boolean;
+}
+
+// Per-account provider state. The root namespace is a function of the GitLab
+// credential (account root namespace), not of the conversation/cwd, and the inline
+// ambient flow never exposes namespace to the model. Cache it per account and reuse
+// it across sessions/turns as the first choice; only re-discover when a cached
+// namespace later proves invalid. Settings enablement is likewise account-scoped.
+// Keyed by a non-reversible fingerprint of the credential + baseUrl (never the raw token).
+const gitLabDuoWorkflowAccountState = new Map<string, GitLabDuoWorkflowAccountState>();
 
 function gitLabDuoWorkflowAccountKey(apiKey: string, baseUrl: string): string {
 	return `${Bun.hash(apiKey).toString(36)}\u0000${baseUrl}`;
+}
+
+function getGitLabDuoWorkflowAccountState(apiKey: string, baseUrl: string): GitLabDuoWorkflowAccountState {
+	const key = gitLabDuoWorkflowAccountKey(apiKey, baseUrl);
+	const existing = gitLabDuoWorkflowAccountState.get(key);
+	if (existing) return existing;
+	const created: GitLabDuoWorkflowAccountState = {};
+	gitLabDuoWorkflowAccountState.set(key, created);
+	return created;
 }
 
 function getGitLabDuoWorkflowCachedNamespace(
 	apiKey: string,
 	baseUrl: string,
 ): GitLabDuoWorkflowNamespaceSelection | undefined {
-	return gitLabDuoWorkflowNamespaceCache.get(gitLabDuoWorkflowAccountKey(apiKey, baseUrl));
+	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection;
 }
 
 function setGitLabDuoWorkflowCachedNamespace(
@@ -732,11 +748,19 @@ function setGitLabDuoWorkflowCachedNamespace(
 	baseUrl: string,
 	selection: GitLabDuoWorkflowNamespaceSelection,
 ): void {
-	gitLabDuoWorkflowNamespaceCache.set(gitLabDuoWorkflowAccountKey(apiKey, baseUrl), selection);
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection = selection;
 }
 
 function clearGitLabDuoWorkflowCachedNamespace(apiKey: string, baseUrl: string): void {
-	gitLabDuoWorkflowNamespaceCache.delete(gitLabDuoWorkflowAccountKey(apiKey, baseUrl));
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection = undefined;
+}
+
+function isGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string): boolean {
+	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl).settingsEnsured === true;
+}
+
+function markGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string): void {
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).settingsEnsured = true;
 }
 
 // True when the user pinned a namespace/project explicitly (option or env). Explicit
@@ -912,12 +936,8 @@ async function runGitLabDuoWorkflow(
 		// Once per session, make sure the namespace has the Duo agent-platform + MCP +
 		// beta flags on. The inline ambient flow needs them; a fresh group ships with
 		// them off. Best-effort (PUT needs maintainer) and idempotent, never blocks.
-		if (
-			providerSessionState &&
-			!providerSessionState.settingsEnsured &&
-			isGitLabDuoWorkflowInlineFlow(workflowDefinition)
-		) {
-			providerSessionState.settingsEnsured = true;
+		if (!isGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl) && isGitLabDuoWorkflowInlineFlow(workflowDefinition)) {
+			markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl);
 			await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId);
 		}
 		// The inline `ambient` flow fails server-side without a project, and OMP has
