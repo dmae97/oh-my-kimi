@@ -154,7 +154,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 		const prompt = session.systemPrompt.join("\n");
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
-		expect(session.getActiveToolNames()).not.toContain("find");
+		expect(session.getActiveToolNames()).not.toContain("search");
 		expect(prompt).toContain("call `search_tool_bm25` before concluding no such tool exists");
 		expect(searchTool?.description).toContain("Total discoverable tools available:");
 	});
@@ -311,15 +311,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableLsp: false,
 		});
 
-		expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
-		expect(session.getSelectedDiscoveredToolNames()).toContain("find");
+		expect(await session.activateDiscoveredTools(["search"])).toEqual(["search"]);
+		expect(session.getSelectedDiscoveredToolNames()).toContain("search");
 
 		await session.setActiveToolsByName(["read", "search_tool_bm25"]);
 
-		expect(session.getActiveToolNames()).not.toContain("find");
-		expect(session.getSelectedDiscoveredToolNames()).not.toContain("find");
-		expect(await session.activateDiscoveredTools(["find"])).toEqual(["find"]);
-		expect(session.getActiveToolNames()).toContain("find");
+		expect(session.getActiveToolNames()).not.toContain("search");
+		expect(session.getSelectedDiscoveredToolNames()).not.toContain("search");
+		expect(await session.activateDiscoveredTools(["search"])).toEqual(["search"]);
+		expect(session.getActiveToolNames()).toContain("search");
 	});
 	it("restores explicit MCP, thinking, and service-tier entries when resuming without rewriting the session file", async () => {
 		const firstManager = SessionManager.create(tempDir, tempDir);

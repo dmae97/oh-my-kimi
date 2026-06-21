@@ -1194,6 +1194,11 @@ describe("AgentSession TTSR resume gate", () => {
 							delta: 'let val = result.unwrap("oops")',
 							partial,
 						});
+						// The TTSR abort placeholder is only minted for tool calls that reached
+						// `toolcall_end`: the agent loop drops incomplete tool calls from an
+						// aborted turn (partial args are unsafe to replay). Complete the call
+						// before the rule-driven abort fires so the labeled placeholder survives.
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCallContent, partial });
 					});
 				} else {
 					pushContinuationStream(stream, () => {});
