@@ -22,7 +22,7 @@ export type MessageBlock = ({ kind: "code" } & CodeBlock) | ({ kind: "quote" } &
 export interface LastCommand {
 	kind: "bash" | "eval";
 	code: string;
-	/** Highlight language: "bash" for bash, "python"/"javascript" for eval. */
+	/** Highlight language: "bash" for bash, or the resolved eval language ("python"/"javascript"/"ruby"/"julia"). */
 	language: string;
 }
 

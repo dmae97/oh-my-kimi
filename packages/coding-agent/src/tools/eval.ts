@@ -31,7 +31,9 @@ const evalCellSchema = type({
 	language: type("'py' | 'js' | 'rb' | 'jl'").describe(
 		'runtime: "py" for the IPython kernel, "js" for the persistent JS VM, "rb" for the persistent Ruby kernel, "jl" for the persistent Julia kernel',
 	),
-	code: type("string").describe("cell body, verbatim. Top-level `await` is available in py/js."),
+	code: type("string").describe(
+		"cell body, verbatim. Top-level `await` is available in py/js; rb/jl auto-display the last expression like a REPL.",
+	),
 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
 	"timeout?": type("number").describe("per-cell timeout in seconds"),
 	"reset?": type("boolean").describe(
@@ -149,12 +151,18 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	const allowPy = backends.python;
 	const allowJs = backends.js;
 	const allowRb = backends.ruby;
+	const allowJl = backends.julia;
 
 	if (language === "python") {
 		if (!allowPy) throw new ToolError("Python backend is disabled (PI_PY=0 or eval.py = false).");
 		if (!(await pythonBackend.isAvailable(session))) {
+			const alternatives = [allowJs ? '"js"' : null, allowRb ? '"rb"' : null, allowJl ? '"jl"' : null].filter(
+				Boolean,
+			);
 			throw new ToolError(
-				'Python backend is unavailable in this session. Pass language: "js" or install the python kernel.',
+				alternatives.length > 0
+					? `Python backend is unavailable in this session. Pass language: ${alternatives.join(" or ")} or install the python kernel.`
+					: 'Python backend is unavailable in this session. Install the python kernel to use language: "py".',
 			);
 		}
 		return { backend: pythonBackend };
@@ -162,19 +170,40 @@ async function resolveBackend(session: ToolSession, language: EvalLanguage): Pro
 	if (language === "ruby") {
 		if (!allowRb) throw new ToolError("Ruby backend is disabled (PI_RB=0 or eval.rb = false).");
 		if (!(await rubyBackend.isAvailable(session))) {
-			throw new ToolError('Ruby backend is unavailable in this session. Pass language: "js" or install Ruby.');
+			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowJl ? '"jl"' : null].filter(
+				Boolean,
+			);
+			throw new ToolError(
+				alternatives.length > 0
+					? `Ruby backend is unavailable in this session. Pass language: ${alternatives.join(" or ")} or install Ruby.`
+					: 'Ruby backend is unavailable in this session. Install Ruby to use language: "rb".',
+			);
 		}
 		return { backend: rubyBackend };
 	}
 	if (language === "julia") {
-		if (!backends.julia) throw new ToolError("Julia backend is disabled (PI_JL=0 or eval.jl = false).");
+		if (!allowJl) throw new ToolError("Julia backend is disabled (PI_JL=0 or eval.jl = false).");
 		if (!(await juliaBackend.isAvailable(session))) {
-			throw new ToolError('Julia backend is unavailable in this session. Pass language: "js" or install Julia.');
+			const alternatives = [allowJs ? '"js"' : null, allowPy ? '"py"' : null, allowRb ? '"rb"' : null].filter(
+				Boolean,
+			);
+			throw new ToolError(
+				alternatives.length > 0
+					? `Julia backend is unavailable in this session. Pass language: ${alternatives.join(" or ")} or install Julia.`
+					: 'Julia backend is unavailable in this session. Install Julia to use language: "jl".',
+			);
 		}
 		return { backend: juliaBackend };
 	}
 	if (!allowJs) throw new ToolError("JavaScript backend is disabled (PI_JS=0 or eval.js = false).");
 	return { backend: jsBackend };
+}
+function formatEvalInputLanguage(value: string): string {
+	if (value === "py" || value === "python") return "python";
+	if (value === "js" || value === "javascript") return "javascript";
+	if (value === "rb" || value === "ruby") return "ruby";
+	if (value === "jl" || value === "julia") return "julia";
+	return value;
 }
 
 export class EvalTool implements AgentTool<typeof evalSchema> {
@@ -185,7 +214,8 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const cells = Array.isArray(params.cells) ? params.cells : [];
 		const firstCell = cells[0] as Partial<EvalCellInput> | undefined;
 		if (!firstCell) return [];
-		const language = typeof firstCell.language === "string" ? firstCell.language : "(missing)";
+		const language =
+			typeof firstCell.language === "string" ? formatEvalInputLanguage(firstCell.language) : "javascript (default)";
 		const code = typeof firstCell.code === "string" ? firstCell.code : "";
 		const lines = [`Language: ${language}`, `Code:\n${truncateForPrompt(code)}`];
 		if (cells.length > 1) {
@@ -236,7 +266,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		const first = cells.find(c => c && typeof c === "object");
 		if (!first) return "evaluating";
 		const title = typeof first.title === "string" ? first.title : undefined;
-		const language = typeof first.language === "string" ? first.language : "?";
+		const language = typeof first.language === "string" ? formatEvalInputLanguage(first.language) : "javascript";
 		const label = title || `running ${language}`;
 		return cells.length > 1 ? `${label} (+${cells.length - 1})` : label;
 	};
@@ -382,7 +412,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					// The per-cell `timeout` is a budget on the cell runtime's *own*
 					// work. Host-side `agent()`/`parallel()`/`completion()` bridge calls suspend
 					// that budget entirely and restart a fresh timeout window when control
-					// returns to Python/JS. Compute, stdout, `log()`/`phase()`, and
+					// returns to the active backend runtime. Compute, stdout, `log()`/`phase()`, and
 					// ordinary tool calls all count against the budget. The watchdog drives
 					// `combinedSignal`; we pass no wall-clock deadline downstream so the
 					// backends never arm a competing fixed timer.

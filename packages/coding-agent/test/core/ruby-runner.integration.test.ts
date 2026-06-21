@@ -85,6 +85,29 @@ describe.skipIf(!SHOULD_RUN)("ruby runner subprocess", () => {
 		}
 	});
 
+	it("does not write an already-aborted request and keeps the kernel usable", async () => {
+		using tempDir = TempDir.createSync("@ruby-runner-preabort-");
+		const kernel = await RubyKernel.start({ cwd: tempDir.path() });
+		try {
+			const controller = new AbortController();
+			controller.abort();
+			const cancelled = await executeRubyWithKernel(kernel, 'File.write("aborted.txt", "nope")', {
+				signal: controller.signal,
+			});
+			expect(cancelled.cancelled).toBe(true);
+
+			const sideEffect = await executeRubyWithKernel(kernel, 'File.exist?("aborted.txt")', {});
+			expect(sideEffect.exitCode).toBe(0);
+			expect(sideEffect.output).toContain("false");
+
+			const after = await executeRubyWithKernel(kernel, "20 + 22", {});
+			expect(after.exitCode).toBe(0);
+			expect(after.output).toContain("42");
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
 	it("surfaces Ruby errors with a non-zero exit and the message", async () => {
 		using tempDir = TempDir.createSync("@ruby-runner-error-");
 		const kernel = await RubyKernel.start({ cwd: tempDir.path() });
@@ -92,6 +115,30 @@ describe.skipIf(!SHOULD_RUN)("ruby runner subprocess", () => {
 			const result = await executeRubyWithKernel(kernel, "raise 'boom'", {});
 			expect(result.exitCode).toBe(1);
 			expect(result.output).toContain("boom");
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
+	it("surfaces Ruby and child-process stderr in output", async () => {
+		using tempDir = TempDir.createSync("@ruby-runner-stderr-");
+		const kernel = await RubyKernel.start({ cwd: tempDir.path() });
+		try {
+			const result = await executeRubyWithKernel(
+				kernel,
+				[
+					'$stderr.print("ruby stderr\\n")',
+					'STDERR.print("constant stderr\\n")',
+					'require "rbconfig"',
+					'system(RbConfig.ruby, "-e", \'STDERR.print("child stderr\\\\n"); STDOUT.print("child stdout\\\\n")\')',
+				].join("\n"),
+				{},
+			);
+			expect(result.exitCode).toBe(0);
+			expect(result.output).toContain("ruby stderr\n");
+			expect(result.output).toContain("constant stderr\n");
+			expect(result.output).toContain("child stderr\n");
+			expect(result.output).toContain("child stdout\n");
 		} finally {
 			await kernel.shutdown();
 		}

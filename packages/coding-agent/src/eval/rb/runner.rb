@@ -16,9 +16,9 @@
 # auto-displayed (like IRB) unless it is nil, an assignment, or a definition.
 #
 # Frame channel isolation: the original stdout is dup'd onto a private IO for
-# protocol frames, then fd 1 is repointed at an internal pipe. Child processes
-# that inherit fd 1 (any `system`/backtick call) land in that pipe and a drain
-# thread re-emits their bytes as stdout frames instead of corrupting the NDJSON
+# protocol frames, then fd 1/fd 2 are repointed at internal pipes. Child
+# processes that inherit stdout/stderr land in those pipes and drain threads
+# re-emit their bytes as stdout/stderr frames instead of corrupting the NDJSON
 # channel. Ruby-level writes go through $stdout/$stderr proxies that emit frames
 # synchronously so they order correctly with display output.
 
@@ -39,15 +39,25 @@ $__omp_silent = false
 begin
   $__omp_frame_io = STDOUT.dup
   $__omp_frame_io.sync = true
-  __omp_cap_r, __omp_cap_w = IO.pipe
-  STDOUT.reopen(__omp_cap_w)
+  __omp_stdout_cap_r, __omp_stdout_cap_w = IO.pipe
+  STDOUT.reopen(__omp_stdout_cap_w)
   STDOUT.sync = true
-  __omp_cap_w.close
-  $__omp_capture_read = __omp_cap_r
+  __omp_stdout_cap_w.close
+  $__omp_stdout_capture_read = __omp_stdout_cap_r
 rescue StandardError
   $__omp_frame_io = STDOUT
   ($__omp_frame_io.sync = true) rescue nil
-  $__omp_capture_read = nil
+  $__omp_stdout_capture_read = nil
+end
+
+begin
+  __omp_stderr_cap_r, __omp_stderr_cap_w = IO.pipe
+  STDERR.reopen(__omp_stderr_cap_w)
+  STDERR.sync = true
+  __omp_stderr_cap_w.close
+  $__omp_stderr_capture_read = __omp_stderr_cap_r
+rescue StandardError
+  $__omp_stderr_capture_read = nil
 end
 
 # Protect the protocol channel from user code: read requests on a private dup of
@@ -159,8 +169,10 @@ end
 # ---------------------------------------------------------------------------
 
 class OmpStreamProxy
-  def initialize(kind)
+  def initialize(kind, io, fileno)
     @kind = kind
+    @io = io
+    @fileno = fileno
   end
 
   def write(*args)
@@ -214,19 +226,20 @@ class OmpStreamProxy
   def sync=(value); value; end
   def tty?; false; end
   def isatty; false; end
-  def fileno; 1; end
-  def to_io; STDOUT; end
+  def fileno; @fileno; end
+  def to_io; @io; end
   def closed?; false; end
   def fsync; 0; end
-  def external_encoding; Encoding::UTF_8; end
+  def external_encoding
+    (@io.external_encoding rescue Encoding::UTF_8)
+  end
 end
 
 # ---------------------------------------------------------------------------
-# fd-1 capture drain (child-process stdout) + parent watchdog
+# fd-1/fd-2 capture drains (child-process stdout/stderr) + parent watchdog
 # ---------------------------------------------------------------------------
 
-def __omp_start_capture_drain
-  io = $__omp_capture_read
+def __omp_start_capture_drain(io, kind)
   return if io.nil?
   Thread.new do
     loop do
@@ -243,7 +256,7 @@ def __omp_start_capture_drain
       if rid.nil?
         ($__omp_raw_stderr.write(chunk) rescue nil)
       else
-        __omp_emit("type" => "stdout", "id" => rid, "data" => __omp_scrub(chunk))
+        __omp_emit("type" => kind, "id" => rid, "data" => __omp_scrub(chunk))
       end
     end
   end
@@ -430,11 +443,12 @@ end
 # ---------------------------------------------------------------------------
 
 def __omp_main
-  $stdout = OmpStreamProxy.new("stdout")
-  $stderr = OmpStreamProxy.new("stderr")
+  $stdout = OmpStreamProxy.new("stdout", STDOUT, 1)
+  $stderr = OmpStreamProxy.new("stderr", STDERR, 2)
   __omp_install_idle_sigint
   __omp_start_parent_watchdog
-  __omp_start_capture_drain
+  __omp_start_capture_drain($__omp_stdout_capture_read, "stdout")
+  __omp_start_capture_drain($__omp_stderr_capture_read, "stderr")
 
   $__omp_proto_stdin.each_line do |raw|
     line = raw.strip

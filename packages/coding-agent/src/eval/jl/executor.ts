@@ -56,11 +56,20 @@ export interface JuliaResult {
 	stdinRequested: boolean;
 }
 
-interface JuliaSession {
+interface JuliaSessionOwners {
+	ownerIds: Set<string>;
+	hasFallbackOwner: boolean;
+}
+
+interface JuliaSession extends JuliaSessionOwners {
 	sessionKey: string;
 	sessionId: string;
+	cwd: string;
 	kernel: JuliaKernel;
-	owners: Set<string>;
+}
+
+interface StartingJuliaSession extends JuliaSessionOwners {
+	promise: Promise<JuliaSession>;
 }
 
 class JuliaExecutionCancelledError extends Error {
@@ -71,7 +80,7 @@ class JuliaExecutionCancelledError extends Error {
 }
 
 const sessions = new Map<string, JuliaSession>();
-const startingSessions = new Map<string, Promise<JuliaSession>>();
+const startingSessions = new Map<string, StartingJuliaSession>();
 const resettingSessions = new Map<string, Promise<void>>();
 
 function normalizeSessionCwd(cwd: string): string {
@@ -239,6 +248,7 @@ function buildKernelEnv(options: {
 }
 
 async function startKernel(cwd: string, options: JuliaExecutorOptions): Promise<JuliaKernel> {
+	requireRemainingTimeoutMs(options.deadlineMs);
 	const env: Record<string, string | undefined> = {};
 	const patch = buildKernelEnv(options);
 	if (patch) {
@@ -256,11 +266,18 @@ async function startKernel(cwd: string, options: JuliaExecutorOptions): Promise<
 	});
 }
 
-function attachOwner(session: JuliaSession, sessionId: string, ownerId: string | undefined): void {
-	if (ownerId) {
-		session.owners.add(ownerId);
-	} else {
-		session.owners.add(`unmanaged:${sessionId}`);
+function attachOwner(session: JuliaSessionOwners, sessionId: string, ownerId: string | undefined): void {
+	if (ownerId !== undefined) {
+		if (session.hasFallbackOwner) {
+			session.ownerIds.delete(sessionId);
+			session.hasFallbackOwner = false;
+		}
+		session.ownerIds.add(ownerId);
+		return;
+	}
+	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
+		session.ownerIds.add(sessionId);
+		session.hasFallbackOwner = true;
 	}
 }
 
@@ -278,31 +295,39 @@ async function acquireSession(
 
 	const inFlight = startingSessions.get(sessionKey);
 	if (inFlight) {
-		const session = await waitForPromiseWithCancellation(inFlight, options);
-		attachOwner(session, sessionId, options.kernelOwnerId);
-		return session;
+		attachOwner(inFlight, sessionId, options.kernelOwnerId);
+		return await waitForPromiseWithCancellation(inFlight.promise, options);
 	}
 
+	let startingSession!: StartingJuliaSession;
 	const startPromise = (async () => {
-		try {
-			const kernel = await startKernel(cwd, options);
-			const session: JuliaSession = {
-				sessionKey,
-				sessionId,
-				kernel,
-				owners: new Set<string>(),
-			};
+		const kernel = await startKernel(cwd, options);
+		const session: JuliaSession = {
+			sessionKey,
+			sessionId,
+			cwd,
+			kernel,
+			ownerIds: new Set(startingSession.ownerIds),
+			hasFallbackOwner: startingSession.hasFallbackOwner,
+		};
+		if (startingSessions.get(sessionKey) === startingSession) {
 			sessions.set(sessionKey, session);
-			return session;
-		} finally {
-			startingSessions.delete(sessionKey);
 		}
+		return session;
 	})();
 
-	startingSessions.set(sessionKey, startPromise);
-	const session = await waitForPromiseWithCancellation(startPromise, options);
-	attachOwner(session, sessionId, options.kernelOwnerId);
-	return session;
+	startingSession = {
+		ownerIds: new Set(),
+		hasFallbackOwner: false,
+		promise: startPromise,
+	};
+	attachOwner(startingSession, sessionId, options.kernelOwnerId);
+	startingSessions.set(sessionKey, startingSession);
+	try {
+		return await waitForPromiseWithCancellation(startPromise, options);
+	} finally {
+		if (startingSessions.get(sessionKey) === startingSession) startingSessions.delete(sessionKey);
+	}
 }
 
 async function replaceSessionKernel(session: JuliaSession, cwd: string, options: JuliaExecutorOptions): Promise<void> {
@@ -310,38 +335,107 @@ async function replaceSessionKernel(session: JuliaSession, cwd: string, options:
 		sessionKey: session.sessionKey,
 	});
 	const oldKernel = session.kernel;
-	void oldKernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {});
-
-	const kernelPromise = startKernel(cwd, options);
-	const kernel = await waitForPromiseWithCancellation(kernelPromise, options);
-	session.kernel = kernel;
+	const remaining = getRemainingTimeoutMs(options.deadlineMs);
+	await oldKernel
+		.shutdown(remaining !== undefined ? { timeoutMs: Math.max(0, remaining) } : undefined)
+		.catch(() => undefined);
+	if (sessions.get(session.sessionKey) !== session) {
+		throw new JuliaExecutionCancelledError(false);
+	}
+	requireRemainingTimeoutMs(options.deadlineMs);
+	const nextKernel = await startKernel(cwd, options);
+	if (sessions.get(session.sessionKey) !== session) {
+		await nextKernel.shutdown().catch(() => undefined);
+		throw new JuliaExecutionCancelledError(false);
+	}
+	session.kernel = nextKernel;
 }
 
 async function resetSession(sessionKey: string): Promise<void> {
-	const session = sessions.get(sessionKey);
+	const session = sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.promise.catch(() => undefined));
 	if (!session) return;
 	sessions.delete(sessionKey);
-	await session.kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {});
+	await session.kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => undefined);
 }
 
 export async function disposeAllJuliaKernelSessions(): Promise<void> {
-	const active = Array.from(sessions.values());
-	sessions.clear();
+	const pending = [...startingSessions.values()].map(starting => starting.promise);
 	startingSessions.clear();
 	resettingSessions.clear();
-	await Promise.all(active.map(s => s.kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {})));
+	const started = await Promise.allSettled(pending);
+	const all = [...sessions.entries()];
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		if (!all.some(([, session]) => session === result.value)) {
+			all.push([result.value.sessionKey, result.value]);
+		}
+	}
+	for (const [id, session] of all) {
+		if (sessions.get(id) === session) sessions.delete(id);
+	}
+	const results = await Promise.allSettled(all.map(([, session]) => session.kernel.shutdown()));
+	for (let i = 0; i < all.length; i += 1) {
+		const [id, session] = all[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) continue;
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Julia kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: id,
+			cwd: session.cwd,
+			reason,
+		});
+		if (!sessions.has(id)) sessions.set(id, session);
+	}
 }
 
 export async function disposeJuliaKernelSessionsByOwner(ownerId: string): Promise<void> {
-	const victims: JuliaSession[] = [];
-	for (const [key, session] of sessions) {
-		session.owners.delete(ownerId);
-		if (session.owners.size === 0) {
-			sessions.delete(key);
-			victims.push(session);
+	const toShutdown: JuliaSession[] = [];
+	const startingToShutdown: StartingJuliaSession[] = [];
+	for (const session of [...sessions.values()]) {
+		if (!session.ownerIds.has(ownerId)) continue;
+		if (session.ownerIds.size === 1) {
+			toShutdown.push(session);
+			continue;
 		}
+		session.ownerIds.delete(ownerId);
 	}
-	await Promise.all(victims.map(s => s.kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {})));
+	for (const [sessionKey, starting] of [...startingSessions.entries()]) {
+		if (sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
+		if (starting.ownerIds.size === 1) {
+			startingSessions.delete(sessionKey);
+			startingToShutdown.push(starting);
+			continue;
+		}
+		starting.ownerIds.delete(ownerId);
+	}
+	for (const session of toShutdown) {
+		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+	}
+	const started = await Promise.allSettled(startingToShutdown.map(starting => starting.promise));
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		const session = result.value;
+		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+		toShutdown.push(session);
+	}
+	const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
+	for (let i = 0; i < toShutdown.length; i += 1) {
+		const session = toShutdown[i];
+		const result = results[i];
+		if (result.status === "fulfilled" && result.value?.confirmed !== false) {
+			session.ownerIds.delete(ownerId);
+			continue;
+		}
+		const reason = result.status === "rejected" ? result.reason : "not confirmed";
+		logger.warn("Julia kernel shutdown not confirmed", {
+			sessionId: session.sessionId,
+			sessionKey: session.sessionKey,
+			cwd: session.cwd,
+			reason,
+		});
+		if (!sessions.has(session.sessionKey)) sessions.set(session.sessionKey, session);
+	}
 }
 
 async function executeWithKernel(

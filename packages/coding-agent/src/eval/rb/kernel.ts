@@ -334,8 +334,13 @@ export class RubyKernel {
 			});
 		};
 
+		let requestWritten = false;
 		const requestCancel = () => {
 			if (pending.settled || pending.escalationTimer) return;
+			if (!requestWritten) {
+				finalize();
+				return;
+			}
 			void this.interrupt();
 			const escalation = setTimeout(() => {
 				if (pending.settled) return;
@@ -375,6 +380,10 @@ export class RubyKernel {
 				onAbort();
 			} else {
 				options.signal.addEventListener("abort", onAbort, { once: true });
+				if (options.signal.aborted) {
+					options.signal.removeEventListener("abort", onAbort);
+					onAbort();
+				}
 			}
 		}
 
@@ -389,6 +398,11 @@ export class RubyKernel {
 			storeHistory: options?.storeHistory ?? !(options?.silent ?? false),
 		});
 
+		if (pending.settled) {
+			return promise;
+		}
+
+		requestWritten = true;
 		try {
 			await this.#writeLine(payload);
 		} catch (err) {

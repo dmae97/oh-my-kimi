@@ -41,7 +41,8 @@ import type { AuthStorage } from "../session/auth-storage";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
-import type { ContextFileEntry } from "../tools";
+import type { ContextFileEntry, ToolSession } from "../tools";
+import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../tools/irc";
 import { normalizeSchema } from "../tools/jtd-to-json-schema";
 import {
@@ -1790,12 +1791,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		toolNames = [...toolNames, "irc"];
 	}
 	if (toolNames?.includes("exec")) {
-		const allowEvalPy = settings.get("eval.py") ?? true;
-		const allowEvalJs = settings.get("eval.js") ?? true;
-		const allowEvalRb = settings.get("eval.rb") ?? true;
-		const allowEvalJl = settings.get("eval.jl") ?? true;
+		const backends = resolveEvalBackends({ settings } as ToolSession);
 		const expanded = toolNames.filter(name => name !== "exec");
-		if (allowEvalPy || allowEvalJs || allowEvalRb || allowEvalJl) expanded.push("eval");
+		if (backends.python || backends.js || backends.ruby || backends.julia) expanded.push("eval");
 		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}

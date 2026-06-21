@@ -2,11 +2,12 @@
  * TUI rendering for the eval tool.
  *
  * Split out from `eval.ts` so the renderer can be imported by `renderers.ts`
- * without dragging the eval *runtime* (JS/Python backends -> agent bridge ->
- * task executor -> sdk -> extension loader -> root barrel) into the renderer
- * module graph. That transitive chain re-enters `renderers.ts` while `eval.ts`
- * is still initializing, which previously crashed module load with a TDZ
- * `Cannot access 'evalToolRenderer' before initialization`.
+ * without dragging the eval *runtime* (JS/Python/Ruby/Julia backends ->
+ * agent bridge -> task executor -> sdk -> extension loader -> root barrel)
+ * into the renderer module graph. That transitive chain re-enters
+ * `renderers.ts` while `eval.ts` is still initializing, which previously
+ * crashed module load with a TDZ `Cannot access 'evalToolRenderer' before
+ * initialization`.
  */
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Markdown, Text } from "@oh-my-pi/pi-tui";
@@ -512,6 +513,7 @@ export const evalToolRenderer = {
 						{
 							code: cell.code,
 							language: languageForHighlighter(cell.language),
+							showLanguage: true,
 							index: i,
 							total: cells.length,
 							title: cell.title,
@@ -614,6 +616,7 @@ export const evalToolRenderer = {
 							{
 								code: cell.code,
 								language: languageForHighlighter(cell.language ?? details?.language),
+								showLanguage: true,
 								index: i,
 								total: cellResults.length,
 								title: cell.title,

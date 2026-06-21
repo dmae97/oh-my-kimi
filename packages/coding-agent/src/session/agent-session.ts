@@ -522,7 +522,7 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Inherited eval executor session id from a parent agent. */
 	parentEvalSessionId?: string;
-	/** Logical owner for retained Python kernels created by this session. */
+	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
 	/**
 	 * AsyncJobManager that this session installed as the process-global instance.
@@ -4175,7 +4175,7 @@ export class AgentSession {
 
 	/**
 	 * Synchronously mark the session as disposing so new work is rejected
-	 * immediately: Python/eval starts throw, queued asides are dropped, and the
+	 * immediately: eval starts throw, queued asides are dropped, and the
 	 * aside provider is detached. Idempotent; `dispose()` runs it first.
 	 *
 	 * Wrappers that await other teardown before delegating to `dispose()` MUST
@@ -4237,11 +4237,9 @@ export class AgentSession {
 				AsyncJobManager.setInstance(undefined);
 			}
 		}
-		const pythonExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
-		if (!pythonExecutionsSettled) {
-			logger.warn(
-				"Detaching retained Python kernel ownership during dispose while Python execution is still active",
-			);
+		const evalExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
+		if (!evalExecutionsSettled) {
+			logger.warn("Detaching retained eval-kernel ownership during dispose while eval execution is still active");
 		}
 		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await disposeRubyKernelSessionsByOwner(this.#evalKernelOwnerId);

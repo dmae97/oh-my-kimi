@@ -98,17 +98,24 @@ export interface RubyResult {
 // register against the same tuple; the kernel stays alive until the last owner detaches.
 // ---------------------------------------------------------------------------
 
-interface RubySession {
-	sessionKey: string;
-	sessionId: string;
-	cwd: string;
-	kernel: RubyKernel;
+interface RubySessionOwners {
 	ownerIds: Set<string>;
 	hasFallbackOwner: boolean;
 }
 
+interface RubySession extends RubySessionOwners {
+	sessionKey: string;
+	sessionId: string;
+	cwd: string;
+	kernel: RubyKernel;
+}
+
+interface StartingRubySession extends RubySessionOwners {
+	promise: Promise<RubySession>;
+}
+
 const sessions = new Map<string, RubySession>();
-const startingSessions = new Map<string, Promise<RubySession>>();
+const startingSessions = new Map<string, StartingRubySession>();
 const resettingSessions = new Map<string, Promise<void>>();
 
 function normalizeSessionCwd(cwd: string): string {
@@ -317,7 +324,7 @@ async function startKernel(cwd: string, options: RubyExecutorOptions): Promise<R
 	});
 }
 
-function attachOwner(session: RubySession, sessionId: string, ownerId: string | undefined): void {
+function attachOwner(session: RubySessionOwners, sessionId: string, ownerId: string | undefined): void {
 	if (ownerId !== undefined) {
 		if (session.hasFallbackOwner) {
 			session.ownerIds.delete(sessionId);
@@ -345,10 +352,10 @@ async function acquireSession(
 	}
 	const starting = startingSessions.get(sessionKey);
 	if (starting) {
-		const session = await starting;
-		attachOwner(session, sessionId, options.kernelOwnerId);
-		return session;
+		attachOwner(starting, sessionId, options.kernelOwnerId);
+		return await starting.promise;
 	}
+	let startingSession!: StartingRubySession;
 	const startup = (async () => {
 		const kernel = await startKernel(cwd, options);
 		const session: RubySession = {
@@ -356,19 +363,25 @@ async function acquireSession(
 			sessionId,
 			cwd,
 			kernel,
-			ownerIds: new Set(),
-			hasFallbackOwner: false,
+			ownerIds: new Set(startingSession.ownerIds),
+			hasFallbackOwner: startingSession.hasFallbackOwner,
 		};
-		sessions.set(sessionKey, session);
+		if (startingSessions.get(sessionKey) === startingSession) {
+			sessions.set(sessionKey, session);
+		}
 		return session;
 	})();
-	startingSessions.set(sessionKey, startup);
+	startingSession = {
+		ownerIds: new Set(),
+		hasFallbackOwner: false,
+		promise: startup,
+	};
+	attachOwner(startingSession, sessionId, options.kernelOwnerId);
+	startingSessions.set(sessionKey, startingSession);
 	try {
-		const session = await startup;
-		attachOwner(session, sessionId, options.kernelOwnerId);
-		return session;
+		return await startup;
 	} finally {
-		if (startingSessions.get(sessionKey) === startup) startingSessions.delete(sessionKey);
+		if (startingSessions.get(sessionKey) === startingSession) startingSessions.delete(sessionKey);
 	}
 }
 
@@ -391,7 +404,8 @@ async function replaceSessionKernel(session: RubySession, cwd: string, options: 
 }
 
 async function resetSession(sessionKey: string): Promise<void> {
-	const existing = sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.catch(() => undefined));
+	const existing =
+		sessions.get(sessionKey) ?? (await startingSessions.get(sessionKey)?.promise.catch(() => undefined));
 	if (!existing) return;
 	sessions.delete(sessionKey);
 	await existing.kernel.shutdown().catch(() => undefined);
@@ -402,7 +416,7 @@ async function resetSession(sessionKey: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function disposeAllRubyKernelSessions(): Promise<void> {
-	const pending = [...startingSessions.values()];
+	const pending = [...startingSessions.values()].map(starting => starting.promise);
 	startingSessions.clear();
 	const started = await Promise.allSettled(pending);
 	const all = [...sessions.entries()];
@@ -433,6 +447,7 @@ export async function disposeAllRubyKernelSessions(): Promise<void> {
 
 export async function disposeRubyKernelSessionsByOwner(ownerId: string): Promise<void> {
 	const toShutdown: RubySession[] = [];
+	const startingToShutdown: StartingRubySession[] = [];
 	for (const session of [...sessions.values()]) {
 		if (!session.ownerIds.has(ownerId)) continue;
 		if (session.ownerIds.size === 1) {
@@ -441,8 +456,24 @@ export async function disposeRubyKernelSessionsByOwner(ownerId: string): Promise
 		}
 		session.ownerIds.delete(ownerId);
 	}
+	for (const [sessionKey, starting] of [...startingSessions.entries()]) {
+		if (sessions.has(sessionKey) || !starting.ownerIds.has(ownerId)) continue;
+		if (starting.ownerIds.size === 1) {
+			startingSessions.delete(sessionKey);
+			startingToShutdown.push(starting);
+			continue;
+		}
+		starting.ownerIds.delete(ownerId);
+	}
 	for (const session of toShutdown) {
 		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+	}
+	const started = await Promise.allSettled(startingToShutdown.map(starting => starting.promise));
+	for (const result of started) {
+		if (result.status !== "fulfilled") continue;
+		const session = result.value;
+		if (sessions.get(session.sessionKey) === session) sessions.delete(session.sessionKey);
+		toShutdown.push(session);
 	}
 	const results = await Promise.allSettled(toShutdown.map(session => session.kernel.shutdown()));
 	for (let i = 0; i < toShutdown.length; i += 1) {

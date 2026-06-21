@@ -19,8 +19,9 @@ export function readEvalBackendsAllowance(session: ToolSession): EvalBackendsAll
 }
 
 /**
- * Materialize the active eval backend allowance: PI_PY / PI_JS / PI_RB env flags
- * override the per-key settings; otherwise settings (defaults true) win.
+ * Materialize the active eval backend allowance: PI_PY / PI_JS / PI_RB / PI_JL
+ * env flags override the per-key settings; otherwise settings (defaults true)
+ * win.
  */
 export function resolveEvalBackends(session: ToolSession): EvalBackendsAllowance {
 	const settings = readEvalBackendsAllowance(session);

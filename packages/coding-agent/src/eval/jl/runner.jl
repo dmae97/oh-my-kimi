@@ -14,6 +14,16 @@ redirect_stdin(devnull)
 
 global current_rid = nothing
 const write_lock = ReentrantLock()
+const drain_state_lock = ReentrantLock()
+
+mutable struct DrainBarrier
+    marker::Vector{UInt8}
+    remaining::Int
+    done::Channel{Nothing}
+end
+
+const active_drain_barrier = Ref{Union{Nothing, DrainBarrier}}(nothing)
+const drain_marker_counter = Ref{UInt}(0)
 
 function json_parse(s::String)
     chars = collect(s)
@@ -274,17 +284,155 @@ function emit_frame(frame)
     end
 end
 
-function drain_stream(rd, kind)
+function find_subsequence(haystack::Vector{UInt8}, needle::Vector{UInt8})
+    needle_len = length(needle)
+    if needle_len == 0 || length(haystack) < needle_len
+        return nothing
+    end
+    last_start = length(haystack) - needle_len + 1
+    for start in 1:last_start
+        matched = true
+        @inbounds for offset in 1:needle_len
+            if haystack[start + offset - 1] != needle[offset]
+                matched = false
+                break
+            end
+        end
+        if matched
+            return start
+        end
+    end
+    return nothing
+end
+
+function marker_overlap(haystack::Vector{UInt8}, needle::Vector{UInt8})
+    max_overlap = min(length(haystack), length(needle) - 1)
+    for overlap in max_overlap:-1:1
+        matched = true
+        @inbounds for offset in 1:overlap
+            if haystack[length(haystack) - overlap + offset] != needle[offset]
+                matched = false
+                break
+            end
+        end
+        if matched
+            return overlap
+        end
+    end
+    return 0
+end
+
+function emit_stream_bytes(kind, bytes::Vector{UInt8})
+    rid = current_rid
+    if rid === nothing || isempty(bytes)
+        return
+    end
+    emit_frame(Dict("type" => kind, "id" => rid, "data" => String(copy(bytes))))
+end
+
+function signal_drain_barrier!(marker::Vector{UInt8})
+    done_channel = lock(drain_state_lock) do
+        barrier = active_drain_barrier[]
+        if barrier === nothing || barrier.marker != marker
+            return nothing
+        end
+        barrier.remaining -= 1
+        if barrier.remaining == 0
+            active_drain_barrier[] = nothing
+            return barrier.done
+        end
+        return nothing
+    end
+    if done_channel !== nothing
+        put!(done_channel, nothing)
+    end
+    return nothing
+end
+
+function process_stream_buffer!(buffer::Vector{UInt8}, kind; flush_all::Bool=false)
+    while true
+        barrier = lock(drain_state_lock) do
+            active_drain_barrier[]
+        end
+        marker = barrier === nothing ? nothing : barrier.marker
+        if marker === nothing
+            if !isempty(buffer)
+                emit_stream_bytes(kind, buffer)
+                empty!(buffer)
+            end
+            return
+        end
+
+        marker_index = find_subsequence(buffer, marker)
+        if marker_index !== nothing
+            emit_len = marker_index - 1
+            if emit_len > 0
+                emit_stream_bytes(kind, buffer[1:emit_len])
+            end
+            deleteat!(buffer, 1:(marker_index + length(marker) - 1))
+            signal_drain_barrier!(marker)
+            continue
+        end
+
+        keep_len = flush_all ? 0 : marker_overlap(buffer, marker)
+        emit_len = length(buffer) - keep_len
+        if emit_len > 0
+            emit_stream_bytes(kind, buffer[1:emit_len])
+            deleteat!(buffer, 1:emit_len)
+        end
+        return
+    end
+end
+
+function next_drain_marker()
+    drain_marker_counter[] += UInt(1)
+    return Vector{UInt8}(codeunits("\0__OMP_DRAIN__:" * string(drain_marker_counter[]) * ":" * string(time_ns()) * "\0"))
+end
+
+function await_stream_drains()
+    flush(stdout)
+    flush(stderr)
+    barrier = DrainBarrier(next_drain_marker(), 2, Channel{Nothing}(1))
+    lock(drain_state_lock) do
+        if active_drain_barrier[] !== nothing
+            error("Drain barrier already active")
+        end
+        active_drain_barrier[] = barrier
+    end
     try
-        while !eof(rd)
-            line = readline(rd, keep=true)
-            rid = current_rid
-            if rid !== nothing && !isempty(line)
-                emit_frame(Dict("type" => kind, "id" => rid, "data" => line))
+        Base.write(out_wr, barrier.marker)
+        flush(out_wr)
+        Base.write(err_wr, barrier.marker)
+        flush(err_wr)
+        take!(barrier.done)
+    finally
+        lock(drain_state_lock) do
+            if active_drain_barrier[] === barrier
+                active_drain_barrier[] = nothing
+            end
+        end
+    end
+    return nothing
+end
+
+function drain_stream(rd, kind)
+    buffer = UInt8[]
+    try
+        while true
+            data = readavailable(rd)
+            if !isempty(data)
+                append!(buffer, data)
+                process_stream_buffer!(buffer, kind)
+            elseif eof(rd)
+                break
+            else
+                sleep(0.001)
             end
         end
     catch
         # ignore
+    finally
+        process_stream_buffer!(buffer, kind, flush_all=true)
     end
 end
 
@@ -469,11 +617,7 @@ function main()
                 emit_error(rid, err, catch_backtrace())
             end
             
-            # Flush stdout and stderr writes before sending done frame
-            flush(stdout)
-            flush(stderr)
-            # Yield to make sure async drain processes all writes
-            sleep(0.01)
+            await_stream_drains()
             
             emit_frame(Dict(
                 "type" => "done",
