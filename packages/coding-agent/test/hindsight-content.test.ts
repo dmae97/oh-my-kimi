@@ -4,6 +4,7 @@ import {
 	formatCurrentTime,
 	formatMemories,
 	type HindsightMessage,
+	hasSubstantiveContent,
 	prepareRetentionTranscript,
 	sliceLastTurnsByUserBoundary,
 	stripMemoryTags,
@@ -181,6 +182,41 @@ describe("prepareRetentionTranscript", () => {
 	it("returns null when nothing meaningful remains", () => {
 		const empty = prepareRetentionTranscript([{ role: "user", content: "<memories>x</memories>" }], true);
 		expect(empty.transcript).toBeNull();
+	});
+
+	it("skips punctuation-only assistant turns so retain never stores `.` noise (#1806)", () => {
+		const messages: HindsightMessage[] = [
+			{ role: "user", content: "explain how transformers work" },
+			{ role: "assistant", content: "." },
+			{ role: "user", content: "now ssh into the server" },
+			{ role: "assistant", content: "..." },
+			{ role: "user", content: "any more updates?" },
+			{ role: "assistant", content: "  \n\t" },
+			{ role: "user", content: "ok keep going" },
+			{ role: "assistant", content: "done — here are the results" },
+		];
+		const { transcript, messageCount } = prepareRetentionTranscript(messages, true);
+		expect(messageCount).toBe(5);
+		expect(transcript).not.toContain("[role: assistant]\n.\n[assistant:end]");
+		expect(transcript).not.toContain("[role: assistant]\n...\n[assistant:end]");
+		expect(transcript).toContain("done — here are the results");
+	});
+});
+
+describe("hasSubstantiveContent", () => {
+	it("treats letter/digit-bearing strings as substantive", () => {
+		expect(hasSubstantiveContent("ok")).toBe(true);
+		expect(hasSubstantiveContent("y")).toBe(true);
+		expect(hasSubstantiveContent("4")).toBe(true);
+		expect(hasSubstantiveContent("こんにちは")).toBe(true);
+	});
+
+	it("rejects whitespace and punctuation-only strings", () => {
+		expect(hasSubstantiveContent("")).toBe(false);
+		expect(hasSubstantiveContent(".")).toBe(false);
+		expect(hasSubstantiveContent("...")).toBe(false);
+		expect(hasSubstantiveContent(" \t\n")).toBe(false);
+		expect(hasSubstantiveContent("— ! ?")).toBe(false);
 	});
 });
 
