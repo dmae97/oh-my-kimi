@@ -36,6 +36,12 @@ function createContext(options: {
 	};
 	const addMessageToChat = vi.fn();
 	const updatePendingMessagesDisplay = vi.fn();
+	const clearOptimisticUserMessage = vi.fn(() => {
+		ctx.optimisticUserMessageSignature = undefined;
+	});
+	const replaceOptimisticUserMessage = vi.fn(() => {
+		ctx.optimisticUserMessageSignature = undefined;
+	});
 	const ctx = {
 		isInitialized: true,
 		statusLine: { invalidate: vi.fn() },
@@ -53,9 +59,19 @@ function createContext(options: {
 						.join(""),
 		optimisticUserMessageSignature: options.optimisticSignature,
 		locallySubmittedUserSignatures: new Set<string>(options.locallySubmittedSignatures ?? []),
+		clearOptimisticUserMessage,
+		replaceOptimisticUserMessage,
 		pendingTools: new Map(),
 	} as unknown as InteractiveModeContext;
-	return { ctx, editor, setText, addMessageToChat, updatePendingMessagesDisplay };
+	return {
+		ctx,
+		editor,
+		setText,
+		addMessageToChat,
+		updatePendingMessagesDisplay,
+		clearOptimisticUserMessage,
+		replaceOptimisticUserMessage,
+	};
 }
 
 describe("EventController message_start (user role)", () => {

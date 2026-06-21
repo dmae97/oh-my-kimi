@@ -436,6 +436,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
+	#optimisticUserMessageComponents: Component[] = [];
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
 	lastLeftTapTime = 0;
@@ -1248,6 +1249,32 @@ export class InteractiveMode implements InteractiveModeContext {
 			throw err;
 		}
 	}
+	#captureAddedChatComponents(render: () => void): Component[] {
+		const start = this.chatContainer.children.length;
+		render();
+		return this.chatContainer.children.slice(start);
+	}
+
+	clearOptimisticUserMessage(): void {
+		this.optimisticUserMessageSignature = undefined;
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
+		this.#optimisticUserMessageComponents = [];
+	}
+
+	replaceOptimisticUserMessage(
+		message: AgentMessage,
+		options?: { imageLinks?: readonly (string | undefined)[] },
+	): void {
+		this.optimisticUserMessageSignature = undefined;
+		this.#pendingSubmissionDispose?.();
+		this.#pendingSubmissionDispose = undefined;
+		for (const component of this.#optimisticUserMessageComponents) {
+			this.chatContainer.removeChild(component);
+		}
+		this.#optimisticUserMessageComponents = [];
+		this.addMessageToChat(message, options);
+	}
 
 	startPendingSubmission(input: {
 		text: string;
@@ -1273,18 +1300,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			const imageCount = submission.images?.length ?? 0;
 			this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
 			this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
-			this.addMessageToChat(
-				{
-					role: "user",
-					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-					attribution: "user",
-					timestamp: Date.now(),
-				},
-				{ imageLinks: input.imageLinks },
-			);
+			this.#optimisticUserMessageComponents = this.#captureAddedChatComponents(() => {
+				this.addMessageToChat(
+					{
+						role: "user",
+						content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+						attribution: "user",
+						timestamp: Date.now(),
+					},
+					{ imageLinks: input.imageLinks },
+				);
+			});
 		} else {
-			this.optimisticUserMessageSignature = undefined;
-			this.#pendingSubmissionDispose = undefined;
+			this.clearOptimisticUserMessage();
 		}
 		this.editor.setText("");
 		this.editor.imageLinks = undefined;
@@ -1301,9 +1329,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		submission.cancelled = true;
 		this.#pendingSubmittedInput = undefined;
-		this.optimisticUserMessageSignature = undefined;
-		this.#pendingSubmissionDispose?.();
-		this.#pendingSubmissionDispose = undefined;
+		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
 		if (submission.customType === "goal-continuation") {
 			this.#goalContinuationTurnInFlight = false;
@@ -1345,6 +1371,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
 			this.optimisticUserMessageSignature = undefined;
 			pendingSubmissionDispose?.();
+			this.#optimisticUserMessageComponents = [];
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
 				this.#stopLoadingAnimation(true);
@@ -1435,15 +1462,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!this.optimisticUserMessageSignature) return;
 		const submission = this.#pendingSubmittedInput;
 		if (!submission || submission.cancelled || submission.customType) return;
-		this.addMessageToChat(
-			{
-				role: "user",
-				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-				attribution: "user",
-				timestamp: Date.now(),
-			},
-			{ imageLinks: submission.imageLinks },
-		);
+		this.#optimisticUserMessageComponents = this.#captureAddedChatComponents(() => {
+			this.addMessageToChat(
+				{
+					role: "user",
+					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+					attribution: "user",
+					timestamp: Date.now(),
+				},
+				{ imageLinks: submission.imageLinks },
+			);
+		});
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
@@ -3257,9 +3286,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	showError(message: string): void {
 		this.#pendingSubmittedInput = undefined;
-		this.optimisticUserMessageSignature = undefined;
-		this.#pendingSubmissionDispose?.();
-		this.#pendingSubmissionDispose = undefined;
+		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(true);
