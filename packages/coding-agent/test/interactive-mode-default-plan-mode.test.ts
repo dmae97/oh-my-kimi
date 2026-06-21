@@ -64,8 +64,11 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		return model;
 	}
 
-	/** Build an InteractiveMode over a brand-new (never-persisted) session. */
-	function createHarness(settings: Settings): InteractiveMode {
+	/** Build an InteractiveMode over a brand-new (never-persisted) session.
+	 *  `extraRegistryTools` registers additional tools that are NOT initially
+	 *  active — modeling tools hidden by `tools.discoveryMode === "all"` that
+	 *  modes may force-activate on entry. */
+	function createHarness(settings: Settings, extraRegistryTools: readonly AgentTool[] = []): InteractiveMode {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
 		const initialModel = modelOrThrow(registry, "claude-sonnet-4-5");
 		const readTool = makeTool("read");
@@ -76,6 +79,9 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			[readTool.name, readTool],
 			[resolveTool.name, resolveTool],
 		]);
+		for (const tool of extraRegistryTools) {
+			toolRegistry.set(tool.name, tool);
+		}
 		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), `active-${Bun.nanoseconds()}`));
 		const createdSession = new AgentSession({
 			agent: new Agent({
@@ -104,6 +110,27 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true, planFilePath: "local://PLAN.md" });
+		expect(session?.getActiveToolNames()).toContain("resolve");
+	});
+
+	it("activates write when entering plan mode even if it was hidden by discoveryMode (issue #3165)", async () => {
+		// `plan-mode-active.md` instructs the agent to draft the plan file with
+		// `write` and refine it with `edit`. Under `tools.discoveryMode === "all"`
+		// `write` is hidden behind `search_tool_bm25` so it's in the registry but
+		// not the initial active set. Plan-mode entry must force-activate it or
+		// the agent only has `edit`, which fails on a non-existent file.
+		const writeTool = makeTool("write");
+		const created = createHarness(
+			Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }),
+			[writeTool],
+		);
+
+		expect(session?.getActiveToolNames()).not.toContain("write");
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getActiveToolNames()).toContain("write");
 		expect(session?.getActiveToolNames()).toContain("resolve");
 	});
 

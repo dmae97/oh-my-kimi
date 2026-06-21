@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed plan mode leaving `write` hidden under `tools.discoveryMode: "all"`, which made the agent attempt to create the plan file via `edit` and stall. Plan-mode entry now force-activates `write` whenever the registry built it, matching the `write`+`edit` instructions in the plan-mode prompt ([#3165](https://github.com/can1357/oh-my-pi/issues/3165))
+
 ## [16.1.9] - 2026-06-21
 
 ### Added
