@@ -70,6 +70,18 @@ async function dispatch(controller: EventController, message: AssistantMessage) 
 	await controller.handleEvent(event);
 }
 
+async function dispatchToolStart(
+	controller: EventController,
+	payload: { toolCallId: string; toolName: string; args: Record<string, unknown> },
+) {
+	await controller.handleEvent({
+		type: "tool_execution_start",
+		toolCallId: payload.toolCallId,
+		toolName: payload.toolName,
+		args: payload.args,
+	} as Extract<AgentSessionEvent, { type: "tool_execution_start" }>);
+}
+
 describe("EventController paces streamed tool args", () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -145,5 +157,39 @@ describe("EventController paces streamed tool args", () => {
 		const calls = updateArgsSpy.mock.calls.length;
 		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS * 5);
 		expect(updateArgsSpy.mock.calls.length).toBe(calls);
+	});
+
+	it("reconciles validated full args on tool_execution_start when the closing args update never lands", async () => {
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+		vi.useFakeTimers();
+		const content = "y".repeat(50);
+		const target = `{"path":"/tmp/exec.ts","content":"${content}"}`;
+		const streaming = makeStreamingMessage([
+			{ type: "toolCall", id: "tc-1", name: "write", arguments: {}, partialJson: target } as never,
+		]);
+		const { controller, pendingTools } = createFixture(streaming);
+
+		// Args still streaming: the reveal seeds the preview at an empty prefix, so
+		// the write head shows its `…` path placeholder rather than the real path.
+		await dispatch(controller, streaming);
+		const component = pendingTools.get("tc-1");
+		if (!component) throw new Error("expected a pending write component");
+		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("/tmp/exec.ts");
+
+		// The closing full-args message_update never arrives (throttled `arguments`
+		// with smoothing off, an owned-dialect projector, or a superseded turn that
+		// still runs the call). The tool executes anyway: tool_execution_start is the
+		// one event every path emits with the validated args, so it must reconcile.
+		await dispatchToolStart(controller, {
+			toolCallId: "tc-1",
+			toolName: "write",
+			args: { path: "/tmp/exec.ts", content },
+		});
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("/tmp/exec.ts");
+
+		// The reveal entry was cancelled: a late tick cannot re-truncate the body
+		// back to a streaming prefix.
+		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS * 5);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("/tmp/exec.ts");
 	});
 });

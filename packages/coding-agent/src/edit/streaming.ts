@@ -85,12 +85,12 @@ export interface EditStreamingStrategy<Args = unknown> {
 
 /**
  * Given an edits array parsed from partial JSON, drop the last entry when the
- * corresponding object in `partialJson` does not yet end with a closed `}`.
+ * corresponding object in `partialJson` has not yet closed with `}`.
  *
- * This guards against `partial-json` silently coercing truncated tails like
- * `"write":nu` / `"write":nul` into `{ write: null }`, which would make the
- * last entry render a spurious null-write error until the value finishes
- * streaming.
+ * The streaming parser materializes a trailing edit object from the fields seen
+ * so far before its closing `}` arrives, so an unfinished last entry can render
+ * as a (partial) edit mid-stream. Dropping it until the object closes keeps the
+ * preview from showing an incomplete edit.
  */
 export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: string | undefined, listKey: string): T[] {
 	if (!Array.isArray(edits) || edits.length === 0) return [...(edits ?? [])];
