@@ -219,6 +219,62 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
+	it("anchors the tail cursor to bytes actually read so a stat/read growth race never duplicates rows", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		const baseline = `${[
+			JSON.stringify({ type: "session", version: CURRENT_SESSION_VERSION, id: "adv", timestamp: TS, cwd: "/tmp" }),
+			messageLine("base", "BASEMARK"),
+		].join("\n")}\n`;
+		fs.writeFileSync(file, baseline);
+		// Stale stat plus a readFileSync that appends a fresh entry in between
+		// reproduces the race the reviewer called out: the rebuild sees the
+		// appended bytes, the tail cursor must record `data.byteLength` (not the
+		// pre-race `stat.size`) so the next poll doesn't replay them.
+		const baselineStat = fs.statSync(file);
+		const realStatSync = fs.statSync.bind(fs);
+		const realReadFileSync = fs.readFileSync.bind(fs);
+		let raceArmed = true;
+		const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((p: fs.PathLike, opts?: fs.StatOptions) => {
+			if (raceArmed && String(p) === file && !opts) return baselineStat as fs.Stats;
+			return realStatSync(p as string, opts as fs.StatSyncOptions);
+		}) as typeof fs.statSync);
+		const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((p: fs.PathOrFileDescriptor, opts?: unknown) => {
+			if (raceArmed && String(p) === file) {
+				fs.appendFileSync(file, `${messageLine("race", "RACEMARK")}\n`);
+				raceArmed = false;
+			}
+			return realReadFileSync(p as fs.PathOrFileDescriptor, opts as Parameters<typeof fs.readFileSync>[1]);
+		}) as typeof fs.readFileSync);
+
+		const viewer = makeViewer(file);
+		try {
+			viewer.render(80);
+			statSpy.mockRestore();
+			readSpy.mockRestore();
+
+			fs.appendFileSync(file, `${messageLine("tail", "TAILMARK")}\n`);
+
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			const deadline = Date.now() + 5000;
+			while (!body().includes("TAILMARK") && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
+			expect(body()).toContain("BASEMARK");
+			expect(body()).toContain("TAILMARK");
+			// The race-window entry must be rendered exactly once, not duplicated
+			// by the poll fast-path re-reading bytes already in the rebuild.
+			expect(body().match(/RACEMARK/g)?.length ?? 0).toBe(1);
+		} finally {
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("clears the remote loading placeholder after a header-only first fetch", async () => {
 		const header = `${JSON.stringify({
 			type: "session",

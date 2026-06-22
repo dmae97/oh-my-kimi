@@ -246,14 +246,24 @@ export class AgentTranscriptViewer implements Component {
 			logger.debug("transcript viewer: read failed", { err: String(err) });
 			return;
 		}
+		// The file may have grown between the earlier `statSync` and this read.
+		// Anchor the tail cursor to what we actually consumed so the next poll's
+		// `#appendLocal` never re-renders bytes already in the rebuilt transcript;
+		// re-stat for mtime/identity so the post-read clock matches what's on disk.
+		let post: fs.Stats;
+		try {
+			post = fs.statSync(sessionFile);
+		} catch {
+			post = stat;
+		}
 		this.#localUnavailable = "";
 		this.#localState = {
 			path: sessionFile,
-			dev: stat.dev,
-			ino: stat.ino,
-			size: stat.size,
-			mtimeMs: stat.mtimeMs,
-			offset: stat.size,
+			dev: post.dev,
+			ino: post.ino,
+			size: data.byteLength,
+			mtimeMs: post.mtimeMs,
+			offset: data.byteLength,
 			pending: "",
 			sentinels: sentinelsFromBuffer(data),
 		};
