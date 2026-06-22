@@ -534,6 +534,7 @@ export interface ResolvedOpenAIResponsesCompat extends ResolvedOpenAISharedCompa
 	supportsImageDetailOriginal: boolean;
 	requiresJuiceZeroHack: boolean;
 	supportsObfuscationOptOut: boolean;
+	streamIdleTimeoutMs?: number;
 }
 
 /**

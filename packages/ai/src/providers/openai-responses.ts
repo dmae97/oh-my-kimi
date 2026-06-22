@@ -436,7 +436,8 @@ const streamOpenAIResponsesOnce = (
 					? buildOpenAIResponsesChainedParams(params, trailingScaffoldingItems, chainState)
 					: { params };
 			sentPreviousResponseId = chained.previousResponseId;
-			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
+			const idleTimeoutMs =
+				options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(model.compat.streamIdleTimeoutMs);
 			const firstEventTimeoutMs =
 				options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =

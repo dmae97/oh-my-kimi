@@ -535,6 +535,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		emptyLengthFinishIsContextError: spec.provider === "ollama",
 		usesOpenAIToolCallIdLimit: spec.provider === "openai",
 		promptCacheSessionHeader: spec.provider === "xai-oauth" ? "x-grok-conv-id" : undefined,
+		streamIdleTimeoutMs: spec.compat?.streamIdleTimeoutMs,
 	};
 	applyCompatOverrides(compat, spec.compat);
 	if (spec.compat?.reasoningDisableMode === undefined) {

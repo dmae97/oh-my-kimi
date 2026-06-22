@@ -2534,6 +2534,7 @@ const SAKANA_FUGU_THINKING: ThinkingConfig = {
 };
 const SAKANA_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 	includeEncryptedReasoning: false,
+	streamIdleTimeoutMs: 300_000,
 };
 
 function normalizeSakanaBaseUrl(baseUrl: string | undefined): string {

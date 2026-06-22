@@ -69272,7 +69272,8 @@
 				}
 			},
 			"compat": {
-				"includeEncryptedReasoning": false
+				"includeEncryptedReasoning": false,
+				"streamIdleTimeoutMs": 300000
 			}
 		},
 		"fugu-ultra": {
@@ -69304,7 +69305,8 @@
 				}
 			},
 			"compat": {
-				"includeEncryptedReasoning": false
+				"includeEncryptedReasoning": false,
+				"streamIdleTimeoutMs": 300000
 			}
 		},
 		"fugu-ultra-20260615": {
@@ -69336,7 +69338,8 @@
 				}
 			},
 			"compat": {
-				"includeEncryptedReasoning": false
+				"includeEncryptedReasoning": false,
+				"streamIdleTimeoutMs": 300000
 			}
 		}
 	},

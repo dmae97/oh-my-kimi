@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
-import { getProxyForProvider, isLocalOrMetadataHost, shouldBypassProxy, wrapFetchForProxy } from "@oh-my-pi/pi-ai/utils/proxy";
+import {
+	getProxyForProvider,
+	isLocalOrMetadataHost,
+	shouldBypassProxy,
+	wrapFetchForProxy,
+} from "@oh-my-pi/pi-ai/utils/proxy";
 
 const PROXY = "http://127.0.0.1:24560";
 
