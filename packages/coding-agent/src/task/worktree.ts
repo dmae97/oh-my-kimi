@@ -186,6 +186,14 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 
 /**
  * Apply nested repo patches directly to their working directories after parent merge.
+ *
+ * Pre-existing dirty state in a nested repo is stashed before the patch is
+ * applied and popped back after the commit, so unrelated user edits never get
+ * folded into the agent's commit. A failing `git stash pop` (e.g. user edits
+ * collide with the patched lines) leaves the stash entry intact and emits a
+ * `logger.warn` — the caller's catch handler turns the broader nested-apply
+ * failure into a non-fatal system notification.
+ *
  * @param commitMessage Optional async function to generate a commit message from the combined diff.
  *                      If omitted or returns null, falls back to a generic message.
  */
@@ -212,15 +220,33 @@ export async function applyNestedPatches(
 		}
 
 		const combinedDiff = repoPatches.map(p => p.patch).join("\n");
-		for (const { patch } of repoPatches) {
-			await git.patch.applyText(nestedDir, patch);
-		}
 
-		// Commit so nested repo history reflects the task changes
-		if ((await git.status(nestedDir)).trim().length > 0) {
-			const msg = (await commitMessage?.(combinedDiff)) ?? "changes from isolated task(s)";
-			await git.stage.files(nestedDir);
-			await git.commit(nestedDir, msg);
+		// Preserve any pre-existing dirty state (tracked + untracked) so we
+		// commit only the agent delta, not the user's in-flight work.
+		const stashed =
+			(await git.status(nestedDir)).trim().length > 0
+				? await git.stash.push(nestedDir, `omp-isolation-${Snowflake.next()}`)
+				: false;
+		try {
+			for (const { patch } of repoPatches) {
+				await git.patch.applyText(nestedDir, patch);
+			}
+			if ((await git.status(nestedDir)).trim().length > 0) {
+				const msg = (await commitMessage?.(combinedDiff)) ?? "changes from isolated task(s)";
+				await git.stage.files(nestedDir);
+				await git.commit(nestedDir, msg);
+			}
+		} finally {
+			if (stashed) {
+				try {
+					await git.stash.pop(nestedDir);
+				} catch (popErr) {
+					logger.warn("Pre-existing nested-repo dirty state could not be auto-restored", {
+						nestedDir,
+						error: popErr instanceof Error ? popErr.message : String(popErr),
+					});
+				}
+			}
 		}
 	}
 }

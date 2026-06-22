@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
 	ensureIsolation,
@@ -196,5 +197,60 @@ describe("worktree isolation helpers", () => {
 				expect(delta.rootPatch).not.toContain("preexisting.txt");
 			});
 		});
+	});
+});
+
+describe("applyNestedPatches", () => {
+	let parentRepo: string;
+	let nestedRel: string;
+	let nestedDir: string;
+
+	beforeEach(async () => {
+		parentRepo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-nested-apply-"));
+		await runGit(parentRepo, ["init", "-q", "-b", "main"]);
+		await runGit(parentRepo, ["config", "user.email", "test@example.com"]);
+		await runGit(parentRepo, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(parentRepo, ".gitignore"), "sub/\n");
+		await runGit(parentRepo, ["add", "."]);
+		await runGit(parentRepo, ["commit", "-q", "-m", "parent-init"]);
+
+		nestedRel = "sub";
+		nestedDir = path.join(parentRepo, nestedRel);
+		await fs.mkdir(nestedDir, { recursive: true });
+		await runGit(nestedDir, ["init", "-q", "-b", "main"]);
+		await runGit(nestedDir, ["config", "user.email", "test@example.com"]);
+		await runGit(nestedDir, ["config", "user.name", "Test User"]);
+		await fs.writeFile(path.join(nestedDir, "file.txt"), "v1\n");
+		await runGit(nestedDir, ["add", "."]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "nested-init"]);
+	});
+
+	afterEach(async () => {
+		await fs.rm(parentRepo, { recursive: true, force: true });
+	});
+
+	it("does not fold pre-existing dirty nested-repo state into the agent commit", async () => {
+		// User has unrelated work-in-progress in the nested repo before the agent runs.
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "user wip\n");
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		const [committedFiles, headContent, otherContent, statusPorcelain] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			fs.readFile(path.join(nestedDir, "file.txt"), "utf8"),
+			fs.readFile(path.join(nestedDir, "other.txt"), "utf8"),
+			runGit(nestedDir, ["status", "--porcelain=v1"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		expect(headContent).toBe("v2\n");
+		expect(otherContent).toBe("user wip\n");
+		expect(statusPorcelain).toBe("?? other.txt");
 	});
 });
