@@ -8,12 +8,14 @@
 import {
 	type ApiKey,
 	type AssistantMessage,
+	type Context,
 	Effort,
 	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
 	ProviderHttpError,
+	type SimpleStreamOptions,
 	type Tool,
 	type Usage,
 	withAuth,
@@ -771,6 +773,61 @@ export function renderHandoffPrompt(customInstructions?: string): string {
 	});
 }
 
+export interface HandoffFromContextOptions {
+	/**
+	 * Stream options mirrored from the live agent turn: `apiKey`, `signal`, the
+	 * `sessionId`/`promptCacheKey` cache-routing pair, `serviceTier`, and the
+	 * session's payload/response hooks. Sending the same routing + payload shape
+	 * the main loop uses is what lets the handoff oneshot READ the provider
+	 * prompt cache the live turn populated instead of cold-missing the whole
+	 * prefix. `reasoning` and `toolChoice` are set internally and override
+	 * anything provided here.
+	 */
+	streamOptions: SimpleStreamOptions;
+	/** See {@link HandoffOptions.telemetry}. */
+	telemetry?: AgentTelemetry;
+	/** See {@link HandoffOptions.thinkingLevel}. */
+	thinkingLevel?: ThinkingLevel;
+}
+
+/**
+ * Run the handoff oneshot against a fully-built provider {@link Context}.
+ *
+ * The caller assembles `context` exactly like a live agent turn — same system
+ * prompt, normalized tools, transformed + obfuscated message history, with the
+ * trailing handoff-prompt message already appended — and supplies
+ * `streamOptions` that mirror the live turn's cache routing. That keeps the
+ * cache-preserving context construction in the host (which owns the transform
+ * pipeline) while this function centralizes the handoff request contract:
+ * `toolChoice: "none"`, clamped reasoning effort, oneshot telemetry, text-only
+ * extraction, and provider-error mapping.
+ */
+export async function generateHandoffFromContext(
+	context: Context,
+	model: Model,
+	options: HandoffFromContextOptions,
+): Promise<string> {
+	const response = await instrumentedCompleteSimple(
+		model,
+		context,
+		{
+			...options.streamOptions,
+			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
+			toolChoice: "none",
+		},
+		{ telemetry: options.telemetry, oneshotKind: "handoff" },
+	);
+
+	if (response.stopReason === "error") {
+		throw createSummarizationError("Handoff generation failed", response);
+	}
+
+	return response.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map(c => c.text)
+		.join("\n");
+}
+
 export async function generateHandoff(
 	messages: AgentMessage[],
 	model: Model,
@@ -789,32 +846,20 @@ export async function generateHandoff(
 		},
 	];
 
-	const response = await instrumentedCompleteSimple(
+	return generateHandoffFromContext(
+		{ systemPrompt: options.systemPrompt, messages: requestMessages, tools: options.tools },
 		model,
 		{
-			systemPrompt: options.systemPrompt,
-			messages: requestMessages,
-			tools: options.tools,
+			streamOptions: {
+				apiKey,
+				signal,
+				initiatorOverride: options.initiatorOverride,
+				metadata: options.metadata,
+			},
+			telemetry: options.telemetry,
+			thinkingLevel: options.thinkingLevel,
 		},
-		{
-			apiKey,
-			signal,
-			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-			toolChoice: "none",
-			initiatorOverride: options.initiatorOverride,
-			metadata: options.metadata,
-		},
-		{ telemetry: options.telemetry, oneshotKind: "handoff" },
 	);
-
-	if (response.stopReason === "error") {
-		throw createSummarizationError("Handoff generation failed", response);
-	}
-
-	return response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map(c => c.text)
-		.join("\n");
 }
 
 async function generateShortSummary(

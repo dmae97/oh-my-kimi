@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
-import { AUTO_HANDOFF_THRESHOLD_FOCUS, generateHandoff, renderHandoffPrompt } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	AUTO_HANDOFF_THRESHOLD_FOCUS,
+	generateHandoff,
+	generateHandoffFromContext,
+	renderHandoffPrompt,
+} from "@oh-my-pi/pi-agent-core/compaction";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
@@ -108,5 +114,45 @@ describe("handoff helpers", () => {
 			throw new Error("Expected text handoff prompt block");
 		}
 		expect(promptBlock.text).toContain("preserve failing test name");
+	});
+
+	test("generateHandoffFromContext forwards cache routing and forces no-tools", async () => {
+		const completeSimpleSpy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValue(createAssistantMessage([{ type: "text", text: "## Goal\nGo" }]));
+		const model = getTestModel();
+		const context = {
+			systemPrompt: ["Live system prompt"],
+			tools: [],
+			messages: [{ role: "user" as const, content: "start work", timestamp: 1 }],
+		};
+
+		const document = await generateHandoffFromContext(context, model, {
+			streamOptions: {
+				apiKey: "test-key",
+				sessionId: "sess-1:side:42",
+				promptCacheKey: "sess-1",
+				// Caller-provided reasoning/toolChoice must be overridden by the
+				// handoff contract below.
+				reasoning: Effort.Low,
+				toolChoice: "auto",
+			},
+			thinkingLevel: ThinkingLevel.Medium,
+		});
+
+		expect(document).toBe("## Goal\nGo");
+		const call = completeSimpleSpy.mock.calls[0];
+		if (!call) throw new Error("Expected completeSimple call");
+		const [calledModel, calledContext, options] = call;
+		expect(calledModel).toBe(model);
+		// Context is forwarded verbatim — the host already built the cache-matching prefix.
+		expect(calledContext).toBe(context);
+		expect(options).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "sess-1:side:42",
+			promptCacheKey: "sess-1",
+			toolChoice: "none",
+			reasoning: Effort.Medium,
+		});
 	});
 });

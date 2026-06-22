@@ -677,8 +677,16 @@ export class Agent {
 	 * in-band dialect sessions stay tools-less (matching their no-native-tools wire
 	 * shape and avoiding tool-markup leakage). `llmMessages` is already converted
 	 * (and, in production, obfuscated) by the caller.
+	 *
+	 * `systemPrompt` defaults to the live agent prompt so the side request hits the
+	 * same cached prefix as the main loop. Callers that must pin a different prompt
+	 * (e.g. handoff generation, which uses the base prompt rather than a per-turn
+	 * `before_agent_start` hook override) pass it explicitly.
 	 */
-	async buildSideRequestContext(llmMessages: Message[]): Promise<Context> {
+	async buildSideRequestContext(
+		llmMessages: Message[],
+		systemPrompt: string[] = this.#state.systemPrompt,
+	): Promise<Context> {
 		const model = this.#state.model;
 		if (!model) throw new Error("No active model on agent");
 		const ownedDialect = this.#dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
@@ -691,7 +699,7 @@ export class Agent {
 					preferredDialect(model.id),
 					this.#pruneToolDescriptions,
 				) ?? []);
-		let context: Context = { systemPrompt: this.#state.systemPrompt, messages, tools };
+		let context: Context = { systemPrompt, messages, tools };
 		if (this.#transformProviderContext) context = await this.#transformProviderContext(context, model);
 		return context;
 	}
