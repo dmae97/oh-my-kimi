@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added token usage breakdown by agent type (Main, Subagents, Advisor) to the overview dashboard
