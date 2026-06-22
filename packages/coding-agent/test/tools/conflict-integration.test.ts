@@ -506,9 +506,7 @@ describe("write resolves conflicts via conflict://N", () => {
 	it("strips hashline display prefixes from replacement content when hashline mode is active", async () => {
 		const filePath = path.join(tempDir, "hashed.ts");
 		await Bun.write(filePath, TWO_WAY);
-		const session = createTestSession(tempDir, {
-			settings: Settings.isolated({ readHashLines: true }),
-		});
+		const session = createTestSession(tempDir);
 		const read = await getTool(session, "read");
 		const write = await getTool(session, "write");
 

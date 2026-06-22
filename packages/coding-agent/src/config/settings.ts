@@ -949,6 +949,11 @@ export class Settings {
 			delete raw["power.preventDisplaySleep"];
 		}
 
+		// readHashLines: removed. Hashline anchors are now driven solely by
+		// edit.mode === "hashline"; the separate read toggle only ever produced
+		// the incoherent "hashline edits without addressable anchors" state.
+		delete raw.readHashLines;
+
 		return raw;
 	}
 

@@ -492,7 +492,6 @@ read:
 | `read.summarize.enabled` | boolean | `true` | Structural summaries for code reads. |
 | `read.summarize.prose` | boolean | `false` | Summarize prose files too. |
 | `read.toolResultPreview` | boolean | `false` | Inline preview of tool results. |
-| `readHashLines` | boolean | `true` | Show hashline tags in read output. |
 | `readLineNumbers` | boolean | `false` | Show plain line numbers. |
 
 ### Context, compaction, and memory

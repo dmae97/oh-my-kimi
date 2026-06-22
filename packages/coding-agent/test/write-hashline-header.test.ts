@@ -102,10 +102,10 @@ describe("write tool hashline header", () => {
 		expect(final).toBe("export const enabled = true;\n");
 	});
 
-	it("omits the hashline header when hashLines display mode is disabled", async () => {
+	it("omits the hashline header when the edit mode is not hashline", async () => {
 		const filePath = path.join(tmpDir, "plain.txt");
 		const session = createSession(tmpDir);
-		session.settings.set("readHashLines", false);
+		session.settings.set("edit.mode", "replace");
 		const tool = new WriteTool(session);
 		const content = "no anchors here\n";
 

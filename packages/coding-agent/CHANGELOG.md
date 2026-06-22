@@ -10,6 +10,10 @@
 - Standardized scrollbar behaviors and keyboard navigation across all list components
 - Optimized internal message framing logic for better performance when handling large data bursts
 
+### Removed
+
+- Removed the `readHashLines` setting (the "Hash Lines" toggle under Files → Reading). Hashline read/search anchors (`[PATH#TAG]` snapshot headers plus `LINE:content`) are now driven solely by `edit.mode === "hashline"`: the toggle was redundant when off (anchors are already suppressed for non-hashline edit modes) and a footgun when on (turning it off left the default hashline edit tool with no addressable anchors, since `read` then skips recording the snapshot tag). Existing configs are migrated automatically by dropping the stale key.
+
 ## [16.1.12] - 2026-06-21
 
 ### Changed

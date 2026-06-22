@@ -2703,18 +2703,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	readHashLines: {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "files",
-			group: "Reading",
-			label: "Hash Lines",
-			description:
-				"Include snapshot-tag headers and line numbers in read output for hashline edit mode ([PATH#TAG] plus LINE:content)",
-		},
-	},
-
 	"read.defaultLimit": {
 		type: "number",
 		default: 300,
