@@ -27,6 +27,10 @@
 
 - Fixed Exa web search requests firing back-to-back with no client-side pacing by adding a configurable `exa.searchDelayMs` delay (default 1000ms) between Exa search requests. ([#3271](https://github.com/can1357/oh-my-pi/issues/3271))
 
+### Fixed
+
+- Fixed `ask` returning `(cancelled)` or aborting the tool when Escape dismissed `Other (type your own)` custom input; it now returns to the option selector so the user can pick a listed answer instead. ([#3269](https://github.com/can1357/oh-my-pi/issues/3269))
+
 ## [16.1.15] - 2026-06-22
 
 ### Added
