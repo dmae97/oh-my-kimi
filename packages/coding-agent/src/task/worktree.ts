@@ -239,7 +239,7 @@ export async function applyNestedPatches(
 		} finally {
 			if (stashed) {
 				try {
-					await git.stash.pop(nestedDir);
+					await git.stash.pop(nestedDir, { index: true });
 				} catch (popErr) {
 					logger.warn("Pre-existing nested-repo dirty state could not be auto-restored", {
 						nestedDir,

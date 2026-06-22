@@ -253,4 +253,34 @@ describe("applyNestedPatches", () => {
 		expect(otherContent).toBe("user wip\n");
 		expect(statusPorcelain).toBe("?? other.txt");
 	});
+
+	it("restores pre-existing staged WIP to the index, not just the working tree", async () => {
+		// Pre-existing tracked file with a staged edit; the patch should leave
+		// this entirely alone, and the stash pop must re-stage it (--index).
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "tracked v1\n");
+		await runGit(nestedDir, ["add", "other.txt"]);
+		await runGit(nestedDir, ["commit", "-q", "-m", "add-other"]);
+		await fs.writeFile(path.join(nestedDir, "other.txt"), "staged wip\n");
+		await runGit(nestedDir, ["add", "other.txt"]);
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		const [committedFiles, statusPorcelain, cachedDiff] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			runGit(nestedDir, ["status", "--porcelain=v1"]),
+			runGit(nestedDir, ["diff", "--cached", "--", "other.txt"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		// Leading "M " (with trailing space) marks an index-only modification —
+		// "M" in the first slot, " " in the second. " M" would mean unstaged.
+		expect(statusPorcelain).toBe("M  other.txt");
+		expect(cachedDiff).toContain("+staged wip");
+	});
 });
