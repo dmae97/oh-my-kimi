@@ -3,6 +3,12 @@
 
 using Base64
 
+# Force GR (the default Plots.jl backend) into a headless workstation so a plot
+# never pops up a native gksqt GUI window — the harness renders the inline PNG
+# from `show(io, MIME"image/png", plt)` itself. `get!` keeps an explicit
+# user-provided value, mirroring the Python runner's MPLBACKEND=Agg default.
+get!(ENV, "GKSwstype", "100")
+
 const ORIGINAL_STDOUT = stdout
 const ORIGINAL_STDERR = stderr
 const ORIGINAL_STDIN = stdin
@@ -441,24 +447,38 @@ end
 
 function build_mime_bundle(value)
     bundle = Dict{String, Any}()
-    
-    # text/plain
-    io_plain = IOBuffer()
-    show(io_plain, MIME"text/plain"(), value)
-    bundle["text/plain"] = String(take!(io_plain))
-    
+
+    # text/plain — every mime probe below uses `Base.invokelatest` because this
+    # function runs from the frozen-world `main()` loop: `show`/`showable`
+    # methods that a package adds when it is `using`-ed *inside* a cell (e.g.
+    # Plots/Makie/GraphRecipes registering rich `show` for their plot types) are
+    # invisible to direct dispatch here and fall back to the default struct show,
+    # which can itself throw. Guard text/plain too so a failing repr never aborts
+    # the whole bundle before the image mime is reached.
+    try
+        io_plain = IOBuffer()
+        Base.invokelatest(show, io_plain, MIME"text/plain"(), value)
+        bundle["text/plain"] = String(take!(io_plain))
+    catch
+        bundle["text/plain"] = try
+            summary(value)
+        catch
+            string(typeof(value))
+        end
+    end
+
     # rich mime types
     for mime_str in ["text/html", "text/markdown", "image/png", "image/jpeg"]
         m = MIME(Symbol(mime_str))
-        if showable(m, value)
+        if Base.invokelatest(showable, m, value)
             try
                 io = IOBuffer()
                 if mime_str in ["image/png", "image/jpeg"]
                     b64_io = Base64EncodePipe(io)
-                    show(b64_io, m, value)
+                    Base.invokelatest(show, b64_io, m, value)
                     close(b64_io)
                 else
-                    show(io, m, value)
+                    Base.invokelatest(show, io, m, value)
                 end
                 bundle[mime_str] = String(take!(io))
             catch
@@ -466,7 +486,7 @@ function build_mime_bundle(value)
             end
         end
     end
-    
+
     if value isa AbstractDict || value isa AbstractVector
         try
             bundle["application/json"] = value
@@ -474,7 +494,7 @@ function build_mime_bundle(value)
             # ignore
         end
     end
-    
+
     return bundle
 end
 
@@ -493,7 +513,13 @@ pushdisplay(OmpDisplay())
 
 function emit_error(rid, err, bt)
     io = IOBuffer()
-    showerror(io, err)
+    # invokelatest + guard: custom error types from packages loaded inside the
+    # cell define `showerror` methods invisible to this frozen-world function.
+    try
+        Base.invokelatest(showerror, io, err)
+    catch
+        print(io, string(err))
+    end
     err_str = String(take!(io))
     
     tb = String[]

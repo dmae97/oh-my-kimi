@@ -129,10 +129,122 @@ def __omp_emit_status(op, data = {})
   __omp_emit_display({ "application/x-omp-status" => status }, "display")
 end
 
+OMP_IMAGE_MIMES = %w[image/png image/jpeg].freeze
+
+# True when `str` already looks like base64 text (ASCII, base64 alphabet, length
+# a multiple of 4). Raw image blobs (PNG/JPEG bytes) contain high bytes, so they
+# fail the ASCII check and get encoded instead of passed through unchanged.
+def __omp_base64?(str)
+  s = str.to_s
+  # ascii_only? is safe on any encoding (no regex over invalid bytes). Raw image
+  # blobs carry high bytes and fail here, so they get encoded rather than scanned.
+  return false unless s.ascii_only?
+  stripped = s.gsub(/\s+/, "")
+  return false if stripped.empty? || (stripped.bytesize % 4) != 0
+  stripped.match?(%r{\A[A-Za-z0-9+/]*={0,2}\z})
+end
+
+# Coerce an image payload to the base64 ASCII the host renders. IRuby-style
+# `to_iruby` hands back raw binary blobs (Gruff#to_blob, ChunkyPNG, RMagick),
+# which would also break JSON.generate; strict-encode them unless already base64.
+def __omp_image_payload(content)
+  require "base64"
+  s = content.to_s
+  return s.gsub(/\s+/, "") if __omp_base64?(s)
+  Base64.strict_encode64(s.b)
+end
+
+# Detect a host-renderable image MIME from a binary blob's magic bytes. Lets us
+# treat the generic `to_blob` (Gruff/RMagick/ChunkyPNG/Vips) as an image only
+# when it really is one, avoiding false positives on unrelated `to_blob` methods.
+def __omp_sniff_image_mime(bytes)
+  b = bytes.to_s.b
+  return "image/png" if b.start_with?("\x89PNG\r\n\x1a\n".b)
+  return "image/jpeg" if b.start_with?("\xFF\xD8\xFF".b)
+  nil
+end
+
+# Stringify keys, base64-encode image payloads, and scrub text payloads so the
+# bundle is always JSON-safe before it reaches __omp_emit.
+def __omp_normalize_bundle(hash)
+  bundle = {}
+  hash.each do |key, val|
+    k = key.to_s
+    bundle[k] =
+      if OMP_IMAGE_MIMES.include?(k)
+        __omp_image_payload(val)
+      elsif val.is_a?(String)
+        __omp_scrub(val)
+      else
+        val
+      end
+  end
+  bundle
+end
+
+# Guarantee a text/plain entry so the model always sees a textual hint, even for
+# image-only bundles (mirrors the Python runner).
+def __omp_finalize_bundle(bundle, value)
+  bundle["text/plain"] ||= __omp_scrub((value.inspect rescue value.class.name))
+  bundle
+end
+
+# Rich-display resolution for non-collection objects. Honors the repo
+# `to_omp_mime` convention first, then the IRuby protocol
+# (`to_iruby_mimebundle` -> [data, metadata], `to_iruby` -> [mime, data]) so plot
+# and image objects (gruff, rubyplot, gnuplotrb, chunky_png, daru, ...) render
+# inline — the Ruby analog of IPython's _repr_*_ methods. Returns nil when the
+# value advertises no rich representation.
+def __omp_rich_mime_bundle(value)
+  if value.respond_to?(:to_omp_mime)
+    mime = (value.to_omp_mime rescue nil)
+    return __omp_finalize_bundle(__omp_normalize_bundle(mime), value) if mime.is_a?(Hash) && !mime.empty?
+  end
+  if value.respond_to?(:to_iruby_mimebundle)
+    data =
+      begin
+        value.to_iruby_mimebundle
+      rescue ArgumentError
+        (value.to_iruby_mimebundle(include: []) rescue nil)
+      rescue StandardError
+        nil
+      end
+    data = data.first if data.is_a?(Array)
+    return __omp_finalize_bundle(__omp_normalize_bundle(data), value) if data.is_a?(Hash) && !data.empty?
+  end
+  if value.respond_to?(:to_iruby)
+    pair = (value.to_iruby rescue nil)
+    if pair.is_a?(Array) && pair.size == 2 && !pair[0].nil?
+      return __omp_finalize_bundle(__omp_normalize_bundle({ pair[0].to_s => pair[1] }), value)
+    end
+  end
+  # Last resort: probe well-known image emitters. Named methods (to_png/to_jpeg)
+  # are trusted; the generic to_blob is accepted only when its bytes sniff as an
+  # image. Covers gems that render via IRuby's registry rather than to_iruby
+  # (Gruff#to_blob, ChunkyPNG#to_blob, RMagick, Vips, ...).
+  if value.respond_to?(:to_png)
+    png = (value.to_png rescue nil)
+    return __omp_finalize_bundle({ "image/png" => __omp_image_payload(png) }, value) if png
+  end
+  jpeg_method = %i[to_jpeg to_jpg].find { |m| value.respond_to?(m) }
+  if jpeg_method
+    jpg = (value.public_send(jpeg_method) rescue nil)
+    return __omp_finalize_bundle({ "image/jpeg" => __omp_image_payload(jpg) }, value) if jpg
+  end
+  if value.respond_to?(:to_blob)
+    blob = (value.to_blob rescue nil)
+    if blob.is_a?(String) && (mime = __omp_sniff_image_mime(blob))
+      return __omp_finalize_bundle({ mime => __omp_image_payload(blob) }, value)
+    end
+  end
+
+  nil
+end
+
 # Build a Jupyter-style MIME bundle for a value. Strings render as plain text,
-# Hash/Array render as JSON (plus a text/plain repr) so the model sees structure,
-# and anything else falls back to its inspect string. Objects may opt into a
-# richer bundle by defining `to_omp_mime` returning a Hash of mime => value.
+# Hash/Array render as JSON (plus a text/plain repr) so the model sees structure.
+# Other objects may expose a rich representation via `to_omp_mime` or the IRuby
+# protocol (`to_iruby`/`to_iruby_mimebundle`); otherwise they fall back to inspect.
 def __omp_mime_bundle(value)
   case value
   when String
@@ -151,12 +263,7 @@ def __omp_mime_bundle(value)
   when nil
     { "text/plain" => "nil" }
   else
-    if value.respond_to?(:to_omp_mime)
-      mime = (value.to_omp_mime rescue nil)
-      mime.is_a?(Hash) ? mime : { "text/plain" => __omp_scrub(value.inspect) }
-    else
-      { "text/plain" => __omp_scrub(value.inspect) }
-    end
+    __omp_rich_mime_bundle(value) || { "text/plain" => __omp_scrub(value.inspect) }
   end
 end
 
