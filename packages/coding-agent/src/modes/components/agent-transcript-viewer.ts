@@ -256,6 +256,14 @@ export class AgentTranscriptViewer implements Component {
 		} catch {
 			post = stat;
 		}
+		// A reader that opens the file mid-append sees a trailing partial line
+		// (no terminating newline). Carry those bytes as `pending` so the next
+		// poll's `#appendLocal` joins them with the completion bytes instead of
+		// parsing a headless line fragment and dropping the entry.
+		const text = data.toString("utf-8");
+		const lastNewline = text.lastIndexOf("\n");
+		const complete = lastNewline >= 0 ? text.slice(0, lastNewline + 1) : "";
+		const pending = lastNewline >= 0 ? text.slice(lastNewline + 1) : text;
 		this.#localUnavailable = "";
 		this.#localState = {
 			path: sessionFile,
@@ -264,11 +272,11 @@ export class AgentTranscriptViewer implements Component {
 			size: data.byteLength,
 			mtimeMs: post.mtimeMs,
 			offset: data.byteLength,
-			pending: "",
+			pending,
 			sentinels: sentinelsFromBuffer(data),
 		};
 		this.#model = undefined;
-		this.#rebuild(this.#extractMessages(parseSessionEntries(data.toString("utf-8"))));
+		this.#rebuild(this.#extractMessages(parseSessionEntries(complete)));
 	}
 
 	#appendLocal(sessionFile: string, stat: fs.Stats, state: LocalTranscriptState): void {

@@ -306,6 +306,45 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
+	it("preserves a partial trailing line through the full rebuild so the completion lands on the next poll", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		const header = `${JSON.stringify({
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "adv",
+			timestamp: TS,
+			cwd: "/tmp",
+		})}\n`;
+		const completeLine = `${messageLine("a0", "FIRSTMARK")}\n`;
+		const partialLine = messageLine("a1", "PARTIALMARK");
+		fs.writeFileSync(file, header + completeLine + partialLine);
+
+		const viewer = makeViewer(file);
+		try {
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			// First entry renders; the headless trailing line stays buffered.
+			expect(body()).toContain("FIRSTMARK");
+			expect(body()).not.toContain("PARTIALMARK");
+
+			// Completing the dangling line via a single newline must surface the
+			// buffered entry; it must NOT be dropped as a malformed fragment.
+			fs.appendFileSync(file, "\n");
+			const deadline = Date.now() + 5000;
+			while (!body().includes("PARTIALMARK") && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
+			expect(body()).toContain("PARTIALMARK");
+		} finally {
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("drops stale rendered rows when the host transcript rotates", async () => {
 		const header = `${JSON.stringify({
 			type: "session",
