@@ -2419,7 +2419,7 @@ export function populateResponsesUsageFromResponse(
 	const orchestrationInputCachedTokens = details?.orchestration_input_cached_tokens ?? 0;
 	const orchestrationOutputTokens = outputDetails?.orchestration_output_tokens ?? 0;
 	const accounting = calculateOpenAIUsageAccounting({
-		promptTokens: (usage.input_tokens ?? 0) + orchestrationInputTokens + orchestrationInputCachedTokens,
+		promptTokens: (usage.input_tokens ?? 0) + orchestrationInputTokens,
 		outputTokens: (usage.output_tokens ?? 0) + orchestrationOutputTokens,
 		cachedTokens: (details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0) + orchestrationInputCachedTokens,
 		reasoningTokens: outputDetails?.reasoning_tokens ?? 0,

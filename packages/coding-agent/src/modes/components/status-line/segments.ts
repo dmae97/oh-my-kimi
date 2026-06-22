@@ -375,7 +375,7 @@ const contextPctSegment: StatusLineSegment = {
 		const window = ctx.contextWindow;
 
 		const autoIcon = ctx.autoCompactEnabled && theme.icon.auto ? ` ${theme.icon.auto}` : "";
-		const text = `${formatContextUsage(pct, window)}${autoIcon}`;
+		const text = `${formatContextUsage(pct, window, ctx.contextTokens)}${autoIcon}`;
 
 		const color = getContextUsageThemeColor(getContextUsageLevel(pct ?? 0, window));
 		const content = withIcon(theme.icon.context, theme.fg(color, text));

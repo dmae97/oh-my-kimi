@@ -12168,8 +12168,8 @@ export class AgentSession {
 		pendingMessages?: AgentMessage[];
 	}): ContextUsageBreakdown | undefined {
 		const model = this.model;
-		const contextWindow = options?.contextWindow ?? model?.contextWindow ?? 0;
-		if (!Number.isFinite(contextWindow) || contextWindow <= 0) return undefined;
+		const rawContextWindow = options?.contextWindow ?? model?.contextWindow ?? 0;
+		const contextWindow = Number.isFinite(rawContextWindow) && rawContextWindow > 0 ? rawContextWindow : 0;
 
 		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(this);
 		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;

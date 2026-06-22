@@ -32,6 +32,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 			...usage,
 		},
 		contextPercent: 0,
+		contextTokens: 0,
 		contextWindow: 0,
 		autoCompactEnabled: false,
 		subagentCount: 0,

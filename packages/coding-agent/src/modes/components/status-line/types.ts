@@ -73,6 +73,7 @@ export interface SegmentContext {
 	};
 	/** Context usage percent, or null when unknown (e.g. right after compaction). */
 	contextPercent: number | null;
+	contextTokens: number;
 	contextWindow: number;
 	autoCompactEnabled: boolean;
 	subagentCount: number;

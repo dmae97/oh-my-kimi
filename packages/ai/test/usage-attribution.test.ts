@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { applyAnthropicUsageExtras } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { parseChunkUsage } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import { calculateOpenAIUsageAccounting, populateResponsesUsageFromResponse } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import {
+	calculateOpenAIUsageAccounting,
+	populateResponsesUsageFromResponse,
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -273,7 +276,7 @@ describe("openai-responses usage attribution", () => {
 		populateResponsesUsageFromResponse(output, {
 			input_tokens: 120,
 			output_tokens: 80,
-			total_tokens: 200,
+			total_tokens: 270,
 			input_tokens_details: {
 				cached_tokens: 10,
 				orchestration_input_tokens: 30,

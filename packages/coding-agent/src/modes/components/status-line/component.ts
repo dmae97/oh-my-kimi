@@ -727,10 +727,12 @@ export class StatusLineComponent implements Component {
 
 		let contextWindow = state.model?.contextWindow ?? this.session.model?.contextWindow ?? 0;
 		let contextPercent: number | null = 0;
+		let contextTokens = 0;
 		if (includeContext) {
 			const breakdown = this.getCachedContextBreakdown();
+			contextTokens = breakdown.usedTokens;
 			contextWindow = breakdown.contextWindow || contextWindow;
-			contextPercent = contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : 0;
+			contextPercent = contextWindow > 0 ? (breakdown.usedTokens / contextWindow) * 100 : null;
 		}
 
 		// Collab guest: context comes from the host's state frames — the local
@@ -738,6 +740,7 @@ export class StatusLineComponent implements Component {
 		const collabState = this.#collabStatus?.stateOverride;
 		if (collabState?.contextUsage) {
 			contextWindow = collabState.contextUsage.contextWindow || contextWindow;
+			contextTokens = collabState.contextUsage.tokens ?? contextTokens;
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
 
@@ -756,6 +759,7 @@ export class StatusLineComponent implements Component {
 			collab: this.#collabStatus,
 			usageStats,
 			contextPercent,
+			contextTokens,
 			contextWindow,
 			autoCompactEnabled: this.#autoCompactEnabled,
 			subagentCount: this.#subagentCount,

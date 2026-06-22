@@ -51,11 +51,15 @@ describe("Sakana AI provider support", () => {
 
 		const bundled = getBundledModels("sakana");
 		expect(bundled.map(model => model.id).sort()).toEqual(["fugu", "fugu-ultra", "fugu-ultra-20260615"]);
+		expect(bundled.find(model => model.id === "fugu")?.contextWindow).toBe(1_000_000);
+		expect(bundled.find(model => model.id === "fugu-ultra")?.contextWindow).toBe(1_000_000);
+		expect(bundled.find(model => model.id === "fugu-ultra-20260615")?.contextWindow).toBe(1_000_000);
 		for (const model of bundled) {
 			expect(model.api).toBe("openai-responses");
 			expect(model.thinking?.efforts).toEqual([Effort.High, Effort.XHigh]);
 			expect(model.thinking?.effortMap?.[Effort.XHigh]).toBe("max");
 			expect((model.compat as ResolvedOpenAIResponsesCompat).includeEncryptedReasoning).toBe(false);
+			expect((model.compat as ResolvedOpenAIResponsesCompat).streamIdleTimeoutMs).toBe(0);
 		}
 
 		const provider = getOAuthProviders().find(item => item.id === "sakana");

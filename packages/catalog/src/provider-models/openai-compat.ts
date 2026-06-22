@@ -2527,6 +2527,7 @@ export function moonshotModelManagerOptions(
 const SAKANA_DEFAULT_BASE_URL = "https://api.sakana.ai/v1";
 const SAKANA_FREE_ROUTER_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 const SAKANA_FUGU_ULTRA_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
+const SAKANA_FUGU_ULTRA_CONTEXT_WINDOW = 1_000_000;
 const SAKANA_FUGU_THINKING: ThinkingConfig = {
 	mode: "effort",
 	efforts: [Effort.High, Effort.XHigh],
@@ -2534,7 +2535,7 @@ const SAKANA_FUGU_THINKING: ThinkingConfig = {
 };
 const SAKANA_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
 	includeEncryptedReasoning: false,
-	streamIdleTimeoutMs: 300_000,
+	streamIdleTimeoutMs: 0,
 };
 
 function normalizeSakanaBaseUrl(baseUrl: string | undefined): string {
@@ -2551,6 +2552,7 @@ function createSakanaFuguStaticModel(
 	id: string,
 	name: string,
 	cost: ModelSpec<"openai-responses">["cost"],
+	contextWindow: number | null,
 ): ModelSpec<"openai-responses"> {
 	return {
 		id,
@@ -2561,7 +2563,7 @@ function createSakanaFuguStaticModel(
 		reasoning: true,
 		input: ["text"],
 		cost: { ...cost },
-		contextWindow: null,
+		contextWindow,
 		maxTokens: null,
 		thinking: { ...SAKANA_FUGU_THINKING },
 		compat: { ...SAKANA_RESPONSES_COMPAT },
@@ -2569,9 +2571,14 @@ function createSakanaFuguStaticModel(
 }
 
 export const SAKANA_FUGU_STATIC_MODELS: readonly ModelSpec<"openai-responses">[] = [
-	createSakanaFuguStaticModel("fugu", "Fugu", SAKANA_FREE_ROUTER_COST),
-	createSakanaFuguStaticModel("fugu-ultra", "Fugu Ultra", SAKANA_FUGU_ULTRA_COST),
-	createSakanaFuguStaticModel("fugu-ultra-20260615", "Fugu Ultra 20260615", SAKANA_FUGU_ULTRA_COST),
+	createSakanaFuguStaticModel("fugu", "Fugu", SAKANA_FREE_ROUTER_COST, SAKANA_FUGU_ULTRA_CONTEXT_WINDOW),
+	createSakanaFuguStaticModel("fugu-ultra", "Fugu Ultra", SAKANA_FUGU_ULTRA_COST, SAKANA_FUGU_ULTRA_CONTEXT_WINDOW),
+	createSakanaFuguStaticModel(
+		"fugu-ultra-20260615",
+		"Fugu Ultra 20260615",
+		SAKANA_FUGU_ULTRA_COST,
+		SAKANA_FUGU_ULTRA_CONTEXT_WINDOW,
+	),
 ];
 
 const SAKANA_FUGU_STATIC_MODEL_BY_ID = new Map(SAKANA_FUGU_STATIC_MODELS.map(model => [model.id, model] as const));

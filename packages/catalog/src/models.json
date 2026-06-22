@@ -60466,12 +60466,12 @@
 			],
 			"cost": {
 				"input": 0.66,
-				"output": 3.5,
-				"cacheRead": 0.33,
+				"output": 3.41,
+				"cacheRead": 0.144,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65535,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -64132,12 +64132,12 @@
 			],
 			"cost": {
 				"input": 0.66,
-				"output": 3.5,
-				"cacheRead": 0.33,
+				"output": 3.41,
+				"cacheRead": 0.144,
 				"cacheWrite": 0
 			},
 			"contextWindow": 262144,
-			"maxTokens": 65535,
+			"maxTokens": 262144,
 			"thinking": {
 				"mode": "effort",
 				"efforts": [
@@ -69259,7 +69259,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 1000000,
 			"maxTokens": null,
 			"thinking": {
 				"mode": "effort",
@@ -69273,7 +69273,7 @@
 			},
 			"compat": {
 				"includeEncryptedReasoning": false,
-				"streamIdleTimeoutMs": 300000
+				"streamIdleTimeoutMs": 0
 			}
 		},
 		"fugu-ultra": {
@@ -69292,7 +69292,7 @@
 				"cacheRead": 0.5,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 1000000,
 			"maxTokens": null,
 			"thinking": {
 				"mode": "effort",
@@ -69306,7 +69306,7 @@
 			},
 			"compat": {
 				"includeEncryptedReasoning": false,
-				"streamIdleTimeoutMs": 300000
+				"streamIdleTimeoutMs": 0
 			}
 		},
 		"fugu-ultra-20260615": {
@@ -69325,7 +69325,7 @@
 				"cacheRead": 0.5,
 				"cacheWrite": 0
 			},
-			"contextWindow": null,
+			"contextWindow": 1000000,
 			"maxTokens": null,
 			"thinking": {
 				"mode": "effort",
@@ -69339,7 +69339,7 @@
 			},
 			"compat": {
 				"includeEncryptedReasoning": false,
-				"streamIdleTimeoutMs": 300000
+				"streamIdleTimeoutMs": 0
 			}
 		}
 	},
