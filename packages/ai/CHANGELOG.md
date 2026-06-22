@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Enabled the manual code-paste login flow for the xAI Grok OAuth (`xai-oauth`) provider when its fixed loopback port is unavailable. `/login` now accepts a pasted authorization code or full `http://127.0.0.1:56121/callback?code=...` redirect URL without changing xAI's allowlisted redirect URI.
+- Renamed the xAI Grok OAuth provider in login and credential prompts to "xAI Grok OAuth (SuperGrok or X Premium+)".
+
 ## [16.1.11] - 2026-06-21
 
 ### Fixed

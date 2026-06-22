@@ -69,6 +69,47 @@ describe("XAIOAuthFlow", () => {
 
 		expect(flow.redirectUri).toBe("http://127.0.0.1:56121/callback");
 	});
+
+	it("continues manual-paste login when the fixed callback port is unavailable", async () => {
+		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(() => {
+			throw new Error("port busy");
+		});
+		const progress: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("/.well-known/openid-configuration")) {
+				return new Response(
+					JSON.stringify({
+						authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+						token_endpoint: "https://auth.x.ai/oauth/token",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			return new Response(
+				JSON.stringify({
+					access_token: "access-token",
+					refresh_token: "refresh-token",
+					expires_in: 3600,
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
+		});
+
+		const flow = new XAIOAuthFlow({
+			fetch: fetchMock as unknown as typeof fetch,
+			onAuth: () => {},
+			onManualCodeInput: async () => "code-xyz",
+			onProgress: message => progress.push(message),
+		});
+
+		const credentials = await flow.login();
+
+		expect(serveSpy).toHaveBeenCalledTimes(1);
+		expect(progress).toContain("OAuth callback port 56121 unavailable; waiting for pasted authorization code.");
+		expect(credentials.access).toBe("access-token");
+		expect(credentials.refresh).toBe("refresh-token");
+	});
 });
 
 describe("XAIOAuthFlow.exchangeToken", () => {

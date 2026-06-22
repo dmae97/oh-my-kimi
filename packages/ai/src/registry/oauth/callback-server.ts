@@ -25,6 +25,7 @@ export interface OAuthCallbackFlowOptions {
 	callbackHostname?: string;
 	/** Exact redirect URI advertised to the provider; disables port fallback. */
 	redirectUri?: string;
+	manualInputOnPortBusy?: boolean;
 }
 
 /**
@@ -36,6 +37,7 @@ export abstract class OAuthCallbackFlow {
 	callbackPath: string;
 	callbackHostname: string;
 	redirectUri?: string;
+	manualInputOnPortBusy?: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
 
@@ -56,6 +58,7 @@ export abstract class OAuthCallbackFlow {
 		this.callbackPath = preferredPortOrOptions.callbackPath ?? CALLBACK_PATH;
 		this.callbackHostname = preferredPortOrOptions.callbackHostname ?? DEFAULT_HOSTNAME;
 		this.redirectUri = preferredPortOrOptions.redirectUri;
+		this.manualInputOnPortBusy = preferredPortOrOptions.manualInputOnPortBusy;
 	}
 
 	/**
@@ -92,32 +95,28 @@ export abstract class OAuthCallbackFlow {
 	async login(): Promise<OAuthCredentials> {
 		const state = this.generateState();
 
-		// Start callback server first to get actual redirect URI
 		const { server, redirectUri } = await this.#startCallbackServer(state);
 
 		try {
-			// Generate auth URL with the ACTUAL redirect URI (may differ from expected if port was busy)
 			const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
 
-			// Notify controller that auth is ready
 			this.ctrl.onAuth?.({ url: authUrl, instructions });
 			this.ctrl.onProgress?.("Waiting for browser authentication...");
 
-			// Wait for callback or manual input
 			const { code } = await this.#waitForCallback(state);
 
 			this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
 
 			return await this.exchangeToken(code, state, redirectUri);
 		} finally {
-			server.stop();
+			server?.stop();
 		}
 	}
 
 	/**
 	 * Start callback server, trying preferred port first, falling back to random.
 	 */
-	async #startCallbackServer(expectedState: string): Promise<{ server: Bun.Server<unknown>; redirectUri: string }> {
+	async #startCallbackServer(expectedState: string): Promise<{ server?: Bun.Server<unknown>; redirectUri: string }> {
 		try {
 			const server = this.#createServer(this.preferredPort, expectedState);
 			if (this.redirectUri) {
@@ -127,6 +126,12 @@ export abstract class OAuthCallbackFlow {
 			return { server, redirectUri };
 		} catch {
 			if (this.redirectUri) {
+				if (this.manualInputOnPortBusy && this.ctrl.onManualCodeInput) {
+					this.ctrl.onProgress?.(
+						`OAuth callback port ${this.preferredPort} unavailable; waiting for pasted authorization code.`,
+					);
+					return { redirectUri: this.redirectUri };
+				}
 				throw new Error(
 					`OAuth callback port ${this.preferredPort} unavailable; cannot fall back to a random port when oauth.redirectUri is set`,
 				);

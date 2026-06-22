@@ -1,7 +1,7 @@
 // Ported from NousResearch/hermes-agent (MIT) — hermes_cli/auth.py xAI sections (L93-111, L2979-3160, L5286-5469).
 
 /**
- * xAI Grok (SuperGrok Subscription) OAuth flow.
+ * xAI Grok (SuperGrok or X Premium+) OAuth flow.
  *
  * Loopback PKCE flow on `127.0.0.1:56121/callback`. One token unlocks Grok-4.x
  * chat, Grok Imagine image generation, and Grok Voice TTS via subsequent
@@ -192,6 +192,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			callbackPath: XAI_OAUTH_REDIRECT_PATH,
 			callbackHostname: XAI_OAUTH_REDIRECT_HOST,
 			redirectUri: `http://${XAI_OAUTH_REDIRECT_HOST}:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`,
+			manualInputOnPortBusy: true,
 		} satisfies OAuthCallbackFlowOptions);
 		this.#fetch = ctrl.fetch ?? fetch;
 	}
@@ -212,7 +213,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 
 		return {
 			url,
-			instructions: `Complete login in your browser for xAI Grok (SuperGrok). Docs: ${XAI_OAUTH_DOCS_URL}`,
+			instructions: `Complete login in your browser for xAI Grok (SuperGrok or X Premium+). Docs: ${XAI_OAUTH_DOCS_URL}`,
 		};
 	}
 
@@ -275,9 +276,6 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 	}
 }
 
-/**
- * Login with xAI Grok OAuth (SuperGrok Subscription).
- */
 export async function loginXAIOAuth(ctrl: OAuthController): Promise<OAuthCredentials> {
 	return new XAIOAuthFlow(ctrl).login();
 }
