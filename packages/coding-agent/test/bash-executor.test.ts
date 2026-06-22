@@ -910,3 +910,59 @@ exit 64
 		await expectMarkerNeverWritten(marker, release);
 	});
 });
+
+describe("executeBash :async: background retention", () => {
+	let tmp: string;
+
+	beforeEach(async () => {
+		tmp = makeTempDir();
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, cwd: tmp });
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+		vi.restoreAllMocks();
+		if (fs.existsSync(tmp)) removeSyncWithRetries(tmp);
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"keeps a per-job :async: shell's background process alive across turns",
+		async () => {
+			const pidFile = path.join(tmp, "pid");
+			const sleepBin = fs.existsSync("/bin/sleep") ? "/bin/sleep" : "sleep";
+			let pid: number | undefined;
+			try {
+				// A per-job `:async:` key: its shell is removed from the reuse map at
+				// teardown, which would SIGKILL the backgrounded child (kill-on-drop).
+				// The retain logic keeps the shell alive while a background process is
+				// still running. `$!` is the external child's pid (nohup is a
+				// transparent background wrapper).
+				const res = await executeBash(`nohup ${sleepBin} 30 >/dev/null 2>&1 & echo $! > ${shellQuote(pidFile)}`, {
+					sessionKey: "retain-probe:async:job1",
+					cwd: tmp,
+				});
+				expect(res.cancelled).toBe(false);
+				pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+				expect(Number.isInteger(pid)).toBe(true);
+
+				// A later turn on a different per-job shell must not have killed it.
+				await executeBash("true", { sessionKey: "retain-probe:async:job2", cwd: tmp });
+
+				let alive = true;
+				try {
+					process.kill(pid, 0);
+				} catch {
+					alive = false;
+				}
+				expect(alive).toBe(true);
+			} finally {
+				if (pid !== undefined) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {}
+				}
+			}
+		},
+	);
+});

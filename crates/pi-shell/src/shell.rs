@@ -174,6 +174,35 @@ impl Shell {
 	pub async fn abort(&self) {
 		self.abort_state.abort().await;
 	}
+
+	/// Number of live background jobs (running `&`/`nohup` children) tracked by
+	/// the persistent session. Completed jobs are reaped first via a silent
+	/// `JobManager::poll()` (no job-control notifications), so the count
+	/// reflects only processes still alive. Returns 0 when no session core is
+	/// materialized. The host uses this to decide whether to retain a per-call
+	/// shell whose background children are still running instead of dropping it
+	/// (which would SIGKILL them on kill-on-drop).
+	pub async fn live_background_job_count(&self) -> u32 {
+		let mut guard = self.session.lock().await;
+		let Some(core) = guard.as_mut() else {
+			return 0;
+		};
+		let jobs = core.shell.jobs_mut();
+		// Fail closed: a poll error leaves the job table in an unknown state, so
+		// report 0 (drop the shell) rather than pin a retained session forever on
+		// stale `representative_pid()` entries.
+		if jobs.poll().is_err() {
+			return 0;
+		}
+		u32::try_from(
+			jobs
+				.jobs
+				.iter()
+				.filter(|job| job.representative_pid().is_some())
+				.count(),
+		)
+		.unwrap_or(u32::MAX)
+	}
 }
 
 pub async fn execute_shell(
@@ -2088,6 +2117,48 @@ replace = [{ pattern = "hello", replacement = "HI" }]
 			max_capture_bytes,
 			..Default::default()
 		}
+	}
+
+	/// `live_background_job_count` reports 0 when the session has no live
+	/// external background jobs and 1 while one is running. The host relies on
+	/// this to retain a per-call shell whose `&`/`nohup` child is still alive
+	/// instead of dropping it (which would SIGKILL the child via kill-on-drop).
+	/// Path-qualified `/bin/sleep` is used so it spawns a real external process
+	/// (the bare `sleep` builtin runs in-process and is intentionally not
+	/// counted).
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn live_background_job_count_tracks_external_background_jobs() {
+		let _guard = shell_test_lock().lock().await;
+		let shell = Shell::new(None);
+
+		// No session core materialized yet.
+		assert_eq!(shell.live_background_job_count().await, 0);
+
+		// A foreground-only command leaves nothing in the background.
+		shell
+			.run(
+				ShellRunOptions { command: "true".into(), ..Default::default() },
+				None,
+				CancelToken::default(),
+			)
+			.await
+			.expect("run true");
+		assert_eq!(shell.live_background_job_count().await, 0);
+
+		// An external background process is tracked while it runs.
+		shell
+			.run(
+				ShellRunOptions { command: "/bin/sleep 30 &".into(), ..Default::default() },
+				None,
+				CancelToken::default(),
+			)
+			.await
+			.expect("run sleep");
+		assert_eq!(shell.live_background_job_count().await, 1);
+
+		// Dropping the shell at scope end reaps the child via kill-on-drop.
+		shell.abort().await;
 	}
 
 	#[cfg(unix)]
