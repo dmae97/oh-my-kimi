@@ -577,9 +577,9 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
     schema.nil? ? text : JSON.parse(text)
   end
 
-  def agent(prompt, agent_type: "task", model: nil, label: nil, schema: nil, isolated: nil, apply: nil, merge: nil, return_handle: false)
+  def agent(prompt, agent: "task", model: nil, label: nil, schema: nil, isolated: nil, apply: nil, merge: nil, handle: false)
     args = { "prompt" => prompt }
-    args["agentType"] = agent_type unless agent_type.nil?
+    args["agent"] = agent unless agent.nil?
     args["model"] = model unless model.nil?
     args["label"] = label unless label.nil?
     args["schema"] = schema unless schema.nil?
@@ -589,11 +589,11 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
     args["apply"] = !!apply unless apply.nil?
     args["merge"] = !!merge unless merge.nil?
     # Tell the bridge a handle is wanted so it preserves the backing artifacts.
-    args["returnHandle"] = true if return_handle
+    args["handle"] = true if handle
     res = OmpBridge.call("__agent__", args)
     text = res.is_a?(Hash) ? res["text"] : res
     parsed = schema.nil? ? text : JSON.parse(text)
-    return parsed unless return_handle
+    return parsed unless handle
     details = res.is_a?(Hash) ? res["details"] : nil
     if !details.is_a?(Hash) || details["id"].nil?
       return { "text" => text, "output" => text, "handle" => nil, "id" => nil, "agent" => nil }

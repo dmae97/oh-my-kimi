@@ -520,10 +520,10 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, isolated=None, apply=None, merge=None, return_handle=False):
+    def agent(prompt, *, agent="task", model=None, label=None, schema=None, isolated=None, apply=None, merge=None, handle=False):
         """Run a subagent and return its final output.
 
-        `agent_type` selects the subagent definition (default "task"). Pass
+        `agent` selects the subagent definition (default "task"). Pass
         `model` to override that agent's model, `label` for the output artifact
         id, and `schema` to request structured JSON output; when `schema` is
         supplied the parsed object is returned. Share background by writing a
@@ -539,13 +539,13 @@ if "__omp_prelude_loaded__" not in globals():
         When isolated, `apply=False` keeps captured changes inside the
         worktree and surfaces the root patch path, branch name, and nested
         repository patches through the DAG node dict (combine with
-        `return_handle=True` to receive them — see below; the bare return type
+        `handle=True` to receive them — see below; the bare return type
         stays bytes/string/parsed object and has nowhere to expose artifacts).
         `merge=False` forces patch mode even when `task.isolation.merge` is
         `"branch"`, avoiding the per-call git lock + repo mutation that branch
         mode performs.
 
-        Set `return_handle=True` to receive a DAG node dict instead of bare
+        Set `handle=True` to receive a DAG node dict instead of bare
         text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
         is the spawned agent's recoverable ``agent://<id>`` URI. A downstream
         ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
@@ -560,8 +560,8 @@ if "__omp_prelude_loaded__" not in globals():
         ``handle=None`` — the helper never throws.
         """
         args = {"prompt": prompt}
-        if agent_type is not None:
-            args["agentType"] = agent_type
+        if agent is not None:
+            args["agent"] = agent
         if model is not None:
             args["model"] = model
         if label is not None:
@@ -574,12 +574,12 @@ if "__omp_prelude_loaded__" not in globals():
             args["apply"] = bool(apply)
         if merge is not None:
             args["merge"] = bool(merge)
-        if return_handle:
-            args["returnHandle"] = True
+        if handle:
+            args["handle"] = True
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         parsed = json.loads(text) if schema is not None else text
-        if not return_handle:
+        if not handle:
             return parsed
         details = res.get("details") if isinstance(res, dict) else None
         if not isinstance(details, dict) or details.get("id") is None:

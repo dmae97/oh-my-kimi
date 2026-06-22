@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the eval `agent()` helper parameters `agent_type` → `agent` and `return_handle` → `handle` across every workflow runtime (Python, JavaScript, Ruby, Julia), so the names are identical in every language (no camelCase/snake_case split) and the agent-selection parameter matches the `task` tool's `agent`. The `__agent__` eval bridge wire protocol was renamed to match.
+
 ### Added
 
 - Added `isolated`, `apply`, and `merge` options to eval `agent()` across every workflow runtime (Python, JavaScript, Ruby, Julia) so `workflowz`-driven fan-outs can request the same copy-on-write worktree isolation the `task` tool offers (strict opt-in via `isolated: true`, matching the `task` tool; `apply: false` keeps captured patches/branches without merging back; `merge: false` forces patch mode). Extracted the task-isolation lifecycle into `task/isolation-runner.ts` so the eval bridge and `TaskTool` share one implementation ([#3196](https://github.com/can1357/oh-my-pi/issues/3196))

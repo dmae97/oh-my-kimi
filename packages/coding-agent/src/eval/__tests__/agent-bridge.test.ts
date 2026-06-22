@@ -156,7 +156,7 @@ describe("runEvalAgent", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("resolves the default task agent and agentType overrides", async () => {
+	it("resolves the default task agent and agent overrides", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
 			singleResult(options, {
@@ -166,7 +166,7 @@ describe("runEvalAgent", () => {
 		const session = makeSession();
 
 		const defaultResult = await runEvalAgent({ prompt: "hello" }, { session });
-		const overrideResult = await runEvalAgent({ prompt: "hello", agentType: "reviewer" }, { session });
+		const overrideResult = await runEvalAgent({ prompt: "hello", agent: "reviewer" }, { session });
 
 		expect(defaultResult.text).toBe("task");
 		expect(overrideResult.text).toBe("reviewer");
@@ -178,7 +178,7 @@ describe("runEvalAgent", () => {
 		mockAgents([taskAgent]);
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		await expect(runEvalAgent({ prompt: "hello", agentType: "missing" }, { session: makeSession() })).rejects.toThrow(
+		await expect(runEvalAgent({ prompt: "hello", agent: "missing" }, { session: makeSession() })).rejects.toThrow(
 			'Unknown agent "missing"',
 		);
 	});
@@ -844,12 +844,12 @@ describe("runEvalAgent isolation", () => {
 		expect(mergeSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("preserves temp artifacts for non-isolated returnHandle outputs", async () => {
+	it("preserves temp artifacts for non-isolated handle outputs", async () => {
 		mockAgents();
 		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		await runEvalAgent({ prompt: "plain handle", returnHandle: true }, { session: makeSession() });
+		await runEvalAgent({ prompt: "plain handle", handle: true }, { session: makeSession() });
 
 		const removedArtifactsDir = rmSpy.mock.calls.some(
 			([target]) => typeof target === "string" && target.includes("omp-eval-agent-"),
@@ -1204,7 +1204,7 @@ describe("runEvalAgent isolation", () => {
 		expect(removedArtifactsDir).toBe(true);
 	});
 
-	it("preserves the temp artifacts dir after a successful apply when returnHandle is requested", async () => {
+	it("preserves the temp artifacts dir after a successful apply when handle is requested", async () => {
 		mockAgents();
 		mockIsolationContext();
 		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
@@ -1218,7 +1218,7 @@ describe("runEvalAgent isolation", () => {
 			mergedBranchForNestedPatches: false,
 		});
 
-		await runEvalAgent({ prompt: "scout", isolated: true, returnHandle: true }, { session: isolatedSession() });
+		await runEvalAgent({ prompt: "scout", isolated: true, handle: true }, { session: isolatedSession() });
 
 		const removedArtifactsDir = rmSpy.mock.calls.some(
 			([target]) => typeof target === "string" && target.includes("omp-eval-agent-"),

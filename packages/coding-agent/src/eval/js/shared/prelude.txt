@@ -121,14 +121,14 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 			"agent",
 			opts,
 			rest,
-			["agentType", "model", "label", "schema", "isolated", "apply", "merge"],
-			"{ agentType, model, label, schema, isolated, apply, merge, returnHandle }",
+			["agent", "model", "label", "schema", "isolated", "apply", "merge"],
+			"{ agent, model, label, schema, isolated, apply, merge, handle }",
 		);
-		const { returnHandle, ...callArgs } = o;
-		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs, returnHandle: Boolean(returnHandle) });
+		const { handle, ...callArgs } = o;
+		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs, handle: Boolean(handle) });
 		const text = res && typeof res === "object" ? res.text : res;
 		const parsed = hasOwn(callArgs, "schema") ? JSON.parse(text) : text;
-		if (!returnHandle) return parsed;
+		if (!handle) return parsed;
 		const details = res && typeof res === "object" ? res.details : undefined;
 		if (!details || typeof details !== "object" || details.id == null) {
 			return { text, output: text, handle: null, id: null, agent: null };

@@ -43,19 +43,19 @@ const DEFAULT_AGENT_LABEL = "EvalAgent";
 
 const agentArgsSchema = type({
 	prompt: "string>0",
-	"agentType?": "string>0",
+	"agent?": "string>0",
 	"model?": "string>0|string>0[]",
 	"label?": "string",
 	"schema?": "unknown",
 	"isolated?": "boolean",
 	"apply?": "boolean",
 	"merge?": "boolean",
-	"returnHandle?": "boolean",
+	"handle?": "boolean",
 });
 
 interface EvalAgentArgs {
 	prompt: string;
-	agentType?: string;
+	agent?: string;
 	model?: string | string[];
 	label?: string;
 	schema?: unknown;
@@ -83,7 +83,7 @@ interface EvalAgentArgs {
 	 */
 	merge?: boolean;
 	/** True when a runtime helper will return an `agent://` handle backed by the output artifacts. */
-	returnHandle?: boolean;
+	handle?: boolean;
 }
 
 export interface EvalAgentBridgeOptions {
@@ -276,7 +276,7 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
  */
 export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
 	const parsed = parseAgentArgs(args);
-	const agentName = parsed.agentType ?? DEFAULT_AGENT_TYPE;
+	const agentName = parsed.agent ?? DEFAULT_AGENT_TYPE;
 	const structured = Object.hasOwn(parsed, "schema");
 
 	assertNotPlanMode(options.session);
@@ -521,8 +521,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		// consumes `details.patchPath` / `details.branchName` /
 		// `details.nestedPatches` out of band. Failed isolated applies throw
 		// earlier with a recovery hint, so they never reach this gate.
-		const shouldCleanupTempArtifacts =
-			tempArtifactsDir && !parsed.returnHandle && (!isIsolated || changesApplied === true);
+		const shouldCleanupTempArtifacts = tempArtifactsDir && !parsed.handle && (!isIsolated || changesApplied === true);
 		if (shouldCleanupTempArtifacts) {
 			await fs.rm(artifactsDir, { recursive: true, force: true });
 		}

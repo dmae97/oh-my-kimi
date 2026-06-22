@@ -734,10 +734,10 @@ function completion(prompt::String; model="default", system=nothing, schema=noth
     return schema === nothing ? text : Main.json_parse(string(text))
 end
 
-function agent(prompt::String; agent_type="task", model=nothing, label=nothing, schema=nothing, isolated=nothing, apply=nothing, merge=nothing, return_handle=false, kwargs...)
+function agent(prompt::String; agent="task", model=nothing, label=nothing, schema=nothing, isolated=nothing, apply=nothing, merge=nothing, handle=false, kwargs...)
     args_dict = Dict{String, Any}("prompt" => prompt)
-    if agent_type !== nothing
-        args_dict["agentType"] = agent_type
+    if agent !== nothing
+        args_dict["agent"] = agent
     end
     if model !== nothing
         args_dict["model"] = model
@@ -759,20 +759,13 @@ function agent(prompt::String; agent_type="task", model=nothing, label=nothing, 
     if merge !== nothing
         args_dict["merge"] = Bool(merge)
     end
-    handle_result = return_handle
+    handle_result = handle
     for (k, v) in kwargs
-        key = string(k)
-        if key == "agent_type" || key == "agentType"
-            args_dict["agentType"] = v
-        elseif key == "return_handle" || key == "returnHandle"
-            handle_result = Bool(v)
-        else
-            args_dict[key] = v
-        end
+        args_dict[string(k)] = v
     end
     # Tell the bridge a handle is wanted so it preserves the backing artifacts.
     if handle_result
-        args_dict["returnHandle"] = true
+        args_dict["handle"] = true
     end
     res = __omp_call_bridge("__agent__", args_dict)
     text = res isa AbstractDict ? get(res, "text", res) : res

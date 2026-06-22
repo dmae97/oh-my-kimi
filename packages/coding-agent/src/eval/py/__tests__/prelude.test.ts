@@ -17,8 +17,8 @@ describe("python prelude", () => {
 		expect(signature).toContain("limit");
 	});
 
-	it("exposes isolation artifacts on the agent() return_handle node", () => {
-		// agent(..., return_handle=True) is the only escape hatch for
+	it("exposes isolation artifacts on the agent() handle node", () => {
+		// agent(..., handle=True) is the only escape hatch for
 		// recovering apply=False patch/branch/nested artifacts (the bare
 		// schema return is just the parsed object), so the helper MUST
 		// translate the bridge's camelCase details onto the node — otherwise
