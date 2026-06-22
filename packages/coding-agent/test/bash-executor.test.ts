@@ -797,6 +797,54 @@ exit 64
 		expect(result.output.trim()).toBe("snapshot_ok");
 	});
 
+	it("survives compound aliases from the user's shell snapshot (issue #3234)", async () => {
+		if (process.platform === "win32") return;
+		const bashPath = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
+		if (!fs.existsSync(bashPath)) return;
+
+		// Pre-seed a snapshot that mirrors Fedora's default `which` alias.
+		// Without the brush-compat scrub, brush's whitespace-only alias
+		// expander turns `(alias;` into the command name and `which` fails
+		// with `command not found: (alias;`. With the scrub, the broken
+		// alias is dropped and brush falls through to `$PATH`.
+		const snapshotPath = path.join(tempDir, "snapshot.sh");
+		fs.writeFileSync(
+			snapshotPath,
+			[
+				"unalias -a 2>/dev/null || true",
+				"alias -- which='(alias; declare -f) | /usr/bin/which --tty-only --read-alias --show-dot --show-tilde'",
+				"alias -- ll='ls -l'",
+				"",
+			].join("\n"),
+		);
+		const rawSnapshot = fs.readFileSync(snapshotPath, "utf8");
+		const { content: scrubbed, dropped } =
+			shellSnapshot.sanitizeSnapshotForBrush(rawSnapshot);
+		fs.writeFileSync(snapshotPath, scrubbed);
+		expect(dropped).toEqual(["which"]);
+		// Compatible aliases must still be installed in brush.
+		expect(scrubbed).toContain("alias -- ll='ls -l'");
+
+		vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+			shell: bashPath,
+			args: ["-l", "-c"],
+			env: { PATH: Bun.env.PATH ?? "", HOME: Bun.env.HOME ?? tempDir },
+			prefix: undefined,
+		});
+		vi.spyOn(shellSnapshot, "getOrCreateSnapshot").mockResolvedValue(snapshotPath);
+
+		const result = await executeBash("which sh", {
+			cwd: tempDir,
+			timeout: 5000,
+			sessionKey: "brush-compound-alias-which",
+		});
+
+		expect(result.cancelled).toBe(false);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).not.toContain("command not found");
+		expect(result.output.trim()).toMatch(/\/sh$/);
+	});
+
 	it("does not allow exec to replace the host", async () => {
 		const result = await executeBash("exec echo hi", { cwd: tempDir, timeout: 5000 });
 		expect(result.cancelled).toBe(false);
