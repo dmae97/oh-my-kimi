@@ -226,6 +226,50 @@ describe("MarketplaceManager", () => {
 		}
 	});
 
+	it("installPlugin with scope:project exposes the marketplace package to the runtime loader", async () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-home-"));
+		const projectAnchor = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-project-"));
+		try {
+			const userPluginsDir = path.join(tmpHome, ".omp", "plugins");
+			const projectPluginsDir = path.join(projectAnchor, ".omp", "plugins");
+			fs.mkdirSync(projectPluginsDir, { recursive: true });
+			const manager = new MarketplaceManager({
+				marketplacesRegistryPath: path.join(tmpHome, ".omp", "marketplaces.json"),
+				installedRegistryPath: path.join(userPluginsDir, "installed_plugins.json"),
+				projectInstalledRegistryPath: path.join(projectPluginsDir, "installed_plugins.json"),
+				marketplacesCacheDir: path.join(userPluginsDir, "cache", "marketplaces"),
+				pluginsCacheDir: path.join(userPluginsDir, "cache", "plugins"),
+			});
+
+			await manager.addMarketplace(FIXTURE_DIR);
+			await manager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" });
+
+			// Project-scope install must surface via the runtime loader when cwd is inside the anchor.
+			const enabled = await getEnabledPlugins(projectAnchor, { home: tmpHome });
+			expect(enabled.map(plugin => plugin.name)).toEqual(["hello-plugin"]);
+			expect(enabled[0].path).toBe(path.join(projectPluginsDir, "node_modules", "hello-plugin"));
+
+			// The runtime symlink and lockfile must live under the project plugins root.
+			const projectLink = path.join(projectPluginsDir, "node_modules", "hello-plugin");
+			expect(fs.realpathSync(projectLink)).toBe(
+				fs.realpathSync(path.join(userPluginsDir, "cache", "plugins", "test-marketplace___hello-plugin___1.0.0")),
+			);
+			const projectLock = await Bun.file(path.join(projectPluginsDir, "omp-plugins.lock.json")).json();
+			expect(projectLock.plugins["hello-plugin"]).toEqual({
+				version: "1.0.0",
+				enabledFeatures: null,
+				enabled: true,
+			});
+
+			// User-scope tree stays untouched.
+			expect(fs.existsSync(path.join(userPluginsDir, "node_modules", "hello-plugin"))).toBe(false);
+			expect(fs.existsSync(path.join(userPluginsDir, "omp-plugins.lock.json"))).toBe(false);
+		} finally {
+			fs.rmSync(tmpHome, { recursive: true, force: true });
+			fs.rmSync(projectAnchor, { recursive: true, force: true });
+		}
+	});
+
 	it("installPlugin embeds config-only marketplace LSP metadata", async () => {
 		const marketplaceDir = path.join(ctx.tmpDir, "config-only-marketplace");
 		const pluginDir = path.join(marketplaceDir, "plugins", "csharp-lsp");

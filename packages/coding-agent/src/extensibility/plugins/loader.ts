@@ -6,8 +6,9 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getPluginsLockfile, getPluginsNodeModules, getPluginsPackageJson, isEnoent } from "@oh-my-pi/pi-utils";
+import { getPluginsDir, getPluginsLockfile, isEnoent } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
+import { resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
@@ -51,38 +52,37 @@ async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides
 	return {};
 }
 /**
- * Get list of enabled plugins with their resolved configurations.
- *
- * Respects both global runtime config and project overrides. Iterates the
- * union of `<plugins>/package.json#dependencies` (`bun install`-installed
- * packages) and `<plugins>/omp-plugins.lock.json#plugins` (so locally
- * `plugin link`-symlinked extensions, which never get a dependency entry,
- * are still discovered). The optional `home` parameter pins the plugins
- * root for callers that need to enumerate plugins relative to a non-default
- * home (tests with a tempdir, discovery loaders threaded with
- * `LoadContext.home`).
+ * Per-root enumeration of plugins from `<root>/node_modules`,
+ * `<root>/package.json#dependencies`, and `<root>/omp-plugins.lock.json#plugins`.
+ * Honors `projectOverrides.disabled` and `projectOverrides.features`. Returns an
+ * empty array when the root has no `node_modules` yet.
  */
-export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<InstalledPlugin[]> {
-	const { home } = opts;
-
-	const nodeModulesPath = getPluginsNodeModules(home);
-	if (!fs.existsSync(nodeModulesPath)) {
-		return [];
-	}
+async function collectPluginsAtRoot(
+	root: string,
+	projectOverrides: ProjectPluginOverrides,
+): Promise<InstalledPlugin[]> {
+	const nodeModulesPath = path.join(root, "node_modules");
+	if (!fs.existsSync(nodeModulesPath)) return [];
 
 	let depsKeys: string[] = [];
-	const pkgJsonPath = getPluginsPackageJson(home);
+	const pkgJsonPath = path.join(root, "package.json");
 	try {
 		const pkg: { dependencies?: Record<string, string> } = await Bun.file(pkgJsonPath).json();
 		depsKeys = Object.keys(pkg.dependencies ?? {});
 	} catch (err) {
-		// Linked-only setups may have no `<plugins>/package.json` yet — that's
+		// Linked-only setups may have no `<root>/package.json` yet — that's
 		// fine, the lockfile still records the link.
 		if (!isEnoent(err)) throw err;
 	}
 
-	const runtimeConfig = await loadRuntimeConfig(home);
-	const projectOverrides = await loadProjectOverrides(cwd);
+	const lockPath = path.join(root, "omp-plugins.lock.json");
+	let runtimeConfig: PluginRuntimeConfig;
+	try {
+		runtimeConfig = normalizePluginRuntimeConfig(await Bun.file(lockPath).json());
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+		runtimeConfig = normalizePluginRuntimeConfig({});
+	}
 
 	// Union: dependencies (npm/marketplace installs) ∪ runtime-config plugins
 	// (links + already-recorded installs). Set preserves first-seen order,
@@ -137,6 +137,47 @@ export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {
 	}
 
 	return plugins;
+}
+
+/**
+ * Get list of enabled plugins with their resolved configurations.
+ *
+ * Enumerates two plugin roots in order: the user root
+ * (`getPluginsDir(home)`) and, when a project anchor (`.omp/` or `.git/`)
+ * exists at or above `cwd`, the project root
+ * (`<projectAnchor>/.omp/plugins`). Each root contributes the union of its
+ * `package.json#dependencies` and `omp-plugins.lock.json#plugins`. Project
+ * entries shadow user entries with the same package name, matching the
+ * shadow semantics of `MarketplaceManager.listInstalledPlugins`.
+ *
+ * The optional `home` parameter pins the user plugins root for callers that
+ * need to enumerate plugins relative to a non-default home (tests with a
+ * tempdir, discovery loaders threaded with `LoadContext.home`).
+ */
+export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<InstalledPlugin[]> {
+	const { home } = opts;
+	const projectOverrides = await loadProjectOverrides(cwd);
+
+	const userRoot = getPluginsDir(home);
+	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides);
+
+	let projectPlugins: InstalledPlugin[] = [];
+	const projectRegistryPath = await resolveActiveProjectRegistryPath(cwd);
+	if (projectRegistryPath) {
+		const projectRoot = path.dirname(projectRegistryPath);
+		if (projectRoot !== userRoot) {
+			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides);
+		}
+	}
+
+	if (projectPlugins.length === 0) return userPlugins;
+	if (userPlugins.length === 0) return projectPlugins;
+
+	// Project entries shadow user entries with the same package name.
+	const merged = new Map<string, InstalledPlugin>();
+	for (const plugin of userPlugins) merged.set(plugin.name, plugin);
+	for (const plugin of projectPlugins) merged.set(plugin.name, plugin);
+	return Array.from(merged.values());
 }
 
 // =============================================================================
