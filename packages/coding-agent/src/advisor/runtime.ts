@@ -412,6 +412,20 @@ function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMes
 			const summary = obfuscator.obfuscate(msg.summary);
 			return summary === msg.summary ? message : ({ ...(message as object), summary } as AgentMessage);
 		}
+		case "fileMention": {
+			const msg = message as AgentMessage & {
+				files: Array<{ path: string; content: string; image?: unknown }>;
+			};
+			let changed = false;
+			const files = msg.files.map(file => {
+				const path = obfuscator.obfuscate(file.path);
+				const content = obfuscator.obfuscate(file.content);
+				if (path === file.path && content === file.content) return file;
+				changed = true;
+				return { ...file, path, content };
+			});
+			return changed ? ({ ...(message as object), files } as AgentMessage) : message;
+		}
 		default:
 			return message;
 	}

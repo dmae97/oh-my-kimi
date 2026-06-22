@@ -501,6 +501,34 @@ describe("advisor", () => {
 			expect(promptInputs[0]).not.toContain("ADVISOR&amp;SECRET&lt;TOKEN&gt;123");
 		});
 
+		it("redacts file-mention paths before formatting", async () => {
+			const secret = "MENTION_SECRET_TOKEN_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{
+					role: "fileMention",
+					files: [{ path: `notes/${secret}.txt`, content: "ignored" }],
+					timestamp: 1,
+				} as unknown as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
+		});
+
 		it("expands plan-mode context once, then collapses an unchanged re-injection", async () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);
