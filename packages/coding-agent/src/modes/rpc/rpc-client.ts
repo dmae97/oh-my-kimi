@@ -17,6 +17,7 @@ import type {
 	RpcAvailableSlashCommand,
 	RpcCommand,
 	RpcExtensionUIRequest,
+	RpcExtensionUIResponse,
 	RpcHandoffResult,
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -688,21 +689,46 @@ export class RpcClient {
 	/**
 	 * Trigger OAuth login for the given provider.
 	 * The server will emit an `open_url` extension_ui_request for the auth URL.
+	 * Providers that require pasted-code completion may then emit an `input`
+	 * extension_ui_request; pass `onManualCodeInput` to satisfy it.
 	 * Resolves when login completes or rejects on failure.
 	 *
 	 * @param onOpenUrl Called when the server emits the auth URL. The host must open
-	 *   it in a browser for the callback-server OAuth flow to complete.
+	 *   it in a browser.
 	 */
 	async login(
 		providerId: string,
-		options?: { onOpenUrl?: (url: string, instructions?: string) => void },
+		options?: {
+			onOpenUrl?: (url: string, instructions?: string) => void;
+			onManualCodeInput?: (prompt: { title: string; placeholder?: string }) => string | Promise<string>;
+		},
 	): Promise<{ providerId: string }> {
-		const { onOpenUrl } = options ?? {};
-		const listener = onOpenUrl
-			? (req: RpcExtensionUIRequest) => {
-					if (req.method === "open_url") onOpenUrl(req.url, req.instructions);
-				}
-			: undefined;
+		const { onManualCodeInput, onOpenUrl } = options ?? {};
+		const listener =
+			onOpenUrl || onManualCodeInput
+				? (req: RpcExtensionUIRequest) => {
+						if (req.method === "open_url") {
+							onOpenUrl?.(req.url, req.instructions);
+							return;
+						}
+						if (req.method !== "input" || !onManualCodeInput) return;
+						void Promise.resolve(onManualCodeInput({ title: req.title, placeholder: req.placeholder }))
+							.then(value => {
+								this.#writeFrame({
+									type: "extension_ui_response",
+									id: req.id,
+									value,
+								});
+							})
+							.catch(() => {
+								this.#writeFrame({
+									type: "extension_ui_response",
+									id: req.id,
+									cancelled: true,
+								});
+							});
+					}
+				: undefined;
 		if (listener) this.#extensionUiListeners.add(listener);
 		try {
 			const response = await this.#send({ type: "login", providerId }, 600_000);
@@ -968,7 +994,10 @@ export class RpcClient {
 		}
 	}
 
-	#writeFrame(frame: RpcCommand | RpcHostToolResult | RpcHostToolUpdate, onError?: (error: Error) => void): void {
+	#writeFrame(
+		frame: RpcCommand | RpcExtensionUIResponse | RpcHostToolResult | RpcHostToolUpdate,
+		onError?: (error: Error) => void,
+	): void {
 		if (!this.#process?.stdin) {
 			throw new Error("Client not started");
 		}

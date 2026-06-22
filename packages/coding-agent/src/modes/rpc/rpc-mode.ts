@@ -1040,11 +1040,9 @@ export async function runRpcMode(
 					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);
 				}
 				const uiCtx = new RpcExtensionUIContext(pendingExtensionRequests, output);
-				// Track whether onAuth has fired. Providers that use OAuthCallbackFlow
-				// always call onAuth first (emit browser URL), then onManualCodeInput as
-				// a fallback. Providers that require interactive input (API-key paste,
-				// GitHub Enterprise URL, device-code entry) call onPrompt before onAuth.
-				// We use this ordering to self-classify at runtime — no static allowlist.
+				// Track whether onAuth has fired. Providers that require interactive
+				// input before a browser URL cannot be satisfied headlessly; after
+				// onAuth, prompt input is the pasted OAuth code/redirect URL path.
 				let authEmitted = false;
 				try {
 					await session.modelRegistry.authStorage.login(command.providerId, {
@@ -1061,7 +1059,7 @@ export async function runRpcMode(
 						onProgress: message => {
 							uiCtx.notify(message, "info");
 						},
-						onPrompt: () => {
+						onPrompt: async prompt => {
 							if (!authEmitted) {
 								// onPrompt called before any auth URL — provider requires
 								// interactive input that cannot be satisfied headlessly.
@@ -1072,11 +1070,7 @@ export async function runRpcMode(
 									),
 								);
 							}
-							// onAuth has already fired — we are inside OAuthCallbackFlow's
-							// manual-redirect fallback race. Returning a never-settling promise
-							// lets the race block until the callback server wins; a rejection
-							// would be caught as null and spin the while(true) loop.
-							return new Promise<string>(() => {});
+							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
 						},
 					});
 					await session.modelRegistry.refresh();
