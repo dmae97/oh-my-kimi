@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.15] - 2026-06-22
+
 ### Fixed
 
 - Fixed API-key `/login` providers replacing sibling credentials instead of appending new keys for the same provider. ([#3265](https://github.com/can1357/oh-my-pi/issues/3265))

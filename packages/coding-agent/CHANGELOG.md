@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.15] - 2026-06-22
+
 ### Added
 
 - Added a `share.store` setting (`blob` "Encrypted Blob" | `gist` "GitHub Gist", default `blob`) controlling where `/share` uploads the encrypted session blob — the share server (`blob`) or a secret GitHub gist with share-server fallback (`gist`).
