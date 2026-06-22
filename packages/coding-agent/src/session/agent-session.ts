@@ -1612,6 +1612,7 @@ export class AgentSession {
 					await this.#advisorRuntime.waitForCatchup(30000, threshold, signal);
 				}
 			}
+			await this.#maintainContextMidRun(messages, signal);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -8266,6 +8267,59 @@ export class AgentSession {
 		});
 	}
 
+
+	/**
+	 * Compact active `/goal` runs that never settle to `agent_end`.
+	 *
+	 * Long autonomous goals can keep producing tool calls inside one agent run.
+	 * The post-turn `agent_end` threshold check never fires in that shape, so
+	 * context can grow until provider overflow. `onTurnEnd` is the safe boundary:
+	 * tool results for the just-finished turn are already paired in
+	 * `activeMessages`, the live array the agent loop reads before its next
+	 * model call. Run maintenance here and splice the compacted state back into
+	 * that array, mirroring [`AgentSession.#applyRewind`].
+	 */
+	async #maintainContextMidRun(activeMessages: AgentMessage[], signal?: AbortSignal): Promise<void> {
+		if (signal?.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) return;
+		if (!(this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active")) return;
+
+		const model = this.model;
+		const contextWindow = model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return;
+
+		const compactionSettings = this.settings.getGroup("compaction");
+		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
+
+		const lastAssistant = [...activeMessages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
+
+		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
+		const storedContextTokens = this.#estimateStoredContextTokens();
+		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
+
+		const messagesBefore = activeMessages.length;
+		await this.#runAutoCompaction("threshold", false, false, false, {
+			autoContinue: false,
+			suppressContinuation: true,
+			triggerContextTokens: contextTokens,
+		});
+
+		if (signal?.aborted) return;
+		const compactedMessages = this.agent.state.messages;
+		if (compactedMessages !== activeMessages) {
+			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
+		}
+		logger.debug("Mid-run goal compaction ran between tool-call turns", {
+			contextTokens,
+			contextWindow,
+			strategy: compactionSettings.strategy,
+			messagesBefore,
+			messagesAfter: activeMessages.length,
+		});
+	}
 	/**
 	 * Check if context maintenance or promotion is needed and run it.
 	 * Called after agent_end and before prompt submission.
@@ -9536,13 +9590,15 @@ export class AgentSession {
 		willRetry: boolean,
 		deferred = false,
 		allowDefer = true,
-		options: { autoContinue?: boolean; triggerContextTokens?: number } = {},
+		options: { autoContinue?: boolean; triggerContextTokens?: number; suppressContinuation?: boolean } = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
-		const shouldAutoContinue = options.autoContinue !== false && compactionSettings.autoContinue !== false;
+		const suppressContinuation = options.suppressContinuation === true;
+		const shouldAutoContinue =
+			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
 		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
 		// reclaims nothing we fall through to the summary-compaction body below so
 		// the oversized input still gets resolved.
@@ -9553,6 +9609,7 @@ export class AgentSession {
 				generation,
 				shouldAutoContinue,
 				options.triggerContextTokens,
+				suppressContinuation,
 			);
 			if (outcome !== "fallback") return outcome;
 		}
@@ -10006,7 +10063,7 @@ export class AgentSession {
 
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
-			} else if (this.agent.hasQueuedMessages()) {
+			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered.
 				this.#scheduleAgentContinue({
@@ -10066,6 +10123,7 @@ export class AgentSession {
 		generation: number,
 		autoContinue: boolean,
 		triggerContextTokens?: number,
+		suppressContinuation = false,
 	): Promise<CompactionCheckResult | "fallback"> {
 		const action = "shake";
 		this.#autoCompactionAbortController?.abort();
@@ -10165,7 +10223,7 @@ export class AgentSession {
 				}
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
-			} else if (this.agent.hasQueuedMessages()) {
+			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
 				this.#scheduleAgentContinue({
 					delayMs: 100,
 					generation,
