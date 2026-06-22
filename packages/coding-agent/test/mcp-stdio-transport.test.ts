@@ -287,6 +287,38 @@ describe("resolveStdioSpawnCommand", () => {
 		expect(result.windowsHide).toBe(true);
 	});
 
+	it("routes unresolvable bare Windows commands through cmd.exe so PATHEXT can find a .cmd shim (#3250)", async () => {
+		// Bun.spawn -> CreateProcess only appends `.exe` to extensionless names.
+		// Commands shipped as `.cmd` shims (`npx`, `yarn`, most pnpm-installed
+		// binaries on Windows) cannot be launched directly. When our PATH walk
+		// finds nothing — empty PATH under a restricted parent, locked-down
+		// shell, UNC mounts that reject `fs.access` — we must delegate to
+		// cmd.exe so its native PATHEXT lookup runs. The legacy fallback
+		// handed `Bun.spawn` the bare name and the subprocess died ~140ms
+		// after spawn with ENOENT/EINVAL (issue #3250).
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "npx", args: ["-y", "cloakbrowser-mcp@latest"] },
+			{
+				cwd: "C:\\project",
+				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+					PATH: "",
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+				platform: "win32",
+			},
+		);
+
+		expect(result.cmd).toEqual([
+			"C:\\Windows\\System32\\cmd.exe",
+			"/d",
+			"/s",
+			"/c",
+			`""npx" "-y" "cloakbrowser-mcp@latest""`,
+		]);
+		expect(result.windowsHide).toBe(true);
+	});
+
 	it("leaves non-Windows commands untouched", async () => {
 		const result = await resolveStdioSpawnCommand(
 			{ type: "stdio", command: "codegraph", args: ["serve", "--mcp"] },

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP stdio servers failing on Windows when the launcher's PATH walk can't pin down a bare `npx`/`yarn`/pnpm-style shim (empty `Bun.env.PATH` under a restricted parent process, UNC mounts that reject `fs.access`, locked-down shells). `resolveStdioSpawnCommand` used to fall back to the bare command name, which `Bun.spawn` → `CreateProcess` can only resolve as `<name>.exe` — never `.cmd`/`.bat` — so `npx -y …` died ~140ms after spawn with `ENOENT`/`EINVAL`. The Windows resolver now routes any unresolvable bare command through `cmd.exe /d /s /c` so Windows's own PATHEXT search picks up the shim. The reporter's diagnosis ("process.env not merged") was incorrect — the merge happens at `transports/stdio.ts:316-319` — but the symptom they hit is real ([#3250](https://github.com/can1357/oh-my-pi/issues/3250)).
+
 ## [16.1.14] - 2026-06-22
 
 ### Added

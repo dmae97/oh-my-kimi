@@ -212,7 +212,18 @@ function buildCmdExeCommand(command: string, args: readonly string[]): string {
 	return `"${quotedCommand}"`;
 }
 
-/** Resolve the subprocess argv used to launch an MCP stdio server. */
+/**
+ * Resolve the subprocess argv used to launch an MCP stdio server.
+ *
+ * On Windows, our PATH/PATHEXT walk may return `null` for a bare command
+ * (e.g. `npx`) — `Bun.env.PATH` empty under a restricted parent process,
+ * UNC/network mounts that reject `fs.access`, locked-down shells. The
+ * legacy fallback handed `Bun.spawn` the bare name, but `CreateProcess`
+ * only appends `.exe` for extensionless names — `.cmd`/`.bat` are never
+ * tried, so `npx` (which exists only as `npx.cmd` on Windows) crashes the
+ * subprocess immediately. When the resolver can't pin the command down,
+ * route through `cmd.exe /d /s /c` so Windows's own PATHEXT lookup runs.
+ */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
 	options: ResolveStdioSpawnOptions,
@@ -220,11 +231,16 @@ export async function resolveStdioSpawnCommand(
 	const args = config.args ?? [];
 	if (options.platform !== "win32") return { cmd: [config.command, ...args] };
 
-	const resolvedCommand =
-		(await resolveWindowsCommandPath(config.command, options.cwd, options.env)) ?? config.command;
+	const resolved = await resolveWindowsCommandPath(config.command, options.cwd, options.env);
+	const resolvedCommand = resolved ?? config.command;
 	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args, options.cwd);
 	if (npmShimCommand) return npmShimCommand;
-	if (!isWindowsBatchCommand(resolvedCommand)) return { cmd: [resolvedCommand, ...args] };
+
+	// Direct-spawn only when we resolved to a concrete file AND its extension
+	// is not a batch script. Everything else (resolved .cmd/.bat, or an
+	// unresolved extensionless command) goes through cmd.exe so PATHEXT runs.
+	const needsCmdExe = resolved === null || isWindowsBatchCommand(resolvedCommand);
+	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args] };
 
 	return {
 		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
