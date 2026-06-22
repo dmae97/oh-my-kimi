@@ -427,7 +427,7 @@ function buildDevinChatRequest(
 		plannerMode: ConversationalPlannerMode.DEFAULT,
 		toolChoice: create(ChatToolChoiceSchema, { choice: { case: "optionName", value: "auto" } }),
 		systemPromptCacheOptions: create(PromptCacheOptionsSchema, { type: CacheControlType.EPHEMERAL }),
-		disableParallelToolCalls: false,
+		disableParallelToolCalls: true,
 		cascadeId,
 		executionId: crypto.randomUUID(),
 		configuration: create(CompletionConfigurationSchema, {

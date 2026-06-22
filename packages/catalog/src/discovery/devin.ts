@@ -17,9 +17,8 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
 
 /** Best-effort match for labels whose wording implies a thinking / reasoning-effort variant. */
-const REASONING_LABEL_PATTERN = /think|thinking|high|medium|low|xhigh|reasoning/i;
+const REASONING_LABEL_PATTERN = /think|thinking|minimal|high|medium|low|xhigh|max|reasoning/i;
 const NO_REASONING_LABEL_PATTERN = /\bno thinking\b/i;
-
 function supportsDevinThinking(config: ClientModelConfig): boolean {
 	if (NO_REASONING_LABEL_PATTERN.test(config.label)) return false;
 	return config.modelInfo?.modelFeatures?.supportsThinking === true || REASONING_LABEL_PATTERN.test(config.label);
