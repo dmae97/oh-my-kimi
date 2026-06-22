@@ -78,6 +78,14 @@ export function gitLabDuoWorkflowModelManagerOptions(
 	const apiKey = config.apiKey;
 	return {
 		providerId: "gitlab-duo-agent",
+		// GitLab Duo discovery is credential- and namespace-specific
+		// (`aiChatAvailableModels(rootNamespaceId:)` also surfaces namespace-pinned
+		// models), so the default provider-id cache namespace would let a second
+		// account/namespace load the first one's authoritative model list at startup
+		// and skip refetching. Partition the cache by a non-reversible fingerprint of
+		// the credential + base URL + namespace/project/cwd scope. Falls back to the
+		// bare provider id when no credential is present (static-only fallback model).
+		...(apiKey ? { cacheProviderId: gitLabDuoWorkflowModelCacheProviderId(apiKey, config) } : undefined),
 		dynamicModelsAuthoritative: true,
 		staticModels: [
 			buildGitLabDuoWorkflowFallbackModel("claude_sonnet_4_6_vertex", "Claude Sonnet 4.6 - Vertex", config.baseUrl),
@@ -96,6 +104,13 @@ export function gitLabDuoWorkflowModelManagerOptions(
 				}
 			: undefined),
 	};
+}
+
+function gitLabDuoWorkflowModelCacheProviderId(apiKey: string, config: GitLabDuoWorkflowModelManagerConfig): string {
+	const scope = [config.baseUrl ?? "", config.namespaceId ?? "", config.projectId ?? "", config.cwd ?? ""].join(
+		"\u0000",
+	);
+	return `gitlab-duo-agent:${Bun.hash(`${apiKey}\u0000${scope}`).toString(36)}`;
 }
 
 // Devin (Codeium Cascade)
@@ -118,10 +133,6 @@ export function devinModelManagerOptions(config: DevinModelManagerConfig = {}): 
 						const { fetchDevinModels } = await devinDiscovery();
 						return fetchDevinModels({ apiKey, baseUrl, fetch });
 					},
-				}
-			: undefined),
-	};
-}
 				}
 			: undefined),
 	};

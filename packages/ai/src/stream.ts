@@ -1187,6 +1187,7 @@ function mapOptionsForApi<TApi extends Api>(
 			return castApi<"gitlab-duo-agent">({
 				...base,
 				cwd: options?.cwd,
+				toolChoice: options?.toolChoice,
 			});
 		case "devin-agent": {
 			const devinModel = model as Model<"devin-agent">;

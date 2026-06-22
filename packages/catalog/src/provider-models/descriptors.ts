@@ -49,7 +49,12 @@ import {
 	zenmuxModelManagerOptions,
 	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
-import { cursorModelManagerOptions, devinModelManagerOptions, gitLabDuoWorkflowModelManagerOptions, zaiModelManagerOptions } from "./special";
+import {
+	cursorModelManagerOptions,
+	devinModelManagerOptions,
+	gitLabDuoWorkflowModelManagerOptions,
+	zaiModelManagerOptions,
+} from "./special";
 
 export const CATALOG_PROVIDERS = [
 	{

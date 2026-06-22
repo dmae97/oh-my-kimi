@@ -16,6 +16,7 @@ import type {
 	StreamOptions,
 	Tool,
 	ToolCall,
+	ToolChoice,
 	ToolResultMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
@@ -120,6 +121,12 @@ export interface GitLabDuoWorkflowOptions extends StreamOptions {
 	webSocketFactory?: GitLabDuoWorkflowWebSocketFactory;
 	/** Idle WebSocket deadline (ms) before aborting and resuming; defaults to {@link GITLAB_DUO_WORKFLOW_IDLE_TIMEOUT_MS}. */
 	idleTimeoutMs?: number;
+	/**
+	 * Tool-choice override forwarded from the stream layer. Only `"none"` is
+	 * acted on: a side-request (e.g. handoff) keeps tool definitions in the cache
+	 * prefix but disables tool use, so the provider must not advertise them to Duo.
+	 */
+	toolChoice?: ToolChoice;
 }
 
 export interface GitLabDuoWorkflowWebSocketLike {
@@ -267,6 +274,11 @@ export interface GitLabDuoWorkflowActiveSession {
 	workflowId: string;
 	startPayload: GitLabDuoWorkflowStartRequest;
 	ws: GitLabDuoWorkflowWebSocketLike;
+	// Best-effort server-side stop for THIS workflow, captured with its own
+	// fetch/baseUrl/apiKey so `ProviderSessionState.close()` (session reset/dispose)
+	// can stop a workflow the server is still running, even though it holds none of
+	// that context itself. Fire-and-forget; never throws.
+	stop?: () => void;
 	pendingActions?: GitLabDuoWorkflowActionDescriptor[];
 	checkpointAgentContentByKey?: Record<string, string>;
 	checkpointAgentContentSignatures?: Record<string, true>;
@@ -679,6 +691,14 @@ function gitLabDuoWorkflowProviderSessionStateKey(
 function createGitLabDuoWorkflowProviderSessionState(): GitLabDuoWorkflowProviderSessionState {
 	const state: GitLabDuoWorkflowProviderSessionState = {
 		close: () => {
+			// Stop the server-side workflow before tearing down the socket. The session
+			// is being reset/disposed, so no resume will return the result; without this
+			// PATCH a workflow the server is still running on OMP would be stranded.
+			try {
+				state.active?.stop?.();
+			} catch {
+				// Best-effort: never let a stop failure block disposal.
+			}
 			try {
 				state.active?.ws.close();
 			} catch {
@@ -715,20 +735,27 @@ interface GitLabDuoWorkflowAccountState {
 	settingsEnsured?: boolean;
 }
 
-// Per-account provider state. The root namespace is a function of the GitLab
-// credential (account root namespace), not of the conversation/cwd, and the inline
-// ambient flow never exposes namespace to the model. Cache it per account and reuse
-// it across sessions/turns as the first choice; only re-discover when a cached
-// namespace later proves invalid. Settings enablement is likewise account-scoped.
-// Keyed by a non-reversible fingerprint of the credential + baseUrl (never the raw token).
+// Per-(account, workspace) provider state. The discovered root namespace is a
+// function of the GitLab credential AND the current cwd's git remote (a token with
+// several top-level groups resolves a different namespace per repo), so caching it
+// account-only would reuse the first workspace's namespace in a second repo and skip
+// re-discovery (and skip per-namespace settings enablement). Key by credential +
+// baseUrl + cwd; reuse across turns/sessions in the SAME workspace, re-discover only
+// when a cached namespace later proves invalid. Explicit namespace/project config
+// bypasses this cache entirely. Keyed by a non-reversible credential fingerprint
+// (never the raw token).
 const gitLabDuoWorkflowAccountState = new Map<string, GitLabDuoWorkflowAccountState>();
 
-function gitLabDuoWorkflowAccountKey(apiKey: string, baseUrl: string): string {
-	return `${Bun.hash(apiKey).toString(36)}\u0000${baseUrl}`;
+function gitLabDuoWorkflowAccountKey(apiKey: string, baseUrl: string, cwd: string | undefined): string {
+	return `${Bun.hash(apiKey).toString(36)}\u0000${baseUrl}\u0000${cwd ?? ""}`;
 }
 
-function getGitLabDuoWorkflowAccountState(apiKey: string, baseUrl: string): GitLabDuoWorkflowAccountState {
-	const key = gitLabDuoWorkflowAccountKey(apiKey, baseUrl);
+function getGitLabDuoWorkflowAccountState(
+	apiKey: string,
+	baseUrl: string,
+	cwd: string | undefined,
+): GitLabDuoWorkflowAccountState {
+	const key = gitLabDuoWorkflowAccountKey(apiKey, baseUrl, cwd);
 	const existing = gitLabDuoWorkflowAccountState.get(key);
 	if (existing) return existing;
 	const created: GitLabDuoWorkflowAccountState = {};
@@ -739,28 +766,30 @@ function getGitLabDuoWorkflowAccountState(apiKey: string, baseUrl: string): GitL
 function getGitLabDuoWorkflowCachedNamespace(
 	apiKey: string,
 	baseUrl: string,
+	cwd: string | undefined,
 ): GitLabDuoWorkflowNamespaceSelection | undefined {
-	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection;
+	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl, cwd).namespaceSelection;
 }
 
 function setGitLabDuoWorkflowCachedNamespace(
 	apiKey: string,
 	baseUrl: string,
+	cwd: string | undefined,
 	selection: GitLabDuoWorkflowNamespaceSelection,
 ): void {
-	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection = selection;
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl, cwd).namespaceSelection = selection;
 }
 
-function clearGitLabDuoWorkflowCachedNamespace(apiKey: string, baseUrl: string): void {
-	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).namespaceSelection = undefined;
+function clearGitLabDuoWorkflowCachedNamespace(apiKey: string, baseUrl: string, cwd: string | undefined): void {
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl, cwd).namespaceSelection = undefined;
 }
 
-function isGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string): boolean {
-	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl).settingsEnsured === true;
+function isGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string, cwd: string | undefined): boolean {
+	return getGitLabDuoWorkflowAccountState(apiKey, baseUrl, cwd).settingsEnsured === true;
 }
 
-function markGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string): void {
-	getGitLabDuoWorkflowAccountState(apiKey, baseUrl).settingsEnsured = true;
+function markGitLabDuoWorkflowSettingsEnsured(apiKey: string, baseUrl: string, cwd: string | undefined): void {
+	getGitLabDuoWorkflowAccountState(apiKey, baseUrl, cwd).settingsEnsured = true;
 }
 
 // True when the user pinned a namespace/project explicitly (option or env). Explicit
@@ -805,6 +834,22 @@ function getGitLabDuoWorkflowErrorField(payload: unknown, field: "message" | "er
 	return value;
 }
 
+// Everything `setupForNamespace` resolves for a chosen namespace: the REST/root ids,
+// the discovered project scoping, the prepared START payload, and the direct_access
+// connection. Named (not `ReturnType<...>`) per repo convention so the contract stays
+// explicit for the cached-namespace and re-discovery branches that consume it.
+interface GitLabDuoWorkflowNamespaceSetup {
+	rootNamespaceId: string;
+	restNamespaceId: string;
+	createNamespaceId: string;
+	restProjectId: string | undefined;
+	startPayload: GitLabDuoWorkflowStartRequest;
+	webSocketProjectId: string | undefined;
+	workflowConnection: GitLabDuoWorkflowDirectAccessConnection;
+	workflowId: string;
+	selectedModelIdentifier: string;
+}
+
 async function runGitLabDuoWorkflow(
 	model: Model<"gitlab-duo-agent">,
 	context: Context,
@@ -814,6 +859,7 @@ async function runGitLabDuoWorkflow(
 	const apiKey = options.apiKey;
 	if (!apiKey) throw new Error("No API key for provider: gitlab-duo-agent");
 	const baseUrl = normalizeGitLabBaseUrl(model.baseUrl || DEFAULT_GITLAB_BASE_URL);
+	const fetchImpl = options.fetch ?? fetch;
 	const providerSessionState = getGitLabDuoWorkflowProviderSessionState(
 		options.providerSessionState,
 		baseUrl,
@@ -842,14 +888,10 @@ async function runGitLabDuoWorkflow(
 			buildGitLabDuoWorkflowActionResponse(requestID, buildGitLabDuoWorkflowResponseFromToolResult(result)),
 		);
 		pendingSession.pendingActions = undefined;
-		const socketResult = await runGitLabDuoWorkflowSocket(
-			pendingSession.ws,
-			pendingSession.startPayload,
-			state,
-			options,
-			responses,
+		await resumeGitLabDuoWorkflowSocket(
+			{ fetchImpl, baseUrl, apiKey, workflowId: pendingSession.workflowId, state, providerSessionState },
+			() => runGitLabDuoWorkflowSocket(pendingSession.ws, pendingSession.startPayload, state, options, responses),
 		);
-		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, socketResult);
 		return;
 	}
 	if (providerSessionState?.active?.paused) {
@@ -857,18 +899,13 @@ async function runGitLabDuoWorkflow(
 		const replay = session.pauseBuffer ?? [];
 		session.paused = false;
 		session.pauseBuffer = [];
-		const socketResult = await runGitLabDuoWorkflowSocket(
-			session.ws,
-			session.startPayload,
-			state,
-			options,
-			undefined,
-			replay,
+		const sessionWorkflowId = session.workflowId;
+		await resumeGitLabDuoWorkflowSocket(
+			{ fetchImpl, baseUrl, apiKey, workflowId: sessionWorkflowId, state, providerSessionState },
+			() => runGitLabDuoWorkflowSocket(session.ws, session.startPayload, state, options, undefined, replay),
 		);
-		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, socketResult);
 		return;
 	}
-	const fetchImpl = options.fetch ?? fetch;
 	// Two cases reach here with a live `pendingSession` that must be abandoned before
 	// seeding a fresh workflow:
 	//  1. A mid-batch steer (resolvedBatch present, user message after it).
@@ -911,17 +948,7 @@ async function runGitLabDuoWorkflow(
 	// it and re-discover once. Explicit namespace/project config bypasses the cache.
 	const setupForNamespace = async (
 		namespaceSelection: GitLabDuoWorkflowNamespaceSelection,
-	): Promise<{
-		rootNamespaceId: string;
-		restNamespaceId: string;
-		createNamespaceId: string;
-		restProjectId: string | undefined;
-		startPayload: GitLabDuoWorkflowStartRequest;
-		webSocketProjectId: string | undefined;
-		workflowConnection: GitLabDuoWorkflowDirectAccessConnection;
-		workflowId: string;
-		selectedModelIdentifier: string;
-	}> => {
+	): Promise<GitLabDuoWorkflowNamespaceSetup> => {
 		const rootNamespaceId = namespaceSelection.rootNamespaceId;
 		const restNamespaceId = toGitLabRestNamespaceId(rootNamespaceId);
 		const createNamespaceId = namespaceSelection.namespacePath ?? restNamespaceId;
@@ -936,8 +963,11 @@ async function runGitLabDuoWorkflow(
 		// Once per session, make sure the namespace has the Duo agent-platform + MCP +
 		// beta flags on. The inline ambient flow needs them; a fresh group ships with
 		// them off. Best-effort (PUT needs maintainer) and idempotent, never blocks.
-		if (!isGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl) && isGitLabDuoWorkflowInlineFlow(workflowDefinition)) {
-			markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl);
+		if (
+			!isGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd) &&
+			isGitLabDuoWorkflowInlineFlow(workflowDefinition)
+		) {
+			markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd);
 			await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId);
 		}
 		// The inline `ambient` flow fails server-side without a project, and OMP has
@@ -982,11 +1012,17 @@ async function runGitLabDuoWorkflow(
 			));
 		const availableModels = await fetchGitLabDuoWorkflowAvailableModels(fetchImpl, baseUrl, apiKey, rootNamespaceId);
 		const selectedModelIdentifier = selectGitLabDuoWorkflowModelRef(model.id, availableModels);
+		// A `toolChoice: "none"` side-request (e.g. handoff keeps live tool definitions
+		// in the cache prefix but disables tool use) must not advertise the tools to
+		// Duo: if the model picked one, the provider would emit a `toolUse` message and
+		// the text-only handoff consumer would yield an empty/partial document. Drop the
+		// advertised tools in that case; named/`auto`/`any` choices keep them.
+		const advertisedTools = options.toolChoice === "none" ? [] : context.tools;
 		const startPayload = buildGitLabDuoWorkflowStartRequest(
 			workflowId,
 			model,
 			context,
-			context.tools,
+			advertisedTools,
 			availableModels,
 			{
 				projectId: webSocketProjectId,
@@ -1010,8 +1046,10 @@ async function runGitLabDuoWorkflow(
 		};
 	};
 
-	const cachedNamespace = explicitNamespace ? undefined : getGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl);
-	let setup: Awaited<ReturnType<typeof setupForNamespace>>;
+	const cachedNamespace = explicitNamespace
+		? undefined
+		: getGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, options.cwd);
+	let setup: GitLabDuoWorkflowNamespaceSetup;
 	if (cachedNamespace) {
 		try {
 			setup = await setupForNamespace(cachedNamespace);
@@ -1022,7 +1060,7 @@ async function runGitLabDuoWorkflow(
 				rootNamespaceId: cachedNamespace.rootNamespaceId,
 				error: gitLabDuoWorkflowErrorText(cachedError),
 			});
-			clearGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl);
+			clearGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, options.cwd);
 			const rediscovered = await resolveGitLabDuoWorkflowNamespaceSelection(
 				model,
 				options,
@@ -1031,7 +1069,7 @@ async function runGitLabDuoWorkflow(
 				fetchImpl,
 			);
 			setup = await setupForNamespace(rediscovered);
-			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, rediscovered);
+			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, options.cwd, rediscovered);
 		}
 	} else {
 		const namespaceSelection = await resolveGitLabDuoWorkflowNamespaceSelection(
@@ -1045,7 +1083,7 @@ async function runGitLabDuoWorkflow(
 		// Cache the freshly discovered namespace per account so the next session/turn
 		// reuses it instead of re-discovering. Explicit config is never cached.
 		if (!explicitNamespace) {
-			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, namespaceSelection);
+			setGitLabDuoWorkflowCachedNamespace(apiKey, baseUrl, options.cwd, namespaceSelection);
 		}
 	}
 	const restNamespaceId = setup.restNamespaceId;
@@ -1076,7 +1114,17 @@ async function runGitLabDuoWorkflow(
 				webSocketFactory: options.webSocketFactory,
 			});
 			if (providerSessionState) {
-				providerSessionState.active = { workflowId, startPayload, ws };
+				// Capture the CURRENT workflow id (it is reassigned across timeout/step-limit/
+				// retry restarts) so a later session-dispose stops the right workflow.
+				const stopWorkflowId = workflowId;
+				providerSessionState.active = {
+					workflowId,
+					startPayload,
+					ws,
+					stop: () => {
+						void stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, stopWorkflowId);
+					},
+				};
 			}
 			lastSocketResult = await runGitLabDuoWorkflowSocket(ws, startPayload, state, options);
 			if (lastSocketResult === "approval") {
@@ -1178,16 +1226,18 @@ async function runGitLabDuoWorkflow(
 		settledNormally = true;
 		finalizeGitLabDuoWorkflowResumeResult(state, providerSessionState, lastSocketResult);
 	} finally {
-		// The socket loop can exit two abnormal ways that both leave the remote
-		// workflow running and `active` referencing a dead socket: a user abort, or
-		// `runGitLabDuoWorkflowSocket` rejecting (e.g. `ws.onerror`) so the settle
-		// block above never ran (`settledNormally` stays false). In either case drop
-		// the resumable session and stop the workflow with a fresh signal — the
-		// request's own signal may be aborted, which would cancel the PATCH before it
-		// is sent. The happy path that intentionally keeps `active` for an
-		// `action`/`pause` resume is gated on `settledNormally && !aborted`.
+		// The socket loop can exit several ways that leave the remote workflow running
+		// and `active` referencing a dead socket: a user abort; `runGitLabDuoWorkflowSocket`
+		// rejecting (e.g. `ws.onerror`) so the settle block never ran (`settledNormally`
+		// stays false); or the socket closing before any terminal status arrived
+		// (`lastSocketResult === "closed"` — a proxy/server drop). In all of these the
+		// local stream is finalized but the server workflow has no explicit stop, so drop
+		// the resumable session and stop it with a FRESH signal (the request's own signal
+		// may be aborted, which would cancel the PATCH before it is sent). The happy path
+		// that intentionally keeps `active` for an `action`/`pause` resume reaches a real
+		// terminal status, never "closed", so it is not affected.
 		const aborted = options.signal?.aborted ?? false;
-		if (aborted || !settledNormally) {
+		if (aborted || !settledNormally || lastSocketResult === "closed") {
 			if (providerSessionState) {
 				providerSessionState.active = undefined;
 			}
@@ -1401,7 +1451,7 @@ async function stopGitLabDuoWorkflow(
 	apiKey: string,
 	workflowId: string,
 ): Promise<void> {
-	await fetchImpl(new URL(`/api/v4/ai/duo_workflows/workflows/${encodeURIComponent(workflowId)}`, baseUrl), {
+	await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/ai/duo_workflows/workflows/${encodeURIComponent(workflowId)}`), {
 		method: "PATCH",
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -1438,7 +1488,7 @@ async function ensureGitLabDuoWorkflowSettings(
 	restNamespaceId: string,
 ): Promise<void> {
 	try {
-		const response = await fetchImpl(new URL(`/api/v4/groups/${encodeURIComponent(restNamespaceId)}`, baseUrl), {
+		const response = await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/groups/${encodeURIComponent(restNamespaceId)}`), {
 			method: "PUT",
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
@@ -1618,7 +1668,14 @@ export function runGitLabDuoWorkflowSocket(
 					settle("closed", error);
 					return;
 				}
-				if (!handleSocketResult(result, data, pending)) return;
+				if (!handleSocketResult(result, data, pending)) {
+					// An `action` result stops the replay loop to hand the tool call back
+					// to OMP. Clear the pause flag first: the live `onmessage` handler must
+					// process the resume continuation directly instead of buffering it
+					// (a buffered continuation would idle the turn until timeout).
+					if (active) active.paused = false;
+					return;
+				}
 				if (active?.pauseBuffer && active.pauseBuffer.length > 0) {
 					pending.push(...active.pauseBuffer);
 					active.pauseBuffer = [];
@@ -2059,6 +2116,36 @@ function finalizeGitLabDuoWorkflowResumeResult(
 	if (result !== "terminal" && !state.stream.done) {
 		finishGitLabDuoWorkflowStream(state, "stop");
 	}
+}
+
+// Run a resume on a preserved socket (action-result or pause replay) and finalize it
+// the same way the fresh-workflow loop does. If the resume rejects — the preserved
+// WebSocket errored, or `ws.send` threw because it closed while the local tool ran —
+// the preserved session would otherwise be left with `active` still set and the
+// server workflow still running. Drop `active` and fire a best-effort stop before
+// rethrowing so the next turn never resumes a dead socket or strands the workflow.
+async function resumeGitLabDuoWorkflowSocket(
+	args: {
+		fetchImpl: FetchImpl;
+		baseUrl: string;
+		apiKey: string;
+		workflowId: string;
+		state: GitLabDuoWorkflowStreamState;
+		providerSessionState: GitLabDuoWorkflowProviderSessionState | undefined;
+	},
+	run: () => Promise<GitLabDuoWorkflowSocketResult>,
+): Promise<void> {
+	let socketResult: GitLabDuoWorkflowSocketResult;
+	try {
+		socketResult = await run();
+	} catch (error) {
+		if (args.providerSessionState) {
+			args.providerSessionState.active = undefined;
+		}
+		await stopGitLabDuoWorkflow(args.fetchImpl, args.baseUrl, args.apiKey, args.workflowId);
+		throw error;
+	}
+	finalizeGitLabDuoWorkflowResumeResult(args.state, args.providerSessionState, socketResult);
 }
 
 function pauseGitLabDuoWorkflowStream(state: GitLabDuoWorkflowStreamState): void {
