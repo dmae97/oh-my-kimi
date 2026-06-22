@@ -18,7 +18,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
-import { markFramedBlockComponent, renderCodeCell } from "../tui";
+import { markFramedBlockComponent, outputBlockContentWidth, renderCodeCell } from "../tui";
 import {
 	JSON_TREE_MAX_DEPTH_COLLAPSED,
 	JSON_TREE_MAX_DEPTH_EXPANDED,
@@ -468,23 +468,33 @@ function formatCellOutputLines(
 		return { lines: [], hiddenCount: 0 };
 	}
 
+	// Cell output lands in renderCodeCell → renderOutputBlock, which re-wraps it
+	// at the box's inner content width. Bound the collapsed tail by VISUAL rows
+	// at that width so a long-line tail can't wrap into more rows than budgeted
+	// and scroll its mutating preview above the live-region window — the
+	// duplicate "ctrl+o to expand" scrollback spray.
+	const innerWidth = outputBlockContentWidth(width);
+
 	if (cell.hasMarkdown && cell.status !== "error") {
 		const md = new Markdown(cell.output, 0, 0, getMarkdownTheme());
-		const allLines = md.render(width);
+		const allLines = md.render(innerWidth);
 		const displayLines = expanded ? allLines : allLines.slice(-previewLines);
 		const hiddenCount = allLines.length - displayLines.length;
 		return { lines: displayLines, hiddenCount };
 	}
 
-	const rawLines = cell.output.split("\n");
-	const displayLines = expanded ? rawLines : rawLines.slice(-previewLines);
-	const hiddenCount = rawLines.length - displayLines.length;
-	const outputLines = displayLines.map(line => {
-		const cleaned = replaceTabs(line);
-		return cell.status === "error" ? theme.fg("error", cleaned) : theme.fg("toolOutput", cleaned);
-	});
-
-	return { lines: outputLines, hiddenCount };
+	const styledOutput = cell.output
+		.split("\n")
+		.map(line => {
+			const cleaned = replaceTabs(line);
+			return cell.status === "error" ? theme.fg("error", cleaned) : theme.fg("toolOutput", cleaned);
+		})
+		.join("\n");
+	if (expanded) {
+		return { lines: styledOutput.split("\n"), hiddenCount: 0 };
+	}
+	const { visualLines, skippedCount } = truncateToVisualLines(styledOutput, previewLines, innerWidth);
+	return { lines: visualLines, hiddenCount: skippedCount };
 }
 
 export const evalToolRenderer = {
@@ -586,7 +596,10 @@ export const evalToolRenderer = {
 			return markFramedBlockComponent({
 				render: (width: number): readonly string[] => {
 					const expanded = options.renderContext?.expanded ?? options.expanded;
-					const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
+					const previewLines = Math.min(
+						options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
+						previewWindowRows(),
+					);
 					const key = `${expanded}|${previewLines}|${options.spinnerFrame}|${previewWindowRows()}`;
 					if (cached && cached.key === key && cached.width === width) {
 						return cached.result;
@@ -717,7 +730,10 @@ export const evalToolRenderer = {
 
 		return {
 			render: (width: number): readonly string[] => {
-				const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
+				const previewLines = Math.min(
+					options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES,
+					previewWindowRows(),
+				);
 				if (cachedLines === undefined || cachedWidth !== width || cachedPreviewLines !== previewLines) {
 					const result = truncateToVisualLines(textContent, previewLines, width);
 					cachedLines = result.visualLines;

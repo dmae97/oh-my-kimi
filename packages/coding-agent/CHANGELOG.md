@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
+- Fixed streaming output blocks incorrectly calculating preview height, preventing flickering banners
+- Fixed streaming `bash`/`eval` tool output duplicating its `… (N earlier lines, showing 10 of M) (ctrl+o to expand)` preview into native scrollback. The collapsed output is a sliding tail window fixed at 10 lines, so when the box outgrew the live viewport (a tall command/output under a still-live predecessor such as a parallel tool) its mutating tail scrolled above the commit window and the renderer re-committed a fresh snapshot every frame, stacking dozens of stale preview banners and chunks. The output preview is now clamped to the viewport tail (`Math.min(10, previewWindowRows())`) and measured in visual rows at the box's inner content width (via the new `outputBlockContentWidth` helper), so on short terminals the volatile tail shrinks to stay on-screen and is never committed. Fixes the duplication introduced when scroll-off commits were made loss-free.
 - Prevented `/handoff` from executing while a response is streaming to avoid session corruption
 - Fixed `/handoff` cold-missing the provider prompt cache. Handoff generation now builds its request through the same pipeline a live turn uses (`convertMessagesToLlm` + `Agent.buildSideRequestContext` + `prepareSimpleStreamOptions`, via the new `generateHandoffFromContext`), so it reuses the live system prompt, normalized tools, transformed/obfuscated message history, and — critically — a stable `promptCacheKey` with a unique side `sessionId`. Previously the oneshot sent no cache-routing key and skipped the `transformContext`/`transformProviderContext` and tool/message normalization the loop applies, so its prefix never matched what the turn populated and every handoff re-read the whole context uncached. Mirrors the cache-preserving path already used by `/btw` and `/omfg`.
 - Fixed `/handoff` (and the RPC `handoff` command) resetting the agent while a response was still streaming, which let the live turn keep emitting into the torn-down session. Manual handoff now refuses while a prompt is in flight (matching `/fork` and `/move`); the auto-handoff path is unaffected.
