@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	buildExaRequestBody,
 	ExaProvider,
 	normalizeSearchType,
+	resetExaSearchThrottleForTest,
 	searchExa,
 	synthesizeAnswer,
 } from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
@@ -214,13 +216,18 @@ function makeMockExaResponse(overrides: Record<string, unknown> = {}) {
 describe("searchExa", () => {
 	let capturedRequestBody: Record<string, unknown> | null = null;
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 0 } });
 		capturedRequestBody = null;
 		process.env.EXA_API_KEY = "test-key-123";
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		resetExaSearchThrottleForTest();
+		resetSettingsForTest();
 		delete process.env.EXA_API_KEY;
 	});
 
@@ -288,6 +295,31 @@ describe("searchExa", () => {
 			type: "neural",
 			contents: { summary: { query: "shape test" } },
 		});
+	});
+
+	it("paces consecutive Exa API requests by the configured delay", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 25 } });
+		const requestTimes: number[] = [];
+		const fetchMock: FetchImpl = (_url, init) => {
+			requestTimes.push(Date.now());
+			if (init?.body) {
+				capturedRequestBody = JSON.parse(init.body as string);
+			}
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first paced request", fetch: fetchMock });
+		await searchExa({ query: "second paced request", fetch: fetchMock });
+
+		expect(requestTimes).toHaveLength(2);
+		expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(20);
 	});
 
 	it("prefers summary over text for snippet field", async () => {
