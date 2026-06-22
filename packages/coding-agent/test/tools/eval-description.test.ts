@@ -17,7 +17,7 @@ function makeSession(opts: { spawns?: string | null; backends?: Record<string, b
 	} as unknown as ToolSession;
 }
 
-/** Pull the model-facing cell-schema fields (sorted `language` enum + descriptions) from the wire schema. */
+/** Pull the model-facing cell-schema fields (sorted `language` enum + descriptions) from the flat wire schema. */
 function wireCellFields(tool: EvalTool): {
 	languages: string[];
 	languageDescription?: string;
@@ -25,17 +25,11 @@ function wireCellFields(tool: EvalTool): {
 } {
 	const wire = toolWireSchema(tool as unknown as AiTool) as {
 		properties?: {
-			cells?: {
-				items?: {
-					properties?: {
-						language?: { enum?: string[]; const?: string; description?: string };
-						code?: { description?: string };
-					};
-				};
-			};
+			language?: { enum?: string[]; const?: string; description?: string };
+			code?: { description?: string };
 		};
 	};
-	const props = wire.properties?.cells?.items?.properties;
+	const props = wire.properties;
 	const language = props?.language;
 	const languages = Array.isArray(language?.enum)
 		? [...language.enum].sort()
@@ -86,15 +80,19 @@ describe("eval tool dynamic schema", () => {
 		}
 	});
 
-	it("hides rb/jl from the wire schema, summary, and description by default", () => {
-		const fields = wireCellFields(new EvalTool(makeSession({})));
+	it("hides rb/jl from the wire schema, summary, description, and examples by default", () => {
+		const tool = new EvalTool(makeSession({}));
+		const fields = wireCellFields(tool);
 		// Default config: rb/jl off → the wire schema is byte-identical to the pre-feature py/js one.
 		expect(fields.languages).toEqual(["js", "py"]);
 		expect(fields.languageDescription).toBe('runtime: "py" for the IPython kernel, "js" for the persistent JS VM');
-		expect(fields.codeDescription).toBe("cell body, verbatim. Use top-level await freely.");
-		const tool = new EvalTool(makeSession({}));
+		expect(fields.codeDescription).toBe("code to run in this eval call, verbatim. Use top-level await freely.");
 		expect(tool.summary).toBe("Execute Python or JavaScript code in an in-process eval backend");
 		expect(tool.description).not.toMatch(/ruby|julia/i);
+		// Examples must not advertise a disabled backend.
+		const exampleLangs = tool.examples.map(ex => ("call" in ex ? ex.call.language : null));
+		expect(exampleLangs).toEqual(["py", "py", "py"]);
+		expect(tool.examples.some(ex => "call" in ex && ex.call.language === "rb")).toBe(false);
 	});
 
 	it("advertises rb/jl across enum, descriptions, summary, and prelude once enabled", () => {
@@ -104,12 +102,15 @@ describe("eval tool dynamic schema", () => {
 		expect(fields.languageDescription).toBe(
 			'runtime: "py" for the IPython kernel, "js" for the persistent JS VM, "rb" for the persistent Ruby kernel, "jl" for the persistent Julia kernel',
 		);
-		expect(fields.codeDescription).toBe(
-			"cell body, verbatim. Top-level `await` is available in py/js; rb/jl auto-display the last expression like a REPL.",
+		expect(fields.codeDescription).toContain(
+			"code to run in this eval call, verbatim. Top-level `await` is available in py/js; rb/jl auto-display the last expression like a REPL.",
 		);
 		expect(tool.summary).toBe("Execute Python, JavaScript, Ruby, or Julia code in a persistent eval backend");
 		expect(tool.description).toMatch(/ruby/i);
 		expect(tool.description).toMatch(/julia/i);
+		// Ruby examples appear once rb is enabled.
+		const rbExampleLangs = tool.examples.filter(ex => "call" in ex && ex.call.language === "rb");
+		expect(rbExampleLangs.length).toBe(2);
 	});
 
 	it("advertises only the enabled subset of optional backends", () => {

@@ -247,7 +247,7 @@ describe("ACP event mapper", () => {
 				type: "tool_execution_start",
 				toolCallId: "tc-eval-start",
 				toolName: "eval",
-				args: { cells: [{ language: "js", title: "sum", code: "return 1 + 1;" }] },
+				args: { language: "js", title: "sum", code: "return 1 + 1;" },
 				intent: "sum",
 			} as AgentSessionEvent,
 			"session-1",
@@ -267,7 +267,7 @@ describe("ACP event mapper", () => {
 		expect(update.title).toBe("[js] sum\nreturn 1 + 1;");
 		expect(update.kind).toBe("execute");
 		expect(update.status).toBe("pending");
-		expect(update.rawInput).toEqual({ cells: [{ language: "js", title: "sum", code: "return 1 + 1;" }] });
+		expect(update.rawInput).toEqual({ language: "js", title: "sum", code: "return 1 + 1;" });
 		expect(update.content).toContainEqual({
 			type: "content",
 			content: { type: "text", text: "[js] sum\nreturn 1 + 1;" },
@@ -305,7 +305,7 @@ describe("ACP event mapper", () => {
 				type: "tool_execution_start",
 				toolCallId: "tc-eval-long-source",
 				toolName: "eval",
-				args: { cells: [{ language: "js", code: source }] },
+				args: { language: "js", code: source },
 			} as AgentSessionEvent,
 			"session-1",
 		);

@@ -127,8 +127,13 @@ export function extractQuoteBlocks(text: string): QuoteBlock[] {
 
 function extractEvalCode(args: unknown): { code: string; language: string } | undefined {
 	if (!args || typeof args !== "object") return undefined;
-	const cells = (args as { cells?: unknown }).cells;
-	if (!Array.isArray(cells)) return undefined;
+	const argsObj = args as { cells?: unknown; code?: unknown };
+	const cells = Array.isArray(argsObj.cells)
+		? argsObj.cells
+		: typeof argsObj.code === "string"
+			? [argsObj]
+			: undefined;
+	if (!cells) return undefined;
 
 	const codeBlocks: string[] = [];
 	let language = "python";

@@ -1,22 +1,23 @@
-Run code in a persistent kernel using a list of cells.
+Run one step of code in a persistent kernel.
 
 <instruction>
-Cells run in array order. State persists per language across cells, tool calls, and `task` subagents — stage helpers/datasets/clients once, subagents reuse directly, no re-import/serialize.
+**One eval call = one cell = one logical step.** State persists per language across separate eval calls, tool calls, and `task` subagents — define helpers/datasets/clients in one call, then later calls reuse them directly.
 
-Cell fields:
+Work incrementally: imports in one call, define in the next, test, then use — each its own eval call. Re-run setup ONLY after `reset`, a kernel crash, or a `NameError`/`ReferenceError` proving the state is gone. Parallelize work *within* a cell with the `parallel(thunks)` helper, not by batching steps.
+
+Fields:
 
 - `language` — {{#if py}}`"py"` IPython kernel{{/if}}{{#ifAll py js}}, {{/ifAll}}{{#if js}}`"js"` persistent JavaScript VM{{/if}}{{#if rb}}{{#ifAny py js}}, {{/ifAny}}`"rb"` persistent Ruby kernel{{/if}}{{#if jl}}{{#ifAny py js rb}}, {{/ifAny}}`"jl"` persistent Julia kernel{{/if}}.
 - `code` — cell body, verbatim. Newlines/quotes JSON-encoded; no fences, no headers.
 - `title` (optional) — short transcript label (e.g. `"imports"`).
-- `timeout` (optional) — per-cell seconds. Raise only for heavy compute or long non-agent tool calls.
-- `reset` (optional) — wipe this cell's language kernel first.{{#ifAll py js}} Per-language: a `py` reset never touches the JS VM.{{/ifAll}}
+- `timeout` (optional) — seconds. Raise only for heavy compute or long non-agent tool calls.
+- `reset` (optional) — wipe this language's kernel first.{{#ifAll py js}} Per-language: a `py` reset never touches the JS VM.{{/ifAll}}
 
-Work incrementally — one logical step per cell (imports, define, test, use), many small cells per call; workflow notes in the assistant message or `title`, never in cell code.
 {{#if py}}Live event loop: use top-level `await` directly; `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
 {{#if js}}JS runs under **Bun**: Bun globals/APIs are available (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`); top-level `await`/`return` work directly.{{/if}}
 {{#if rb}}Ruby: synchronous; helper options are keyword args (e.g. `tree(".", max_depth: 2)`); the last expression auto-displays unless it is `nil`, an assignment, or a definition (like IRB).{{/if}}
 {{#if jl}}Julia: synchronous; helper options are standard keyword args (e.g. `tree(max_depth=2)`); the last expression auto-displays unless it is an assignment or a definition (like the Julia REPL).{{/if}}
-Errors name the failing cell ("Cell 3 failed") — resubmit the fixed cell + any remaining.
+On error, fix and re-run only the failing step — prior calls' state survives.
 </instruction>
 
 <prelude>
@@ -71,3 +72,7 @@ Pipe handles through stage helpers to build a dependency graph — acyclic waves
 - **Acyclic only.** A node never waits on its own descendant.
 </dag>
 {{/if}}
+
+<critical>
+Prior top-level names (`data`, `sessions`, helpers, imports) survive into the next eval call — reuse them; NEVER re-import, re-require, or re-declare a helper. Re-read a file only if it may have changed since the last read. Re-run setup only after `reset`, a crash, or a `NameError`/`ReferenceError`.
+</critical>

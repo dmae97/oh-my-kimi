@@ -1,6 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added support for Ruby and Julia code cells in the eval tool
+
+### Changed
+
+- Updated the eval tool view to render the new single-cell eval args (flat `language`/`code`/`title`/`timeout`/`reset`) and to highlight Ruby (`rb`) and Julia (`jl`) cells with their own syntax instead of collapsing them to Python, while still parsing legacy multi-cell `cells` arrays and framed `input` strings from older transcripts.
+
 ### Fixed
 
 - Improved compatibility with legacy todo task transcripts

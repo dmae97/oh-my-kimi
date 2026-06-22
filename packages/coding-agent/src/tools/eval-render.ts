@@ -56,6 +56,9 @@ interface EvalRenderCellArg {
 }
 
 interface EvalRenderArgs {
+	language?: string;
+	code?: string;
+	title?: string;
 	cells?: EvalRenderCellArg[];
 	__partialJson?: string;
 }
@@ -81,8 +84,8 @@ function normalizeRenderLanguage(value: string | undefined): EvalLanguage {
 }
 
 function getRenderCells(args: EvalRenderArgs | undefined): EvalRenderCell[] {
-	const raw = args?.cells;
-	if (!Array.isArray(raw)) return [];
+	if (!args) return [];
+	const raw = Array.isArray(args.cells) ? args.cells : typeof args.code === "string" ? [args] : [];
 	const out: EvalRenderCell[] = [];
 	for (const cell of raw) {
 		if (!cell || typeof cell !== "object") continue;

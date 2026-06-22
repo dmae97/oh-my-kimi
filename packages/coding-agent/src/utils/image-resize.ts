@@ -141,11 +141,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		// lagging edge up to the floor via the default fit:"fill" resize.
 		if (targetWidth < minDimension || targetHeight < minDimension) {
 			const shortEdge = Math.min(targetWidth, targetHeight);
-			const upscale = Math.min(
-				minDimension / shortEdge,
-				opts.maxWidth / targetWidth,
-				opts.maxHeight / targetHeight,
-			);
+			const upscale = Math.min(minDimension / shortEdge, opts.maxWidth / targetWidth, opts.maxHeight / targetHeight);
 			if (upscale > 1) {
 				targetWidth = Math.round(targetWidth * upscale);
 				targetHeight = Math.round(targetHeight * upscale);

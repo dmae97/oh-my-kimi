@@ -468,8 +468,13 @@ function buildEvalStartText(args: unknown): string | undefined {
 	if (typeof args !== "object" || args === null || Array.isArray(args)) {
 		return undefined;
 	}
-	const cells = (args as EvalCellContainer).cells;
-	if (!Array.isArray(cells) || cells.length === 0) {
+	const container = args as EvalCellContainer & EvalCellLike;
+	const cells = Array.isArray(container.cells)
+		? container.cells
+		: typeof container.code === "string"
+			? [container]
+			: [];
+	if (cells.length === 0) {
 		return undefined;
 	}
 	const lines: string[] = [];

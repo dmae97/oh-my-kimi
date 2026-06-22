@@ -80,7 +80,7 @@ function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; 
 			parts.push(icon);
 		}
 	}
-	if (index !== undefined && total !== undefined) {
+	if (index !== undefined && total !== undefined && total > 1) {
 		parts.push(theme.fg("accent", `[${index + 1}/${total}]`));
 	}
 	if (title) {

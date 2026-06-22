@@ -242,7 +242,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": true } });
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
-			assistantToolCall("eval-image", "eval", { cells: [{ language: "py", code: "display(image)" }] }),
+			assistantToolCall("eval-image", "eval", { language: "py", code: "display(image)" }),
 			{
 				role: "toolResult",
 				toolCallId: "eval-image",
@@ -279,9 +279,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			isError: false,
 			timestamp: 2,
 		});
-		session.appendMessage(
-			assistantToolCall("eval-reopened", "eval", { cells: [{ language: "py", code: "display(image)" }] }),
-		);
+		session.appendMessage(assistantToolCall("eval-reopened", "eval", { language: "py", code: "display(image)" }));
 		session.appendMessage({
 			role: "toolResult",
 			toolCallId: "eval-reopened",

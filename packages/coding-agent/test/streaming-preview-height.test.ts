@@ -435,7 +435,9 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 		const hidden = total - window;
 		const longLines = Array.from({ length: total }, (_, i) => `line-${i}`);
 		const { lines, text } = renderPending("eval", {
-			cells: [{ language: "js", title: "big", code: longLines.map(line => `const ${line} = 1;`).join("\n") }],
+			language: "js",
+			title: "big",
+			code: longLines.map(line => `const ${line} = 1;`).join("\n"),
 		});
 
 		expect(lines.length, "eval code preview should stay bounded").toBeLessThan(window + 10);
