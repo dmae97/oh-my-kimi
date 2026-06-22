@@ -74,7 +74,7 @@ describe("eval js agent() returnHandle", () => {
 		expect(node).toEqual({ text: "lonely", output: "lonely", handle: null, id: null, agent: null });
 	});
 
-	it("exposes patchPath/branchName/changesApplied/isolated/isolationSummary on the handle", async () => {
+	it("exposes patchPath/branchName/nestedPatches/changesApplied/isolated/isolationSummary on the handle", async () => {
 		const payload = JSON.stringify({ ok: true });
 		const sandbox = loadPrelude(async () => ({
 			text: payload,
@@ -85,6 +85,7 @@ describe("eval js agent() returnHandle", () => {
 				isolated: true,
 				patchPath: "/artifacts/iso-1.patch",
 				changesApplied: null,
+				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
 				isolationSummary: "Isolation: changes captured at `/artifacts/iso-1.patch` (apply=false). Not applied.",
 			},
 		}));
@@ -98,6 +99,7 @@ describe("eval js agent() returnHandle", () => {
 		expect(node.data).toEqual({ ok: true });
 		expect(node.isolated).toBe(true);
 		expect(node.patchPath).toBe("/artifacts/iso-1.patch");
+		expect(node.nestedPatches).toEqual([{ relativePath: "nested", patch: "diff --git a/file b/file\n" }]);
 		expect(node.changesApplied).toBeNull();
 		expect(node.isolationSummary).toContain("/artifacts/iso-1.patch");
 		expect("branchName" in node).toBe(false);

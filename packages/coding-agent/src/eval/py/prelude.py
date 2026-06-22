@@ -538,12 +538,13 @@ if "__omp_prelude_loaded__" not in globals():
         "none" errors the call instead of silently downgrading.
 
         When isolated, `apply=False` keeps captured changes inside the
-        worktree and surfaces the patch artifact / branch name through the
-        DAG node dict (combine with `return_handle=True` to receive them
-        — see below; the bare return type stays bytes/string/parsed object
-        and has nowhere to expose the artifact). `merge=False` forces patch
-        mode even when `task.isolation.merge` is `"branch"`, avoiding the
-        per-call git lock + repo mutation that branch mode performs.
+        worktree and surfaces the root patch path, branch name, and nested
+        repository patches through the DAG node dict (combine with
+        `return_handle=True` to receive them — see below; the bare return type
+        stays bytes/string/parsed object and has nowhere to expose artifacts).
+        `merge=False` forces patch mode even when `task.isolation.merge` is
+        `"branch"`, avoiding the per-call git lock + repo mutation that branch
+        mode performs.
 
         Set `return_handle=True` to receive a DAG node dict instead of bare
         text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
@@ -553,8 +554,9 @@ if "__omp_prelude_loaded__" not in globals():
         reference, never re-inlined. When ``schema`` is also set the parsed
         object lands under ``"data"``. When the spawn ran isolated the node
         also carries ``"isolated"`` and, when present, ``"patch_path"``,
-        ``"branch_name"``, ``"changes_applied"`` (``True``/``False``/``None``
-        — ``None`` means ``apply=False``), and ``"isolation_summary"``. If
+        ``"branch_name"``, ``"nested_patches"``, ``"changes_applied"``
+        (``True``/``False``/``None`` — ``None`` means ``apply=False``), and
+        ``"isolation_summary"``. If
         the bridge returns no recoverable id the node still resolves with
         ``handle=None`` — the helper never throws.
         """
@@ -596,6 +598,7 @@ if "__omp_prelude_loaded__" not in globals():
             ("isolated", "isolated"),
             ("patchPath", "patch_path"),
             ("branchName", "branch_name"),
+            ("nestedPatches", "nested_patches"),
             ("changesApplied", "changes_applied"),
             ("isolationSummary", "isolation_summary"),
         ):

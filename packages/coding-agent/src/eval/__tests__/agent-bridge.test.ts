@@ -961,6 +961,28 @@ describe("runEvalAgent isolation", () => {
 		expect(result.text).toContain("apply=false");
 	});
 
+	it("surfaces nested patches when apply=false captured branch-mode nested-only changes", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "nested-only",
+				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
+			}),
+		);
+		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
+
+		const session = isolatedSession({ "task.isolation.merge": "branch" });
+		const result = await runEvalAgent({ prompt: "scout", apply: false }, { session });
+
+		expect(mergeSpy).not.toHaveBeenCalled();
+		expect(result.details.branchName).toBeUndefined();
+		expect(result.details.patchPath).toBeUndefined();
+		expect(result.details.nestedPatches).toEqual([{ relativePath: "nested", patch: "diff --git a/file b/file\n" }]);
+		expect(result.text).toContain("nested repository");
+		expect(result.text).toContain("apply=false");
+	});
+
 	it("preserves the temp artifacts dir when apply=false so details.patchPath remains valid", async () => {
 		mockAgents();
 		mockIsolationContext();

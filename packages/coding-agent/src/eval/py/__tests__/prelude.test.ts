@@ -19,12 +19,13 @@ describe("python prelude", () => {
 
 	it("exposes isolation artifacts on the agent() return_handle node", () => {
 		// agent(..., return_handle=True) is the only escape hatch for
-		// recovering apply=False patch/branch artifacts (the bare schema
-		// return is just the parsed object), so the helper MUST translate
-		// the bridge's camelCase details onto the node — otherwise an
-		// isolated apply=False workflow loses its captured patch.
+		// recovering apply=False patch/branch/nested artifacts (the bare
+		// schema return is just the parsed object), so the helper MUST
+		// translate the bridge's camelCase details onto the node — otherwise
+		// an isolated apply=False workflow loses captured nested patches.
 		expect(PYTHON_PRELUDE).toContain('("patchPath", "patch_path")');
 		expect(PYTHON_PRELUDE).toContain('("branchName", "branch_name")');
+		expect(PYTHON_PRELUDE).toContain('("nestedPatches", "nested_patches")');
 		expect(PYTHON_PRELUDE).toContain('("changesApplied", "changes_applied")');
 		expect(PYTHON_PRELUDE).toContain('("isolationSummary", "isolation_summary")');
 	});

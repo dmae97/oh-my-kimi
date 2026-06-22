@@ -22,7 +22,7 @@ import {
 } from "../task/isolation-runner";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
-import { applyNestedPatches, parseIsolationMode } from "../task/worktree";
+import { applyNestedPatches, type NestedRepoPatch, parseIsolationMode } from "../task/worktree";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
 import { generateCommitMessage } from "../utils/commit-message-generator";
@@ -104,6 +104,8 @@ export interface EvalAgentResult {
 		patchPath?: string;
 		/** Captured branch (branch mode) — surfaced regardless of `apply`. */
 		branchName?: string;
+		/** Captured nested repository patches — surfaced for isolated `apply=false` manual application. */
+		nestedPatches?: NestedRepoPatch[];
 		/**
 		 * Tri-state apply outcome for isolated runs:
 		 * - `true`  — apply ran (or had nothing to do) and left the repo clean.
@@ -481,7 +483,12 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		} else if (result.patchPath) {
 			mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
 		} else {
-			mergeSummary = "\n\nIsolation: no changes captured.";
+			const nestedPatches = result.nestedPatches ?? [];
+			if (nestedPatches.length > 0) {
+				mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
+			} else {
+				mergeSummary = "\n\nIsolation: no changes captured.";
+			}
 		}
 	}
 
@@ -514,6 +521,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			isolated: isIsolated || undefined,
 			patchPath: result.patchPath,
 			branchName: result.branchName,
+			nestedPatches: result.nestedPatches?.length ? result.nestedPatches : undefined,
 			changesApplied: isIsolated ? changesApplied : undefined,
 			isolationSummary: mergeSummary ? mergeSummary.trim() : undefined,
 		},
