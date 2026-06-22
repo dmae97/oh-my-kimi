@@ -1,5 +1,19 @@
 Runs bash in a shell session — terminal ops: git, bun, cargo, python.
 
+# When to use bash — and when not to
+
+Bash invokes **real binaries** with simple args. It is NOT a scripting surface.
+
+Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
+
+Anything below → `eval` cell, not bash:
+- Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
+- Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
+- `$(...)` command substitution nested inside another command
+- Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
+- Multiline commands, `&&`-chains mixing control flow
+- Quote/JSON escaping that fights the shell
+
 <instruction>
 - `cwd` sets the working dir, not `cd dir && …`
 - `env: { NAME: "…" }` for multiline / quote-heavy / untrusted values; reference `$NAME`
@@ -14,6 +28,7 @@ Runs bash in a shell session — terminal ops: git, bun, cargo, python.
 </instruction>
 
 <critical>
+- Bash invokes real binaries with simple args; it is NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`node -e`, `python -c`), several piped stages, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
 - NEVER shell out to search content or files: `grep/rg` → `search`.
 - Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>

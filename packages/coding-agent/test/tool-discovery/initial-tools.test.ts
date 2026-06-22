@@ -74,6 +74,21 @@ describe("built-in tool loadMode annotations", () => {
 		}
 		expect(missing).toEqual([]);
 	});
+
+	it("marks eval essential so it survives tools.discoveryMode 'all'", async () => {
+		const metadata = await getToolMetadata();
+		expect(metadata.get("eval")?.loadMode).toBe("essential");
+		// Essential loadMode keeps eval active under discovery-all even when it is
+		// absent from the essential-names set — not relying on the names list.
+		const kept = filterInitialToolsForDiscoveryAll(["eval"], {
+			loadModeOf: name => metadata.get(name)?.loadMode as BuiltinToolLoadMode | undefined,
+			essentialNames: new Set<string>(),
+			explicitlyRequested: new Set<string>(),
+			restored: new Set<string>(),
+			forceActive: new Set<string>(),
+		});
+		expect(kept).toEqual(["eval"]);
+	});
 });
 
 describe("computeEssentialBuiltinNames", () => {

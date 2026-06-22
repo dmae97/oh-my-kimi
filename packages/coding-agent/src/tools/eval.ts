@@ -305,7 +305,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	get summary(): string {
 		return summarizeEvalLanguages(this.#enabledLanguages());
 	}
-	readonly loadMode = "discoverable";
+	readonly loadMode = "essential";
 	readonly label = "Eval";
 	get description(): string {
 		if (!this.session) return getEvalToolDescription();
