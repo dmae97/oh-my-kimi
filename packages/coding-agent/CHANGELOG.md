@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `umans` requests with more than 10 live context images still sending every image despite the provider budget; outgoing provider contexts now drop the oldest images above the active provider cap while preserving text and newest images ([#3230](https://github.com/can1357/oh-my-pi/issues/3230)).
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
