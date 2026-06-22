@@ -8,8 +8,10 @@ import { resolveEvalBackends } from "@oh-my-pi/pi-coding-agent/tools/eval-backen
 
 let originalPiPy: string | undefined;
 let originalPiJs: string | undefined;
+let originalPiRb: string | undefined;
+let originalPiJl: string | undefined;
 
-function restoreEnv(name: "PI_PY" | "PI_JS", value: string | undefined): void {
+function restoreEnv(name: "PI_PY" | "PI_JS" | "PI_RB" | "PI_JL", value: string | undefined): void {
 	if (value === undefined) {
 		delete Bun.env[name];
 		return;
@@ -43,14 +45,20 @@ describe("EvalTool language dispatch", () => {
 	beforeEach(() => {
 		originalPiPy = Bun.env.PI_PY;
 		originalPiJs = Bun.env.PI_JS;
+		originalPiRb = Bun.env.PI_RB;
+		originalPiJl = Bun.env.PI_JL;
 		delete Bun.env.PI_PY;
 		delete Bun.env.PI_JS;
+		delete Bun.env.PI_RB;
+		delete Bun.env.PI_JL;
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		restoreEnv("PI_PY", originalPiPy);
 		restoreEnv("PI_JS", originalPiJs);
+		restoreEnv("PI_RB", originalPiRb);
+		restoreEnv("PI_JL", originalPiJl);
 	});
 
 	it('dispatches to the JS backend when cell.language === "js"', async () => {
@@ -127,7 +135,12 @@ describe("EvalTool language dispatch", () => {
 		settings.set("eval.py", false);
 		settings.set("eval.js", false);
 
-		expect(resolveEvalBackends(makeSession(settings))).toEqual({ python: true, js: false, ruby: true, julia: true });
+		expect(resolveEvalBackends(makeSession(settings))).toEqual({
+			python: true,
+			js: false,
+			ruby: false,
+			julia: false,
+		});
 	});
 
 	it("lets PI_JS disable js execution even when eval.js is enabled", async () => {
