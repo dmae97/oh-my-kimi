@@ -40,6 +40,17 @@ import type {
 } from "./types";
 import { buildPluginId, parsePluginId } from "./types";
 
+const RUNTIME_PACKAGE_NAME_RE = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+const MAX_RUNTIME_PACKAGE_NAME_LENGTH = 214;
+
+function assertRuntimePackageName(name: string): string {
+	if (name.length > MAX_RUNTIME_PACKAGE_NAME_LENGTH || !RUNTIME_PACKAGE_NAME_RE.test(name)) {
+		throw new Error(`Invalid marketplace plugin package name: ${JSON.stringify(name)}`);
+	}
+	return name;
+}
+
+
 // ── Options ──────────────────────────────────────────────────────────────────
 
 export interface MarketplaceManagerOptions {
@@ -756,11 +767,22 @@ export class MarketplaceManager {
 	async #resolvePluginPackageName(installPath: string, fallbackName: string): Promise<string> {
 		try {
 			const pkg: { name?: unknown } = await Bun.file(path.join(installPath, "package.json")).json();
-			return typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : fallbackName;
+			const name = typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : fallbackName;
+			return assertRuntimePackageName(name);
 		} catch (err) {
-			if (isEnoent(err)) return fallbackName;
+			if (isEnoent(err)) return assertRuntimePackageName(fallbackName);
 			throw err;
 		}
+	}
+
+	#runtimePackagePath(scope: "user" | "project", packageName: string): string {
+		const nodeModules = path.resolve(this.#nodeModulesPath(scope));
+		const linkPath = path.resolve(nodeModules, assertRuntimePackageName(packageName));
+		const relative = path.relative(nodeModules, linkPath);
+		if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+			throw new Error(`Marketplace plugin package path escapes node_modules: ${JSON.stringify(packageName)}`);
+		}
+		return linkPath;
 	}
 
 	async #resolveInstalledPackageNames(
@@ -781,7 +803,7 @@ export class MarketplaceManager {
 		version: string,
 		enabled: boolean | undefined,
 	): Promise<void> {
-		const linkPath = path.join(this.#nodeModulesPath(scope), packageName);
+		const linkPath = this.#runtimePackagePath(scope, packageName);
 		await fs.mkdir(path.dirname(linkPath), { recursive: true });
 		await fs.rm(linkPath, { recursive: true, force: true });
 		await fs.symlink(cachePath, linkPath, process.platform === "win32" ? "junction" : "dir");
@@ -797,7 +819,7 @@ export class MarketplaceManager {
 	}
 
 	async #removeRuntimePlugin(scope: "user" | "project", packageName: string): Promise<void> {
-		await fs.rm(path.join(this.#nodeModulesPath(scope), packageName), { recursive: true, force: true });
+		await fs.rm(this.#runtimePackagePath(scope, packageName), { recursive: true, force: true });
 
 		const config = await this.#loadRuntimeConfig(scope);
 		delete config.plugins[packageName];

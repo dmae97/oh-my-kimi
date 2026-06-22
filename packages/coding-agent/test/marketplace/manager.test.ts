@@ -204,6 +204,37 @@ describe("MarketplaceManager", () => {
 		expect(installed[0].id).toBe("hello-plugin@test-marketplace");
 	});
 
+	it("installPlugin rejects package names that escape node_modules", async () => {
+		const marketplaceDir = path.join(ctx.tmpDir, "bad-package-marketplace");
+		const pluginDir = path.join(marketplaceDir, "plugins", "bad-package");
+		fs.mkdirSync(path.join(marketplaceDir, ".claude-plugin"), { recursive: true });
+		fs.mkdirSync(pluginDir, { recursive: true });
+		await Bun.write(
+			path.join(marketplaceDir, ".claude-plugin", "marketplace.json"),
+			`${JSON.stringify(
+				{
+					name: "bad-package-marketplace",
+					owner: { name: "Test Author" },
+					plugins: [{ name: "bad-package", source: "./plugins/bad-package", version: "1.0.0" }],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		await Bun.write(path.join(pluginDir, "package.json"), `${JSON.stringify({ name: "../outside" })}\n`);
+		await Bun.write(path.join(ctx.tmpDir, "outside"), "sentinel\n");
+
+		await ctx.manager.addMarketplace(marketplaceDir);
+		await expect(ctx.manager.installPlugin("bad-package", "bad-package-marketplace")).rejects.toThrow(
+			/Invalid marketplace plugin package name/,
+		);
+
+		expect(await Bun.file(path.join(ctx.tmpDir, "outside")).text()).toBe("sentinel\n");
+		expect(fs.existsSync(path.join(ctx.tmpDir, "node_modules"))).toBe(false);
+		const installed = await ctx.manager.listInstalledPlugins();
+		expect(installed).toHaveLength(0);
+	});
+
 	it("installPlugin exposes marketplace package to the runtime loader", async () => {
 		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-home-"));
 		try {
