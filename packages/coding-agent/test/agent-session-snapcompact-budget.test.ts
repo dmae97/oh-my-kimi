@@ -21,10 +21,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { effectiveReserveTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import { effectiveReserveTokens, estimateTokens, prepareCompaction } from "@oh-my-pi/pi-agent-core/compaction";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { computeNonMessageTokens } from "@oh-my-pi/pi-coding-agent/modes/utils/context-usage";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -113,15 +114,31 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		}
 	});
 
-	it("passes a window-sized maxFrames to snapcompact.compact() on sub-1M-token models", async () => {
-		// Capture the options snapcompact.compact() is invoked with, and short-
-		// circuit it so the projection downstream evaluates against a known
-		// empty-frame archive (which fits any budget). The contract is about
-		// what the caller asks for, not what snapcompact then chooses to emit.
+	it("passes a maxFrames whose full projection (frames + text edges + base) fits the budget", async () => {
+		// Tighten kept-recent into the realistic ~100k-token range. Without
+		// it, the helper has so much headroom that even a flawed (too-large)
+		// cap reserve passes the `maxFrames × FRAME_TOKEN_ESTIMATE < budget`
+		// check by accident. Reviewer chatgpt-codex on #3249 cited the exact
+		// failure mode: ~120k headroom on Anthropic 11on16-bw chose 23 frames
+		// under the previous 4k-reserve helper, but `23 × 5024 + 7k text
+		// edges + 2k summary template + base` then exceeded the same headroom.
 		const model = session.model;
 		if (!model) throw new Error("Expected model to be set on session");
 		const ctxWindow = model.contextWindow ?? 0;
 		expect(ctxWindow).toBeGreaterThan(0);
+
+		const settings = { enabled: true as const, reserveTokens: 16384, keepRecentTokens: 4000 };
+		const reserve = effectiveReserveTokens(ctxWindow, settings);
+		const budget = ctxWindow - reserve;
+		// Filler tuned so `baseTokens ≈ 100k`, leaving ~70k headroom — the
+		// regime where a shape-aware cap reserve actually matters.
+		const targetRecentTokens = 100_000;
+		const filler = "x".repeat(targetRecentTokens * 4);
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: filler }],
+			timestamp: Date.now(),
+		});
 
 		const branchEntries = sessionManager.getBranch();
 		const firstKeptEntry = branchEntries[branchEntries.length - 1];
@@ -148,16 +165,25 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		expect(maxFrames).toBeLessThan(snapcompact.MAX_FRAMES_DEFAULT);
 		expect(maxFrames).toBeGreaterThan(0);
 
-		// The chosen cap MUST keep the projected frame budget inside the
-		// resolved (window − reserve) envelope — otherwise the projection
-		// guard would reject and loop back to the LLM summary every tick.
-		const reserve = effectiveReserveTokens(ctxWindow, {
-			enabled: true,
-			reserveTokens: 16384,
-			keepRecentTokens: 4000,
-		});
-		const budget = ctxWindow - reserve;
-		expect((maxFrames ?? 0) * snapcompact.FRAME_TOKEN_ESTIMATE).toBeLessThan(budget);
+		// Verify the FULL projection — base (non-message + kept-recent) +
+		// frame-bearing summary cost — fits the budget. The projection
+		// {@link #projectSnapcompactContextTokens} mirrors what the auto and
+		// manual paths charge: countTokens(summary + textHead + textTail) +
+		// numFrames × FRAME_TOKEN_ESTIMATE + non-message + kept-recent.
+		const preparation = prepareCompaction(branchEntries, settings);
+		if (!preparation) throw new Error("Expected non-empty preparation");
+		let baseTokens = computeNonMessageTokens(session);
+		for (const message of preparation.recentMessages) {
+			baseTokens += estimateTokens(message);
+		}
+		const shape = snapcompact.resolveShape(model);
+		const edgeCap = snapcompact.geometry(shape).capacity;
+		// Worst-case `textHead + textTail` tokenized at the cl100k 4-chars/token
+		// baseline, plus a 2k allowance for the snapcompact summary template
+		// (intro + FILES section + grid notes).
+		const worstCaseEdgeTokens = Math.ceil((2 * edgeCap) / 4) + 2000;
+		const fullProjection = baseTokens + (maxFrames ?? 0) * snapcompact.FRAME_TOKEN_ESTIMATE + worstCaseEdgeTokens;
+		expect(fullProjection).toBeLessThanOrEqual(budget);
 	});
 
 	it("skips snapcompact entirely when kept-recent already exceeds the budget", async () => {

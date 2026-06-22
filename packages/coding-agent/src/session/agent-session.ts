@@ -9435,14 +9435,15 @@ export class AgentSession {
 	 * shape — frame-bearing or text-only — can fit, and the caller MUST
 	 * shortcut to the LLM summarizer instead of re-running snapcompact to
 	 * re-emit the "could not bring the context under the limit" warning every
-	 * threshold tick. The **cap** calculation subtracts a 4k summary-text
-	 * reserve sized for a typical frame-bearing archive (~2k summary lead-in
-	 * + one HQ-capacity verbatim text edge), so the projection still passes
-	 * once frames land — but it MUST NOT gate the skip decision, since a
-	 * frame-less archive (`text.length <= 2 * edgeCap` short-circuit in
+	 * threshold tick. The **cap** calculation subtracts a shape-aware reserve
+	 * (`2 × geometry(shape).capacity` chars worth of text edges, billed at the
+	 * tiktoken cl100k baseline, plus a 2k summary-template allowance) sized
+	 * from the same `shape` snapcompact will use, so the projection still
+	 * passes once frames land — but it MUST NOT gate the skip decision, since
+	 * a frame-less archive (`text.length <= 2 * edgeCap` short-circuit in
 	 * `planArchive`) typically costs only a few hundred tokens of summary
 	 * lead and would fit under residual headroom far smaller than the cap
-	 * reserve (chatgpt-codex review on #3249).
+	 * reserve (chatgpt-codex reviews on #3249).
 	 *
 	 * Returns `1` when the frame charge would overflow but the text-only path
 	 * still has room: snapcompact's planner picks the frame-less layout
@@ -9466,12 +9467,33 @@ export class AgentSession {
 		// far less than the cap reserve below, so any positive residual is
 		// worth attempting and the projection guard catches actual overflow.
 		if (baseTokens >= totalBudget) return 0;
-		// Cap reserve: conservative headroom for a frame-bearing archive's
-		// summary lead-in plus verbatim text edges. Applied ONLY to the
-		// maxFrames cap (so the projection passes once frames land), never
-		// to the skip decision above.
-		const SUMMARY_TEXT_RESERVE = 4000;
-		const frameBudget = totalBudget - baseTokens - SUMMARY_TEXT_RESERVE;
+		// Cap reserve mirrors what `estimateTokens(summaryMessage)` will charge
+		// when frames > 0: `countTokens(summaryTemplate ‖ textHead ‖ textTail)`
+		// plus `numFrames × FRAME_TOKEN_ESTIMATE`. Resolve the shape this
+		// snapcompact pass will actually use (matches the `shape` argument
+		// passed to `snapcompact.compact` in the auto and manual paths) so the
+		// text-edge cost reflects the live frame geometry rather than a fixed
+		// approximation. Reviewer (chatgpt-codex on #3249): a 4k reserve
+		// undersized the ~7k text-edge cost on the default Anthropic
+		// 11on16-bw shape, so the projection then rejected the `maxFrames`
+		// the cap had picked and the warning loop reappeared.
+		//
+		// - `textHead` and `textTail` each consume up to `geometry.capacity`
+		//   chars when frames > 0 (one HQ-capacity page per edge: see
+		//   `TEXT_EDGE_PAGES = 1` in `planArchive`), so 2 × capacity chars
+		//   total. Per-shape capacity: Anthropic 11on16-bw ~13.9k, Opus
+		//   1932px ~21k, Gemini 8on22-bw 2048px ~23.8k, OpenAI 1568px ~13.9k.
+		// - tiktoken cl100k ≈ 4 chars/token on ASCII (verified empirically
+		//   for prose, code, and JSON); a 1.15 multiplier absorbs tokenizer
+		//   drift on denser content (e.g. dense JSON / tool-result blobs).
+		// - Summary template (intro + FILES section + grid notes) bills
+		//   ~2k tokens for typical sessions.
+		const shape = snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape"));
+		const edgeCap = snapcompact.geometry(shape).capacity;
+		const textEdgeTokens = Math.ceil((2 * edgeCap * 1.15) / 4);
+		const SUMMARY_TEMPLATE_TOKENS = 2000;
+		const capReserve = textEdgeTokens + SUMMARY_TEMPLATE_TOKENS;
+		const frameBudget = totalBudget - baseTokens - capReserve;
 		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
 		return Math.min(Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE), snapcompact.MAX_FRAMES_DEFAULT);
 	}
