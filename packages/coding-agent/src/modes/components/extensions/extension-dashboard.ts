@@ -26,6 +26,7 @@ import { Settings } from "../../../config/settings";
 import { DynamicBorder } from "../../../modes/components/dynamic-border";
 import { theme } from "../../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../../modes/utils/keybinding-matchers";
+import { handleTabSwitchKey, padLinesToHeight } from "../selector-helpers";
 import { ExtensionList } from "./extension-list";
 import { InspectorPanel } from "./inspector-panel";
 import {
@@ -145,13 +146,8 @@ export class ExtensionDashboard extends Container {
 		}
 		const lines = super.render(width);
 		// Pad to the full viewport so the dashboard covers the screen instead of
-		// letting the transcript peek through below it. Copy before padding — the
-		// container's render result is component-owned and must not be mutated.
-		const rows = this.#terminalRows();
-		if (lines.length >= rows) return lines;
-		const padded = lines.slice();
-		while (padded.length < rows) padded.push("");
-		return padded;
+		// letting the transcript peek through below it.
+		return padLinesToHeight(lines, this.#terminalRows());
 	}
 
 	#buildLayout(): void {
@@ -339,12 +335,7 @@ export class ExtensionDashboard extends Container {
 		}
 
 		// Tab/Shift+Tab or Left/Right: Cycle through tabs
-		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
-			this.#switchTab(1);
-			return;
-		}
-		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
-			this.#switchTab(-1);
+		if (handleTabSwitchKey(data, direction => this.#switchTab(direction))) {
 			return;
 		}
 

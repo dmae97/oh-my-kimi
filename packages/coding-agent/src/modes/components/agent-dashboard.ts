@@ -21,7 +21,6 @@ import {
 	type Component,
 	Container,
 	Editor,
-	extractPrintableText,
 	fuzzyMatch,
 	Input,
 	matchesKey,
@@ -59,6 +58,7 @@ import {
 	matchesSelectUp,
 } from "../utils/keybinding-matchers";
 import { DynamicBorder } from "./dynamic-border";
+import { clampSelection, handleTabSwitchKey, padLinesToHeight, searchableChar } from "./selector-helpers";
 
 type SourceTabId = "all" | AgentSource;
 type AgentScope = "project" | "user";
@@ -521,31 +521,19 @@ export class AgentDashboard extends Container {
 		const lines = super.render(width);
 		// Pad to the full viewport so every state (list, edit, create) covers the
 		// screen as a true full-screen view instead of letting the transcript peek
-		// through below it. Copy before padding — the container's render result is
-		// component-owned and must not be mutated.
-		const rows = this.#terminalRows();
-		if (lines.length >= rows) return lines;
-		const padded = lines.slice();
-		while (padded.length < rows) padded.push("");
-		return padded;
+		// through below it.
+		return padLinesToHeight(lines, this.#terminalRows());
 	}
 
 	#clampSelection(): void {
-		if (this.#filteredAgents.length === 0) {
-			this.#selectedIndex = 0;
-			this.#scrollOffset = 0;
-			return;
-		}
-
-		this.#selectedIndex = Math.min(this.#selectedIndex, this.#filteredAgents.length - 1);
-		this.#selectedIndex = Math.max(0, this.#selectedIndex);
-
-		const maxVisible = this.#getMaxVisibleItems();
-		if (this.#selectedIndex < this.#scrollOffset) {
-			this.#scrollOffset = this.#selectedIndex;
-		} else if (this.#selectedIndex >= this.#scrollOffset + maxVisible) {
-			this.#scrollOffset = this.#selectedIndex - maxVisible + 1;
-		}
+		const next = clampSelection(
+			this.#selectedIndex,
+			this.#scrollOffset,
+			this.#filteredAgents.length,
+			this.#getMaxVisibleItems(),
+		);
+		this.#selectedIndex = next.selectedIndex;
+		this.#scrollOffset = next.scrollOffset;
 	}
 
 	#persistDisabledAgents(): void {
@@ -1150,12 +1138,7 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		if (matchesKey(data, "tab") || matchesKey(data, "right")) {
-			this.#switchTab(1);
-			return;
-		}
-		if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
-			this.#switchTab(-1);
+		if (handleTabSwitchKey(data, direction => this.#switchTab(direction))) {
 			return;
 		}
 
@@ -1190,17 +1173,11 @@ export class AgentDashboard extends Container {
 			return;
 		}
 
-		const printableText = extractPrintableText(data);
-		if (printableText && printableText.length === 1) {
-			const printableCharCode = printableText.charCodeAt(0);
-			if (printableCharCode > 32 && printableCharCode < 127) {
-				if (printableText === "j" || printableText === "k") {
-					return;
-				}
-				this.#searchQuery += printableText;
-				this.#applyFilters();
-				this.#buildLayout();
-			}
+		const char = searchableChar(data);
+		if (char !== null) {
+			this.#searchQuery += char;
+			this.#applyFilters();
+			this.#buildLayout();
 		}
 	}
 }

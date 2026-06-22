@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Refined TUI dashboard and list component layout logic for consistent rendering
+- Standardized scrollbar behaviors and keyboard navigation across all list components
 - Optimized internal message framing logic for better performance when handling large data bursts
 
 ## [16.1.12] - 2026-06-21
