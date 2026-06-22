@@ -14,8 +14,8 @@ Runs bash in a shell session — terminal ops: git, bun, cargo, python.
 </instruction>
 
 <critical>
-- NEVER trim or silence output: no `| head -n N`, `| tail -n N`, `| less`, `2>&1`, `2>/dev/null`. stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
-- Pipelines that COMPUTE a new fact are correct bash: `wc -l`, `sort | uniq -c`, `comm`, `cut`, `diff a b`, `shasum`. Litmus: produces a count, frequency table, set difference, or checksum no tool returns → bash. Merely moves or trims bytes a tool can fetch → use the tool.
+- NEVER shell out to search content or files: `grep/rg` → `search`.
+- Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>
 
 <output>
