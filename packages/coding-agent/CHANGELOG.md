@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Unified subprocess lifecycle management for mnemopi, speech, tiny-model, and TTS workers
+- Softened the system-prompt and tool-prompt guidance that hard-forbade reaching for shell equivalents of dedicated tools (`grep`/`rg`, `sed`/`perl -i`, `cat`/`head`/`tail`, `find`/`fd`). The "Specialized Tool Priority" section, the `bash`/`search`/`find`/`read`/`replace` tool prompts, and the FORBIDDEN/NEVER framing now state the dedicated tools as the preferred default rather than an absolute prohibition, so the agent no longer fights itself when a quick shell command is the right call. The opt-in `bashInterceptor` (default off) still hard-blocks these commands for users who enable it.
 - Refined TUI dashboard and list component layout logic for consistent rendering
 - Standardized scrollbar behaviors and keyboard navigation across all list components
 - Optimized internal message framing logic for better performance when handling large data bursts

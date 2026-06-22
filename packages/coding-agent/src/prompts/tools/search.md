@@ -17,6 +17,5 @@ Searches files using regex.
 </output>
 
 <critical>
-- MUST use built-in `search` for any content search. NEVER shell out to `grep`, `rg`, `ripgrep`, `ag`, `ack`, `git grep`, `awk`, `sed`-for-search, or any CLI search via Bash — not even for one match or a quick check.
 - Open-ended search needing multiple rounds? MUST use the Task tool with the explore subagent, NOT chained `search` calls.
 </critical>

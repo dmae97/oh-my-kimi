@@ -14,7 +14,6 @@ Runs bash in a shell session — terminal ops: git, bun, cargo, python.
 </instruction>
 
 <critical>
-- NEVER shell out to fetch, display, list, page, or search what a dedicated tool serves: `cat`/`head`/`tail`/`less`/`more`/`ls` → `read`; `grep`/`rg`/`ag`/`ack` → `search`; `find`/`fd` → `find`; `sed -i`/`perl -i`/`awk -i` → `edit`; `echo >`/heredoc → `write`. Tools keep gitignore semantics, line anchors, structured output shell loses.
 - NEVER trim or silence output: no `| head -n N`, `| tail -n N`, `| less`, `2>&1`, `2>/dev/null`. stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 - Pipelines that COMPUTE a new fact are correct bash: `wc -l`, `sort | uniq -c`, `comm`, `cut`, `diff a b`, `shasum`. Litmus: produces a count, frequency table, set difference, or checksum no tool returns → bash. Merely moves or trims bytes a tool can fetch → use the tool.
 </critical>

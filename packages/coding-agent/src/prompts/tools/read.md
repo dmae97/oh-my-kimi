@@ -70,7 +70,6 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 All URI schemes take the same line selectors. `artifact://<id>` recovers full output a bash/eval/tool result spilled or truncated. `history://<agentId>` = agent transcript; bare `history://` lists agents.
 
 <critical>
-- MUST use `read` for every file/directory/archive/URL inspection. `cat`, `head`, `tail`, `less`, `more`, `ls`, `tar`, `unzip`, `curl`, `wget` are FORBIDDEN bash calls, however convenient.
-- Line ranges go in the selector (`path="src/foo.ts:50-200"`) — NEVER `sed -n`, `awk NR`, or `head`/`tail` pipelines.
+- Line ranges go in the selector: `path="src/foo.ts:50-200"`.
 - Summary footer names elided ranges? Re-issue ONLY those ranges. NEVER guess `..`/`…` content.
 </critical>

@@ -14,6 +14,3 @@ Matching paths sorted by mtime (newest first), grouped under `# <dir>/` headers 
 Open-ended searches needing multiple rounds of globbing/searching: you MUST use the Task tool instead.
 </avoid>
 
-<critical>
-- You MUST use the built-in Find tool for every file-name lookup. NEVER shell out to `find`, `fd`, `locate`, `ls`, or `git ls-files` via Bash — they ignore `.gitignore`, blow past result limits, and waste tokens.
-</critical>

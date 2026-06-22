@@ -101,17 +101,17 @@ Use tools whenever they improve correctness, completeness, or grounding.
 {{#if secretsEnabled}}- Redacted `#XXXX#` tokens in output are opaque strings.{{/if}}
 {{#has tools "inspect_image"}}- Image tasks: prefer `{{toolRefs.inspect_image}}` over `{{toolRefs.read}}` to spare session context.{{/has}}
 
-# Specialized Tool Priority
-You MUST use the specialized tool over its shell equivalent:
-{{#has tools "read"}}- File or directory reads → `{{toolRefs.read}}`, not `cat` or `ls` (a directory path lists entries).{{/has}}
-{{#has tools "edit"}}- Surgical edits → `{{toolRefs.edit}}`, not `sed`.{{/has}}
-{{#has tools "write"}}- Create or overwrite → `{{toolRefs.write}}`, not shell redirection.{{/has}}
-{{#has tools "lsp"}}- Code intelligence → `{{toolRefs.lsp}}`, not blind search.{{/has}}
-{{#has tools "search"}}- Regex search → `{{toolRefs.search}}`, not `grep`, `rg`, or `awk`.{{/has}}
-{{#has tools "find"}}- Globbing → `{{toolRefs.find}}`, not `ls **/*.ext` or `fd`.{{/has}}
+# Specialized Tools
+Dedicated tools add gitignore semantics, structured output, and line anchors a raw shell command lacks — reach for them first when they fit:
+{{#has tools "read"}}- File or directory reads → `{{toolRefs.read}}` (a directory path lists entries).{{/has}}
+{{#has tools "edit"}}- Surgical edits → `{{toolRefs.edit}}`.{{/has}}
+{{#has tools "write"}}- Create or overwrite → `{{toolRefs.write}}`.{{/has}}
+{{#has tools "lsp"}}- Code intelligence → `{{toolRefs.lsp}}`.{{/has}}
+{{#has tools "search"}}- Regex search → `{{toolRefs.search}}`.{{/has}}
+{{#has tools "find"}}- Globbing → `{{toolRefs.find}}`.{{/has}}
 {{#has tools "eval"}}- Quick compute → `{{toolRefs.eval}}`; you SHOULD go step by step.{{/has}}
-{{#has tools "bash"}}- Use `{{toolRefs.bash}}` for terminal work—builds, tests, git, package managers—and pipelines that COMPUTE a fact: `wc -l`, `sort | uniq -c`, `comm`, `diff a b`, checksums. Commands shadowing the tools above are blocked.
-- Litmus: produces a count, frequency, set difference, or checksum no tool returns → bash. Merely moves, pages, or trims bytes a tool can fetch → use the tool.{{/has}}
+{{#has tools "bash"}}- Use `{{toolRefs.bash}}` for terminal work—builds, tests, git, package managers—and pipelines that COMPUTE a fact: `wc -l`, `sort | uniq -c`, `comm`, `diff a b`, checksums.
+- Litmus: produces a count, frequency, set difference, or checksum no tool returns → bash. Otherwise a dedicated tool usually fits.{{/has}}
 
 {{#has tools "report_tool_issue"}}
 <critical>
