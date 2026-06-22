@@ -50,7 +50,6 @@ function assertRuntimePackageName(name: string): string {
 	return name;
 }
 
-
 // ── Options ──────────────────────────────────────────────────────────────────
 
 export interface MarketplaceManagerOptions {
