@@ -9035,9 +9035,7 @@ export class AgentSession {
 		if (currentModel.api === "openai-completions") {
 			const currentScope = `${currentModel.provider}:${currentModel.baseUrl ?? ""}`;
 			const nextScope =
-				nextModel.api === "openai-completions"
-					? `${nextModel.provider}:${nextModel.baseUrl ?? ""}`
-					: undefined;
+				nextModel.api === "openai-completions" ? `${nextModel.provider}:${nextModel.baseUrl ?? ""}` : undefined;
 			if (currentScope !== nextScope) {
 				completionsPrefixToEvict = `openai-completions:${currentScope}:`;
 			}
