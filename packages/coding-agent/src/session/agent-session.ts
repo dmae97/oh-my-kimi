@@ -9429,17 +9429,25 @@ export class AgentSession {
 	 * high-res Anthropic ceiling), so picking `maxFrames` from this helper makes
 	 * {@link #projectSnapcompactContextTokens} succeed by construction.
 	 *
-	 * Returns `0` only when the kept-recent slice plus the non-message overhead
-	 * plus the summary lead-in reserve already exceed the budget — at that
-	 * point even snapcompact's text-only archive path (frames `[]`, the
-	 * `text.length <= 2 * edgeCap` short-circuit in `planArchive`) cannot fit
-	 * and the caller MUST skip it instead of running just to re-emit the
-	 * "could not bring the context under the limit" warning every threshold
-	 * tick. Returns `1` when the frame charge would overflow but the text-only
-	 * path still has room: snapcompact's planner picks the frame-less layout
+	 * Skip vs. cap use different reserves on purpose. The **skip** decision
+	 * (return `0`) trips only when kept-recent plus non-message tokens already
+	 * eat the entire `ctxWindow − reserve` envelope: at that point no archive
+	 * shape — frame-bearing or text-only — can fit, and the caller MUST
+	 * shortcut to the LLM summarizer instead of re-running snapcompact to
+	 * re-emit the "could not bring the context under the limit" warning every
+	 * threshold tick. The **cap** calculation subtracts a 4k summary-text
+	 * reserve sized for a typical frame-bearing archive (~2k summary lead-in
+	 * + one HQ-capacity verbatim text edge), so the projection still passes
+	 * once frames land — but it MUST NOT gate the skip decision, since a
+	 * frame-less archive (`text.length <= 2 * edgeCap` short-circuit in
+	 * `planArchive`) typically costs only a few hundred tokens of summary
+	 * lead and would fit under residual headroom far smaller than the cap
+	 * reserve (chatgpt-codex review on #3249).
+	 *
+	 * Returns `1` when the frame charge would overflow but the text-only path
+	 * still has room: snapcompact's planner picks the frame-less layout
 	 * automatically when the discarded text fits in the edges, so giving it
-	 * the minimum cap lets it succeed for small archives instead of being
-	 * skipped outright (chatgpt-codex review on #3249).
+	 * the minimum cap lets it succeed instead of being skipped outright.
 	 *
 	 * Without this cap, the bundled `MAX_FRAMES_DEFAULT = 80` × 5024 tokens =
 	 * ~402k frame-token projection always overflows any sub-1M-token window
@@ -9449,18 +9457,21 @@ export class AgentSession {
 		const ctxWindow = this.model?.contextWindow ?? 0;
 		if (ctxWindow <= 0) return snapcompact.MAX_FRAMES_DEFAULT;
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
-		let nonFrameTokens = computeNonMessageTokens(this);
+		let baseTokens = computeNonMessageTokens(this);
 		for (const message of preparation.recentMessages) {
-			nonFrameTokens += estimateTokens(message);
+			baseTokens += estimateTokens(message);
 		}
-		// Headroom for the summary-message lead-in plus the verbatim text edges
-		// snapcompact pins around the imaged middle. Sized for the typical
-		// snapcompact summary (~2k tokens) plus one HQ-capacity text edge on
-		// each side; conservative, so a tighter post-render run cannot drift
-		// past the projection check below.
+		const totalBudget = ctxWindow - reserve;
+		// Skip iff there is no headroom whatsoever; a text-only archive costs
+		// far less than the cap reserve below, so any positive residual is
+		// worth attempting and the projection guard catches actual overflow.
+		if (baseTokens >= totalBudget) return 0;
+		// Cap reserve: conservative headroom for a frame-bearing archive's
+		// summary lead-in plus verbatim text edges. Applied ONLY to the
+		// maxFrames cap (so the projection passes once frames land), never
+		// to the skip decision above.
 		const SUMMARY_TEXT_RESERVE = 4000;
-		const frameBudget = ctxWindow - reserve - nonFrameTokens - SUMMARY_TEXT_RESERVE;
-		if (frameBudget < 0) return 0;
+		const frameBudget = totalBudget - baseTokens - SUMMARY_TEXT_RESERVE;
 		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
 		return Math.min(Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE), snapcompact.MAX_FRAMES_DEFAULT);
 	}

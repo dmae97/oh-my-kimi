@@ -196,25 +196,27 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		expect(notices.some(n => n.level === "warning" && n.message.includes("kept history"))).toBe(true);
 	});
 
-	it("still invokes snapcompact with maxFrames=1 when the budget can only fit a text-only archive", async () => {
-		// Reviewer (chatgpt-codex on #3249): when kept-recent leaves less than
-		// one FRAME_TOKEN_ESTIMATE of headroom but still some room for a
-		// summary, snapcompact's `text.length <= 2 * edgeCap` short-circuit in
-		// `planArchive` can still produce a valid frame-less archive that the
-		// projection accepts (0 frame tokens billed). The helper MUST NOT
-		// return 0 in that case — it must give snapcompact the minimum
-		// `maxFrames = 1` cap so that text-only opportunity is taken.
+	it("still invokes snapcompact with maxFrames=1 when residual headroom is below the summary-text reserve", async () => {
+		// Reviewer (chatgpt-codex on #3249, second pass): when kept-recent +
+		// non-message leaves SOME real headroom but less than the 4k
+		// SUMMARY_TEXT_RESERVE the helper holds back to size frame caps, the
+		// previous revision still went negative and returned 0 (skipped
+		// snapcompact). But a text-only snapcompact archive (the
+		// `text.length <= 2 * edgeCap` short-circuit in `planArchive`)
+		// typically costs only a few hundred tokens of summary lead, far
+		// below 4k. The skip decision MUST use raw `baseTokens >= totalBudget`
+		// — the cap reserve applies only to the maxFrames math, not the skip.
 		const model = session.model;
 		if (!model) throw new Error("Expected model");
 		const ctxWindow = model.contextWindow ?? 0;
-		// Tune the kept-recent message so frameBudget lands in the
-		// `[0, FRAME_TOKEN_ESTIMATE)` window: kept-recent + non-message +
-		// summary reserve is just under `ctxWindow - reserve` but the
-		// residual is below one frame's token charge. Aim for ~3000 tokens
-		// of headroom (less than FRAME_TOKEN_ESTIMATE = 5024).
+		// Tune kept-recent so the residual `totalBudget − baseTokens` is
+		// 1500 tokens — strictly positive, but well below the 4k cap reserve.
+		// The previous helper would compute frameBudget = 1500 − 4000 = −2500
+		// and return 0; the fixed helper returns 1 because the residual is
+		// positive and the text-only archive can still fit.
 		const reserve = Math.max(Math.floor(ctxWindow * 0.15), 16384);
-		const headroomTokens = 3000;
-		const targetRecentTokens = ctxWindow - reserve - 4000 /* SUMMARY_TEXT_RESERVE */ - headroomTokens;
+		const headroomTokens = 1500;
+		const targetRecentTokens = ctxWindow - reserve - headroomTokens;
 		// Rough 4-chars-per-token rule for the tiktoken estimator on ASCII.
 		const filler = "x".repeat(targetRecentTokens * 4);
 		sessionManager.appendMessage({
