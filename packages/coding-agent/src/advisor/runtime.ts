@@ -346,23 +346,15 @@ function obfuscateAssistantMessage(obfuscator: SecretObfuscator, message: Assist
 	return changed ? { ...message, content } : message;
 }
 
-function obfuscateStringDetails(
+function obfuscateDetails(
 	obfuscator: SecretObfuscator,
 	details: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
 	if (!details) return details;
-	let changed = false;
-	const result: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(details)) {
-		if (typeof value === "string") {
-			const text = obfuscator.obfuscate(value);
-			if (text !== value) changed = true;
-			result[key] = text;
-		} else {
-			result[key] = value;
-		}
-	}
-	return changed ? result : details;
+	// Walk strings at every depth: `customOneLiner` renders nested fields
+	// (e.g. `async-result` reads `details.jobs[].label`/`jobId`), so a shallow
+	// pass leaks any secret a background job's label happens to contain.
+	return obfuscateToolArguments(obfuscator, details);
 }
 
 function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMessage): AgentMessage {
@@ -382,7 +374,7 @@ function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMes
 				details?: Record<string, unknown>;
 			};
 			const content = obfuscateTextualContent(obfuscator, msg.content);
-			const details = obfuscateStringDetails(obfuscator, msg.details);
+			const details = obfuscateDetails(obfuscator, msg.details);
 			if (content === msg.content && details === msg.details) return message;
 			return { ...(message as object), content, details } as AgentMessage;
 		}
