@@ -1,10 +1,9 @@
 /**
- * Contract: renderInitialMessages renders the DISPLAY TRANSCRIPT, not the LLM
- * context. The transcript comes from `session.buildTranscriptSessionContext()`
- * (full history, compactions inline); `sessionManager.buildSessionContext()`
- * — the LLM-context builder — must not be consulted for display. Feeding the
- * compacted LLM context to the chat is exactly the old "session starts over
- * after compaction" bug.
+ * Contract: renderInitialMessages renders the collapsed live DISPLAY TRANSCRIPT,
+ * not the LLM context. The transcript comes from
+ * `session.buildTranscriptSessionContext({ collapseCompactedHistory: true })`;
+ * `sessionManager.buildSessionContext()` — the LLM-context builder — must not be
+ * consulted for display.
  *
  * Also guards the cold-launch terminal cleanup: `omp` / `omp -c` leave the
  * previous run's transcript in native scrollback because the TUI's initial
@@ -52,7 +51,7 @@ function makeEmptyContext(): SessionContext {
 /** Build a minimal InteractiveModeContext mock, returning spies for assertions. */
 function makeCtx(): {
 	ctx: InteractiveModeContext;
-	transcriptSpy: Mock<() => SessionContext>;
+	transcriptSpy: Mock<(options?: { collapseCompactedHistory?: boolean }) => SessionContext>;
 	llmContextSpy: Mock<() => SessionContext>;
 	renderSessionContextSpy: Mock<(...args: unknown[]) => void>;
 } {
@@ -182,14 +181,14 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 }
 
 describe("UiHelpers.renderInitialMessages — transcript source", () => {
-	it("renders the display transcript, never the LLM context", () => {
+	it("renders the collapsed live display transcript, never the LLM context", () => {
 		const { ctx, transcriptSpy, llmContextSpy, renderSessionContextSpy } = makeCtx();
 		const transcript = makeEmptyContext();
 		transcriptSpy.mockReturnValue(transcript);
 
 		new UiHelpers(ctx).renderInitialMessages();
 
-		expect(transcriptSpy).toHaveBeenCalledTimes(1);
+		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
 		expect(llmContextSpy).not.toHaveBeenCalled();
 		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
 			updateFooter: true,

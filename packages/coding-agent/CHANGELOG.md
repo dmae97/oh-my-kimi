@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed large-session TUI stalls by tailing appended transcript JSONL, avoiding full resize replays, and collapsing compacted history on the live display surface ([#3258](https://github.com/can1357/oh-my-pi/issues/3258)).
+
 ## [16.1.14] - 2026-06-22
 
 ### Added

@@ -6,11 +6,12 @@
  * (the reported "first char off / title shift"). Scrolling must also move the
  * visible window.
  */
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AgentHubRemote } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
 import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -62,7 +63,17 @@ function buildJsonl(): string {
 	return `${lines.join("\n")}\n`;
 }
 
-function makeViewer(file: string) {
+function messageLine(id: string, content: string): string {
+	return JSON.stringify({
+		type: "message",
+		id,
+		parentId: null,
+		timestamp: TS,
+		message: { role: "user", synthetic: true, attribution: "agent", content, timestamp: 0 },
+	});
+}
+
+function makeViewer(file: string, remote?: AgentHubRemote) {
 	const agents = new AgentRegistry();
 	agents.register({
 		id: "Main/advisor",
@@ -70,7 +81,7 @@ function makeViewer(file: string) {
 		kind: "advisor",
 		parentId: "Main",
 		session: null,
-		sessionFile: file,
+		sessionFile: remote ? undefined : file,
 		status: "parked",
 	});
 	return new AgentTranscriptViewer({
@@ -78,6 +89,7 @@ function makeViewer(file: string) {
 		registry: agents,
 		ui: { requestRender: () => {}, requestComponentRender: () => {} } as never,
 		cwd: "/tmp",
+		remote,
 		expandKeys: ["ctrl+o"],
 		hubKeys: ["ctrl+s"],
 		requestRender: () => {},
@@ -178,6 +190,63 @@ describe("AgentTranscriptViewer", () => {
 		} finally {
 			viewer.dispose();
 			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("tails appended local transcript bytes without rereading the whole file", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		fs.writeFileSync(file, `${buildJsonl()}${messageLine("tail-before", "BEFORETAIL")}\n`);
+		const viewer = makeViewer(file);
+		try {
+			viewer.render(80);
+			const readFileSpy = vi.spyOn(fs, "readFileSync");
+			fs.appendFileSync(file, `${messageLine("tail-after", "TAILMARKER")}\n`);
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			const deadline = Date.now() + 5000;
+			while (!body().includes("TAILMARKER") && Date.now() < deadline) {
+				await Bun.sleep(50);
+			}
+			expect(body()).toContain("TAILMARKER");
+			expect(readFileSpy).not.toHaveBeenCalled();
+		} finally {
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("clears the remote loading placeholder after a header-only first fetch", async () => {
+		const header = `${JSON.stringify({
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "adv",
+			timestamp: TS,
+			cwd: "/tmp",
+		})}\n`;
+		const remote: AgentHubRemote = {
+			chat: () => {},
+			kill: () => {},
+			revive: () => {},
+			readTranscript: async () => ({ text: header, newSize: Buffer.byteLength(header, "utf-8") }),
+		};
+		const viewer = makeViewer("", remote);
+		try {
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			const deadline = Date.now() + 5000;
+			while (body().includes("Loading transcript from host") && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(body()).toContain("No messages yet.");
+		} finally {
+			viewer.dispose();
 		}
 	});
 });

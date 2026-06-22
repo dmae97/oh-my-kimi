@@ -517,9 +517,9 @@ export class UiHelpers {
 		this.ctx.pendingBashComponents = [];
 		this.ctx.pendingPythonComponents = [];
 
-		// Display always uses the full-history transcript: compactions show as
-		// inline dividers instead of restarting the visible conversation.
-		const context = this.ctx.viewSession.buildTranscriptSessionContext();
+		// Live display uses the compacted transcript tail; export/resume callers
+		// can still request the full inline compaction history.
+		const context = this.ctx.viewSession.buildTranscriptSessionContext({ collapseCompactedHistory: true });
 		this.ctx.renderSessionContext(context, {
 			updateFooter: true,
 			populateHistory: !this.ctx.focusedAgentId,

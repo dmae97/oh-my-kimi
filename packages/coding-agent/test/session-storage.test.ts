@@ -57,3 +57,29 @@ describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 		expect(fs.existsSync(artifactsDir)).toBe(true);
 	});
 });
+
+describe("FileSessionStorage.writeTextSync", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
+	});
+
+	afterEach(async () => {
+		await fsp.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("replaces the file identity so transcript tailers detect rewrites", async () => {
+		const { FileSessionStorage } = await import("@oh-my-pi/pi-coding-agent/session/session-storage");
+		const storage = new FileSessionStorage();
+		const sessionPath = path.join(tempDir, "session.jsonl");
+
+		storage.writeTextSync(sessionPath, "first\n");
+		const first = fs.statSync(sessionPath);
+		storage.writeTextSync(sessionPath, "second\n");
+		const second = fs.statSync(sessionPath);
+
+		expect(second.ino).not.toBe(first.ino);
+		expect(await Bun.file(sessionPath).text()).toBe("second\n");
+	});
+});

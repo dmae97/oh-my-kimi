@@ -936,6 +936,25 @@ describe("buildSessionContext", () => {
 		expect(llm.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
 	});
 
+	it("transcript collapse option elides compacted display history", () => {
+		const u1 = createMessageEntry(createUserMessage("1"));
+		const a1 = createMessageEntry(createAssistantMessage("a"));
+		const compact1 = createCompactionEntry("First summary", u1.id);
+		const u2 = createMessageEntry(createUserMessage("2"));
+		const compact2 = createCompactionEntry("Second summary", u2.id);
+		const u3 = createMessageEntry(createUserMessage("3"));
+		const entries: SessionEntry[] = [u1, a1, compact1, u2, compact2, u3];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+		});
+
+		expect(transcript.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
+		expect((transcript.messages[0] as { summary: string }).summary).toContain("Second summary");
+		expect(transcript.cacheMissExplainedAt).toEqual([false, false, false]);
+	});
+
 	it("should handle multiple compactions (only latest matters)", () => {
 		// First batch
 		const u1 = createMessageEntry(createUserMessage("1"));
