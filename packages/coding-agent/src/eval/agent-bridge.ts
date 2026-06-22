@@ -205,6 +205,29 @@ async function getArtifacts(session: ToolSession): Promise<ArtifactPaths> {
 	return { sessionFile, artifactsDir, tempArtifactsDir };
 }
 
+/**
+ * Persist nested-repo patches to the per-call artifacts dir so an isolated
+ * apply failure can surface their paths in the thrown ToolError. The
+ * isolation worktree is already gone by the time we run, so without this the
+ * captured nested patches would be unrecoverable.
+ */
+async function persistNestedPatches(
+	artifactsDir: string,
+	agentId: string,
+	nestedPatches: NestedRepoPatch[],
+): Promise<string[]> {
+	const written: string[] = [];
+	for (let index = 0; index < nestedPatches.length; index++) {
+		const patch = nestedPatches[index];
+		if (!patch) continue;
+		const slug = patch.relativePath.replace(/[^A-Za-z0-9._-]+/g, "_") || `nested-${index}`;
+		const out = path.join(artifactsDir, `${agentId}.nested-${index}-${slug}.patch`);
+		await Bun.write(out, patch.patch);
+		written.push(out);
+	}
+	return written;
+}
+
 function emitProgressStatus(emitStatus: ((event: JsStatusEvent) => void) | undefined, progress: AgentProgress): void {
 	if (!emitStatus) return;
 	const preview = (progress.assignment ?? progress.task ?? "").split("\n")[0]?.slice(0, 120);
@@ -464,8 +487,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 				if (result.patchPath) recoveryParts.push(`Captured patch preserved at ${result.patchPath}.`);
 				if (result.branchName) recoveryParts.push(`Captured branch preserved as ${result.branchName}.`);
 				if (result.nestedPatches?.length) {
+					const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
 					recoveryParts.push(
-						`Captured nested repository patches (${result.nestedPatches.length}) preserved in details.nestedPatches.`,
+						`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
 					);
 				}
 				const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";

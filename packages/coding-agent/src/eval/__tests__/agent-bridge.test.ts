@@ -974,6 +974,40 @@ describe("runEvalAgent isolation", () => {
 		);
 	});
 
+	it("persists captured nested patches to a recoverable file before throwing on apply failure", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const nestedPatch = "diff --git a/file b/file\n";
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "ran",
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+				nestedPatches: [{ relativePath: "sub/nested", patch: nestedPatch }],
+			}),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\n<system-notification>Patch apply failed: conflict in foo.ts</system-notification>",
+			changesApplied: false,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
+
+		let caught: Error | undefined;
+		try {
+			await runEvalAgent({ prompt: "scout" }, { session: isolatedSession() });
+		} catch (err) {
+			caught = err as Error;
+		}
+		expect(caught).toBeDefined();
+		const match = caught?.message.match(/(\/[^\s,]+?\.nested-0-sub_nested\.patch)/);
+		expect(match).not.toBeNull();
+		const persistedPath = match?.[1];
+		expect(persistedPath).toBeDefined();
+		const contents = await fs.readFile(persistedPath!, "utf-8");
+		expect(contents).toBe(nestedPatch);
+		await fs.rm(path.dirname(persistedPath!), { recursive: true, force: true });
+	});
+
 	it("skips the merge phase when apply=false and surfaces the patch artifact instead", async () => {
 		mockAgents();
 		mockIsolationContext();
