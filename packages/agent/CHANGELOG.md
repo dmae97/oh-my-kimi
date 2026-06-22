@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `generateHandoffFromContext(context, model, options)` to `@oh-my-pi/pi-agent-core/compaction`: runs the handoff oneshot against a fully-built provider `Context` (system prompt, normalized tools, transformed history, trailing handoff prompt) with `streamOptions` mirroring the live turn's cache routing, so a host that owns the transform pipeline can make the handoff request share the prompt cache the main turn populated. `generateHandoff(messages, …)` is unchanged and now delegates to it.

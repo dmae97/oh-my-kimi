@@ -9,7 +9,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 Anything below → `eval` cell, not bash:
 - Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
 - Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
-- `$(...)` command substitution nested inside another command
+- `$(…)` command substitution nested inside another command
 - Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
 - Multiline commands, `&&`-chains mixing control flow
 - Quote/JSON escaping that fights the shell
@@ -28,7 +28,7 @@ Anything below → `eval` cell, not bash:
 </instruction>
 
 <critical>
-- Bash invokes real binaries with simple args; it is NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`node -e`, `python -c`), several piped stages, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
+- Bash invokes real binaries with simple args; it is NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
 - NEVER shell out to search content or files: `grep/rg` → `search`.
 - Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>

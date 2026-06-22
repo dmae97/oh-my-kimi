@@ -22,14 +22,10 @@
 - Prevented `/handoff` from executing while a response is streaming to avoid session corruption
 - Fixed `/handoff` cold-missing the provider prompt cache. Handoff generation now builds its request through the same pipeline a live turn uses (`convertMessagesToLlm` + `Agent.buildSideRequestContext` + `prepareSimpleStreamOptions`, via the new `generateHandoffFromContext`), so it reuses the live system prompt, normalized tools, transformed/obfuscated message history, and — critically — a stable `promptCacheKey` with a unique side `sessionId`. Previously the oneshot sent no cache-routing key and skipped the `transformContext`/`transformProviderContext` and tool/message normalization the loop applies, so its prefix never matched what the turn populated and every handoff re-read the whole context uncached. Mirrors the cache-preserving path already used by `/btw` and `/omfg`.
 - Fixed `/handoff` (and the RPC `handoff` command) resetting the agent while a response was still streaming, which let the live turn keep emitting into the torn-down session. Manual handoff now refuses while a prompt is in flight (matching `/fork` and `/move`); the auto-handoff path is unaffected.
-
-### Fixed
-
 - Fixed Exa web search requests firing back-to-back with no client-side pacing by adding a configurable `exa.searchDelayMs` delay (default 1000ms) between Exa search requests. ([#3271](https://github.com/can1357/oh-my-pi/issues/3271))
-
-### Fixed
-
 - Fixed `ask` returning `(cancelled)` or aborting the tool when Escape dismissed `Other (type your own)` custom input; it now returns to the option selector so the user can pick a listed answer instead. ([#3269](https://github.com/can1357/oh-my-pi/issues/3269))
+- Fixed `/goal` threshold auto-compaction skipping real sessions through three paths: per-turn supersede/drop-useless pruning no longer deflates the threshold trigger below the last provider-billed context; active-goal text stops now attempt threshold maintenance before unexpected-stop retry continuations can return from post-turn handling; and empty `toolUse` stops keep the existing cleanup pass that strips the orphan assistant from active context + session history before any compaction continuation. Active-goal compaction continuations now also resolve completed retry gates before returning, preventing `isRetrying` from staying stuck after a retry succeeds over the threshold. Added `agent_end maintenance routing` and `Auto-compaction threshold decision` debug logs so future no-start reports identify the exact early-return branch and the billed/stored/resolved/post-maintenance token counts that fed `shouldCompact`. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
+- Fixed active `/goal` runs that never reached `agent_end` because the model kept emitting tool calls inside one agent run. Threshold maintenance now runs between tool-call turns, compacts the live loop context in place, and suppresses queued continuations that would race the still-running goal loop. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
 
 ## [16.1.15] - 2026-06-22
 
@@ -123,11 +119,6 @@
 - Fixed transcript scrollback stability on terminals with eager erase risk so completed assistant messages remain stable while new streaming lines are rendering
 - Fixed Hindsight retain (and the shared mnemopi/Hindsight recall paths) framing assistant turns whose only content was punctuation/whitespace — most commonly the lone `.` some providers emit for tool-call-only or thinking-only turns — into `[role: assistant]\n.\n[assistant:end]` blocks that polluted the bank, wasted retain tokens, and degraded recall. `prepareRetentionTranscript`, `extractMessages`, and `flattenMessagesForRecall` now require at least one letter or digit per message via a shared `hasSubstantiveContent` predicate ([#1806](https://github.com/can1357/oh-my-pi/issues/1806)).
 - Fixed `/resume` rendering forked child sessions without a fork tag, making them indistinguishable from their parent when titles match ([#1792](https://github.com/can1357/oh-my-pi/issues/1792)).
-
-### Fixed
-
-- Fixed `/goal` threshold auto-compaction skipping real sessions through three paths: per-turn supersede/drop-useless pruning no longer deflates the threshold trigger below the last provider-billed context; active-goal text stops now attempt threshold maintenance before unexpected-stop retry continuations can return from post-turn handling; and empty `toolUse` stops keep the existing cleanup pass that strips the orphan assistant from active context + session history before any compaction continuation. Active-goal compaction continuations now also resolve completed retry gates before returning, preventing `isRetrying` from staying stuck after a retry succeeds over the threshold. Added `agent_end maintenance routing` and `Auto-compaction threshold decision` debug logs so future no-start reports identify the exact early-return branch and the billed/stored/resolved/post-maintenance token counts that fed `shouldCompact`. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
-- Fixed active `/goal` runs that never reached `agent_end` because the model kept emitting tool calls inside one agent run. Threshold maintenance now runs between tool-call turns, compacts the live loop context in place, and suppresses queued continuations that would race the still-running goal loop. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
 
 ## [16.1.10] - 2026-06-21
 
