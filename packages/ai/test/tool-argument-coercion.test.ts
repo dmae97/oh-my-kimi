@@ -692,7 +692,7 @@ describe("Tool argument coercion", () => {
 			arguments: { payload: { items: "[4, 5]" } },
 		};
 
-		const result = validateToolArguments(tool, toolCall);
+		const result = validateToolArguments(tool, toolCall) as { payload: { items: number[] } };
 		expect(result.payload.items).toEqual([4, 5]);
 	});
 

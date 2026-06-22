@@ -15,6 +15,7 @@ import { ProviderHttpError } from "./errors";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
+import type { DevinOptions } from "./providers/devin";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
 import type { GoogleOptions } from "./providers/google";
 import { getVertexAccessToken } from "./providers/google-auth";
@@ -37,6 +38,7 @@ import {
 	streamAzureOpenAIResponses,
 	streamBedrock,
 	streamCursor,
+	streamDevin,
 	streamGoogle,
 	streamGoogleGeminiCli,
 	streamGoogleVertex,
@@ -293,22 +295,46 @@ function streamDispatch<TApi extends Api>(
 		case "openrouter": {
 			const useResponses = $env.PI_OPENROUTER_RESPONSES !== "0";
 			if (useResponses) {
-				return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+				return streamOpenAIResponses(
+					model as Model<"openai-responses">,
+					context,
+					providerOptions as OptionsForApi<"openai-responses">,
+				);
 			}
-			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
+			return streamOpenAICompletions(
+				model as Model<"openai-completions">,
+				context,
+				providerOptions as OptionsForApi<"openai-completions">,
+			);
 		}
 
 		case "openai-completions":
-			return streamOpenAICompletions(model as Model<"openai-completions">, context, providerOptions as any);
+			return streamOpenAICompletions(
+				model as Model<"openai-completions">,
+				context,
+				providerOptions as OptionsForApi<"openai-completions">,
+			);
 
 		case "openai-responses":
-			return streamOpenAIResponses(model as Model<"openai-responses">, context, providerOptions as any);
+			return streamOpenAIResponses(
+				model as Model<"openai-responses">,
+				context,
+				providerOptions as OptionsForApi<"openai-responses">,
+			);
 
 		case "azure-openai-responses":
-			return streamAzureOpenAIResponses(model as Model<"azure-openai-responses">, context, providerOptions as any);
+			return streamAzureOpenAIResponses(
+				model as Model<"azure-openai-responses">,
+				context,
+				providerOptions as OptionsForApi<"azure-openai-responses">,
+			);
 
 		case "openai-codex-responses":
-			return streamOpenAICodexResponses(model as Model<"openai-codex-responses">, context, providerOptions as any);
+			return streamOpenAICodexResponses(
+				model as Model<"openai-codex-responses">,
+				context,
+				providerOptions as OptionsForApi<"openai-codex-responses">,
+			);
 
 		case "google-generative-ai":
 			return streamGoogle(model as Model<"google-generative-ai">, context, providerOptions);
@@ -325,6 +351,9 @@ function streamDispatch<TApi extends Api>(
 
 		case "cursor-agent":
 			return streamCursor(model as Model<"cursor-agent">, context, providerOptions as CursorOptions);
+
+		case "devin-agent":
+			return streamDevin(model as Model<"devin-agent">, context, providerOptions as DevinOptions);
 
 		default:
 			throw new Error(`Unhandled API: ${api}`);
@@ -1114,6 +1143,18 @@ function mapOptionsForApi<TApi extends Api>(
 				...base,
 				execHandlers,
 				onToolResult,
+			});
+		}
+
+		case "devin-agent": {
+			const devinModel = model as Model<"devin-agent">;
+			const effort =
+				options?.reasoning && !options.disableReasoning
+					? requireSupportedEffort(devinModel, options.reasoning)
+					: undefined;
+			return castApi<"devin-agent">({
+				...base,
+				chatModelUid: resolveWireModelId(devinModel, effort),
 			});
 		}
 

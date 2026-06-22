@@ -66,7 +66,7 @@ describe("provider registry auth surface", () => {
 
 	test("paste-code login set is derived from pasteCodeFlow", () => {
 		expect([...PASTE_CODE_LOGIN_PROVIDERS].sort()).toEqual(
-			["anthropic", "gitlab-duo", "google-antigravity", "google-gemini-cli", "openai-codex"].sort(),
+			["anthropic", "devin", "gitlab-duo", "google-antigravity", "google-gemini-cli", "openai-codex"].sort(),
 		);
 		expect(PASTE_CODE_LOGIN_PROVIDERS.has("zenmux")).toBe(false);
 	});

@@ -1,6 +1,13 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for Devin as a provider
+
+### Changed
+
+- Updated tool call arguments to use `Record<string, unknown>` and `unknown` for tool results
 
 ## [16.1.11] - 2026-06-21
 

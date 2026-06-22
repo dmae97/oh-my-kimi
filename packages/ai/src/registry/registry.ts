@@ -8,6 +8,7 @@ import { cerebrasProvider } from "./cerebras";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { cursorProvider } from "./cursor";
 import { deepseekProvider } from "./deepseek";
+import { devinProvider } from "./devin";
 import { firepassProvider } from "./firepass";
 import { fireworksProvider } from "./fireworks";
 import { githubCopilotProvider } from "./github-copilot";
@@ -78,6 +79,7 @@ const ALL = [
 	openrouterProvider,
 	githubCopilotProvider,
 	cursorProvider,
+	devinProvider,
 	googleAntigravityProvider,
 	googleGeminiCliProvider,
 	openaiCodexDeviceProvider,

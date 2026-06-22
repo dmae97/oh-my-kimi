@@ -45,6 +45,7 @@
 		"zod": "catalog:"
 	},
 	"devDependencies": {
+		"@bufbuild/protoc-gen-es": "catalog:",
 		"@types/bun": "catalog:"
 	},
 	"engines": {

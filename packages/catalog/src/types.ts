@@ -14,7 +14,8 @@ export type KnownApi =
 	| "google-gemini-cli"
 	| "google-vertex"
 	| "ollama-chat"
-	| "cursor-agent";
+	| "cursor-agent"
+	| "devin-agent";
 export type Api = KnownApi | (string & {});
 
 /** Canonical thinking transport used by a model. */

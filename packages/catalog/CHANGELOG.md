@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for Devin as a model provider
+- Added capability to fetch dynamic models from the Devin model manager
 
 ## [16.1.11] - 2026-06-21
 

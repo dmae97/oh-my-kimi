@@ -308,7 +308,9 @@ async function multiTurn<TApi extends Api>(model: Model<TApi>, options?: Options
 				expect(block.id).toBeTruthy();
 				expect(block.arguments).toBeTruthy();
 
-				const { a, b, operation } = block.arguments;
+				const a = Number(block.arguments.a);
+				const b = Number(block.arguments.b);
+				const operation = typeof block.arguments.operation === "string" ? block.arguments.operation : "";
 				let result: number;
 				switch (operation) {
 					case "add":

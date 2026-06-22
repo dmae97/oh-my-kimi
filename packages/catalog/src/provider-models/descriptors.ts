@@ -48,7 +48,7 @@ import {
 	zenmuxModelManagerOptions,
 	zhipuCodingPlanModelManagerOptions,
 } from "./openai-compat";
-import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
+import { cursorModelManagerOptions, devinModelManagerOptions, zaiModelManagerOptions } from "./special";
 
 export const CATALOG_PROVIDERS = [
 	{
@@ -107,6 +107,14 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["DEEPSEEK_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => deepseekModelManagerOptions(config),
 		catalogDiscovery: { label: "DeepSeek" },
+	},
+	{
+		id: "devin",
+		defaultModel: "swe-1-6",
+		envVars: ["DEVIN_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => devinModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Devin", envVars: ["DEVIN_API_KEY"], oauthProvider: "devin" },
 	},
 	{
 		id: "firepass",

@@ -1,5 +1,6 @@
 import { once } from "@oh-my-pi/pi-utils";
 import { fetchCodexModels } from "../discovery/codex";
+import type { DevinModelDiscoveryOptions } from "../discovery/devin";
 import type { ModelManagerOptions } from "../model-manager";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,34 @@ export function cursorModelManagerOptions(config: CursorModelManagerConfig = {})
 }
 
 const cursorDiscovery = once(() => import("../discovery/cursor"));
+
+// ---------------------------------------------------------------------------
+// Devin (Codeium Cascade)
+// ---------------------------------------------------------------------------
+
+export interface DevinModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: DevinModelDiscoveryOptions["fetch"];
+}
+
+export function devinModelManagerOptions(config: DevinModelManagerConfig = {}): ModelManagerOptions<"devin-agent"> {
+	const { apiKey, baseUrl, fetch } = config;
+	return {
+		providerId: "devin",
+		...(apiKey ? { dynamicModelsAuthoritative: true } : undefined),
+		...(apiKey
+			? {
+					fetchDynamicModels: async () => {
+						const { fetchDevinModels } = await devinDiscovery();
+						return fetchDevinModels({ apiKey, baseUrl, fetch });
+					},
+				}
+			: undefined),
+	};
+}
+
+const devinDiscovery = once(() => import("../discovery/devin"));
 
 // ---------------------------------------------------------------------------
 // Zai

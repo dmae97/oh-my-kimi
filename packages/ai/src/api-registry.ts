@@ -14,9 +14,10 @@ import type {
 	StreamOptions,
 } from "./types";
 
-const BUILTIN_APIS = new Set<KnownApi>([
+const BUILTIN_API_IDS = [
 	"openai-completions",
 	"openai-responses",
+	"openrouter",
 	"openai-codex-responses",
 	"azure-openai-responses",
 	"anthropic-messages",
@@ -26,7 +27,16 @@ const BUILTIN_APIS = new Set<KnownApi>([
 	"google-vertex",
 	"ollama-chat",
 	"cursor-agent",
-]);
+	"devin-agent",
+] as const satisfies readonly KnownApi[];
+
+type _MissingBuiltinApis = Exclude<KnownApi, (typeof BUILTIN_API_IDS)[number]>;
+type _CheckBuiltinApis = _MissingBuiltinApis extends never
+	? true
+	: ["BUILTIN_APIS is missing KnownApi values", _MissingBuiltinApis];
+true satisfies _CheckBuiltinApis;
+
+const BUILTIN_APIS = new Set<KnownApi>(BUILTIN_API_IDS);
 
 export type CustomStreamFn = (
 	model: Model<Api>,

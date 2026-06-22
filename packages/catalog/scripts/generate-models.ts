@@ -111,7 +111,8 @@ async function fetchProviderModelsFromCatalog(descriptor: CatalogProviderDescrip
 
 	try {
 		console.log(`Fetching models from ${descriptor.catalogDiscovery.label} model manager...`);
-		const manager = createModelManager(descriptor.createModelManagerOptions({ apiKey }));
+		const managerOptions = descriptor.createModelManagerOptions({ apiKey });
+		const manager = createModelManager(managerOptions);
 		const result = await manager.refresh("online");
 		// `stale: true` means the dynamic fetch failed and the manager fell back
 		// to merging the local agent.db model cache over the static catalog —
@@ -184,7 +185,7 @@ function applyGlobalModelsDevFallback(
 	const providerScopedKeys = new Set(modelsDevModels.map(model => `${model.provider}/${model.id}`));
 	const globalReferences = createGlobalModelsDevReferenceMap(modelsDevModels);
 	return models.map(model => {
-		if (providerScopedKeys.has(`${model.provider}/${model.id}`)) {
+		if (providerScopedKeys.has(`${model.provider}/${model.id}`) || model.provider === "devin") {
 			return model;
 		}
 		const reference = globalReferences.get(model.id);

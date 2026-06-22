@@ -204,7 +204,10 @@ function walkAssistantContent(
 					type: "toolCall",
 					id: block.id,
 					name: block.name,
-					arguments: block.input ?? {},
+					arguments:
+						block.input && typeof block.input === "object" && !Array.isArray(block.input)
+							? (block.input as Record<string, unknown>)
+							: {},
 				});
 				break;
 			default: {
