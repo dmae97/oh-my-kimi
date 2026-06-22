@@ -320,8 +320,13 @@ export class AgentTranscriptViewer implements Component {
 					return;
 				}
 				if (result.newSize < fromByte) {
-					// Host transcript rotated/truncated — restart from 0.
+					// Host transcript rotated/truncated — drop the stale rendered rows
+					// before restarting; otherwise the post-rotation fetch would stack
+					// new content under the pre-rotation history.
 					this.#remoteBytes = 0;
+					this.#hasRemoteData = false;
+					this.#model = undefined;
+					this.#rebuild([]);
 					this.#fetchRemote();
 					return;
 				}

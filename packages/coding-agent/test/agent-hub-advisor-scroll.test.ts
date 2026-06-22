@@ -305,4 +305,56 @@ describe("AgentTranscriptViewer", () => {
 			viewer.dispose();
 		}
 	});
+
+	it("drops stale rendered rows when the host transcript rotates", async () => {
+		const header = `${JSON.stringify({
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id: "adv",
+			timestamp: TS,
+			cwd: "/tmp",
+		})}\n`;
+		const before = `${header}${messageLine("a0", "BEFORE_ROTATE")}\n`;
+		const beforeSize = Buffer.byteLength(before, "utf-8");
+		const after = `${header}${messageLine("a1", "AFTER_ROTATE")}\n`;
+		const afterSize = Buffer.byteLength(after, "utf-8");
+
+		let phase: "initial" | "rotated" | "post" = "initial";
+		const remote: AgentHubRemote = {
+			chat: () => {},
+			kill: () => {},
+			revive: () => {},
+			readTranscript: async (_id: string, fromByte: number) => {
+				if (phase === "initial") {
+					phase = "rotated";
+					return { text: before, newSize: beforeSize };
+				}
+				if (phase === "rotated") {
+					phase = "post";
+					// Host has rotated: newSize is smaller than the byte cursor we sent.
+					return { text: "", newSize: 0 };
+				}
+				// Post-rotation refetch from byte 0.
+				expect(fromByte).toBe(0);
+				return { text: after, newSize: afterSize };
+			},
+		};
+		const viewer = makeViewer("", remote);
+		try {
+			const body = () =>
+				viewer
+					.render(80)
+					.map(l => Bun.stripANSI(l))
+					.join("\n");
+			const deadline = Date.now() + 5000;
+			while (!body().includes("AFTER_ROTATE") && Date.now() < deadline) {
+				await Bun.sleep(20);
+			}
+			expect(body()).toContain("AFTER_ROTATE");
+			// Pre-rotation rows must not stack underneath the refetched transcript.
+			expect(body()).not.toContain("BEFORE_ROTATE");
+		} finally {
+			viewer.dispose();
+		}
+	});
 });
