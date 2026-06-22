@@ -967,18 +967,33 @@ async function runGitLabDuoWorkflow(
 			!isGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd) &&
 			isGitLabDuoWorkflowInlineFlow(workflowDefinition)
 		) {
-			markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd);
-			await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId);
+			// Mark the workspace ensured only after a definitive attempt (HTTP response,
+			// success or 4xx). A transient network error / 5xx returns false so a later
+			// turn retries instead of permanently skipping the PUT on a namespace whose
+			// flags are still off.
+			if (await ensureGitLabDuoWorkflowSettings(fetchImpl, baseUrl, apiKey, restNamespaceId)) {
+				markGitLabDuoWorkflowSettingsEnsured(apiKey, baseUrl, options.cwd);
+			}
 		}
 		// The inline `ambient` flow fails server-side without a project, and OMP has
-		// no project of its own, so auto-discover one under the resolved namespace
-		// when nothing is configured. The built-in `chat` flow runs namespace-only.
+		// no project of its own, so auto-discover one when nothing is configured. Prefer
+		// the project the namespace was resolved from (the workspace git remote or an
+		// explicit project), so a group with multiple projects scopes to the actual
+		// repository instead of a generic group-listing pick. Fall back to the generic
+		// membership lookup only when the namespace carries no project. `chat` runs
+		// namespace-only.
 		const discoveredProject =
 			!configuredProjectPath && !configuredProjectId && isGitLabDuoWorkflowInlineFlow(workflowDefinition)
-				? await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
+				? namespaceSelection.projectPath
+					? { path: namespaceSelection.projectPath }
+					: await discoverGitLabDuoWorkflowProject(fetchImpl, baseUrl, apiKey, restNamespaceId)
 				: undefined;
 		if (discoveredProject) {
-			traceGitLabDuoWorkflow("project.discover", { projectId: discoveredProject.id, hasPath: true });
+			traceGitLabDuoWorkflow("project.discover", {
+				projectId: discoveredProject.id,
+				hasPath: Boolean(discoveredProject.path),
+				fromRemote: Boolean(namespaceSelection.projectPath),
+			});
 		}
 		const projectPath = configuredProjectPath ?? discoveredProject?.path;
 		const projectId = configuredProjectId ?? discoveredProject?.id;
@@ -1317,7 +1332,10 @@ async function resolveGitLabDuoWorkflowNumericProjectId(
 }
 
 interface GitLabDuoWorkflowDiscoveredProject {
-	id: string;
+	// Numeric id is known when discovered via the projects API; for a project carried
+	// from the resolved namespace (git remote / explicit path) only the full path is
+	// known and the numeric id is resolved later from the path for WebSocket routing.
+	id?: string;
 	path: string;
 }
 
@@ -1487,7 +1505,12 @@ async function ensureGitLabDuoWorkflowSettings(
 	baseUrl: string,
 	apiKey: string,
 	restNamespaceId: string,
-): Promise<void> {
+): Promise<boolean> {
+	// Returns whether the attempt was DEFINITIVE (so the caller may stop retrying):
+	// any HTTP response — 2xx (flags now on) or 4xx (insufficient rights / no such
+	// namespace, which retrying never fixes) — is definitive. A thrown network error
+	// or a 5xx is transient, so the caller should keep the guard retryable and try
+	// again on a later turn rather than permanently skipping the PUT.
 	try {
 		const response = await fetchImpl(gitLabApiUrl(baseUrl, `/api/v4/groups/${encodeURIComponent(restNamespaceId)}`), {
 			method: "PUT",
@@ -1498,8 +1521,10 @@ async function ensureGitLabDuoWorkflowSettings(
 			body: JSON.stringify(buildGitLabDuoWorkflowSettingsBody()),
 		});
 		traceGitLabDuoWorkflow("settings.ensure", { status: response.status, ok: response.ok });
+		return response.status < 500;
 	} catch (error) {
 		traceGitLabDuoWorkflow("settings.ensure_error", { error: gitLabDuoWorkflowErrorText(error) });
+		return false;
 	}
 }
 

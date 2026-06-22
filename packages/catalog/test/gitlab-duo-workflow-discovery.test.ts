@@ -238,7 +238,11 @@ describe("GitLab Duo Workflow discovery", () => {
 			fetch,
 		});
 
-		expect(selection).toEqual({ rootNamespaceId: "runtime-graphql-root", source: "project" });
+		expect(selection).toEqual({
+			rootNamespaceId: "runtime-graphql-root",
+			projectPath: "group/project",
+			source: "project",
+		});
 		expect(calls.map(call => new URL(call.url).pathname)).toEqual([
 			"/api/v4/projects/group%2Fproject",
 			"/api/graphql",

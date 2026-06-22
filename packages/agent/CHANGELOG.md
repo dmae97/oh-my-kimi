@@ -25,6 +25,10 @@
 
 - Updated `buildSideRequestContext` to allow pinning custom system prompts
 
+### Fixed
+
+- Fixed `Agent` forwarding the working directory (`cwd`) into provider stream options so the GitLab Duo Agent provider can scope local tool execution to the workspace.
+
 ## [16.1.10] - 2026-06-21
 
 ### Fixed
@@ -45,9 +49,6 @@
 ### Changed
 
 - Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
-### Fixed
-
-- Fixed `Agent` forwarding the working directory (`cwd`) into provider stream options so the GitLab Duo Agent provider can scope local tool execution to the workspace.
 
 ## [16.1.5] - 2026-06-19
 

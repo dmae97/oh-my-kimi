@@ -82,6 +82,11 @@ interface GitLabDuoWorkflowAvailability {
 interface GitLabDuoWorkflowCandidate {
 	rootNamespaceId: string;
 	namespacePath?: string;
+	// The concrete GitLab project (full path) this namespace was resolved from, when
+	// the candidate came from an explicit project id/path or the workspace git remote.
+	// Carried forward so runtime scoping uses the actual repository project instead of
+	// a generic group project.
+	projectPath?: string;
 	source: GitLabDuoWorkflowCandidateSource;
 }
 
@@ -105,6 +110,10 @@ export interface GitLabDuoWorkflowDiscoveryConfig {
 export interface GitLabDuoWorkflowNamespaceSelection {
 	rootNamespaceId: string;
 	namespacePath?: string;
+	// Concrete GitLab project (full path) the namespace was resolved from, when known
+	// (explicit project config or the workspace git remote). The runtime prefers this
+	// over a generic group project so the workflow scopes to the active repository.
+	projectPath?: string;
 	source: GitLabDuoWorkflowCandidateSource;
 }
 
@@ -115,6 +124,7 @@ export async function discoverGitLabDuoWorkflowNamespace(
 	return {
 		rootNamespaceId: selection.rootNamespaceId,
 		...(selection.namespacePath ? { namespacePath: selection.namespacePath } : {}),
+		...(selection.projectPath ? { projectPath: selection.projectPath } : {}),
 		source: selection.source,
 	};
 }
@@ -230,6 +240,9 @@ async function selectGitLabDuoWorkflowCandidate<TSelection>(
 		if (projectNamespace) {
 			const selected = await resolveCandidate({
 				rootNamespaceId: projectNamespace,
+				// Only a full path (group/project) is meaningful as a runtime project
+				// scope; a bare numeric id resolves the namespace but is not carried.
+				...(projectId.includes("/") ? { projectPath: projectId } : {}),
 				source: "project",
 			});
 			if (selected) {
@@ -244,6 +257,7 @@ async function selectGitLabDuoWorkflowCandidate<TSelection>(
 		if (remoteNamespace) {
 			const selected = await resolveCandidate({
 				rootNamespaceId: remoteNamespace,
+				projectPath: remoteProjectPath,
 				source: "remote",
 			});
 			if (selected) {
@@ -267,8 +281,14 @@ function resolveRuntimeNamespaceCandidate(
 ): GitLabDuoWorkflowNamespaceSelection | null {
 	const rootNamespaceId = normalizeIdentifier(candidate.rootNamespaceId);
 	const namespacePath = normalizeIdentifier(candidate.namespacePath);
+	const projectPath = normalizeIdentifier(candidate.projectPath);
 	return rootNamespaceId
-		? { rootNamespaceId, ...(namespacePath ? { namespacePath } : {}), source: candidate.source }
+		? {
+				rootNamespaceId,
+				...(namespacePath ? { namespacePath } : {}),
+				...(projectPath ? { projectPath } : {}),
+				source: candidate.source,
+			}
 		: null;
 }
 
