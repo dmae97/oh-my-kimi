@@ -1,4 +1,5 @@
 import type { AssistantMessage, ServiceTier, StopReason, Usage } from "@oh-my-pi/pi-ai";
+import type { AgentType } from "./shared-types";
 
 export * from "./shared-types";
 
@@ -32,6 +33,8 @@ export interface MessageStats {
 	errorMessage: string | null;
 	/** Token usage */
 	usage: Usage;
+	/** Which agent produced this message (main agent, task subagent, advisor) */
+	agentType: AgentType;
 }
 
 /**

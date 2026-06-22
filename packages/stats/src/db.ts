@@ -4,7 +4,10 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import type { GeneratedProvider } from "@oh-my-pi/pi-catalog/models";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { getConfigRootDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { classifyAgentType } from "./parser";
 import type {
+	AgentType,
+	AgentTypeStats,
 	AggregatedStats,
 	BehaviorModelStats,
 	BehaviorOverallStats,
@@ -41,6 +44,7 @@ const BACKFILL_PENDING = "pending";
 const USER_MESSAGES_BACKFILL_KEY = "user_messages_v6";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
 const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
+const AGENT_TYPE_BACKFILL_KEY = "agent_type_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
 }
@@ -58,6 +62,11 @@ export async function initDb(): Promise<Database> {
 	// https://github.com/can1357/oh-my-pi/issues/2421.
 	db.run("PRAGMA busy_timeout = 5000");
 	db.run("PRAGMA journal_mode = WAL");
+
+	// Whether `messages` predates this init — drives the one-time agent_type
+	// backfill below, so it must be sampled before CREATE TABLE adds the table.
+	const messagesTableExisted =
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'").get() !== undefined;
 
 	// Create tables
 	db.run(`
@@ -85,6 +94,7 @@ export async function initDb(): Promise<Database> {
 			cost_cache_read REAL NOT NULL,
 			cost_cache_write REAL NOT NULL,
 			cost_total REAL NOT NULL,
+			agent_type TEXT NOT NULL DEFAULT 'main',
 			UNIQUE(session_file, entry_id)
 		);
 
@@ -135,6 +145,26 @@ export async function initDb(): Promise<Database> {
 		db.run("ALTER TABLE messages ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0");
 	}
 	db.run("UPDATE messages SET premium_requests = 0 WHERE premium_requests IS NULL");
+	// Token-usage-by-agent: each message is classified main / subagent / advisor
+	// from its transcript path. A brand-new table gets the column from CREATE
+	// TABLE and the parser labels rows at insert time; a pre-existing table gets
+	// the column here (defaulting every prior row to 'main') and enrolls the
+	// one-time path-based reclassification, gated by a meta sentinel.
+	const hasAgentTypeColumn = messageColumns.some(column => column.name === "agent_type");
+	if (!hasAgentTypeColumn) {
+		db.run("ALTER TABLE messages ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'main'");
+	}
+	// For any pre-existing table, enroll the backfill PENDING unless a prior run
+	// already settled the sentinel — `OR IGNORE` leaves an existing
+	// COMPLETE/PENDING value intact, so an ALTER that committed before its
+	// sentinel write (process killed in between) still reclassifies on the next
+	// init instead of silently leaving every row as the 'main' default. A
+	// brand-new empty table has nothing to reclassify, so it settles COMPLETE.
+	db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(
+		AGENT_TYPE_BACKFILL_KEY,
+		messagesTableExisted ? BACKFILL_PENDING : BACKFILL_COMPLETE,
+	);
+	db.run("CREATE INDEX IF NOT EXISTS idx_messages_timestamp_agent_type ON messages(timestamp, agent_type)");
 	// Each behavior-metric bump invalidates previously-ingested rows. We detect
 	// the stale schema by column name and drop the table; `IF NOT EXISTS` above
 	// already produced the new schema, but we want a clean wipe + re-ingest.
@@ -186,6 +216,7 @@ export async function initDb(): Promise<Database> {
 	backfillUserMessages(db);
 	repairUserMessageLinks(db);
 	backfillPriorityPremiumRequests(db);
+	backfillAgentType(db);
 	backfillMissingCatalogCosts(db);
 	return db;
 }
@@ -317,8 +348,8 @@ export function insertMessageStats(stats: MessageStats[]): number {
 			session_file, entry_id, folder, model, provider, api, timestamp,
 			duration, ttft, stop_reason, error_message,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, premium_requests,
-			cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total, agent_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_file, entry_id) DO UPDATE SET
 			premium_requests = excluded.premium_requests
 		WHERE messages.premium_requests < excluded.premium_requests
@@ -351,6 +382,7 @@ export function insertMessageStats(stats: MessageStats[]): number {
 				cost.cacheRead,
 				cost.cacheWrite,
 				cost.total,
+				s.agentType,
 			);
 			if (result.changes > 0) inserted++;
 		}
@@ -516,6 +548,41 @@ export function getStatsByFolder(cutoff?: number): FolderStats[] {
 	return rows.map(row => ({
 		folder: row.folder,
 		...buildAggregatedStats([row]),
+	}));
+}
+
+/**
+ * Get token usage grouped by agent type (main agent, task subagents, advisor).
+ * Token columns are explicit so the dashboard's share denominator matches the
+ * counts it renders. Rows missing `agent_type` (defensive) fall back to "main".
+ */
+export function getStatsByAgentType(cutoff?: number): AgentTypeStats[] {
+	if (!db) return [];
+
+	const hasCutoff = cutoff !== undefined && cutoff > 0;
+	const stmt = db.prepare(`
+		SELECT
+			agent_type,
+			COUNT(*) as total_requests,
+			SUM(input_tokens) as total_input_tokens,
+			SUM(output_tokens) as total_output_tokens,
+			SUM(cache_read_tokens) as total_cache_read_tokens,
+			SUM(cache_write_tokens) as total_cache_write_tokens,
+			SUM(cost_total) as total_cost
+		FROM messages
+		${hasCutoff ? "WHERE timestamp >= ?" : ""}
+		GROUP BY agent_type
+	`);
+
+	const rows = (hasCutoff ? stmt.all(cutoff) : stmt.all()) as any[];
+	return rows.map(row => ({
+		agentType: (row.agent_type as AgentType) ?? "main",
+		totalRequests: row.total_requests || 0,
+		totalInputTokens: row.total_input_tokens || 0,
+		totalOutputTokens: row.total_output_tokens || 0,
+		totalCacheReadTokens: row.total_cache_read_tokens || 0,
+		totalCacheWriteTokens: row.total_cache_write_tokens || 0,
+		totalCost: row.total_cost || 0,
 	}));
 }
 
@@ -686,6 +753,7 @@ function rowToMessageStats(row: any): MessageStats {
 				total: row.cost_total,
 			},
 		},
+		agentType: (row.agent_type as AgentType) ?? "main",
 	};
 }
 
@@ -792,6 +860,37 @@ function backfillUserMessages(database: Database): void {
 	database
 		.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 		.run(USER_MESSAGES_BACKFILL_KEY, BACKFILL_PENDING);
+}
+
+/**
+ * Reclassify pre-existing `messages` rows by agent type once, after the
+ * `agent_type` column is added to an older database (every prior row defaulted
+ * to 'main' on the ALTER). Classification is purely path-based — derived from
+ * the stored `session_file` — so no session re-parse is needed. Idempotent and
+ * crash-safe: enrolled (PENDING) only at migration time in {@link initDb} and
+ * marked COMPLETE inside the same transaction that applies the updates, so an
+ * interrupted run rolls back and retries on the next init.
+ */
+function backfillAgentType(database: Database): void {
+	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(AGENT_TYPE_BACKFILL_KEY) as
+		| { value: string }
+		| undefined;
+	if (row?.value !== BACKFILL_PENDING) return;
+
+	const sessionFiles = database.prepare("SELECT DISTINCT session_file FROM messages").all() as {
+		session_file: string;
+	}[];
+	const update = database.prepare("UPDATE messages SET agent_type = ? WHERE session_file = ?");
+	const markComplete = database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+	const apply = database.transaction(() => {
+		for (const { session_file } of sessionFiles) {
+			const agentType = classifyAgentType(session_file);
+			// Rows already default to 'main'; only the nested transcripts move.
+			if (agentType !== "main") update.run(agentType, session_file);
+		}
+		markComplete.run(AGENT_TYPE_BACKFILL_KEY, BACKFILL_COMPLETE);
+	});
+	apply();
 }
 
 /**

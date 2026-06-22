@@ -133,10 +133,40 @@ export interface DashboardStats {
 	overall: AggregatedStats;
 	byModel: ModelStats[];
 	byFolder: FolderStats[];
+	byAgentType: AgentTypeStats[];
 	timeSeries: TimeSeriesPoint[];
 	modelSeries: ModelTimeSeriesPoint[];
 	modelPerformanceSeries: ModelPerformancePoint[];
 	costSeries: CostTimeSeriesPoint[];
+}
+
+/**
+ * Which agent produced a message, derived from its transcript file location
+ * inside the session directory: the top-level `<project>/<file>.jsonl` is the
+ * `main` agent, an `__advisor.jsonl` is the passive `advisor`, and any other
+ * nested transcript is a task `subagent`.
+ */
+export type AgentType = "main" | "subagent" | "advisor";
+
+/**
+ * Token usage aggregated by {@link AgentType} over the active range. Token
+ * columns are explicit so the dashboard's share denominator matches the
+ * counts it renders (input + output + cache read + cache write).
+ */
+export interface AgentTypeStats {
+	agentType: AgentType;
+	/** Total number of requests */
+	totalRequests: number;
+	/** Total input tokens */
+	totalInputTokens: number;
+	/** Total output tokens */
+	totalOutputTokens: number;
+	/** Total cache read tokens */
+	totalCacheReadTokens: number;
+	/** Total cache write tokens */
+	totalCacheWriteTokens: number;
+	/** Total cost */
+	totalCost: number;
 }
 
 /**
