@@ -3,6 +3,8 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 export interface ImageResizeOptions {
 	maxWidth?: number;
 	maxHeight?: number;
+	/** Smallest allowed edge length (px). Inputs below this are scaled up. */
+	minDimension?: number;
 	maxBytes?: number;
 	jpegQuality?: number;
 	excludeWebP?: boolean;
@@ -23,6 +25,13 @@ export interface ResizedImage {
 // binding constraint once images are downsized to 1568px (Anthropic's internal threshold).
 const DEFAULT_MAX_BYTES = 500 * 1024;
 
+// Smallest edge length (px) vision backends reliably accept. They tile images into
+// fixed patches (Anthropic uses 28px) and reject degenerate sub-patch images — e.g.
+// the 1x1 PNG an empty chart render emits — with a hard 400 ("Could not process
+// image") that can poison the whole request. 200px is the smallest size Anthropic
+// documents as valid (200x200 = 64 visual tokens); undersized images are scaled up.
+const DEFAULT_MIN_DIMENSION = 200;
+
 const DEFAULT_OPTIONS: Required<Omit<ImageResizeOptions, "excludeWebP">> = {
 	// Anthropic's "internal recommended size" — Claude internally caps images at
 	// 1568px on the longest edge before vision processing.
@@ -30,6 +39,7 @@ const DEFAULT_OPTIONS: Required<Omit<ImageResizeOptions, "excludeWebP">> = {
 	maxHeight: 1568,
 	maxBytes: DEFAULT_MAX_BYTES,
 	jpegQuality: 80,
+	minDimension: DEFAULT_MIN_DIMENSION,
 };
 
 /**
@@ -87,7 +97,12 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		// still get JPEG-compressed.
 		const originalSize = inputBuffer.length;
 		const comfortableSize = opts.maxBytes / 4;
+		// Clamp the floor to the caps so an unusually small max can't demand an
+		// impossible "≥ min and ≤ max" target.
+		const minDimension = Math.min(opts.minDimension, opts.maxWidth, opts.maxHeight);
 		if (
+			originalWidth >= minDimension &&
+			originalHeight >= minDimension &&
 			originalWidth <= opts.maxWidth &&
 			originalHeight <= opts.maxHeight &&
 			originalSize <= comfortableSize &&
@@ -118,6 +133,25 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		if (targetHeight > opts.maxHeight) {
 			targetWidth = Math.round((targetWidth * opts.maxHeight) / targetHeight);
 			targetHeight = opts.maxHeight;
+		}
+
+		// Lift undersized inputs up to the minimum. A uniform scale covers the
+		// common case (icons, the 1x1 chart) without distortion; an aspect ratio
+		// too extreme to satisfy both floor and cap falls back to stretching the
+		// lagging edge up to the floor via the default fit:"fill" resize.
+		if (targetWidth < minDimension || targetHeight < minDimension) {
+			const shortEdge = Math.min(targetWidth, targetHeight);
+			const upscale = Math.min(
+				minDimension / shortEdge,
+				opts.maxWidth / targetWidth,
+				opts.maxHeight / targetHeight,
+			);
+			if (upscale > 1) {
+				targetWidth = Math.round(targetWidth * upscale);
+				targetHeight = Math.round(targetHeight * upscale);
+			}
+			targetWidth = Math.min(opts.maxWidth, Math.max(minDimension, targetWidth));
+			targetHeight = Math.min(opts.maxHeight, Math.max(minDimension, targetHeight));
 		}
 
 		// First-attempt encoder: try PNG and JPEG (+ WebP if not excluded) — return smallest.

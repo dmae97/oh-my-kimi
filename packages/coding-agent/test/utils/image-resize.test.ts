@@ -128,6 +128,50 @@ describe("resizeImage defaults", () => {
 	});
 });
 
+describe("resizeImage minimum dimension", () => {
+	it("upscales a degenerate 1x1 image up to the 200px floor", async () => {
+		// A 1x1 PNG (e.g. an empty chart render) would sail through the fast path
+		// untouched and trip a provider 400 "Could not process image".
+		const result = await resizeImage({ type: "image", data: RED_1X1_PNG_BASE64, mimeType: "image/png" });
+
+		expect(result.wasResized).toBe(true);
+		// Square source stays square at the floor.
+		expect(result.width).toBe(200);
+		expect(result.height).toBe(200);
+		// The encoded bytes actually carry those dimensions.
+		const meta = await new Bun.Image(Buffer.from(result.data, "base64")).metadata();
+		expect(meta.width).toBeGreaterThanOrEqual(200);
+		expect(meta.height).toBeGreaterThanOrEqual(200);
+	});
+
+	it("honors a custom minDimension override", async () => {
+		const result = await resizeImage(
+			{ type: "image", data: RED_1X1_PNG_BASE64, mimeType: "image/png" },
+			{ minDimension: 64 },
+		);
+
+		expect(result.width).toBe(64);
+		expect(result.height).toBe(64);
+	});
+
+	it("stretches a degenerate aspect ratio so both edges clear the floor and stay within the cap", async () => {
+		// 1x1600 strip: the cap pulls the long edge to 1568 while the short edge
+		// stays at 1px, so a uniform scale can't satisfy both bounds — the floor
+		// must be reached by fill-stretching the short edge.
+		const strip = await makeRedPng(1, 1600);
+		const result = await resizeImage({ type: "image", data: strip, mimeType: "image/png" });
+
+		expect(result.wasResized).toBe(true);
+		expect(result.width).toBeGreaterThanOrEqual(200);
+		expect(result.height).toBeGreaterThanOrEqual(200);
+		expect(result.width).toBeLessThanOrEqual(1568);
+		expect(result.height).toBeLessThanOrEqual(1568);
+		const meta = await new Bun.Image(Buffer.from(result.data, "base64")).metadata();
+		expect(meta.width).toBeGreaterThanOrEqual(200);
+		expect(meta.height).toBeGreaterThanOrEqual(200);
+	});
+});
+
 describe("resizeImage env wiring", () => {
 	const prior = Bun.env.OMP_NO_WEBP;
 
