@@ -8267,7 +8267,6 @@ export class AgentSession {
 		});
 	}
 
-
 	/**
 	 * Compact active `/goal` runs that never settle to `agent_end`.
 	 *
