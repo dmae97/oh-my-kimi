@@ -13,6 +13,12 @@ import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type { InstalledPlugin, PluginManifest, PluginRuntimeConfig, ProjectPluginOverrides } from "./types";
 
+/** Installed plugin plus the root scope that supplied its runtime metadata. */
+export interface ScopedInstalledPlugin extends InstalledPlugin {
+	scope: "user" | "project";
+}
+
+
 installLegacyPiSpecifierShim();
 
 // =============================================================================
@@ -60,7 +66,8 @@ async function loadProjectOverrides(cwd: string): Promise<ProjectPluginOverrides
 async function collectPluginsAtRoot(
 	root: string,
 	projectOverrides: ProjectPluginOverrides,
-): Promise<InstalledPlugin[]> {
+	scope: ScopedInstalledPlugin["scope"],
+): Promise<ScopedInstalledPlugin[]> {
 	const nodeModulesPath = path.join(root, "node_modules");
 	if (!fs.existsSync(nodeModulesPath)) return [];
 
@@ -92,7 +99,7 @@ async function collectPluginsAtRoot(
 		names.add(name);
 	}
 
-	const plugins: InstalledPlugin[] = [];
+	const plugins: ScopedInstalledPlugin[] = [];
 	for (const name of names) {
 		const pluginPkgPath = path.join(nodeModulesPath, name, "package.json");
 		let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
@@ -130,6 +137,7 @@ async function collectPluginsAtRoot(
 			name,
 			version: pluginPkg.version,
 			path: path.join(nodeModulesPath, name),
+			scope,
 			manifest,
 			enabledFeatures,
 			enabled: true,
@@ -154,19 +162,19 @@ async function collectPluginsAtRoot(
  * need to enumerate plugins relative to a non-default home (tests with a
  * tempdir, discovery loaders threaded with `LoadContext.home`).
  */
-export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<InstalledPlugin[]> {
+export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {}): Promise<ScopedInstalledPlugin[]> {
 	const { home } = opts;
 	const projectOverrides = await loadProjectOverrides(cwd);
 
 	const userRoot = getPluginsDir(home);
-	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides);
+	const userPlugins = await collectPluginsAtRoot(userRoot, projectOverrides, "user");
 
-	let projectPlugins: InstalledPlugin[] = [];
+	let projectPlugins: ScopedInstalledPlugin[] = [];
 	const projectRegistryPath = await resolveActiveProjectRegistryPath(cwd);
 	if (projectRegistryPath) {
 		const projectRoot = path.dirname(projectRegistryPath);
 		if (projectRoot !== userRoot) {
-			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides);
+			projectPlugins = await collectPluginsAtRoot(projectRoot, projectOverrides, "project");
 		}
 	}
 
@@ -174,7 +182,7 @@ export async function getEnabledPlugins(cwd: string, opts: { home?: string } = {
 	if (userPlugins.length === 0) return projectPlugins;
 
 	// Project entries shadow user entries with the same package name.
-	const merged = new Map<string, InstalledPlugin>();
+	const merged = new Map<string, ScopedInstalledPlugin>();
 	for (const plugin of userPlugins) merged.set(plugin.name, plugin);
 	for (const plugin of projectPlugins) merged.set(plugin.name, plugin);
 	return Array.from(merged.values());
