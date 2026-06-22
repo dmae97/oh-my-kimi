@@ -44,6 +44,7 @@ import {
 	CompactionCancelledError,
 	type CompactionPreparation,
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	calculatePromptTokens,
 	collectEntriesForBranchSummary,
@@ -7797,31 +7798,45 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			// Snapcompact runs locally first; if its frame archive plus the kept
-			// history still overflows the model window, fall back to an LLM summary
-			// (far cheaper than ~FRAME_TOKEN_ESTIMATE per frame).
+			// Snapcompact runs locally first. The frame cap is sized from the live
+			// model window via #computeSnapcompactMaxFrames so the post-render context
+			// fits without the warning loop (issue #3247). Zero-frame budget → skip
+			// snapcompact and take the summarizer path immediately.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (snapcompactReady) {
-				snapcompactResult = await snapcompact.compact(preparation, {
-					convertToLlm,
-					model: this.model,
-					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-				});
-				const ctxWindow = this.model?.contextWindow ?? 0;
-				const budget =
-					ctxWindow > 0
-						? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
-						: Number.POSITIVE_INFINITY;
-				if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
-					logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings);
+				if (maxFrames < 1) {
+					logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
 						model: this.model?.id,
 					});
 					this.emitNotice(
 						"warning",
-						"snapcompact could not bring the context under the limit — using an LLM summary instead",
+						"snapcompact: kept history alone exceeds the context budget — using an LLM summary instead",
 						"compaction",
 					);
-					snapcompactResult = undefined;
+				} else {
+					snapcompactResult = await snapcompact.compact(preparation, {
+						convertToLlm,
+						model: this.model,
+						shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+						maxFrames,
+					});
+					const ctxWindow = this.model?.contextWindow ?? 0;
+					const budget =
+						ctxWindow > 0
+							? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
+							: Number.POSITIVE_INFINITY;
+					if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
+						logger.warn("Snapcompact still overflows the window after frame-budget sizing; falling back", {
+							model: this.model?.id,
+						});
+						this.emitNotice(
+							"warning",
+							"snapcompact could not bring the context under the limit — using an LLM summary instead",
+							"compaction",
+						);
+						snapcompactResult = undefined;
+					}
 				}
 			}
 
@@ -9408,6 +9423,40 @@ export class AgentSession {
 	}
 
 	/**
+	 * Cap on snapcompact frames the post-compaction context can carry without
+	 * busting the model window. Mirrors the per-frame token charge used by the
+	 * projection ({@link snapcompact.FRAME_TOKEN_ESTIMATE}, the conservative
+	 * high-res Anthropic ceiling), so picking `maxFrames` from this helper makes
+	 * {@link #projectSnapcompactContextTokens} succeed by construction.
+	 *
+	 * Returns `0` when the kept-recent slice plus the non-message overhead
+	 * already eats the entire budget — at that point snapcompact cannot fit a
+	 * single frame and the caller MUST skip it instead of running just to
+	 * reject the result and re-emit the "could not bring the context under the
+	 * limit" warning every threshold tick. Without this cap, the bundled
+	 * `MAX_FRAMES_DEFAULT = 80` × 5024 tokens = ~402k frame-token projection
+	 * always overflows any sub-1M-token window (issue #3247).
+	 */
+	#computeSnapcompactMaxFrames(preparation: CompactionPreparation, settings: CompactionSettings): number {
+		const ctxWindow = this.model?.contextWindow ?? 0;
+		if (ctxWindow <= 0) return snapcompact.MAX_FRAMES_DEFAULT;
+		const reserve = effectiveReserveTokens(ctxWindow, settings);
+		let nonFrameTokens = computeNonMessageTokens(this);
+		for (const message of preparation.recentMessages) {
+			nonFrameTokens += estimateTokens(message);
+		}
+		// Headroom for the summary-message lead-in plus the verbatim text edges
+		// snapcompact pins around the imaged middle. Sized for the typical
+		// snapcompact summary (~2k tokens) plus one HQ-capacity text edge on
+		// each side; conservative, so a tighter post-render run cannot drift
+		// past the projection check below.
+		const SUMMARY_TEXT_RESERVE = 4000;
+		const frameBudget = ctxWindow - reserve - nonFrameTokens - SUMMARY_TEXT_RESERVE;
+		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 0;
+		return Math.min(Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE), snapcompact.MAX_FRAMES_DEFAULT);
+	}
+
+	/**
 	 * Project the post-compaction context size of a snapcompact result: kept
 	 * recent messages + the summary message with its re-attached frames + the
 	 * fixed non-message overhead (system prompt + tools). Mirrors how the
@@ -9652,24 +9701,20 @@ export class AgentSession {
 			let tokensBefore: number;
 			let details: unknown;
 
-			// Snapcompact runs locally first; if its frame archive plus the kept
-			// history still overflows the model window (frames default to
-			// MAX_FRAMES_DEFAULT and cost ~FRAME_TOKEN_ESTIMATE each), an LLM
-			// summary is far cheaper — downgrade to context-full and take the
-			// summarizer path.
+			// Snapcompact runs locally first. The post-compaction context = kept-recent
+			// + a summary message carrying the imaged archive at FRAME_TOKEN_ESTIMATE
+			// per frame; #computeSnapcompactMaxFrames sizes the frame cap from the
+			// live window so we don't run snapcompact just to overflow and fall back
+			// every threshold tick. Kept-recent already over budget → skip snapcompact
+			// outright (a single frame won't fit). Otherwise the projection below is
+			// only a defensive guard for summary-text drift.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 				);
 				const renderScan = snapcompact.scanRenderability(text);
-				if (renderScan.isSafe) {
-					snapcompactResult = await snapcompact.compact(preparation, {
-						convertToLlm,
-						model: this.model,
-						shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-					});
-				} else {
+				if (!renderScan.isSafe) {
 					logger.warn("Snapcompact disabled: high non-ASCII rate detected; falling back to an LLM summary", {
 						model: this.model?.id,
 						unrenderableRatio: renderScan.unrenderableRatio,
@@ -9680,6 +9725,26 @@ export class AgentSession {
 						"compaction",
 					);
 					action = "context-full";
+				} else {
+					const maxFrames = this.#computeSnapcompactMaxFrames(preparation, compactionSettings);
+					if (maxFrames < 1) {
+						logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
+							model: this.model?.id,
+						});
+						this.emitNotice(
+							"warning",
+							"snapcompact: kept history alone exceeds the context budget — using an LLM summary instead",
+							"compaction",
+						);
+						action = "context-full";
+					} else {
+						snapcompactResult = await snapcompact.compact(preparation, {
+							convertToLlm,
+							model: this.model,
+							shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+							maxFrames,
+						});
+					}
 				}
 
 				if (snapcompactResult) {
@@ -9690,7 +9755,7 @@ export class AgentSession {
 							: Number.POSITIVE_INFINITY;
 					const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
 					if (projected > budget) {
-						logger.warn("Snapcompact still overflows the window; falling back to an LLM summary", {
+						logger.warn("Snapcompact still overflows the window after frame-budget sizing; falling back", {
 							model: this.model?.id,
 							projected,
 							budget,
