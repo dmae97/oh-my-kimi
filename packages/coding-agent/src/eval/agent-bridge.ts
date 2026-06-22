@@ -49,6 +49,7 @@ const agentArgsSchema = type({
 	"isolated?": "boolean",
 	"apply?": "boolean",
 	"merge?": "boolean",
+	"returnHandle?": "boolean",
 });
 
 interface EvalAgentArgs {
@@ -80,6 +81,8 @@ interface EvalAgentArgs {
 	 * lock + repo mutation that branch mode performs.
 	 */
 	merge?: boolean;
+	/** True when a runtime helper will return an `agent://` handle backed by the output artifacts. */
+	returnHandle?: boolean;
 }
 
 export interface EvalAgentBridgeOptions {
@@ -483,13 +486,13 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	}
 
 	// Clean up the temp artifacts dir we created for this call only when the
-	// caller will not need the captured patch later. We keep it for two cases:
-	//   * a failed apply (`changesApplied === false`) so the user can recover
-	//     from `result.patchPath` manually — matches TaskTool behavior.
-	//   * `apply=false` (`changesApplied === null`), where the caller asked us
-	//     not to merge and consumes `details.patchPath` / `details.branchName`
-	//     out of band.
-	const shouldCleanupTempArtifacts = tempArtifactsDir && (!isIsolated || changesApplied === true);
+	// caller will not need files from it later. Keep it when the runtime helper
+	// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
+	// here), on a failed apply (`changesApplied === false`), and on
+	// `apply=false` (`changesApplied === null`) where the caller consumes
+	// `details.patchPath` / `details.branchName` out of band.
+	const shouldCleanupTempArtifacts =
+		tempArtifactsDir && !parsed.returnHandle && (!isIsolated || changesApplied === true);
 	if (shouldCleanupTempArtifacts) {
 		await fs.rm(artifactsDir, { recursive: true, force: true });
 	}

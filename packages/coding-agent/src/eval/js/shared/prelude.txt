@@ -125,7 +125,7 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 			"{ agentType, model, label, schema, isolated, apply, merge, returnHandle }",
 		);
 		const { returnHandle, ...callArgs } = o;
-		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs });
+		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs, returnHandle: Boolean(returnHandle) });
 		const text = res && typeof res === "object" ? res.text : res;
 		const parsed = hasOwn(callArgs, "schema") ? JSON.parse(text) : text;
 		if (!returnHandle) return parsed;

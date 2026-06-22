@@ -843,6 +843,17 @@ describe("runEvalAgent isolation", () => {
 		expect(mergeSpy).toHaveBeenCalledTimes(1);
 	});
 
+	it("preserves temp artifacts for non-isolated returnHandle outputs", async () => {
+		mockAgents();
+		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+
+		await runEvalAgent({ prompt: "plain handle", returnHandle: true }, { session: makeSession() });
+
+		const removedArtifactsDir = rmSpy.mock.calls.some(([target]) => typeof target === "string" && target.includes("omp-eval-agent-"));
+		expect(removedArtifactsDir).toBe(false);
+	});
+
 	it("forwards merge=false as patch mode and passes the worktree cwd through baseOptions", async () => {
 		mockAgents();
 		const { repoRoot } = mockIsolationContext();
@@ -985,5 +996,27 @@ describe("runEvalAgent isolation", () => {
 			([target]) => typeof target === "string" && target.includes("omp-eval-agent-"),
 		);
 		expect(removedArtifactsDir).toBe(true);
+	});
+
+	it("preserves the temp artifacts dir after a successful apply when returnHandle is requested", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, { output: "captured", patchPath: `/artifacts/${opts.agentId}.patch` }),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\nApplied",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: false,
+		});
+
+		await runEvalAgent({ prompt: "scout", returnHandle: true }, { session: isolatedSession() });
+
+		const removedArtifactsDir = rmSpy.mock.calls.some(
+			([target]) => typeof target === "string" && target.includes("omp-eval-agent-"),
+		);
+		expect(removedArtifactsDir).toBe(false);
 	});
 });

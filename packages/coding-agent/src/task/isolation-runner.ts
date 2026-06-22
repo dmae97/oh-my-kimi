@@ -197,12 +197,16 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 	const { result, repoRoot, mergeMode } = opts;
 	try {
 		if (mergeMode === "branch") {
+			const canApplyNestedOnly =
+				!result.branchName && result.exitCode === 0 && !result.aborted && (result.nestedPatches?.length ?? 0) > 0;
 			if (!result.branchName || result.exitCode !== 0 || result.aborted) {
 				return {
-					summary: "\n\nNo changes to apply.",
+					summary: canApplyNestedOnly
+						? "\n\nNo root changes to apply; nested repository patches captured."
+						: "\n\nNo changes to apply.",
 					changesApplied: true,
-					hadAnyChanges: false,
-					mergedBranchForNestedPatches: false,
+					hadAnyChanges: canApplyNestedOnly,
+					mergedBranchForNestedPatches: canApplyNestedOnly,
 				};
 			}
 			const mergeResult = await mergeTaskBranches(repoRoot, [

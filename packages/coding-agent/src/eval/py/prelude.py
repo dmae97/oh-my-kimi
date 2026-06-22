@@ -573,6 +573,8 @@ if "__omp_prelude_loaded__" not in globals():
             args["apply"] = bool(apply)
         if merge is not None:
             args["merge"] = bool(merge)
+        if return_handle:
+            args["returnHandle"] = True
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         parsed = json.loads(text) if schema is not None else text

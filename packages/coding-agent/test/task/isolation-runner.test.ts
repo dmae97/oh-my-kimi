@@ -1,0 +1,61 @@
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import { mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
+
+function result(overrides: Partial<SingleResult> = {}): SingleResult {
+	return {
+		index: 0,
+		id: "NestedOnly",
+		agent: "task",
+		agentSource: "bundled",
+		task: "Do nested work",
+		assignment: "Do nested work",
+		exitCode: 0,
+		output: "done",
+		stderr: "",
+		truncated: false,
+		durationMs: 1,
+		tokens: 0,
+		requests: 0,
+		...overrides,
+	};
+}
+
+describe("mergeIsolatedChanges", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("allows nested-only branch-mode patches to apply when no root branch was created", async () => {
+		const mergeSpy = vi.spyOn(worktreeModule, "mergeTaskBranches");
+		const outcome = await mergeIsolatedChanges({
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			result: result({
+				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
+			}),
+		});
+
+		expect(mergeSpy).not.toHaveBeenCalled();
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.hadAnyChanges).toBe(true);
+		expect(outcome.mergedBranchForNestedPatches).toBe(true);
+		expect(outcome.summary).toContain("nested repository patches captured");
+	});
+
+	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
+		const outcome = await mergeIsolatedChanges({
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			result: result({
+				exitCode: 1,
+				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
+			}),
+		});
+
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.hadAnyChanges).toBe(false);
+		expect(outcome.mergedBranchForNestedPatches).toBe(false);
+	});
+});

@@ -26,12 +26,15 @@ type AgentHelper = (prompt: string, opts?: Record<string, unknown>) => Promise<u
 describe("eval js agent() returnHandle", () => {
 	it("returns a DAG node carrying the agent:// handle when returnHandle is set", async () => {
 		let seenName: string | undefined;
-		const sandbox = loadPrelude(async name => {
+		let seenArgs: Record<string, unknown> | undefined;
+		const sandbox = loadPrelude(async (name, args) => {
 			seenName = name;
+			seenArgs = args as Record<string, unknown>;
 			return { text: "hello world", details: { agent: "task", id: "abc123", model: "m", structured: false } };
 		});
 		const node = await (sandbox.agent as AgentHelper)("say hi", { returnHandle: true });
 		expect(seenName).toBe("__agent__");
+		expect(seenArgs?.returnHandle).toBe(true);
 		expect(node).toEqual({
 			text: "hello world",
 			output: "hello world",
