@@ -9026,18 +9026,18 @@ export class AgentSession {
 			providerKeys.add(`openai-responses:${nextModel.provider}`);
 		}
 
-		// `openai-completions` sessions are keyed `openai-completions:<provider>:<baseUrl>:<modelId>`
+		// `openai-completions` sessions are keyed `openai-completions:<provider>:<resolvedBaseUrl>:<modelId>`
 		// and cache backend-specific decisions (strict-tools disable scopes, reasoning-effort
-		// fallbacks). When the user moves away from that backend — different `api`, `provider`,
-		// or `baseUrl` — the cached decisions no longer track the active transport. Evict the
-		// full `(provider, baseUrl)` prefix; same-backend model toggles keep their state.
+		// fallbacks). The resolved request base URL can differ from the catalog `model.baseUrl`
+		// (Moonshot env override, Alibaba Coding Plan enterprise URL, Azure deployment URL),
+		// so evict by provider prefix when the user moves away from that completions backend.
 		let completionsPrefixToEvict: string | undefined;
 		if (currentModel.api === "openai-completions") {
 			const currentScope = `${currentModel.provider}:${currentModel.baseUrl ?? ""}`;
 			const nextScope =
 				nextModel.api === "openai-completions" ? `${nextModel.provider}:${nextModel.baseUrl ?? ""}` : undefined;
 			if (currentScope !== nextScope) {
-				completionsPrefixToEvict = `openai-completions:${currentScope}:`;
+				completionsPrefixToEvict = `openai-completions:${currentModel.provider}:`;
 			}
 		}
 

@@ -92,7 +92,7 @@ describe("AgentSession openai-completions provider session eviction", () => {
 		expect(session.providerSessionState.has(completionsSessionKey(deepseek))).toBe(false);
 	});
 
-	it("evicts every cached entry under the old (provider, baseUrl) prefix", async () => {
+	it("evicts every cached entry under the old provider prefix", async () => {
 		const deepseekPro = completionsModel("deepseek", "deepseek-v4-pro");
 		const deepseekFlash = completionsModel("deepseek", "deepseek-v4-flash");
 		const cerebras = completionsModel("cerebras", "llama3.1-8b");
@@ -117,6 +117,25 @@ describe("AgentSession openai-completions provider session eviction", () => {
 		expect(flashCloseSpy).toHaveBeenCalledTimes(1);
 		expect(session.providerSessionState.has(completionsSessionKey(deepseekPro))).toBe(false);
 		expect(session.providerSessionState.has(completionsSessionKey(deepseekFlash))).toBe(false);
+	});
+
+	it("evicts entries whose base URL was resolved at request time", async () => {
+		const moonshot = completionsModel("moonshot", "kimi-k2-thinking");
+		const cerebras = completionsModel("cerebras", "llama3.1-8b");
+		authStorage.setRuntimeApiKey(cerebras.provider, "cerebras-test-key");
+
+		session = buildSession(moonshot);
+
+		const closeSpy = vi.fn();
+		const resolvedBaseUrlKey = `openai-completions:${moonshot.provider}:https://api.moonshot.cn/v1:${moonshot.id}`;
+		session.providerSessionState.set(resolvedBaseUrlKey, {
+			close: closeSpy,
+		} satisfies ProviderSessionState);
+
+		await session.setModel(cerebras);
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(session.providerSessionState.has(resolvedBaseUrlKey)).toBe(false);
 	});
 
 	it("leaves unrelated provider session state untouched", async () => {
