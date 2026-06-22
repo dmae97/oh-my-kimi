@@ -48,7 +48,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
-import { isUsageLimitError, isUsageLimitStatus } from "./rate-limit-utils";
+import { isUsageLimitOutcome } from "./rate-limit-utils";
 import { PROVIDER_REGISTRY } from "./registry";
 import type {
 	Api,
@@ -384,13 +384,18 @@ function extractStatusFromAssistantError(message: AssistantMessage): number | un
 function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
 	// 401 means the credential is bad. Usage-limit phrasing (Codex's
 	// "You have hit your ChatGPT usage limit", Anthropic's "usage_limit_reached",
-	// Google's "resource_exhausted") and bare 429s mean this account is parked
-	// but a sibling credential can usually pick the request up. Both are
-	// rotatable via `onAuthError` — the auth-gateway maps the former to
-	// `invalidateCredentialMatching` and the latter to `markUsageLimitReached`.
-	if (status === 401 || isUsageLimitStatus(status)) return true;
+	// Google's "resource_exhausted", OpenAI's "insufficient_quota") and 429s
+	// without transient rate-limit wording mean this account is parked but a
+	// sibling credential can usually pick the request up. Both are rotatable
+	// via `onAuthError` — the auth-gateway maps the former to
+	// `invalidateCredentialMatching` and the latter to
+	// `markUsageLimitReached`. Transient 429s ("Too many requests",
+	// per-minute caps) classify as RATE_LIMIT_EXCEEDED in
+	// `parseRateLimitReason` and stay in the provider's own backoff layer
+	// instead of burning siblings.
+	if (status === 401) return true;
 	void error;
-	return !!message && isUsageLimitError(message);
+	return isUsageLimitOutcome(status, message);
 }
 
 function createAssistantAuthError(message: AssistantMessage): Error {

@@ -12,7 +12,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { extractHttpStatusFromError, getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "./auth-retry";
-import { isUsageLimitError, isUsageLimitStatus } from "./rate-limit-utils";
+import { isUsageLimitOutcome } from "./rate-limit-utils";
 import { getProviderDefinition } from "./registry";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./registry/oauth";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./registry/oauth/types";
@@ -4091,7 +4091,7 @@ export class AuthStorage {
 		const error = options?.error;
 		const status = extractHttpStatusFromError(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-		if (isUsageLimitStatus(status) || (message && isUsageLimitError(message))) {
+		if (isUsageLimitOutcome(status, message)) {
 			return (
 				await this.markUsageLimitReached(provider, sessionId, {
 					modelId: options?.modelId,

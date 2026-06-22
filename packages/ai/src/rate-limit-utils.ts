@@ -102,9 +102,31 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 const USAGE_LIMIT_PATTERN =
 	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|quota.?reached|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)/i;
 
-/** HTTP status codes that can represent an account-local usage cap without a useful body. */
+/**
+ * HTTP status codes that, absent richer body classification, represent an
+ * account-local usage cap rather than a bad credential or a transient blip.
+ * Always combine with {@link isUsageLimitOutcome} when a message is available
+ * — a 429 carrying transient rate-limit wording is NOT a usage cap.
+ */
 export function isUsageLimitStatus(status: number | undefined): boolean {
 	return status === 429;
+}
+
+/**
+ * Returns true for failures that should burn one credential and rotate to a
+ * sibling account. Usage-limit phrasing in the body always wins (Codex
+ * `usage_limit_reached`, Anthropic account rate-limit, Google
+ * `resource_exhausted`, OpenAI `insufficient_quota`, …); otherwise bare 429
+ * falls back to the status-only signal — EXCEPT when the body classifies as
+ * a transient rate-limit (`Too many requests`, per-minute caps) via
+ * {@link parseRateLimitReason}. Transient 429s backoff against the same
+ * credential and are owned by the provider's retry layer.
+ */
+export function isUsageLimitOutcome(status: number | undefined, message: string | undefined): boolean {
+	if (message && isUsageLimitError(message)) return true;
+	if (!isUsageLimitStatus(status)) return false;
+	if (message && parseRateLimitReason(message) === "RATE_LIMIT_EXCEEDED") return false;
+	return true;
 }
 
 export function isUsageLimitError(errorMessage: string): boolean {

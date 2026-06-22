@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	calculateRateLimitBackoffMs,
 	isUsageLimitError,
+	isUsageLimitOutcome,
 	isUsageLimitStatus,
 	parseRateLimitReason,
 } from "@oh-my-pi/pi-ai/rate-limit-utils";
@@ -130,6 +131,43 @@ describe("isUsageLimitError", () => {
 		}
 		expect(isUsageLimitStatus(429)).toBe(true);
 		expect(isUsageLimitStatus(400)).toBe(false);
+	});
+});
+
+describe("isUsageLimitOutcome", () => {
+	it("rotates on bare 429 without a richer message", () => {
+		expect(isUsageLimitOutcome(429, undefined)).toBe(true);
+		expect(isUsageLimitOutcome(429, "429")).toBe(true);
+	});
+
+	it("rotates on 429 carrying quota payload codes", () => {
+		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
+			expect(isUsageLimitOutcome(429, message)).toBe(true);
+		}
+	});
+
+	it("keeps transient 429s (`too many requests`, per-minute caps) in the upstream-backoff lane", () => {
+		expect(isUsageLimitOutcome(429, "Cloud Code Assist API error (429): Too many requests")).toBe(false);
+		expect(isUsageLimitOutcome(429, "Requests per minute limit reached")).toBe(false);
+	});
+
+	it("still rotates on 429 with explicit account rate-limit framing", () => {
+		expect(
+			isUsageLimitOutcome(
+				429,
+				'{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+			),
+		).toBe(true);
+	});
+
+	it("rotates on usage-limit message regardless of status", () => {
+		expect(isUsageLimitOutcome(undefined, "usage_limit_reached")).toBe(true);
+		expect(isUsageLimitOutcome(500, "insufficient_quota")).toBe(true);
+	});
+
+	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {
+		expect(isUsageLimitOutcome(401, "Invalid API key")).toBe(false);
+		expect(isUsageLimitOutcome(400, "invalid_request_error: model unsupported")).toBe(false);
 	});
 });
 

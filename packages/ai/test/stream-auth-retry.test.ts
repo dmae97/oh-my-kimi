@@ -403,6 +403,49 @@ describe("streamSimple resolver auth retry", () => {
 		}
 	});
 
+	it("does not rotate or refresh on a transient 429 `too many requests` body", async () => {
+		const keys: unknown[] = [];
+		const retryResolves: ApiKeyResolveContext[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: assistant() });
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: assistantError("Cloud Code Assist API error (429): Too many requests", 429),
+					});
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		const stream = streamSimple(model(), context, {
+			apiKey: async ctx => {
+				if (ctx.error !== undefined) retryResolves.push(ctx);
+				return ctx.error === undefined ? "credential-A" : "credential-B";
+			},
+		});
+
+		const eventTypes: string[] = [];
+		for await (const event of stream) {
+			eventTypes.push(event.type);
+		}
+		const result = await stream.result();
+
+		// The provider's own retry/backoff layer owns transient 429s — the auth
+		// retry loop must NOT capture them, mint a refresh, or burn a sibling.
+		expect(retryResolves).toEqual([]);
+		expect(keys).toEqual(["credential-A"]);
+		expect(eventTypes).toEqual(["start", "error"]);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Too many requests");
+	});
+
 	it("rotates on the exact Google Resource exhausted 429 error before content", async () => {
 		const keys: unknown[] = [];
 		const retryContexts: ApiKeyResolveContext[] = [];

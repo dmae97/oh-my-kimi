@@ -1,6 +1,6 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { OAuthAccess } from "./auth-storage";
-import { isUsageLimitError, isUsageLimitStatus } from "./rate-limit-utils";
+import { isUsageLimitOutcome } from "./rate-limit-utils";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -72,17 +72,20 @@ export function seedApiKeyResolver(seed: string | undefined, resolver: ApiKeyRes
 
 /**
  * Classifies whether an error should trigger a credential refresh/rotation
- * retry: a hard `401`, a body-classified usage limit, or a bare `429` whose
- * provider payload did not preserve a richer quota code.
+ * retry: a hard `401`, body-classified usage limit (Codex
+ * `usage_limit_reached`, Anthropic account rate-limit, Google
+ * `resource_exhausted`, OpenAI `insufficient_quota`, …), or a bare `429`
+ * whose payload did not preserve a richer quota code. Transient 429s
+ * (`Too many requests`, per-minute caps) classify as `RATE_LIMIT_EXCEEDED`
+ * via {@link parseRateLimitReason} and stay in the upstream-backoff lane.
  */
 export function isAuthRetryableError(error: unknown): boolean {
 	const status = extractHttpStatusFromError(error);
-	if (status === 401 || isUsageLimitStatus(status)) return true;
+	if (status === 401) return true;
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-	if (!message) return false;
-	const messageStatus = extractHttpStatusFromError({ message });
-	if (messageStatus === 401 || isUsageLimitStatus(messageStatus)) return true;
-	return isUsageLimitError(message);
+	const embeddedStatus = message ? extractHttpStatusFromError({ message }) : undefined;
+	if (embeddedStatus === 401) return true;
+	return isUsageLimitOutcome(status ?? embeddedStatus, message);
 }
 
 /**

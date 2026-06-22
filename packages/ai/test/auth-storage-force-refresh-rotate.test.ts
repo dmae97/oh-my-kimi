@@ -195,6 +195,27 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		expect(usageLimitSpy).not.toHaveBeenCalled();
 	});
 
+	test("rotateSessionCredential leaves transient 429s out of the quota block path", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		registerProvider();
+		await authStorage.set(PROVIDER, [
+			{ type: "oauth", access: "acc-A", refresh: "ref-A", expires: farExpiry() },
+			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
+		]);
+
+		await authStorage.getApiKey(PROVIDER, "transient-429");
+		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
+
+		await authStorage.rotateSessionCredential(PROVIDER, "transient-429", {
+			error: Object.assign(new Error("Cloud Code Assist API error (429): Too many requests"), { status: 429 }),
+		});
+
+		// `Too many requests` / per-minute caps are owned by the provider's own
+		// retry layer — burning a sibling credential here would orphan an
+		// otherwise-healthy account for the default backoff window.
+		expect(usageLimitSpy).not.toHaveBeenCalled();
+	});
+
 	test("rotateSessionCredential reports no sibling for a single-credential setup", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();
