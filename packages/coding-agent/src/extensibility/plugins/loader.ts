@@ -18,7 +18,6 @@ export interface ScopedInstalledPlugin extends InstalledPlugin {
 	scope: "user" | "project";
 }
 
-
 installLegacyPiSpecifierShim();
 
 // =============================================================================
