@@ -2147,6 +2147,14 @@ async function resumeGitLabDuoWorkflowSocket(
 		throw error;
 	}
 	finalizeGitLabDuoWorkflowResumeResult(args.state, args.providerSessionState, socketResult);
+	// `action`/`pause` keep the session alive for the next resume; `terminal` is a real
+	// server completion. But `closed`/`timeout` (and an exhausted `approval`) settle the
+	// local stream while the remote workflow may still be running — mirror the fresh-
+	// workflow `finally` and send the stop PATCH so a half-open/dropped socket after a
+	// tool result never strands the server-side workflow with no local handle left.
+	if (socketResult === "closed" || socketResult === "timeout") {
+		await stopGitLabDuoWorkflow(args.fetchImpl, args.baseUrl, args.apiKey, args.workflowId);
+	}
 }
 
 function pauseGitLabDuoWorkflowStream(state: GitLabDuoWorkflowStreamState): void {
