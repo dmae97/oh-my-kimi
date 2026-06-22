@@ -531,11 +531,10 @@ if "__omp_prelude_loaded__" not in globals():
 
         Pass `isolated=True` to run the subagent inside an isolation worktree
         (copy-on-write of the parent repo) so parallel `agent()` spawns can
-        edit overlapping files safely. The default tracks the session's
-        `task.isolation.mode`: opt-in when isolation is enabled, off when set
-        to "none". `isolated=False` explicitly disables isolation even when
-        the setting would default it on; `isolated=True` while the mode is
-        "none" errors the call instead of silently downgrading.
+        edit overlapping files safely. Strict opt-in, mirroring the `task`
+        tool: the default is non-isolated regardless of `task.isolation.mode`.
+        `isolated=True` while the setting is `"none"` errors out instead of
+        silently downgrading.
 
         When isolated, `apply=False` keeps captured changes inside the
         worktree and surfaces the root patch path, branch name, and nested

@@ -60,10 +60,10 @@ interface EvalAgentArgs {
 	schema?: unknown;
 	/**
 	 * Run this subagent inside an isolation worktree (copy-on-write of the
-	 * parent repo). Defaults to the session's `task.isolation.mode`: opt-in
-	 * when isolation is enabled, off when `mode === "none"`. Passing `false`
-	 * explicitly overrides the inherited default; passing `true` while
-	 * `mode === "none"` errors out to match the `task` tool.
+	 * parent repo). Strict opt-in: defaults to `false` regardless of the
+	 * session's `task.isolation.mode`, mirroring the `task` tool. Passing
+	 * `true` while `task.isolation.mode === "none"` errors out instead of
+	 * silently downgrading.
 	 */
 	isolated?: boolean;
 	/**
@@ -328,23 +328,17 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const id = await outputManager.allocate(outputIdBase(parsed.label, agentName));
 	const assignment = parsed.prompt.trim();
 
-	// Isolation gating. Default to the session's `task.isolation.mode` — opt
-	// out only when the caller explicitly passes `isolated=False`. `isolated=True`
-	// while the mode is "none" mirrors the `task` tool: surface a clear error
-	// instead of silently downgrading.
+	// Isolation gating. Strict opt-in: only the explicit `isolated=true`
+	// argument turns it on; `task.isolation.mode` no longer drives the
+	// default. Mirrors the `task` tool so eval `agent()` and `task` callers
+	// see the same semantic. `isolated=true` while the mode is `"none"`
+	// surfaces a clear error instead of silently downgrading.
 	const isolationMode = options.session.settings.get("task.isolation.mode");
 	const isolationEnabledInSettings = isolationMode !== "none";
-	let isIsolated: boolean;
-	if (parsed.isolated === true) {
-		if (!isolationEnabledInSettings) {
-			throw new ToolError(`agent(isolated=True) requires task.isolation.mode to be set; current mode is "none".`);
-		}
-		isIsolated = true;
-	} else if (parsed.isolated === false) {
-		isIsolated = false;
-	} else {
-		isIsolated = isolationEnabledInSettings;
+	if (parsed.isolated === true && !isolationEnabledInSettings) {
+		throw new ToolError(`agent(isolated=True) requires task.isolation.mode to be set; current mode is "none".`);
 	}
+	const isIsolated = parsed.isolated === true;
 	const settingsMergeMode = options.session.settings.get("task.isolation.merge");
 	const mergeMode: "patch" | "branch" = parsed.merge === false ? "patch" : settingsMergeMode;
 	const applyChanges = parsed.apply !== false;
