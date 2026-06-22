@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed bracketed paste treating a bare `.png` filename as an image attachment path instead of normal prompt text. ([#3253](https://github.com/can1357/oh-my-pi/issues/3253))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
