@@ -551,6 +551,24 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 	}
 
+	/**
+	 * Re-derive the SessionList's external-row reserve from the actual
+	 * rendered height of the confirmation dialog at the live width before
+	 * the regular composition walks the children. The dialog's title is
+	 * Markdown and its option list, hint, and any countdown can all wrap
+	 * on narrow terminals or against long session names; a fixed reserve
+	 * would underestimate that and let the picker top still scroll into
+	 * native scrollback (issue #3283 review feedback). The dialog's own
+	 * `Container` memoization makes the extra pre-render essentially free
+	 * — `super.render(width)` reuses the same cached array reference, so
+	 * the engine still sees a stable child render.
+	 */
+	override render(width: number): readonly string[] {
+		const reserveRows = this.#confirmationDialog?.render(Math.max(1, width)).length ?? 0;
+		this.#sessionList.setExternalReserveRows(reserveRows);
+		return super.render(width);
+	}
+
 	#headerLabel(): string {
 		const scopeLabel = this.#scope === "all" ? "all projects" : "current folder";
 		return `${theme.bold("Resume Session")} ${theme.fg("muted", `(${scopeLabel})`)}`;
@@ -607,26 +625,14 @@ export class SessionSelectorComponent extends Container {
 		this.#messageContainer.addChild(new Spacer(1));
 	}
 
-	// Rows the delete-confirmation dialog adds below the picker's bottom
-	// border. Used to shrink the SessionList while the dialog is mounted so
-	// the picker's total rendered output never exceeds the terminal height.
-	// Sized generously (title + session-name + spacer + 2 options + spacer +
-	// hint + leading/trailing blanks) so the SessionList always concedes
-	// enough room for the dialog as it grows, even when the displayed session
-	// name wraps.
-	static readonly #DELETE_DIALOG_RESERVE_ROWS = 12;
-
 	#showDeleteConfirmation(session: SessionInfo): void {
 		const displayName = session.title || session.firstMessage.slice(0, 40) || session.id;
 		const closeDialog = () => {
 			this.removeChild(this.#confirmationDialog!);
 			this.#confirmationDialog = null;
-			// Release the dialog's row reservation BEFORE requesting the
-			// rerender so the SessionList can grow back to its full window
-			// in the same frame the dialog disappears. Otherwise the picker
-			// re-renders short, leaving a band of blank rows beneath it for
-			// one frame (visible as a flicker / "still scrolled" feel).
-			this.#sessionList.setExternalReserveRows(0);
+			// The next render() override pass will see no dialog and reset
+			// the reserve to 0 before walking children, so the SessionList
+			// grows back inside the very same frame the dialog disappears.
 			this.#onRequestRender?.();
 		};
 		this.#confirmationDialog = new HookSelectorComponent(
@@ -648,13 +654,12 @@ export class SessionSelectorComponent extends Container {
 			},
 			closeDialog,
 		);
-		// Shrink the SessionList by the dialog's worst-case height BEFORE
-		// mounting the dialog so the very first frame containing the dialog
-		// already fits the terminal viewport. Without this the dialog's first
-		// render still overflows and the TUI commits the picker's top rows
-		// to native scrollback before the SessionList has a chance to react
-		// — issue #3283.
-		this.#sessionList.setExternalReserveRows(SessionSelectorComponent.#DELETE_DIALOG_RESERVE_ROWS);
+		// The reserve is recomputed every frame inside render() from the
+		// dialog's actual rendered height at the live width — see the
+		// `render` override on this class — so no pre-mount reserve hint
+		// is needed here. That measurement runs BEFORE the children walk,
+		// so the first frame containing the dialog already fits the
+		// viewport even when the dialog's title or session-name wraps.
 		this.addChild(this.#confirmationDialog);
 	}
 
