@@ -818,8 +818,7 @@ exit 64
 			].join("\n"),
 		);
 		const rawSnapshot = fs.readFileSync(snapshotPath, "utf8");
-		const { content: scrubbed, dropped } =
-			shellSnapshot.sanitizeSnapshotForBrush(rawSnapshot);
+		const { content: scrubbed, dropped } = shellSnapshot.sanitizeSnapshotForBrush(rawSnapshot);
 		fs.writeFileSync(snapshotPath, scrubbed);
 		expect(dropped).toEqual(["which"]);
 		// Compatible aliases must still be installed in brush.

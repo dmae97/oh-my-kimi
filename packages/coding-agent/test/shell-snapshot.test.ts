@@ -36,7 +36,7 @@ describe("sanitizeSnapshotForBrush", () => {
 		// single quote (and a pipe), so the filter still trips on the pipe.
 		["decoded-pipe", "alias -- a='cat '\\''one'\\'' | head'"],
 	])("drops aliases whose body needs shell parsing (%s)", (_label, line) => {
-		const result = sanitizeSnapshotForBrush(line + "\n");
+		const result = sanitizeSnapshotForBrush(`${line}\n`);
 		expect(result.dropped).toEqual(["a"]);
 		expect(result.content).not.toContain("alias -- a=");
 	});
@@ -49,7 +49,7 @@ describe("sanitizeSnapshotForBrush", () => {
 		// must survive — we only ban truly unparseable bodies.
 		["embedded-quote", "alias -- say='echo '\\''hello'\\'''"],
 	])("preserves aliases brush can handle by whitespace split (%s)", (_label, line) => {
-		const result = sanitizeSnapshotForBrush(line + "\n");
+		const result = sanitizeSnapshotForBrush(`${line}\n`);
 		expect(result.dropped).toEqual([]);
 		expect(result.content).toContain(line);
 	});
