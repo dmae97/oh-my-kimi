@@ -602,11 +602,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "share",
-		description: "Share session via an encrypted link (secret gist or share server)",
+		description: "Share session via an encrypted link (share server or secret gist)",
 		handle: async (_command, runtime) => {
 			try {
 				const result = await shareSession(runtime.sessionManager, {
 					serverUrl: runtime.settings.get("share.serverUrl"),
+					store: runtime.settings.get("share.store"),
 					state: runtime.session.state,
 					obfuscator: runtime.settings.get("share.redactSecrets") ? runtime.session.obfuscator : undefined,
 				});

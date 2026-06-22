@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionData } from "../src/export/html";
-import { buildShareSnapshot, normalizeShareServerUrl, SERVER_MAX_SEALED_BYTES, sealToFit } from "../src/export/share";
+import {
+	buildShareSnapshot,
+	normalizeShareServerUrl,
+	SERVER_MAX_SEALED_BYTES,
+	sealToFit,
+	shareSession,
+} from "../src/export/share";
 import { SecretObfuscator } from "../src/secrets/obfuscator";
 import type { SessionEntry } from "../src/session/session-entries";
 import type { SessionManager } from "../src/session/session-manager";
@@ -251,5 +257,47 @@ describe("normalizeShareServerUrl", () => {
 		expect(normalizeShareServerUrl("https://example.com/s///")).toBe("https://example.com/s");
 		expect(normalizeShareServerUrl(undefined)).toBe("https://my.omp.sh/s");
 		expect(normalizeShareServerUrl("   ")).toBe("https://my.omp.sh/s");
+	});
+});
+
+describe("shareSession", () => {
+	test("default store seals the snapshot and uploads it to the share server", async () => {
+		const entries = [messageEntry("e1", null, "share me"), messageEntry("e2", "e1", "second")];
+		const sm = {
+			getHeader: () => sessionData([], "x").header,
+			getEntries: () => entries,
+			getLeafId: () => "e2",
+		} as unknown as SessionManager;
+
+		let uploaded: Uint8Array<ArrayBuffer> | null = null;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				if (req.method !== "POST") return new Response("nope", { status: 405 });
+				uploaded = new Uint8Array(await req.arrayBuffer());
+				return Response.json({ id: "blobshareid01" });
+			},
+		});
+		try {
+			const base = `http://localhost:${server.port}`;
+			const result = await shareSession(sm, { serverUrl: base });
+
+			// Default store ("blob") routes to the server, not a gist: server-issued id, no gistUrl.
+			expect(result.method).toBe("server");
+			expect(result.gistUrl).toBeUndefined();
+			const [link, keyText] = result.url.split("#");
+			expect(link).toBe(`${base}/blobshareid01`);
+			expect(uploaded).not.toBeNull();
+
+			// The #key fragment decrypts the exact bytes the server received.
+			const key = await crypto.subtle.importKey("raw", Buffer.from(keyText, "base64url"), "AES-GCM", false, [
+				"decrypt",
+			]);
+			const opened = await open(key, uploaded as unknown as Uint8Array<ArrayBuffer>);
+			expect(opened.entries).toHaveLength(2);
+			expect(JSON.stringify(opened)).toContain("share me");
+		} finally {
+			server.stop(true);
+		}
 	});
 });

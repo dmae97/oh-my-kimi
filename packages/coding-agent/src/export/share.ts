@@ -3,13 +3,13 @@
  *
  * The session JSON is gzipped and sealed with a fresh AES-256-GCM key
  * (`[12B IV][ciphertext+tag]`, same layout as collab frames), then pushed to
- * one of two stores:
+ * one of two stores, chosen by `share.store`:
  *
- *   1. A secret GitHub gist (preferred — free, durable, no relay storage)
- *      holding base64 of the sealed blob, when an authenticated `gh` exists.
- *   2. The share server (`POST <serverUrl>` → `{"id":"…"}`), capped at 1 MB;
- *      oversized sessions are truncated (images first, then long strings,
- *      then oldest entries) until the sealed blob fits.
+ *   1. The share server (default — `POST <serverUrl>` → `{"id":"…"}`), capped
+ *      at 1 MB; oversized sessions are truncated (images first, then long
+ *      strings, then oldest entries) until the sealed blob fits.
+ *   2. A secret GitHub gist (`store: "gist"`, when an authenticated `gh`
+ *      exists; falls back to the share server) holding base64 of the blob.
  *
  * Either way the link is `<serverUrl>/<id>#<base64url key>`. The viewer page
  * served there fetches the blob (gist ids are hex; server ids never are),
@@ -50,9 +50,17 @@ const TEXT_CAPS = [32_768, 8_192, 2_048, 512];
 const BLANK_IMAGE_DATA_URL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 const IMAGE_OMITTED_TEXT = "[image omitted from share]";
 
+export type ShareStore = "blob" | "gist";
+
 export interface ShareSessionOptions {
 	/** Share server/viewer base URL; defaults to {@link DEFAULT_SHARE_URL}. */
 	serverUrl?: string;
+	/**
+	 * Where to upload the sealed blob. `"blob"` (default) posts to the share
+	 * server; `"gist"` pushes to a secret GitHub gist first (needs an
+	 * authenticated `gh`) and falls back to the server.
+	 */
+	store?: ShareStore;
 	/** Agent state for system prompt + tool descriptions in the snapshot. */
 	state?: AgentState;
 	/**
@@ -268,7 +276,7 @@ function redactShareMessage(o: SecretObfuscator, message: AgentMessage): AgentMe
 	}
 }
 
-/** Share the session; tries a secret gist first, then the share server. */
+/** Share the session; uploads to the share server unless `options.store` is `"gist"`. */
 export async function shareSession(sm: SessionManager, options?: ShareSessionOptions): Promise<ShareSessionResult> {
 	const data = buildShareSnapshot(sm, options);
 	const keyBytes = new Uint8Array(SHARE_KEY_BYTES);
@@ -277,29 +285,23 @@ export async function shareSession(sm: SessionManager, options?: ShareSessionOpt
 	const keyText = Buffer.from(keyBytes).toString("base64url");
 	const base = normalizeShareServerUrl(options?.serverUrl);
 
-	const forGist = await sealToFit(key, data, GIST_MAX_SEALED_BYTES);
-	const gist = await tryCreateGist(forGist.sealed);
-	if (gist) {
-		return {
-			url: `${base}/${gist.id}#${keyText}`,
-			method: "gist",
-			gistUrl: gist.url,
-			truncated: forGist.truncated,
-			sealedBytes: forGist.sealed.byteLength,
-		};
+	if (options?.store === "gist") {
+		const forGist = await sealToFit(key, data, GIST_MAX_SEALED_BYTES);
+		const gist = await tryCreateGist(forGist.sealed);
+		if (gist) {
+			return {
+				url: `${base}/${gist.id}#${keyText}`,
+				method: "gist",
+				gistUrl: gist.url,
+				truncated: forGist.truncated,
+				sealedBytes: forGist.sealed.byteLength,
+			};
+		}
+		// gh unusable or gist creation failed — fall back to the share server.
+		return shareViaServer(key, data, base, keyText, forGist);
 	}
 
-	const forServer =
-		forGist.sealed.byteLength <= SERVER_MAX_SEALED_BYTES
-			? forGist
-			: await sealToFit(key, data, SERVER_MAX_SEALED_BYTES);
-	const id = await uploadToServer(forServer.sealed, base);
-	return {
-		url: `${base}/${id}#${keyText}`,
-		method: "server",
-		truncated: forServer.truncated,
-		sealedBytes: forServer.sealed.byteLength,
-	};
+	return shareViaServer(key, data, base, keyText);
 }
 
 /** Strip trailing slashes so `<base>/<id>` composes cleanly. */
@@ -431,6 +433,27 @@ async function tryCreateGist(sealed: Uint8Array): Promise<{ id: string; url: str
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
 	}
+}
+
+/** Seal to the server cap (reusing `preFit` when it already fits) and upload. */
+async function shareViaServer(
+	key: CryptoKey,
+	data: SessionData,
+	base: string,
+	keyText: string,
+	preFit?: SealedSession,
+): Promise<ShareSessionResult> {
+	const forServer =
+		preFit && preFit.sealed.byteLength <= SERVER_MAX_SEALED_BYTES
+			? preFit
+			: await sealToFit(key, data, SERVER_MAX_SEALED_BYTES);
+	const id = await uploadToServer(forServer.sealed, base);
+	return {
+		url: `${base}/${id}#${keyText}`,
+		method: "server",
+		truncated: forServer.truncated,
+		sealedBytes: forServer.sealed.byteLength,
+	};
 }
 
 /** POST the sealed blob to the share server; returns the assigned id. */

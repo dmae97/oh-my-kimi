@@ -217,6 +217,7 @@ export class CommandController {
 		try {
 			const result = await shareSession(this.ctx.session.sessionManager, {
 				serverUrl: this.ctx.settings.get("share.serverUrl"),
+				store: this.ctx.settings.get("share.store"),
 				state: this.ctx.session.state,
 				obfuscator: this.ctx.settings.get("share.redactSecrets") ? this.ctx.session.obfuscator : undefined,
 			});
