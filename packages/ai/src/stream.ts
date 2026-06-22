@@ -48,7 +48,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
-import { isUsageLimitError } from "./rate-limit-utils";
+import { isUsageLimitError, isUsageLimitStatus } from "./rate-limit-utils";
 import { PROVIDER_REGISTRY } from "./registry";
 import type {
 	Api,
@@ -384,11 +384,11 @@ function extractStatusFromAssistantError(message: AssistantMessage): number | un
 function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
 	// 401 means the credential is bad. Usage-limit phrasing (Codex's
 	// "You have hit your ChatGPT usage limit", Anthropic's "usage_limit_reached",
-	// Google's "resource_exhausted") means this account is parked but a
-	// sibling credential can usually pick the request up. Both are
+	// Google's "resource_exhausted") and bare 429s mean this account is parked
+	// but a sibling credential can usually pick the request up. Both are
 	// rotatable via `onAuthError` — the auth-gateway maps the former to
 	// `invalidateCredentialMatching` and the latter to `markUsageLimitReached`.
-	if (status === 401) return true;
+	if (status === 401 || isUsageLimitStatus(status)) return true;
 	void error;
 	return !!message && isUsageLimitError(message);
 }

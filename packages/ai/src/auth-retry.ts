@@ -1,6 +1,6 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { OAuthAccess } from "./auth-storage";
-import { isUsageLimitError } from "./rate-limit-utils";
+import { isUsageLimitError, isUsageLimitStatus } from "./rate-limit-utils";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -72,14 +72,16 @@ export function seedApiKeyResolver(seed: string | undefined, resolver: ApiKeyRes
 
 /**
  * Classifies whether an error should trigger a credential refresh/rotation
- * retry: a hard `401`, or a rotatable usage-limit ("usage_limit_reached",
- * Codex's "you have hit your ChatGPT usage limit", etc.).
+ * retry: a hard `401`, a body-classified usage limit, or a bare `429` whose
+ * provider payload did not preserve a richer quota code.
  */
 export function isAuthRetryableError(error: unknown): boolean {
-	if (extractHttpStatusFromError(error) === 401) return true;
+	const status = extractHttpStatusFromError(error);
+	if (status === 401 || isUsageLimitStatus(status)) return true;
 	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 	if (!message) return false;
-	if (extractHttpStatusFromError({ message }) === 401) return true;
+	const messageStatus = extractHttpStatusFromError({ message });
+	if (messageStatus === 401 || isUsageLimitStatus(messageStatus)) return true;
 	return isUsageLimitError(message);
 }
 

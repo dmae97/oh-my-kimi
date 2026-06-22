@@ -350,6 +350,59 @@ describe("streamSimple resolver auth retry", () => {
 		expect(keys).toEqual(["old-key", "new-key"]);
 	});
 
+	it("rotates before emitting content for Codex quota payloads", async () => {
+		const payloads: Array<{ message: string; status?: number }> = [
+			{ message: "429", status: 429 },
+			{ message: '{"error":{"code":"insufficient_quota","message":"quota exhausted"}}' },
+			{ message: '{"error":{"code":"usage_limit_exceeded","message":"usage limit exceeded"}}' },
+			{ message: '{"error":{"code":"usage_limit_reached","message":"usage limit reached"}}' },
+		];
+		let activePayload = payloads[0]!;
+		let keys: unknown[] = [];
+		registerCustomApi(
+			API,
+			(_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				pushKey(keys, options);
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					if (options?.apiKey === "credential-B") {
+						ok(stream);
+						return;
+					}
+					stream.push({ type: "start", partial: assistant() });
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: assistantError(activePayload.message, activePayload.status),
+					});
+				});
+				return stream;
+			},
+			SOURCE_ID,
+		);
+
+		for (const payload of payloads) {
+			activePayload = payload;
+			keys = [];
+			const eventTypes: string[] = [];
+			const retryContexts: ApiKeyResolveContext[] = [];
+			const stream = streamSimple(model(), context, {
+				apiKey: async ctx => {
+					if (ctx.error !== undefined) retryContexts.push(ctx);
+					return ctx.error === undefined ? "credential-A" : ctx.lastChance ? "credential-B" : "credential-A";
+				},
+			});
+			for await (const event of stream) {
+				eventTypes.push(event.type);
+			}
+
+			expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
+			expect(keys).toEqual(["credential-A", "credential-B"]);
+			expect(eventTypes).toEqual(["start", "done"]);
+			expect(retryContexts.map(ctx => ctx.lastChance)).toEqual([false, true]);
+		}
+	});
+
 	it("rotates on the exact Google Resource exhausted 429 error before content", async () => {
 		const keys: unknown[] = [];
 		const retryContexts: ApiKeyResolveContext[] = [];

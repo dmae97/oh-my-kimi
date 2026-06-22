@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { calculateRateLimitBackoffMs, isUsageLimitError, parseRateLimitReason } from "@oh-my-pi/pi-ai/rate-limit-utils";
+import {
+	calculateRateLimitBackoffMs,
+	isUsageLimitError,
+	isUsageLimitStatus,
+	parseRateLimitReason,
+} from "@oh-my-pi/pi-ai/rate-limit-utils";
 
 describe("parseRateLimitReason", () => {
 	it("classifies Google Quota exceeded as QUOTA_EXHAUSTED", () => {
@@ -117,6 +122,14 @@ describe("isUsageLimitError", () => {
 	it("detects bare 'quota reached' phrasing", () => {
 		expect(isUsageLimitError("quota reached")).toBe(true);
 		expect(isUsageLimitError("quota_reached")).toBe(true);
+	});
+
+	it("detects OpenAI quota payload codes as credential-rotatable usage limits", () => {
+		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
+			expect(isUsageLimitError(message)).toBe(true);
+		}
+		expect(isUsageLimitStatus(429)).toBe(true);
+		expect(isUsageLimitStatus(400)).toBe(false);
 	});
 });
 

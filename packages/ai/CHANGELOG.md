@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenAI Codex OAuth account rotation for quota failures that surface as bare HTTP 429 or `insufficient_quota`, so pre-content failures temporarily block only the exhausted credential and retry a healthy sibling. ([#3231](https://github.com/can1357/oh-my-pi/issues/3231))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
