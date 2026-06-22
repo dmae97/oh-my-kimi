@@ -460,6 +460,43 @@ describe("SettingsList", () => {
 		expect(seen).toEqual(["alpha2", "alpha"]);
 	});
 
+	it("verifies handleWheelAt ignores wheel on sidebar but succeeds on settings pane", () => {
+		const list = new SettingsList(
+			sectionedItems(),
+			10,
+			testTheme,
+			() => {},
+			() => {},
+		);
+		// Before render, sidebar Hit columns are not set
+		expect(list.handleWheelAt(1, 0, 0)).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("alpha2");
+		// Reset back to alpha
+		list.selectItem("alpha");
+
+		// Render in split layout (wide width, e.g. 120 cols) so sidebar hit areas are mapped
+		list.render(120);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+
+		// Scrolling on sidebar (e.g. col 0) should be ignored (returns false, selection unchanged)
+		expect(list.handleWheelAt(1, 0, 0)).toBe(false);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+
+		// Scrolling in the settings list pane (e.g. col 40 >= sidebar width) should move selection
+		expect(list.handleWheelAt(1, 0, 40)).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("alpha2");
+
+		// Scrolling up (delta -1) from 'alpha' (the first item) should clamp (no wrap)
+		list.selectItem("alpha");
+		expect(list.handleWheelAt(-1, 0, 40)).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("alpha");
+
+		// Scrolling down (delta 1) from 'gamma' (the last item) should clamp (no wrap)
+		list.selectItem("gamma");
+		expect(list.handleWheelAt(1, 0, 40)).toBe(true);
+		expect(list.getSelectedItem()?.id).toBe("gamma");
+	});
+
 	it("hit-tests pane rows to items and sidebar rows to section jump targets", () => {
 		const list = new SettingsList(
 			sectionedItems(),
