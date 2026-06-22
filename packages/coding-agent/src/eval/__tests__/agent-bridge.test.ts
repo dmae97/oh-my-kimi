@@ -1022,7 +1022,10 @@ describe("runEvalAgent isolation", () => {
 		);
 		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
 
-		const result = await runEvalAgent({ prompt: "scout", isolated: true, apply: false }, { session: isolatedSession() });
+		const result = await runEvalAgent(
+			{ prompt: "scout", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
 
 		expect(mergeSpy).not.toHaveBeenCalled();
 		expect(result.details.isolated).toBe(true);
@@ -1082,7 +1085,10 @@ describe("runEvalAgent isolation", () => {
 			singleResult(opts.baseOptions, { output: "captured", patchPath: `/artifacts/${opts.agentId}.patch` }),
 		);
 
-		const result = await runEvalAgent({ prompt: "scout", isolated: true, apply: false }, { session: isolatedSession() });
+		const result = await runEvalAgent(
+			{ prompt: "scout", isolated: true, apply: false },
+			{ session: isolatedSession() },
+		);
 
 		expect(result.details.patchPath).toMatch(/\.patch$/);
 		const removedArtifactsDir = rmSpy.mock.calls.some(
