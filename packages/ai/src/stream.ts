@@ -64,6 +64,7 @@ import type {
 	ToolChoice,
 } from "./types";
 import { AssistantMessageEventStream } from "./utils/event-stream";
+import { wrapFetchForProxy } from "./utils/proxy";
 import { withRequestDebugFetch } from "./utils/request-debug";
 import { withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
 
@@ -237,9 +238,12 @@ function streamDispatch<TApi extends Api>(
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): AssistantMessageEventStream {
-	const requestOptions = withRequestDebugFetch(options as StreamOptions | undefined) as
-		| OptionsForApi<TApi>
-		| undefined;
+	const baseOptions = (options || {}) as StreamOptions;
+	const debugOptions = withRequestDebugFetch(baseOptions);
+	const requestOptions = {
+		...debugOptions,
+		fetch: wrapFetchForProxy(debugOptions.fetch ?? (globalThis.fetch as FetchImpl), model.provider),
+	} as OptionsForApi<TApi>;
 
 	// Check custom API registry first (extension-provided APIs like "vertex-claude-api")
 	const customApiProvider = getCustomApi(model.api);
@@ -248,12 +252,12 @@ function streamDispatch<TApi extends Api>(
 	}
 
 	if (isGitLabDuoModel(model)) {
-		const apiKey = (requestOptions as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
+		const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
 			throw new Error(`No API key for provider: ${model.provider}`);
 		}
 		return streamGitLabDuo(model, context, {
-			...(requestOptions as SimpleStreamOptions | undefined),
+			...(requestOptions as SimpleStreamOptions),
 			apiKey,
 		});
 	}
@@ -263,14 +267,10 @@ function streamDispatch<TApi extends Api>(
 		return streamGoogleVertex(model as Model<"google-vertex">, context, requestOptions as GoogleVertexOptions);
 	} else if (model.api === "bedrock-converse-stream") {
 		// Bedrock doesn't have any API keys instead it sources credentials from standard AWS env variables or from given AWS profile.
-		return streamBedrock(
-			model as Model<"bedrock-converse-stream">,
-			context,
-			(requestOptions || {}) as BedrockOptions,
-		);
+		return streamBedrock(model as Model<"bedrock-converse-stream">, context, requestOptions as BedrockOptions);
 	}
 
-	const apiKey = requestOptions?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -278,7 +278,7 @@ function streamDispatch<TApi extends Api>(
 		? {
 				...requestOptions,
 				apiKey: "vertex-adc",
-				fetch: createVertexAuthenticatedFetch(requestOptions as StreamOptions | undefined),
+				fetch: createVertexAuthenticatedFetch(requestOptions),
 			}
 		: { ...requestOptions, apiKey };
 
@@ -410,7 +410,12 @@ export function streamSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	const requestOptions = withRequestDebugFetch(options);
+	const baseOptions = (options || {}) as SimpleStreamOptions;
+	const debugOptions = withRequestDebugFetch(baseOptions);
+	const requestOptions = {
+		...debugOptions,
+		fetch: wrapFetchForProxy(debugOptions.fetch ?? (globalThis.fetch as FetchImpl), model.provider),
+	} as SimpleStreamOptions;
 	const apiKeyResolver = isApiKeyResolver(requestOptions?.apiKey) ? requestOptions.apiKey : undefined;
 	if (apiKeyResolver) {
 		const outer = new AssistantMessageEventStream();

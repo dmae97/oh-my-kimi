@@ -302,6 +302,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 						profile: options.profile,
 						region,
 						signal: options.signal,
+						fetch: options.fetch,
 					});
 				}
 				const signed = await signRequest({

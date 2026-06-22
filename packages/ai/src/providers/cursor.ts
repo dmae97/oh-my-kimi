@@ -127,6 +127,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
+import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
@@ -377,7 +378,15 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					})
 				: undefined;
 
-			h2Client = http2.connect(baseUrl);
+			const proxyUrl = shouldBypassProxy(new URL(baseUrl)) ? undefined : getProxyForProvider(model.provider);
+			if (proxyUrl) {
+				const tlsSocket = await connectProxiedSocket(proxyUrl, baseUrl);
+				h2Client = http2.connect(baseUrl, {
+					createConnection: () => tlsSocket,
+				});
+			} else {
+				h2Client = http2.connect(baseUrl);
+			}
 
 			h2Request = h2Client.request(requestHeaders);
 

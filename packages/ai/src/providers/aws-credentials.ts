@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import type { FetchImpl } from "../types";
 import { raceWithSignal } from "../utils/abort";
 import type { AwsCredentials } from "./aws-sigv4";
 
@@ -37,6 +38,7 @@ export interface CredentialResolveOptions {
 	/** Falls back to env (`AWS_REGION` / `AWS_DEFAULT_REGION`) and finally `us-east-1`. */
 	region?: string;
 	signal?: AbortSignal;
+	fetch?: FetchImpl;
 }
 
 const REFRESH_SKEW_MS = 60_000;
@@ -75,9 +77,10 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 	const existing = inflight.get(cacheKey);
 	if (existing) return raceWithSignal(existing, opts.signal);
 
+	const fetchImpl = opts.fetch ?? (globalThis.fetch as FetchImpl);
 	const promise = (async () => {
 		try {
-			const creds = await resolveFresh(profile, region, AbortSignal.timeout(SHARED_RESOLVE_TIMEOUT_MS));
+			const creds = await resolveFresh(profile, region, AbortSignal.timeout(SHARED_RESOLVE_TIMEOUT_MS), fetchImpl);
 			cache.set(cacheKey, { creds, expiresAt: creds.expiresAt ?? Number.POSITIVE_INFINITY });
 			return creds;
 		} finally {
@@ -88,18 +91,23 @@ export async function resolveAwsCredentials(opts: CredentialResolveOptions = {})
 	return raceWithSignal(promise, opts.signal);
 }
 
-async function resolveFresh(profile: string, region: string, signal?: AbortSignal): Promise<ResolvedCredentials> {
+async function resolveFresh(
+	profile: string,
+	region: string,
+	signal?: AbortSignal,
+	fetchImpl: FetchImpl = globalThis.fetch as FetchImpl,
+): Promise<ResolvedCredentials> {
 	// 1. Environment first — matches the AWS SDK chain order.
 	const envCreds = readEnvCredentials();
 	if (envCreds) return envCreds;
 
 	// 2. Profile (static or SSO).
-	const profileCreds = await readProfileCredentials(profile, region, signal);
+	const profileCreds = await readProfileCredentials(profile, region, signal, fetchImpl);
 	if (profileCreds) return profileCreds;
 
 	// 3. EC2 IMDSv2.
 	if ($env.AWS_EC2_METADATA_DISABLED?.toLowerCase() !== "true") {
-		const imdsCreds = await readImdsCredentials(signal);
+		const imdsCreds = await readImdsCredentials(signal, fetchImpl);
 		if (imdsCreds) return imdsCreds;
 	}
 
@@ -167,6 +175,7 @@ async function readProfileCredentials(
 	profile: string,
 	region: string,
 	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
 ): Promise<ResolvedCredentials | undefined> {
 	const home = os.homedir();
 	const credentialsPath = $env.AWS_SHARED_CREDENTIALS_FILE || path.join(home, ".aws", "credentials");
@@ -195,7 +204,7 @@ async function readProfileCredentials(
 	}
 
 	if (merged.sso_account_id && merged.sso_role_name) {
-		return readSsoCredentials(merged, configIni, region, signal);
+		return readSsoCredentials(merged, configIni, region, signal, fetchImpl);
 	}
 
 	if (merged.credential_process) {
@@ -217,6 +226,7 @@ async function readSsoCredentials(
 	configIni: IniFile | undefined,
 	defaultRegion: string,
 	signal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
 ): Promise<ResolvedCredentials | undefined> {
 	// Two SSO profile shapes:
 	//   - legacy: `sso_start_url` + `sso_region` directly on the profile
@@ -246,7 +256,7 @@ async function readSsoCredentials(
 		`https://portal.sso.${ssoRegion}.amazonaws.com/federation/credentials` +
 		`?account_id=${encodeURIComponent(profileCfg.sso_account_id)}` +
 		`&role_name=${encodeURIComponent(profileCfg.sso_role_name)}`;
-	const response = await fetch(url, {
+	const response = await fetchImpl(url, {
 		method: "GET",
 		headers: { "x-amz-sso_bearer_token": token.accessToken },
 		signal,
@@ -480,11 +490,14 @@ export function tokenizeCredentialProcessCommand(cmd: string): string[] {
 const IMDS_HOST = "169.254.169.254";
 const IMDS_TIMEOUT_MS = 1000;
 
-async function readImdsCredentials(parentSignal: AbortSignal | undefined): Promise<ResolvedCredentials | undefined> {
+async function readImdsCredentials(
+	parentSignal: AbortSignal | undefined,
+	fetchImpl: FetchImpl,
+): Promise<ResolvedCredentials | undefined> {
 	const timeout = AbortSignal.timeout(IMDS_TIMEOUT_MS);
 	const signal = parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
 	try {
-		const tokenRes = await fetch(`http://${IMDS_HOST}/latest/api/token`, {
+		const tokenRes = await fetchImpl(`http://${IMDS_HOST}/latest/api/token`, {
 			method: "PUT",
 			headers: { "x-aws-ec2-metadata-token-ttl-seconds": "21600" },
 			signal,
@@ -492,7 +505,7 @@ async function readImdsCredentials(parentSignal: AbortSignal | undefined): Promi
 		if (!tokenRes.ok) return undefined;
 		const token = await tokenRes.text();
 
-		const roleRes = await fetch(`http://${IMDS_HOST}/latest/meta-data/iam/security-credentials/`, {
+		const roleRes = await fetchImpl(`http://${IMDS_HOST}/latest/meta-data/iam/security-credentials/`, {
 			headers: { "x-aws-ec2-metadata-token": token },
 			signal,
 		});
@@ -500,7 +513,7 @@ async function readImdsCredentials(parentSignal: AbortSignal | undefined): Promi
 		const role = (await roleRes.text()).trim();
 		if (!role) return undefined;
 
-		const credsRes = await fetch(
+		const credsRes = await fetchImpl(
 			`http://${IMDS_HOST}/latest/meta-data/iam/security-credentials/${encodeURIComponent(role)}`,
 			{
 				headers: { "x-aws-ec2-metadata-token": token },

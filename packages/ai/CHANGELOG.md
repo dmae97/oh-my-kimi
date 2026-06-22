@@ -3,6 +3,8 @@
 ## [Unreleased]
 ### Added
 
+- Added proxy support for model providers via `PI_PROXY` and `PI_PROXY_<PROVIDER>` variables
+- Added `NO_PROXY` environment variable support for bypassing proxy configuration
 - Added support for Sakana AI provider
 - Added Sakana AI login and request base URL support for `SAKANA_*` / `FUGU_*` environment variables
 
@@ -10,6 +12,11 @@
 
 - Consolidated API key authentication logic across registry providers
 - Disabled parallel tool calls for Devin provider requests
+
+### Fixed
+
+- Improved proxy bypass logic to correctly handle private IP ranges and local metadata services
+- Enhanced memoization for proxy environment variable lookups to improve performance
 
 ## [16.1.13] - 2026-06-22
 
