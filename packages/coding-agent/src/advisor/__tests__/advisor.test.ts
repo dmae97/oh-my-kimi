@@ -3,9 +3,9 @@ import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core
 import { type } from "arktype";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
+import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
-import { SecretObfuscator } from "../../secrets/obfuscator";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
 	AdviseTool,
