@@ -3,7 +3,8 @@
 /**
  * xAI Grok (SuperGrok or X Premium+) OAuth flow.
  *
- * Loopback PKCE flow on `127.0.0.1:56121/callback`. One token unlocks Grok-4.x
+ * Manual-code PKCE flow using `127.0.0.1:56121/callback` as the allowlisted
+ * redirect URI. One token unlocks Grok-4.x
  * chat, Grok Imagine image generation, and Grok Voice TTS via subsequent
  * commits. Endpoint discovery is hardened against MITM via
  * {@link validateXAIEndpoint}: any non-HTTPS or non-`x.ai`/`*.x.ai` host is
@@ -177,10 +178,7 @@ function buildXAIAuthorizeUrl(opts: BuildXAIAuthorizeUrlOptions): string {
 }
 
 /**
- * xAI Grok OAuth loopback flow (Hermes `_xai_oauth_loopback_login` L5315-5469).
- *
- * Uses a fixed redirect URI so the callback server fails fast instead of
- * falling back to a random port that xAI's redirect_uri allowlist rejects.
+ * xAI Grok OAuth code flow (Hermes `_xai_oauth_loopback_login` L5315-5469).
  */
 export class XAIOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string = "";
@@ -192,7 +190,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			callbackPath: XAI_OAUTH_REDIRECT_PATH,
 			callbackHostname: XAI_OAUTH_REDIRECT_HOST,
 			redirectUri: `http://${XAI_OAUTH_REDIRECT_HOST}:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`,
-			fallbackToManualInputOnBindFailure: true,
+			manualInputOnly: true,
 		} satisfies OAuthCallbackFlowOptions);
 		this.#fetch = ctrl.fetch ?? fetch;
 	}

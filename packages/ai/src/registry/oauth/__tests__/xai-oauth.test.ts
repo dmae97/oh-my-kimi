@@ -70,13 +70,15 @@ describe("XAIOAuthFlow", () => {
 		expect(flow.redirectUri).toBe("http://127.0.0.1:56121/callback");
 	});
 
-	it("continues manual-paste login when the fixed callback port is unavailable", async () => {
+	it("uses pasted-code login without starting a callback server", async () => {
 		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(() => {
-			throw new Error("port busy");
+			throw new Error("callback server should not start");
 		});
+		let authUrl = "";
+		let tokenRequestBody = "";
 		const progress: string[] = [];
-		const fetchMock = vi.fn(async (input: string | URL) => {
-			const url = typeof input === "string" ? input : input.toString();
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
 			if (url.includes("/.well-known/openid-configuration")) {
 				return new Response(
 					JSON.stringify({
@@ -86,6 +88,7 @@ describe("XAIOAuthFlow", () => {
 					{ status: 200, headers: { "Content-Type": "application/json" } },
 				);
 			}
+			tokenRequestBody = init?.body instanceof URLSearchParams ? init.body.toString() : String(init?.body ?? "");
 			return new Response(
 				JSON.stringify({
 					access_token: "access-token",
@@ -98,15 +101,26 @@ describe("XAIOAuthFlow", () => {
 
 		const flow = new XAIOAuthFlow({
 			fetch: fetchMock as unknown as typeof fetch,
-			onAuth: () => {},
-			onManualCodeInput: async () => "code-xyz",
+			onAuth: info => {
+				authUrl = info.url;
+			},
+			onManualCodeInput: async () => {
+				const parsed = new URL(authUrl);
+				const redirectUri = parsed.searchParams.get("redirect_uri") ?? "";
+				const state = parsed.searchParams.get("state") ?? "";
+				return `${redirectUri}?code=code-xyz&state=${encodeURIComponent(state)}`;
+			},
 			onProgress: message => progress.push(message),
 		});
 
 		const credentials = await flow.login();
+		const authorizeUrl = new URL(authUrl);
+		const tokenParams = new URLSearchParams(tokenRequestBody);
 
-		expect(serveSpy).toHaveBeenCalledTimes(1);
-		expect(progress).toContain("OAuth callback port 56121 unavailable; waiting for pasted authorization code.");
+		expect(serveSpy).not.toHaveBeenCalled();
+		expect(authorizeUrl.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:56121/callback");
+		expect(progress).toContain("Waiting for pasted authorization code...");
+		expect(tokenParams.get("code")).toBe("code-xyz");
 		expect(credentials.access).toBe("access-token");
 		expect(credentials.refresh).toBe("refresh-token");
 	});

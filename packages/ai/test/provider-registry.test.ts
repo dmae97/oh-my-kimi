@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
-import { PASTE_CODE_LOGIN_PROVIDERS, PROVIDER_REGISTRY } from "@oh-my-pi/pi-ai/registry";
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai/registry";
 import {
 	getOAuthProviders,
 	refreshOAuthToken,
@@ -69,11 +69,6 @@ describe("provider registry auth surface", () => {
 			["anthropic", "gitlab-duo", "google-antigravity", "google-gemini-cli", "openai-codex", "xai-oauth"].sort(),
 		);
 		expect(PASTE_CODE_LOGIN_PROVIDERS.has("zenmux")).toBe(false);
-	});
-
-	test("xAI OAuth advertises its fixed loopback callback port for auth-broker tunnels", () => {
-		const xaiOauth = PROVIDER_REGISTRY.find(provider => provider.id === "xai-oauth");
-		expect(xaiOauth?.callbackPort).toBe(56121);
 	});
 
 	test("refresh dispatch returns api-key providers unchanged and routes real refreshers", async () => {

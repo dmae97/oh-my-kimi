@@ -25,7 +25,7 @@ export interface OAuthCallbackFlowOptions {
 	callbackHostname?: string;
 	/** Exact redirect URI advertised to the provider; disables port fallback. */
 	redirectUri?: string;
-	fallbackToManualInputOnBindFailure?: boolean;
+	manualInputOnly?: boolean;
 }
 
 /**
@@ -37,7 +37,7 @@ export abstract class OAuthCallbackFlow {
 	callbackPath: string;
 	callbackHostname: string;
 	redirectUri?: string;
-	fallbackToManualInputOnBindFailure?: boolean;
+	#manualInputOnly: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
 
@@ -51,6 +51,7 @@ export abstract class OAuthCallbackFlow {
 			this.preferredPort = preferredPortOrOptions;
 			this.callbackPath = callbackPath;
 			this.callbackHostname = DEFAULT_HOSTNAME;
+			this.#manualInputOnly = false;
 			return;
 		}
 
@@ -58,7 +59,7 @@ export abstract class OAuthCallbackFlow {
 		this.callbackPath = preferredPortOrOptions.callbackPath ?? CALLBACK_PATH;
 		this.callbackHostname = preferredPortOrOptions.callbackHostname ?? DEFAULT_HOSTNAME;
 		this.redirectUri = preferredPortOrOptions.redirectUri;
-		this.fallbackToManualInputOnBindFailure = preferredPortOrOptions.fallbackToManualInputOnBindFailure;
+		this.#manualInputOnly = preferredPortOrOptions.manualInputOnly ?? false;
 	}
 
 	/**
@@ -95,13 +96,19 @@ export abstract class OAuthCallbackFlow {
 	async login(): Promise<OAuthCredentials> {
 		const state = this.generateState();
 
-		const { server, redirectUri } = await this.#startCallbackServer(state);
+		const { server, redirectUri } = this.#manualInputOnly
+			? { redirectUri: this.#buildRedirectUri() }
+			: await this.#startCallbackServer(state);
 
 		try {
 			const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
 
 			this.ctrl.onAuth?.({ url: authUrl, instructions });
-			this.ctrl.onProgress?.("Waiting for browser authentication...");
+			this.ctrl.onProgress?.(
+				this.#manualInputOnly
+					? "Waiting for pasted authorization code..."
+					: "Waiting for browser authentication...",
+			);
 
 			const { code } = await this.#waitForCallback(state);
 
@@ -113,25 +120,19 @@ export abstract class OAuthCallbackFlow {
 		}
 	}
 
+	#buildRedirectUri(): string {
+		return this.redirectUri ?? `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
+	}
+
 	/**
 	 * Start callback server, trying preferred port first, falling back to random.
 	 */
 	async #startCallbackServer(expectedState: string): Promise<{ server?: Bun.Server<unknown>; redirectUri: string }> {
 		try {
 			const server = this.#createServer(this.preferredPort, expectedState);
-			if (this.redirectUri) {
-				return { server, redirectUri: this.redirectUri };
-			}
-			const redirectUri = `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
-			return { server, redirectUri };
+			return { server, redirectUri: this.#buildRedirectUri() };
 		} catch {
 			if (this.redirectUri) {
-				if (this.fallbackToManualInputOnBindFailure && this.ctrl.onManualCodeInput) {
-					this.ctrl.onProgress?.(
-						`OAuth callback port ${this.preferredPort} unavailable; waiting for pasted authorization code.`,
-					);
-					return { redirectUri: this.redirectUri };
-				}
 				throw new Error(
 					`OAuth callback port ${this.preferredPort} unavailable; cannot fall back to a random port when oauth.redirectUri is set`,
 				);
@@ -212,15 +213,14 @@ export abstract class OAuthCallbackFlow {
 		const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT);
 		const signal = this.ctrl.signal ? AbortSignal.any([this.ctrl.signal, timeoutSignal]) : timeoutSignal;
 
-		const callbackPromise = new Promise<CallbackResult>((resolve, reject) => {
-			this.#callbackResolve = resolve;
-			this.#callbackReject = reject;
+		const { promise: callbackPromise, resolve, reject } = Promise.withResolvers<CallbackResult>();
+		this.#callbackResolve = resolve;
+		this.#callbackReject = reject;
 
-			signal.addEventListener("abort", () => {
-				this.#callbackResolve = undefined;
-				this.#callbackReject = undefined;
-				reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
-			});
+		signal.addEventListener("abort", () => {
+			this.#callbackResolve = undefined;
+			this.#callbackReject = undefined;
+			reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
 		});
 
 		// Manual input race (if supported)
