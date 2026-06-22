@@ -349,6 +349,38 @@ describe("searchExa", () => {
 		expect(fetchCount).toBe(1);
 	});
 
+	it("aborts while queued behind another Exa throttle wait", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 1_000 } });
+		let fetchCount = 0;
+		const fetchMock: FetchImpl = () => {
+			fetchCount += 1;
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first request", fetch: fetchMock });
+		const secondController = new AbortController();
+		const thirdController = new AbortController();
+		const second = searchExa({ query: "second request", fetch: fetchMock, signal: secondController.signal });
+		const startedAt = Date.now();
+		const third = searchExa({ query: "third request", fetch: fetchMock, signal: thirdController.signal });
+		await Bun.sleep(0);
+		thirdController.abort(new Error("cancelled queued Exa throttle wait"));
+
+		await expect(third).rejects.toThrow("cancelled queued Exa throttle wait");
+		expect(Date.now() - startedAt).toBeLessThan(250);
+		expect(fetchCount).toBe(1);
+
+		secondController.abort(new Error("cleanup second Exa throttle wait"));
+		await expect(second).rejects.toThrow("cleanup second Exa throttle wait");
+	});
+
 	it("prefers summary over text for snippet field", async () => {
 		const result = await searchExa({
 			query: "snippet test",

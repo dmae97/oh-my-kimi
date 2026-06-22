@@ -66,12 +66,23 @@ function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<vo
 	return promise;
 }
 
+function waitUntilDoneOrAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return promise;
+	signal.throwIfAborted();
+	const { promise: aborted, reject } = Promise.withResolvers<never>();
+	const onAbort = (): void => rejectWithAbortReason(reject, signal);
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([promise, aborted]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
+	});
+}
+
 async function waitForExaSearchSlot(signal: AbortSignal | undefined): Promise<void> {
 	const delayMs = configuredExaSearchDelayMs();
 	if (delayMs <= 0) return;
 
 	const prior = exaSearchThrottle.catch(() => {});
-	const current = prior.then(async () => {
+	const queued = prior.then(async () => {
 		signal?.throwIfAborted();
 		const waitMs = Math.max(0, nextExaSearchRequestAt - Date.now());
 		if (waitMs > 0) {
@@ -80,8 +91,8 @@ async function waitForExaSearchSlot(signal: AbortSignal | undefined): Promise<vo
 		signal?.throwIfAborted();
 		nextExaSearchRequestAt = Date.now() + delayMs;
 	});
-	exaSearchThrottle = current.catch(() => {});
-	await current;
+	exaSearchThrottle = queued.catch(() => {});
+	await waitUntilDoneOrAborted(queued, signal);
 }
 
 /** Reset Exa request pacing state for isolated provider tests. */
