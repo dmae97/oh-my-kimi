@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an XDG-aware document conversion cache directory helper for coding-agent document reads.
+
 ## [16.1.8] - 2026-06-20
 
 ### Added
