@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.14] - 2026-06-22
+
 ### Added
 
 - Added proxy support for model providers via `PI_PROXY` and `PI_PROXY_<PROVIDER>` variables

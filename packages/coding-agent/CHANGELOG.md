@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.14] - 2026-06-22
+
 ### Added
 
 - Added a Ruby eval backend (`language: "rb"`): a persistent subprocess Ruby kernel that shares the standard agent tool bridge and evaluation model, supporting IRB-style auto-display of results in a persistent session

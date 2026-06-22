@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+
+## [16.1.14] - 2026-06-22
+
 ### Fixed
 
 - Improved delimiter-balance repair to correctly identify and spare deleted structural closers

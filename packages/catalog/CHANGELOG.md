@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.14] - 2026-06-22
+
 ### Added
 
 - Added Sakana AI provider support with Fugu model integration
