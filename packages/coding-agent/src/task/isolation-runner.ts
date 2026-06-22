@@ -344,8 +344,9 @@ export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions):
 		(mergeMode !== "branch" || mergedBranchForNestedPatches);
 	if (!eligible) return "";
 	try {
-		await applyNestedPatches(repoRoot, nestedPatches, commitMessage);
-		return "";
+		const warnings = await applyNestedPatches(repoRoot, nestedPatches, commitMessage);
+		if (warnings.length === 0) return "";
+		return `\n\n<system-notification>${warnings.join("\n")}</system-notification>`;
 	} catch {
 		// Nested patch failures are non-fatal to the parent merge.
 		return "\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";

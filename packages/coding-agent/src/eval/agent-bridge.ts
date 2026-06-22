@@ -344,16 +344,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	const mergeMode: "patch" | "branch" = parsed.merge === false ? "patch" : settingsMergeMode;
 	const applyChanges = parsed.apply !== false;
 
-	let isolationContext: IsolationContext | null = null;
-	if (isIsolated) {
-		try {
-			isolationContext = await prepareIsolationContext(options.session.cwd);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
-		}
-	}
-	const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
+	// Isolation context capture (prepareIsolationContext → captureBaseline)
+	// happens inside the timeout-pause closure below; on dirty/large repos the
+	// baseline walk can run long and must stay covered by the eval idle
+	// suspension.
 
 	const buildCommitMessage = makeIsolationCommitMessage(options.session);
 
@@ -417,6 +411,17 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// not abort us mid-cherry-pick or mid-nested-commit. The clock restarts
 	// only after we hand control back to the runtime.
 	const { result, mergeSummary, changesApplied } = await withBridgeTimeoutPause(options.emitStatus, async () => {
+		let isolationContext: IsolationContext | null = null;
+		if (isIsolated) {
+			try {
+				isolationContext = await prepareIsolationContext(options.session.cwd);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
+			}
+		}
+		const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
+
 		const result = await (async () => {
 			if (!isolationContext) {
 				return taskExecutor.runSubprocess(baseRunOptions);

@@ -364,4 +364,31 @@ describe("applyNestedPatches", () => {
 		expect(statusPorcelain).toBe("M  other.txt");
 		expect(cachedDiff).toContain("+staged wip");
 	});
+
+	it("returns a stash-restore warning when pop conflicts with the agent commit", async () => {
+		// User had unrelated WIP on the same file the agent will edit, so the
+		// stash will conflict with the committed version after pop.
+		await fs.writeFile(path.join(nestedDir, "file.txt"), "user wip\n");
+
+		const patch =
+			"diff --git a/file.txt b/file.txt\n" +
+			"--- a/file.txt\n" +
+			"+++ b/file.txt\n" +
+			"@@ -1 +1 @@\n" +
+			"-v1\n" +
+			"+v2\n";
+		const warnings = await applyNestedPatches(parentRepo, [{ relativePath: nestedRel, patch }]);
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("could not be auto-restored");
+		expect(warnings[0]).toContain(nestedRel);
+
+		// Commit landed and the stash entry is preserved for manual recovery.
+		const [committedFiles, stashList] = await Promise.all([
+			runGit(nestedDir, ["log", "-1", "--name-only", "--pretty=format:"]),
+			runGit(nestedDir, ["stash", "list"]),
+		]);
+		expect(committedFiles.trim()).toBe("file.txt");
+		expect(stashList).toContain("omp-isolation-");
+	});
 });

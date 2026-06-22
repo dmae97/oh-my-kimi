@@ -924,6 +924,54 @@ describe("runEvalAgent isolation", () => {
 		expect(mergeIdx).toBeLessThan(resumeIdx);
 	});
 
+	it("keeps the timeout paused through isolation baseline capture", async () => {
+		mockAgents();
+		const ops: string[] = [];
+		vi.spyOn(isolationRunner, "prepareIsolationContext").mockImplementation(async () => {
+			ops.push("prepare");
+			return {
+				repoRoot: "/repo-root",
+				baseline: {
+					root: {
+						repoRoot: "/repo-root",
+						headCommit: "HEAD",
+						staged: "",
+						unstaged: "",
+						untracked: [],
+						untrackedPatch: "",
+					},
+					nested: [],
+				},
+			};
+		});
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, { output: "done", patchPath: `/artifacts/${opts.agentId}.patch` }),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\nMerged",
+			changesApplied: true,
+			hadAnyChanges: true,
+			mergedBranchForNestedPatches: false,
+		});
+
+		await runEvalAgent(
+			{ prompt: "scout", isolated: true },
+			{
+				session: isolatedSession(),
+				emitStatus: event => {
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP || event.op === EVAL_TIMEOUT_RESUME_OP) ops.push(event.op);
+				},
+			},
+		);
+
+		const pauseIdx = ops.indexOf(EVAL_TIMEOUT_PAUSE_OP);
+		const resumeIdx = ops.lastIndexOf(EVAL_TIMEOUT_RESUME_OP);
+		const prepareIdx = ops.indexOf("prepare");
+		expect(pauseIdx).toBeGreaterThanOrEqual(0);
+		expect(prepareIdx).toBeGreaterThan(pauseIdx);
+		expect(prepareIdx).toBeLessThan(resumeIdx);
+	});
+
 	it("keeps schema-backed isolated output parseable by moving merge text into details", async () => {
 		mockAgents();
 		mockIsolationContext();
