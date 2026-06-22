@@ -3,6 +3,7 @@ import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core
 import { type } from "arktype";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
+import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
 import {
@@ -445,6 +446,119 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("hello");
 			expect(promptInputs[0]).not.toContain("note");
+		});
+
+		it("obfuscates session updates before prompting the advisor", async () => {
+			const secret = "ADVISOR_SECRET_TOKEN_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [{ role: "user", content: `token ${secret}`, timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
+		});
+
+		it("redacts expanded primary context before XML escaping", async () => {
+			const secret = "ADVISOR&SECRET<TOKEN>123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{
+					role: "custom",
+					customType: "plan-mode-context",
+					content: `Plan mode carries ${secret}`,
+					display: false,
+					timestamp: 1,
+				} as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
+			expect(promptInputs[0]).not.toContain("ADVISOR&amp;SECRET&lt;TOKEN&gt;123");
+		});
+
+		it("redacts file-mention paths before formatting", async () => {
+			const secret = "MENTION_SECRET_TOKEN_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{
+					role: "fileMention",
+					files: [{ path: `notes/${secret}.txt`, content: "ignored" }],
+					timestamp: 1,
+				} as unknown as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
+		});
+
+		it("redacts nested async-result job labels before formatting", async () => {
+			const secret = "JOB_LABEL_SECRET_TOKEN_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [
+				{
+					role: "custom",
+					customType: "async-result",
+					content: "",
+					details: { jobs: [{ label: `bash: echo ${secret}`, jobId: "j1" }] },
+					display: true,
+					attribution: "agent",
+					timestamp: 1,
+				} as unknown as AgentMessage,
+			];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
 		});
 
 		it("expands plan-mode context once, then collapses an unchanged re-injection", async () => {

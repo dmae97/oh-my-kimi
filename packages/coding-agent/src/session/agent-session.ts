@@ -1936,6 +1936,7 @@ export class AgentSession {
 			snapshotMessages: () => this.agent.state.messages,
 			enqueueAdvice,
 			maintainContext: incomingTokens => this.#maintainAdvisorContext(incomingTokens),
+			obfuscator: this.#obfuscator,
 		});
 		if (seedToCurrent) {
 			this.#advisorRuntime.seedTo(this.agent.state.messages.length);

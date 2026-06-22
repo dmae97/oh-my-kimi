@@ -1,6 +1,8 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
+import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
+import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
 
 /** Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core `Agent`. */
@@ -16,6 +18,8 @@ export interface AdvisorRuntimeHost {
 	snapshotMessages(): AgentMessage[];
 	/** Surface one advice note to the primary (enqueues into the session YieldQueue). */
 	enqueueAdvice(note: string, severity?: "nit" | "concern" | "blocker"): void;
+	/** Redact primary transcript bytes before they reach the advisor model. */
+	obfuscator?: SecretObfuscator;
 	/**
 	 * Pre-prompt context maintenance for the advisor's own append-only context.
 	 * Promotes the advisor model to a larger sibling when its context nears the
@@ -174,7 +178,9 @@ export class AdvisorRuntime {
 			.map(m => this.#dedupContextMessage(m));
 		this.#lastCount = all.length;
 		if (delta.length === 0) return null;
-		const md = formatSessionHistoryMarkdown(delta, {
+		const obfuscator = this.host.obfuscator;
+		const formattedDelta = obfuscator?.hasSecrets() ? obfuscateAdvisorDelta(obfuscator, delta) : delta;
+		const md = formatSessionHistoryMarkdown(formattedDelta, {
 			includeThinking: true,
 			includeToolIntent: true,
 			watchedRoles: true,
@@ -303,4 +309,126 @@ export class AdvisorRuntime {
 			this.#busy = false;
 		}
 	}
+}
+
+type TextualContent = string | readonly (TextContent | ImageContent)[];
+
+function obfuscateTextualContent(obfuscator: SecretObfuscator, content: TextualContent): TextualContent {
+	if (typeof content === "string") return obfuscator.obfuscate(content);
+	let changed = false;
+	const result = content.map((block): TextContent | ImageContent => {
+		if (block.type !== "text") return block;
+		const text = obfuscator.obfuscate(block.text);
+		if (text === block.text) return block;
+		changed = true;
+		return { ...block, text };
+	});
+	return changed ? result : content;
+}
+
+function obfuscateAssistantMessage(obfuscator: SecretObfuscator, message: AssistantMessage): AssistantMessage {
+	let changed = false;
+	const content = message.content.map((block): AssistantMessage["content"][number] => {
+		if (block.type === "text") {
+			const text = obfuscator.obfuscate(block.text);
+			if (text === block.text) return block;
+			changed = true;
+			return { ...block, text };
+		}
+		if (block.type === "toolCall") {
+			const args = obfuscateToolArguments(obfuscator, block.arguments);
+			if (args === block.arguments) return block;
+			changed = true;
+			return { ...block, arguments: args };
+		}
+		return block;
+	});
+	return changed ? { ...message, content } : message;
+}
+
+function obfuscateDetails(
+	obfuscator: SecretObfuscator,
+	details: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	if (!details) return details;
+	// Walk strings at every depth: `customOneLiner` renders nested fields
+	// (e.g. `async-result` reads `details.jobs[].label`/`jobId`), so a shallow
+	// pass leaks any secret a background job's label happens to contain.
+	return obfuscateToolArguments(obfuscator, details);
+}
+
+function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMessage): AgentMessage {
+	switch (message.role) {
+		case "user":
+		case "developer":
+		case "toolResult": {
+			const content = obfuscateTextualContent(obfuscator, message.content as TextualContent);
+			return content === message.content ? message : ({ ...(message as object), content } as AgentMessage);
+		}
+		case "assistant":
+			return obfuscateAssistantMessage(obfuscator, message as AssistantMessage) as AgentMessage;
+		case "custom":
+		case "hookMessage": {
+			const msg = message as AgentMessage & {
+				content: TextualContent;
+				details?: Record<string, unknown>;
+			};
+			const content = obfuscateTextualContent(obfuscator, msg.content);
+			const details = obfuscateDetails(obfuscator, msg.details);
+			if (content === msg.content && details === msg.details) return message;
+			return { ...(message as object), content, details } as AgentMessage;
+		}
+		case "bashExecution": {
+			const msg = message as AgentMessage & { command: string; output: string };
+			const command = obfuscator.obfuscate(msg.command);
+			const output = obfuscator.obfuscate(msg.output);
+			return command === msg.command && output === msg.output
+				? message
+				: ({ ...(message as object), command, output } as AgentMessage);
+		}
+		case "pythonExecution": {
+			const msg = message as AgentMessage & { code: string; output: string };
+			const code = obfuscator.obfuscate(msg.code);
+			const output = obfuscator.obfuscate(msg.output);
+			return code === msg.code && output === msg.output
+				? message
+				: ({ ...(message as object), code, output } as AgentMessage);
+		}
+		case "branchSummary": {
+			const msg = message as AgentMessage & { summary: string };
+			const summary = obfuscator.obfuscate(msg.summary);
+			return summary === msg.summary ? message : ({ ...(message as object), summary } as AgentMessage);
+		}
+		case "compactionSummary": {
+			const msg = message as AgentMessage & { summary: string };
+			const summary = obfuscator.obfuscate(msg.summary);
+			return summary === msg.summary ? message : ({ ...(message as object), summary } as AgentMessage);
+		}
+		case "fileMention": {
+			const msg = message as AgentMessage & {
+				files: Array<{ path: string; content: string; image?: unknown }>;
+			};
+			let changed = false;
+			const files = msg.files.map(file => {
+				const path = obfuscator.obfuscate(file.path);
+				const content = obfuscator.obfuscate(file.content);
+				if (path === file.path && content === file.content) return file;
+				changed = true;
+				return { ...file, path, content };
+			});
+			return changed ? ({ ...(message as object), files } as AgentMessage) : message;
+		}
+		default:
+			return message;
+	}
+}
+
+function obfuscateAdvisorDelta(obfuscator: SecretObfuscator, messages: AgentMessage[]): AgentMessage[] {
+	let changed = false;
+	const result = messages.map(message => {
+		const next = obfuscateAdvisorMessage(obfuscator, message);
+		if (next !== message) changed = true;
+		return next;
+	});
+	return changed ? result : messages;
 }
