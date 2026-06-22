@@ -25,7 +25,7 @@ export interface OAuthCallbackFlowOptions {
 	callbackHostname?: string;
 	/** Exact redirect URI advertised to the provider; disables port fallback. */
 	redirectUri?: string;
-	manualInputOnPortBusy?: boolean;
+	fallbackToManualInputOnBindFailure?: boolean;
 }
 
 /**
@@ -37,7 +37,7 @@ export abstract class OAuthCallbackFlow {
 	callbackPath: string;
 	callbackHostname: string;
 	redirectUri?: string;
-	manualInputOnPortBusy?: boolean;
+	fallbackToManualInputOnBindFailure?: boolean;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
 
@@ -58,7 +58,7 @@ export abstract class OAuthCallbackFlow {
 		this.callbackPath = preferredPortOrOptions.callbackPath ?? CALLBACK_PATH;
 		this.callbackHostname = preferredPortOrOptions.callbackHostname ?? DEFAULT_HOSTNAME;
 		this.redirectUri = preferredPortOrOptions.redirectUri;
-		this.manualInputOnPortBusy = preferredPortOrOptions.manualInputOnPortBusy;
+		this.fallbackToManualInputOnBindFailure = preferredPortOrOptions.fallbackToManualInputOnBindFailure;
 	}
 
 	/**
@@ -126,7 +126,7 @@ export abstract class OAuthCallbackFlow {
 			return { server, redirectUri };
 		} catch {
 			if (this.redirectUri) {
-				if (this.manualInputOnPortBusy && this.ctrl.onManualCodeInput) {
+				if (this.fallbackToManualInputOnBindFailure && this.ctrl.onManualCodeInput) {
 					this.ctrl.onProgress?.(
 						`OAuth callback port ${this.preferredPort} unavailable; waiting for pasted authorization code.`,
 					);

@@ -192,7 +192,7 @@ export class XAIOAuthFlow extends OAuthCallbackFlow {
 			callbackPath: XAI_OAUTH_REDIRECT_PATH,
 			callbackHostname: XAI_OAUTH_REDIRECT_HOST,
 			redirectUri: `http://${XAI_OAUTH_REDIRECT_HOST}:${XAI_OAUTH_REDIRECT_PORT}${XAI_OAUTH_REDIRECT_PATH}`,
-			manualInputOnPortBusy: true,
+			fallbackToManualInputOnBindFailure: true,
 		} satisfies OAuthCallbackFlowOptions);
 		this.#fetch = ctrl.fetch ?? fetch;
 	}

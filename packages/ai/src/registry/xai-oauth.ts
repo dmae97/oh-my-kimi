@@ -15,6 +15,5 @@ export const xaiOauthProvider = {
 		return refreshXAIOAuthToken(credentials.refresh);
 	},
 	callbackPort: 56121,
-	// Headless/remote: also accept a pasted code / loopback redirect URL (raced with the callback).
 	pasteCodeFlow: true,
 } as const satisfies ProviderDefinition;
