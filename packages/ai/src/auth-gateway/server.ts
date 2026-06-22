@@ -19,14 +19,14 @@
  */
 
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { extractRetryHint, logger } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
-import { isUsageLimitError } from "../rate-limit-utils";
+import { isUsageLimitError, isUsageLimitOutcome } from "../rate-limit-utils";
 import { streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
@@ -315,7 +315,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 	peer: string,
 ): Promise<string | undefined> {
 	const message = error instanceof Error ? error.message : String(error);
-	if (isUsageLimitError(message)) {
+	if (isUsageLimitOutcome(extractHttpStatusFromError(error), message)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
 		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
 			retryAfterMs,

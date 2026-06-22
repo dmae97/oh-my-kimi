@@ -100,7 +100,55 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 
 /** Detect usage/quota limit errors in error messages (persistent, requires credential switch). */
 const USAGE_LIMIT_PATTERN =
-	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|quota.?reached|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?balance/i;
+	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?exceeded|quota.?reached|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)/i;
+
+/**
+ * HTTP status codes that, absent richer body classification, represent an
+ * account-local usage cap rather than a bad credential or a transient blip.
+ * Always combine with {@link isUsageLimitOutcome} when a message is available
+ * — a 429 carrying transient rate-limit wording is NOT a usage cap.
+ */
+export function isUsageLimitStatus(status: number | undefined): boolean {
+	return status === 429;
+}
+
+/**
+ * Returns true for failures that should burn one credential and rotate to a
+ * sibling account. Decision tree:
+ *
+ *  1. Body matches {@link isUsageLimitError} (Codex `usage_limit_reached`,
+ *     Anthropic account rate-limit, Google `resource_exhausted`, OpenAI
+ *     `insufficient_quota`, …) → rotate.
+ *  2. Status is not 429 → backoff (caller's domain).
+ *  3. Body is absent or {@link isOpaqueStatusBody opaque} (just the status,
+ *     empty JSON, HTTP framing only) → rotate conservatively: the server
+ *     gave us nothing else to go on.
+ *  4. Body has content → defer to {@link parseRateLimitReason}. Only
+ *     `QUOTA_EXHAUSTED` rotates; `RATE_LIMIT_EXCEEDED` (`Too many requests`,
+ *     per-minute caps), `MODEL_CAPACITY_EXHAUSTED` (`Service overloaded`),
+ *     `SERVER_ERROR`, and `UNKNOWN` (`Please retry in 5s`) stay in the
+ *     provider's own backoff layer so transient 429s don't burn sibling
+ *     credentials.
+ */
+export function isUsageLimitOutcome(status: number | undefined, message: string | undefined): boolean {
+	if (message && isUsageLimitError(message)) return true;
+	if (!isUsageLimitStatus(status)) return false;
+	if (!message || isOpaqueStatusBody(message)) return true;
+	return parseRateLimitReason(message) === "QUOTA_EXHAUSTED";
+}
+
+/**
+ * A 429 body is opaque when it carries no signal beyond the status itself —
+ * empty, whitespace-only, the status digits with HTTP/JSON framing, or
+ * generic punctuation. Anything else (retry hints, capacity wording, error
+ * descriptions) is informative enough to defer to the classifier.
+ */
+function isOpaqueStatusBody(message: string): boolean {
+	const cleaned = message
+		.replace(/\b429\b/g, "")
+		.replace(/\b(?:http|https|status|error|code|response|message)\b/gi, "");
+	return !/[a-z\d]{3,}/i.test(cleaned);
+}
 
 export function isUsageLimitError(errorMessage: string): boolean {
 	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
