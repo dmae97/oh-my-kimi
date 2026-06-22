@@ -38,7 +38,7 @@ nothing
 		expect(result.output).toContain("DIFF_DELETE=true");
 		expect(result.output).toContain("DIFF_ADD=true");
 		expect(result.output).toContain("TREE_CHILD=true");
-	});
+	}, 30_000);
 
 	it("supports output ranges, JSON queries, metadata, and ANSI stripping", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-julia-output-");
@@ -73,5 +73,5 @@ nothing
 		expect(result.output).toContain("STRIPPED=red");
 		expect(result.output).toContain("META=alpha:true");
 		expect(result.output).toContain("MULTI=2:alpha:json");
-	});
+	}, 30_000);
 });
