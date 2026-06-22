@@ -850,7 +850,9 @@ describe("runEvalAgent isolation", () => {
 
 		await runEvalAgent({ prompt: "plain handle", returnHandle: true }, { session: makeSession() });
 
-		const removedArtifactsDir = rmSpy.mock.calls.some(([target]) => typeof target === "string" && target.includes("omp-eval-agent-"));
+		const removedArtifactsDir = rmSpy.mock.calls.some(
+			([target]) => typeof target === "string" && target.includes("omp-eval-agent-"),
+		);
 		expect(removedArtifactsDir).toBe(false);
 	});
 
