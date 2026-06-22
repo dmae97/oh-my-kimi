@@ -322,6 +322,33 @@ describe("searchExa", () => {
 		expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(20);
 	});
 
+	it("aborts while waiting for the configured Exa request delay", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 1_000 } });
+		let fetchCount = 0;
+		const fetchMock: FetchImpl = () => {
+			fetchCount += 1;
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first request", fetch: fetchMock });
+		const controller = new AbortController();
+		const startedAt = Date.now();
+		const pending = searchExa({ query: "cancelled request", fetch: fetchMock, signal: controller.signal });
+		await Bun.sleep(0);
+		controller.abort(new Error("cancelled Exa throttle wait"));
+
+		await expect(pending).rejects.toThrow("cancelled Exa throttle wait");
+		expect(Date.now() - startedAt).toBeLessThan(250);
+		expect(fetchCount).toBe(1);
+	});
+
 	it("prefers summary over text for snippet field", async () => {
 		const result = await searchExa({
 			query: "snippet test",

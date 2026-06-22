@@ -32,6 +32,40 @@ function configuredExaSearchDelayMs(): number {
 	}
 }
 
+function rejectWithAbortReason(reject: (reason?: unknown) => void, signal: AbortSignal): void {
+	try {
+		signal.throwIfAborted();
+		reject(new DOMException("The operation was aborted.", "AbortError"));
+	} catch (error) {
+		reject(error);
+	}
+}
+
+function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+	if (ms <= 0) return Promise.resolve();
+	signal?.throwIfAborted();
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	let timer: NodeJS.Timeout | undefined;
+	const cleanup = (): void => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
+		signal?.removeEventListener("abort", onAbort);
+	};
+	const onAbort = (): void => {
+		cleanup();
+		if (signal) rejectWithAbortReason(reject, signal);
+	};
+	timer = setTimeout(() => {
+		cleanup();
+		resolve();
+	}, ms);
+	signal?.addEventListener("abort", onAbort, { once: true });
+	if (signal?.aborted) onAbort();
+	return promise;
+}
+
 async function waitForExaSearchSlot(signal: AbortSignal | undefined): Promise<void> {
 	const delayMs = configuredExaSearchDelayMs();
 	if (delayMs <= 0) return;
@@ -41,7 +75,7 @@ async function waitForExaSearchSlot(signal: AbortSignal | undefined): Promise<vo
 		signal?.throwIfAborted();
 		const waitMs = Math.max(0, nextExaSearchRequestAt - Date.now());
 		if (waitMs > 0) {
-			await Bun.sleep(waitMs);
+			await abortableSleep(waitMs, signal);
 		}
 		signal?.throwIfAborted();
 		nextExaSearchRequestAt = Date.now() + delayMs;
