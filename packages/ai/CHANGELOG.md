@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Consolidated API key authentication logic across registry providers
 - Disabled parallel tool calls for Devin provider requests
 
 ## [16.1.13] - 2026-06-22

@@ -29,6 +29,7 @@ import * as piNative from "../providers/pi-native-server";
 import { isUsageLimitError } from "../rate-limit-utils";
 import { streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { captureRequestHeaders, corsHeaders, isAuthorized, json, resolvePeer, withCors } from "./http";
 import type {
@@ -110,11 +111,9 @@ function deriveSessionId(modelId: string, context: Context): string {
 		parts.push(JSON.stringify({ role: first.role, content: first.content }));
 	}
 	const seed = parts.join("\u0000");
-	const hex = new Bun.CryptoHasher("sha256").update(seed).digest("hex");
-	// Format the leading 128 bits as a v4-shape UUID (8-4-4-4-12). Codex's
-	// `normalizeOpenAIResponsesPromptCacheKey` accepts ≤64 chars verbatim, so
-	// the 36-char UUID flows through unchanged.
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+	// The 36-char UUID flows through unchanged: Codex's
+	// `normalizeOpenAIResponsesPromptCacheKey` accepts ≤64 chars verbatim.
+	return deterministicUuid(seed);
 }
 
 function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: AbortSignal): SimpleStreamOptions {

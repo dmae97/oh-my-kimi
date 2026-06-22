@@ -124,6 +124,7 @@ import type {
 	ToolResultMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
+import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
@@ -2259,19 +2260,6 @@ function extractAssistantMessageText(msg: Message): string {
 }
 
 /**
- * Derive a stable, UUID-formatted `message_id` from a content key.
- * Ensures identical historical messages hash to the same blob IDs across
- * requests, so `conversationBlobStores` does not grow unboundedly and
- * unchanged history reuses existing blob IDs.
- */
-type CursorMessageId = `${string}-${string}-${string}-${string}-${string}`;
-
-function deterministicMessageId(key: string): CursorMessageId {
-	const hex = createHash("sha256").update(key).digest("hex");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-/**
  * Index of the last user/developer message in `messages`, or -1 if none.
  * Used to exclude the current user turn from history builders — it goes in
  * `ConversationActionSchema.userMessageAction`, not in history structures.
@@ -2394,7 +2382,7 @@ function buildConversationTurns(
 		const userMessage = createCursorUserMessage(
 			msg.content,
 			userText,
-			deterministicMessageId(`u:${turns.length}:${cursorUserContentKey(msg.content)}`),
+			deterministicUuid(`u:${turns.length}:${cursorUserContentKey(msg.content)}`),
 		);
 		const userMessageBytes = toBinary(UserMessageSchema, userMessage);
 		const userMessageBlobId = storeCursorBlob(blobStore, userMessageBytes);

@@ -42,6 +42,7 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types";
+import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
@@ -455,6 +456,8 @@ function buildDevinChatRequest(
 /** Map omp `Message` history onto Cascade `ChatMessagePrompt`s (USER / SYSTEM / TOOL channels). */
 function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMessagePrompt[] {
 	const prompts: ChatMessagePrompt[] = [];
+	// messageId seeds are `cascadeId\0index\0role[...]` — prompt text is excluded
+	// so ids stay stable across content edits / history rebuilds.
 	for (const [index, msg] of messages.entries()) {
 		if (msg.role === "user" || msg.role === "developer") {
 			let promptText = "";
@@ -472,7 +475,7 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 			}
 			prompts.push(
 				create(ChatMessagePromptSchema, {
-					messageId: deterministicMessageId(`${cascadeId}\0${index}\0${msg.role}`),
+					messageId: deterministicUuid(`${cascadeId}\0${index}\0${msg.role}`),
 					source: ChatMessageSource.USER,
 					prompt: promptText,
 					images,
@@ -501,7 +504,7 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 			}
 			prompts.push(
 				create(ChatMessagePromptSchema, {
-					messageId: msg.responseId ?? `bot-${deterministicMessageId(`${cascadeId}\0${index}\0assistant`)}`,
+					messageId: msg.responseId ?? `bot-${deterministicUuid(`${cascadeId}\0${index}\0assistant`)}`,
 					source: ChatMessageSource.SYSTEM,
 					prompt: promptText,
 					thinking: thinkingText,
@@ -522,7 +525,7 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 			}
 			prompts.push(
 				create(ChatMessagePromptSchema, {
-					messageId: deterministicMessageId(`${cascadeId}\0${index}\0tool\0${msg.toolCallId}`),
+					messageId: deterministicUuid(`${cascadeId}\0${index}\0tool\0${msg.toolCallId}`),
 					source: ChatMessageSource.TOOL,
 					toolCallId: msg.toolCallId,
 					toolResultIsError: msg.isError,
@@ -533,16 +536,6 @@ function buildChatMessagePrompts(messages: Message[], cascadeId: string): ChatMe
 		}
 	}
 	return prompts;
-}
-
-/**
- * Deterministic UUID-shaped message id derived from a stable per-message seed.
- * Seed is `${cascadeId}\0${index}\0${role}[...]` — prompt text is intentionally
- * excluded so ids stay stable across content edits / history rebuilds.
- */
-function deterministicMessageId(seed: string): string {
-	const hex = new Bun.CryptoHasher("sha256").update(seed).digest("hex");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
