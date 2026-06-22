@@ -920,6 +920,60 @@ describe("runEvalAgent isolation", () => {
 		expect(result.details.isolationSummary).toBe("No changes to apply.");
 	});
 
+	it("throws when an isolated apply fails so schema callers cannot mistake it for success", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const structuredOutput = JSON.stringify({ status: "ok" });
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: structuredOutput,
+				patchPath: `/artifacts/${opts.agentId}.patch`,
+			}),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\n<system-notification>Patch apply failed: conflict in foo.ts</system-notification>",
+			changesApplied: false,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
+
+		await expect(
+			runEvalAgent(
+				{
+					prompt: "structured",
+					schema: {
+						type: "object",
+						properties: { status: { type: "string" } },
+						required: ["status"],
+					},
+				},
+				{ session: isolatedSession() },
+			),
+		).rejects.toThrow(/isolated apply failed.*Patch apply failed.*Captured patch preserved at \/artifacts\//s);
+	});
+
+	it("throws on apply failure for non-schema callers too instead of burying the warning in text", async () => {
+		mockAgents();
+		mockIsolationContext();
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts =>
+			singleResult(opts.baseOptions, {
+				output: "ran",
+				branchName: `omp/task/${opts.agentId}`,
+			}),
+		);
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockResolvedValue({
+			summary: "\n\n<system-notification>Branch merge failed: omp/task/x.\nConflict: foo.ts</system-notification>",
+			changesApplied: false,
+			hadAnyChanges: false,
+			mergedBranchForNestedPatches: false,
+		});
+
+		const session = isolatedSession({ "task.isolation.merge": "branch" });
+		await expect(runEvalAgent({ prompt: "scout" }, { session })).rejects.toThrow(
+			/isolated apply failed.*Branch merge failed.*Captured branch preserved as omp\/task\//s,
+		);
+	});
+
 	it("skips the merge phase when apply=false and surfaces the patch artifact instead", async () => {
 		mockAgents();
 		mockIsolationContext();

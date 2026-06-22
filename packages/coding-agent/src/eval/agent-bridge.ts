@@ -458,24 +458,38 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 			});
 			mergeSummary = outcome.summary;
 			changesApplied = outcome.changesApplied;
+			if (outcome.changesApplied === false) {
+				const summaryText = outcome.summary.trim();
+				const recoveryParts: string[] = [];
+				if (result.patchPath) recoveryParts.push(`Captured patch preserved at ${result.patchPath}.`);
+				if (result.branchName) recoveryParts.push(`Captured branch preserved as ${result.branchName}.`);
+				if (result.nestedPatches?.length) {
+					recoveryParts.push(
+						`Captured nested repository patches (${result.nestedPatches.length}) preserved in details.nestedPatches.`,
+					);
+				}
+				const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";
+				throw new ToolError(
+					`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
+				);
+			}
 
-			// Apply nested repo patches (separate from parent git) under the same
-			// gating TaskTool uses: only when the parent merge made it through.
-			if (mergeMode === "branch" || outcome.changesApplied !== false) {
-				const nestedPatches = result.nestedPatches ?? [];
-				const eligible =
-					nestedPatches.length > 0 &&
-					result.exitCode === 0 &&
-					!result.aborted &&
-					(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
-				if (eligible) {
-					try {
-						await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
-					} catch {
-						// Nested patch failures are non-fatal to the parent merge
-						mergeSummary +=
-							"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
-					}
+			// Apply nested repo patches (separate from parent git). The throw
+			// above already exited on a failed parent merge, so we know either
+			// the parent succeeded (patch mode) or branch mode is in play.
+			const nestedPatches = result.nestedPatches ?? [];
+			const eligible =
+				nestedPatches.length > 0 &&
+				result.exitCode === 0 &&
+				!result.aborted &&
+				(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
+			if (eligible) {
+				try {
+					await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
+				} catch {
+					// Nested patch failures are non-fatal to the parent merge
+					mergeSummary +=
+						"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
 				}
 			}
 		} else if (result.branchName) {
@@ -495,9 +509,10 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// Clean up the temp artifacts dir we created for this call only when the
 	// caller will not need files from it later. Keep it when the runtime helper
 	// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
-	// here), on a failed apply (`changesApplied === false`), and on
-	// `apply=false` (`changesApplied === null`) where the caller consumes
-	// `details.patchPath` / `details.branchName` out of band.
+	// here) and on `apply=false` (`changesApplied === null`) where the caller
+	// consumes `details.patchPath` / `details.branchName` /
+	// `details.nestedPatches` out of band. Failed isolated applies throw
+	// earlier with a recovery hint, so they never reach this gate.
 	const shouldCleanupTempArtifacts =
 		tempArtifactsDir && !parsed.returnHandle && (!isIsolated || changesApplied === true);
 	if (shouldCleanupTempArtifacts) {
