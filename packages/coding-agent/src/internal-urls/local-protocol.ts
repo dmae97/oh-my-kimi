@@ -157,7 +157,7 @@ export function resolveLocalUrlToPath(
 }
 
 /**
- * On-disk roots the eval helpers (`read`/`write`/`append`) substitute for
+ * On-disk roots the eval helpers (`read`/`write`) substitute for
  * internal-URL schemes so e.g. `write("local://x.md")` lands where a later
  * `read local://x.md` resolves — instead of a literal `local:/` directory under
  * the cwd (a stdlib `pathlib.Path`/`path.resolve` collapses `local://` to

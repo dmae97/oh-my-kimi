@@ -800,7 +800,7 @@ export class WorkerCore {
 			displays.push({ type: "text", text: safeJsonStringify(output.data) });
 			return;
 		}
-		// status — surface as compact JSON so helper side effects (read/write/tree) appear in
+		// status — surface as compact JSON so helper side effects (read/write/env) appear in
 		// the cell result alongside explicit display() output.
 		displays.push({ type: "text", text: safeJsonStringify(output.event) });
 	}

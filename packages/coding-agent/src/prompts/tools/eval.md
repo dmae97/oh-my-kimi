@@ -15,8 +15,8 @@ Fields:
 
 {{#if py}}Live event loop: use top-level `await` directly; `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
 {{#if js}}JS runs under **Bun**: Bun globals/APIs are available (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`); top-level `await`/`return` work directly.{{/if}}
-{{#if rb}}Ruby: synchronous; helper options are keyword args (e.g. `tree(".", max_depth: 2)`); the last expression auto-displays unless it is `nil`, an assignment, or a definition (like IRB).{{/if}}
-{{#if jl}}Julia: synchronous; helper options are standard keyword args (e.g. `tree(max_depth=2)`); the last expression auto-displays unless it is an assignment or a definition (like the Julia REPL).{{/if}}
+{{#if rb}}Ruby: synchronous; helper options are keyword args (e.g. `output("id", limit: 2)`); the last expression auto-displays unless it is `nil`, an assignment, or a definition (like IRB).{{/if}}
+{{#if jl}}Julia: synchronous; helper options are standard keyword args (e.g. `output("id", limit=2)`); the last expression auto-displays unless it is an assignment or a definition (like the Julia REPL).{{/if}}
 On error, fix and re-run only the failing step — prior calls' state survives.
 </instruction>
 
@@ -31,12 +31,6 @@ read(path, offset?=1, limit?=None) → str
     File as text; offset/limit 1-indexed lines. Accepts `local://…`.
 write(path, content) → str
     Write file (creates parents) → resolved path. `local://…` persists across turns/subagents.
-append(path, content) → str
-    Append → resolved path. Accepts `local://…`.
-tree(path?=".", max_depth?=3, show_hidden?=False) → str
-    Directory tree.
-diff(a, b) → str
-    Unified diff of two files.
 env(key?=None, value?=None) → str | None | dict
     No args → full env dict; one → value of `key`; two → set `key=value`, return value.
 output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | dict | list[dict]

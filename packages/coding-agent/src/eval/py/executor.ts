@@ -71,7 +71,7 @@ export interface PythonExecutorOptions {
 	artifactPath?: string;
 	artifactId?: string;
 	/**
-	 * On-disk roots the prelude helpers (`read`/`write`/`append`) substitute for
+	 * On-disk roots the prelude helpers (`read`/`write`) substitute for
 	 * internal-URL schemes (e.g. `{ local: "/…/artifacts/local" }`). Exported to
 	 * the kernel as `PI_EVAL_LOCAL_ROOTS` (JSON) so `write("local://x")` lands
 	 * where `read local://x` resolves instead of a literal `local:/` directory.

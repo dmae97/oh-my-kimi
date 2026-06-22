@@ -144,13 +144,10 @@ describe.skipIf(!SHOULD_RUN)("ruby runner subprocess", () => {
 		}
 	});
 
-	it("exposes prelude file + text helpers", async () => {
+	it("exposes prelude file helpers", async () => {
 		using tempDir = TempDir.createSync("@ruby-runner-prelude-");
 		const kernel = await RubyKernel.start({ cwd: tempDir.path() });
 		try {
-			const sorted = await executeRubyWithKernel(kernel, 'sort("b\\na\\nb", unique: true)', {});
-			expect(sorted.output).toContain("a\nb");
-
 			const written = await executeRubyWithKernel(kernel, 'write("note.txt", "hello"); read("note.txt")', {});
 			expect(written.output).toContain("hello");
 		} finally {

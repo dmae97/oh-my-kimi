@@ -241,14 +241,12 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 	const opIcons: Record<string, AvailableIcon> = {
 		read: "icon.file",
 		write: "icon.file",
-		append: "icon.file",
 		cat: "icon.file",
 		touch: "icon.file",
 		ls: "icon.folder",
 		cd: "icon.folder",
 		pwd: "icon.folder",
 		mkdir: "icon.folder",
-		tree: "icon.folder",
 		git_status: "icon.git",
 		git_diff: "icon.git",
 		git_log: "icon.git",
@@ -280,7 +278,6 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 			if (data.path) parts.push(`from ${shortenPath(String(data.path))}`);
 			break;
 		case "write":
-		case "append":
 			parts.push(`${data.chars ?? data.bytes ?? 0} chars`);
 			if (data.path) parts.push(`to ${shortenPath(String(data.path))}`);
 			break;
@@ -318,13 +315,6 @@ function formatStatusEvent(event: EvalStatusEvent, theme: Theme): string {
 		case "git_diff":
 			parts.push(`${data.lines} line${(data.lines as number) !== 1 ? "s" : ""}`);
 			if (data.staged) parts.push("(staged)");
-			break;
-		case "diff":
-			if (data.identical) {
-				parts.push("files identical");
-			} else {
-				parts.push("files differ");
-			}
 			break;
 		case "batch":
 			parts.push(`${data.files} file${(data.files as number) !== 1 ? "s" : ""} processed`);
@@ -415,8 +405,6 @@ function formatStatusEventExpanded(event: EvalStatusEvent, theme: Theme): string
 		case "cat":
 		case "head":
 		case "tail":
-		case "tree":
-		case "diff":
 		case "git_diff":
 		case "sh":
 			if (data.preview) addPreview(String(data.preview));
