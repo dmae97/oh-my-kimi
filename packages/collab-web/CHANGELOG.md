@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Improved compatibility with legacy todo task transcripts
 
 ## [16.1.8] - 2026-06-20
 

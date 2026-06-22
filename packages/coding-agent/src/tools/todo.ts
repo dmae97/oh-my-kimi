@@ -52,21 +52,18 @@ const InitListEntry = type({
 	items: type("string").describe("task content").array().atLeastLength(1).describe("tasks for this phase"),
 });
 
-const TodoOpEntry = type({
+const todoSchema = type({
 	op: TodoOp,
 	"list?": InitListEntry.array().describe("phased task list (init)"),
 	"task?": type("string").describe("task content"),
 	"phase?": type("string").describe("phase name"),
 	"items?": type("string").describe("task content").array().atLeastLength(1).describe("tasks to append"),
-});
-
-const todoSchema = type({
-	ops: TodoOpEntry.array().atLeastLength(1).describe("ordered todo operations"),
-}).describe("apply ordered todo operations");
+}).describe("apply a single todo operation");
 
 type TodoParams = TodoSchema;
 type TodoSchema = typeof todoSchema.infer;
-type TodoOpEntryValue = TodoParams["ops"][number];
+/** A single todo op entry (the params object itself). */
+type TodoOpEntryValue = TodoParams;
 
 // =============================================================================
 // State helpers
@@ -402,10 +399,7 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string
 
 function applyParams(phases: TodoPhase[], params: TodoParams): { phases: TodoPhase[]; errors: string[] } {
 	const errors: string[] = [];
-	let next = phases;
-	for (const entry of params.ops) {
-		next = applyEntry(next, entry, errors);
-	}
+	const next = applyEntry(phases, params, errors);
 	normalizeInProgressTask(next);
 	return { phases: next, errors };
 }
@@ -413,9 +407,15 @@ function applyParams(phases: TodoPhase[], params: TodoParams): { phases: TodoPha
 /** Apply an array of `todo`-style ops to existing phases. Used by /todo slash command. */
 export function applyOpsToPhases(
 	currentPhases: TodoPhase[],
-	ops: TodoParams["ops"],
+	ops: TodoParams[],
 ): { phases: TodoPhase[]; errors: string[] } {
-	return applyParams(clonePhases(currentPhases), { ops });
+	const errors: string[] = [];
+	let next = clonePhases(currentPhases);
+	for (const op of ops) {
+		next = applyEntry(next, op, errors);
+	}
+	normalizeInProgressTask(next);
+	return { phases: next, errors };
 }
 
 // =============================================================================
@@ -572,64 +572,44 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		{
 			caption: "Initial setup (multi-phase)",
 			call: {
-				ops: [
-					{
-						op: "init",
-						list: [
-							{ phase: "Foundation", items: ["Scaffold crate", "Wire workspace"] },
-							{ phase: "Auth", items: ["Port credential store", "Wire OAuth providers"] },
-							{ phase: "Verification", items: ["Run cargo test"] },
-						],
-					},
+				op: "init",
+				list: [
+					{ phase: "Foundation", items: ["Scaffold crate", "Wire workspace"] },
+					{ phase: "Auth", items: ["Port credential store", "Wire OAuth providers"] },
+					{ phase: "Verification", items: ["Run cargo test"] },
 				],
 			},
 		},
 		{
 			caption: "View current state (read-only)",
-			call: {
-				ops: [{ op: "view" }],
-			},
+			call: { op: "view" },
 		},
 		{
 			caption: "Initial setup (single phase)",
 			call: {
-				ops: [
-					{
-						op: "init",
-						list: [{ phase: "Implementation", items: ["Apply fix", "Run tests"] }],
-					},
-				],
+				op: "init",
+				list: [{ phase: "Implementation", items: ["Apply fix", "Run tests"] }],
 			},
 		},
 		{
 			caption: "Complete one task",
-			call: {
-				ops: [{ op: "done", task: "Wire workspace" }],
-			},
+			call: { op: "done", task: "Wire workspace" },
 		},
 		{
 			caption: "Complete a whole phase",
-			call: {
-				ops: [{ op: "done", phase: "Auth" }],
-			},
+			call: { op: "done", phase: "Auth" },
 		},
 		{
 			caption: "Remove all tasks",
-			call: {
-				ops: [{ op: "rm" }],
-			},
+			call: { op: "rm" },
 		},
 		{
 			caption: "Drop one task",
-			call: {
-				ops: [{ op: "drop", task: "Run cargo test" }],
-			},
+			call: { op: "drop", task: "Run cargo test" },
 		},
 		{
 			caption: "Append tasks to a phase",
-			call: {
-				ops: [{ op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] }],
-			},
+			call: { op: "append", phase: "Auth", items: ["Handle retries", "Run tests"] },
 		},
 	];
 	readonly loadMode = "discoverable";
@@ -646,7 +626,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	): Promise<AgentToolResult<TodoToolDetails>> {
 		const previousPhases = clonePhases(this.session.getTodoPhases?.() ?? []);
 		// Pure-view calls are reads: no normalization, no state write.
-		const readOnly = params.ops.every(entry => entry.op === "view");
+		const readOnly = params.op === "view";
 		const { phases: updated, errors } = readOnly
 			? { phases: previousPhases, errors: [] as string[] }
 			: applyParams(clonePhases(previousPhases), params);
@@ -673,14 +653,31 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-type TodoRenderArgs = {
-	ops?: Array<{
-		op?: string;
-		task?: string;
-		phase?: string;
-		items?: string[];
-	}>;
+type TodoRenderOp = {
+	op?: string;
+	task?: string;
+	phase?: string;
+	items?: string[];
 };
+
+/** New single-op shape `{op,...}`; legacy `{ops:[...]}` still seen in old transcripts. */
+type TodoRenderArgs = TodoRenderOp & {
+	ops?: TodoRenderOp[];
+};
+
+/**
+ * Normalize streaming/legacy render args to a flat op list. Accepts the new
+ * top-level `{op,...}` shape (returned as a one-element list), the legacy
+ * `{ops:[...]}` batch from old transcripts/collab-web, and partially-parsed
+ * streaming deltas (non-array `ops`, non-object entries) without crashing.
+ */
+function normalizeTodoArg(args: TodoRenderArgs | undefined): TodoRenderOp[] {
+	if (!args || typeof args !== "object") return [];
+	if (Array.isArray(args.ops)) {
+		return args.ops.filter((entry): entry is TodoRenderOp => !!entry && typeof entry === "object");
+	}
+	return typeof args.op === "string" ? [args] : [];
+}
 
 // =============================================================================
 // Phase numbering (display-only)
@@ -794,7 +791,7 @@ function computeTouchedPhases(
 	for (const transition of completedTasks) touched.add(transition.phase);
 	// Phases explicitly named by the ops that ran. `init` replaces the whole
 	// list, so the entire plan is fresh and every phase counts as touched.
-	const ops = Array.isArray(args?.ops) ? args.ops : [];
+	const ops = normalizeTodoArg(args);
 	for (const op of ops) {
 		if (!op || typeof op !== "object") continue;
 		if (op.op === "init") {
@@ -823,18 +820,17 @@ function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Th
 
 export const todoToolRenderer = {
 	renderCall(args: TodoRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
-		// `args` here is the raw partially-parsed JSON from the streaming
-		// tool-call delta and may not satisfy `TodoRenderArgs` at runtime:
-		// `parseStreamingJson` can hand back `{ ops: "[" }` mid-delta, or
-		// entries that are `null` / strings before fields stream. Guard
-		// against non-array `ops` and non-object entries so a malformed
-		// delta never breaks the TUI render loop (#2005).
-		const opsList = Array.isArray(args?.ops) ? args.ops : [];
+		// `args` is the raw partially-parsed JSON from the streaming tool-call
+		// delta and may not satisfy `TodoRenderArgs` at runtime:
+		// `parseStreamingJson` can hand back `{ op: 1 }` mid-delta, or a legacy
+		// `{ ops: "[" }` shape before fields stream. `normalizeTodoArg` guards
+		// both the new single-op and legacy batch shapes so a malformed delta
+		// never breaks the TUI render loop (#2005).
+		const opsList = normalizeTodoArg(args);
 		const ops =
 			opsList.length === 0
 				? ["update"]
-				: opsList.map(entry => {
-						const e = entry && typeof entry === "object" ? entry : ({} as NonNullable<typeof entry>);
+				: opsList.map(e => {
 						const parts = [e.op ?? "update"];
 						if (e.task) parts.push(e.task);
 						if (e.phase) parts.push(e.phase);
