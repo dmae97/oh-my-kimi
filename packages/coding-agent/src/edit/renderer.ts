@@ -22,6 +22,7 @@ import {
 	invalidateRenderedStringCache,
 	type LspBatchRequest,
 	PREVIEW_LIMITS,
+	previewWindowRows,
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
@@ -347,15 +348,23 @@ function formatStreamingDiff(
 	cache?: RenderedStringCache,
 ): string {
 	if (!diff) return "";
-	let text = cachedRenderedString(cache, uiTheme, expanded, rawPath, diff, () => {
-		// Collapsed uses a "Cursor" tail window: pin the last
-		// EDIT_STREAMING_PREVIEW_LINES rows to the bottom so freshly streamed changes
-		// stay on screen. The whole-file diff is recomputed on every streamed chunk
-		// and its Myers alignment is not monotonic in payload length, so a hunk-aware
-		// window stutters as rows move between hunks. Expanded deliberately lifts that
-		// cap for the approval-time full view.
+	// Clamp the collapsed tail to the viewport so a tall or fast-growing diff
+	// cannot outgrow the live window. Otherwise its mutating tail scrolls above
+	// the native-scrollback commit boundary and the engine re-commits a fresh
+	// snapshot every streamed frame, stacking duplicate "… more lines above"
+	// previews in history. Budgeted in logical rows (only the tail is colored —
+	// recoloring the whole growing diff per chunk would be costly) with the
+	// viewport reserve absorbing wrapping; `previewWindowRows()` is in the cache
+	// salt so a resize re-slices.
+	const budget = expanded ? Number.POSITIVE_INFINITY : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
+	let text = cachedRenderedString(cache, uiTheme, expanded, `${rawPath}:${budget}`, diff, () => {
+		// Collapsed uses a "Cursor" tail window: pin the last rows to the bottom so
+		// freshly streamed changes stay on screen. The whole-file diff is recomputed
+		// on every streamed chunk and its Myers alignment is not monotonic in payload
+		// length, so a hunk-aware window stutters as rows move between hunks. Expanded
+		// deliberately lifts the cap for the approval-time full view.
 		const allLines = diff.replace(/\n+$/u, "").split("\n");
-		const hiddenLines = expanded ? 0 : Math.max(0, allLines.length - EDIT_STREAMING_PREVIEW_LINES);
+		const hiddenLines = Math.max(0, allLines.length - budget);
 		const visible = hiddenLines > 0 ? allLines.slice(hiddenLines) : allLines;
 		let rendered = "\n\n";
 		if (hiddenLines > 0) {
