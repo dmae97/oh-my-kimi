@@ -373,6 +373,44 @@ describe("boundary-balance repair", () => {
 		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
 	});
 
+	it("does not keep deleted closer suffixes whose tail the payload already restates", () => {
+		const file = [
+			"const REASONING_LABEL_PATTERN = /think/i;",
+			"const NO_REASONING_LABEL_PATTERN = /no/i;",
+			"",
+			"\treturn config.supportsThinking === true;",
+			"}",
+			"}",
+		].join("\n");
+		const diff = [
+			"SWAP 3.=6:",
+			"+function supportsDevinThinking(config: ClientModelConfig): boolean {",
+			"+\tif (NO_REASONING_LABEL_PATTERN.test(config.label)) return false;",
+			"+\treturn config.supportsThinking === true;",
+			"+}",
+		].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(
+			[
+				"const REASONING_LABEL_PATTERN = /think/i;",
+				"const NO_REASONING_LABEL_PATTERN = /no/i;",
+				"function supportsDevinThinking(config: ClientModelConfig): boolean {",
+				"\tif (NO_REASONING_LABEL_PATTERN.test(config.label)) return false;",
+				"\treturn config.supportsThinking === true;",
+				"}",
+			].join("\n"),
+		);
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(0);
+	});
+
+	it("keeps an omitted outer closer even when the payload restates an inner closer", () => {
+		const file = ["if (a) {", "\tif (b) {", "\t\told();", "\t}", "}", "after();"].join("\n");
+		const diff = ["SWAP 1.=5:", "+if (a) {", "+\tif (c) {", "+\t\tnew();", "+\t}"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["if (a) {", "\tif (c) {", "\t\tnew();", "\t}", "}", "after();"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
 	// A dupSuffix repair in hunk A zeroes its contribution; the residual must be
 	// recomputed post-repair so hunk B's genuine missing closer still fires.
 	it("still keeps a missing closer when another hunk's dupSuffix repair masks the raw delta", () => {

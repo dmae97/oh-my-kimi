@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed delimiter-balance repair so deleted closer suffixes are kept only when the replacement prefix still has unmatched openers for them, avoiding duplicated trailing braces while preserving omitted outer closers.
+
 ## [16.1.8] - 2026-06-20
 
 ### Fixed
