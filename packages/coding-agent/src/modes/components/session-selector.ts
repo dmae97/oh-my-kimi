@@ -172,6 +172,15 @@ class SessionList implements Component {
 
 	onDeleteRequest?: (session: SessionInfo) => void;
 
+	// Extra row count the picker must keep free for a sibling component
+	// (currently the delete-confirmation dialog) mounted below the bottom
+	// border. Set by `SessionSelectorComponent` while the dialog is on screen
+	// so the SessionList shrinks its visible window and the picker's total
+	// rendered output stays within the terminal height. Without this the
+	// picker overflows by ~dialog-height rows, the TUI commits those top rows
+	// to native scrollback to fit, and when the dialog closes the picker
+	// header is stranded above the viewport — issue #3283.
+	#externalReserveRows = 0;
 	#allSessions: SessionInfo[];
 	#showCwd: boolean;
 	readonly #historyMatcher?: SessionHistoryMatcher;
@@ -199,22 +208,40 @@ class SessionList implements Component {
 	}
 
 	/**
+	 * Reserve `rows` of vertical budget for a sibling component rendered
+	 * outside the SessionList (e.g. the delete-confirmation dialog). The
+	 * visible-entry window shrinks accordingly so the picker frame stays
+	 * within the terminal viewport while the sibling is mounted.
+	 */
+	setExternalReserveRows(rows: number): void {
+		const next = Math.max(0, Math.trunc(rows));
+		if (next === this.#externalReserveRows) return;
+		this.#externalReserveRows = next;
+	}
+
+	/**
 	 * Number of sessions to show at once, sized so the whole picker fits the
 	 * current viewport instead of pushing its header/search off the top.
 	 *
-	 * Budget = rows − chrome − reserve, divided by the worst-case per-session
-	 * height. Chrome (12) is the surrounding spacers/borders/header (7) plus the
-	 * list's search line, blank, scroll indicator, blank, and hint (5). A titled
-	 * session is the tallest item at 4 lines (title + preview + metadata +
-	 * blank); budgeting for that guarantees no overflow even when every visible
-	 * entry has a title. The reserve covers below-editor hook widgets / cursor.
+	 * Budget = rows − chrome − reserve − externalReserve, divided by the
+	 * worst-case per-session height. Chrome (12) is the surrounding
+	 * spacers/borders/header (7) plus the list's search line, blank, scroll
+	 * indicator, blank, and hint (5). A titled session is the tallest item at
+	 * 4 lines (title + preview + metadata + blank); budgeting for that
+	 * guarantees no overflow even when every visible entry has a title. The
+	 * reserve covers below-editor hook widgets / cursor. The external reserve
+	 * is non-zero only while a sibling overlay (the delete-confirmation
+	 * dialog) is mounted below the bottom border, and is allowed to drive
+	 * the count down to zero so the dialog never pushes the picker past the
+	 * terminal height.
 	 */
 	#visibleCount(): number {
 		const CHROME = 12;
 		const PER_SESSION = 4;
 		const RESERVE = 1;
-		const budget = this.#getTerminalRows() - CHROME - RESERVE;
-		return Math.max(2, Math.floor(budget / PER_SESSION));
+		const budget = this.#getTerminalRows() - CHROME - RESERVE - this.#externalReserveRows;
+		const minimum = this.#externalReserveRows > 0 ? 0 : 2;
+		return Math.max(minimum, Math.floor(budget / PER_SESSION));
 	}
 
 	/** Replace the visible dataset, e.g. when toggling folder/all-projects scope. */
@@ -580,8 +607,28 @@ export class SessionSelectorComponent extends Container {
 		this.#messageContainer.addChild(new Spacer(1));
 	}
 
+	// Rows the delete-confirmation dialog adds below the picker's bottom
+	// border. Used to shrink the SessionList while the dialog is mounted so
+	// the picker's total rendered output never exceeds the terminal height.
+	// Sized generously (title + session-name + spacer + 2 options + spacer +
+	// hint + leading/trailing blanks) so the SessionList always concedes
+	// enough room for the dialog as it grows, even when the displayed session
+	// name wraps.
+	static readonly #DELETE_DIALOG_RESERVE_ROWS = 12;
+
 	#showDeleteConfirmation(session: SessionInfo): void {
 		const displayName = session.title || session.firstMessage.slice(0, 40) || session.id;
+		const closeDialog = () => {
+			this.removeChild(this.#confirmationDialog!);
+			this.#confirmationDialog = null;
+			// Release the dialog's row reservation BEFORE requesting the
+			// rerender so the SessionList can grow back to its full window
+			// in the same frame the dialog disappears. Otherwise the picker
+			// re-renders short, leaving a band of blank rows beneath it for
+			// one frame (visible as a flicker / "still scrolled" feel).
+			this.#sessionList.setExternalReserveRows(0);
+			this.#onRequestRender?.();
+		};
 		this.#confirmationDialog = new HookSelectorComponent(
 			`Delete session?\n${displayName}`,
 			["Yes", "No"],
@@ -597,21 +644,17 @@ export class SessionSelectorComponent extends Container {
 						this.#showError(err instanceof Error ? err.message : String(err));
 					}
 				}
-				// Close confirmation dialog
-				this.removeChild(this.#confirmationDialog!);
-				this.#confirmationDialog = null;
-				// Request rerender
-				this.#onRequestRender?.();
+				closeDialog();
 			},
-			() => {
-				// Cancel - close confirmation dialog
-				this.removeChild(this.#confirmationDialog!);
-				this.#confirmationDialog = null;
-				// Request rerender
-				this.#onRequestRender?.();
-			},
+			closeDialog,
 		);
-		// Show confirmation dialog
+		// Shrink the SessionList by the dialog's worst-case height BEFORE
+		// mounting the dialog so the very first frame containing the dialog
+		// already fits the terminal viewport. Without this the dialog's first
+		// render still overflows and the TUI commits the picker's top rows
+		// to native scrollback before the SessionList has a chance to react
+		// — issue #3283.
+		this.#sessionList.setExternalReserveRows(SessionSelectorComponent.#DELETE_DIALOG_RESERVE_ROWS);
 		this.addChild(this.#confirmationDialog);
 	}
 
