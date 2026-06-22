@@ -770,8 +770,11 @@ function parseGitLabRemoteProjectPath(remoteUrl: string, expectedHost: string | 
 function parseRemoteUrl(remoteUrl: string): { host: string; projectPath: string } | null {
 	try {
 		const url = new URL(remoteUrl);
-		return { host: url.hostname, projectPath: url.pathname };
+		// `host` (not `hostname`) keeps any explicit port so a self-managed GitLab on a
+		// non-default port is not confused with another service on the same hostname.
+		return { host: url.host, projectPath: url.pathname };
 	} catch {
+		// SCP-style `git@host:path` has no port concept; bare host is the only key.
 		const scpMatch = remoteUrl.match(/^(?:[^@]+@)?([^:]+):(.+)$/);
 		if (scpMatch?.[1] && scpMatch[2]) {
 			return { host: scpMatch[1], projectPath: scpMatch[2] };
@@ -782,7 +785,8 @@ function parseRemoteUrl(remoteUrl: string): { host: string; projectPath: string 
 
 function parseUrlHost(url: string): string | null {
 	try {
-		return new URL(url).hostname;
+		// Match `parseRemoteUrl`: include the port so host comparison is port-aware.
+		return new URL(url).host;
 	} catch {
 		return null;
 	}

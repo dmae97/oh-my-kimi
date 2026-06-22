@@ -655,4 +655,42 @@ describe("GitLab Duo Workflow discovery", () => {
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it("does not treat a same-host different-port remote as the workspace project", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gitlab-duo-workflow-"));
+		try {
+			await fs.mkdir(path.join(tmpDir, ".git"));
+			// The configured GitLab is on :8443; the remote points at the same hostname
+			// on :9443 — a different GitLab service. It must NOT be accepted as this
+			// instance's project, so discovery falls through to the group candidate
+			// instead of querying :8443 for a project path that lives elsewhere.
+			await fs.writeFile(
+				path.join(tmpDir, ".git", "config"),
+				`[remote "origin"]\n\turl = https://gitlab.example.com:9443/group/project.git\n`,
+			);
+			const { fetch, calls } = createMockFetch({
+				projects: {
+					"group/project": { id: 7, namespace: { rootAncestor: { id: "remote-root" } } },
+				},
+				groups: [{ id: "group-root" }],
+				models: {
+					"remote-root": availableModels("remote_model"),
+					"group-root": availableModels("group_model"),
+				},
+			});
+
+			const selection = await discoverGitLabDuoWorkflowNamespace({
+				apiKey: TEST_TOKEN,
+				baseUrl: "https://gitlab.example.com:8443",
+				cwd: tmpDir,
+				fetch,
+			});
+
+			// Falls through to the group candidate, never queries the cross-port project.
+			expect(selection.rootNamespaceId).toBe("group-root");
+			expect(calls.some(call => call.url.includes("/api/v4/projects/group%2Fproject"))).toBe(false);
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
 });

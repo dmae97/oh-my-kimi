@@ -83,8 +83,12 @@ export function gitLabDuoWorkflowModelManagerOptions(
 		// models), so the default provider-id cache namespace would let a second
 		// account/namespace load the first one's authoritative model list at startup
 		// and skip refetching. Partition the cache by a non-reversible fingerprint of
-		// the credential + base URL + namespace/project/cwd scope. Falls back to the
-		// bare provider id when no credential is present (static-only fallback model).
+		// the exact inputs `fetchGitLabDuoWorkflowModels` resolves the namespace from
+		// (credential + base URL + namespace/project config + the same env vars + the
+		// effective workspace cwd whose git remote drives auto-discovery). Built-in
+		// discovery only passes apiKey/baseUrl/fetch, so the cwd/env terms — not the
+		// empty config fields — are what actually separate workspace A from B here.
+		// Falls back to the bare provider id when no credential is present.
 		...(apiKey ? { cacheProviderId: gitLabDuoWorkflowModelCacheProviderId(apiKey, config) } : undefined),
 		dynamicModelsAuthoritative: true,
 		staticModels: [
@@ -107,9 +111,14 @@ export function gitLabDuoWorkflowModelManagerOptions(
 }
 
 function gitLabDuoWorkflowModelCacheProviderId(apiKey: string, config: GitLabDuoWorkflowModelManagerConfig): string {
-	const scope = [config.baseUrl ?? "", config.namespaceId ?? "", config.projectId ?? "", config.cwd ?? ""].join(
-		"\u0000",
-	);
+	// Mirror the exact inputs `discoverGitLabDuoWorkflowNamespace` keys off: explicit
+	// namespace/project config OR the same env vars, then the git remote at the
+	// effective cwd. Built-in discovery leaves the config fields empty, so the env +
+	// resolved cwd terms are what actually distinguish two workspaces sharing a token.
+	const namespaceId = config.namespaceId ?? Bun.env.GITLAB_DUO_NAMESPACE_ID ?? "";
+	const projectId = config.projectId ?? Bun.env.GITLAB_DUO_PROJECT_ID ?? Bun.env.GITLAB_DUO_PROJECT_PATH ?? "";
+	const cwd = config.cwd ?? process.cwd();
+	const scope = [config.baseUrl ?? "", namespaceId, projectId, cwd].join("\u0000");
 	return `gitlab-duo-agent:${Bun.hash(`${apiKey}\u0000${scope}`).toString(36)}`;
 }
 
