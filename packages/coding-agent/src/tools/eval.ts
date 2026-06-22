@@ -14,7 +14,7 @@ import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
 import { truncateForPrompt } from "./approval";
-import { resolveEvalBackends } from "./eval-backends";
+import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
 import { upsertStatusEvent } from "./eval-render";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -23,32 +23,111 @@ import { clampTimeout } from "./tool-timeouts";
 
 export { EVAL_DEFAULT_PREVIEW_LINES, evalToolRenderer } from "./eval-render";
 
-/**
- * Per-cell input. Each cell runs in order; state persists within a language
- * across cells and across tool calls.
- */
-const evalCellSchema = type({
-	language: type("'py' | 'js' | 'rb' | 'jl'").describe(
-		'runtime: "py" for the IPython kernel, "js" for the persistent JS VM, "rb" for the persistent Ruby kernel, "jl" for the persistent Julia kernel',
-	),
-	code: type("string").describe(
-		"cell body, verbatim. Top-level `await` is available in py/js; rb/jl auto-display the last expression like a REPL.",
-	),
+/** Language tokens the eval tool accepts, in stable display order. */
+export type EvalLanguageToken = "py" | "js" | "rb" | "jl";
+const EVAL_LANGUAGE_ORDER: readonly EvalLanguageToken[] = ["py", "js", "rb", "jl"];
+const EVAL_LANGUAGE_RUNTIME: Record<EvalLanguageToken, string> = {
+	py: '"py" for the IPython kernel',
+	js: '"js" for the persistent JS VM',
+	rb: '"rb" for the persistent Ruby kernel',
+	jl: '"jl" for the persistent Julia kernel',
+};
+const EVAL_LANGUAGE_NAME: Record<EvalLanguageToken, string> = {
+	py: "Python",
+	js: "JavaScript",
+	rb: "Ruby",
+	jl: "Julia",
+};
+const EVAL_CELLS_DESCRIPTION =
+	"cells executed in order. State persists within each language across cells and tool calls.";
+
+/** Join names as an English "or" list: ["A"]→"A", ["A","B"]→"A or B", 3+→"A, B, or C". */
+function joinWithOr(items: readonly string[]): string {
+	if (items.length <= 1) return items[0] ?? "";
+	if (items.length === 2) return `${items[0]} or ${items[1]}`;
+	return `${items.slice(0, -1).join(", ")}, or ${items[items.length - 1]}`;
+}
+
+function describeLanguageField(langs: readonly EvalLanguageToken[]): string {
+	return `runtime: ${langs.map(lang => EVAL_LANGUAGE_RUNTIME[lang]).join(", ")}`;
+}
+
+function describeCodeField(langs: readonly EvalLanguageToken[]): string {
+	const replLangs = langs.filter(lang => lang === "rb" || lang === "jl");
+	// No persistent REPL backends → keep the original py/js phrasing verbatim so the
+	// default (rb/jl off) wire schema stays byte-identical to the pre-feature one.
+	if (replLangs.length === 0) return "cell body, verbatim. Use top-level await freely.";
+	const awaitLangs = langs.filter(lang => lang === "py" || lang === "js");
+	const clauses: string[] = [];
+	if (awaitLangs.length > 0) clauses.push(`Top-level \`await\` is available in ${awaitLangs.join("/")}`);
+	clauses.push(`${replLangs.join("/")} auto-display the last expression like a REPL`);
+	return `cell body, verbatim. ${clauses.join("; ")}.`;
+}
+
+/** One-line discovery summary listing the runtimes available this session. */
+function summarizeEvalLanguages(langs: readonly EvalLanguageToken[]): string {
+	const names = langs.map(lang => EVAL_LANGUAGE_NAME[lang]);
+	const list = names.length > 0 ? joinWithOr(names) : "Python or JavaScript";
+	// "in-process" matches the historical py/js summary; persistent kernels (rb/jl) switch wording.
+	const backend = langs.some(lang => lang === "rb" || lang === "jl") ? "a persistent" : "an in-process";
+	return `Execute ${list} code in ${backend} eval backend`;
+}
+
+/** Resolved-allowance → enabled language tokens, preserving display order. */
+function enabledEvalLanguages(backends: EvalBackendsAllowance): EvalLanguageToken[] {
+	const allowed: Record<EvalLanguageToken, boolean> = {
+		py: backends.python,
+		js: backends.js,
+		rb: backends.ruby,
+		jl: backends.julia,
+	};
+	return EVAL_LANGUAGE_ORDER.filter(lang => allowed[lang]);
+}
+
+const evalCellCommonFields = {
 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
 	"timeout?": type("number").describe("per-cell timeout in seconds"),
 	"reset?": type("boolean").describe(
 		"wipe this cell's language kernel before running. Other languages are untouched.",
 	),
+};
+
+/**
+ * Per-cell input. Each cell runs in order; state persists within a language
+ * across cells and across tool calls. This static schema carries the full
+ * language union for typing; {@link buildEvalSchema} narrows the wire copy per
+ * session so disabled backends are never advertised to the model.
+ */
+const evalCellSchema = type({
+	language: type("'py' | 'js' | 'rb' | 'jl'").describe(describeLanguageField(EVAL_LANGUAGE_ORDER)),
+	code: type("string").describe(describeCodeField(EVAL_LANGUAGE_ORDER)),
+	...evalCellCommonFields,
 });
 export type EvalCellInput = typeof evalCellSchema.infer;
 
 export const evalSchema = type({
-	cells: evalCellSchema
-		.array()
-		.atLeastLength(1)
-		.describe("cells executed in order. State persists within each language across cells and tool calls."),
+	cells: evalCellSchema.array().atLeastLength(1).describe(EVAL_CELLS_DESCRIPTION),
 });
 export type EvalToolParams = typeof evalSchema.infer;
+
+/**
+ * Build a session-scoped copy of the eval schema whose `language` enum and field
+ * descriptions advertise only the runtimes enabled for this session. Disabled
+ * backends never reach the model: the wire schema, BM25 discovery corpus, and
+ * tool description stay in lockstep with {@link resolveEvalBackends}. The static
+ * {@link evalSchema} (full union) remains the type-level source of truth.
+ */
+function buildEvalSchema(langs: readonly EvalLanguageToken[]): typeof evalSchema {
+	const cellSchema = type({
+		language: type.enumerated(...langs).describe(describeLanguageField(langs)),
+		code: type("string").describe(describeCodeField(langs)),
+		...evalCellCommonFields,
+	});
+	const schema = type({
+		cells: cellSchema.array().atLeastLength(1).describe(EVAL_CELLS_DESCRIPTION),
+	});
+	return schema as unknown as typeof evalSchema;
+}
 
 export type EvalToolResult = {
 	content: Array<{ type: "text"; text: string }>;
@@ -107,8 +186,8 @@ export interface EvalToolDescriptionOptions {
 export function getEvalToolDescription(options: EvalToolDescriptionOptions = {}): string {
 	const py = options.py ?? true;
 	const js = options.js ?? true;
-	const rb = options.rb ?? true;
-	const jl = options.jl ?? true;
+	const rb = options.rb ?? false;
+	const jl = options.jl ?? false;
 	const spawns = options.spawns ?? true;
 	return prompt.render(evalDescription, { py, js, rb, jl, spawns });
 }
@@ -223,7 +302,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 		}
 		return lines;
 	};
-	readonly summary = "Execute Python, JavaScript, Ruby, or Julia code in a persistent eval backend";
+	get summary(): string {
+		return summarizeEvalLanguages(this.#enabledLanguages());
+	}
 	readonly loadMode = "discoverable";
 	readonly label = "Eval";
 	get description(): string {
@@ -258,7 +339,16 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			},
 		},
 	];
-	readonly parameters = evalSchema;
+	get parameters(): typeof evalSchema {
+		const langs = this.#enabledLanguages();
+		if (langs.length === 0 || langs.length === EVAL_LANGUAGE_ORDER.length) return evalSchema;
+		const key = langs.join(",");
+		if (this.#paramsKey !== key) {
+			this.#cachedParams = buildEvalSchema(langs);
+			this.#paramsKey = key;
+		}
+		return this.#cachedParams ?? evalSchema;
+	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
@@ -272,6 +362,17 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	};
 
 	readonly #proxyExecutor?: EvalProxyExecutor;
+
+	#paramsKey?: string;
+	#cachedParams?: typeof evalSchema;
+
+	/**
+	 * Languages enabled for this session, in display order. Detached tools (no
+	 * session) fall back to the shipped defaults (py/js; rb/jl are opt-in).
+	 */
+	#enabledLanguages(): EvalLanguageToken[] {
+		return this.session ? enabledEvalLanguages(resolveEvalBackends(this.session)) : ["py", "js"];
+	}
 
 	constructor(
 		private readonly session: ToolSession | null,

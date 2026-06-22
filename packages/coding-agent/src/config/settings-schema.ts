@@ -2988,7 +2988,7 @@ export const SETTINGS_SCHEMA = {
 
 	"eval.rb": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "shell",
 			group: "Eval & Runtimes",
@@ -2999,7 +2999,7 @@ export const SETTINGS_SCHEMA = {
 
 	"eval.jl": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "shell",
 			group: "Eval & Runtimes",
