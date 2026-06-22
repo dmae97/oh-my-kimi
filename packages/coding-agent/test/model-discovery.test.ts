@@ -60,8 +60,8 @@ describe("ModelRegistry runtime discovery", () => {
 		}
 	});
 
-	function writeCachedOllamaModels(models: Model<"openai-completions">[]) {
-		writeModelCache("ollama", Date.now(), models, true, "", cacheDbPath);
+	function writeCachedOllamaModels(models: Model<"openai-completions">[], updatedAt = Date.now()) {
+		writeModelCache("ollama", updatedAt, models, true, "", cacheDbPath);
 	}
 
 	function getModelsForProvider(registry: ModelRegistry, provider: string) {
@@ -304,6 +304,57 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(ollama?.api).toBe("openai-responses");
 		expect(ollama?.baseUrl).toBe("http://127.0.0.1:11434/v1");
 		expect(registry.getProviderDiscoveryState("ollama")?.status).toBe("cached");
+	});
+
+	test("refreshes cached discovery when models config is newer than the cache", async () => {
+		writeRawModelsJson({
+			ollama: {
+				baseUrl: "http://127.0.0.1:11434/v1",
+				api: "openai-responses",
+				auth: "none",
+				discovery: { type: "ollama" },
+				modelOverrides: {
+					"phi3:3.8b": { contextWindow: 8192, maxTokens: 4096 },
+				},
+			},
+		});
+		const configMtime = fs.statSync(modelsJsonPath).mtimeMs;
+		writeCachedOllamaModels(
+			[
+				buildModel({
+					id: "phi3:3.8b",
+					name: "phi3:3.8b",
+					api: "openai-completions",
+					provider: "ollama",
+					baseUrl: "http://127.0.0.1:11434/v1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 32768,
+				}),
+			],
+			Math.floor(configMtime) - 1,
+		);
+		let tagCalls = 0;
+		const fetchMock = mockOllamaDiscovery(["phi3:3.8b"], "http://127.0.0.1:11434", {
+			capabilities: ["completion"],
+			model_info: { "phi3.context_length": 8192 },
+		});
+		const countingFetch: FetchImpl = async (input, init) => {
+			if (String(input) === "http://127.0.0.1:11434/api/tags") {
+				tagCalls++;
+			}
+			return fetchMock(input, init);
+		};
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: countingFetch });
+		await registry.refresh("online-if-uncached");
+
+		const phi3 = registry.find("ollama", "phi3:3.8b");
+		expect(tagCalls).toBe(1);
+		expect(phi3?.contextWindow).toBe(8192);
+		expect(phi3?.maxTokens).toBe(4096);
 	});
 
 	test("discovers ollama thinking capabilities from show metadata", async () => {
