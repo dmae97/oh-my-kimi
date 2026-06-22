@@ -420,129 +420,132 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		// eval session with an independent kernel.
 	};
 
-	// Suspend eval timeout accounting while the subagent owns control. The
-	// timeout clock restarts once the bridge returns to the cell runtime.
-	const result = await withBridgeTimeoutPause(options.emitStatus, async () => {
-		if (!isolationContext) {
-			return taskExecutor.runSubprocess(baseRunOptions);
-		}
-		const taskStart = Date.now();
-		return runIsolatedSubprocess({
-			baseOptions: baseRunOptions,
-			context: isolationContext,
-			preferredBackend,
-			agentId: id,
-			mergeMode,
-			artifactsDir,
-			description: trimToUndefined(parsed.label),
-			buildCommitMessage,
-			buildFailureResult: err => {
-				const message = err instanceof Error ? err.message : String(err);
-				return {
-					index: 0,
-					id,
-					agent: effectiveAgent.name,
-					agentSource: effectiveAgent.source,
-					task: renderSubagentPrompt(assignment),
-					assignment,
-					description: trimToUndefined(parsed.label),
-					exitCode: 1,
-					output: "",
-					stderr: message,
-					truncated: false,
-					durationMs: Date.now() - taskStart,
-					tokens: 0,
-					requests: 0,
-					modelOverride,
-					error: message,
-				};
-			},
-		});
-	});
-
-	if (result.exitCode !== 0 || result.error || result.aborted) {
-		throw new ToolError(buildSubagentFailureMessage(agentName, result));
-	}
-
-	let mergeSummary = "";
-	let changesApplied: boolean | null = null;
-	if (isIsolated && isolationContext) {
-		if (applyChanges) {
-			const outcome = await mergeIsolatedChanges({
-				result,
-				repoRoot: isolationContext.repoRoot,
+	// Suspend eval timeout accounting through the WHOLE bridge call: the
+	// subagent subprocess plus any isolation post-processing (merge,
+	// nested-patch apply, cleanup). All of that is host-side work while the
+	// runtime is parked waiting for the result, and the cell timeout must
+	// not abort us mid-cherry-pick or mid-nested-commit. The clock restarts
+	// only after we hand control back to the runtime.
+	const { result, mergeSummary, changesApplied } = await withBridgeTimeoutPause(options.emitStatus, async () => {
+		const result = await (async () => {
+			if (!isolationContext) {
+				return taskExecutor.runSubprocess(baseRunOptions);
+			}
+			const taskStart = Date.now();
+			return runIsolatedSubprocess({
+				baseOptions: baseRunOptions,
+				context: isolationContext,
+				preferredBackend,
+				agentId: id,
 				mergeMode,
+				artifactsDir,
+				description: trimToUndefined(parsed.label),
+				buildCommitMessage,
+				buildFailureResult: err => {
+					const message = err instanceof Error ? err.message : String(err);
+					return {
+						index: 0,
+						id,
+						agent: effectiveAgent.name,
+						agentSource: effectiveAgent.source,
+						task: renderSubagentPrompt(assignment),
+						assignment,
+						description: trimToUndefined(parsed.label),
+						exitCode: 1,
+						output: "",
+						stderr: message,
+						truncated: false,
+						durationMs: Date.now() - taskStart,
+						tokens: 0,
+						requests: 0,
+						modelOverride,
+						error: message,
+					};
+				},
 			});
-			mergeSummary = outcome.summary;
-			changesApplied = outcome.changesApplied;
-			if (outcome.changesApplied === false) {
-				const summaryText = outcome.summary.trim();
-				const recoveryParts: string[] = [];
-				if (result.patchPath) recoveryParts.push(`Captured patch preserved at ${result.patchPath}.`);
-				if (result.branchName) recoveryParts.push(`Captured branch preserved as ${result.branchName}.`);
-				if (result.nestedPatches?.length) {
-					const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
-					recoveryParts.push(
-						`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
+		})();
+
+		if (result.exitCode !== 0 || result.error || result.aborted) {
+			throw new ToolError(buildSubagentFailureMessage(agentName, result));
+		}
+
+		let mergeSummary = "";
+		let changesApplied: boolean | null = null;
+		if (isIsolated && isolationContext) {
+			if (applyChanges) {
+				const outcome = await mergeIsolatedChanges({
+					result,
+					repoRoot: isolationContext.repoRoot,
+					mergeMode,
+				});
+				mergeSummary = outcome.summary;
+				changesApplied = outcome.changesApplied;
+				if (outcome.changesApplied === false) {
+					const summaryText = outcome.summary.trim();
+					const recoveryParts: string[] = [];
+					if (result.patchPath) recoveryParts.push(`Captured patch preserved at ${result.patchPath}.`);
+					if (result.branchName) recoveryParts.push(`Captured branch preserved as ${result.branchName}.`);
+					if (result.nestedPatches?.length) {
+						const nestedPaths = await persistNestedPatches(artifactsDir, result.id, result.nestedPatches);
+						recoveryParts.push(
+							`Captured nested repository patches (${result.nestedPatches.length}) preserved at: ${nestedPaths.join(", ")}.`,
+						);
+					}
+					const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";
+					throw new ToolError(
+						`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
 					);
 				}
-				const recoveryHint = recoveryParts.length > 0 ? ` ${recoveryParts.join(" ")}` : "";
-				throw new ToolError(
-					`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
-				);
-			}
 
-			// Apply nested repo patches (separate from parent git). The throw
-			// above already exited on a failed parent merge, so we know either
-			// the parent succeeded (patch mode) or branch mode is in play.
-			const nestedPatches = result.nestedPatches ?? [];
-			const eligible =
-				nestedPatches.length > 0 &&
-				result.exitCode === 0 &&
-				!result.aborted &&
-				(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
-			if (eligible) {
-				try {
-					await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
-				} catch {
-					// Nested patch failures are non-fatal to the parent merge
-					mergeSummary +=
-						"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+				// Apply nested repo patches (separate from parent git). The throw
+				// above already exited on a failed parent merge, so we know either
+				// the parent succeeded (patch mode) or branch mode is in play.
+				const nestedPatches = result.nestedPatches ?? [];
+				const eligible =
+					nestedPatches.length > 0 &&
+					result.exitCode === 0 &&
+					!result.aborted &&
+					(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
+				if (eligible) {
+					try {
+						await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
+					} catch {
+						// Nested patch failures are non-fatal to the parent merge
+						mergeSummary +=
+							"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
+					}
+				}
+			} else if (result.branchName) {
+				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
+			} else if (result.patchPath) {
+				mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
+			} else {
+				const nestedPatches = result.nestedPatches ?? [];
+				if (nestedPatches.length > 0) {
+					mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
+				} else {
+					mergeSummary = "\n\nIsolation: no changes captured.";
 				}
 			}
-		} else if (result.branchName) {
-			mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
-		} else if (result.patchPath) {
-			mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
-		} else {
-			const nestedPatches = result.nestedPatches ?? [];
-			if (nestedPatches.length > 0) {
-				mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
-			} else {
-				mergeSummary = "\n\nIsolation: no changes captured.";
-			}
 		}
-	}
 
-	// Clean up the temp artifacts dir we created for this call only when the
-	// caller will not need files from it later. Keep it when the runtime helper
-	// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
-	// here) and on `apply=false` (`changesApplied === null`) where the caller
-	// consumes `details.patchPath` / `details.branchName` /
-	// `details.nestedPatches` out of band. Failed isolated applies throw
-	// earlier with a recovery hint, so they never reach this gate.
-	const shouldCleanupTempArtifacts =
-		tempArtifactsDir && !parsed.returnHandle && (!isIsolated || changesApplied === true);
-	if (shouldCleanupTempArtifacts) {
-		await fs.rm(artifactsDir, { recursive: true, force: true });
-	}
+		// Clean up the temp artifacts dir we created for this call only when the
+		// caller will not need files from it later. Keep it when the runtime helper
+		// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
+		// here) and on `apply=false` (`changesApplied === null`) where the caller
+		// consumes `details.patchPath` / `details.branchName` /
+		// `details.nestedPatches` out of band. Failed isolated applies throw
+		// earlier with a recovery hint, so they never reach this gate.
+		const shouldCleanupTempArtifacts =
+			tempArtifactsDir && !parsed.returnHandle && (!isIsolated || changesApplied === true);
+		if (shouldCleanupTempArtifacts) {
+			await fs.rm(artifactsDir, { recursive: true, force: true });
+		}
 
-	options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
+		options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
 
-	// The final `onProgress` flush from `runSubprocess` already emits a
-	// status:"completed" event carrying full stats (toolCount, cost, context),
-	// so we don't emit a second, sparser completion event here — it would
-	// coalesce over the richer one and drop those stats.
+		return { result, mergeSummary, changesApplied };
+	});
 
 	return {
 		text: structured ? result.output : result.output + mergeSummary,

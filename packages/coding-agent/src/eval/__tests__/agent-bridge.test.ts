@@ -887,6 +887,43 @@ describe("runEvalAgent isolation", () => {
 		expect(result.text).toContain("Applied patches: yes");
 	});
 
+	it("keeps the timeout paused through isolation merge/apply so the cell can't abort mid-cherry-pick", async () => {
+		mockAgents();
+		mockIsolationContext();
+		const ops: string[] = [];
+		vi.spyOn(isolationRunner, "runIsolatedSubprocess").mockImplementation(async opts => {
+			ops.push("subprocess");
+			return singleResult(opts.baseOptions, { output: "done", patchPath: `/artifacts/${opts.agentId}.patch` });
+		});
+		vi.spyOn(isolationRunner, "mergeIsolatedChanges").mockImplementation(async () => {
+			ops.push("merge");
+			return {
+				summary: "\n\nMerged",
+				changesApplied: true,
+				hadAnyChanges: true,
+				mergedBranchForNestedPatches: false,
+			};
+		});
+
+		await runEvalAgent(
+			{ prompt: "migration", isolated: true },
+			{
+				session: isolatedSession(),
+				emitStatus: event => {
+					if (event.op === EVAL_TIMEOUT_PAUSE_OP || event.op === EVAL_TIMEOUT_RESUME_OP) ops.push(event.op);
+				},
+			},
+		);
+
+		const pauseIdx = ops.indexOf(EVAL_TIMEOUT_PAUSE_OP);
+		const resumeIdx = ops.lastIndexOf(EVAL_TIMEOUT_RESUME_OP);
+		const mergeIdx = ops.indexOf("merge");
+		expect(pauseIdx).toBeGreaterThanOrEqual(0);
+		expect(resumeIdx).toBeGreaterThan(pauseIdx);
+		expect(mergeIdx).toBeGreaterThan(pauseIdx);
+		expect(mergeIdx).toBeLessThan(resumeIdx);
+	});
+
 	it("keeps schema-backed isolated output parseable by moving merge text into details", async () => {
 		mockAgents();
 		mockIsolationContext();
