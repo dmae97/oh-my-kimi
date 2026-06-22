@@ -11,6 +11,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { isEnoent, logger, pathIsWithin } from "@oh-my-pi/pi-utils";
+import { normalizePluginRuntimeConfig } from "../runtime-config";
+import type { PluginRuntimeConfig } from "../types";
 
 import { cachePlugin } from "./cache";
 import { classifySource, fetchMarketplace, parseMarketplaceCatalog, promoteCloneToCache } from "./fetcher";
@@ -298,6 +300,9 @@ export class MarketplaceManager {
 			}
 		}
 
+		const packageName = await this.#resolvePluginPackageName(cachePath, name);
+		const previousPackageNames = await this.#resolveInstalledPackageNames(existing ?? [], name);
+
 		// Only now clean up old entries — new cache succeeded, so it is safe to remove old ones.
 		if (existing && existing.length > 0) {
 			// Remove from scope-appropriate registry first, then cross-check refs before disk deletion.
@@ -336,6 +341,13 @@ export class MarketplaceManager {
 		const freshInstReg = await readInstalledPluginsRegistry(registryPath);
 		const newInstReg = addInstalledPlugin(freshInstReg, pluginId, installedEntry);
 		await writeInstalledPluginsRegistry(registryPath, newInstReg);
+
+		for (const previousPackageName of previousPackageNames) {
+			if (previousPackageName !== packageName) {
+				await this.#removeRuntimePlugin(scope, previousPackageName);
+			}
+		}
+		await this.#registerRuntimePlugin(scope, packageName, cachePath, version, wasDisabled ? false : undefined);
 
 		this.#clearCache();
 
@@ -434,6 +446,7 @@ export class MarketplaceManager {
 		const targetEntries = targetScope === "project" ? projectEntries! : userEntries!;
 		const targetReg = targetScope === "project" ? projectReg : userReg;
 		const registryPath = this.#registryPath(targetScope);
+		const packageNames = await this.#resolveInstalledPackageNames(targetEntries, parsed.name);
 
 		const updatedReg = removeInstalledPlugin(targetReg, pluginId);
 		await writeInstalledPluginsRegistry(registryPath, updatedReg);
@@ -451,6 +464,10 @@ export class MarketplaceManager {
 			if (!referenced.has(entry.installPath)) {
 				await fs.rm(entry.installPath, { recursive: true, force: true });
 			}
+		}
+
+		for (const packageName of packageNames) {
+			await this.#removeRuntimePlugin(targetScope, packageName);
 		}
 
 		this.#clearCache();
@@ -538,6 +555,12 @@ export class MarketplaceManager {
 			},
 		};
 		await writeInstalledPluginsRegistry(registryPath, updated);
+
+		const fallbackName = parsePluginId(pluginId)?.name ?? pluginId;
+		const packageNames = await this.#resolveInstalledPackageNames(entries, fallbackName);
+		for (const packageName of packageNames) {
+			await this.#setRuntimePluginEnabled(targetScope, packageName, enabled);
+		}
 
 		this.#clearCache();
 
@@ -700,6 +723,96 @@ export class MarketplaceManager {
 	}
 
 	// ── Private helpers ───────────────────────────────────────────────────────
+
+	#runtimeRoot(scope: "user" | "project"): string {
+		return path.dirname(this.#registryPath(scope));
+	}
+
+	#nodeModulesPath(scope: "user" | "project"): string {
+		return path.join(this.#runtimeRoot(scope), "node_modules");
+	}
+
+	#runtimeLockPath(scope: "user" | "project"): string {
+		return path.join(this.#runtimeRoot(scope), "omp-plugins.lock.json");
+	}
+
+	async #loadRuntimeConfig(scope: "user" | "project"): Promise<PluginRuntimeConfig> {
+		try {
+			return normalizePluginRuntimeConfig(await Bun.file(this.#runtimeLockPath(scope)).json());
+		} catch (err) {
+			if (isEnoent(err)) return normalizePluginRuntimeConfig({});
+			logger.warn("Failed to load marketplace plugin runtime config", {
+				path: this.#runtimeLockPath(scope),
+				error: String(err),
+			});
+			return normalizePluginRuntimeConfig({});
+		}
+	}
+
+	async #writeRuntimeConfig(scope: "user" | "project", config: PluginRuntimeConfig): Promise<void> {
+		await Bun.write(this.#runtimeLockPath(scope), JSON.stringify(config, null, 2));
+	}
+
+	async #resolvePluginPackageName(installPath: string, fallbackName: string): Promise<string> {
+		try {
+			const pkg: { name?: unknown } = await Bun.file(path.join(installPath, "package.json")).json();
+			return typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : fallbackName;
+		} catch (err) {
+			if (isEnoent(err)) return fallbackName;
+			throw err;
+		}
+	}
+
+	async #resolveInstalledPackageNames(
+		entries: readonly InstalledPluginEntry[],
+		fallbackName: string,
+	): Promise<Set<string>> {
+		const packageNames = new Set<string>();
+		for (const entry of entries) {
+			packageNames.add(await this.#resolvePluginPackageName(entry.installPath, fallbackName));
+		}
+		return packageNames;
+	}
+
+	async #registerRuntimePlugin(
+		scope: "user" | "project",
+		packageName: string,
+		cachePath: string,
+		version: string,
+		enabled: boolean | undefined,
+	): Promise<void> {
+		const linkPath = path.join(this.#nodeModulesPath(scope), packageName);
+		await fs.mkdir(path.dirname(linkPath), { recursive: true });
+		await fs.rm(linkPath, { recursive: true, force: true });
+		await fs.symlink(cachePath, linkPath, process.platform === "win32" ? "junction" : "dir");
+
+		const config = await this.#loadRuntimeConfig(scope);
+		const previous = config.plugins[packageName];
+		config.plugins[packageName] = {
+			version,
+			enabledFeatures: previous?.enabledFeatures ?? null,
+			enabled: enabled ?? previous?.enabled ?? true,
+		};
+		await this.#writeRuntimeConfig(scope, config);
+	}
+
+	async #removeRuntimePlugin(scope: "user" | "project", packageName: string): Promise<void> {
+		await fs.rm(path.join(this.#nodeModulesPath(scope), packageName), { recursive: true, force: true });
+
+		const config = await this.#loadRuntimeConfig(scope);
+		delete config.plugins[packageName];
+		delete config.settings[packageName];
+		await this.#writeRuntimeConfig(scope, config);
+	}
+
+	async #setRuntimePluginEnabled(scope: "user" | "project", packageName: string, enabled: boolean): Promise<void> {
+		const config = await this.#loadRuntimeConfig(scope);
+		const previous = config.plugins[packageName];
+		if (!previous) return;
+
+		config.plugins[packageName] = { ...previous, enabled };
+		await this.#writeRuntimeConfig(scope, config);
+	}
 
 	#registryPath(scope: "user" | "project"): string {
 		if (scope === "project") {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed marketplace plugin installs registering only in `installed_plugins.json` and never in the runtime plugin tree, leaving slash commands and extensions unavailable after `omp plugin install name@marketplace` ([#3244](https://github.com/can1357/oh-my-pi/issues/3244)).
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
