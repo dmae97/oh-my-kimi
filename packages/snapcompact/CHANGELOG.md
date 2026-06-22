@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.13] - 2026-06-22
+
 ### Fixed
 
 - Fixed the Umans provider image budget to match its 10-image request cap.

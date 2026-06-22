@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.13] - 2026-06-22
+
 ### Added
 
 - Added support for Devin as a provider
