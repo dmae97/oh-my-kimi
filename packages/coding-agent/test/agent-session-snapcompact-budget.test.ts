@@ -195,4 +195,58 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		// (which implied snapcompact had run and produced an oversized result).
 		expect(notices.some(n => n.level === "warning" && n.message.includes("kept history"))).toBe(true);
 	});
+
+	it("still invokes snapcompact with maxFrames=1 when the budget can only fit a text-only archive", async () => {
+		// Reviewer (chatgpt-codex on #3249): when kept-recent leaves less than
+		// one FRAME_TOKEN_ESTIMATE of headroom but still some room for a
+		// summary, snapcompact's `text.length <= 2 * edgeCap` short-circuit in
+		// `planArchive` can still produce a valid frame-less archive that the
+		// projection accepts (0 frame tokens billed). The helper MUST NOT
+		// return 0 in that case — it must give snapcompact the minimum
+		// `maxFrames = 1` cap so that text-only opportunity is taken.
+		const model = session.model;
+		if (!model) throw new Error("Expected model");
+		const ctxWindow = model.contextWindow ?? 0;
+		// Tune the kept-recent message so frameBudget lands in the
+		// `[0, FRAME_TOKEN_ESTIMATE)` window: kept-recent + non-message +
+		// summary reserve is just under `ctxWindow - reserve` but the
+		// residual is below one frame's token charge. Aim for ~3000 tokens
+		// of headroom (less than FRAME_TOKEN_ESTIMATE = 5024).
+		const reserve = Math.max(Math.floor(ctxWindow * 0.15), 16384);
+		const headroomTokens = 3000;
+		const targetRecentTokens = ctxWindow - reserve - 4000 /* SUMMARY_TEXT_RESERVE */ - headroomTokens;
+		// Rough 4-chars-per-token rule for the tiktoken estimator on ASCII.
+		const filler = "x".repeat(targetRecentTokens * 4);
+		sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: filler }],
+			timestamp: Date.now(),
+		});
+
+		const branchEntries = sessionManager.getBranch();
+		const lastEntry = branchEntries[branchEntries.length - 1];
+		if (!lastEntry?.id) throw new Error("Expected branch entry with id");
+
+		const compactSpy = vi.spyOn(snapcompact, "compact").mockResolvedValue({
+			summary: "stubbed snapcompact",
+			shortSummary: "stub",
+			firstKeptEntryId: lastEntry.id,
+			tokensBefore: 100_000,
+			// Text-only archive: zero frames, modest text edges. The projection
+			// charges 0 for frames, so the post-compaction context fits.
+			details: { readFiles: [], modifiedFiles: [] },
+			preserveData: {
+				snapcompact: { frames: [], totalChars: 1000, truncatedChars: 0 },
+			},
+		});
+
+		await session.compact(undefined, { mode: "snapcompact" });
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		const opts = compactSpy.mock.calls[0]?.[1];
+		// Snapcompact MUST be invoked with the floor cap, never skipped,
+		// even though one frame charge would overflow the budget — the
+		// text-only `planArchive` path makes this case recoverable.
+		expect(opts?.maxFrames).toBe(1);
+	});
 });

@@ -9429,13 +9429,21 @@ export class AgentSession {
 	 * high-res Anthropic ceiling), so picking `maxFrames` from this helper makes
 	 * {@link #projectSnapcompactContextTokens} succeed by construction.
 	 *
-	 * Returns `0` when the kept-recent slice plus the non-message overhead
-	 * already eats the entire budget — at that point snapcompact cannot fit a
-	 * single frame and the caller MUST skip it instead of running just to
-	 * reject the result and re-emit the "could not bring the context under the
-	 * limit" warning every threshold tick. Without this cap, the bundled
-	 * `MAX_FRAMES_DEFAULT = 80` × 5024 tokens = ~402k frame-token projection
-	 * always overflows any sub-1M-token window (issue #3247).
+	 * Returns `0` only when the kept-recent slice plus the non-message overhead
+	 * plus the summary lead-in reserve already exceed the budget — at that
+	 * point even snapcompact's text-only archive path (frames `[]`, the
+	 * `text.length <= 2 * edgeCap` short-circuit in `planArchive`) cannot fit
+	 * and the caller MUST skip it instead of running just to re-emit the
+	 * "could not bring the context under the limit" warning every threshold
+	 * tick. Returns `1` when the frame charge would overflow but the text-only
+	 * path still has room: snapcompact's planner picks the frame-less layout
+	 * automatically when the discarded text fits in the edges, so giving it
+	 * the minimum cap lets it succeed for small archives instead of being
+	 * skipped outright (chatgpt-codex review on #3249).
+	 *
+	 * Without this cap, the bundled `MAX_FRAMES_DEFAULT = 80` × 5024 tokens =
+	 * ~402k frame-token projection always overflows any sub-1M-token window
+	 * (issue #3247).
 	 */
 	#computeSnapcompactMaxFrames(preparation: CompactionPreparation, settings: CompactionSettings): number {
 		const ctxWindow = this.model?.contextWindow ?? 0;
@@ -9452,7 +9460,8 @@ export class AgentSession {
 		// past the projection check below.
 		const SUMMARY_TEXT_RESERVE = 4000;
 		const frameBudget = ctxWindow - reserve - nonFrameTokens - SUMMARY_TEXT_RESERVE;
-		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 0;
+		if (frameBudget < 0) return 0;
+		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
 		return Math.min(Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE), snapcompact.MAX_FRAMES_DEFAULT);
 	}
 
