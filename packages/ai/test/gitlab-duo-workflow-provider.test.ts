@@ -566,9 +566,15 @@ describe("GitLab Duo Workflow per-account namespace cache", () => {
 			providerSessionState,
 			webSocketFactory,
 		});
-		for (let attempt = 0; attempt < 30 && !socket; attempt++) {
-			await Bun.sleep(0);
+		// Wait until the provider actually opens the socket. Reaching `openGitLabDuoWorkflowSocket`
+		// is several awaits deep (namespace discovery → project discovery → direct_access →
+		// create workflow → available models), so a fixed handful of microtask turns races on a
+		// loaded CI runner and leaves `onopen` undelivered, idling the stream to its 5s timeout.
+		// Poll on a real deadline against the socket factory instead of a turn count.
+		for (let waited = 0; waited < 2000 && !socket; waited += 5) {
+			await Bun.sleep(5);
 		}
+		if (!socket) throw new Error("GitLab Duo Workflow socket was never opened");
 		socket?.onopen?.(new Event("open"));
 		socket?.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
 		await stream.result();
