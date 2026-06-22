@@ -23,6 +23,10 @@
 - Fixed `/handoff` cold-missing the provider prompt cache. Handoff generation now builds its request through the same pipeline a live turn uses (`convertMessagesToLlm` + `Agent.buildSideRequestContext` + `prepareSimpleStreamOptions`, via the new `generateHandoffFromContext`), so it reuses the live system prompt, normalized tools, transformed/obfuscated message history, and — critically — a stable `promptCacheKey` with a unique side `sessionId`. Previously the oneshot sent no cache-routing key and skipped the `transformContext`/`transformProviderContext` and tool/message normalization the loop applies, so its prefix never matched what the turn populated and every handoff re-read the whole context uncached. Mirrors the cache-preserving path already used by `/btw` and `/omfg`.
 - Fixed `/handoff` (and the RPC `handoff` command) resetting the agent while a response was still streaming, which let the live turn keep emitting into the torn-down session. Manual handoff now refuses while a prompt is in flight (matching `/fork` and `/move`); the auto-handoff path is unaffected.
 
+### Fixed
+
+- Fixed Exa web search requests firing back-to-back with no client-side pacing by adding a configurable `exa.searchDelayMs` delay (default 1000ms) between Exa search requests. ([#3271](https://github.com/can1357/oh-my-pi/issues/3271))
+
 ## [16.1.15] - 2026-06-22
 
 ### Added

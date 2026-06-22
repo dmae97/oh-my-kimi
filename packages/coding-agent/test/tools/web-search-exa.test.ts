@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
 	buildExaRequestBody,
 	ExaProvider,
 	normalizeSearchType,
+	resetExaSearchThrottleForTest,
 	searchExa,
 	synthesizeAnswer,
 } from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
@@ -214,13 +216,18 @@ function makeMockExaResponse(overrides: Record<string, unknown> = {}) {
 describe("searchExa", () => {
 	let capturedRequestBody: Record<string, unknown> | null = null;
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 0 } });
 		capturedRequestBody = null;
 		process.env.EXA_API_KEY = "test-key-123";
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+		resetExaSearchThrottleForTest();
+		resetSettingsForTest();
 		delete process.env.EXA_API_KEY;
 	});
 
@@ -288,6 +295,90 @@ describe("searchExa", () => {
 			type: "neural",
 			contents: { summary: { query: "shape test" } },
 		});
+	});
+
+	it("paces consecutive Exa API requests by the configured delay", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 25 } });
+		const requestTimes: number[] = [];
+		const fetchMock: FetchImpl = (_url, init) => {
+			requestTimes.push(Date.now());
+			if (init?.body) {
+				capturedRequestBody = JSON.parse(init.body as string);
+			}
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first paced request", fetch: fetchMock });
+		await searchExa({ query: "second paced request", fetch: fetchMock });
+
+		expect(requestTimes).toHaveLength(2);
+		expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(20);
+	});
+
+	it("aborts while waiting for the configured Exa request delay", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 1_000 } });
+		let fetchCount = 0;
+		const fetchMock: FetchImpl = () => {
+			fetchCount += 1;
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first request", fetch: fetchMock });
+		const controller = new AbortController();
+		const startedAt = Date.now();
+		const pending = searchExa({ query: "cancelled request", fetch: fetchMock, signal: controller.signal });
+		await Bun.sleep(0);
+		controller.abort(new Error("cancelled Exa throttle wait"));
+
+		await expect(pending).rejects.toThrow("cancelled Exa throttle wait");
+		expect(Date.now() - startedAt).toBeLessThan(250);
+		expect(fetchCount).toBe(1);
+	});
+
+	it("aborts while queued behind another Exa throttle wait", async () => {
+		resetSettingsForTest();
+		resetExaSearchThrottleForTest();
+		await Settings.init({ inMemory: true, overrides: { "exa.searchDelayMs": 1_000 } });
+		let fetchCount = 0;
+		const fetchMock: FetchImpl = () => {
+			fetchCount += 1;
+			return Promise.resolve(
+				new Response(JSON.stringify(makeMockExaResponse()), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		};
+
+		await searchExa({ query: "first request", fetch: fetchMock });
+		const secondController = new AbortController();
+		const thirdController = new AbortController();
+		const second = searchExa({ query: "second request", fetch: fetchMock, signal: secondController.signal });
+		const startedAt = Date.now();
+		const third = searchExa({ query: "third request", fetch: fetchMock, signal: thirdController.signal });
+		await Bun.sleep(0);
+		thirdController.abort(new Error("cancelled queued Exa throttle wait"));
+
+		await expect(third).rejects.toThrow("cancelled queued Exa throttle wait");
+		expect(Date.now() - startedAt).toBeLessThan(250);
+		expect(fetchCount).toBe(1);
+
+		secondController.abort(new Error("cleanup second Exa throttle wait"));
+		await expect(second).rejects.toThrow("cleanup second Exa throttle wait");
 	});
 
 	it("prefers summary over text for snippet field", async () => {

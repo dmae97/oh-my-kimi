@@ -4479,6 +4479,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"exa.searchDelayMs": {
+		type: "number",
+		default: 1_000,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Exa Search Delay",
+			description: "Minimum delay between Exa web search requests in milliseconds; set 0 to disable pacing",
+		},
+	},
+
 	"exa.enableResearcher": {
 		type: "boolean",
 		default: false,
@@ -4785,6 +4796,7 @@ export interface TtsrSettings {
 export interface ExaSettings {
 	enabled: boolean;
 	enableSearch: boolean;
+	searchDelayMs: number;
 	enableResearcher: boolean;
 	enableWebsets: boolean;
 }
