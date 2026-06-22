@@ -992,6 +992,7 @@ export class ModelRegistry {
 				});
 				continue;
 			}
+			const configStale = this.#isDiscoveryCacheOlderThanModelsConfig(cache.updatedAt);
 			const models = this.#applyProviderModelOverrides(
 				providerConfig.provider,
 				this.#normalizeDiscoverableModels(
@@ -1007,7 +1008,7 @@ export class ModelRegistry {
 				provider: providerConfig.provider,
 				status: "cached",
 				optional: providerConfig.optional ?? false,
-				stale: !cache.fresh || !cache.authoritative,
+				stale: !cache.fresh || !cache.authoritative || configStale,
 				fetchedAt: cache.updatedAt,
 				models: models.map(model => model.id),
 			});
@@ -1259,12 +1260,19 @@ export class ModelRegistry {
 		return providerConfig.provider;
 	}
 
+	#isDiscoveryCacheOlderThanModelsConfig(cacheUpdatedAt: number): boolean {
+		const configMtime = this.#modelsConfigFile.getMtimeMs();
+		return configMtime !== null && cacheUpdatedAt < Math.floor(configMtime);
+	}
+
 	async #discoverProviderModels(
 		providerConfig: DiscoveryProviderConfig,
 		strategy: ModelRefreshStrategy,
 	): Promise<Model<Api>[]> {
 		const cacheProviderId = this.#configuredDiscoveryCacheProviderId(providerConfig);
 		const cached = readModelCache<Api>(cacheProviderId, 24 * 60 * 60 * 1000, Date.now, this.#cacheDbPath);
+		const cacheOlderThanConfig = cached !== null && this.#isDiscoveryCacheOlderThanModelsConfig(cached.updatedAt);
+		const effectiveStrategy = strategy === "online-if-uncached" && cacheOlderThanConfig ? "online" : strategy;
 		const requiresAuth = !this.#keylessProviders.has(providerConfig.provider);
 		if (requiresAuth) {
 			const apiKey = await this.#peekApiKeyForProvider(providerConfig.provider);
@@ -1311,12 +1319,12 @@ export class ModelRegistry {
 			cacheTtlMs: 24 * 60 * 60 * 1000,
 			fetchDynamicModels,
 		});
-		const result = await manager.refresh(strategy);
+		const result = await manager.refresh(effectiveStrategy);
 		const status = discoveryError
 			? result.models.length > 0
 				? "cached"
 				: "unavailable"
-			: strategy === "offline"
+			: effectiveStrategy === "offline"
 				? cached
 					? "cached"
 					: "idle"
@@ -1327,7 +1335,7 @@ export class ModelRegistry {
 			provider: providerId,
 			status,
 			optional: providerConfig.optional ?? false,
-			stale: result.stale || status === "cached",
+			stale: result.stale || status === "cached" || (cacheOlderThanConfig && status !== "ok"),
 			fetchedAt: discoveryError ? cached?.updatedAt : Date.now(),
 			models: result.models.map(model => model.id),
 			error: discoveryError,

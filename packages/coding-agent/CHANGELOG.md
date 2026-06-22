@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed configured model discovery caches to refresh when `models.yml`/`models.json` is newer than the cached row, so updated local model metadata is not shadowed by fresh `models.db` entries. ([#3242](https://github.com/can1357/oh-my-pi/issues/3242))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
