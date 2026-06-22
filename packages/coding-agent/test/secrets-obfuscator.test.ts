@@ -252,7 +252,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 });
 
 describe("deobfuscateAgentMessages (display restore)", () => {
-	it("restores assistant content and model-generated summaries, leaving raw user text untouched", () => {
+	it("restores assistant text and tool calls while leaving raw user text and thinking untouched", () => {
 		const secret = "DISPLAY_SECRET_TOKEN_123";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const placeholder = obfuscator.obfuscate(secret);
@@ -302,11 +302,16 @@ describe("deobfuscateAgentMessages (display restore)", () => {
 
 		const restored = deobfuscateAgentMessages(obfuscator, [userMsg, assistantMsg, branchSummary, compactionSummary]);
 
-		// Assistant text, thinking, and tool-call args/intent are restored to the real secret.
+		// Assistant text and tool-call args/intent are restored to the real secret.
 		const restoredAssistant = restored[1] as AssistantMessage;
 		const assistantJson = JSON.stringify(restoredAssistant.content);
 		expect(assistantJson).toContain(secret);
-		expect(assistantJson).not.toContain(placeholder);
+		expect(assistantJson).not.toContain(`answer ${placeholder}`);
+		expect(assistantJson).not.toContain(`path ${placeholder}`);
+		expect(assistantJson).not.toContain(`intent ${placeholder}`);
+		// Opaque thinking is never walked: placeholder-shaped bytes survive unchanged.
+		expect(assistantJson).toContain(`reason ${placeholder}`);
+		expect(assistantJson).not.toContain(`reason ${secret}`);
 		// Model-generated summaries are restored.
 		expect((restored[2] as { summary: string }).summary).toBe(`branch ${secret}`);
 		expect((restored[3] as { summary: string; shortSummary?: string }).summary).toBe(`compact ${secret}`);

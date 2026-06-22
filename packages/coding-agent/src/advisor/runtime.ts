@@ -2,6 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import { logger } from "@oh-my-pi/pi-utils";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
+import type { SecretObfuscator } from "../secrets/obfuscator";
 
 /** Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core `Agent`. */
 export interface AdvisorAgent {
@@ -16,6 +17,8 @@ export interface AdvisorRuntimeHost {
 	snapshotMessages(): AgentMessage[];
 	/** Surface one advice note to the primary (enqueues into the session YieldQueue). */
 	enqueueAdvice(note: string, severity?: "nit" | "concern" | "blocker"): void;
+	/** Redact primary transcript bytes before they reach the advisor model. */
+	obfuscator?: SecretObfuscator;
 	/**
 	 * Pre-prompt context maintenance for the advisor's own append-only context.
 	 * Promotes the advisor model to a larger sibling when its context nears the
@@ -181,7 +184,9 @@ export class AdvisorRuntime {
 			expandPrimaryContext: true,
 		});
 		if (!md.trim()) return null;
-		return `### Session update\n\n${md}`;
+		const text = `### Session update\n\n${md}`;
+		const obfuscator = this.host.obfuscator;
+		return obfuscator?.hasSecrets() ? obfuscator.obfuscate(text) : text;
 	}
 
 	/**

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed hide-secrets handling so advisor session updates are redacted before the advisor model sees them and opaque assistant thinking blocks are no longer deobfuscated.
+
 ## [16.1.14] - 2026-06-22
 
 ### Added

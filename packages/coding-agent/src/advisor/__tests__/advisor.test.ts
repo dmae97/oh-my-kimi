@@ -5,6 +5,7 @@ import { createAdvisorMessageCard } from "../../modes/components/advisor-message
 import { getThemeByName } from "../../modes/theme/theme";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
+import { SecretObfuscator } from "../../secrets/obfuscator";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
 	AdviseTool,
@@ -445,6 +446,28 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(1);
 			expect(promptInputs[0]).toContain("hello");
 			expect(promptInputs[0]).not.toContain("note");
+		});
+
+		it("obfuscates session updates before prompting the advisor", async () => {
+			const secret = "ADVISOR_SECRET_TOKEN_123";
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+			const placeholder = obfuscator.obfuscate(secret);
+			const promptInputs: string[] = [];
+			const agent = makeAgent(promptInputs);
+			const messages: AgentMessage[] = [{ role: "user", content: `token ${secret}`, timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				obfuscator,
+			};
+			const runtime = new AdvisorRuntime(agent, host);
+
+			runtime.onTurnEnd();
+			await Promise.resolve();
+
+			expect(promptInputs).toHaveLength(1);
+			expect(promptInputs[0]).toContain(placeholder);
+			expect(promptInputs[0]).not.toContain(secret);
 		});
 
 		it("expands plan-mode context once, then collapses an unchanged re-injection", async () => {
