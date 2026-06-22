@@ -420,6 +420,7 @@ export const PROVIDER_IMAGE_BUDGETS: Record<string, number> = {
 	"google-vertex": 200,
 	"google-gemini-cli": 200,
 	openrouter: 90,
+	umans: 10,
 };
 
 /** Safe floor for unknown providers (strictest mainstream measured: Groq ~5). */

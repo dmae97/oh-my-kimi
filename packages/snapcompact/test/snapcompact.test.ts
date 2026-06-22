@@ -944,6 +944,7 @@ describe("archive helpers", () => {
 
 	it("provider image budgets stay permissive while unknown providers keep the safe floor", () => {
 		expect(snapcompact.providerImageBudget("openrouter")).toBe(90);
+		expect(snapcompact.providerImageBudget("umans")).toBe(10);
 		// Unknown providers fall to the safe floor.
 		expect(snapcompact.providerImageBudget(undefined)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerImageBudget("some-new-router")).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
