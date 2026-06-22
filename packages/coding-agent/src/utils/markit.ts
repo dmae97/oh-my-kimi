@@ -200,11 +200,12 @@ export async function convertBufferWithMarkit(
 	buffer: Uint8Array,
 	extension: string,
 	signal?: AbortSignal,
+	options?: { useCache?: boolean },
 ): Promise<MarkitConversionResult> {
 	const normalizedExtension = normalizeExtension(extension);
 	const streamInfo: StreamInfo = {
 		extension: normalizedExtension,
 		filename: `input${normalizedExtension}`,
 	};
-	return runCachedBufferConversion(buffer, streamInfo, signal, true);
+	return runCachedBufferConversion(buffer, streamInfo, signal, options?.useCache ?? true);
 }
