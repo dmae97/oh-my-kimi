@@ -6,9 +6,7 @@
  * simpler than the Python sibling — Ruby has no venv layout to detect — but it
  * mirrors the same allowlist/denylist + explicit-interpreter shape.
  */
-import * as os from "node:os";
-import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { createEnvFilter, enumerateRuntimes, resolveExplicitPath, resolveRuntime } from "../runtime-env";
 
 const DEFAULT_ENV_ALLOWLIST = [
 	"PATH",
@@ -81,23 +79,6 @@ const DEFAULT_ENV_DENYLIST = [
 // through lets `bundle`/`gem`/rbenv/asdf-shimmed code resolve consistently.
 const DEFAULT_ENV_ALLOW_PREFIXES = ["LC_", "XDG_", "PI_", "GEM_", "BUNDLE", "RBENV_", "RUBY", "CHRUBY_", "ASDF_"];
 
-const CASE_INSENSITIVE_ENV = process.platform === "win32";
-
-// Dynamic-membership lookups: built once by normalizing the static lists, then
-// queried with `.has()` against runtime env keys.
-const NORMALIZED_ALLOWLIST = new Set(
-	[...DEFAULT_ENV_ALLOWLIST, ...WINDOWS_ENV_ALLOWLIST].map(key => (CASE_INSENSITIVE_ENV ? key.toUpperCase() : key)),
-);
-const NORMALIZED_DENYLIST = new Set(DEFAULT_ENV_DENYLIST.map(key => (CASE_INSENSITIVE_ENV ? key.toUpperCase() : key)));
-const NORMALIZED_ALLOW_PREFIXES = CASE_INSENSITIVE_ENV
-	? DEFAULT_ENV_ALLOW_PREFIXES.map(prefix => prefix.toUpperCase())
-	: DEFAULT_ENV_ALLOW_PREFIXES;
-
-// Secret-shaped names that must never leak into eval cells even when they fall
-// under a broad allow-prefix (e.g. `RUBYGEMS_API_KEY` under `RUBY`). Checked
-// after the explicit allowlist so intentional entries (SSH_AUTH_SOCK) survive.
-const SECRET_KEY_PATTERN = /API[_-]?KEY|APIKEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|ACCESS[_-]?KEY|PRIVATE[_-]?KEY/i;
-
 export interface RubyRuntime {
 	/** Path to the ruby executable. */
 	rubyPath: string;
@@ -105,28 +86,12 @@ export interface RubyRuntime {
 	env: Record<string, string | undefined>;
 }
 
-/**
- * Filter environment variables to a safe allowlist for Ruby subprocesses.
- * Removes sensitive API keys and limits to known-safe variables.
- */
-export function filterEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
-	const filtered: Record<string, string | undefined> = {};
-	for (const key in env) {
-		const value = env[key];
-		if (value === undefined) continue;
-		const normalizedKey = CASE_INSENSITIVE_ENV ? key.toUpperCase() : key;
-		if (NORMALIZED_DENYLIST.has(normalizedKey)) continue;
-		if (NORMALIZED_ALLOWLIST.has(normalizedKey)) {
-			filtered[normalizedKey === "PATH" ? "PATH" : key] = value;
-			continue;
-		}
-		if (SECRET_KEY_PATTERN.test(normalizedKey)) continue;
-		if (NORMALIZED_ALLOW_PREFIXES.some(prefix => normalizedKey.startsWith(prefix))) {
-			filtered[key] = value;
-		}
-	}
-	return filtered;
-}
+export const filterEnv = createEnvFilter({
+	allowList: DEFAULT_ENV_ALLOWLIST,
+	windowsAllowList: WINDOWS_ENV_ALLOWLIST,
+	denyList: DEFAULT_ENV_DENYLIST,
+	allowPrefixes: DEFAULT_ENV_ALLOW_PREFIXES,
+});
 
 /**
  * Resolve an explicitly configured interpreter (`ruby.interpreter`) into a
@@ -139,13 +104,7 @@ export function resolveExplicitRubyRuntime(
 	cwd: string,
 	baseEnv: Record<string, string | undefined>,
 ): RubyRuntime {
-	const expanded =
-		interpreter === "~"
-			? os.homedir()
-			: interpreter.startsWith("~/")
-				? path.join(os.homedir(), interpreter.slice(2))
-				: interpreter;
-	const rubyPath = path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
+	const rubyPath = resolveExplicitPath(interpreter, cwd);
 	return { rubyPath, env: { ...baseEnv } };
 }
 
@@ -158,11 +117,7 @@ export function enumerateRubyRuntimes(
 	baseEnv: Record<string, string | undefined>,
 	interpreter?: string,
 ): RubyRuntime[] {
-	if (interpreter) {
-		return [resolveExplicitRubyRuntime(interpreter, cwd, baseEnv)];
-	}
-	const systemPath = $which("ruby");
-	return systemPath ? [{ rubyPath: systemPath, env: { ...baseEnv } }] : [];
+	return enumerateRuntimes(cwd, baseEnv, "ruby", (rubyPath, env) => ({ rubyPath, env }), interpreter);
 }
 
 /**
@@ -173,9 +128,5 @@ export function resolveRubyRuntime(
 	baseEnv: Record<string, string | undefined>,
 	interpreter?: string,
 ): RubyRuntime {
-	const [runtime] = enumerateRubyRuntimes(cwd, baseEnv, interpreter);
-	if (!runtime) {
-		throw new Error("Ruby executable not found on PATH");
-	}
-	return runtime;
+	return resolveRuntime(cwd, baseEnv, "ruby", (rubyPath, env) => ({ rubyPath, env }), interpreter);
 }

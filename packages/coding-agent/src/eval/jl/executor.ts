@@ -1,15 +1,12 @@
 import * as path from "node:path";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import { Settings } from "../../config/settings";
-import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
-import { ensurePyToolBridge, type PyToolBridgeInfo, registerPyToolBridge } from "../py/tool-bridge";
+import { attachSessionOwner, createCancelledKernelResult, executeWithKernelBase } from "../executor-base";
+import { ensurePyToolBridge, type PyToolBridgeInfo } from "../py/tool-bridge";
 import type { EvalDisplayOutput, EvalStatusEvent } from "../types";
 import {
 	checkJuliaKernelAvailability,
 	JuliaKernel,
-	type KernelDisplayOutput,
 	type KernelExecuteOptions,
 	type KernelExecuteResult,
 } from "./kernel";
@@ -193,19 +190,7 @@ function formatKernelTimeoutAnnotation(timeoutMs: number | undefined, kernelKill
 
 function createCancelledJuliaResult(_timedOut: boolean, timeoutMs?: number): JuliaResult {
 	const output = formatTimeoutAnnotation(timeoutMs) ?? "[execution cancelled]\n";
-	return {
-		output,
-		exitCode: undefined,
-		cancelled: true,
-		truncated: false,
-		artifactId: undefined,
-		totalLines: 1,
-		totalBytes: Buffer.byteLength(output),
-		outputLines: 1,
-		outputBytes: Buffer.byteLength(output),
-		displayOutputs: [],
-		stdinRequested: false,
-	};
+	return createCancelledKernelResult(output);
 }
 
 function buildKernelEnvPatch(options: {
@@ -266,21 +251,6 @@ async function startKernel(cwd: string, options: JuliaExecutorOptions): Promise<
 	});
 }
 
-function attachOwner(session: JuliaSessionOwners, sessionId: string, ownerId: string | undefined): void {
-	if (ownerId !== undefined) {
-		if (session.hasFallbackOwner) {
-			session.ownerIds.delete(sessionId);
-			session.hasFallbackOwner = false;
-		}
-		session.ownerIds.add(ownerId);
-		return;
-	}
-	if (session.hasFallbackOwner || session.ownerIds.size === 0) {
-		session.ownerIds.add(sessionId);
-		session.hasFallbackOwner = true;
-	}
-}
-
 async function acquireSession(
 	sessionKey: string,
 	sessionId: string,
@@ -289,13 +259,13 @@ async function acquireSession(
 ): Promise<JuliaSession> {
 	const existing = sessions.get(sessionKey);
 	if (existing) {
-		attachOwner(existing, sessionId, options.kernelOwnerId);
+		attachSessionOwner(existing, sessionId, options.kernelOwnerId);
 		return existing;
 	}
 
 	const inFlight = startingSessions.get(sessionKey);
 	if (inFlight) {
-		attachOwner(inFlight, sessionId, options.kernelOwnerId);
+		attachSessionOwner(inFlight, sessionId, options.kernelOwnerId);
 		return await waitForPromiseWithCancellation(inFlight.promise, options);
 	}
 
@@ -321,7 +291,7 @@ async function acquireSession(
 		hasFallbackOwner: false,
 		promise: startPromise,
 	};
-	attachOwner(startingSession, sessionId, options.kernelOwnerId);
+	attachSessionOwner(startingSession, sessionId, options.kernelOwnerId);
 	startingSessions.set(sessionKey, startingSession);
 	try {
 		return await waitForPromiseWithCancellation(startPromise, options);
@@ -443,126 +413,19 @@ async function executeWithKernel(
 	code: string,
 	options: JuliaExecutorOptions | undefined,
 ): Promise<JuliaResult> {
-	const displayOutputs: EvalDisplayOutput[] = [];
-	const collectDisplay = (output: KernelDisplayOutput) => {
-		if (output.type === "status") {
-			options?.onStatus?.(output.event);
-		}
-		displayOutputs.push(output);
-	};
-
-	const settings = await Settings.init();
-	const sink = new OutputSink({
-		onChunk: options?.onChunk,
-		headBytes: resolveOutputSinkHeadBytes(settings),
-		maxColumns: resolveOutputMaxColumns(settings),
+	return executeWithKernelBase<JuliaExecutorOptions, Record<string, string | undefined>>({
+		kernel,
+		code,
+		options,
+		runIdPrefix: "jl",
+		errorLogLabel: "Julia",
+		isJulia: true,
+		cancelledErrorClass: JuliaExecutionCancelledError,
+		buildKernelEnvPatch,
+		formatKernelTimeoutAnnotation,
+		formatTimeoutAnnotation,
+		resolveDeadlineMs: opts => opts?.deadlineMs,
 	});
-
-	const deadlineMs = options?.deadlineMs;
-	let executionTimeoutMs: number | undefined;
-	const runId = `jl-${crypto.randomUUID()}`;
-
-	const emitStatus = (event: EvalStatusEvent) => collectDisplay({ type: "status", event });
-	const unregisterBridge =
-		options?.toolSession && options?.bridgeSessionId
-			? registerPyToolBridge(options.bridgeSessionId, runId, {
-					toolSession: options.toolSession,
-					signal: options.signal,
-					emitStatus,
-				})
-			: null;
-
-	try {
-		executionTimeoutMs = requireRemainingTimeoutMs(deadlineMs);
-		const result = await kernel.execute(code, {
-			cwd: options?.cwd,
-			env: buildKernelEnvPatch(options ?? {}),
-			id: runId,
-			signal: options?.signal,
-			timeoutMs: executionTimeoutMs,
-			onChunk: text => sink.push(text),
-			onDisplay: output => collectDisplay(output),
-		});
-
-		if (result.cancelled) {
-			const annotation = result.timedOut
-				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
-				: undefined;
-			const dumped = await sink.dump(annotation);
-			return {
-				exitCode: undefined,
-				cancelled: true,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: result.stdinRequested,
-			};
-		}
-
-		if (result.stdinRequested) {
-			const dumped = await sink.dump("Kernel requested stdin; interactive input is not supported.");
-			return {
-				exitCode: 1,
-				cancelled: false,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: true,
-			};
-		}
-
-		const exitCode = result.status === "ok" ? 0 : 1;
-		const dumped = await sink.dump();
-		return {
-			exitCode,
-			cancelled: false,
-			truncated: dumped.truncated,
-			output: dumped.output,
-			artifactId: dumped.artifactId ?? undefined,
-			totalLines: dumped.totalLines,
-			totalBytes: dumped.totalBytes,
-			outputLines: dumped.outputLines,
-			outputBytes: dumped.outputBytes,
-			displayOutputs,
-			stdinRequested: false,
-		};
-	} catch (err) {
-		if (isCancellationError(err) || options?.signal?.aborted) {
-			const timedOut = isTimedOutCancellation(err, options?.signal);
-			const annotation = timedOut
-				? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs)
-				: undefined;
-			const dumped = await sink.dump(annotation);
-			return {
-				exitCode: undefined,
-				cancelled: true,
-				truncated: dumped.truncated,
-				output: dumped.output,
-				artifactId: dumped.artifactId ?? undefined,
-				totalLines: dumped.totalLines,
-				totalBytes: dumped.totalBytes,
-				outputLines: dumped.outputLines,
-				outputBytes: dumped.outputBytes,
-				displayOutputs,
-				stdinRequested: false,
-			};
-		}
-		const error = err instanceof Error ? err : new Error(String(err));
-		logger.error("Julia execution failed", { error: error.message });
-		throw error;
-	} finally {
-		unregisterBridge?.();
-	}
 }
 
 async function ensureKernelAvailable(cwd: string, options: JuliaExecutorOptions): Promise<void> {

@@ -1,9 +1,7 @@
 /**
  * Julia runtime resolution utilities.
  */
-import * as os from "node:os";
-import * as path from "node:path";
-import { $which } from "@oh-my-pi/pi-utils";
+import { createEnvFilter, enumerateRuntimes, resolveExplicitPath, resolveRuntime } from "../runtime-env";
 
 const DEFAULT_ENV_ALLOWLIST = [
 	"PATH",
@@ -68,20 +66,6 @@ const DEFAULT_ENV_DENYLIST = ["PI_API_KEY", "PI_TOKEN", "PI_PASSWORD", "PI_SESSI
 // through lets Julia discover packages and configure its runtime consistently.
 const DEFAULT_ENV_ALLOW_PREFIXES = ["LC_", "XDG_", "PI_", "JULIA_", "OPENBLAS_", "MKL_"];
 
-const CASE_INSENSITIVE_ENV = process.platform === "win32";
-
-const NORMALIZED_ALLOWLIST = new Set(
-	[...DEFAULT_ENV_ALLOWLIST, ...WINDOWS_ENV_ALLOWLIST].map(key => (CASE_INSENSITIVE_ENV ? key.toUpperCase() : key)),
-);
-const NORMALIZED_DENYLIST = new Set(DEFAULT_ENV_DENYLIST.map(key => (CASE_INSENSITIVE_ENV ? key.toUpperCase() : key)));
-const NORMALIZED_ALLOW_PREFIXES = CASE_INSENSITIVE_ENV
-	? DEFAULT_ENV_ALLOW_PREFIXES.map(prefix => prefix.toUpperCase())
-	: DEFAULT_ENV_ALLOW_PREFIXES;
-
-// Secret-shaped names that must never leak into eval cells even when they fall
-// under a broad allow-prefix.
-const SECRET_KEY_PATTERN = /API[_-]?KEY|APIKEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|ACCESS[_-]?KEY|PRIVATE[_-]?KEY/i;
-
 export interface JuliaRuntime {
 	/** Path to the julia executable. */
 	juliaPath: string;
@@ -89,28 +73,12 @@ export interface JuliaRuntime {
 	env: Record<string, string | undefined>;
 }
 
-/**
- * Filter environment variables to a safe allowlist for Julia subprocesses.
- * Removes sensitive API keys and limits to known-safe variables.
- */
-export function filterEnv(env: Record<string, string | undefined>): Record<string, string | undefined> {
-	const filtered: Record<string, string | undefined> = {};
-	for (const key in env) {
-		const value = env[key];
-		if (value === undefined) continue;
-		const normalizedKey = CASE_INSENSITIVE_ENV ? key.toUpperCase() : key;
-		if (NORMALIZED_DENYLIST.has(normalizedKey)) continue;
-		if (NORMALIZED_ALLOWLIST.has(normalizedKey)) {
-			filtered[normalizedKey === "PATH" ? "PATH" : key] = value;
-			continue;
-		}
-		if (SECRET_KEY_PATTERN.test(normalizedKey)) continue;
-		if (NORMALIZED_ALLOW_PREFIXES.some(prefix => normalizedKey.startsWith(prefix))) {
-			filtered[key] = value;
-		}
-	}
-	return filtered;
-}
+export const filterEnv = createEnvFilter({
+	allowList: DEFAULT_ENV_ALLOWLIST,
+	windowsAllowList: WINDOWS_ENV_ALLOWLIST,
+	denyList: DEFAULT_ENV_DENYLIST,
+	allowPrefixes: DEFAULT_ENV_ALLOW_PREFIXES,
+});
 
 /**
  * Resolve an explicitly configured interpreter (`julia.interpreter`) into a
@@ -122,13 +90,7 @@ export function resolveExplicitJuliaRuntime(
 	cwd: string,
 	baseEnv: Record<string, string | undefined>,
 ): JuliaRuntime {
-	const expanded =
-		interpreter === "~"
-			? os.homedir()
-			: interpreter.startsWith("~/")
-				? path.join(os.homedir(), interpreter.slice(2))
-				: interpreter;
-	const juliaPath = path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
+	const juliaPath = resolveExplicitPath(interpreter, cwd);
 	return { juliaPath, env: { ...baseEnv } };
 }
 
@@ -141,11 +103,7 @@ export function enumerateJuliaRuntimes(
 	baseEnv: Record<string, string | undefined>,
 	interpreter?: string,
 ): JuliaRuntime[] {
-	if (interpreter) {
-		return [resolveExplicitJuliaRuntime(interpreter, cwd, baseEnv)];
-	}
-	const systemPath = $which("julia");
-	return systemPath ? [{ juliaPath: systemPath, env: { ...baseEnv } }] : [];
+	return enumerateRuntimes(cwd, baseEnv, "julia", (juliaPath, env) => ({ juliaPath, env }), interpreter);
 }
 
 /**
@@ -156,9 +114,5 @@ export function resolveJuliaRuntime(
 	baseEnv: Record<string, string | undefined>,
 	interpreter?: string,
 ): JuliaRuntime {
-	const [runtime] = enumerateJuliaRuntimes(cwd, baseEnv, interpreter);
-	if (!runtime) {
-		throw new Error("Julia executable not found on PATH");
-	}
-	return runtime;
+	return resolveRuntime(cwd, baseEnv, "julia", (juliaPath, env) => ({ juliaPath, env }), interpreter);
 }

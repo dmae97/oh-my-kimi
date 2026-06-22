@@ -5,19 +5,22 @@ import {
 	type ExecutorBackendResult,
 	resolveEvalUrlRoots,
 } from "../backend";
+import {
+	namespaceSessionId as sharedNamespace,
+	readInterpreterSetting as sharedReadInterpreterSetting,
+	toExecutorBackendResult,
+} from "../backend-helpers";
 import { executeJulia } from "./executor";
 import { checkJuliaKernelAvailability } from "./kernel";
 
 const JULIA_SESSION_PREFIX = "julia:";
 
 export function namespaceSessionId(sessionId: string): string {
-	return sessionId.startsWith(JULIA_SESSION_PREFIX) ? sessionId : `${JULIA_SESSION_PREFIX}${sessionId}`;
+	return sharedNamespace(sessionId, JULIA_SESSION_PREFIX);
 }
 
 function readInterpreterSetting(session: ToolSession): string | undefined {
-	const settings = session.settings as { get?: (key: string) => unknown } | undefined;
-	const value = settings?.get?.("julia.interpreter");
-	return typeof value === "string" ? value.trim() || undefined : undefined;
+	return sharedReadInterpreterSetting(session, "julia.interpreter");
 }
 
 export default {
@@ -46,17 +49,6 @@ export default {
 			onStatus: opts.onStatus,
 			toolSession: opts.session,
 		});
-		return {
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			artifactId: result.artifactId,
-			totalLines: result.totalLines,
-			totalBytes: result.totalBytes,
-			outputLines: result.outputLines,
-			outputBytes: result.outputBytes,
-			displayOutputs: result.displayOutputs,
-		};
+		return toExecutorBackendResult(result);
 	},
 } satisfies ExecutorBackend;

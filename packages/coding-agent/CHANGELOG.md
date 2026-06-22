@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added a Ruby eval backend (`language: "rb"`): a persistent subprocess Ruby kernel that shares the standard agent tool bridge and evaluation model, supporting IRB-style auto-display of results in a persistent session
@@ -12,6 +13,7 @@
 
 ### Changed
 
+- Refactored internal evaluation logic to consolidate shared kernel management and IPC handling
 - Refactored internal draft state to consolidate images and text into the editor component
 - Unified transcript rendering logic for background jobs, IRC traffic, and file mentions
 - Unified subprocess lifecycle management for mnemopi, speech, tiny-model, and TTS workers

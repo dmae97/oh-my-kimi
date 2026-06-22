@@ -5,17 +5,17 @@
  * instance; sessions reuse a single subprocess across executions. Cancellation
  * is delivered as SIGINT (clean interrupt, kernel state preserved) and escalates
  * to a full shutdown only when the runner ignores it. Mirrors the Python kernel
- * (eval/py/kernel.ts); display rendering and Windows console spawn handling are
- * shared with it.
+ * (eval/py/kernel.ts); the IPC loop, lifecycle, and display rendering are shared
+ * with it via BaseKernel.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
-import type { Subprocess } from "bun";
 import { $ } from "bun";
 import { Settings } from "../../config/settings";
-import { type KernelDisplayOutput, renderKernelDisplay } from "../py/display";
+import { BaseKernel, getRemainingTimeMs, type KernelRuntimeEnv, type KernelStartOptions } from "../kernel-base";
+import type { KernelDisplayOutput } from "../py/display";
 import { hostHasInheritableConsole, shouldHideKernelWindow } from "../py/spawn-options";
 import { RUBY_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.rb" with { type: "text" };
@@ -27,6 +27,7 @@ import {
 	resolveRubyRuntime,
 } from "./runtime";
 
+export type { KernelExecuteResult, KernelRuntimeEnv, KernelShutdownResult } from "../kernel-base";
 export type { KernelDisplayOutput, PythonStatusEvent } from "../py/display";
 export { renderKernelDisplay } from "../py/display";
 
@@ -55,8 +56,6 @@ const STARTUP_TIMEOUT_MS = 10_000;
 // to a full subprocess shutdown so the host queue unblocks instead of hanging.
 const INTERRUPT_ESCALATION_MS = 5_000;
 
-export type KernelRuntimeEnv = Record<string, string | null>;
-
 export interface KernelExecuteOptions {
 	id?: string;
 	/** Runtime working directory applied immediately before this request executes. */
@@ -71,62 +70,12 @@ export interface KernelExecuteOptions {
 	storeHistory?: boolean;
 }
 
-export interface KernelExecuteResult {
-	status: "ok" | "error";
-	executionCount?: number;
-	error?: { name: string; value: string; traceback: string[] };
-	cancelled: boolean;
-	timedOut: boolean;
-	stdinRequested: boolean;
-	/** True when the kernel subprocess was killed while settling this execution. */
-	kernelKilled?: boolean;
-}
-
-export interface KernelShutdownResult {
-	confirmed: boolean;
-}
-
-interface KernelLifecycleOptions {
-	signal?: AbortSignal;
-	deadlineMs?: number;
-}
-
-interface KernelStartOptions extends KernelLifecycleOptions {
-	cwd: string;
-	env?: Record<string, string | undefined>;
-	/** Explicit interpreter path (`ruby.interpreter`); skips discovery when set. */
-	interpreter?: string;
-}
-
-interface KernelShutdownOptions {
-	signal?: AbortSignal;
-	timeoutMs?: number;
-}
-
 export interface RubyKernelAvailability {
 	ok: boolean;
 	rubyPath?: string;
 	reason?: string;
 	/** The probed-working runtime, when one was found. */
 	runtime?: RubyRuntime;
-}
-
-function getRemainingTimeMs(deadlineMs?: number): number | undefined {
-	if (deadlineMs === undefined) return undefined;
-	return Math.max(0, deadlineMs - Date.now());
-}
-
-function createAbortError(name: "AbortError" | "TimeoutError", message: string): Error {
-	const err = new Error(message);
-	err.name = name;
-	return err;
-}
-
-function throwIfAborted(signal: AbortSignal | undefined, fallbackReason: string): void {
-	if (!signal?.aborted) return;
-	const reason = signal.reason;
-	if (reason instanceof Error) throw reason;
-	throw createAbortError("AbortError", typeof reason === "string" ? reason : fallbackReason);
 }
 
 // Cache successful probes per resolved cwd + explicit interpreter. Failures are
@@ -181,48 +130,24 @@ async function probeRubyKernelAvailability(cwd: string, interpreter?: string): P
 	}
 }
 
-type FrameType = "started" | "stdout" | "stderr" | "display" | "result" | "error" | "done";
-
-interface Frame {
-	type: FrameType;
-	id?: string;
-	data?: string;
-	bundle?: Record<string, unknown>;
-	ename?: string;
-	evalue?: string;
-	traceback?: string[];
-	status?: "ok" | "error";
-	executionCount?: number;
-	cancelled?: boolean;
-}
-
-interface PendingExecution {
-	resolve: (result: KernelExecuteResult) => void;
-	options?: KernelExecuteOptions;
-	status: "ok" | "error";
-	executionCount?: number;
-	error?: { name: string; value: string; traceback: string[] };
-	cancelled: boolean;
-	timedOut: boolean;
-	stdinRequested: boolean;
-	kernelKilled: boolean;
-	settled: boolean;
-	escalationTimer?: NodeJS.Timeout;
-}
-
-export class RubyKernel {
-	readonly id: string;
-	#proc: Subprocess | null = null;
-	#stdin: Bun.FileSink | null = null;
-	#alive = true;
-	#disposed = false;
-	#shutdownConfirmed = false;
-	#exitedPromise: Promise<number> | null = null;
-	#pending = new Map<string, PendingExecution>();
-	#readBuffer = "";
-
+export class RubyKernel extends BaseKernel<KernelExecuteOptions> {
 	private constructor(id: string) {
-		this.id = id;
+		super(id, {
+			languageName: "Ruby",
+			traceIpc: TRACE_IPC,
+			exitPayload: JSON.stringify({ type: "exit" }),
+			interruptEscalationMs: INTERRUPT_ESCALATION_MS,
+			shutdownGraceMs: SHUTDOWN_GRACE_MS,
+			buildPayload: (code, msgId, opts) =>
+				JSON.stringify({
+					id: msgId,
+					code,
+					cwd: opts?.cwd,
+					env: opts?.env,
+					silent: opts?.silent ?? false,
+					storeHistory: opts?.storeHistory ?? !(opts?.silent ?? false),
+				}),
+		});
 	}
 
 	static async start(options: KernelStartOptions): Promise<RubyKernel> {
@@ -270,440 +195,21 @@ export class RubyKernel {
 				hostHasInheritableConsole: hostHasInheritableConsole(),
 			}),
 		});
-		kernel.#proc = proc;
-		kernel.#stdin = proc.stdin;
-		kernel.#exitedPromise = proc.exited;
-		void kernel.#exitedPromise.then(code => {
-			kernel.#alive = false;
-			kernel.#abortPendingExecutions(`Ruby kernel exited with code ${code}`, { kernelKilled: true });
-		});
-
-		kernel.#startReader(proc.stdout as ReadableStream<Uint8Array>);
-		kernel.#startStderrDrain(proc.stderr as ReadableStream<Uint8Array>);
+		kernel.setProcess(proc);
 
 		const startup = { signal: options.signal, deadlineMs: options.deadlineMs };
 		const startupBudget = Math.min(getRemainingTimeMs(startup.deadlineMs) ?? STARTUP_TIMEOUT_MS, STARTUP_TIMEOUT_MS);
 
 		try {
 			const initScript = buildInitScript(options.cwd, options.env);
-			await kernel.#executeWithBudget(initScript, startup.signal, startupBudget, "Ruby kernel init");
-			await kernel.#executeWithBudget(RUBY_PRELUDE, startup.signal, startupBudget, "Ruby kernel prelude");
+			await kernel.executeWithBudget(initScript, startup.signal, startupBudget, "Ruby kernel init");
+			await kernel.executeWithBudget(RUBY_PRELUDE, startup.signal, startupBudget, "Ruby kernel prelude");
 			return kernel;
 		} catch (err) {
 			await kernel.shutdown({ timeoutMs: SHUTDOWN_GRACE_MS }).catch(() => {});
 			throw err;
 		}
 	}
-
-	isAlive(): boolean {
-		return this.#alive && !this.#disposed;
-	}
-
-	async execute(code: string, options?: KernelExecuteOptions): Promise<KernelExecuteResult> {
-		if (!this.isAlive()) {
-			throw new Error("Ruby kernel is not running");
-		}
-
-		const msgId = options?.id ?? Snowflake.next();
-		const { promise, resolve } = Promise.withResolvers<KernelExecuteResult>();
-		const pending: PendingExecution = {
-			resolve,
-			options,
-			status: "ok",
-			cancelled: false,
-			timedOut: false,
-			stdinRequested: false,
-			settled: false,
-			kernelKilled: false,
-		};
-		this.#pending.set(msgId, pending);
-
-		const finalize = () => {
-			if (pending.settled) return;
-			pending.settled = true;
-			this.#pending.delete(msgId);
-			cleanup();
-			resolve({
-				status: pending.status,
-				executionCount: pending.executionCount,
-				error: pending.error,
-				cancelled: pending.cancelled,
-				timedOut: pending.timedOut,
-				stdinRequested: pending.stdinRequested,
-				kernelKilled: pending.kernelKilled,
-			});
-		};
-
-		let requestWritten = false;
-		const requestCancel = () => {
-			if (pending.settled || pending.escalationTimer) return;
-			if (!requestWritten) {
-				finalize();
-				return;
-			}
-			void this.interrupt();
-			const escalation = setTimeout(() => {
-				if (pending.settled) return;
-				logger.warn("Ruby runner did not respond to SIGINT; terminating subprocess", {
-					kernelId: this.id,
-				});
-				pending.kernelKilled = true;
-				void this.shutdown();
-			}, INTERRUPT_ESCALATION_MS);
-			escalation.unref?.();
-			pending.escalationTimer = escalation;
-		};
-
-		const onAbort = () => {
-			pending.cancelled = true;
-			pending.timedOut = pending.timedOut || isTimeoutReason(options?.signal?.reason);
-			requestCancel();
-		};
-		const timeoutId =
-			typeof options?.timeoutMs === "number" && options.timeoutMs > 0
-				? setTimeout(() => {
-						pending.timedOut = true;
-						pending.cancelled = true;
-						requestCancel();
-					}, options.timeoutMs)
-				: undefined;
-
-		const cleanup = () => {
-			clearTimeout(timeoutId);
-			clearTimeout(pending.escalationTimer);
-			pending.escalationTimer = undefined;
-			options?.signal?.removeEventListener("abort", onAbort);
-		};
-
-		if (options?.signal) {
-			if (options.signal.aborted) {
-				onAbort();
-			} else {
-				options.signal.addEventListener("abort", onAbort, { once: true });
-				if (options.signal.aborted) {
-					options.signal.removeEventListener("abort", onAbort);
-					onAbort();
-				}
-			}
-		}
-
-		(pending as PendingExecution & { finalize: () => void }).finalize = finalize;
-
-		const payload = JSON.stringify({
-			id: msgId,
-			code,
-			cwd: options?.cwd,
-			env: options?.env,
-			silent: options?.silent ?? false,
-			storeHistory: options?.storeHistory ?? !(options?.silent ?? false),
-		});
-
-		if (pending.settled) {
-			return promise;
-		}
-
-		requestWritten = true;
-		try {
-			await this.#writeLine(payload);
-		} catch (err) {
-			pending.cancelled = true;
-			pending.error = {
-				name: "TransportError",
-				value: err instanceof Error ? err.message : String(err),
-				traceback: [],
-			};
-			finalize();
-		}
-
-		return promise;
-	}
-
-	async interrupt(): Promise<void> {
-		if (!this.#proc || this.#disposed) return;
-		try {
-			this.#proc.kill("SIGINT");
-		} catch (err) {
-			logger.warn("Failed to interrupt ruby runner", { error: err instanceof Error ? err.message : String(err) });
-		}
-	}
-
-	async shutdown(options?: KernelShutdownOptions): Promise<KernelShutdownResult> {
-		if (this.#shutdownConfirmed) return { confirmed: true };
-
-		this.#alive = false;
-		this.#abortPendingExecutions("Ruby kernel shutdown", { kernelKilled: true });
-
-		const timeoutMs = options?.timeoutMs ?? SHUTDOWN_GRACE_MS;
-		const proc = this.#proc;
-		if (!proc) {
-			this.#shutdownConfirmed = true;
-			this.#disposed = true;
-			return { confirmed: true };
-		}
-
-		try {
-			await this.#writeLine(JSON.stringify({ type: "exit" })).catch(() => {});
-		} catch {
-			/* writer may already be closed */
-		}
-
-		try {
-			this.#stdin?.end();
-		} catch {
-			/* ignore */
-		}
-
-		const exited = this.#waitForExitWithTimeout(timeoutMs);
-		let result = await exited;
-		if (!result) {
-			try {
-				proc.kill("SIGTERM");
-			} catch {
-				/* ignore */
-			}
-			result = await this.#waitForExitWithTimeout(timeoutMs);
-		}
-		if (!result) {
-			try {
-				proc.kill("SIGKILL");
-			} catch {
-				/* ignore */
-			}
-			result = await this.#waitForExitWithTimeout(timeoutMs);
-		}
-
-		const confirmed = !!result;
-		this.#shutdownConfirmed = confirmed;
-		this.#disposed = true;
-		return { confirmed };
-	}
-
-	#abortPendingExecutions(reason: string, options?: { kernelKilled?: boolean }): void {
-		if (this.#pending.size === 0) return;
-		const pending = Array.from(this.#pending.values());
-		this.#pending.clear();
-		const kernelKilledDefault = options?.kernelKilled ?? false;
-		for (const entry of pending) {
-			if (entry.settled) continue;
-			entry.settled = true;
-			void entry.options?.onChunk?.(`[kernel] ${reason}\n`);
-			entry.resolve({
-				status: "error",
-				cancelled: true,
-				timedOut: entry.timedOut,
-				stdinRequested: entry.stdinRequested,
-				executionCount: entry.executionCount,
-				error: entry.error,
-				kernelKilled: entry.kernelKilled || kernelKilledDefault,
-			});
-		}
-	}
-
-	async #writeLine(line: string): Promise<void> {
-		if (!this.#stdin) {
-			throw new Error("Ruby kernel stdin is not open");
-		}
-		if (TRACE_IPC) {
-			logger.debug("RubyKernel send", { preview: line.slice(0, 120) });
-		}
-		this.#stdin.write(`${line}\n`);
-		this.#stdin.flush();
-	}
-
-	#startReader(stream: ReadableStream<Uint8Array>): void {
-		const reader = stream.getReader();
-		const decoder = new TextDecoder();
-		const loop = async () => {
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					this.#readBuffer += decoder.decode(value, { stream: true });
-					await this.#flushFrames();
-				}
-				this.#readBuffer += decoder.decode();
-				await this.#flushFrames();
-			} catch (err) {
-				logger.warn("Ruby kernel reader failed", { error: err instanceof Error ? err.message : String(err) });
-			} finally {
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
-			}
-		};
-		void loop();
-	}
-
-	#startStderrDrain(stream: ReadableStream<Uint8Array>): void {
-		const reader = stream.getReader();
-		const decoder = new TextDecoder();
-		const loop = async () => {
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					const text = decoder.decode(value);
-					if (text.trim()) {
-						logger.warn("Ruby runner stderr", { text });
-					}
-				}
-			} catch {
-				/* ignore */
-			} finally {
-				try {
-					reader.releaseLock();
-				} catch {
-					/* ignore */
-				}
-			}
-		};
-		void loop();
-	}
-
-	async #flushFrames(): Promise<void> {
-		while (true) {
-			const nl = this.#readBuffer.indexOf("\n");
-			if (nl < 0) return;
-			const line = this.#readBuffer.slice(0, nl);
-			this.#readBuffer = this.#readBuffer.slice(nl + 1);
-			if (!line.trim()) continue;
-			let frame: Frame;
-			try {
-				frame = JSON.parse(line) as Frame;
-			} catch (err) {
-				logger.warn("Ruby runner emitted invalid JSON", {
-					line: line.slice(0, 200),
-					error: err instanceof Error ? err.message : String(err),
-				});
-				continue;
-			}
-			if (TRACE_IPC) {
-				logger.debug("RubyKernel recv", { type: frame.type, id: frame.id });
-			}
-			await this.#handleFrame(frame);
-		}
-	}
-
-	async #handleFrame(frame: Frame): Promise<void> {
-		const rid = frame.id;
-		if (!rid) return;
-		const pending = this.#pending.get(rid) as (PendingExecution & { finalize?: () => void }) | undefined;
-		if (!pending) return;
-
-		switch (frame.type) {
-			case "started":
-				return;
-			case "stdout":
-			case "stderr": {
-				const text = frame.data ?? "";
-				if (text && pending.options?.onChunk) {
-					await pending.options.onChunk(text);
-				}
-				return;
-			}
-			case "display":
-			case "result": {
-				const bundle = frame.bundle ?? {};
-				const { text, outputs } = await renderKernelDisplay(bundle);
-				if (text && pending.options?.onChunk) {
-					await pending.options.onChunk(text);
-				}
-				if (outputs.length > 0 && pending.options?.onDisplay) {
-					for (const output of outputs) {
-						await pending.options.onDisplay(output);
-					}
-				}
-				return;
-			}
-			case "error": {
-				const traceback = Array.isArray(frame.traceback) ? frame.traceback.map(String) : [];
-				pending.status = "error";
-				pending.error = {
-					name: String(frame.ename ?? "Error"),
-					value: String(frame.evalue ?? ""),
-					traceback,
-				};
-				const message =
-					traceback.length > 0 ? `${traceback.join("\n")}\n` : `${pending.error.name}: ${pending.error.value}\n`;
-				if (pending.options?.onChunk) {
-					await pending.options.onChunk(message);
-				}
-				return;
-			}
-			case "done": {
-				if (typeof frame.executionCount === "number") {
-					pending.executionCount = frame.executionCount;
-				}
-				if (frame.status === "error" && pending.status === "ok") {
-					pending.status = "error";
-				}
-				if (frame.cancelled) {
-					pending.cancelled = true;
-				}
-				pending.finalize?.();
-				return;
-			}
-		}
-	}
-
-	async #executeWithBudget(
-		code: string,
-		signal: AbortSignal | undefined,
-		timeoutMs: number,
-		label: string,
-	): Promise<void> {
-		const controller = new AbortController();
-		const cleanups: Array<() => void> = [];
-		if (signal) {
-			if (signal.aborted) {
-				controller.abort(signal.reason);
-			} else {
-				const onAbort = () => controller.abort(signal.reason);
-				signal.addEventListener("abort", onAbort, { once: true });
-				cleanups.push(() => signal.removeEventListener("abort", onAbort));
-			}
-		}
-		const timer =
-			timeoutMs > 0
-				? setTimeout(() => controller.abort(createAbortError("TimeoutError", `${label} timed out`)), timeoutMs)
-				: undefined;
-		if (timer) cleanups.push(() => clearTimeout(timer));
-		try {
-			throwIfAborted(controller.signal, label);
-			const result = await this.execute(code, {
-				signal: controller.signal,
-				silent: true,
-				storeHistory: false,
-			});
-			if (result.cancelled) {
-				throw createAbortError(result.timedOut ? "TimeoutError" : "AbortError", `${label} cancelled`);
-			}
-			if (result.status === "error") {
-				const reason = result.error?.value ?? "Ruby kernel init failed";
-				throw new Error(`${label} failed: ${reason}`);
-			}
-		} finally {
-			for (const cleanup of cleanups) cleanup();
-		}
-	}
-
-	#waitForExitWithTimeout(timeoutMs: number): Promise<number | null> {
-		if (!this.#exitedPromise) return Promise.resolve(0);
-		const exitedPromise = this.#exitedPromise;
-		const timeout = new Promise<null>(resolve => {
-			const timer = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
-			timer.unref?.();
-		});
-		return Promise.race([exitedPromise.then(code => code as number | null), timeout]);
-	}
-}
-
-function isTimeoutReason(reason: unknown): boolean {
-	if (reason instanceof DOMException) return reason.name === "TimeoutError";
-	if (reason instanceof Error) return reason.name === "TimeoutError";
-	return false;
 }
 
 function buildInitScript(cwd: string, env?: Record<string, string | undefined>): string {
