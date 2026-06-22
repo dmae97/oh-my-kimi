@@ -1845,14 +1845,9 @@ export class AuthStorage {
 				return;
 			}
 			const newCredential: ApiKeyCredential = { type: "api_key", key: result };
-			const appendApiKeyLogin = "appendApiKeyLogin" in def && def.appendApiKeyLogin === true;
-			const stored = appendApiKeyLogin
-				? this.#store.upsertAuthCredentialRemote
-					? await this.#store.upsertAuthCredentialRemote(provider, newCredential)
-					: this.#store.upsertAuthCredentialForProvider(provider, newCredential)
-				: this.#store.replaceAuthCredentialsRemote
-					? await this.#store.replaceAuthCredentialsRemote(provider, [newCredential])
-					: this.#store.replaceAuthCredentialsForProvider(provider, [newCredential]);
+			const stored = this.#store.upsertAuthCredentialRemote
+				? await this.#store.upsertAuthCredentialRemote(provider, newCredential)
+				: this.#store.upsertAuthCredentialForProvider(provider, newCredential);
 			this.#setStoredCredentials(
 				provider,
 				stored.map(entry => ({ id: entry.id, credential: entry.credential })),

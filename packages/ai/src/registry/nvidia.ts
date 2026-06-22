@@ -58,5 +58,4 @@ export const nvidiaProvider = {
 	id: "nvidia",
 	name: "NVIDIA",
 	login: (cb: OAuthLoginCallbacks) => loginNvidia(cb),
-	appendApiKeyLogin: true,
 } as const satisfies ProviderDefinition;
