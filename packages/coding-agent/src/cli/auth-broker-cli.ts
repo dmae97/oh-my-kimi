@@ -28,6 +28,7 @@ import {
 	type OAuthCredential,
 	type OAuthProvider,
 	type OAuthProviderInfo,
+	PASTE_CODE_LOGIN_PROVIDERS,
 	PROVIDER_REGISTRY,
 	SqliteAuthCredentialStore,
 } from "@oh-my-pi/pi-ai";
@@ -211,6 +212,12 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 	const storage = new AuthStorage(store);
 	await storage.reload();
 	try {
+		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
+		// Agent's vscode:// URI) get the manual paste fallback. For normal loopback
+		// providers `onManualCodeInput` would make OAuthCallbackFlow race a readline
+		// prompt against the HTTP callback; if the callback wins, the outstanding
+		// prompt is never cancelled and leaves the terminal in a dirty/blocked state.
+		const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
 		await storage.login(provider, {
 			onAuth({ url, instructions }) {
 				process.stdout.write(`\nOpen this URL in your browser:\n${url}\n`);
@@ -223,12 +230,13 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 			onPrompt(p) {
 				return ask(`${p.message}${p.placeholder ? ` (${p.placeholder})` : ""}:`);
 			},
-			onManualCodeInput() {
-				// Providers with a fixed non-loopback redirect (e.g. GitLab Duo Agent's
-				// vscode:// URI) never hit the local callback server, so offer the same
-				// paste-the-redirect fallback the interactive TUI sign-in uses.
-				return ask("Paste the authorization code (or full redirect URL):");
-			},
+			...(usesManualInput
+				? {
+						onManualCodeInput() {
+							return ask("Paste the authorization code (or full redirect URL):");
+						},
+					}
+				: undefined),
 		});
 		process.stdout.write(`\nCredentials saved to ${getAgentDbPath()}\n`);
 	} finally {

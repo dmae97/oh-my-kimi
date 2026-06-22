@@ -1229,15 +1229,16 @@ async function runGitLabDuoWorkflow(
 		// The socket loop can exit several ways that leave the remote workflow running
 		// and `active` referencing a dead socket: a user abort; `runGitLabDuoWorkflowSocket`
 		// rejecting (e.g. `ws.onerror`) so the settle block never ran (`settledNormally`
-		// stays false); or the socket closing before any terminal status arrived
-		// (`lastSocketResult === "closed"` — a proxy/server drop). In all of these the
+		// stays false); or the socket reached a half-open/stuck terminal state with no
+		// real completion — `lastSocketResult === "closed"` (proxy/server drop) or
+		// `"timeout"` (idle deadline, retry already exhausted). In all of these the
 		// local stream is finalized but the server workflow has no explicit stop, so drop
 		// the resumable session and stop it with a FRESH signal (the request's own signal
 		// may be aborted, which would cancel the PATCH before it is sent). The happy path
 		// that intentionally keeps `active` for an `action`/`pause` resume reaches a real
-		// terminal status, never "closed", so it is not affected.
+		// terminal status, never "closed"/"timeout", so it is not affected.
 		const aborted = options.signal?.aborted ?? false;
-		if (aborted || !settledNormally || lastSocketResult === "closed") {
+		if (aborted || !settledNormally || lastSocketResult === "closed" || lastSocketResult === "timeout") {
 			if (providerSessionState) {
 				providerSessionState.active = undefined;
 			}
