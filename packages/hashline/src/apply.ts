@@ -430,38 +430,167 @@ function findDuplicatePrefix(group: ReplacementGroup, fileLines: readonly string
 	}
 	return 0;
 }
+interface DroppedSuffixClosers {
+	readonly startLine: number;
+	readonly count: number;
+	readonly balance: DelimiterBalance;
+}
+
+function countPayloadRestatedSuffixHead(payload: readonly string[], suffixLines: readonly string[]): number {
+	const maxCount = Math.min(payload.length, suffixLines.length);
+	for (let count = maxCount; count >= 1; count--) {
+		let matches = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (payload[payload.length - count + offset] !== suffixLines[offset]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return count;
+	}
+	return 0;
+}
+
+function countProjectedBelowSuffixTail(
+	group: ReplacementGroup,
+	fileLines: readonly string[],
+	deletedLines: ReadonlySet<number>,
+	insertedLineMaps: InsertedLineMaps,
+	suffixLines: readonly string[],
+): number {
+	const below: string[] = [];
+	const appendCloserLines = (lines: readonly string[] | undefined): boolean => {
+		if (!lines) return true;
+		for (const text of lines) {
+			if (!STRUCTURAL_CLOSER_RE.test(text)) return false;
+			below.push(text);
+		}
+		return true;
+	};
+	if (!appendCloserLines(insertedLineMaps.after.get(group.endLine))) return 0;
+	for (let line = group.endLine + 1; line <= fileLines.length; line++) {
+		if (!appendCloserLines(insertedLineMaps.before.get(line))) break;
+		if (!deletedLines.has(line)) {
+			const text = fileLines[line - 1] ?? "";
+			if (!STRUCTURAL_CLOSER_RE.test(text)) break;
+			below.push(text);
+		}
+		if (!appendCloserLines(insertedLineMaps.after.get(line))) break;
+	}
+	const maxCount = Math.min(below.length, suffixLines.length);
+	for (let count = maxCount; count >= 1; count--) {
+		let matches = true;
+		for (let offset = 0; offset < count; offset++) {
+			if (below[offset] !== suffixLines[suffixLines.length - count + offset]) {
+				matches = false;
+				break;
+			}
+		}
+		if (matches) return count;
+	}
+	return 0;
+}
+
+interface InsertedLineMaps {
+	readonly before: ReadonlyMap<number, readonly string[]>;
+	readonly after: ReadonlyMap<number, readonly string[]>;
+}
+
+function computeProjectedPrefixBalance(
+	group: ReplacementGroup,
+	fileLines: readonly string[],
+	deletedLines: ReadonlySet<number>,
+	insertedByLine: ReadonlyMap<number, readonly string[]>,
+	insertedLineMaps: InsertedLineMaps,
+): DelimiterBalance {
+	const prefix: string[] = [];
+	for (let line = 1; line < group.startLine; line++) {
+		const inserted = insertedByLine.get(line);
+		if (inserted) prefix.push(...inserted);
+		if (!deletedLines.has(line)) prefix.push(fileLines[line - 1] ?? "");
+	}
+	const insertedAtStart = insertedLineMaps.before.get(group.startLine);
+	if (insertedAtStart) prefix.push(...insertedAtStart);
+	prefix.push(...group.payload);
+	return computeDelimiterBalance(prefix);
+}
 
 function prefixCanCoverSuffixClosers(
 	group: ReplacementGroup,
 	fileLines: readonly string[],
 	suffixBalance: DelimiterBalance,
+	coveredBelowBalance: DelimiterBalance,
+	deletedLines: ReadonlySet<number>,
+	insertedByLine: ReadonlyMap<number, readonly string[]>,
+	insertedLineMaps: InsertedLineMaps,
 ): boolean {
 	const neededOpeners = balanceNegate(suffixBalance);
-	const prefixBalance = computeDelimiterBalance([...fileLines.slice(0, group.startLine - 1), ...group.payload]);
-	return balanceCovers(prefixBalance, neededOpeners);
+	const prefixBalance = computeProjectedPrefixBalance(
+		group,
+		fileLines,
+		deletedLines,
+		insertedByLine,
+		insertedLineMaps,
+	);
+	const uncoveredPrefixBalance = balanceSum(prefixBalance, coveredBelowBalance);
+	return balanceCovers(uncoveredPrefixBalance, neededOpeners);
 }
 
 /**
- * Smallest `m` such that the range's last `m` deleted lines are all pure
- * structural closers, sparing them (keeping instead of deleting) zeroes `delta`,
- * and the final prefix before the spared suffix still has unmatched openers for
- * those closers. The mirror mistake: a range that swallows a closing delimiter
- * the payload never restates.
+ * Missing segment of the range's deleted structural-closer suffix that should
+ * be spared. Payload lines that already restate the suffix head are not kept
+ * again, and projected closers immediately below the range satisfy the suffix
+ * tail. The remaining middle segment is kept only when backed by unmatched
+ * openers plus the whole-patch residual.
  */
 function findDroppedSuffixClosers(
 	group: ReplacementGroup,
 	fileLines: readonly string[],
 	delta: DelimiterBalance,
-): number {
-	const wanted = balanceNegate(delta);
-	const maxM = group.deleteIndices.length;
-	for (let m = 1; m <= maxM; m++) {
-		if (!STRUCTURAL_CLOSER_RE.test(fileLines[group.endLine - m] ?? "")) break;
-		const suffixBalance = computeDelimiterBalance(fileLines.slice(group.endLine - m, group.endLine));
-		if (!balanceEqual(suffixBalance, wanted)) continue;
-		if (prefixCanCoverSuffixClosers(group, fileLines, suffixBalance)) return m;
+	remainingDelta: DelimiterBalance,
+	deletedPrefixBalance: DelimiterBalance,
+	deletedLines: ReadonlySet<number>,
+	insertedByLine: ReadonlyMap<number, readonly string[]>,
+	insertedLineMaps: InsertedLineMaps,
+): DroppedSuffixClosers | undefined {
+	let suffixLength = 0;
+	while (
+		suffixLength < group.deleteIndices.length &&
+		STRUCTURAL_CLOSER_RE.test(fileLines[group.endLine - suffixLength - 1] ?? "")
+	) {
+		suffixLength++;
 	}
-	return 0;
+	if (suffixLength === 0) return undefined;
+
+	const suffixStartLine = group.endLine - suffixLength + 1;
+	const suffixLines = fileLines.slice(group.endLine - suffixLength, group.endLine);
+	const restatedHead = countPayloadRestatedSuffixHead(group.payload, suffixLines);
+	const coveredTail = countProjectedBelowSuffixTail(group, fileLines, deletedLines, insertedLineMaps, suffixLines);
+	const keepStart = restatedHead;
+	const keepEnd = suffixLength - coveredTail;
+	if (keepStart >= keepEnd) return undefined;
+
+	const keptLines = suffixLines.slice(keepStart, keepEnd);
+	const keptBalance = computeDelimiterBalance(keptLines);
+	const neededOpeners = balanceNegate(keptBalance);
+	const coveredBelowBalance = computeDelimiterBalance(suffixLines.slice(keepEnd));
+	if (!balanceCovers(delta, neededOpeners)) return undefined;
+	if (balanceCovers(deletedPrefixBalance, neededOpeners)) return undefined;
+	if (!balanceCovers(remainingDelta, neededOpeners)) return undefined;
+	if (
+		!prefixCanCoverSuffixClosers(
+			group,
+			fileLines,
+			keptBalance,
+			coveredBelowBalance,
+			deletedLines,
+			insertedByLine,
+			insertedLineMaps,
+		)
+	) {
+		return undefined;
+	}
+	return { startLine: suffixStartLine + keepStart, count: keepEnd - keepStart, balance: keptBalance };
 }
 
 interface BoundaryEcho {
@@ -755,10 +884,6 @@ function repairReplacementBoundaries(
 		slots.push({ kind: "candidate", group, inserts, deletes, delta });
 	}
 
-	// Pass 2: project the post-pass-1 stream to learn which lines are deleted and
-	// what is inserted where, sum the whole-patch residual balance bleed-free,
-	// then resolve each deferred missing-closer candidate against that residual,
-	// consuming it per repair so one missing closer is never spent twice.
 	const projected: AppliedEdit[] = [];
 	for (const slot of slots) {
 		projected.push(...(slot.kind === "candidate" ? [...slot.inserts, ...slot.deletes] : slot.edits));
@@ -768,12 +893,22 @@ function repairReplacementBoundaries(
 		if (edit.kind === "delete") deletedLines.add(edit.anchor.line);
 	}
 	const insertedByLine = new Map<number, string[]>();
+	const insertedLineMaps: { before: Map<number, string[]>; after: Map<number, string[]> } = {
+		before: new Map(),
+		after: new Map(),
+	};
 	for (const edit of projected) {
 		if (edit.kind !== "insert") continue;
 		for (const anchor of getCursorAnchors(edit.cursor)) {
 			const lines = insertedByLine.get(anchor.line);
 			if (lines) lines.push(edit.text);
 			else insertedByLine.set(anchor.line, [edit.text]);
+		}
+		if (edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor") {
+			const bySide = edit.cursor.kind === "before_anchor" ? insertedLineMaps.before : insertedLineMaps.after;
+			const lines = bySide.get(edit.cursor.anchor.line);
+			if (lines) lines.push(edit.text);
+			else bySide.set(edit.cursor.anchor.line, [edit.text]);
 		}
 	}
 	let remainingDelta: DelimiterBalance = { paren: 0, bracket: 0, brace: 0 };
@@ -787,20 +922,37 @@ function repairReplacementBoundaries(
 			out.push(...slot.edits);
 			continue;
 		}
-		const prefixBalance = netDeletedPrefixBalance(slot.group, deletedLines, insertedByLine, fileLines);
-		const droppedClosers =
-			!balanceCovers(prefixBalance, slot.delta) && balanceCovers(remainingDelta, slot.delta)
-				? findDroppedSuffixClosers(slot.group, fileLines, slot.delta)
-				: 0;
-		if (droppedClosers > 0) {
+		const deletedPrefixBalance = netDeletedPrefixBalance(slot.group, deletedLines, insertedByLine, fileLines);
+		const droppedClosers = findDroppedSuffixClosers(
+			slot.group,
+			fileLines,
+			slot.delta,
+			remainingDelta,
+			deletedPrefixBalance,
+			deletedLines,
+			insertedByLine,
+			insertedLineMaps,
+		);
+		if (droppedClosers) {
 			warnings.push(
 				describeBoundaryRepair(
 					slot.group,
-					`kept ${droppedClosers} structural closing line(s) the range deleted without restating`,
+					`kept ${droppedClosers.count} structural closing line(s) the range deleted without restating`,
 				),
 			);
-			out.push(...slot.inserts, ...slot.deletes.slice(0, slot.deletes.length - droppedClosers));
-			remainingDelta = balanceDelta(remainingDelta, slot.delta);
+			out.push(
+				...slot.inserts,
+				...slot.deletes.filter(
+					edit =>
+						edit.kind !== "delete" ||
+						edit.anchor.line < droppedClosers.startLine ||
+						edit.anchor.line >= droppedClosers.startLine + droppedClosers.count,
+				),
+			);
+			for (let line = droppedClosers.startLine; line < droppedClosers.startLine + droppedClosers.count; line++) {
+				deletedLines.delete(line);
+			}
+			remainingDelta = balanceSum(remainingDelta, droppedClosers.balance);
 			continue;
 		}
 		out.push(...slot.inserts, ...slot.deletes);

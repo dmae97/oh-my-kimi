@@ -403,6 +403,95 @@ describe("boundary-balance repair", () => {
 		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(0);
 	});
 
+	it("keeps only the non-restated outer closer for a nested deleted suffix", () => {
+		const file = ["class C {", "\told();", "\t}", "}"].join("\n");
+		const diff = ["SWAP 2.=4:", "+\tnewMethod() {", "+\t\treturn 1;", "+\t}"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["class C {", "\tnewMethod() {", "\t\treturn 1;", "\t}", "}"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("ignores non-contiguously deleted openers when choosing which closer to keep", () => {
+		const file = ["if (a) {", "\told();", "\tmore();", "}", "const obj = {", "\ta: 1,", "};"].join("\n");
+		const diff = ["DEL 1", "SWAP 3.=4:", "+\tnew();", "SWAP 7.=7:", "+\tb: 2,"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["\told();", "\tnew();", "const obj = {", "\ta: 1,", "\tb: 2,", "};"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("counts earlier kept closers in later projected prefixes", () => {
+		const file = [
+			"if (a) {",
+			"\told();",
+			"}",
+			"const NO_REASONING_LABEL_PATTERN = /no/i;",
+			"\treturn config.supportsThinking === true;",
+			"\t}",
+		].join("\n");
+		const diff = [
+			"SWAP 2.=3:",
+			"+\tnew();",
+			"SWAP 4.=6:",
+			"+function supportsDevinThinking(config: ClientModelConfig): boolean {",
+			"+\treturn config.supportsThinking === true;",
+			"+}",
+		].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(
+			[
+				"if (a) {",
+				"\tnew();",
+				"}",
+				"function supportsDevinThinking(config: ClientModelConfig): boolean {",
+				"\treturn config.supportsThinking === true;",
+				"}",
+			].join("\n"),
+		);
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("does not let an earlier kept closer cover a later orphan closer", () => {
+		const file = ["if (a) {", "\told();", "}", "}"].join("\n");
+		const diff = ["SWAP 2.=3:", "+\tnew();", "SWAP 4.=4:", "+after();"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["if (a) {", "\tnew();", "}", "after();"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("does not keep a deleted outer closer when one survives below the range", () => {
+		const file = ["class C {", "\tmethod() {", "\t\told();", "\t}", "}", "}"].join("\n");
+		const diff = ["SWAP 2.=5:", "+\tmethod() {", "+\t\tnew();", "+\t}"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["class C {", "\tmethod() {", "\t\tnew();", "\t}", "}"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(0);
+	});
+
+	it("keeps an omitted inner closer when the outer closer survives below", () => {
+		const file = ["class C {", "\tmethod() {", "\t\told();", "\t}", "}", "}"].join("\n");
+		const diff = ["SWAP 2.=5:", "+\tmethod() {", "+\t\tnew();"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["class C {", "\tmethod() {", "\t\tnew();", "\t}", "}"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("counts same-line inserted prefixes before replacement payload", () => {
+		const file = ["\told();", "}"].join("\n");
+		const diff = ["INS.PRE 1:", "+if (a) {", "SWAP 1.=2:", "+\tnew();"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(["if (a) {", "\tnew();", "}"].join("\n"));
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
+	it("counts a separately inserted closer immediately below the range", () => {
+		const file = ["class C {", "\told();", "}", "after();", "const obj = {", "\ta: 1,", "};"].join("\n");
+		const diff = ["SWAP 2.=3:", "+\tnew();", "INS.PRE 4:", "+}", "SWAP 7.=7:", "+\tb: 2,"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(
+			["class C {", "\tnew();", "}", "after();", "const obj = {", "\ta: 1,", "\tb: 2,", "};"].join("\n"),
+		);
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
+
 	it("keeps an omitted outer closer even when the payload restates an inner closer", () => {
 		const file = ["if (a) {", "\tif (b) {", "\t\told();", "\t}", "}", "after();"].join("\n");
 		const diff = ["SWAP 1.=5:", "+if (a) {", "+\tif (c) {", "+\t\tnew();", "+\t}"].join("\n");
