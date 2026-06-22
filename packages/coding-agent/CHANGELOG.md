@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Optimized internal message framing logic for better performance when handling large data bursts
 
 ## [16.1.12] - 2026-06-21
 
