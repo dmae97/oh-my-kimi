@@ -94,7 +94,7 @@ describe("applyEligibleNestedPatches", () => {
 	});
 
 	it("applies nested patches and returns no warning on success", async () => {
-		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches").mockResolvedValue();
+		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches").mockResolvedValue([]);
 		const suffix = await applyEligibleNestedPatches({
 			result: result({ nestedPatches: [nestedPatch] }),
 			repoRoot: "/repo",
@@ -116,5 +116,21 @@ describe("applyEligibleNestedPatches", () => {
 			mergedBranchForNestedPatches: true,
 		});
 		expect(suffix).toContain("Some nested repository patches failed to apply");
+	});
+
+	it("surfaces stash-restore warnings from applyNestedPatches as a system-notification", async () => {
+		vi.spyOn(worktreeModule, "applyNestedPatches").mockResolvedValue([
+			"Pre-existing dirty state in nested repo `nested` could not be auto-restored after the agent commit; stash entry preserved (conflict).",
+		]);
+		const suffix = await applyEligibleNestedPatches({
+			result: result({ nestedPatches: [nestedPatch] }),
+			repoRoot: "/repo",
+			mergeMode: "patch",
+			changesApplied: true,
+			mergedBranchForNestedPatches: false,
+		});
+		expect(suffix).toContain("could not be auto-restored");
+		expect(suffix).toContain("stash entry preserved");
+		expect(suffix).toContain("<system-notification>");
 	});
 });
