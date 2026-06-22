@@ -8,6 +8,7 @@ import {
 import { formatKeyHints, type KeybindingsManager } from "../config/keybindings";
 import { isSettingsInitialized, settings } from "../config/settings";
 import { applyEmojiCompletion, getEmojiSuggestions, isEmojiPrefix, tryEmojiInlineReplace } from "./emoji-autocomplete";
+import { getGithubRefPrefix, getGithubRefSuggestions } from "./github-ref-autocomplete";
 import {
 	applyInternalUrlCompletion,
 	getInternalUrlSuggestions,
@@ -109,6 +110,8 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	): Promise<{ items: AutocompleteItem[]; prefix: string } | null> {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
+		const githubRefSuggestions = getGithubRefSuggestions(textBeforeCursor);
+		if (githubRefSuggestions) return githubRefSuggestions;
 		const promptActionPrefix = getPromptActionPrefix(textBeforeCursor);
 		if (promptActionPrefix) {
 			const query = promptActionPrefix.slice(1).toLowerCase();
@@ -156,6 +159,9 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		cursorCol: number;
 		onApplied?: () => void;
 	} {
+		if (getGithubRefPrefix(prefix)) {
+			return applyInternalUrlCompletion(lines, cursorLine, cursorCol, item, prefix);
+		}
 		if (prefix.startsWith("#") && isPromptActionItem(item)) {
 			if (item.actionId === "undo") {
 				return {
