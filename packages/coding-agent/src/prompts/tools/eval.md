@@ -13,6 +13,7 @@ Cell fields:
 
 Work incrementally — one logical step per cell (imports, define, test, use), many small cells per call; workflow notes in the assistant message or `title`, never in cell code.
 {{#if py}}Live event loop: use top-level `await` directly; `asyncio.run(…)` raises "cannot be called from a running event loop".{{/if}}
+{{#if js}}JS runs under **Bun**: Bun globals/APIs are available (`Bun.file`, `Bun.write`, `Bun.$`, `fetch`, `Buffer`); top-level `await`/`return` work directly.{{/if}}
 {{#if rb}}Ruby: synchronous; helper options are keyword args (e.g. `tree(".", max_depth: 2)`); the last expression auto-displays unless it is `nil`, an assignment, or a definition (like IRB).{{/if}}
 {{#if jl}}Julia: synchronous; helper options are standard keyword args (e.g. `tree(max_depth=2)`); the last expression auto-displays unless it is an assignment or a definition (like the Julia REPL).{{/if}}
 Errors name the failing cell ("Cell 3 failed") — resubmit the fixed cell + any remaining.
