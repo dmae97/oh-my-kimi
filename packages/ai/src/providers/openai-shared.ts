@@ -2401,19 +2401,29 @@ export function populateResponsesUsageFromResponse(
 				input_tokens_details?: {
 					cached_tokens?: number | null;
 					cache_write_tokens?: number | null;
+					orchestration_input_tokens?: number | null;
+					orchestration_input_cached_tokens?: number | null;
 				} | null;
-				output_tokens_details?: { reasoning_tokens?: number | null } | null;
+				output_tokens_details?: {
+					reasoning_tokens?: number | null;
+					orchestration_output_tokens?: number | null;
+				} | null;
 		  }
 		| null
 		| undefined,
 ): void {
 	if (!usage) return;
+	const details = usage.input_tokens_details;
+	const outputDetails = usage.output_tokens_details;
+	const orchestrationInputTokens = details?.orchestration_input_tokens ?? 0;
+	const orchestrationInputCachedTokens = details?.orchestration_input_cached_tokens ?? 0;
+	const orchestrationOutputTokens = outputDetails?.orchestration_output_tokens ?? 0;
 	const accounting = calculateOpenAIUsageAccounting({
-		promptTokens: usage.input_tokens ?? 0,
-		outputTokens: usage.output_tokens ?? 0,
-		cachedTokens: usage.input_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0,
-		reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
-		cacheWriteOpenRouter: usage.input_tokens_details?.cache_write_tokens ?? undefined,
+		promptTokens: (usage.input_tokens ?? 0) + orchestrationInputTokens + orchestrationInputCachedTokens,
+		outputTokens: (usage.output_tokens ?? 0) + orchestrationOutputTokens,
+		cachedTokens: (details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0) + orchestrationInputCachedTokens,
+		reasoningTokens: outputDetails?.reasoning_tokens ?? 0,
+		cacheWriteOpenRouter: details?.cache_write_tokens ?? undefined,
 		cacheWriteDeepSeek: usage.prompt_cache_miss_tokens ?? undefined,
 		hasDeepSeekCacheHitAndMiss:
 			usage.prompt_cache_hit_tokens !== undefined && usage.prompt_cache_miss_tokens !== undefined,
