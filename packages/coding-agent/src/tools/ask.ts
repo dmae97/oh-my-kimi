@@ -308,7 +308,7 @@ async function askSingleQuestion(
 				}
 				const customResult = await promptForCustomInput();
 				if (customResult.input === undefined) {
-					break;
+					continue;
 				}
 				customInput = customResult.input;
 				break;
@@ -332,51 +332,57 @@ async function askSingleQuestion(
 		}
 		selectedOptions = Array.from(selected);
 	} else {
-		const displayOptions = addRecommendedSuffix(questionOptions, recommended);
-		const optionsWithNavigation: ExtensionUISelectItem[] = [...displayOptions, OTHER_OPTION];
+		while (true) {
+			const displayOptions = addRecommendedSuffix(questionOptions, recommended);
+			const optionsWithNavigation: ExtensionUISelectItem[] = [...displayOptions, OTHER_OPTION];
 
-		let initialIndex = recommended;
-		const previouslySelected = selectedOptions[0];
-		if (previouslySelected) {
-			const selectedIndex = questionOptions.findIndex(option => option.label === previouslySelected);
-			if (selectedIndex >= 0) initialIndex = selectedIndex;
-		} else if (customInput !== undefined) {
-			initialIndex = displayOptions.length;
-		}
-		if (initialIndex !== undefined) {
-			const maxIndex = Math.max(optionsWithNavigation.length - 1, 0);
-			initialIndex = Math.max(0, Math.min(initialIndex, maxIndex));
-		}
-
-		const {
-			choice,
-			timedOut: selectTimedOut,
-			navigation: arrowNavigation,
-		} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex, {
-			selectionMarker: "radio",
-			markableCount: displayOptions.length,
-		});
-		timedOut = selectTimedOut;
-
-		if (arrowNavigation) {
-			return { selectedOptions, customInput, timedOut, navigation: arrowNavigation };
-		}
-		if (choice === undefined) {
-			if (!timedOut) {
-				return { selectedOptions, customInput, timedOut, cancelled: true };
+			let initialIndex = recommended;
+			const previouslySelected = selectedOptions[0];
+			if (previouslySelected) {
+				const selectedIndex = questionOptions.findIndex(option => option.label === previouslySelected);
+				if (selectedIndex >= 0) initialIndex = selectedIndex;
+			} else if (customInput !== undefined) {
+				initialIndex = displayOptions.length;
 			}
-		} else if (choice === OTHER_OPTION) {
-			if (!selectTimedOut) {
-				const customResult = await promptForCustomInput();
-				if (customResult.input !== undefined) {
-					customInput = customResult.input;
-					selectedOptions = [];
+			if (initialIndex !== undefined) {
+				const maxIndex = Math.max(optionsWithNavigation.length - 1, 0);
+				initialIndex = Math.max(0, Math.min(initialIndex, maxIndex));
+			}
+
+			const {
+				choice,
+				timedOut: selectTimedOut,
+				navigation: arrowNavigation,
+			} = await selectOption(promptWithProgress, optionsWithNavigation, initialIndex, {
+				selectionMarker: "radio",
+				markableCount: displayOptions.length,
+			});
+			timedOut = selectTimedOut;
+
+			if (arrowNavigation) {
+				return { selectedOptions, customInput, timedOut, navigation: arrowNavigation };
+			}
+			if (choice === undefined) {
+				if (!timedOut) {
+					return { selectedOptions, customInput, timedOut, cancelled: true };
 				}
-				// If editor was dismissed (undefined), keep prior selectedOptions/customInput intact
+				break;
 			}
-		} else {
+			if (choice === OTHER_OPTION) {
+				if (selectTimedOut) {
+					break;
+				}
+				const customResult = await promptForCustomInput();
+				if (customResult.input === undefined) {
+					continue;
+				}
+				customInput = customResult.input;
+				selectedOptions = [];
+				break;
+			}
 			selectedOptions = [stripRecommendedSuffix(choice)];
 			customInput = undefined;
+			break;
 		}
 		if (navigation?.allowForward) {
 			return { selectedOptions, customInput, timedOut, navigation: "forward" };
