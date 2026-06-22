@@ -439,7 +439,7 @@ describe("OpenAI responses history payload", () => {
 		]);
 	});
 
-	it("strips provider-only image generation fields from replayed native history", async () => {
+	it("drops unfinished image generation calls from replayed native history", async () => {
 		const model = getOpenAIReasoningModel("openai", "gpt-5-mini");
 		const context: Context = {
 			messages: [
@@ -447,9 +447,21 @@ describe("OpenAI responses history payload", () => {
 				makeAssistantMessage(
 					[
 						{
-							id: "ig_history",
+							id: "ig_failed",
+							type: "image_generation_call",
+							status: "failed",
+						},
+						{
+							id: "ig_generating",
 							type: "image_generation_call",
 							status: "generating",
+							action: "generate",
+						},
+						{
+							id: "ig_completed",
+							type: "image_generation_call",
+							status: "completed",
+							result: "base64-image",
 							action: "generate",
 							background: "opaque",
 							output_format: "png",
@@ -462,13 +474,19 @@ describe("OpenAI responses history payload", () => {
 			],
 		};
 		const payload = (await captureResponsesPayload(model, context)) as { input?: unknown[] };
-
-		expect(findResponsesInputItem(payload.input, "image_generation_call")).toEqual({
-			id: "ig_history",
-			type: "image_generation_call",
-			status: "generating",
-			result: null,
+		const imageGenerationItems = payload.input?.filter(item => {
+			if (!item || typeof item !== "object") return false;
+			return (item as { type?: unknown }).type === "image_generation_call";
 		});
+
+		expect(imageGenerationItems).toEqual([
+			{
+				id: "ig_completed",
+				type: "image_generation_call",
+				status: "completed",
+				result: "base64-image",
+			},
+		]);
 	});
 
 	it("falls back to rebuilt history on resumed same-provider sessions with fresh session state", async () => {
