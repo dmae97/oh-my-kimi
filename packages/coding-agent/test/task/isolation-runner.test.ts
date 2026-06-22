@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
 
@@ -57,5 +57,64 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.changesApplied).toBe(true);
 		expect(outcome.hadAnyChanges).toBe(false);
 		expect(outcome.mergedBranchForNestedPatches).toBe(false);
+	});
+});
+
+describe("applyEligibleNestedPatches", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const nestedPatch = { relativePath: "nested", patch: "diff --git a/file b/file\n" };
+
+	it("skips when patch-mode parent merge failed", async () => {
+		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches");
+		const suffix = await applyEligibleNestedPatches({
+			result: result({ nestedPatches: [nestedPatch] }),
+			repoRoot: "/repo",
+			mergeMode: "patch",
+			changesApplied: false,
+			mergedBranchForNestedPatches: false,
+		});
+		expect(suffix).toBe("");
+		expect(applySpy).not.toHaveBeenCalled();
+	});
+
+	it("skips when branch mode did not actually merge the root branch", async () => {
+		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches");
+		const suffix = await applyEligibleNestedPatches({
+			result: result({ nestedPatches: [nestedPatch] }),
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			changesApplied: true,
+			mergedBranchForNestedPatches: false,
+		});
+		expect(suffix).toBe("");
+		expect(applySpy).not.toHaveBeenCalled();
+	});
+
+	it("applies nested patches and returns no warning on success", async () => {
+		const applySpy = vi.spyOn(worktreeModule, "applyNestedPatches").mockResolvedValue();
+		const suffix = await applyEligibleNestedPatches({
+			result: result({ nestedPatches: [nestedPatch] }),
+			repoRoot: "/repo",
+			mergeMode: "patch",
+			changesApplied: true,
+			mergedBranchForNestedPatches: false,
+		});
+		expect(suffix).toBe("");
+		expect(applySpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns a system-notification suffix on apply failure", async () => {
+		vi.spyOn(worktreeModule, "applyNestedPatches").mockRejectedValue(new Error("boom"));
+		const suffix = await applyEligibleNestedPatches({
+			result: result({ nestedPatches: [nestedPatch] }),
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			changesApplied: true,
+			mergedBranchForNestedPatches: true,
+		});
+		expect(suffix).toContain("Some nested repository patches failed to apply");
 	});
 });

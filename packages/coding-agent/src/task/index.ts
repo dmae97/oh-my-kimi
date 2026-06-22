@@ -47,11 +47,12 @@ import type { AsyncJobManager } from "../async";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import {
+	applyEligibleNestedPatches,
 	type IsolationContext,
+	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
 	prepareIsolationContext,
 	runIsolatedSubprocess,
@@ -61,7 +62,7 @@ import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
-import { applyNestedPatches, parseIsolationMode } from "./worktree";
+import { parseIsolationMode } from "./worktree";
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, {
@@ -1242,17 +1243,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			};
 			emitProgress();
 
-			const buildCommitMessageFn = () =>
-				commitStyle === "ai" && this.session.modelRegistry
-					? async (diff: string) => {
-							return generateCommitMessage(
-								diff,
-								this.session.modelRegistry!,
-								this.session.settings,
-								this.session.getSessionId?.() ?? undefined,
-							);
-						}
-					: undefined;
+			const buildCommitMessageFn = makeIsolationCommitMessage(this.session);
 
 			const sharedRunOptions = {
 				cwd: this.session.cwd,
@@ -1361,23 +1352,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				mergedBranchForNestedPatches = outcome.mergedBranchForNestedPatches;
 			}
 
-			// Apply nested repo patches (separate from parent git)
-			if (isIsolated && repoRoot && (mergeMode === "branch" || changesApplied !== false)) {
-				const nestedPatches = result.nestedPatches ?? [];
-				const eligible =
-					nestedPatches.length > 0 &&
-					result.exitCode === 0 &&
-					!result.aborted &&
-					(mergeMode !== "branch" || mergedBranchForNestedPatches);
-				if (eligible) {
-					try {
-						await applyNestedPatches(repoRoot, nestedPatches, buildCommitMessageFn());
-					} catch {
-						// Nested patch failures are non-fatal to the parent merge
-						mergeSummary +=
-							"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
-					}
-				}
+			// Apply nested repo patches (separate from parent git).
+			if (isIsolated && repoRoot) {
+				mergeSummary += await applyEligibleNestedPatches({
+					result,
+					repoRoot,
+					mergeMode,
+					changesApplied,
+					mergedBranchForNestedPatches,
+					commitMessage: buildCommitMessageFn(),
+				});
 			}
 
 			// Cleanup temp directory if used

@@ -15,17 +15,18 @@ import * as taskDiscovery from "../task/discovery";
 import type { ExecutorOptions } from "../task/executor";
 import * as taskExecutor from "../task/executor";
 import {
+	applyEligibleNestedPatches,
 	type IsolationContext,
+	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
 	prepareIsolationContext,
 	runIsolatedSubprocess,
 } from "../task/isolation-runner";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
-import { applyNestedPatches, type NestedRepoPatch, parseIsolationMode } from "../task/worktree";
+import { type NestedRepoPatch, parseIsolationMode } from "../task/worktree";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
-import { generateCommitMessage } from "../utils/commit-message-generator";
 import { withBridgeTimeoutPause } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 // Import review tools for side effects (registers subagent tool handlers).
@@ -354,18 +355,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	}
 	const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
 
-	const commitStyle = options.session.settings.get("task.isolation.commits");
-	const buildCommitMessage = () =>
-		commitStyle === "ai" && options.session.modelRegistry
-			? async (diff: string) => {
-					return generateCommitMessage(
-						diff,
-						options.session.modelRegistry!,
-						options.session.settings,
-						options.session.getSessionId?.() ?? undefined,
-					);
-				}
-			: undefined;
+	const buildCommitMessage = makeIsolationCommitMessage(options.session);
 
 	const baseRunOptions: ExecutorOptions = {
 		cwd: options.session.cwd,
@@ -497,24 +487,14 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 					);
 				}
 
-				// Apply nested repo patches (separate from parent git). The throw
-				// above already exited on a failed parent merge, so we know either
-				// the parent succeeded (patch mode) or branch mode is in play.
-				const nestedPatches = result.nestedPatches ?? [];
-				const eligible =
-					nestedPatches.length > 0 &&
-					result.exitCode === 0 &&
-					!result.aborted &&
-					(mergeMode !== "branch" || outcome.mergedBranchForNestedPatches);
-				if (eligible) {
-					try {
-						await applyNestedPatches(isolationContext.repoRoot, nestedPatches, buildCommitMessage());
-					} catch {
-						// Nested patch failures are non-fatal to the parent merge
-						mergeSummary +=
-							"\n\n<system-notification>Some nested repository patches failed to apply.</system-notification>";
-					}
-				}
+				mergeSummary += await applyEligibleNestedPatches({
+					result,
+					repoRoot: isolationContext.repoRoot,
+					mergeMode,
+					changesApplied: outcome.changesApplied,
+					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
+					commitMessage: buildCommitMessage(),
+				});
 			} else if (result.branchName) {
 				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
 			} else if (result.patchPath) {
