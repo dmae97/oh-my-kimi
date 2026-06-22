@@ -8,7 +8,7 @@ import {
 import { formatKeyHints, type KeybindingsManager } from "../config/keybindings";
 import { isSettingsInitialized, settings } from "../config/settings";
 import { applyEmojiCompletion, getEmojiSuggestions, isEmojiPrefix, tryEmojiInlineReplace } from "./emoji-autocomplete";
-import { getGithubRefPrefix, getGithubRefSuggestions } from "./github-ref-autocomplete";
+import { getGithubRefContext, getGithubRefSuggestions } from "./github-ref-autocomplete";
 import {
 	applyInternalUrlCompletion,
 	getInternalUrlSuggestions,
@@ -159,7 +159,7 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		cursorCol: number;
 		onApplied?: () => void;
 	} {
-		if (getGithubRefPrefix(prefix)) {
+		if (getGithubRefContext(prefix)) {
 			return applyInternalUrlCompletion(lines, cursorLine, cursorCol, item, prefix);
 		}
 		if (prefix.startsWith("#") && isPromptActionItem(item)) {
