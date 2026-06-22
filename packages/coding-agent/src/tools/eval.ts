@@ -458,6 +458,13 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					status: "pending",
 				}));
 				const cellOutputs: string[] = [];
+				// The cell currently inside backend.execute(). Streamed stdout is
+				// appended to its rendered `output` live so a long-running cell (e.g. a
+				// sleep loop) shows progress instead of nothing until it returns. A
+				// dedicated per-cell tail buffer keeps attribution correct and avoids
+				// double-counting against the aggregate `tailBuffer`; on completion the
+				// authoritative `cellResult.output` (below) overwrites this live tail.
+				let activeLiveCell: { result: EvalCellResult; buf: TailBuffer } | undefined;
 
 				const appendTail = (text: string) => {
 					tailBuffer.append(text);
@@ -507,6 +514,10 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					maxColumns: resolveOutputMaxColumns(session.settings),
 					onChunk: chunk => {
 						appendTail(chunk);
+						if (activeLiveCell) {
+							activeLiveCell.buf.append(chunk);
+							activeLiveCell.result.output = activeLiveCell.buf.text();
+						}
 						pushUpdate();
 					},
 				});
@@ -534,6 +545,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					cellResult.statusEvents = undefined;
 					cellResult.exitCode = undefined;
 					cellResult.durationMs = undefined;
+					activeLiveCell = { result: cellResult, buf: new TailBuffer(DEFAULT_MAX_BYTES * 2) };
 					pushUpdate();
 
 					const startTime = Date.now();
@@ -567,6 +579,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 						});
 					} finally {
 						idle.dispose();
+						activeLiveCell = undefined;
 					}
 					const durationMs = Date.now() - startTime;
 
