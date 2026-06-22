@@ -14,6 +14,10 @@
 
 - Fixed `nohup`/`&` background processes started inside an auto-backgrounded (`:async:`) bash turn being killed when that turn's shell was torn down. The per-job shell is now retained while a background process is still running (and reaped once it exits), so backgrounded commands survive across turns while still dying with the harness process.
 
+### Fixed
+
+- Fixed `openai-completions` provider session state surviving `/model` switches across different providers or base URLs. `AgentSession.#closeProviderSessionsForModelSwitch` only evicted `openai-codex-responses` and `openai-responses:<provider>` keys; entries keyed `openai-completions:<provider>:<resolvedBaseUrl>:<modelId>` (cached strict-tools disable scopes and reasoning-effort fallbacks for the old transport) lingered indefinitely. Moving away from an `openai-completions` backend now evicts every cached entry for the previous provider, including entries whose base URL was resolved at request time rather than read from the catalog, while same-backend model toggles keep their cached state ([#3260](https://github.com/can1357/oh-my-pi/issues/3260))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added

@@ -9026,6 +9026,21 @@ export class AgentSession {
 			providerKeys.add(`openai-responses:${nextModel.provider}`);
 		}
 
+		// `openai-completions` sessions are keyed `openai-completions:<provider>:<resolvedBaseUrl>:<modelId>`
+		// and cache backend-specific decisions (strict-tools disable scopes, reasoning-effort
+		// fallbacks). The resolved request base URL can differ from the catalog `model.baseUrl`
+		// (Moonshot env override, Alibaba Coding Plan enterprise URL, Azure deployment URL),
+		// so evict by provider prefix when the user moves away from that completions backend.
+		let completionsPrefixToEvict: string | undefined;
+		if (currentModel.api === "openai-completions") {
+			const currentScope = `${currentModel.provider}:${currentModel.baseUrl ?? ""}`;
+			const nextScope =
+				nextModel.api === "openai-completions" ? `${nextModel.provider}:${nextModel.baseUrl ?? ""}` : undefined;
+			if (currentScope !== nextScope) {
+				completionsPrefixToEvict = `openai-completions:${currentModel.provider}:`;
+			}
+		}
+
 		for (const providerKey of providerKeys) {
 			const state = this.#providerSessionState.get(providerKey);
 			if (!state) continue;
@@ -9040,6 +9055,21 @@ export class AgentSession {
 			}
 
 			this.#providerSessionState.delete(providerKey);
+		}
+
+		if (completionsPrefixToEvict !== undefined) {
+			for (const [key, state] of this.#providerSessionState) {
+				if (!key.startsWith(completionsPrefixToEvict)) continue;
+				try {
+					state.close();
+				} catch (error) {
+					logger.warn("Failed to close provider session state during model switch", {
+						providerKey: key,
+						error: String(error),
+					});
+				}
+				this.#providerSessionState.delete(key);
+			}
 		}
 	}
 
