@@ -195,7 +195,7 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		expect(usageLimitSpy).not.toHaveBeenCalled();
 	});
 
-	test("rotateSessionCredential leaves transient 429s out of the quota block path", async () => {
+	test("rotateSessionCredential leaves informative transient 429s out of the quota block path", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 		registerProvider();
 		await authStorage.set(PROVIDER, [
@@ -203,17 +203,28 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 			{ type: "oauth", access: "acc-B", refresh: "ref-B", expires: farExpiry() },
 		]);
 
-		await authStorage.getApiKey(PROVIDER, "transient-429");
-		const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
+		const transient429Bodies = [
+			"Cloud Code Assist API error (429): Too many requests",
+			"Please retry in 5s",
+			"Service overloaded 529",
+		];
 
-		await authStorage.rotateSessionCredential(PROVIDER, "transient-429", {
-			error: Object.assign(new Error("Cloud Code Assist API error (429): Too many requests"), { status: 429 }),
-		});
+		for (const [index, body] of transient429Bodies.entries()) {
+			const sessionId = `transient-429-${index}`;
+			await authStorage.getApiKey(PROVIDER, sessionId);
+			const usageLimitSpy = vi.spyOn(authStorage, "markUsageLimitReached");
 
-		// `Too many requests` / per-minute caps are owned by the provider's own
-		// retry layer — burning a sibling credential here would orphan an
-		// otherwise-healthy account for the default backoff window.
-		expect(usageLimitSpy).not.toHaveBeenCalled();
+			await authStorage.rotateSessionCredential(PROVIDER, sessionId, {
+				error: Object.assign(new Error(body), { status: 429 }),
+			});
+
+			// `Too many requests`, server retry hints, and capacity overload are
+			// owned by the provider's own retry layer — burning a sibling
+			// credential here would orphan a healthy account for the default
+			// backoff window.
+			expect(usageLimitSpy).not.toHaveBeenCalled();
+			usageLimitSpy.mockRestore();
+		}
 	});
 
 	test("rotateSessionCredential reports no sibling for a single-credential setup", async () => {

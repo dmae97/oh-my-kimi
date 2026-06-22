@@ -135,9 +135,13 @@ describe("isUsageLimitError", () => {
 });
 
 describe("isUsageLimitOutcome", () => {
-	it("rotates on bare 429 without a richer message", () => {
+	it("rotates on bare/opaque 429 bodies (status-only fallback)", () => {
 		expect(isUsageLimitOutcome(429, undefined)).toBe(true);
+		expect(isUsageLimitOutcome(429, "")).toBe(true);
 		expect(isUsageLimitOutcome(429, "429")).toBe(true);
+		expect(isUsageLimitOutcome(429, "HTTP 429")).toBe(true);
+		expect(isUsageLimitOutcome(429, "Error 429")).toBe(true);
+		expect(isUsageLimitOutcome(429, "{}")).toBe(true);
 	});
 
 	it("rotates on 429 carrying quota payload codes", () => {
@@ -146,9 +150,15 @@ describe("isUsageLimitOutcome", () => {
 		}
 	});
 
-	it("keeps transient 429s (`too many requests`, per-minute caps) in the upstream-backoff lane", () => {
+	it("keeps informative transient 429s in the upstream-backoff lane", () => {
+		// RATE_LIMIT_EXCEEDED — generic throttling.
 		expect(isUsageLimitOutcome(429, "Cloud Code Assist API error (429): Too many requests")).toBe(false);
 		expect(isUsageLimitOutcome(429, "Requests per minute limit reached")).toBe(false);
+		// MODEL_CAPACITY_EXHAUSTED — provider overload, not account quota.
+		expect(isUsageLimitOutcome(429, "Service overloaded 529")).toBe(false);
+		// UNKNOWN but carries a transient retry hint — body is informative,
+		// so we defer to parseRateLimitReason and stay out of the quota lane.
+		expect(isUsageLimitOutcome(429, "Please retry in 5s")).toBe(false);
 	});
 
 	it("still rotates on 429 with explicit account rate-limit framing", () => {

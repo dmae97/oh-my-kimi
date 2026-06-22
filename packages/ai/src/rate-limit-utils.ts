@@ -114,19 +114,40 @@ export function isUsageLimitStatus(status: number | undefined): boolean {
 
 /**
  * Returns true for failures that should burn one credential and rotate to a
- * sibling account. Usage-limit phrasing in the body always wins (Codex
- * `usage_limit_reached`, Anthropic account rate-limit, Google
- * `resource_exhausted`, OpenAI `insufficient_quota`, …); otherwise bare 429
- * falls back to the status-only signal — EXCEPT when the body classifies as
- * a transient rate-limit (`Too many requests`, per-minute caps) via
- * {@link parseRateLimitReason}. Transient 429s backoff against the same
- * credential and are owned by the provider's retry layer.
+ * sibling account. Decision tree:
+ *
+ *  1. Body matches {@link isUsageLimitError} (Codex `usage_limit_reached`,
+ *     Anthropic account rate-limit, Google `resource_exhausted`, OpenAI
+ *     `insufficient_quota`, …) → rotate.
+ *  2. Status is not 429 → backoff (caller's domain).
+ *  3. Body is absent or {@link isOpaqueStatusBody opaque} (just the status,
+ *     empty JSON, HTTP framing only) → rotate conservatively: the server
+ *     gave us nothing else to go on.
+ *  4. Body has content → defer to {@link parseRateLimitReason}. Only
+ *     `QUOTA_EXHAUSTED` rotates; `RATE_LIMIT_EXCEEDED` (`Too many requests`,
+ *     per-minute caps), `MODEL_CAPACITY_EXHAUSTED` (`Service overloaded`),
+ *     `SERVER_ERROR`, and `UNKNOWN` (`Please retry in 5s`) stay in the
+ *     provider's own backoff layer so transient 429s don't burn sibling
+ *     credentials.
  */
 export function isUsageLimitOutcome(status: number | undefined, message: string | undefined): boolean {
 	if (message && isUsageLimitError(message)) return true;
 	if (!isUsageLimitStatus(status)) return false;
-	if (message && parseRateLimitReason(message) === "RATE_LIMIT_EXCEEDED") return false;
-	return true;
+	if (!message || isOpaqueStatusBody(message)) return true;
+	return parseRateLimitReason(message) === "QUOTA_EXHAUSTED";
+}
+
+/**
+ * A 429 body is opaque when it carries no signal beyond the status itself —
+ * empty, whitespace-only, the status digits with HTTP/JSON framing, or
+ * generic punctuation. Anything else (retry hints, capacity wording, error
+ * descriptions) is informative enough to defer to the classifier.
+ */
+function isOpaqueStatusBody(message: string): boolean {
+	const cleaned = message
+		.replace(/\b429\b/g, "")
+		.replace(/\b(?:http|https|status|error|code|response|message)\b/gi, "");
+	return !/[a-z\d]{3,}/i.test(cleaned);
 }
 
 export function isUsageLimitError(errorMessage: string): boolean {
