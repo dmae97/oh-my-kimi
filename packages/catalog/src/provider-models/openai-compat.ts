@@ -2582,6 +2582,7 @@ export const SAKANA_FUGU_STATIC_MODELS: readonly ModelSpec<"openai-responses">[]
 ];
 
 const SAKANA_FUGU_STATIC_MODEL_BY_ID = new Map(SAKANA_FUGU_STATIC_MODELS.map(model => [model.id, model] as const));
+const SAKANA_FUGU_STATIC_MODEL_IDS = SAKANA_FUGU_STATIC_MODELS.map(model => model.id);
 
 export interface SakanaModelManagerConfig {
 	apiKey?: string;
@@ -2596,6 +2597,7 @@ export function sakanaModelManagerOptions(config?: SakanaModelManagerConfig): Mo
 	return {
 		providerId: "sakana",
 		dynamicModelsAuthoritative: true,
+		dropCachedModelIdsOnStaticMismatch: SAKANA_FUGU_STATIC_MODEL_IDS,
 		...(apiKey && {
 			fetchDynamicModels: () =>
 				fetchOpenAICompatibleModels({

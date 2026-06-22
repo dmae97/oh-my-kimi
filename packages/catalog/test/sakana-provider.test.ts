@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/stream";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER, PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import { sakanaModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { FetchImpl, ResolvedOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/types";
+import type { FetchImpl, ModelSpec, ResolvedOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/types";
 
 const ORIGINAL_ENV = {
 	SAKANA_API_KEY: Bun.env.SAKANA_API_KEY,
@@ -96,6 +100,52 @@ describe("Sakana AI provider support", () => {
 		expect(fuguNext?.compat?.includeEncryptedReasoning).toBe(false);
 	});
 
+	test("drops stale cached Fugu rows when bundled context metadata changes", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-sakana-stale-cache-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const staleFugu: ModelSpec<"openai-responses"> = {
+			id: "fugu",
+			name: "Fugu",
+			api: "openai-responses",
+			provider: "sakana",
+			baseUrl: "https://api.sakana.ai/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272_000,
+			maxTokens: null,
+		};
+		const correctedFugu: ModelSpec<"openai-responses"> = { ...staleFugu, contextWindow: 1_000_000 };
+
+		try {
+			await resolveProviderModels(
+				{
+					providerId: "sakana",
+					staticModels: [staleFugu],
+					dynamicModelsAuthoritative: true,
+					fetchDynamicModels: async () => [staleFugu],
+					cacheDbPath: dbPath,
+				},
+				"online",
+			);
+
+			const offline = await resolveProviderModels(
+				{
+					...sakanaModelManagerOptions({
+						apiKey: "sakana-key",
+						fetch: async () => new Response(null, { status: 503 }),
+					}),
+					staticModels: [correctedFugu],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+
+			expect(offline.models.find(model => model.id === "fugu")?.contextWindow).toBe(1_000_000);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 	test("prefers explicit Sakana model-manager base URL over environment aliases", async () => {
 		Bun.env.SAKANA_BASE_URL = "https://env.sakana.test";
 		const fetchMock: FetchImpl = vi.fn(
