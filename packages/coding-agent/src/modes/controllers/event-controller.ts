@@ -5,7 +5,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
-import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import type { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
@@ -25,6 +25,7 @@ import type { ResolveToolDetails } from "../../tools/resolve";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { interruptHint } from "../shared";
+import { createAssistantMessageComponent } from "../utils/interactive-context-helpers";
 import { StreamingRevealController } from "./streaming-reveal";
 import { ToolArgsRevealController } from "./tool-args-reveal";
 
@@ -332,14 +333,7 @@ export class EventController {
 			this.ctx.ui.requestRender();
 		} else if (event.message.role === "assistant") {
 			this.#lastVisibleBlockCount = 0;
-			this.ctx.streamingComponent = new AssistantMessageComponent(
-				undefined,
-				this.ctx.hideThinkingBlock,
-				() => this.ctx.ui.requestRender(),
-				this.ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
-				this.ctx.ui.imageBudget,
-				this.ctx.proseOnlyThinking,
-			);
+			this.ctx.streamingComponent = createAssistantMessageComponent(this.ctx);
 			this.ctx.streamingMessage = event.message;
 			this.ctx.chatContainer.addChild(this.ctx.streamingComponent);
 			this.#streamingReveal.begin(this.ctx.streamingComponent, this.ctx.streamingMessage);

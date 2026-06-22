@@ -13,8 +13,7 @@
  */
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { Text, type TUI } from "@oh-my-pi/pi-tui";
-import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
+import type { TUI } from "@oh-my-pi/pi-tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
 import { settings } from "../../config/settings";
@@ -22,16 +21,20 @@ import type { MessageRenderer } from "../../extensibility/extensions/types";
 import {
 	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
 	type CustomMessage,
-	isSilentAbort,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionMessageEntry } from "../../session/session-entries";
-import { createIrcMessageCard } from "../../tools/irc";
-import { canonicalizeMessage } from "../../utils/thinking-display";
 import { theme } from "../theme/theme";
+import {
+	assistantHasVisibleContent,
+	buildAsyncResultBlock,
+	buildFileMentionBlock,
+	buildIrcMessageCard,
+	normalizeToolArgs,
+	resolveAssistantErrorMessage,
+} from "../utils/transcript-render-helpers";
 import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
 import { createBackgroundTanDispatchBlock } from "./background-tan-message";
@@ -49,7 +52,7 @@ import { type LateDiagnosticsFile, LateDiagnosticsMessageComponent } from "./lat
 import { ReadToolGroupComponent, readArgsHaveTarget, readArgsTargetInternalUrl } from "./read-tool-group";
 import { SkillMessageComponent } from "./skill-message";
 import { ToolExecutionComponent } from "./tool-execution";
-import { TranscriptBlock, TranscriptContainer } from "./transcript-container";
+import { TranscriptContainer } from "./transcript-container";
 import { createUsageRowBlock } from "./usage-row";
 import { UserMessageComponent } from "./user-message";
 
@@ -218,27 +221,9 @@ export class ChatTranscriptBuilder {
 				break;
 			}
 			case "fileMention": {
-				const block = new TranscriptBlock();
-				for (const file of message.files) {
-					let suffix: string;
-					if (file.skippedReason === "tooLarge") {
-						const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
-						suffix = `(skipped: ${size})`;
-					} else {
-						suffix = file.image
-							? "(image)"
-							: file.lineCount === undefined
-								? "(unknown lines)"
-								: `(${file.lineCount} lines)`;
-					}
-					const text = `${theme.fg("dim", `${theme.tree.last} `)}${theme.fg("muted", "Read")} ${theme.fg(
-						"accent",
-						file.path,
-					)} ${theme.fg("dim", suffix)}`;
-					// Indent one column to match the transcript's other rows (the viewer renders
-					// body rows without an outer gutter; rows own their left pad).
-					block.addChild(new Text(text, 1, 0));
-				}
+				// Indent one column to match the transcript's other rows (the viewer renders
+				// body rows without an outer gutter; rows own their left pad).
+				const block = buildFileMentionBlock(message.files, 1);
 				if (block.children.length > 0) this.container.addChild(block);
 				break;
 			}
@@ -266,24 +251,14 @@ export class ChatTranscriptBuilder {
 			this.#lastAssistantUsage = message.usage;
 		}
 
-		const hasVisibleAssistantContent = message.content.some(
-			content =>
-				(content.type === "text" && canonicalizeMessage(content.text)) ||
-				(content.type === "thinking" && canonicalizeMessage(content.thinking)),
-		);
+		const hasVisibleAssistantContent = assistantHasVisibleContent(message);
 		if (hasVisibleAssistantContent) {
 			// New visible turn content closes the current read run (mirrors rebuild).
 			this.#readGroup?.seal();
 			this.#readGroup = null;
 		}
 
-		const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
-		const hasErrorStop = !isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
-		const errorMessage = hasErrorStop
-			? message.stopReason === "aborted"
-				? resolveAbortLabel(message.errorMessage)
-				: message.errorMessage || "Error"
-			: null;
+		const { hasErrorStop, errorMessage } = resolveAssistantErrorMessage(message);
 
 		for (const content of message.content) {
 			if (content.type !== "toolCall") continue;
@@ -303,10 +278,7 @@ export class ChatTranscriptBuilder {
 						content.id,
 					);
 				} else {
-					const normalizedArgs =
-						content.arguments && typeof content.arguments === "object" && !Array.isArray(content.arguments)
-							? (content.arguments as Record<string, unknown>)
-							: {};
+					const normalizedArgs = normalizeToolArgs(content.arguments);
 					this.#readArgs.set(content.id, normalizedArgs);
 				}
 				continue;
@@ -373,42 +345,7 @@ export class ChatTranscriptBuilder {
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): void {
 		if (!message.display) return;
 		if (message.customType === "async-result") {
-			const details = (
-				message as CustomMessage<{
-					jobId?: string;
-					type?: "bash" | "task";
-					label?: string;
-					durationMs?: number;
-					jobs?: Array<{ jobId?: string; type?: "bash" | "task"; label?: string; durationMs?: number }>;
-				}>
-			).details;
-			const jobs =
-				details?.jobs && details.jobs.length > 0
-					? details.jobs
-					: [
-							{
-								jobId: details?.jobId,
-								type: details?.type,
-								label: details?.label,
-								durationMs: details?.durationMs,
-							},
-						];
-			const block = new TranscriptBlock();
-			for (const job of jobs) {
-				const jobId = job.jobId ?? "unknown";
-				const typeLabel = job.type ? `[${job.type}]` : "[job]";
-				const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-				const line = [
-					theme.fg("success", `${theme.status.done} Background job completed`),
-					theme.fg("dim", typeLabel),
-					theme.fg("accent", jobId),
-					duration ? theme.fg("dim", `(${duration})`) : undefined,
-				]
-					.filter(Boolean)
-					.join(" ");
-				block.addChild(new Text(line, 1, 0));
-			}
-			this.container.addChild(block);
+			this.container.addChild(buildAsyncResultBlock(message));
 			return;
 		}
 		if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
@@ -433,28 +370,7 @@ export class ChatTranscriptBuilder {
 			message.customType === "irc:autoreply" ||
 			message.customType === "irc:relay"
 		) {
-			const details = (
-				message as CustomMessage<{ from?: string; to?: string; message?: string; body?: string; replyTo?: string }>
-			).details;
-			const kind =
-				message.customType === "irc:incoming"
-					? ("incoming" as const)
-					: message.customType === "irc:autoreply"
-						? ("autoreply" as const)
-						: ("relay" as const);
-			const card = createIrcMessageCard(
-				{
-					kind,
-					from: details?.from,
-					to: details?.to,
-					body: kind === "incoming" ? details?.message : details?.body,
-					replyTo: details?.replyTo,
-					timestamp: message.timestamp,
-				},
-				() => this.#expanded,
-				theme,
-			);
-			this.container.addChild(card);
+			this.container.addChild(buildIrcMessageCard(message, () => this.#expanded));
 			return;
 		}
 		if (message.customType === "advisor") {

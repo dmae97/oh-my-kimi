@@ -13,4 +13,3 @@ Matching paths sorted by mtime (newest first), grouped under `# <dir>/` headers 
 <avoid>
 Open-ended searches needing multiple rounds of globbing/searching: you MUST use the Task tool instead.
 </avoid>
-

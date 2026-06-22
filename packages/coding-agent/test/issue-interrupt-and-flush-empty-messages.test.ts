@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -19,6 +20,8 @@ function createContext() {
 				return editorText;
 			},
 			addToHistory: vi.fn(),
+			pendingImages: [] as ImageContent[],
+			pendingImageLinks: [] as (string | undefined)[],
 		},
 		ui: { requestRender },
 		session: {
@@ -34,8 +37,6 @@ function createContext() {
 		get viewSession() {
 			return (this as typeof ctx).session;
 		},
-		pendingImages: [],
-		pendingImageLinks: [],
 		compactionQueuedMessages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
 		isBashMode: false,

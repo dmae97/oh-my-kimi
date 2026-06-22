@@ -408,8 +408,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
 	proseOnlyThinking = true;
-	pendingImages: ImageContent[] = [];
-	pendingImageLinks: (string | undefined)[] = [];
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	pendingBashComponents: BashExecutionComponent[] = [];
@@ -1094,7 +1092,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#goalSuppressNextContinuation) return;
 		if (this.#pendingSubmittedInput) return;
 		if (this.editor.getText().trim().length > 0) return;
-		if ((this.pendingImages?.length ?? 0) > 0) return;
+		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 		const state = this.session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return;
 		const prompt = this.session.goalRuntime.buildContinuationPrompt();
@@ -1113,7 +1111,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.#isAutoSubmitBlocked()) return;
 			if (this.#pendingSubmittedInput) return;
 			if (this.editor.getText().trim().length > 0) return;
-			if ((this.pendingImages?.length ?? 0) > 0) return;
+			if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return;
 			this.#goalContinuationTurnInFlight = true;
@@ -1338,9 +1336,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#stopLoadingAnimation(true);
 		}
 		if (!submission.customType) {
-			this.pendingImages = submission.images ? [...submission.images] : [];
-			this.pendingImageLinks = submission.imageLinks ? [...submission.imageLinks] : [];
-			this.editor.imageLinks = this.pendingImageLinks;
+			this.editor.pendingImages = submission.images ? [...submission.images] : [];
+			this.editor.pendingImageLinks = submission.imageLinks ? [...submission.imageLinks] : [];
+			this.editor.imageLinks = this.editor.pendingImageLinks;
 			this.rebuildChatFromMessages();
 			this.editor.setText(submission.text);
 		}

@@ -15,6 +15,9 @@ interface StubEditor {
 	getText: () => string;
 	addToHistory: (text: string) => void;
 	imageLinks?: unknown;
+	pendingImages: ImageContent[];
+	pendingImageLinks: (string | undefined)[];
+	clearDraft: (text?: string) => void;
 }
 interface PromptOptionsLike {
 	streamingBehavior?: "steer" | "followUp";
@@ -31,6 +34,15 @@ function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent
 			return editorText;
 		},
 		addToHistory: vi.fn(),
+		pendingImages: opts.pendingImages,
+		pendingImageLinks: opts.pendingImages.map(() => undefined),
+		clearDraft(text?: string) {
+			if (text !== undefined) this.addToHistory(text);
+			this.setText("");
+			this.imageLinks = undefined;
+			this.pendingImages = [];
+			this.pendingImageLinks = [];
+		},
 	};
 	const prompt = vi.fn(async (_text: string, _options?: PromptOptionsLike) => {});
 	const updatePendingMessagesDisplay = vi.fn();
@@ -48,8 +60,6 @@ function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent
 			extensionRunner: undefined,
 			prompt,
 		},
-		pendingImages: opts.pendingImages,
-		pendingImageLinks: opts.pendingImages.map(() => undefined),
 		loopModeEnabled: false,
 		compactionQueuedMessages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
@@ -81,8 +91,8 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		expect(call[1]?.images).toEqual([image]);
 
 		// Pending image state is consumed so the next message does not resend it.
-		expect(ctx.pendingImages).toEqual([]);
-		expect(ctx.pendingImageLinks).toEqual([]);
+		expect(ctx.editor.pendingImages).toEqual([]);
+		expect(ctx.editor.pendingImageLinks).toEqual([]);
 	});
 
 	it("forwards pending images when not streaming", async () => {
@@ -98,7 +108,7 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		if (!call) throw new Error("expected session.prompt to be called");
 		expect(call[1]?.images).toEqual([image]);
 		expect(call[1]?.streamingBehavior).toBeUndefined();
-		expect(ctx.pendingImages).toEqual([]);
+		expect(ctx.editor.pendingImages).toEqual([]);
 	});
 
 	it("omits images when none are pending", async () => {

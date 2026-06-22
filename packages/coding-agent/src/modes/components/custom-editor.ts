@@ -1,3 +1,4 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -162,6 +163,24 @@ export function extractBracketedImagePastePath(data: string): string | undefined
  */
 export class CustomEditor extends Editor {
 	imageLinks?: readonly (string | undefined)[];
+
+	/** Draft images pasted into the composer, consumed on submit. Co-located with
+	 *  {@link imageLinks} so every piece of draft-image state lives on the editor. */
+	pendingImages: ImageContent[] = [];
+	/** Per-image source links (file:// targets) parallel to {@link pendingImages};
+	 *  `undefined` entries are images without a backing reference yet. */
+	pendingImageLinks: (string | undefined)[] = [];
+
+	/** Clear the composer draft: optionally commit `historyText` to history, then
+	 *  reset the editor text and all pending draft-image state. The shared tail of
+	 *  every "message submitted" path; pass no argument for a plain discard. */
+	clearDraft(historyText?: string): void {
+		if (historyText !== undefined) this.addToHistory(historyText);
+		this.setText("");
+		this.imageLinks = undefined;
+		this.pendingImages = [];
+		this.pendingImageLinks = [];
+	}
 
 	/** Treat image/paste markers as indivisible: a stray backspace deletes the whole token
 	 *  instead of corrupting `[Paste #1, +30 lines]` into plain text. */

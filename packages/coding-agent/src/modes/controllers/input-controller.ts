@@ -530,10 +530,7 @@ export class InputController {
 			// model continues the prior intent rather than second-guessing the interrupt.
 			if (text === "." || text === "c") {
 				if (this.ctx.onInputCallback) {
-					this.ctx.editor.setText("");
-					this.ctx.pendingImages = [];
-					this.ctx.pendingImageLinks = [];
-					this.ctx.editor.imageLinks = undefined;
+					this.ctx.editor.clearDraft();
 					this.ctx.onInputCallback({
 						text: manualContinuePrompt,
 						cancelled: false,
@@ -546,16 +543,14 @@ export class InputController {
 			}
 
 			const runner = this.ctx.session.extensionRunner;
-			let inputImages = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
-			let inputImageLinks = this.ctx.pendingImageLinks.length > 0 ? [...this.ctx.pendingImageLinks] : undefined;
+			let inputImages = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+			let inputImageLinks =
+				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, inputImages, "interactive");
 				if (result?.handled) {
-					this.ctx.editor.setText("");
-					this.ctx.pendingImages = [];
-					this.ctx.pendingImageLinks = [];
-					this.ctx.editor.imageLinks = undefined;
+					this.ctx.editor.clearDraft();
 					return;
 				}
 				if (result?.text !== undefined) {
@@ -603,12 +598,8 @@ export class InputController {
 					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
 					return;
 				}
-				this.ctx.editor.addToHistory(text);
-				this.ctx.editor.setText("");
-				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.pendingImages = [];
-				this.ctx.pendingImageLinks = [];
+				this.ctx.editor.clearDraft(text);
 				// No local render: the prompt comes back from the host as a
 				// collab-prompt event/entry and renders with the author badge.
 				this.ctx.collabGuest.sendPrompt(text, images);
@@ -680,8 +671,8 @@ export class InputController {
 				this.ctx.editor.setText("");
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.pendingImages = [];
-				this.ctx.pendingImageLinks = [];
+				this.ctx.editor.pendingImages = [];
+				this.ctx.editor.pendingImageLinks = [];
 				// Record the signature so the queued message's eventual delivery
 				// (a user-role `message_start` event) leaves any draft the user has
 				// typed since queuing intact. Same protection as #783, applied to
@@ -744,8 +735,8 @@ export class InputController {
 				// Include any pending images from clipboard paste
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.pendingImages = [];
-				this.ctx.pendingImageLinks = [];
+				this.ctx.editor.pendingImages = [];
+				this.ctx.editor.pendingImageLinks = [];
 
 				// Render user message immediately, then let session events catch up.
 				// Tag the submission as "steer": this is a normal Enter the controller
@@ -771,8 +762,8 @@ export class InputController {
 				// semantics instead of throwing AgentBusyError.
 				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.pendingImages = [];
-				this.ctx.pendingImageLinks = [];
+				this.ctx.editor.pendingImages = [];
+				this.ctx.editor.pendingImageLinks = [];
 				try {
 					await this.ctx.withLocalSubmission(
 						text,
@@ -787,9 +778,11 @@ export class InputController {
 					// extension command).
 					this.ctx.editor.setText(text);
 					if (images && images.length > 0) {
-						this.ctx.pendingImages = [...images];
-						this.ctx.pendingImageLinks = inputImageLinks ? [...inputImageLinks] : images.map(() => undefined);
-						this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+						this.ctx.editor.pendingImages = [...images];
+						this.ctx.editor.pendingImageLinks = inputImageLinks
+							? [...inputImageLinks]
+							: images.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 					}
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
 				}
@@ -816,12 +809,8 @@ export class InputController {
 			this.ctx.showStatus("Commands run in the main session — press ←← to return first");
 			return; // editor text not cleared: Editor does not auto-clear on submit
 		}
-		const images = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
-		this.ctx.editor.addToHistory(text);
-		this.ctx.editor.setText("");
-		this.ctx.editor.imageLinks = undefined;
-		this.ctx.pendingImages = [];
-		this.ctx.pendingImageLinks = [];
+		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+		this.ctx.editor.clearDraft(text);
 		try {
 			// prompt() handles idle (new turn) and streaming (queues per streamingBehavior).
 			await this.ctx.withLocalSubmission(text, () => target.prompt(text, { streamingBehavior, images }), {
@@ -989,10 +978,7 @@ export class InputController {
 		}
 		const didRetry = await this.ctx.viewSession.retry();
 		if (didRetry) {
-			this.ctx.editor.setText("");
-			this.ctx.pendingImages = [];
-			this.ctx.pendingImageLinks = [];
-			this.ctx.editor.imageLinks = undefined;
+			this.ctx.editor.clearDraft();
 		} else {
 			this.ctx.showStatus("Nothing to retry");
 		}
@@ -1016,7 +1002,7 @@ export class InputController {
 		// the queued entry is later re-parsed into a skill invocation is a
 		// separate concern owned by the compaction-resume path.
 		if (this.ctx.session.isCompacting) {
-			const images = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
+			const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 			this.ctx.queueCompactionMessage(text, "followUp", images);
 			return;
 		}
@@ -1040,14 +1026,10 @@ export class InputController {
 
 		// Forward any pending clipboard-pasted images alongside the queued text;
 		// otherwise the follow-up would drop the image (mirrors the Enter/steer path).
-		const images = this.ctx.pendingImages.length > 0 ? [...this.ctx.pendingImages] : undefined;
+		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 
 		if (this.ctx.session.isStreaming) {
-			this.ctx.editor.addToHistory(text);
-			this.ctx.editor.setText("");
-			this.ctx.editor.imageLinks = undefined;
-			this.ctx.pendingImages = [];
-			this.ctx.pendingImageLinks = [];
+			this.ctx.editor.clearDraft(text);
 			await this.ctx.withLocalSubmission(
 				text,
 				() => this.ctx.session.prompt(text, { streamingBehavior: "followUp", images }),
@@ -1059,11 +1041,7 @@ export class InputController {
 		}
 
 		// Not streaming — just submit normally
-		this.ctx.editor.addToHistory(text);
-		this.ctx.editor.setText("");
-		this.ctx.editor.imageLinks = undefined;
-		this.ctx.pendingImages = [];
-		this.ctx.pendingImageLinks = [];
+		this.ctx.editor.clearDraft(text);
 		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text, { images }), {
 			imageCount: images?.length ?? 0,
 		});
@@ -1108,7 +1086,7 @@ export class InputController {
 		let queuedText: string;
 		if (queuedImages.length > 0) {
 			const parts: string[] = [];
-			let imageOffset = this.ctx.pendingImages.length;
+			let imageOffset = this.ctx.editor.pendingImages.length;
 			for (const entry of allQueued) {
 				parts.push(shiftImageMarkers(entry.text, imageOffset));
 				if (entry.images && entry.images.length > 0) imageOffset += entry.images.length;
@@ -1124,9 +1102,9 @@ export class InputController {
 		// re-materialized lazily; the restored text already carries the
 		// renumbered `[Image #N, WxH]` markers).
 		if (queuedImages.length > 0) {
-			this.ctx.pendingImages.push(...queuedImages);
-			this.ctx.pendingImageLinks.push(...queuedImages.map(() => undefined));
-			this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
+			this.ctx.editor.pendingImages.push(...queuedImages);
+			this.ctx.editor.pendingImageLinks.push(...queuedImages.map(() => undefined));
+			this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 		}
 		this.ctx.updatePendingMessagesDisplay();
 		if (options?.abort) {
@@ -1148,14 +1126,14 @@ export class InputController {
 				this.ctx.sessionManager.putBlob.bind(this.ctx.sessionManager),
 			)
 		)?.[0];
-		this.ctx.pendingImages.push({
+		this.ctx.editor.pendingImages.push({
 			type: "image",
 			data: imageData.data,
 			mimeType: imageData.mimeType,
 		});
-		this.ctx.pendingImageLinks.push(imageLink);
-		this.ctx.editor.imageLinks = this.ctx.pendingImageLinks;
-		const imageNum = this.ctx.pendingImages.length;
+		this.ctx.editor.pendingImageLinks.push(imageLink);
+		this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+		const imageNum = this.ctx.editor.pendingImages.length;
 		const dims = await this.#imageDimensions(imageData);
 		const label = dims ? `[Image #${imageNum}, ${dims.width}x${dims.height}]` : `[Image #${imageNum}]`;
 		this.ctx.editor.insertText(`${label} `);

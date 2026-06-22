@@ -32,6 +32,9 @@ type FakeEditor = {
 	clearCustomKeyHandlers(): void;
 	pasteText(text: string): void;
 	imageLinks?: (string | undefined)[];
+	pendingImages: ImageContent[];
+	pendingImageLinks: (string | undefined)[];
+	clearDraft(historyText?: string): void;
 };
 
 type InputListenerResult = { consume: boolean } | undefined;
@@ -108,6 +111,15 @@ async function createContext() {
 		setActionKeys,
 		setCustomKeyHandler,
 		clearCustomKeyHandlers,
+		pendingImages: [],
+		pendingImageLinks: [],
+		clearDraft(historyText?: string) {
+			if (historyText !== undefined) this.addToHistory(historyText);
+			this.setText("");
+			this.imageLinks = undefined;
+			this.pendingImages = [];
+			this.pendingImageLinks = [];
+		},
 	};
 	focused = editor;
 	const ctx = {
@@ -132,7 +144,6 @@ async function createContext() {
 				return keyMap[action] ? [...keyMap[action]] : [];
 			},
 		} as InteractiveModeContext["keybindings"],
-		pendingImages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
 		isKnownSlashCommand: () => false,
 		recordLocalSubmission(this: InteractiveModeContext, text: string, imageCount = 0) {
@@ -304,15 +315,15 @@ describe("InputController keybinding setup", () => {
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
-		ctx.pendingImages = [image];
-		ctx.pendingImageLinks = ["local://draft.png"];
-		editor.imageLinks = ctx.pendingImageLinks;
+		ctx.editor.pendingImages = [image];
+		ctx.editor.pendingImageLinks = ["local://draft.png"];
+		editor.imageLinks = ctx.editor.pendingImageLinks;
 		editor.setText("draft with image");
 		editor.onRetry?.();
 		await Promise.resolve();
 
-		expect(ctx.pendingImages).toEqual([]);
-		expect(ctx.pendingImageLinks).toEqual([]);
+		expect(ctx.editor.pendingImages).toEqual([]);
+		expect(ctx.editor.pendingImageLinks).toEqual([]);
 		expect(editor.imageLinks).toBeUndefined();
 		expect(editor.getText()).toBe("");
 	});

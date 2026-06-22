@@ -39,16 +39,20 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "../../mode
 import {
 	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
 	type CustomMessage,
-	isSilentAbort,
 	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-	resolveAbortLabel,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
 } from "../../session/messages";
 import type { SessionContext } from "../../session/session-context";
-import { createIrcMessageCard } from "../../tools/irc";
-import { formatBytes, formatDuration } from "../../tools/render-utils";
-import { canonicalizeMessage } from "../../utils/thinking-display";
+import { createAssistantMessageComponent } from "./interactive-context-helpers";
+import {
+	assistantHasVisibleContent,
+	buildAsyncResultBlock,
+	buildFileMentionBlock,
+	buildIrcMessageCard,
+	normalizeToolArgs,
+	resolveAssistantErrorMessage,
+} from "./transcript-render-helpers";
 
 type TextBlock = { type: "text"; text: string };
 interface RenderInitialMessagesOptions {
@@ -143,47 +147,7 @@ export class UiHelpers {
 			case "custom": {
 				if (message.display) {
 					if (message.customType === "async-result") {
-						const details = (
-							message as CustomMessage<{
-								jobId?: string;
-								type?: "bash" | "task";
-								label?: string;
-								durationMs?: number;
-								jobs?: Array<{
-									jobId?: string;
-									type?: "bash" | "task";
-									label?: string;
-									durationMs?: number;
-								}>;
-							}>
-						).details;
-						const jobs =
-							details?.jobs && details.jobs.length > 0
-								? details.jobs
-								: [
-										{
-											jobId: details?.jobId,
-											type: details?.type,
-											label: details?.label,
-											durationMs: details?.durationMs,
-										},
-									];
-						const block = new TranscriptBlock();
-						for (const job of jobs) {
-							const jobId = job.jobId ?? "unknown";
-							const typeLabel = job.type ? `[${job.type}]` : "[job]";
-							const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-							const line = [
-								theme.fg("success", `${theme.status.done} Background job completed`),
-								theme.fg("dim", typeLabel),
-								theme.fg("accent", jobId),
-								duration ? theme.fg("dim", `(${duration})`) : undefined,
-							]
-								.filter(Boolean)
-								.join(" ");
-							block.addChild(new Text(line, 1, 0));
-						}
-						this.ctx.chatContainer.addChild(block);
+						this.ctx.chatContainer.addChild(buildAsyncResultBlock(message));
 						break;
 					}
 					if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
@@ -213,33 +177,7 @@ export class UiHelpers {
 						message.customType === "irc:autoreply" ||
 						message.customType === "irc:relay"
 					) {
-						const details = (
-							message as CustomMessage<{
-								from?: string;
-								to?: string;
-								message?: string;
-								body?: string;
-								replyTo?: string;
-							}>
-						).details;
-						const kind =
-							message.customType === "irc:incoming"
-								? ("incoming" as const)
-								: message.customType === "irc:autoreply"
-									? ("autoreply" as const)
-									: ("relay" as const);
-						const card = createIrcMessageCard(
-							{
-								kind,
-								from: details?.from,
-								to: details?.to,
-								body: kind === "incoming" ? details?.message : details?.body,
-								replyTo: details?.replyTo,
-								timestamp: message.timestamp,
-							},
-							() => this.ctx.toolOutputExpanded,
-							theme,
-						);
+						const card = buildIrcMessageCard(message, () => this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(card);
 						return [card];
 					}
@@ -284,25 +222,7 @@ export class UiHelpers {
 			}
 			case "fileMention": {
 				// Render compact file mention display
-				const block = new TranscriptBlock();
-				for (const file of message.files) {
-					let suffix: string;
-					if (file.skippedReason === "tooLarge") {
-						const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
-						suffix = `(skipped: ${size})`;
-					} else {
-						suffix = file.image
-							? "(image)"
-							: file.lineCount === undefined
-								? "(unknown lines)"
-								: `(${file.lineCount} lines)`;
-					}
-					const text = `${theme.fg("dim", `${theme.tree.last} `)}${theme.fg("muted", "Read")} ${theme.fg(
-						"accent",
-						file.path,
-					)} ${theme.fg("dim", suffix)}`;
-					block.addChild(new Text(text, 0, 0));
-				}
+				const block = buildFileMentionBlock(message.files, 0);
 				if (block.children.length > 0) this.ctx.chatContainer.addChild(block);
 				break;
 			}
@@ -326,14 +246,7 @@ export class UiHelpers {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.ctx.hideThinkingBlock,
-					() => this.ctx.ui.requestRender(),
-					this.ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
-					this.ctx.ui.imageBudget,
-					this.ctx.proseOnlyThinking,
-				);
+				const assistantComponent = createAssistantMessageComponent(this.ctx, message);
 				this.ctx.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -425,11 +338,7 @@ export class UiHelpers {
 						this.ctx.lastAssistantUsage = usage;
 					}
 				}
-				const hasVisibleAssistantContent = message.content.some(
-					content =>
-						(content.type === "text" && canonicalizeMessage(content.text)) ||
-						(content.type === "thinking" && canonicalizeMessage(content.thinking)),
-				);
+				const hasVisibleAssistantContent = assistantHasVisibleContent(message);
 				if (hasVisibleAssistantContent) {
 					// Rebuild reconstructs immutable history; seal (not finalize) so the
 					// group freezes even if a read's result was never persisted —
@@ -438,14 +347,10 @@ export class UiHelpers {
 					readGroup?.seal();
 					readGroup = null;
 				}
-				const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
-				const hasErrorStop =
-					!isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
-				const errorMessage = hasErrorStop
-					? message.stopReason === "aborted"
-						? resolveAbortLabel(message.errorMessage, this.ctx.viewSession.retryAttempt)
-						: message.errorMessage || "Error"
-					: null;
+				const { hasErrorStop, errorMessage } = resolveAssistantErrorMessage(
+					message,
+					this.ctx.viewSession.retryAttempt,
+				);
 
 				// Render tool call components
 				for (const content of message.content) {
@@ -474,10 +379,7 @@ export class UiHelpers {
 								content.id,
 							);
 						} else {
-							const normalizedArgs =
-								content.arguments && typeof content.arguments === "object" && !Array.isArray(content.arguments)
-									? (content.arguments as Record<string, unknown>)
-									: {};
+							const normalizedArgs = normalizeToolArgs(content.arguments);
 							readToolCallArgs.set(content.id, normalizedArgs);
 							if (assistantComponent) {
 								readToolCallAssistantComponents.set(content.id, assistantComponent);
@@ -647,10 +549,7 @@ export class UiHelpers {
 	}
 
 	clearEditor(): void {
-		this.ctx.editor.setText("");
-		this.ctx.pendingImages = [];
-		this.ctx.pendingImageLinks = [];
-		this.ctx.editor.imageLinks = undefined;
+		this.ctx.editor.clearDraft();
 		this.ctx.ui.requestRender();
 	}
 
@@ -719,11 +618,7 @@ export class UiHelpers {
 	queueCompactionMessage(text: string, mode: "steer" | "followUp", images?: ImageContent[]): void {
 		const queuedImages = images && images.length > 0 ? images : undefined;
 		this.ctx.compactionQueuedMessages.push({ text, mode, images: queuedImages } as CompactionQueuedMessage);
-		this.ctx.editor.addToHistory(text);
-		this.ctx.editor.setText("");
-		this.ctx.editor.imageLinks = undefined;
-		this.ctx.pendingImages = [];
-		this.ctx.pendingImageLinks = [];
+		this.ctx.editor.clearDraft(text);
 		this.ctx.updatePendingMessagesDisplay();
 		this.ctx.showStatus(
 			queuedImages ? "Queued message with image for after compaction" : "Queued message for after compaction",

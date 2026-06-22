@@ -160,8 +160,6 @@ export interface InteractiveModeContext {
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
 	proseOnlyThinking: boolean;
-	pendingImages: ImageContent[];
-	pendingImageLinks: (string | undefined)[];
 	compactionQueuedMessages: CompactionQueuedMessage[];
 	pendingTools: Map<string, ToolExecutionHandle>;
 	pendingBashComponents: BashExecutionComponent[];

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext, SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -32,12 +33,14 @@ type FakeEditor = {
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
 	clearCustomKeyHandlers(): void;
+	pendingImages: ImageContent[];
+	pendingImageLinks: (string | undefined)[];
 };
 
 function createSubmission(input: {
 	text: string;
-	images?: InteractiveModeContext["pendingImages"];
-	imageLinks?: InteractiveModeContext["pendingImageLinks"];
+	images?: ImageContent[];
+	imageLinks?: (string | undefined)[];
 }): SubmittedUserInput {
 	return {
 		text: input.text,
@@ -99,11 +102,7 @@ function createContext(): {
 	const updatePendingMessagesDisplay = vi.fn();
 	const prompt = vi.fn();
 	const startPendingSubmission = vi.fn(
-		(input: {
-			text: string;
-			images?: InteractiveModeContext["pendingImages"];
-			imageLinks?: InteractiveModeContext["pendingImageLinks"];
-		}) => {
+		(input: { text: string; images?: ImageContent[]; imageLinks?: (string | undefined)[] }) => {
 			ensureLoadingAnimation();
 			return createSubmission(input);
 		},
@@ -119,6 +118,8 @@ function createContext(): {
 		setActionKeys: vi.fn(),
 		setCustomKeyHandler: vi.fn(),
 		clearCustomKeyHandlers: vi.fn(),
+		pendingImages: [],
+		pendingImageLinks: [],
 	};
 
 	let ctx!: InteractiveModeContext;
@@ -173,8 +174,6 @@ function createContext(): {
 		keybindings: {
 			getKeys: () => [],
 		} as unknown as InteractiveModeContext["keybindings"],
-		pendingImages: [],
-		pendingImageLinks: [],
 		compactionQueuedMessages: [],
 		isBashMode: false,
 		isPythonMode: false,

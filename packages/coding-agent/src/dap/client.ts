@@ -400,7 +400,7 @@ export class DapClient {
 				framer.push(Buffer.from(value));
 
 				// Drain every complete message currently buffered.
-				for (const messageText of framer.drain((headerText) => {
+				for (const messageText of framer.drain(headerText => {
 					// Non-protocol bytes (e.g. an adapter printing to stdout).
 					// Drop past the bogus terminator and resync instead of
 					// stalling on the same junk header forever.
