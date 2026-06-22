@@ -9,6 +9,11 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { providerImageBudget } from "@oh-my-pi/snapcompact";
 
+const TOOL_RESULT_IMAGE_OMISSION: TextContent = {
+	type: "text",
+	text: "[image omitted: provider image limit]",
+};
+
 function countImages(context: Context): number {
 	let count = 0;
 	for (const message of context.messages) {
@@ -52,7 +57,8 @@ function clampDeveloperMessage(message: DeveloperMessage, state: { remainingDrop
 function clampToolResultMessage(message: ToolResultMessage, state: { remainingDrops: number }): ToolResultMessage {
 	if (state.remainingDrops <= 0) return message;
 	const content = clampContent(message.content, state);
-	return content ? { ...message, content } : message;
+	if (!content) return message;
+	return { ...message, content: content.length > 0 ? content : [TOOL_RESULT_IMAGE_OMISSION] };
 }
 
 /** Drops oldest transient image blocks so outgoing vision requests fit the active provider's image cap. */

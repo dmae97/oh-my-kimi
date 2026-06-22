@@ -69,6 +69,28 @@ describe("provider context image budgets", () => {
 		expect(imageData(context)).toEqual(Array.from({ length: 31 }, (_, index) => `image-${index}`));
 	});
 
+	it("keeps image-only tool results meaningful when every image block is dropped", () => {
+		const context: Context = {
+			systemPrompt: [],
+			tools: [],
+			messages: Array.from({ length: 11 }, (_, index) => ({
+				role: "toolResult",
+				toolCallId: `call-${index}`,
+				toolName: "inspect_image",
+				content: [image(`image-${index}`)],
+				isError: false,
+				timestamp: index,
+			})),
+		};
+
+		const clamped = clampProviderContextImages(context, UMANS_MODEL);
+		const firstMessage = clamped.messages[0];
+
+		expect(imageData(clamped)).toEqual(Array.from({ length: 10 }, (_, index) => `image-${index + 1}`));
+		expect(firstMessage?.role).toBe("toolResult");
+		expect(firstMessage?.content).toEqual([text("[image omitted: provider image limit]")]);
+	});
+
 	it("preserves context identity when the provider cap is not exceeded", () => {
 		const context: Context = {
 			systemPrompt: [],
