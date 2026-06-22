@@ -26,12 +26,15 @@ type AgentHelper = (prompt: string, opts?: Record<string, unknown>) => Promise<u
 describe("eval js agent() returnHandle", () => {
 	it("returns a DAG node carrying the agent:// handle when returnHandle is set", async () => {
 		let seenName: string | undefined;
-		const sandbox = loadPrelude(async name => {
+		let seenArgs: Record<string, unknown> | undefined;
+		const sandbox = loadPrelude(async (name, args) => {
 			seenName = name;
+			seenArgs = args as Record<string, unknown>;
 			return { text: "hello world", details: { agent: "task", id: "abc123", model: "m", structured: false } };
 		});
 		const node = await (sandbox.agent as AgentHelper)("say hi", { returnHandle: true });
 		expect(seenName).toBe("__agent__");
+		expect(seenArgs?.returnHandle).toBe(true);
 		expect(node).toEqual({
 			text: "hello world",
 			output: "hello world",
@@ -69,5 +72,36 @@ describe("eval js agent() returnHandle", () => {
 		const sandbox = loadPrelude(async () => ({ text: "lonely" }));
 		const node = await (sandbox.agent as AgentHelper)("x", { returnHandle: true });
 		expect(node).toEqual({ text: "lonely", output: "lonely", handle: null, id: null, agent: null });
+	});
+
+	it("exposes patchPath/branchName/nestedPatches/changesApplied/isolated/isolationSummary on the handle", async () => {
+		const payload = JSON.stringify({ ok: true });
+		const sandbox = loadPrelude(async () => ({
+			text: payload,
+			details: {
+				agent: "task",
+				id: "iso-1",
+				structured: true,
+				isolated: true,
+				patchPath: "/artifacts/iso-1.patch",
+				changesApplied: null,
+				nestedPatches: [{ relativePath: "nested", patch: "diff --git a/file b/file\n" }],
+				isolationSummary: "Isolation: changes captured at `/artifacts/iso-1.patch` (apply=false). Not applied.",
+			},
+		}));
+		const node = (await (sandbox.agent as AgentHelper)("scout", {
+			schema: { type: "object" },
+			isolated: true,
+			apply: false,
+			returnHandle: true,
+		})) as Record<string, unknown>;
+		expect(node.handle).toBe("agent://iso-1");
+		expect(node.data).toEqual({ ok: true });
+		expect(node.isolated).toBe(true);
+		expect(node.patchPath).toBe("/artifacts/iso-1.patch");
+		expect(node.nestedPatches).toEqual([{ relativePath: "nested", patch: "diff --git a/file b/file\n" }]);
+		expect(node.changesApplied).toBeNull();
+		expect(node.isolationSummary).toContain("/artifacts/iso-1.patch");
+		expect("branchName" in node).toBe(false);
 	});
 });

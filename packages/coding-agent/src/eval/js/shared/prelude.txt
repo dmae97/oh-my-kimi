@@ -117,9 +117,15 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 	};
 
 	const agent = async (prompt, opts, ...rest) => {
-		const o = optionsArg("agent", opts, rest, ["agentType", "model", "label", "schema"], "{ agentType, model, label, schema, returnHandle }");
+		const o = optionsArg(
+			"agent",
+			opts,
+			rest,
+			["agentType", "model", "label", "schema", "isolated", "apply", "merge"],
+			"{ agentType, model, label, schema, isolated, apply, merge, returnHandle }",
+		);
 		const { returnHandle, ...callArgs } = o;
-		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs });
+		const res = await globalThis.__omp_call_tool__("__agent__", { prompt, ...callArgs, returnHandle: Boolean(returnHandle) });
 		const text = res && typeof res === "object" ? res.text : res;
 		const parsed = hasOwn(callArgs, "schema") ? JSON.parse(text) : text;
 		if (!returnHandle) return parsed;
@@ -129,6 +135,9 @@ if (!globalThis.__omp_js_prelude_loaded__) {
 		}
 		const node = { text, output: text, handle: `agent://${details.id}`, id: details.id, agent: details.agent ?? null };
 		if (hasOwn(callArgs, "schema")) node.data = parsed;
+		for (const key of ["isolated", "patchPath", "branchName", "nestedPatches", "changesApplied", "isolationSummary"]) {
+			if (details[key] !== undefined) node[key] = details[key];
+		}
 		return node;
 	};
 

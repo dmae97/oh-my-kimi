@@ -734,7 +734,7 @@ function completion(prompt::String; model="default", system=nothing, schema=noth
     return schema === nothing ? text : Main.json_parse(string(text))
 end
 
-function agent(prompt::String; agent_type="task", model=nothing, label=nothing, schema=nothing, return_handle=false, kwargs...)
+function agent(prompt::String; agent_type="task", model=nothing, label=nothing, schema=nothing, isolated=nothing, apply=nothing, merge=nothing, return_handle=false, kwargs...)
     args_dict = Dict{String, Any}("prompt" => prompt)
     if agent_type !== nothing
         args_dict["agentType"] = agent_type
@@ -748,6 +748,17 @@ function agent(prompt::String; agent_type="task", model=nothing, label=nothing, 
     if schema !== nothing
         args_dict["schema"] = schema
     end
+    # Isolation knobs mirror the `task` tool: strict opt-in via `isolated`,
+    # with `apply`/`merge` controlling the post-run patch/branch merge.
+    if isolated !== nothing
+        args_dict["isolated"] = Bool(isolated)
+    end
+    if apply !== nothing
+        args_dict["apply"] = Bool(apply)
+    end
+    if merge !== nothing
+        args_dict["merge"] = Bool(merge)
+    end
     handle_result = return_handle
     for (k, v) in kwargs
         key = string(k)
@@ -758,6 +769,10 @@ function agent(prompt::String; agent_type="task", model=nothing, label=nothing, 
         else
             args_dict[key] = v
         end
+    end
+    # Tell the bridge a handle is wanted so it preserves the backing artifacts.
+    if handle_result
+        args_dict["returnHandle"] = true
     end
     res = __omp_call_bridge("__agent__", args_dict)
     text = res isa AbstractDict ? get(res, "text", res) : res
@@ -778,6 +793,18 @@ function agent(prompt::String; agent_type="task", model=nothing, label=nothing, 
     )
     if schema !== nothing
         node["data"] = parsed
+    end
+    for (src_key, dst_key) in (
+        ("isolated", "isolated"),
+        ("patchPath", "patch_path"),
+        ("branchName", "branch_name"),
+        ("nestedPatches", "nested_patches"),
+        ("changesApplied", "changes_applied"),
+        ("isolationSummary", "isolation_summary"),
+    )
+        if haskey(details, src_key)
+            node[dst_key] = details[src_key]
+        end
     end
     return node
 end

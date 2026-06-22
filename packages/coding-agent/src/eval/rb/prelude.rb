@@ -577,12 +577,19 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
     schema.nil? ? text : JSON.parse(text)
   end
 
-  def agent(prompt, agent_type: "task", model: nil, label: nil, schema: nil, return_handle: false)
+  def agent(prompt, agent_type: "task", model: nil, label: nil, schema: nil, isolated: nil, apply: nil, merge: nil, return_handle: false)
     args = { "prompt" => prompt }
     args["agentType"] = agent_type unless agent_type.nil?
     args["model"] = model unless model.nil?
     args["label"] = label unless label.nil?
     args["schema"] = schema unless schema.nil?
+    # Isolation knobs mirror the `task` tool: strict opt-in via `isolated`,
+    # with `apply`/`merge` controlling the post-run patch/branch merge.
+    args["isolated"] = !!isolated unless isolated.nil?
+    args["apply"] = !!apply unless apply.nil?
+    args["merge"] = !!merge unless merge.nil?
+    # Tell the bridge a handle is wanted so it preserves the backing artifacts.
+    args["returnHandle"] = true if return_handle
     res = OmpBridge.call("__agent__", args)
     text = res.is_a?(Hash) ? res["text"] : res
     parsed = schema.nil? ? text : JSON.parse(text)
@@ -599,6 +606,16 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
       "agent" => details["agent"],
     }
     node["data"] = parsed unless schema.nil?
+    {
+      "isolated" => "isolated",
+      "patchPath" => "patch_path",
+      "branchName" => "branch_name",
+      "nestedPatches" => "nested_patches",
+      "changesApplied" => "changes_applied",
+      "isolationSummary" => "isolation_summary",
+    }.each do |src_key, dst_key|
+      node[dst_key] = details[src_key] if details.key?(src_key)
+    end
     node
   end
 

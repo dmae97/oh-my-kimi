@@ -520,7 +520,7 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, return_handle=False):
+    def agent(prompt, *, agent_type="task", model=None, label=None, schema=None, isolated=None, apply=None, merge=None, return_handle=False):
         """Run a subagent and return its final output.
 
         `agent_type` selects the subagent definition (default "task"). Pass
@@ -529,14 +529,35 @@ if "__omp_prelude_loaded__" not in globals():
         supplied the parsed object is returned. Share background by writing a
         local:// file and referencing it in the prompt.
 
+        Pass `isolated=True` to run the subagent inside an isolation worktree
+        (copy-on-write of the parent repo) so parallel `agent()` spawns can
+        edit overlapping files safely. Strict opt-in, mirroring the `task`
+        tool: the default is non-isolated regardless of `task.isolation.mode`.
+        `isolated=True` while the setting is `"none"` errors out instead of
+        silently downgrading.
+
+        When isolated, `apply=False` keeps captured changes inside the
+        worktree and surfaces the root patch path, branch name, and nested
+        repository patches through the DAG node dict (combine with
+        `return_handle=True` to receive them — see below; the bare return type
+        stays bytes/string/parsed object and has nowhere to expose artifacts).
+        `merge=False` forces patch mode even when `task.isolation.merge` is
+        `"branch"`, avoiding the per-call git lock + repo mutation that branch
+        mode performs.
+
         Set `return_handle=True` to receive a DAG node dict instead of bare
         text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
         is the spawned agent's recoverable ``agent://<id>`` URI. A downstream
         ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
         in its prompt so a large transcript flows through the graph by
         reference, never re-inlined. When ``schema`` is also set the parsed
-        object lands under ``"data"``. If the bridge returns no recoverable id
-        the node still resolves with ``handle=None`` — the helper never throws.
+        object lands under ``"data"``. When the spawn ran isolated the node
+        also carries ``"isolated"`` and, when present, ``"patch_path"``,
+        ``"branch_name"``, ``"nested_patches"``, ``"changes_applied"``
+        (``True``/``False``/``None`` — ``None`` means ``apply=False``), and
+        ``"isolation_summary"``. If
+        the bridge returns no recoverable id the node still resolves with
+        ``handle=None`` — the helper never throws.
         """
         args = {"prompt": prompt}
         if agent_type is not None:
@@ -547,6 +568,14 @@ if "__omp_prelude_loaded__" not in globals():
             args["label"] = label
         if schema is not None:
             args["schema"] = schema
+        if isolated is not None:
+            args["isolated"] = bool(isolated)
+        if apply is not None:
+            args["apply"] = bool(apply)
+        if merge is not None:
+            args["merge"] = bool(merge)
+        if return_handle:
+            args["returnHandle"] = True
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
         parsed = json.loads(text) if schema is not None else text
@@ -564,6 +593,16 @@ if "__omp_prelude_loaded__" not in globals():
         }
         if schema is not None:
             node["data"] = parsed
+        for src_key, dst_key in (
+            ("isolated", "isolated"),
+            ("patchPath", "patch_path"),
+            ("branchName", "branch_name"),
+            ("nestedPatches", "nested_patches"),
+            ("changesApplied", "changes_applied"),
+            ("isolationSummary", "isolation_summary"),
+        ):
+            if src_key in details:
+                node[dst_key] = details[src_key]
         return node
 
     def _concurrency_limit():
