@@ -62,6 +62,10 @@ const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.Hig
 const LOW_MEDIUM_HIGH_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
 const GLM_52_HIGH_MAX_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.XHigh];
 
+const FUGU_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.XHigh];
+const FUGU_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
+	[Effort.XHigh]: "max",
+};
 type EffortMap = Partial<Record<Effort, string>>;
 
 const GROQ_QWEN3_32B_REASONING_EFFORT_MAP: Readonly<EffortMap> = {
@@ -306,6 +310,9 @@ function getModelDefinedEfforts<TApi extends Api>(
 			return GLM_52_HIGH_MAX_REASONING_EFFORTS;
 		}
 	}
+	if (isSakanaFuguReasoningModel(spec)) {
+		return FUGU_REASONING_EFFORTS;
+	}
 	return isOpenAICompatReasoningApi(spec.api) &&
 		(isMinimaxM2FamilyModelId(spec.id) ||
 			isOpenAIGptOssModelId(spec.id) ||
@@ -382,6 +389,9 @@ function inferDetectedEffortMap<TApi extends Api>(
 	if (isOllamaCloudGlm52ReasoningEffortModel(spec)) {
 		return GLM_52_XHIGH_MAX_EFFORT_MAP;
 	}
+	if (isSakanaFuguReasoningModel(spec)) {
+		return FUGU_REASONING_EFFORT_MAP;
+	}
 	if (!isOpenAICompatReasoningApi(spec.api)) {
 		return undefined;
 	}
@@ -403,6 +413,10 @@ function inferDetectedEffortMap<TApi extends Api>(
 		map = { ...map, ...GLM_52_XHIGH_MAX_EFFORT_MAP };
 	}
 	return map;
+}
+
+function isSakanaFuguReasoningModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return spec.provider === "sakana" && /^fugu(?:$|-)/i.test(spec.id);
 }
 
 function isDeepseekReasoningModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {

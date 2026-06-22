@@ -37,6 +37,7 @@ import {
 	isKimiK27CodeModelId,
 	MODELS_DEV_PROVIDER_DESCRIPTORS,
 	mapModelsDevToModels,
+	SAKANA_FUGU_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
 import type { ModelSpec } from "../src/types";
@@ -490,6 +491,12 @@ async function generateModels() {
 	// Mythos 5). Deduped behind upstream entries; metadata is pinned in
 	// applyAnthropicCatalogPolicy.
 	allModels.push(...ANTHROPIC_CURATED_FALLBACK_MODELS);
+	// Seed Sakana's documented Fugu models so the provider is usable when
+	// catalog generation has no live API key. If live `/v1/models` succeeds,
+	// Sakana is authoritative and stale seed IDs must stay out.
+	if (!authoritativeCatalogProviders.has("sakana")) {
+		allModels.push(...SAKANA_FUGU_STATIC_MODELS);
+	}
 	// Seed Fireworks "Fast" serving-path variants (`<id>-fast`). Fast routers are
 	// not enumerated by the serverless control-plane list, so discovery never
 	// surfaces them; the seed projects each base entry into a fast variant.

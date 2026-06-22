@@ -2521,6 +2521,100 @@ export function moonshotModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 16.5 Sakana AI
+// ---------------------------------------------------------------------------
+
+const SAKANA_DEFAULT_BASE_URL = "https://api.sakana.ai/v1";
+const SAKANA_FREE_ROUTER_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+const SAKANA_FUGU_ULTRA_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
+const SAKANA_FUGU_THINKING: ThinkingConfig = {
+	mode: "effort",
+	efforts: [Effort.High, Effort.XHigh],
+	effortMap: { [Effort.XHigh]: "max" },
+};
+const SAKANA_RESPONSES_COMPAT: ModelSpec<"openai-responses">["compat"] = {
+	includeEncryptedReasoning: false,
+};
+
+function normalizeSakanaBaseUrl(baseUrl: string | undefined): string {
+	const value = baseUrl?.trim() || SAKANA_DEFAULT_BASE_URL;
+	const normalized = value.replace(/\/+$/, "");
+	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+function isSakanaFuguModelId(modelId: string): boolean {
+	return /^fugu(?:$|-)/i.test(modelId);
+}
+
+function createSakanaFuguStaticModel(
+	id: string,
+	name: string,
+	cost: ModelSpec<"openai-responses">["cost"],
+): ModelSpec<"openai-responses"> {
+	return {
+		id,
+		name,
+		api: "openai-responses",
+		provider: "sakana",
+		baseUrl: SAKANA_DEFAULT_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		cost: { ...cost },
+		contextWindow: null,
+		maxTokens: null,
+		thinking: { ...SAKANA_FUGU_THINKING },
+		compat: { ...SAKANA_RESPONSES_COMPAT },
+	};
+}
+
+export const SAKANA_FUGU_STATIC_MODELS: readonly ModelSpec<"openai-responses">[] = [
+	createSakanaFuguStaticModel("fugu", "Fugu", SAKANA_FREE_ROUTER_COST),
+	createSakanaFuguStaticModel("fugu-ultra", "Fugu Ultra", SAKANA_FUGU_ULTRA_COST),
+	createSakanaFuguStaticModel("fugu-ultra-20260615", "Fugu Ultra 20260615", SAKANA_FUGU_ULTRA_COST),
+];
+
+const SAKANA_FUGU_STATIC_MODEL_BY_ID = new Map(SAKANA_FUGU_STATIC_MODELS.map(model => [model.id, model] as const));
+
+export interface SakanaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function sakanaModelManagerOptions(config?: SakanaModelManagerConfig): ModelManagerOptions<"openai-responses"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = normalizeSakanaBaseUrl(config?.baseUrl ?? Bun.env.SAKANA_BASE_URL ?? Bun.env.FUGU_BASE_URL);
+	const references = createBundledReferenceMap<"openai-responses">("sakana");
+	return {
+		providerId: "sakana",
+		dynamicModelsAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-responses",
+					provider: "sakana",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id) ?? SAKANA_FUGU_STATIC_MODEL_BY_ID.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						if (!reference && isSakanaFuguModelId(model.id)) {
+							return {
+								...model,
+								reasoning: true,
+								thinking: { ...SAKANA_FUGU_THINKING },
+								compat: { ...SAKANA_RESPONSES_COMPAT },
+							};
+						}
+						return model;
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 17. Qwen Portal
 // ---------------------------------------------------------------------------
 

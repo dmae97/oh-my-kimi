@@ -130,6 +130,17 @@ export interface OpenAIRequestSetup {
 	requestHeaders: Record<string, string>;
 }
 
+function normalizeSakanaRequestBaseUrl(baseUrl: string | undefined): string | undefined {
+	const value = baseUrl?.trim();
+	if (!value) return undefined;
+	const normalized = value.replace(/\/+$/, "");
+	return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+function resolveSakanaRequestBaseUrl(): string | undefined {
+	return normalizeSakanaRequestBaseUrl($env.SAKANA_BASE_URL) ?? normalizeSakanaRequestBaseUrl($env.FUGU_BASE_URL);
+}
+
 export function resolveOpenAIRequestSetup(
 	model: OpenAIRequestSetupModel,
 	options: OpenAIRequestSetupOptions,
@@ -163,6 +174,12 @@ export function resolveOpenAIRequestSetup(
 		const moonshotBaseUrl = $env.MOONSHOT_BASE_URL?.trim();
 		if (moonshotBaseUrl) {
 			baseUrl = moonshotBaseUrl;
+		}
+	}
+	if (model.provider === "sakana") {
+		const sakanaBaseUrl = resolveSakanaRequestBaseUrl();
+		if (sakanaBaseUrl) {
+			baseUrl = sakanaBaseUrl;
 		}
 	}
 	if (model.provider === "github-copilot") {

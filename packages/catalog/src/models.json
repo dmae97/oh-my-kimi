@@ -69242,6 +69242,104 @@
 			"maxTokens": 8192
 		}
 	},
+	"sakana": {
+		"fugu": {
+			"id": "fugu",
+			"name": "Fugu",
+			"api": "openai-responses",
+			"provider": "sakana",
+			"baseUrl": "https://api.sakana.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
+			},
+			"compat": {
+				"includeEncryptedReasoning": false
+			}
+		},
+		"fugu-ultra": {
+			"id": "fugu-ultra",
+			"name": "Fugu Ultra",
+			"api": "openai-responses",
+			"provider": "sakana",
+			"baseUrl": "https://api.sakana.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
+			},
+			"compat": {
+				"includeEncryptedReasoning": false
+			}
+		},
+		"fugu-ultra-20260615": {
+			"id": "fugu-ultra-20260615",
+			"name": "Fugu Ultra 20260615",
+			"api": "openai-responses",
+			"provider": "sakana",
+			"baseUrl": "https://api.sakana.ai/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 5,
+				"output": 30,
+				"cacheRead": 0.5,
+				"cacheWrite": 0
+			},
+			"contextWindow": null,
+			"maxTokens": null,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"xhigh": "max"
+				}
+			},
+			"compat": {
+				"includeEncryptedReasoning": false
+			}
+		}
+	},
 	"synthetic": {
 		"hf:MiniMaxAI/MiniMax-M3": {
 			"id": "hf:MiniMaxAI/MiniMax-M3",

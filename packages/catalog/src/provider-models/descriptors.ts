@@ -35,6 +35,7 @@ import {
 	openrouterModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
+	sakanaModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
 	umansModelManagerOptions,
@@ -307,6 +308,14 @@ export const CATALOG_PROVIDERS = [
 			label: "Qwen Portal",
 			oauthProvider: "qwen-portal",
 		},
+	},
+	{
+		id: "sakana",
+		defaultModel: "fugu",
+		envVars: ["SAKANA_API_KEY", "FUGU_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => sakanaModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Sakana AI" },
 	},
 	{
 		id: "synthetic",

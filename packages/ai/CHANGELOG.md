@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for Sakana AI provider
+- Added Sakana AI login and request base URL support for `SAKANA_*` / `FUGU_*` environment variables
 
 ### Changed
 

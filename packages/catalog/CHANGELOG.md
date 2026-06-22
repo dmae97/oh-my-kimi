@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added Sakana AI provider support with Fugu model integration
+- Added Sakana AI/Fugu provider catalog entries with Fugu model discovery and Responses API metadata
 - Added support for "xhigh" reasoning tier across model configurations
 - Added configuration for new models GCP-5.4 Mini, GPT-5.5, and variants
 - Added `devin` variant collapse table to streamline model tiering

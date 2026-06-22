@@ -44,6 +44,7 @@ import { parallelProvider } from "./parallel";
 import { perplexityProvider } from "./perplexity";
 import { qianfanProvider } from "./qianfan";
 import { qwenPortalProvider } from "./qwen-portal";
+import { sakanaProvider } from "./sakana";
 import { syntheticProvider } from "./synthetic";
 import { tavilyProvider } from "./tavily";
 import { togetherProvider } from "./together";
@@ -90,6 +91,7 @@ const ALL = [
 	zhipuCodingPlanProvider,
 	umansProvider,
 	qwenPortalProvider,
+	sakanaProvider,
 	minimaxCodeProvider,
 	minimaxCodeCnProvider,
 	xiaomiProvider,
