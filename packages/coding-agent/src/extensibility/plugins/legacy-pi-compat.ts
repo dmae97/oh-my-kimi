@@ -120,7 +120,7 @@ export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path
 	}
 	const parent = pathImpl.dirname(metaDir);
 	if (pathImpl.basename(pathImpl.normalize(parent)) === "root") {
-		return parent + pathImpl.sep + "packages";
+		return `${parent + pathImpl.sep}packages`;
 	}
 	return pathImpl.join(metaDir, "packages");
 }
