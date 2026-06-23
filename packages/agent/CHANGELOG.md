@@ -13,6 +13,9 @@
 ### Fixed
 
 - Hardened the agent-loop cooperative yield against backward wall-clock jumps. A stale future timestamp left in the shared yield gate (NTP step, or a fake-timer test mocking `Date.now`) could make `yieldIfDue()` gate forever and stop yielding to the event loop; the gate now treats a backward clock delta as due and re-anchors. The gate is exposed as an injectable `YieldGate` (with `yieldIfDue()` retained as the shared singleton) so it can be exercised without mocking process-global timers.
+### Added
+
+- Added an optional `cwdResolver` to `Agent` (and a `getCwd` per-call resolver on `AgentLoopConfig`) that is read once per LLM call to resolve the working directory, overriding the static `cwd` (falling back to it when the resolver returns `undefined`). Lets a host reflect a session move into provider options without reconstructing the agent — workspace-scoped provider discovery (e.g. GitLab Duo Agent namespace/project) now follows the live directory instead of the directory captured at construction.
 
 ## [16.1.16] - 2026-06-23
 
