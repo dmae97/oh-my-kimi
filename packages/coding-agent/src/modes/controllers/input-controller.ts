@@ -27,6 +27,27 @@ import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } fr
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
+/**
+ * Slash commands that may carry secrets in their arguments should never be
+ * persisted to history. /login <url> receives an OAuth callback URL containing
+ * code= and state= params. /mcp add --token <token> receives a bearer token.
+ */
+export function shouldSkipHistory(slashText: string): boolean {
+	if (!slashText.startsWith("/")) return false;
+	const name = slashText.slice(1).split(/\s+/, 1)[0];
+	// /login <url> — the redirect URL carries OAuth code= and state= params.
+	// /login <provider> (e.g. "anthropic") is safe — it just opens the selector.
+	if (name === "login" && slashText.length > "/login".length) {
+		const arg = slashText.slice("/login".length).trim();
+		return arg.includes("://") || arg.startsWith("http");
+	}
+	if (name === "mcp") {
+		const args = slashText.slice("/mcp".length).trim();
+		return args.startsWith("add") && /--token\s/.test(args);
+	}
+	return false;
+}
+
 interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
@@ -572,6 +593,7 @@ export class InputController {
 				ctx: this.ctx,
 			});
 			if (slashResult === true) {
+				if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 				return;
 			}
 			if (typeof slashResult === "string") {
@@ -1011,6 +1033,7 @@ export class InputController {
 			ctx: this.ctx,
 		});
 		if (slashResult === true) {
+			if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 			return;
 		}
 		if (typeof slashResult === "string") {

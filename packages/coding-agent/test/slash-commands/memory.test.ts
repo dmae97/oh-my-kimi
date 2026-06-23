@@ -26,7 +26,6 @@ describe("/memory slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/memory view", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/memory view");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleMemoryCommand).toHaveBeenCalledWith("/memory view");
 	});
@@ -37,7 +36,6 @@ describe("/memory slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/memory    stats", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/memory    stats");
 		expect(harness.handleMemoryCommand).toHaveBeenCalledWith("/memory    stats");
 	});
 });

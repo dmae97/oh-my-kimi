@@ -4,7 +4,9 @@
 
 ### Fixed
 
+- Slash commands are now recorded in input history (Up Arrow recall). Previously only 4 commands (`/plan`, `/goal`, `/mcp`, `/ssh`) stored their text; all other built-in slash commands were silently skipped because `executeBuiltinSlashCommand` returned `true` before `addToHistory` was called. History is now centralized in the input controller after successful command dispatch. Commands that may carry secrets (`/login <url>` with OAuth callback params, `/mcp add --token <token>`) are excluded from history to prevent credential leakage ([#3148](https://github.com/can1357/oh-my-pi/issues/3148))
 - Fixed all extension loading silently failing on the cross-compiled `omp-darwin-arm64` release binary (downloaded directly or via a Homebrew tap wrapper) because `__computeBunfsPackageRoot` mis-handled `import.meta.dir = "//root/omp-darwin-arm64"`. Bun 1.3.14 reports `<bunfs-root>/<binary-name>` for the compiled entry's `import.meta.dir`, but the pre-fix function joined `metaDir + "packages"` and produced `/root/omp-darwin-arm64/packages` — the binary basename was baked into every bunfs path, so the TypeBox/legacy-pi shims and every `@oh-my-pi/pi-*` package-root override failed `existsSync` validation and `resolveCanonicalPiSpecifier` fell through to a bunfs `Bun.resolveSync` that also could not find the module. The function now detects the bunfs-root + binary-basename shape (`path.basename(path.dirname(metaDir)) === "root"`) and strips the trailing binary segment by slicing the original `metaDir`; the production bunfs shim join path also preserves Bun's bunfs-native `//root` / `B:\~BUN\root` prefix that `path.join` would otherwise collapse. ([#3329](https://github.com/can1357/oh-my-pi/issues/3329))
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes

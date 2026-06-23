@@ -26,7 +26,6 @@ describe("/btw slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/btw why is it doing that?", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/btw why is it doing that?");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleBtwCommand).toHaveBeenCalledWith("why is it doing that?");
 	});
@@ -40,17 +39,15 @@ describe("/btw slash command", () => {
 		);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/btw    explain why the cache reuse matters here");
 		expect(harness.handleBtwCommand).toHaveBeenCalledWith("explain why the cache reuse matters here");
 	});
 
-	it("does not add a blank /btw invocation to history", async () => {
+	it("handles a blank /btw invocation without error", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/btw   ", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleBtwCommand).toHaveBeenCalledWith("");
 	});
