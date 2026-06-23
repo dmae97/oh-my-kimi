@@ -609,7 +609,10 @@ export class InputController {
 				return;
 			}
 			if (typeof slashResult === "string") {
-				// Command handled but returned remaining text to use as prompt
+				// Command handled but returned remaining text to use as prompt.
+				// Record the original slash command text so Up Arrow recalls
+				// "/loop 10 fix bug" rather than just "fix bug".
+				if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 				text = slashResult;
 			}
 
@@ -1049,6 +1052,9 @@ export class InputController {
 			return;
 		}
 		if (typeof slashResult === "string") {
+			// Command handled but returned remaining text to use as prompt.
+			// Record the original slash command text so Up Arrow recalls it.
+			if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 			text = slashResult;
 		}
 
