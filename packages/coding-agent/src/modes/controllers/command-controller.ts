@@ -6,6 +6,7 @@ import {
 	getEnvApiKey,
 	getProviderDetails,
 	type ProviderDetails,
+	resolveUsedFraction,
 	type UsageLimit,
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
@@ -1306,22 +1307,10 @@ export function renderProviderSection(details: ProviderDetails, uiTheme: Pick<ty
 	return `${lines.join("\n")}\n`;
 }
 
-function resolveFraction(limit: UsageLimit): number | undefined {
-	const amount = limit.amount;
-	if (amount.usedFraction !== undefined) return amount.usedFraction;
-	if (amount.used !== undefined && amount.limit !== undefined && amount.limit > 0) {
-		return amount.used / amount.limit;
-	}
-	if (amount.unit === "percent" && amount.used !== undefined) {
-		return amount.used / 100;
-	}
-	return undefined;
-}
-
 function resolveProviderUsageTotal(reports: UsageReport[]): number {
 	return reports
 		.flatMap(report => report.limits)
-		.map(limit => resolveFraction(limit) ?? 0)
+		.map(limit => resolveUsedFraction(limit) ?? 0)
 		.reduce((sum, value) => sum + value, 0);
 }
 
@@ -1432,7 +1421,7 @@ function resolveAggregateStatus(limits: UsageLimit[]): UsageLimit["status"] {
 
 function formatAggregateAmount(limits: UsageLimit[]): string {
 	const fractions = limits
-		.map(limit => resolveFraction(limit))
+		.map(limit => resolveUsedFraction(limit))
 		.filter((value): value is number => value !== undefined);
 	if (fractions.length === limits.length && fractions.length > 0) {
 		const sum = fractions.reduce((total, value) => total + value, 0);
@@ -1489,7 +1478,7 @@ function resolveStatusColor(status: UsageLimit["status"]): "success" | "warning"
 }
 
 function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: number): string {
-	const fraction = resolveFraction(limit);
+	const fraction = resolveUsedFraction(limit);
 	if (fraction === undefined) {
 		return uiTheme.fg("dim", "·".repeat(barWidth));
 	}
@@ -1610,7 +1599,7 @@ function renderUsageReports(
 			const entries = group.limits.map((limit, index) => ({
 				limit,
 				report: group.reports[index],
-				fraction: resolveFraction(limit),
+				fraction: resolveUsedFraction(limit),
 				index,
 			}));
 			entries.sort((a, b) => {
