@@ -688,25 +688,25 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			}
 
 			const isRootPrefix =
-				rawPrefix === "" ||
+				expandedPrefix === "" ||
 				rawPrefix === "./" ||
-				rawPrefix === "../" ||
-				rawPrefix === "~" ||
-				rawPrefix === "~/" ||
-				rawPrefix === "/" ||
-				(isAtPrefix && rawPrefix === "");
+				expandedPrefix === "../" ||
+				expandedPrefix === "~" ||
+				expandedPrefix === "~/" ||
+				expandedPrefix === "/" ||
+				(isAtPrefix && expandedPrefix === "");
 
 			if (isRootPrefix) {
 				// Complete from specified position
-				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
 				}
 				searchPrefix = "";
-			} else if (rawPrefix.endsWith("/")) {
+			} else if (expandedPrefix.endsWith("/")) {
 				// If prefix ends with /, show contents of that directory
-				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
@@ -716,7 +716,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				// Split into directory and file prefix
 				const dir = path.dirname(expandedPrefix);
 				const file = path.basename(expandedPrefix);
-				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = dir;
 				} else {
 					searchDir = path.join(this.#basePath, dir);
