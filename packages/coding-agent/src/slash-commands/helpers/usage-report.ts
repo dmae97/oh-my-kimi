@@ -1,4 +1,5 @@
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
+import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { OAuthAccountIdentity } from "../../session/auth-storage";
 import type { SlashCommandRuntime } from "../types";
 import { reportMatchesActiveAccount } from "./active-oauth-account";
@@ -54,7 +55,7 @@ function renderUsageReports(
 		const activeAccount = resolveActiveAccount?.(provider);
 		// Provider-wide disclaimers render once per provider, not per limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
-		for (const note of providerNotes) lines.push(`  ${note}`);
+		for (const note of providerNotes) lines.push(`  ${sanitizeText(note)}`);
 		for (const report of providerReports) {
 			const inUse = reportMatchesActiveAccount(report, activeAccount);
 			const savedResets = report.resetCredits?.availableCount ?? 0;
