@@ -99,8 +99,9 @@ const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
  *   1.2.x and early 1.3.x). Append `packages` for the canonical layout.
  * - the bunfs mount root followed by the binary's basename — `//root/<bin>`
  *   on POSIX or `<drive>:\~BUN\root\<bin>.exe` on Windows (observed on Bun
- *   1.3.14, e.g. the Homebrew `omp-darwin-arm64` build — issue #3329). The
- *   trailing segment is stripped so the result still lands on `<root>/packages`.
+ *   1.3.14 with the cross-compiled `omp-darwin-arm64` release asset — issue
+ *   #3329). The trailing segment is stripped so the result still lands on
+ *   `<root>/packages`.
  * - the module's own source directory if a future Bun release switches to
  *   module-specific `import.meta.dir` values:
  *   `<bunfs>/packages/coding-agent/src/extensibility/plugins`.

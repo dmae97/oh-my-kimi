@@ -36,11 +36,11 @@ describe("legacy pi compat bunfs root computation (issue #1514)", () => {
 	});
 
 	it("strips the trailing binary-name segment when Bun reports `<bunfs-root>/<binary>` (issue #3329)", () => {
-		// Bun 1.3.14 on the Homebrew darwin-arm64 compiled binary reports
-		// `import.meta.dir` as `//root/omp-darwin-arm64`. The leading `//`
-		// is part of Bun's bunfs identifier — `path.posix.join("//root", ...)`
-		// would collapse it to `/root`, so the strip path must preserve the
-		// original prefix verbatim.
+		// Bun 1.3.14 on the cross-compiled `omp-darwin-arm64` release asset
+		// reports `import.meta.dir` as `//root/omp-darwin-arm64`. The leading
+		// `//` is part of Bun's bunfs identifier — `path.posix.join("//root",
+		// ...)` would collapse it to `/root`, so the strip path must preserve
+		// the original prefix verbatim.
 		expect(__computeBunfsPackageRoot("//root/omp-darwin-arm64", path.posix)).toBe("//root/packages");
 		// `$bunfs`-prefixed variant is also handled.
 		expect(__computeBunfsPackageRoot("/$bunfs/root/omp", path.posix)).toBe("/$bunfs/root/packages");
