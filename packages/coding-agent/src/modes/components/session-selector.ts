@@ -501,6 +501,13 @@ export interface SessionSelectorOptions {
 export class SessionSelectorComponent extends Container {
 	#sessionList: SessionList;
 	#confirmationDialog: HookSelectorComponent | null = null;
+	// Hosts whichever of `#sessionList` / `#confirmationDialog` is live this
+	// frame. The delete dialog REPLACES the list in this slot rather than being
+	// appended below the picker chrome, so the picker is always
+	// `chrome + max(list, dialog) + chrome` and never overflows the viewport
+	// (issue #3283: an overflowing dialog frame committed the header into
+	// scrollback, stranding it above the viewport once the dialog closed).
+	#contentSlot: Container;
 	#messageContainer: Container;
 	#headerText: Text;
 	#onDelete?: (session: SessionInfo) => Promise<boolean>;
@@ -562,7 +569,9 @@ export class SessionSelectorComponent extends Container {
 				void this.#toggleScope();
 			};
 		}
-		this.addChild(this.#sessionList);
+		this.#contentSlot = new Container();
+		this.#contentSlot.addChild(this.#sessionList);
+		this.addChild(this.#contentSlot);
 	}
 
 	#headerLabel(): string {
@@ -623,6 +632,15 @@ export class SessionSelectorComponent extends Container {
 
 	#showDeleteConfirmation(session: SessionInfo): void {
 		const displayName = session.title || session.firstMessage.slice(0, 40) || session.id;
+		const closeDialog = () => {
+			this.#confirmationDialog = null;
+			// Restore the SessionList into the content slot so the picker is back
+			// to its normal layout on the very next render — the same frame the
+			// dialog disappears.
+			this.#contentSlot.clear();
+			this.#contentSlot.addChild(this.#sessionList);
+			this.#onRequestRender?.();
+		};
 		this.#confirmationDialog = new HookSelectorComponent(
 			`Delete session?\n${displayName}`,
 			["Yes", "No"],
@@ -638,22 +656,18 @@ export class SessionSelectorComponent extends Container {
 						this.#showError(err instanceof Error ? err.message : String(err));
 					}
 				}
-				// Close confirmation dialog
-				this.removeChild(this.#confirmationDialog!);
-				this.#confirmationDialog = null;
-				// Request rerender
-				this.#onRequestRender?.();
+				closeDialog();
 			},
-			() => {
-				// Cancel - close confirmation dialog
-				this.removeChild(this.#confirmationDialog!);
-				this.#confirmationDialog = null;
-				// Request rerender
-				this.#onRequestRender?.();
-			},
+			closeDialog,
 		);
-		// Show confirmation dialog
-		this.addChild(this.#confirmationDialog);
+		// Swap the SessionList out of the content slot and mount the dialog in its
+		// place: the dialog competes only with the SessionList's rendered budget,
+		// never the SessionList AND the picker chrome, so the picker frame stays
+		// inside the terminal viewport and the TUI never commits the header into
+		// scrollback (issue #3283).
+		this.#contentSlot.clear();
+		this.#contentSlot.addChild(this.#confirmationDialog);
+		this.#onRequestRender?.();
 	}
 
 	/**
@@ -671,7 +685,7 @@ export class SessionSelectorComponent extends Container {
 		const lines: string[] = [];
 		for (const child of this.children) {
 			const childLines = child.render(width);
-			if (child === this.#sessionList) this.#listLineOffset = lines.length;
+			if (child === this.#contentSlot) this.#listLineOffset = lines.length;
 			for (const line of childLines) lines.push(line);
 		}
 		const footer = this.#footerLines(width);
