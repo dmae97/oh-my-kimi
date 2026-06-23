@@ -1684,13 +1684,15 @@ const streamAnthropicOnce = (
 				// `context_management.clear_thinking_20251015` requires this beta. OAuth
 				// requests carry it in `claudeCodeAgentBetaDefaults`; API-key requests
 				// need it added explicitly so the field is honored instead of rejected
-				// (#3288). Skip Copilot — its proxy strips Anthropic betas and the
-				// upstream compat flag demotes thinking blocks to text, so there is
-				// nothing for `keep: "all"` to preserve.
+				// (#3288). Skip transports where this package cannot deliver the beta
+				// in the form their adapter accepts: Copilot strips Anthropic betas,
+				// and Vertex rawPredict needs betas in the body (`anthropic_beta`),
+				// not as an `anthropic-beta` HTTP header.
 				if (
 					model.reasoning &&
 					options?.thinkingEnabled &&
 					model.provider !== "github-copilot" &&
+					model.provider !== "google-vertex" &&
 					!extraBetas.includes(contextManagementBeta)
 				) {
 					extraBetas.push(contextManagementBeta);
@@ -2970,10 +2972,13 @@ function buildParams(
 	// `context-management-2025-06-27` beta to caller-owned SDK clients. Skip
 	// Copilot because its proxy strips Anthropic betas and demotes thinking
 	// blocks to text upstream, so `keep: "all"` is a no-op that risks proxy
-	// rejection of an unrecognized field.
+	// rejection of an unrecognized field. Skip Vertex rawPredict because that
+	// adapter requires betas in the JSON body (`anthropic_beta`) instead of the
+	// Anthropic HTTP beta header this code can add.
 	const shouldKeepThinkingContext =
 		!options?.client &&
 		model.provider !== "github-copilot" &&
+		model.provider !== "google-vertex" &&
 		(thinking?.type === "adaptive" || thinking?.type === "enabled");
 	const contextManagement = shouldKeepThinkingContext
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }

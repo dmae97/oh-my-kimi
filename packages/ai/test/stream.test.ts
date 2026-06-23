@@ -580,7 +580,12 @@ describe("Generate E2E Tests", () => {
 				contextWindow: 200_000,
 				maxTokens: 64_000,
 			});
-			const captured = Promise.withResolvers<{ url: string; authorization: string | null; body: unknown }>();
+			const captured = Promise.withResolvers<{
+				url: string;
+				authorization: string | null;
+				betaHeader: string | null;
+				body: unknown;
+			}>();
 
 			try {
 				__resetVertexTokenCache();
@@ -598,6 +603,7 @@ describe("Generate E2E Tests", () => {
 					{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
 					{
 						apiKey: "<authenticated>",
+						thinkingEnabled: true,
 						fetch: async (input, init) => {
 							const url = input instanceof Request ? input.url : input.toString();
 							if (
@@ -611,6 +617,7 @@ describe("Generate E2E Tests", () => {
 							captured.resolve({
 								url,
 								authorization: headers.get("authorization"),
+								betaHeader: headers.get("anthropic-beta"),
 								body: JSON.parse(bodyText),
 							});
 							return new Response(JSON.stringify({ error: { message: "stop after capture" } }), { status: 400 });
@@ -632,6 +639,9 @@ describe("Generate E2E Tests", () => {
 					stream: true,
 				});
 				expect((request.body as Record<string, unknown>).model).toBeUndefined();
+				expect((request.body as Record<string, { type?: string }>).thinking?.type).toBe("enabled");
+				expect((request.body as Record<string, unknown>).context_management).toBeUndefined();
+				expect(request.betaHeader ?? "").not.toContain("context-management-2025-06-27");
 			} finally {
 				__resetVertexTokenCache();
 				homedirSpy.mockRestore();
