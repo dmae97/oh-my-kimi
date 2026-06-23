@@ -131,7 +131,7 @@ export class EventController {
 				}
 				if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
 					this.ctx.streamingComponent.setHideThinkingBlock(hideThinking);
-					this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+					this.#streamingReveal.resyncVisibility();
 				}
 				this.ctx.ui.resetDisplay();
 			},
