@@ -945,6 +945,7 @@ async function buildSessionOptions(
 interface RunRootCommandDependencies {
 	createAgentSession?: typeof createAgentSession;
 	discoverAuthStorage?: typeof discoverAuthStorage;
+	selectSession?: typeof selectSession;
 	runAcpMode?: RunAcpMode;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
@@ -1131,7 +1132,8 @@ export async function runRootCommand(
 	// (see issue #1668).
 	if (typeof parsedArgs.resume === "string" && !sessionManager) {
 		writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled: session is in another project.")}\n`);
-		return;
+		stopStartupWatchdog();
+		process.exit(0);
 	}
 
 	// Handle --resume (no value): show session picker
@@ -1147,17 +1149,26 @@ export async function runRootCommand(
 			preloadedAllSessions = await logger.time("SessionManager.listAll", SessionManager.listAll);
 			if (preloadedAllSessions.length === 0) {
 				writeStartupNotice(parsedArgs, `${chalk.dim("No sessions found")}\n`);
-				return;
+				stopStartupWatchdog();
+				process.exit(0);
 			}
 		}
 		pauseStartupWatchdog();
-		const selected = await logger.time("selectSession", selectSession, folderSessions, {
+		const selected = await logger.time("selectSession", deps.selectSession ?? selectSession, folderSessions, {
 			allSessions: preloadedAllSessions,
 		});
 		resumeStartupWatchdog();
 		if (!selected) {
 			writeStartupNotice(parsedArgs, `${chalk.dim("No session selected")}\n`);
-			return;
+			// Quit instead of returning: startup already armed long-lived handles
+			// (theme watcher + SIGWINCH/macOS appearance listeners via initTheme,
+			// settings save timer, model registry) that keep the event loop alive,
+			// so a bare return hangs the process after the picker leaves the alt
+			// screen. No session was built here, so there is nothing to flush. The
+			// in-session `/resume` picker (selector-controller.ts) takes a different
+			// onCancel that just closes the overlay — only this startup path exits.
+			stopStartupWatchdog();
+			process.exit(0);
 		}
 		// Resuming a session from another project: switch the process into that
 		// project's directory and refresh cwd-derived caches before the session is
