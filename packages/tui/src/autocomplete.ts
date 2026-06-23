@@ -678,6 +678,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const { rawPrefix, isAtPrefix, isQuotedPrefix } = parsePathPrefix(prefix);
 			let expandedPrefix = rawPrefix;
 
+			// Normalize backslashes to forward slashes so Windows native paths
+			// (C:\tmp\foo) work with the /-based splitting/joining below.
+			expandedPrefix = expandedPrefix.replace(/\\/g, "/");
+
 			// Handle home directory expansion
 			if (expandedPrefix.startsWith("~")) {
 				expandedPrefix = this.#expandHomePath(expandedPrefix);
@@ -746,7 +750,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 				let relativePath: string;
 				const name = entry.name;
-				const displayPrefix = rawPrefix;
+				const displayPrefix = rawPrefix.replace(/\\/g, "/");
 
 				if (displayPrefix.endsWith("/")) {
 					// If prefix ends with /, append entry to the prefix
