@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Exported `removeWithRetries()` as a standalone async function so tests with async cleanup hooks (`afterEach(async () => …)`) can use the same retry-on-EBUSY cleanup logic as `TempDir.remove()`. Previously only the sync variant was exported, forcing async tests to use `fs.rm` directly — which fails with EBUSY on Windows when SQLite database files are still locked.
+
 ## [16.1.8] - 2026-06-20
 
 ### Added

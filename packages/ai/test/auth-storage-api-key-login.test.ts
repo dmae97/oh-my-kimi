@@ -8,6 +8,7 @@ import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-sto
 import * as deepseekModule from "@oh-my-pi/pi-ai/registry/deepseek";
 import * as kagiModule from "@oh-my-pi/pi-ai/registry/kagi";
 import * as ollamaCloudModule from "@oh-my-pi/pi-ai/registry/ollama-cloud";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function countCredentialRows(dbPath: string, provider: string): number {
 	const db = new Database(dbPath, { readonly: true });
@@ -62,7 +63,7 @@ describe("AuthStorage api-key login upsert", () => {
 		authStorage = null;
 		dbPath = "";
 		if (tempDir) {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 			tempDir = "";
 		}
 	});
