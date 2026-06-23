@@ -2944,11 +2944,17 @@ function buildParams(
 		}
 	}
 
-	// Pre-compute context_management (depends on thinking).
-	const contextManagement =
-		isOAuthToken && thinking?.type === "adaptive"
-			? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
-			: undefined;
+	// Pre-compute context_management. Send keep: "all" for every enabled or
+	// adaptive thinking request (OAuth + API-key) — not just OAuth. Without
+	// this directive Anthropic-compatible backends (Z.AI, Kimi, DeepSeek, …)
+	// strip the replayed thinking blocks `replayUnsignedThinking` puts back
+	// on the wire, so the model loses the prior reasoning chain across turns
+	// and the KV cache misses every turn (#3288). Narrowing this guard back
+	// to `isOAuthToken` regresses every API-key thinking provider.
+	const shouldKeepThinkingContext = thinking?.type === "adaptive" || thinking?.type === "enabled";
+	const contextManagement = shouldKeepThinkingContext
+		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
+		: undefined;
 
 	// Pre-compute output_config.
 	const outputConfigEntries: AnthropicOutputConfig = {};

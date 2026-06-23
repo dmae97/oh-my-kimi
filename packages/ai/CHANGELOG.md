@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Anthropic-compatible thinking requests sending replayed thinking blocks without `context_management.keep: "all"`, preserving multi-turn reasoning context for API-key providers. ([#3288](https://github.com/can1357/oh-my-pi/issues/3288))
+
 ## [16.1.15] - 2026-06-22
 
 ### Fixed
