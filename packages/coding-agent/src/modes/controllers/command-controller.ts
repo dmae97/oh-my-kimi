@@ -1344,10 +1344,16 @@ function formatWindowSuffix(label: string, windowLabel: string, uiTheme: typeof 
 function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: number): string {
 	const email = report.metadata?.email;
 	if (typeof email === "string" && email) return email;
-	const accountId = report.metadata?.accountId ?? limit.scope.accountId;
-	if (typeof accountId === "string" && accountId) return accountId;
-	const projectId = report.metadata?.projectId ?? limit.scope.projectId;
-	if (typeof projectId === "string" && projectId) return projectId;
+	const accountId =
+		typeof report.metadata?.accountId === "string" && report.metadata.accountId
+			? report.metadata.accountId
+			: limit.scope.accountId || undefined;
+	if (accountId) return accountId;
+	const projectId =
+		typeof report.metadata?.projectId === "string" && report.metadata.projectId
+			? report.metadata.projectId
+			: limit.scope.projectId || undefined;
+	if (projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
