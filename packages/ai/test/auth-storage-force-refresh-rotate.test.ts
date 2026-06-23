@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import { registerOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const PROVIDER = "unit-rotate-oauth";
 const SOURCE = "auth-storage-force-refresh-rotate-test";
@@ -48,7 +49,7 @@ describe("AuthStorage forceRefresh + rotateSessionCredential", () => {
 		store = undefined;
 		authStorage = undefined;
 		if (tempDir) {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 			tempDir = "";
 		}
 	});

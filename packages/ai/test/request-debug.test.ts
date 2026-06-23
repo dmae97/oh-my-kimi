@@ -8,6 +8,7 @@ import type { AssistantMessage, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { wrapFetchForRequestDebug } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const enc = new TextEncoder();
 
@@ -27,7 +28,7 @@ afterEach(async () => {
 	process.chdir(previousCwd);
 	if (previousDebugFlag === undefined) delete Bun.env.PI_REQ_DEBUG;
 	else Bun.env.PI_REQ_DEBUG = previousDebugFlag;
-	if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
+	if (tempDir) await removeWithRetries(tempDir);
 	tempDir = undefined;
 });
 
