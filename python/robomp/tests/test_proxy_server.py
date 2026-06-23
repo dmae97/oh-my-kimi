@@ -1129,6 +1129,25 @@ async def test_git_fetch_rejects_ext_remote_helper(proxy_settings: Settings, ups
     assert resp.status_code == 400, resp.text
 
 
+async def test_git_fetch_rejects_option_shaped_origin(proxy_settings: Settings, upstream_repo: Path) -> None:
+    pool_dir = _stage_pool(proxy_settings, upstream_repo)
+    config_path = pool_dir / ".git" / "config"
+    config_text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(config_text.replace(f"\turl = {upstream_repo}\n", "\turl = --upload-pack=env\n"), encoding="utf-8")
+
+    app = _build_app(proxy_settings)
+    body = b'{"repo":"octo/widget"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch", body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 400, resp.text
+
+
+
 
 @pytest.mark.parametrize(
     "clone_url",
@@ -1139,6 +1158,7 @@ async def test_git_fetch_rejects_ext_remote_helper(proxy_settings: Settings, ups
         "http://github.com/octo/widget.git",  # plain http would ship the PAT in cleartext
         "https://github.com/octo/widget.git%0dhost=evil.example",  # credential-protocol injection
         "ext::sh -c env",  # remote helper transports can execute code
+        "--upload-pack=env",  # leading dash would be parsed as a git option
     ],
 )
 async def test_git_clone_rejects_unsafe_url(proxy_settings: Settings, clone_url: str) -> None:

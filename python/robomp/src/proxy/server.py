@@ -288,6 +288,8 @@ def _remote_auth_for_url(url: str, expected_repo: str, token: str) -> _RemoteAut
         raise HTTPException(400, "remote url must not be empty or padded")
     if _FORBIDDEN_URL_BYTES_RE.search(raw):
         raise HTTPException(400, "remote url contains forbidden control bytes")
+    if raw.startswith("-"):
+        raise HTTPException(400, "remote url must not start with '-'")
     if _REMOTE_HELPER_RE.match(raw):
         raise HTTPException(400, "git remote helper transports are disabled")
     scheme = (urlparse(raw).scheme or "").lower()
