@@ -29,20 +29,32 @@ import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title
 
 /**
  * Slash commands that may carry secrets in their arguments should never be
- * persisted to history. /login accepts three callback forms (redirect URL,
- * query string, raw auth code) — all can contain OAuth code=/state= params,
- * so skip any /login with arguments. /mcp add --token <token> carries a
- * bearer token.
+ * persisted to history.
+ *
+ * - /login accepts three callback forms (redirect URL, query string, raw auth
+ *   code) — all can contain OAuth code=/state= params.
+ * - /join <link> carries a 32-byte room key and optional write token.
+ * - /mcp add --token <token> carries a bearer token.
+ *
+ * The command name is extracted the same way as parseSlashCommand() — splitting
+ * on the earliest whitespace or colon — so /login:?code=... is correctly matched.
  */
 export function shouldSkipHistory(slashText: string): boolean {
 	if (!slashText.startsWith("/")) return false;
-	const name = slashText.slice(1).split(/\s+/, 1)[0];
+	const body = slashText.slice(1);
+	// Match parseSlashCommand: split on earliest whitespace or colon.
+	const firstWs = body.search(/\s/);
+	const firstColon = body.indexOf(":");
+	const sep = firstWs === -1 ? firstColon : firstColon === -1 ? firstWs : Math.min(firstWs, firstColon);
+	const name = sep === -1 ? body : body.slice(0, sep);
+	const hasArgs = sep !== -1;
 	// /login <anything> — parseCallbackInput() accepts redirect URLs, query
 	// strings (?code=...), and raw auth codes, all of which carry secrets.
-	// Skipping all /login-with-args is safer than pattern-matching each form.
-	if (name === "login" && slashText.length > "/login".length) return true;
+	if (name === "login" && hasArgs) return true;
+	// /join <link> — the link carries the 32-byte room key and write token.
+	if (name === "join" && hasArgs) return true;
 	if (name === "mcp") {
-		const args = slashText.slice("/mcp".length).trim();
+		const args = body.slice(sep + 1).trim();
 		return args.startsWith("add") && /--token\s/.test(args);
 	}
 	return false;

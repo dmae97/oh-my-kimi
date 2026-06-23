@@ -18,6 +18,22 @@ describe("shouldSkipHistory — security filter for slash command history", () =
 		expect(shouldSkipHistory("/login raw-auth-code-xyz")).toBe(true);
 	});
 
+	it("skips /login when colon-separated (parseSlashCommand treats : as separator)", () => {
+		// /login:?code=abc&state=xyz — the colon is a valid separator, so the
+		// command name is "login" and the args carry the OAuth secret.
+		expect(shouldSkipHistory("/login:?code=abc&state=xyz")).toBe(true);
+		expect(shouldSkipHistory("/login:auth-code-xyz")).toBe(true);
+	});
+
+	it("skips /join with a link argument (carries 32-byte room key and write token)", () => {
+		expect(shouldSkipHistory("/join omp://share/abc123def456...")).toBe(true);
+		expect(shouldSkipHistory("/join omp:abc123def456...")).toBe(true);
+	});
+
+	it("does not skip /join without arguments", () => {
+		expect(shouldSkipHistory("/join")).toBe(false);
+	});
+
 	it("skips /mcp add with --token flag (contains bearer token)", () => {
 		expect(shouldSkipHistory("/mcp add myserver --url http://x --token sk-secret123")).toBe(true);
 	});
