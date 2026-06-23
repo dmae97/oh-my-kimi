@@ -13,6 +13,10 @@
 
 - Fixed `task.maxConcurrency: 0` serializing subagent spawns instead of running them unbounded. The settings UI labels `0` as "Unlimited", but the session-scoped spawn `Semaphore` clamped `max` via `Math.max(1, max)`, so the second subagent body in a batch always waited for the first to release the seat. The constructor now treats `max <= 0` (and any non-finite input) as unbounded via `Number.POSITIVE_INFINITY`, matching the eval `parallel()`/`pipeline()` worker-pool semantics ([#3305](https://github.com/can1357/oh-my-pi/issues/3305)).
 
+### Fixed
+
+- Fixed MCP tool calls forwarding empty optional placeholder arguments (`""` and `{}`) to `tools/call`; optional placeholders are now omitted while required fields and meaningful falsy values are preserved. ([#3302](https://github.com/can1357/oh-my-pi/issues/3302))
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes
