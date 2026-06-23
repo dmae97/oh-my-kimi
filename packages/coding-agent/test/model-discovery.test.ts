@@ -741,6 +741,39 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("llama.cpp", "sleeping-model")?.contextWindow).toBe(239104);
 	});
 
+	test("llama.cpp selected model refresh does not resolve command api keys", async () => {
+		const commandLogPath = path.join(tempDir, "llama-cpp-key-command.log");
+		writeRawModelsJson({
+			"llama.cpp": {
+				baseUrl: "http://127.0.0.1:8080",
+				apiKey: `!"${process.execPath}" -e 'require("node:fs").appendFileSync(${JSON.stringify(commandLogPath)}, "x"); process.exit(1);'`,
+				api: "openai-responses",
+				discovery: { type: "llama.cpp" },
+				models: [{ id: "protected-model", reasoning: false, input: ["text"] }],
+			},
+		});
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				const headers = init?.headers as Headers | Record<string, string> | undefined;
+				const authHeader = headers instanceof Headers ? headers.get("Authorization") : headers?.Authorization;
+				expect(authHeader).toBeUndefined();
+				return new Response(JSON.stringify({ data: [{ id: "protected-model", meta: { n_ctx: 239104 } }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const commandOutputBeforeRefresh = fs.readFileSync(commandLogPath, "utf8");
+		const model = registry.find("llama.cpp", "protected-model");
+		if (!model) throw new Error("custom llama.cpp model missing");
+		const refreshed = await registry.refreshSelectedModelMetadata(model);
+		expect(refreshed.contextWindow).toBe(239104);
+		expect(fs.readFileSync(commandLogPath, "utf8")).toBe(commandOutputBeforeRefresh);
+	});
+
 	test("llama.cpp selected model refresh preserves same-id custom limits", async () => {
 		writeRawModelsJson({
 			"llama.cpp": {

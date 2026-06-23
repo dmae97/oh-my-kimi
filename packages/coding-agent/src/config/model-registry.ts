@@ -770,7 +770,7 @@ export class ModelRegistry {
 		if (!isLlamaCppDiscovery) {
 			return model;
 		}
-		const contextWindow = await discoverLlamaCppModelContextWindow(model, this.#discoveryContext());
+		const contextWindow = await discoverLlamaCppModelContextWindow(model, this.#nonResolvingDiscoveryContext());
 		if (contextWindow === undefined) {
 			return this.find(model.provider, model.id) ?? model;
 		}
@@ -1409,6 +1409,13 @@ export class ModelRegistry {
 				}
 				return this.resolver(provider);
 			},
+		};
+	}
+
+	#nonResolvingDiscoveryContext(): DiscoveryContext {
+		return {
+			fetch: this.#fetch,
+			getBearerApiKeyResolver: async () => undefined,
 		};
 	}
 
