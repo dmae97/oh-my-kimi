@@ -115,13 +115,17 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		}
 	});
 
-	it("derives the SessionList reserve from the dialog's actual rendered height", () => {
-		// Direct contract: the picker's render() override must size the
-		// SessionList's external reserve to the dialog's *actual* rendered
-		// height at the live width — not a fixed constant — so a narrow
-		// terminal or a long session title that wraps the dialog past the
-		// constant never leaves the picker overflowing the viewport
-		// (PR #3285 review feedback).
+	it("keeps the picker frame bounded on a narrow terminal where the dialog title wraps", () => {
+		// Direct structural contract: even on a small terminal with a
+		// session name that wraps the dialog past any plausible fixed
+		// reserve, the picker's total rendered output stays within the
+		// terminal height. The dialog REPLACES the SessionList inside
+		// the picker frame, so its rows compete only with the
+		// SessionList's rendered budget — not with both the SessionList
+		// AND picker chrome (PR #3285 second review round). Without the
+		// structural fix the dialog could push the picker past the
+		// viewport once the SessionList reserve could not shrink any
+		// further, and the TUI committed the header into scrollback.
 		const longName = "a-very-very-very-very-long-session-title-that-must-wrap-on-a-narrow-terminal";
 		const sessions: SessionInfo[] = [
 			{
@@ -140,7 +144,7 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 		];
 
 		const NARROW_WIDTH = 30;
-		const TERMINAL_ROWS = 50;
+		const TERMINAL_ROWS = 24;
 		const selector = new SessionSelectorComponent(
 			sessions,
 			() => {},
@@ -149,33 +153,14 @@ describe("issue #3283: /resume picker scrolls down after deleting a session", ()
 			{ getTerminalRows: () => TERMINAL_ROWS, onDelete: async () => true },
 		);
 
-		// Baseline: render the picker before the dialog opens.
-		const beforeOpen = selector.render(NARROW_WIDTH).length;
+		// Baseline: picker fits the viewport before the dialog opens.
+		expect(selector.render(NARROW_WIDTH).length).toBeLessThanOrEqual(TERMINAL_ROWS);
 
-		// Open the delete confirmation. The picker's render override
-		// measures the dialog and pushes the reserve into the SessionList
-		// before super.render() walks the children, so the very first
-		// render after the dialog mounts already reflects the dynamic
-		// reserve.
+		// Open the delete confirmation; the dialog takes the SessionList
+		// slot inside the picker frame. The picker's rendered total must
+		// STILL fit the viewport even though the dialog wraps past the
+		// previous 12-row reserve guess.
 		selector.handleInput("\x1b[3~");
-		const afterOpen = selector.render(NARROW_WIDTH);
-		const dialog = selector.children.at(-1);
-		expect(dialog).toBeDefined();
-		const dialogHeight = dialog!.render(NARROW_WIDTH).length;
-
-		// On a narrow width with a long title the dialog wraps past the
-		// previous hard-coded 12-row reserve.
-		expect(dialogHeight).toBeGreaterThan(12);
-
-		// Contract: when the dialog wraps past the previous constant
-		// reserve (12), the dynamic reserve correctly shrinks the
-		// SessionList by the dialog's *actual* height, so the picker
-		// frame growth is ≤ 0 (sessions freed ≥ dialog rows added). A
-		// constant reserve only frees 12 rows regardless, so the picker
-		// frame grows by `dialogHeight - 12` rows on every dialog open.
-		// Allow a one-session rounding slack (4 rows) for the floor
-		// inside `#visibleCount`.
-		const growth = afterOpen.length - beforeOpen;
-		expect(growth).toBeLessThanOrEqual(0);
+		expect(selector.render(NARROW_WIDTH).length).toBeLessThanOrEqual(TERMINAL_ROWS);
 	});
 });
