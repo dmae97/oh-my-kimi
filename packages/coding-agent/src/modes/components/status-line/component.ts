@@ -1,12 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
+import type { OAuthAccountIdentity } from "../../../session/auth-storage";
+import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
 import * as git from "../../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
@@ -207,11 +209,13 @@ export class StatusLineComponent implements Component {
 	#lastTokensPerSecond: number | null = null;
 	#lastTokensPerSecondTimestamp: number | null = null;
 
-	// Anthropic usage caching (5-min TTL, OAuth/sub only)
+	// Provider usage caching (5-min TTL, OAuth/sub only)
 	#cachedUsage: {
+		tier?: string;
 		fiveHour?: { percent: number; resetMinutes?: number };
 		sevenDay?: { percent: number; resetHours?: number };
 	} | null = null;
+	#cachedUsageContextKey: string | null = null;
 	#usageFetchedAt = 0;
 	#usageInFlight = false;
 	#usageStartTimer: Timer | null = null;
@@ -531,15 +535,28 @@ export class StatusLineComponent implements Component {
 		return null;
 	}
 
+	#getUsageContextKey(session: AgentSession): string {
+		const activeProvider = session.state.model?.provider ?? session.model?.provider ?? "";
+		if (!activeProvider) return "";
+		const identity = session.modelRegistry?.authStorage?.getOAuthAccountIdentity(activeProvider, session.sessionId);
+		return [activeProvider, identity?.accountId ?? "", identity?.email ?? "", identity?.projectId ?? ""].join("\0");
+	}
+
 	/**
 	 * Startup redraws only arm a short-delayed task; timeout releases the render
 	 * cadence while a late successful fetch can still refresh the cached segment.
 	 */
 	refreshUsageInBackground(): void {
 		const now = Date.now();
+		const session = this.session;
+		const usageContextKey = this.#getUsageContextKey(session);
+		if (this.#cachedUsageContextKey !== usageContextKey) {
+			this.#cachedUsage = null;
+			this.#usageFetchedAt = 0;
+			this.#cachedUsageContextKey = usageContextKey;
+		}
 		if (this.#usageInFlight || this.#usageStartTimer) return;
 		if (this.#usageFetchedAt > 0 && now - this.#usageFetchedAt < 5 * 60_000) return;
-		const session = this.session;
 		const fetcher = (session as { fetchUsageReports?: (signal?: AbortSignal) => Promise<unknown> }).fetchUsageReports;
 		if (typeof fetcher !== "function") return;
 		this.#usageInFlight = true;
@@ -572,7 +589,12 @@ export class StatusLineComponent implements Component {
 
 	#applyUsageRefreshReports(session: AgentSession, reports: unknown): void {
 		if (this.#disposed || this.session !== session) return;
-		this.#cachedUsage = this.#normalizeUsageReports(reports);
+		const activeProvider = session.state.model?.provider ?? session.model?.provider;
+		const activeIdentity =
+			activeProvider && session.modelRegistry?.authStorage
+				? session.modelRegistry.authStorage.getOAuthAccountIdentity(activeProvider, session.sessionId)
+				: undefined;
+		this.#cachedUsage = this.#normalizeUsageReports(reports, activeProvider, activeIdentity);
 		this.#usageFetchedAt = Date.now();
 	}
 
@@ -599,20 +621,35 @@ export class StatusLineComponent implements Component {
 		}
 	}
 
-	#normalizeUsageReports(reports: unknown): {
+	#normalizeUsageReports(
+		reports: unknown,
+		activeProvider?: string,
+		activeIdentity?: OAuthAccountIdentity,
+	): {
+		tier?: string;
 		fiveHour?: { percent: number; resetMinutes?: number };
 		sevenDay?: { percent: number; resetHours?: number };
 	} | null {
 		if (!Array.isArray(reports)) return null;
 		let fiveHour: { percent: number; resetMinutes?: number } | undefined;
 		let sevenDay: { percent: number; resetHours?: number } | undefined;
+		let fiveHourTier: string | undefined;
+		let sevenDayTier: string | undefined;
 		const now = Date.now();
 		for (const report of reports) {
 			if (!report || typeof report !== "object") continue;
+			const provider = (report as { provider?: unknown }).provider;
+			if (activeProvider && provider !== activeProvider) continue;
 			const limits = (report as { limits?: unknown }).limits;
 			if (!Array.isArray(limits)) continue;
 			for (const limit of limits) {
 				if (!limit || typeof limit !== "object") continue;
+				if (
+					activeIdentity &&
+					!limitMatchesActiveAccount(report as UsageReport, limit as UsageLimit, activeIdentity)
+				) {
+					continue;
+				}
 				const l = limit as {
 					scope?: { windowId?: string; tier?: string };
 					window?: { resetsAt?: number };
@@ -623,23 +660,30 @@ export class StatusLineComponent implements Component {
 				const windowId = l.scope?.windowId;
 				const tier = l.scope?.tier;
 				const resetsAt = l.window?.resetsAt;
-				if (windowId === "5h" && !tier && !fiveHour) {
+				// Accept tiered limits, but prefer untiered (backward compat with Anthropic).
+				// An untiered limit always replaces a tiered one; among same-tieredness, first wins.
+				if (windowId === "5h" && (!fiveHour || (fiveHourTier !== undefined && !tier))) {
 					fiveHour = {
 						percent: fraction * 100,
 						resetMinutes:
 							typeof resetsAt === "number" ? Math.max(0, Math.round((resetsAt - now) / 60_000)) : undefined,
 					};
-				} else if (windowId === "7d" && !tier && !sevenDay) {
+					fiveHourTier = tier || undefined;
+				}
+				if (windowId === "7d" && (!sevenDay || (sevenDayTier !== undefined && !tier))) {
 					sevenDay = {
 						percent: fraction * 100,
 						resetHours:
 							typeof resetsAt === "number" ? Math.max(0, Math.round((resetsAt - now) / 3_600_000)) : undefined,
 					};
+					sevenDayTier = tier || undefined;
 				}
 			}
 		}
 		if (!fiveHour && !sevenDay) return null;
-		return { fiveHour, sevenDay };
+		// Single compact label; prefer the five-hour tier if displayed windows ever disagree.
+		const effectiveTier = fiveHourTier ?? sevenDayTier;
+		return { tier: effectiveTier, fiveHour, sevenDay };
 	}
 
 	/**
