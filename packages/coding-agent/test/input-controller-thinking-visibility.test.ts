@@ -19,6 +19,7 @@ describe("InputController thinking visibility", () => {
 		const chatContainer = { children, clear, addChild };
 		const ctx = {
 			hideThinkingBlock: false,
+			effectiveHideThinkingBlock: false,
 			settings: { set },
 			session: { agent: { hideThinkingSummary: false } },
 			chatContainer,
@@ -41,5 +42,36 @@ describe("InputController thinking visibility", () => {
 		expect(setHideThinkingBlock).toHaveBeenCalledWith(true);
 		expect(resetDisplay).toHaveBeenCalledTimes(1);
 		expect(showStatus).toHaveBeenCalledWith("Thinking blocks: hidden");
+	});
+
+	it("refuses to toggle and informs the user when thinking level is off", () => {
+		// When thinking is "off", effectiveHideThinkingBlock is true even if the
+		// user's hideThinkingBlock setting is false. The toggle should refuse
+		// instead of silently no-op'ing or corrupting the setting.
+		const assistant = new AssistantMessageComponent();
+		const setHideThinkingBlock = vi.spyOn(assistant, "setHideThinkingBlock");
+		const set = vi.fn();
+		const showStatus = vi.fn();
+		const resetDisplay = vi.fn();
+		const ctx = {
+			hideThinkingBlock: false,
+			effectiveHideThinkingBlock: true, // thinking is off → effective is true
+			settings: { set },
+			session: { agent: { hideThinkingSummary: false } },
+			chatContainer: { children: [assistant], clear: vi.fn(), addChild: vi.fn() },
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			showStatus,
+			ui: { resetDisplay },
+		} as unknown as InteractiveModeContext;
+
+		new InputController(ctx).toggleThinkingBlockVisibility();
+
+		// Setting was not changed, components were not updated, no reset.
+		expect(ctx.hideThinkingBlock).toBe(false);
+		expect(set).not.toHaveBeenCalled();
+		expect(setHideThinkingBlock).not.toHaveBeenCalled();
+		expect(resetDisplay).not.toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith("Thinking is off — enable thinking to show blocks");
 	});
 });

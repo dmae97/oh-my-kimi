@@ -87,7 +87,7 @@ export class EventController {
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
-			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: () => this.ctx.ui.requestRender(),
 		});
