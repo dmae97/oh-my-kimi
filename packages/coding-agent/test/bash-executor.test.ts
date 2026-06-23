@@ -974,7 +974,7 @@ describe("executeBash :async: background retention", () => {
 	});
 
 	it.skipIf(process.platform === "win32")(
-		"keeps a per-job :async: shell's background process alive across turns",
+		"keeps a per-job :async: shell's plain-`&` background process alive across turns",
 		async () => {
 			const pidFile = path.join(tmp, "pid");
 			const sleepBin = fs.existsSync("/bin/sleep") ? "/bin/sleep" : "sleep";
@@ -982,10 +982,11 @@ describe("executeBash :async: background retention", () => {
 			try {
 				// A per-job `:async:` key: its shell is removed from the reuse map at
 				// teardown, which would SIGKILL the backgrounded child (kill-on-drop).
-				// The retain logic keeps the shell alive while a background process is
-				// still running. `$!` is the external child's pid (nohup is a
-				// transparent background wrapper).
-				const res = await executeBash(`nohup ${sleepBin} 30 >/dev/null 2>&1 & echo $! > ${shellQuote(pidFile)}`, {
+				// A plain `&` job stays a child of the shell, so `liveBackgroundJobCount`
+				// sees it and the retain logic keeps the shell alive while the child
+				// runs. `$!` is the external child's own pid (no transparent wrapper to
+				// unwrap), so it is the process we assert on.
+				const res = await executeBash(`${sleepBin} 30 >/dev/null 2>&1 & echo $! > ${shellQuote(pidFile)}`, {
 					sessionKey: "retain-probe:async:job1",
 					cwd: tmp,
 				});
@@ -995,6 +996,50 @@ describe("executeBash :async: background retention", () => {
 
 				// A later turn on a different per-job shell must not have killed it.
 				await executeBash("true", { sessionKey: "retain-probe:async:job2", cwd: tmp });
+
+				let alive = true;
+				try {
+					process.kill(pid, 0);
+				} catch {
+					alive = false;
+				}
+				expect(alive).toBe(true);
+			} finally {
+				if (pid !== undefined) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch {}
+				}
+			}
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"keeps a nohup-detached background process alive across turns (reparenting)",
+		async () => {
+			const pidFile = path.join(tmp, "nohup-pid");
+			const sleepBin = fs.existsSync("/bin/sleep") ? "/bin/sleep" : "sleep";
+			let pid: number | undefined;
+			try {
+				// `nohup cmd &` is a transparent background wrapper: brush unwraps it and
+				// double-forks the operand so it reparents to init and survives teardown
+				// independently of the retain map. The shell only ever tracked the
+				// short-lived intermediate fork, so `$!` is NOT the surviving process —
+				// the operand writes its own pid before `exec`ing the long sleep, and
+				// that pid (unchanged across exec) is the one we assert stays alive.
+				const operand = `echo $$ > ${pidFile}; exec ${sleepBin} 30`;
+				const res = await executeBash(`nohup sh -c ${shellQuote(operand)} >/dev/null 2>&1 &`, {
+					sessionKey: "reparent-probe:async:job1",
+					cwd: tmp,
+				});
+				expect(res.cancelled).toBe(false);
+
+				await pollUntil(() => fs.existsSync(pidFile), Date.now() + 4000);
+				pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+				expect(Number.isInteger(pid)).toBe(true);
+
+				// A later turn on a different per-job shell must not have killed it.
+				await executeBash("true", { sessionKey: "reparent-probe:async:job2", cwd: tmp });
 
 				let alive = true;
 				try {
