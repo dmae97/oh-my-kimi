@@ -211,6 +211,13 @@ export function resolveProfileAliasCommandFromProcess(
 	};
 }
 
+/** Normalize backslashes to forward slashes for POSIX-shell paths.
+ *  path.posix.join only adds / separators — it preserves existing backslashes
+ *  in input segments like homeDir ("C:\Users\me"), producing mixed paths. */
+function toPosix(p: string): string {
+	return p.replace(/\\/g, "/");
+}
+
 function resolveShellConfigPath(
 	shell: ProfileAliasShell,
 	homeDir: string,
@@ -218,25 +225,29 @@ function resolveShellConfigPath(
 	env: NodeJS.ProcessEnv,
 ): string {
 	// POSIX shells (bash/zsh/fish) always need forward-slash config paths,
-	// even on Windows — path.posix.join guarantees that regardless of platform.
+	// even on Windows. path.posix.join adds / separators but preserves existing
+	// backslashes in input segments, so we normalize each component with toPosix.
 	// PowerShell profiles use the platform-native path.join (backslashes on
 	// Windows, forward slashes elsewhere).
+	const posixHome = toPosix(homeDir);
 	switch (shell) {
 		case "zsh":
-			return path.posix.join(env.ZDOTDIR || homeDir, ".zshrc");
+			return path.posix.join(env.ZDOTDIR ? toPosix(env.ZDOTDIR) : posixHome, ".zshrc");
 		case "bash":
-			return platform === "darwin" ? path.posix.join(homeDir, ".bash_profile") : path.posix.join(homeDir, ".bashrc");
+			return platform === "darwin"
+				? path.posix.join(posixHome, ".bash_profile")
+				: path.posix.join(posixHome, ".bashrc");
 		case "fish": {
 			// fish sources conf.d from $XDG_CONFIG_HOME/fish (default ~/.config/fish);
 			// a hard-coded ~/.config would be silently ignored when the user relocates
 			// their XDG config root, leaving the alias unsourced after a restart.
-			const configHome = env.XDG_CONFIG_HOME || path.posix.join(homeDir, ".config");
+			const configHome = env.XDG_CONFIG_HOME ? toPosix(env.XDG_CONFIG_HOME) : path.posix.join(posixHome, ".config");
 			return path.posix.join(configHome, "fish", "conf.d", "omp-profiles.fish");
 		}
 		case "pwsh":
 			return platform === "win32"
 				? path.join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
-				: path.posix.join(homeDir, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+				: path.posix.join(posixHome, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
 		case "powershell":
 			return path.join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
 	}

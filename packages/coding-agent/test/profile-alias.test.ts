@@ -360,4 +360,65 @@ describe("profile alias installer", () => {
 		).rejects.toThrow("Invalid OMP profile");
 		expect(files.size).toBe(0);
 	});
+
+	it("normalizes backslashes in Windows homeDir for POSIX shell config paths", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/bash",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		// path.posix.join preserves backslashes in input segments, so we must
+		// normalize them — bash/zsh/fish can't resolve C:\Users\me/.bashrc
+		expect(result.configPath).toBe("C:/Users/me/.bashrc");
+		expect(result.reloadedWith).toBe(". 'C:/Users/me/.bashrc'");
+	});
+
+	it("normalizes backslashes in ZDOTDIR for zsh config paths on Windows", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/zsh",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			env: { ZDOTDIR: "D:\\zdotdir" },
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.configPath).toBe("D:/zdotdir/.zshrc");
+		expect(result.reloadedWith).toBe(". 'D:/zdotdir/.zshrc'");
+	});
+
+	it("normalizes backslashes in XDG_CONFIG_HOME for fish config paths on Windows", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/fish",
+			platform: "win32",
+			homeDir: "C:\\Users\\me",
+			env: { XDG_CONFIG_HOME: "D:\\xdg" },
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		expect(result.configPath).toBe("D:/xdg/fish/conf.d/omp-profiles.fish");
+		expect(result.reloadedWith).toBe("source 'D:/xdg/fish/conf.d/omp-profiles.fish'");
+	});
 });
