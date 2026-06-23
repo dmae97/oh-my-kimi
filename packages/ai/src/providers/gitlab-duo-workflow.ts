@@ -1977,6 +1977,15 @@ function emitGitLabDuoWorkflowCheckpoint(
 	// not any delta emitted earlier in the socket call — otherwise a stale replayed
 	// boundary would fire one pause_turn per snapshot and hit the loop's continuation cap.
 	let deltaThisCheckpoint = false;
+	// Turn position within this full-snapshot replay: a request/tool boundary
+	// starts a new turn. The content-signature fallback below is scoped to this
+	// index so it suppresses only a replayed message reappearing at the SAME turn
+	// position (e.g. GitLab renames a message_id across a shrunk snapshot, so the
+	// per-key lookup misses but the text was already emitted for that turn). A
+	// genuinely new later message with text equal to an earlier one lands at a
+	// LATER turn (after an extra boundary), so its signature differs and it still
+	// emits — repeated assistant output across turns is no longer swallowed.
+	let turnIndex = 0;
 	for (const entry of checkpoint.entries) {
 		if (entry.kind === "boundary") {
 			if (deltaThisCheckpoint && state.providerSessionState?.active) {
@@ -1985,14 +1994,15 @@ function emitGitLabDuoWorkflowCheckpoint(
 			}
 			endGitLabDuoWorkflowText(state);
 			endGitLabDuoWorkflowThinking(state);
+			turnIndex += 1;
 			continue;
 		}
 
 		const contentByKey = state.checkpointAgentContentByKey ?? {};
 		const contentSignatures = state.checkpointAgentContentSignatures ?? {};
 		const previousContent = contentByKey[entry.messageKey];
-		const contentSignature = `${entry.kind}\u0000${entry.content}`;
-		const contentOnlySignature = `content\u0000${entry.content}`;
+		const contentSignature = `${turnIndex}\u0000${entry.kind}\u0000${entry.content}`;
+		const contentOnlySignature = `${turnIndex}\u0000content\u0000${entry.content}`;
 		const duplicateContent =
 			previousContent === undefined &&
 			(contentSignatures[contentSignature] === true || contentSignatures[contentOnlySignature] === true);

@@ -2510,6 +2510,89 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(text).toBe("Working");
 	});
 
+	it("emits a later agent message whose text equals an earlier turn (no global content dedupe)", async () => {
+		// Two genuine agent turns separated by a tool boundary both say "Done".
+		// The content-signature fallback must be scoped to turn position, not global
+		// text equality, or the second legitimate message is swallowed.
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send() {},
+			close() {},
+		};
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const startPayload = buildGitLabDuoWorkflowStartRequest("workflow-1", model, context);
+		const providerSessionState = {
+			active: { workflowId: "workflow-1", startPayload, ws: socket },
+		} as unknown as GitLabDuoWorkflowStreamState["providerSessionState"];
+		const streamPromise = runGitLabDuoWorkflowSocket(
+			socket,
+			startPayload,
+			{ stream: new AssistantMessageEventStream(), output, started: true, providerSessionState },
+			{ apiKey: "[REDACTED]" },
+		);
+		socket.onopen?.(new Event("open"));
+		// First turn: agent says "Done", then a tool boundary. The boundary after a
+		// same-checkpoint delta pauses, so the first snapshot only carries turn 0.
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "CREATED",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [{ message_type: "agent", message_id: "agent-a", content: "Done" }],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+		// Second turn after a tool boundary: a NEW agent message also says "Done".
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "INPUT_REQUIRED",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [
+									{ message_type: "agent", message_id: "agent-a", content: "Done" },
+									{ message_type: "tool", content: "tool ran" },
+									{ message_type: "agent", message_id: "agent-b", content: "Done" },
+								],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+
+		await streamPromise;
+		const text = output.content.map(block => (block.type === "text" ? block.text : "")).join("");
+		// Both legitimate turns are present (turn 0 "Done" replayed/suppressed once,
+		// turn 1 "Done" emitted), so the second is not lost to global text dedupe.
+		expect(text).toBe("DoneDone");
+	});
+
 	it("emits pause_turn at a server-side tool boundary and resumes into a separate assistant message", async () => {
 		const socket: GitLabDuoWorkflowWebSocketLike = {
 			onopen: null,
