@@ -79,7 +79,7 @@ export async function readMarkitConversionCache(key: string): Promise<MarkitConv
 	return { status: "hit", content: entry.content };
 }
 
-async function pruneMarkitConversionCache(cacheDir: string): Promise<void> {
+export async function pruneMarkitConversionCache(cacheDir: string): Promise<void> {
 	let names: string[];
 	try {
 		names = await fs.readdir(cacheDir);
@@ -143,7 +143,9 @@ async function pruneMarkitConversionCache(cacheDir: string): Promise<void> {
 export async function writeMarkitConversionCache(key: string, content: string): Promise<void> {
 	const cacheDir = getDocumentConversionCacheDir();
 	const target = path.join(cacheDir, `${key}.json`);
-	const tempPath = path.join(cacheDir, `${key}.${process.pid}.${Date.now()}.tmp`);
+	// The random suffix keeps concurrent writers (same pid + same ms) from
+	// colliding on one temp path before the atomic rename.
+	const tempPath = path.join(cacheDir, `${key}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`);
 	const payload = JSON.stringify({ version: MARKIT_CONVERSION_CACHE_VERSION, content });
 	try {
 		await fs.mkdir(cacheDir, { recursive: true });

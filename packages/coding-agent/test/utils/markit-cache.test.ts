@@ -12,6 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import { convertBufferWithMarkit, convertFileWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
+import { pruneMarkitConversionCache } from "@oh-my-pi/pi-coding-agent/utils/markit-cache";
 import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("document conversion cache", () => {
@@ -97,5 +98,22 @@ describe("document conversion cache", () => {
 		expect(second.cache).toBe("skipped");
 
 		expect(convert).toHaveBeenCalledTimes(2);
+	});
+
+	it("sweeps orphaned .tmp files during prune", async () => {
+		const cacheDir = path.join(getAgentDir(), "cache", "document-conversions");
+		await fs.mkdir(cacheDir, { recursive: true });
+
+		const stalePath = path.join(cacheDir, "orphan.123.456.tmp");
+		const freshPath = path.join(cacheDir, "active.789.012.tmp");
+		await fs.writeFile(stalePath, "stale");
+		await fs.writeFile(freshPath, "fresh");
+		const old = new Date(Date.now() - 60 * 60 * 1000);
+		await fs.utimes(stalePath, old, old);
+
+		await pruneMarkitConversionCache(cacheDir);
+
+		expect(await fs.exists(stalePath)).toBe(false);
+		expect(await fs.exists(freshPath)).toBe(true);
 	});
 });

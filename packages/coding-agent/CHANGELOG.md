@@ -37,6 +37,7 @@
 ### Changed
 
 - Cached successful document conversions so repeated reads of unchanged PDFs, Office documents, and EPUBs reuse converted markdown instead of rerunning markit conversion.
+- Hardened the document conversion cache: random-suffixed temp filenames, orphaned `.tmp` sweeping during prune, and regression coverage for the sweep.
 
 ## [16.1.14] - 2026-06-22
 
