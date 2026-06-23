@@ -213,10 +213,13 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 	await storage.reload();
 	try {
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
-		// Agent's vscode:// URI) get the manual paste fallback. For normal loopback
-		// providers `onManualCodeInput` would make OAuthCallbackFlow race a readline
-		// prompt against the HTTP callback; if the callback wins, the outstanding
-		// prompt is never cancelled and leaves the terminal in a dirty/blocked state.
+		// Agent's vscode:// URI) get the manual paste fallback. An explicit
+		// `onManualCodeInput` is honored for ANY provider (the storage escape hatch),
+		// so for loopback providers we must not pass it: it would make
+		// `OAuthCallbackFlow` race a readline prompt against the HTTP callback and, if
+		// the callback wins, leave that prompt outstanding (dirty/blocked terminal).
+		// `AuthStorage.login` independently refuses to synthesize the default prompt
+		// for non-paste-code providers, so this is defense-in-depth on the same gate.
 		const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
 		await storage.login(provider, {
 			onAuth({ url, instructions }) {

@@ -68,6 +68,7 @@
 ### Fixed
 
 - Fixed GitLab Duo Workflow `direct_access` errors dropping the HTTP status when GitLab returned a JSON error body (e.g. a 401 `{"message":"Unauthorized"}` from an expired OAuth token, or a 429 quota body). The thrown error now embeds `HTTP <status>` alongside the body message so the streaming auth-retry path (`extractStatusFromAssistantError` → `extractHttpStatusFromError`) can recover the status and refresh/rotate the parked broker credential instead of surfacing a hard failure.
+- Fixed `AuthStorage.login` always synthesizing a default manual-code paste prompt, which made the loopback `OAuthCallbackFlow` race a readline prompt against the HTTP callback for normal (non-paste-code) OAuth providers and could leave that prompt dangling — a dirty/blocked terminal — when the browser callback won. The default prompt is now synthesized only for `pasteCodeFlow` providers (`PASTE_CODE_LOGIN_PROVIDERS`); loopback providers get no manual-code race unless a caller explicitly supplies `onManualCodeInput`. This is the authoritative gate covering every caller (not just the auth-broker CLI).
 
 ## [16.1.16] - 2026-06-23
 
