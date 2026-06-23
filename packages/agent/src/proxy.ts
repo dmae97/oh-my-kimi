@@ -184,6 +184,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			const reason = options.signal?.aborted ? "aborted" : "error";
 			partial.stopReason = reason;
+			scrubPartialJson(partial);
 			partial.errorMessage = errorMessage;
 			stream.push({
 				type: "error",
