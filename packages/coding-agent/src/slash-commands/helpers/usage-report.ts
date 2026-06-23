@@ -55,7 +55,8 @@ function renderUsageReports(
 		const activeAccount = resolveActiveAccount?.(provider);
 		// Provider-wide disclaimers render once per provider, not per limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
-		for (const note of providerNotes) lines.push(`  ${sanitizeText(note.replace(/[\r\n]+/g, " "))}`);
+		for (const note of providerNotes)
+			lines.push(`  ${sanitizeText(note.replace(/[\r\n]+/g, " ").replace(/\t/g, "  "))}`);
 		for (const report of providerReports) {
 			const inUse = reportMatchesActiveAccount(report, activeAccount);
 			const savedResets = report.resetCredits?.availableCount ?? 0;
@@ -88,7 +89,9 @@ function renderUsageReports(
 					lines.push(`  resets in ${formatDuration(limit.window.resetsAt - nowMs)}`);
 				}
 				if (limit.notes && limit.notes.length > 0)
-					lines.push(`  ${limit.notes.map(n => sanitizeText(n.replace(/[\r\n]+/g, " "))).join(" • ")}`);
+					lines.push(
+						`  ${limit.notes.map(n => sanitizeText(n.replace(/[\r\n]+/g, " ").replace(/\t/g, "  "))).join(" • ")}`,
+					);
 			}
 		}
 	}
