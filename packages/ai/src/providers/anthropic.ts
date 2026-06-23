@@ -120,10 +120,11 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 }
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
+const contextManagementBeta = "context-management-2025-06-27";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"context-management-2025-06-27",
+	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
 	"structured-outputs-2025-12-15",
 ] as const;
@@ -131,7 +132,7 @@ const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"context-management-2025-06-27",
+	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
 	midConversationSystemBeta,
 	"advanced-tool-use-2025-11-20",
@@ -1680,6 +1681,20 @@ const streamAnthropicOnce = (
 					// carry it in the Claude Code list).
 					extraBetas.push(midConversationSystemBeta);
 				}
+				// `context_management.clear_thinking_20251015` requires this beta. OAuth
+				// requests carry it in `claudeCodeAgentBetaDefaults`; API-key requests
+				// need it added explicitly so the field is honored instead of rejected
+				// (#3288). Skip Copilot — its proxy strips Anthropic betas and the
+				// upstream compat flag demotes thinking blocks to text, so there is
+				// nothing for `keep: "all"` to preserve.
+				if (
+					model.reasoning &&
+					options?.thinkingEnabled &&
+					model.provider !== "github-copilot" &&
+					!extraBetas.includes(contextManagementBeta)
+				) {
+					extraBetas.push(contextManagementBeta);
+				}
 
 				const created = createClient(model, {
 					model,
@@ -2950,8 +2965,13 @@ function buildParams(
 	// strip the replayed thinking blocks `replayUnsignedThinking` puts back
 	// on the wire, so the model loses the prior reasoning chain across turns
 	// and the KV cache misses every turn (#3288). Narrowing this guard back
-	// to `isOAuthToken` regresses every API-key thinking provider.
-	const shouldKeepThinkingContext = thinking?.type === "adaptive" || thinking?.type === "enabled";
+	// to `isOAuthToken` regresses every API-key thinking provider. Skip
+	// Copilot — its proxy strips Anthropic betas (so the required
+	// `context-management-2025-06-27` header never lands) and the compat
+	// flag demotes thinking blocks to text, so `keep: "all"` is a no-op
+	// that risks the proxy rejecting an unrecognized field.
+	const shouldKeepThinkingContext =
+		model.provider !== "github-copilot" && (thinking?.type === "adaptive" || thinking?.type === "enabled");
 	const contextManagement = shouldKeepThinkingContext
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
 		: undefined;

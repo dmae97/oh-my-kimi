@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed Anthropic-compatible thinking requests sending replayed thinking blocks without `context_management.keep: "all"`, preserving multi-turn reasoning context for API-key providers. ([#3288](https://github.com/can1357/oh-my-pi/issues/3288))
+- Fixed Anthropic-compatible thinking requests sending replayed thinking blocks without `context_management.keep: "all"`, preserving multi-turn reasoning context for API-key providers. API-key requests now also advertise the required `context-management-2025-06-27` beta header so the field is honored instead of rejected. GitHub Copilot's Anthropic proxy is excluded because it strips Anthropic betas and demotes thinking blocks to text upstream. ([#3288](https://github.com/can1357/oh-my-pi/issues/3288))
 
 ## [16.1.15] - 2026-06-22
 
