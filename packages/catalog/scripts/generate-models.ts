@@ -62,7 +62,7 @@ const packageRoot = path.join(import.meta.dir, "..");
  * and never written to models.json.
  */
 const DISCOVERY_ONLY_PROVIDERS = new Set(["ollama", "vllm", "lm-studio", "litellm"]);
-const RETIRED_PROVIDERS = new Set(["wafer-pass"]);
+const RETIRED_PROVIDERS = new Set(["wafer-pass", "wandb"]);
 
 async function resolveProviderApiKey(providerId: string, catalog: CatalogDiscoveryConfig): Promise<string | undefined> {
 	for (const envVar of catalog.envVars ?? []) {

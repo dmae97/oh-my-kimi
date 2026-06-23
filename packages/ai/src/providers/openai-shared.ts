@@ -13,6 +13,11 @@ import type {
 	ResolvedOpenAISharedCompat,
 	VercelGatewayRouting,
 } from "@oh-my-pi/pi-catalog/types";
+import {
+	COREWEAVE_PROJECT_HEADER,
+	coreWeaveProjectHeaders,
+	hasCoreWeaveProjectHeader,
+} from "@oh-my-pi/pi-catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import { $env, extractHttpStatusFromError, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import {
@@ -141,6 +146,16 @@ function resolveSakanaRequestBaseUrl(): string | undefined {
 	return normalizeSakanaRequestBaseUrl($env.SAKANA_BASE_URL) ?? normalizeSakanaRequestBaseUrl($env.FUGU_BASE_URL);
 }
 
+function applyCoreWeaveProjectHeader(headers: Record<string, string>): void {
+	if (hasCoreWeaveProjectHeader(headers)) {
+		return;
+	}
+	const projectHeaders = coreWeaveProjectHeaders($env);
+	if (projectHeaders) {
+		headers[COREWEAVE_PROJECT_HEADER] = projectHeaders[COREWEAVE_PROJECT_HEADER];
+	}
+}
+
 export function resolveOpenAIRequestSetup(
 	model: OpenAIRequestSetupModel,
 	options: OpenAIRequestSetupOptions,
@@ -160,6 +175,9 @@ export function resolveOpenAIRequestSetup(
 		Object.assign(headers, getOpenRouterHeaders());
 	}
 	Object.assign(headers, options.extraHeaders);
+	if (model.provider === "coreweave") {
+		applyCoreWeaveProjectHeader(headers);
+	}
 	if (options.prependHeaders) {
 		headers = { ...options.prependHeaders(), ...headers };
 	}

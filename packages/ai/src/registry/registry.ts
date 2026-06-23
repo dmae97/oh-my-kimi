@@ -6,6 +6,7 @@ import { anthropicProvider } from "./anthropic";
 import { azureProvider } from "./azure";
 import { cerebrasProvider } from "./cerebras";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
+import { coreWeaveProvider } from "./coreweave";
 import { cursorProvider } from "./cursor";
 import { deepseekProvider } from "./deepseek";
 import { devinProvider } from "./devin";
@@ -112,6 +113,7 @@ const ALL = [
 	syntheticProvider,
 	nanogptProvider,
 	waferServerlessProvider,
+	coreWeaveProvider,
 	vercelAiGatewayProvider,
 	cloudflareAiGatewayProvider,
 	litellmProvider,

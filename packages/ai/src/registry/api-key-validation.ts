@@ -21,6 +21,7 @@ type ModelListValidationOptions = {
 	provider: string;
 	apiKey: string;
 	modelsUrl: string;
+	headers?: Record<string, string> | (() => Record<string, string> | undefined);
 	signal?: AbortSignal;
 	fetch?: FetchImpl;
 };
@@ -30,6 +31,12 @@ const VALIDATION_TIMEOUT_MS = 15_000;
 function normalizeAnthropicCompatibleBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/, "");
 	return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
+}
+
+function resolveValidationHeaders(
+	headers: Record<string, string> | (() => Record<string, string> | undefined) | undefined,
+): Record<string, string> | undefined {
+	return typeof headers === "function" ? headers() : headers;
 }
 
 /**
@@ -129,6 +136,7 @@ export async function validateApiKeyAgainstModelsEndpoint(options: ModelListVali
 	const response = await fetchImpl(options.modelsUrl, {
 		method: "GET",
 		headers: {
+			...(resolveValidationHeaders(options.headers) ?? {}),
 			Authorization: `Bearer ${options.apiKey}`,
 		},
 		signal,
