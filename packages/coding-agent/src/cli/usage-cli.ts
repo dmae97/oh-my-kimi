@@ -452,7 +452,7 @@ export function formatUsageBreakdown(
 		);
 		// Provider-wide disclaimers render once per provider, not per limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
-		for (const note of providerNotes) lines.push(`  ${chalk.dim(sanitizeText(note))}`);
+		for (const note of providerNotes) lines.push(`  ${chalk.dim(sanitizeText(note.replace(/[\r\n]+/g, " ")))}`);
 
 		const labelWidth = providerReports
 			.flatMap(report => report.limits)
