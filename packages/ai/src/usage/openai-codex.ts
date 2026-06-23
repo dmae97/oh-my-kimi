@@ -488,6 +488,7 @@ export const openaiCodexUsageProvider: UsageProvider = {
 							expiresAt: c.expiresAt,
 							status: c.status,
 						}));
+					resetCredits.availableCount = list.availableCount;
 				}
 			} catch (error) {
 				ctx.logger?.warn("Codex reset credits detail fetch failed", { error: String(error) });
