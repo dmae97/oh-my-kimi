@@ -242,8 +242,11 @@ describe("CombinedAutocompleteProvider", () => {
 			const result = await provider.getSuggestions([line], 0, line.length);
 
 			const values = result?.items.map(item => item.value) ?? [];
-			expect(values).toContain(`@${outsideDir}/alpha/`);
-			expect(values).toContain(`@${outsideDir}/beta/`);
+			// Normalize to forward slashes — the provider normalizes suggestion paths
+			// so they work consistently on all platforms (forward slashes are valid on Windows).
+			const normalizedOutsideDir = outsideDir.replace(/\\/g, "/");
+			expect(values).toContain(`@${normalizedOutsideDir}/alpha/`);
+			expect(values).toContain(`@${normalizedOutsideDir}/beta/`);
 			expect(values.some(value => value.endsWith("nested.ts"))).toBe(false);
 		});
 	});

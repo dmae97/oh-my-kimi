@@ -694,7 +694,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 			if (isRootPrefix) {
 				// Complete from specified position
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
@@ -702,7 +702,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				searchPrefix = "";
 			} else if (rawPrefix.endsWith("/")) {
 				// If prefix ends with /, show contents of that directory
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
@@ -712,7 +712,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				// Split into directory and file prefix
 				const dir = path.dirname(expandedPrefix);
 				const file = path.basename(expandedPrefix);
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (rawPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = dir;
 				} else {
 					searchDir = path.join(this.#basePath, dir);
@@ -780,6 +780,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					}
 				}
 
+				// Normalize backslashes to forward slashes so suggestions are consistent
+				// with the user's input (which uses / on all platforms) and work correctly
+				// when inserted back into the editor. Forward slashes are valid on Windows.
+				relativePath = relativePath.replace(/\\/g, "/");
 				const pathValue = isDirectory ? `${relativePath}/` : relativePath;
 				const value = buildCompletionValue(pathValue, {
 					isDirectory,
