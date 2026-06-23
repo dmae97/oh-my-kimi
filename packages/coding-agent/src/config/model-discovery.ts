@@ -117,6 +117,11 @@ type LlamaCppDiscoveredServerMetadata = {
 	input?: ("text" | "image")[];
 };
 
+type LlamaCppModelListEntry = {
+	id: string;
+	contextWindow?: number;
+};
+
 function toPositiveNumberOrUndefined(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value) && value > 0) {
 		return value;
@@ -160,6 +165,26 @@ function extractLlamaCppContextWindow(payload: Record<string, unknown>): number 
 		}
 	}
 	return toPositiveNumberOrUndefined(payload.n_ctx);
+}
+
+function extractLlamaCppModelContextWindow(item: Record<string, unknown>): number | undefined {
+	const meta = item.meta;
+	if (!isRecord(meta)) {
+		return undefined;
+	}
+	return toPositiveNumberOrUndefined(meta.n_ctx) ?? toPositiveNumberOrUndefined(meta.n_ctx_train);
+}
+
+function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
+	if (!isRecord(payload) || !Array.isArray(payload.data)) {
+		return [];
+	}
+	return payload.data.flatMap(item => {
+		if (!isRecord(item) || typeof item.id !== "string" || !item.id) {
+			return [];
+		}
+		return [{ id: item.id, contextWindow: extractLlamaCppModelContextWindow(item) }];
+	});
 }
 
 function extractLlamaCppInputCapabilities(payload: Record<string, unknown>): ("text" | "image")[] | undefined {
@@ -338,12 +363,13 @@ export async function discoverLlamaCppModels(
 	const [response, serverMetadata] = apiKey
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
-	const payload = (await response.json()) as { data?: Array<{ id: string }> };
-	const models = payload.data ?? [];
+	const payload = (await response.json()) as unknown;
+	const models = parseLlamaCppModelList(payload);
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
-		const id = item.id;
+		const { id } = item;
 		if (!id) continue;
+		const contextWindow = item.contextWindow ?? serverMetadata?.contextWindow ?? 128000;
 		discovered.push(
 			buildModel({
 				id,
@@ -355,11 +381,8 @@ export async function discoverLlamaCppModels(
 				input: serverMetadata?.input ?? ["text"],
 				imageInputDecoder: "stb",
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: serverMetadata?.contextWindow ?? 128000,
-				maxTokens: Math.min(
-					serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY,
-					DISCOVERY_DEFAULT_MAX_TOKENS,
-				),
+				contextWindow,
+				maxTokens: Math.min(contextWindow, DISCOVERY_DEFAULT_MAX_TOKENS),
 				headers,
 				compat: {
 					supportsStore: false,
@@ -370,6 +393,34 @@ export async function discoverLlamaCppModels(
 		);
 	}
 	return discovered;
+}
+
+export async function discoverLlamaCppModelContextWindow(
+	model: Pick<Model<Api>, "provider" | "id" | "baseUrl" | "headers">,
+	ctx: DiscoveryContext,
+): Promise<number | undefined> {
+	const baseUrl = normalizeLlamaCppBaseUrl(model.baseUrl);
+	const modelsUrl = `${baseUrl}/models`;
+	const baseHeaders: Record<string, string> = { ...(model.headers ?? {}) };
+	const attempt = async (headers: Record<string, string>) => {
+		const response = await ctx.fetch(modelsUrl, {
+			headers,
+			signal: AbortSignal.timeout(250),
+		});
+		if (!response.ok) {
+			return undefined;
+		}
+		const entries = parseLlamaCppModelList(await response.json());
+		return entries.find(entry => entry.id === model.id)?.contextWindow;
+	};
+	try {
+		const apiKey = await ctx.getBearerApiKeyResolver(model.provider);
+		return apiKey
+			? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
+			: await attempt(baseHeaders);
+	} catch {
+		return undefined;
+	}
 }
 
 export async function discoverOpenAIModelsList(
