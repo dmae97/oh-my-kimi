@@ -682,19 +682,23 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			// (C:\tmp\foo) work with the /-based splitting/joining below.
 			expandedPrefix = expandedPrefix.replace(/\\/g, "/");
 
+			// Capture the pre-expansion prefix so root checks can still
+			// detect bare "~" and "~/" after #expandHomePath rewrites them.
+			const preExpand = expandedPrefix;
+
 			// Handle home directory expansion
 			if (expandedPrefix.startsWith("~")) {
 				expandedPrefix = this.#expandHomePath(expandedPrefix);
 			}
 
 			const isRootPrefix =
-				expandedPrefix === "" ||
-				rawPrefix === "./" ||
-				expandedPrefix === "../" ||
-				expandedPrefix === "~" ||
-				expandedPrefix === "~/" ||
-				expandedPrefix === "/" ||
-				(isAtPrefix && expandedPrefix === "");
+				preExpand === "" ||
+				preExpand === "./" ||
+				preExpand === "../" ||
+				preExpand === "~" ||
+				preExpand === "~/" ||
+				preExpand === "/" ||
+				(isAtPrefix && preExpand === "");
 
 			if (isRootPrefix) {
 				// Complete from specified position
