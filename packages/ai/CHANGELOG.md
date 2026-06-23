@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `credits` field (array of `UsageResetCreditDetail` with `grantedAt`, `expiresAt`, `status`) to `UsageResetCredits`, so display layers can show when banked rate-limit resets expire. The OpenAI Codex usage provider now calls `listCodexResetCredits` to populate individual credit details when `availableCount > 0` ([#3339](https://github.com/can1357/oh-my-pi/issues/3339)).
+
 ## [16.1.16] - 2026-06-23
 
 ### Fixed

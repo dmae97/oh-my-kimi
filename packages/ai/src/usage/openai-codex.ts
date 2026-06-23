@@ -12,6 +12,7 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { listCodexResetCredits } from "./openai-codex-reset";
 import { toNumber } from "./shared";
 
 const CODEX_USAGE_PATH = "wham/usage";
@@ -470,6 +471,28 @@ export const openaiCodexUsageProvider: UsageProvider = {
 		}
 
 		const resetCredits = parseResetCredits(payload);
+		if (resetCredits && resetCredits.availableCount > 0) {
+			try {
+				const list = await listCodexResetCredits({
+					accessToken,
+					accountId,
+					baseUrl: params.baseUrl,
+					fetch: ctx.fetch,
+					signal: params.signal,
+				});
+				if (list?.credits.length) {
+					resetCredits.credits = list.credits
+						.filter(c => (c.status ?? "available") === "available")
+						.map(c => ({
+							grantedAt: c.grantedAt,
+							expiresAt: c.expiresAt,
+							status: c.status,
+						}));
+				}
+			} catch (error) {
+				ctx.logger?.warn("Codex reset credits detail fetch failed", { error: String(error) });
+			}
+		}
 		const report: UsageReport = {
 			provider: "openai-codex",
 			fetchedAt: nowMs,
