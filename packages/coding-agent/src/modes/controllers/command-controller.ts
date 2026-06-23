@@ -1342,22 +1342,22 @@ function formatWindowSuffix(label: string, windowLabel: string, uiTheme: typeof 
 }
 
 function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: number): string {
-	const email = (report.metadata?.email as string | undefined) ?? limit.scope.accountId;
-	if (email) return email;
-	const accountId = (report.metadata?.accountId as string | undefined) ?? limit.scope.accountId;
-	if (accountId) return accountId;
-	const projectId = (report.metadata?.projectId as string | undefined) ?? limit.scope.projectId;
-	if (projectId) return projectId;
+	const email = report.metadata?.email;
+	if (typeof email === "string" && email) return email;
+	const accountId = report.metadata?.accountId ?? limit.scope.accountId;
+	if (typeof accountId === "string" && accountId) return accountId;
+	const projectId = report.metadata?.projectId ?? limit.scope.projectId;
+	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
 function formatUnlimitedReportLabel(report: UsageReport, index: number): string {
-	const email = report.metadata?.email as string | undefined;
-	if (email) return email;
-	const accountId = report.metadata?.accountId as string | undefined;
-	if (accountId) return accountId;
-	const projectId = report.metadata?.projectId as string | undefined;
-	if (projectId) return projectId;
+	const email = report.metadata?.email;
+	if (typeof email === "string" && email) return email;
+	const accountId = report.metadata?.accountId;
+	if (typeof accountId === "string" && accountId) return accountId;
+	const projectId = report.metadata?.projectId;
+	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;
 }
 
@@ -1588,9 +1588,11 @@ function renderUsageReports(
 			const count = report.resetCredits?.availableCount ?? 0;
 			if (count <= 0) continue;
 			const label =
-				(report.metadata?.email as string | undefined) ??
-				(report.metadata?.accountId as string | undefined) ??
-				"account";
+				typeof report.metadata?.email === "string" && report.metadata.email
+					? report.metadata.email
+					: typeof report.metadata?.accountId === "string" && report.metadata.accountId
+						? report.metadata.accountId
+						: "account";
 			const isActive =
 				!!activeAccount &&
 				((!!activeAccount.accountId && activeAccount.accountId === report.metadata?.accountId) ||
@@ -1661,8 +1663,8 @@ function renderUsageReports(
 		const unlimitedReports = providerReports.filter(report => report.limits.length === 0);
 		for (const report of unlimitedReports) {
 			const label = formatUnlimitedReportLabel(report, 0);
-			const tier = report.metadata?.planType as string | undefined;
-			const tierSuffix = tier ? ` ${uiTheme.fg("dim", `(${tier})`)}` : "";
+			const tier = report.metadata?.planType;
+			const tierSuffix = typeof tier === "string" && tier ? ` ${uiTheme.fg("dim", `(${tier})`)}` : "";
 			lines.push(
 				`${uiTheme.fg("success", uiTheme.status.success)} ${label}${tierSuffix} ${uiTheme.fg("dim", "-- no limits")}`,
 			);
