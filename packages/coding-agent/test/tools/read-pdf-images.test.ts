@@ -14,7 +14,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as markit from "@oh-my-pi/pi-coding-agent/utils/markit";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 // 1x1 transparent PNG — small enough to pass through image loading untouched.
 const TINY_PNG = Buffer.from(
@@ -59,7 +59,7 @@ describe("read PDF image extraction", () => {
 	});
 	afterEach(() => {
 		vi.restoreAllMocks();
-		fs.rmSync(testDir, { recursive: true, force: true });
+		removeSyncWithRetries(testDir);
 	});
 
 	it("rewrites image placeholders into browse handles on a full read", async () => {

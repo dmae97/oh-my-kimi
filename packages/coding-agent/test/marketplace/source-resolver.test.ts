@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-
 import type { MarketplacePluginEntry } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { resolvePluginSource } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // Fixture: a cloned marketplace with a single plugin at ./plugins/hello-plugin
 const FIXTURE_DIR = path.resolve(import.meta.dir, "fixtures/valid-marketplace");
@@ -22,7 +22,7 @@ describe("resolvePluginSource", () => {
 	});
 
 	afterEach(() => {
-		fs.rmSync(tmpDir, { recursive: true, force: true });
+		removeSyncWithRetries(tmpDir);
 	});
 
 	it("resolves relative source to absolute plugin directory", async () => {

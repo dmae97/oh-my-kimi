@@ -10,6 +10,7 @@ import type { WritethroughCallback } from "@oh-my-pi/pi-coding-agent/lsp";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ describe("HashlineFilesystem ACP fs routing", () => {
 
 	afterEach(async () => {
 		resetSettingsForTest();
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("routes plain workspace writes through the bridge and skips writethrough", async () => {
@@ -142,7 +143,7 @@ describe("executeReplaceSingle ACP fs routing", () => {
 
 	afterEach(async () => {
 		resetSettingsForTest();
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("routes plain workspace writes through the bridge and skips writethrough", async () => {
@@ -215,7 +216,7 @@ describe("executePatchSingle ACP fs routing", () => {
 
 	afterEach(async () => {
 		resetSettingsForTest();
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("routes plain workspace writes through the bridge and skips writethrough", async () => {

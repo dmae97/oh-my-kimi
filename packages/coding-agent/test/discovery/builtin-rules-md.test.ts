@@ -17,7 +17,7 @@ import { type Rule, ruleCapability } from "@oh-my-pi/pi-coding-agent/capability/
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 // Register all discovery providers as a side effect.
 import "@oh-my-pi/pi-coding-agent/discovery";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 let tempDir: string;
 let home: string;
@@ -59,7 +59,7 @@ afterEach(() => {
 		setAgentDir(fallbackAgentDir);
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
-	fs.rmSync(tempDir, { recursive: true, force: true });
+	removeSyncWithRetries(tempDir);
 });
 
 test("user ~/.omp/agent/RULES.md becomes an alwaysApply rule", async () => {

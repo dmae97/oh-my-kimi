@@ -11,6 +11,7 @@ import {
 	writeAuthBrokerSnapshotCache,
 } from "@oh-my-pi/pi-ai/auth-broker";
 import { discoverAuthStorage } from "@oh-my-pi/pi-coding-agent/sdk";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const ENV_KEYS = [
 	"OMP_AUTH_BROKER_URL",
@@ -68,7 +69,7 @@ describe("discoverAuthStorage auth-broker snapshot cache", () => {
 			if (savedEnv[key] === undefined) delete process.env[key];
 			else process.env[key] = savedEnv[key];
 		}
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	});
 
 	test("boots from a fresh encrypted cache when the broker is down", async () => {

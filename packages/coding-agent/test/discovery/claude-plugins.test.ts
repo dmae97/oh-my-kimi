@@ -11,6 +11,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { loadSlashCommands } from "@oh-my-pi/pi-coding-agent/extensibility/slash-commands";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import type { SlashCommand } from "@oh-my-pi/pi-coding-agent/capability/slash-command";
@@ -80,7 +81,7 @@ describe("listClaudePluginRoots", () => {
 		} else {
 			process.env.HOME = originalHome;
 		}
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	});
 
 	test("returns empty roots when no registry file exists", async () => {
@@ -597,7 +598,7 @@ describe("discoverAgents plugin precedence", () => {
 
 	afterEach(async () => {
 		clearClaudePluginRootsCache();
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	});
 
 	test("prefers project-scoped plugin agent over user-scoped plugin agent", async () => {

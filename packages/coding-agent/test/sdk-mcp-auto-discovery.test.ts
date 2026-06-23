@@ -8,7 +8,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { MANY_TOOL_COUNT } from "./fixtures/many-tools-mcp";
 
 // Contracts for deferred (hasUI) MCP discovery follow-ups:
@@ -48,7 +48,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		authStorage.close();
 		for (const dir of [registryDir, isolatedHome]) {
 			if (dir && fs.existsSync(dir)) {
-				fs.rmSync(dir, { recursive: true, force: true });
+				removeSyncWithRetries(dir);
 			}
 		}
 	});
@@ -61,7 +61,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 
 	afterEach(() => {
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 		mock.restore();
 	});

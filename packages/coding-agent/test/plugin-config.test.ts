@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import * as piUtils from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("plugin config", () => {
 	let tmpRoot: string;
@@ -23,7 +24,7 @@ describe("plugin config", () => {
 
 	afterEach(async () => {
 		mock.restore();
-		await fs.rm(tmpRoot, { recursive: true, force: true });
+		await removeWithRetries(tmpRoot);
 	});
 
 	async function writeLegacyLockfile(pluginName: string): Promise<void> {

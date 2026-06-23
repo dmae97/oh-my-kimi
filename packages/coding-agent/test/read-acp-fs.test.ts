@@ -8,6 +8,7 @@ import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-brid
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ReadToolDetails } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const BRIDGE_CONTENT = "// content from editor buffer\nexport function greet() { return 'bridge'; }\n";
 
@@ -39,7 +40,7 @@ describe("read tool ACP fs routing", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("routes plain text reads through the bridge and does not call Bun.file().text()", async () => {

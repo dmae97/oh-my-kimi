@@ -13,7 +13,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { InspectImageTool } from "@oh-my-pi/pi-coding-agent/tools/inspect-image";
 import { inspectImageToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/inspect-image-renderer";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, sanitizeText } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
 const TINY_PNG_BASE64 =
@@ -129,7 +129,7 @@ describe("InspectImageTool", () => {
 	});
 
 	afterEach(() => {
-		fs.rmSync(testDir, { recursive: true, force: true });
+		removeSyncWithRetries(testDir);
 	});
 
 	it("sends image and question to completeSimple and returns text-only result", async () => {

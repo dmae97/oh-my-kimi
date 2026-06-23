@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-
 import { resolveStdioSpawnCommand, StdioTransport, writeFrame } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("resolveStdioSpawnCommand", () => {
 	it("resolves bare Windows commands through PATHEXT and wraps .cmd shims with cmd.exe", async () => {
@@ -34,7 +34,7 @@ describe("resolveStdioSpawnCommand", () => {
 			]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -63,8 +63,8 @@ describe("resolveStdioSpawnCommand", () => {
 			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${localShim}" "serve""`]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(projectDir, { recursive: true, force: true });
-			await fs.rm(globalDir, { recursive: true, force: true });
+			await removeWithRetries(projectDir);
+			await removeWithRetries(globalDir);
 		}
 	});
 
@@ -113,7 +113,7 @@ describe("resolveStdioSpawnCommand", () => {
 			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -155,7 +155,7 @@ describe("resolveStdioSpawnCommand", () => {
 			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "serve""`]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -187,7 +187,7 @@ describe("resolveStdioSpawnCommand", () => {
 			]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -219,7 +219,7 @@ describe("resolveStdioSpawnCommand", () => {
 			]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -259,7 +259,7 @@ describe("resolveStdioSpawnCommand", () => {
 			]);
 			expect(result.windowsHide).toBe(true);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 

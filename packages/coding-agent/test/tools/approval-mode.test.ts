@@ -8,7 +8,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 const BASE_SETTINGS = {
 	"async.enabled": false,
@@ -66,7 +66,7 @@ describe("tools.approvalMode setting", () => {
 		// Windows can briefly hold tempdir handles after session.dispose(); retry a few times.
 		for (let attempt = 0; attempt < 5; attempt++) {
 			try {
-				fs.rmSync(tempDir, { recursive: true, force: true });
+				removeSyncWithRetries(tempDir);
 				break;
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;

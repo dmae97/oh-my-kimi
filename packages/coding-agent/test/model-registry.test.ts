@@ -9,7 +9,7 @@ import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -67,7 +67,7 @@ describe("ModelRegistry", () => {
 		}
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 
@@ -95,7 +95,7 @@ describe("ModelRegistry", () => {
 
 	afterAll(() => {
 		sharedAuth.close();
-		fs.rmSync(sharedDir, { recursive: true, force: true });
+		removeSyncWithRetries(sharedDir);
 		if (bootOllamaBaseUrl === undefined) delete Bun.env.OLLAMA_BASE_URL;
 		else Bun.env.OLLAMA_BASE_URL = bootOllamaBaseUrl;
 		if (bootOllamaHost === undefined) delete Bun.env.OLLAMA_HOST;

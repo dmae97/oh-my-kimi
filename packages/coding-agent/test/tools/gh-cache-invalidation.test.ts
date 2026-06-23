@@ -13,6 +13,7 @@ import {
 	putCached,
 	resetForTests as resetCacheForTests,
 } from "@oh-my-pi/pi-coding-agent/tools/github-cache";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const REPO = "owner/example";
 
@@ -92,7 +93,7 @@ afterEach(async () => {
 	} else {
 		process.env.OMP_GITHUB_CACHE_DB = originalEnv;
 	}
-	await fs.rm(tempDir, { recursive: true, force: true });
+	await removeWithRetries(tempDir);
 });
 
 describe("invalidateGithubCacheForBashCommand", () => {

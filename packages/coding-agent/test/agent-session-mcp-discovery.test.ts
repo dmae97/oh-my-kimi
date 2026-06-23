@@ -16,6 +16,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { OutputMeta } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
 function createModel(): Model<"openai-responses"> {
@@ -149,7 +150,7 @@ describe("AgentSession MCP discovery", () => {
 			await session.dispose();
 		}
 		for (const tempDir of tempDirs.splice(0)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

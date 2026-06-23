@@ -6,6 +6,7 @@ import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { searchSearXNG } from "@oh-my-pi/pi-coding-agent/web/search/providers/searxng";
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("SearXNG web search provider", () => {
 	afterEach(() => {
@@ -90,7 +91,7 @@ describe("SearXNG web search provider", () => {
 				`Basic ${Buffer.from("alice:s3cret", "utf-8").toString("base64")}`,
 			);
 		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true });
+			await removeWithRetries(agentDir);
 		}
 	});
 

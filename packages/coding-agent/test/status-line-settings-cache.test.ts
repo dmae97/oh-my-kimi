@@ -8,7 +8,7 @@ import { StatusLineComponent, type StatusLineSettings } from "@oh-my-pi/pi-codin
 import { STATUS_LINE_PRESETS } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/presets";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import * as git from "@oh-my-pi/pi-coding-agent/utils/git";
-import { setProjectDir } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let settingsState: SettingsTestState | undefined;
@@ -26,7 +26,7 @@ afterEach(() => {
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
 	if (projectDir) {
-		fs.rmSync(projectDir, { recursive: true, force: true });
+		removeSyncWithRetries(projectDir);
 	}
 	projectDir = "";
 });

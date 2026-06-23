@@ -10,7 +10,7 @@ import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { zip } from "@oh-my-pi/pi-coding-agent/utils/zip";
 import * as scrapers from "@oh-my-pi/pi-coding-agent/web/scrapers/types";
 import * as scraperUtils from "@oh-my-pi/pi-coding-agent/web/scrapers/utils";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -108,7 +108,7 @@ describe("read URL binary dispatch", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		fs.rmSync(testDir, { recursive: true, force: true });
+		removeSyncWithRetries(testDir);
 	});
 
 	it("lists a remote zip instead of dumping decoded bytes", async () => {

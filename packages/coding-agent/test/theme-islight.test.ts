@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { generateThemeVars } from "@oh-my-pi/pi-coding-agent/export/html";
 import { defaultThemes } from "@oh-my-pi/pi-coding-agent/modes/theme/defaults";
 import { getResolvedThemeColors, getThemeByName, isLightTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getAgentDir, getCustomThemesDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getCustomThemesDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 describe("Theme.isLight", () => {
 	it("classifies built-in themes by their status-line surface", async () => {
@@ -73,7 +73,7 @@ describe("getResolvedThemeColors HTML export defaults", () => {
 		} else {
 			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
 		}
-		await fs.rm(tempAgentDir, { recursive: true, force: true });
+		await removeWithRetries(tempAgentDir);
 		tempAgentDir = undefined;
 	});
 

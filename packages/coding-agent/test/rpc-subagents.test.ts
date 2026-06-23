@@ -21,12 +21,13 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 const tempPaths: string[] = [];
 
 afterEach(() => {
 	for (const tempPath of tempPaths.splice(0)) {
-		fs.rmSync(tempPath, { recursive: true, force: true });
+		removeSyncWithRetries(tempPath);
 	}
 });
 

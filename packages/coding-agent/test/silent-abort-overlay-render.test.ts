@@ -18,6 +18,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 const SESSION_ID = "test-session-1";
 
@@ -78,7 +79,7 @@ describe("Agent hub silent-abort regression", () => {
 
 	afterEach(() => {
 		resetSettingsForTest();
-		fs.rmSync(tmpDir, { recursive: true, force: true });
+		removeSyncWithRetries(tmpDir);
 	});
 
 	it("renders no error line for silent-abort assistant messages with empty content", () => {

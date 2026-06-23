@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { getAgentDir, getPluginsDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDir, getPluginsDir, removeSyncWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 const currentPiCodingAgentPath = Bun.resolveSync("@oh-my-pi/pi-coding-agent", import.meta.dir);
 const currentPiExtensionsPath = Bun.resolveSync("@oh-my-pi/pi-coding-agent/extensibility/extensions", import.meta.dir);
@@ -81,7 +81,7 @@ describe("plugin extension discovery", () => {
 		}
 		originalXdg.clear();
 		setAgentDir(originalAgentDir);
-		fs.rmSync(tempHome, { recursive: true, force: true });
+		removeSyncWithRetries(tempHome);
 	});
 
 	it("loads installed plugin extensions declared in package.json", async () => {
@@ -97,7 +97,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "legacy-pi-plugin");
 		const extensionPath = path.join(pluginDir, "dist", "extension.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.dirname(extensionPath), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -160,7 +160,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "package-import-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "src", "feature"), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -218,7 +218,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "conditional-import-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "node"), { recursive: true });
 		fs.mkdirSync(path.join(pluginDir, "import"), { recursive: true });
 		fs.writeFileSync(
@@ -280,7 +280,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "json-import-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -329,7 +329,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "null-exact-import-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -379,7 +379,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "null-conditional-import-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -431,7 +431,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "side-effect-plugin");
 		const extensionPath = path.join(pluginDir, "src", "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -511,7 +511,7 @@ describe("plugin extension discovery", () => {
 		const pluginDir = path.join(pluginsDir, "node_modules", "dir-entry-plugin");
 		const extensionDir = path.join(pluginDir, ".pi", "extensions", "dir-entry");
 		const extensionPath = path.join(extensionDir, "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(extensionDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -557,7 +557,7 @@ describe("plugin extension discovery", () => {
 		const pluginDir = path.join(pluginsDir, "node_modules", "subdir-entry-plugin");
 		const extensionDir = path.join(pluginDir, "extensions", "feature");
 		const extensionPath = path.join(extensionDir, "index.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(extensionDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -604,7 +604,7 @@ describe("plugin extension discovery", () => {
 		const pluginDir = path.join(pluginsDir, "node_modules", "nested-manifest-plugin");
 		const featureDir = path.join(pluginDir, "extensions", "feature");
 		const realEntry = path.join(featureDir, "dist", "real-ext.ts");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(path.dirname(realEntry), { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -662,7 +662,7 @@ describe("plugin extension discovery", () => {
 		const pluginsDir = getPluginsDir();
 		const pluginDir = path.join(pluginsDir, "node_modules", "missing-decl-plugin");
 		const featureDir = path.join(pluginDir, "extensions", "feature");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(featureDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),
@@ -708,7 +708,7 @@ describe("plugin extension discovery", () => {
 		const pluginDir = path.join(pluginsDir, "node_modules", "dts-plugin");
 		const extensionsDir = path.join(pluginDir, "extensions");
 		const moduleEntry = path.join(extensionsDir, "ext.js");
-		fs.rmSync(path.join(pluginsDir, "node_modules"), { recursive: true, force: true });
+		removeSyncWithRetries(path.join(pluginsDir, "node_modules"));
 		fs.mkdirSync(extensionsDir, { recursive: true });
 		fs.writeFileSync(
 			path.join(pluginsDir, "package.json"),

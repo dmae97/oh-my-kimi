@@ -16,6 +16,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function getResultText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -87,7 +88,7 @@ describe("SearchTool internal URL resolution", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 		AgentRegistry.resetGlobalForTests();
 		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();

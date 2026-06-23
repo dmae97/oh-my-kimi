@@ -13,6 +13,7 @@ import {
 	searchExa,
 	synthesizeAnswer,
 } from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-exa-auth-"));
@@ -21,7 +22,7 @@ async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promis
 		return await run(authStorage);
 	} finally {
 		authStorage.close();
-		await fs.rm(dir, { recursive: true, force: true });
+		await removeWithRetries(dir);
 	}
 }
 

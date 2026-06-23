@@ -14,6 +14,7 @@ import type {
 } from "@oh-my-pi/pi-coding-agent/dap/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { DebugTool } from "@oh-my-pi/pi-coding-agent/tools/debug";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const TEST_ADAPTER: DapResolvedAdapter = {
 	name: "lldb-dap",
@@ -339,7 +340,7 @@ describe("DAP launch failure handling", () => {
 			expect(client.isAlive()).toBe(true);
 		} finally {
 			await client?.dispose();
-			await fs.rm(cwd, { recursive: true, force: true });
+			await removeWithRetries(cwd);
 		}
 	});
 });
@@ -364,7 +365,7 @@ describe("DebugTool launch validation", () => {
 					/launch program resolves to a directory.*python/,
 				);
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			launchSpy.mockRestore();
@@ -407,7 +408,7 @@ describe("DebugTool launch validation", () => {
 				expect(opts.extraLaunchArguments).toEqual({ mode: "debug" });
 				expect(opts.program).toBe(path.join(cwd, "cmd"));
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			sessionLaunchSpy.mockRestore();
@@ -444,7 +445,7 @@ describe("DebugTool launch validation", () => {
 				expect(opts.adapter.name).toBe("dlv");
 				expect(opts.extraLaunchArguments).toEqual({ mode: "debug" });
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			sessionLaunchSpy.mockRestore();
@@ -483,7 +484,7 @@ describe("DebugTool launch validation", () => {
 				const [opts] = sessionLaunchSpy.mock.calls[0]!;
 				expect(opts.extraLaunchArguments).toEqual({ mode: "exec" });
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			sessionLaunchSpy.mockRestore();
@@ -510,7 +511,7 @@ describe("DebugTool launch validation", () => {
 					tool.execute("call", { action: "launch", program: "main.py", adapter: "debugpy" }),
 				).rejects.toThrow(/debugpy.*python not found in PATH/);
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			launchSpy.mockRestore();
@@ -535,7 +536,7 @@ describe("DebugTool launch validation", () => {
 					/debugpy.*python not found in PATH/,
 				);
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			attachSpy.mockRestore();
@@ -561,7 +562,7 @@ describe("DebugTool launch validation", () => {
 					/No debugger adapter available/,
 				);
 			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
+				await removeWithRetries(cwd);
 			}
 		} finally {
 			launchSpy.mockRestore();

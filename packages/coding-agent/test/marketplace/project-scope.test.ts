@@ -24,6 +24,7 @@ import {
 	readInstalledPluginsRegistry,
 	writeInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ describe("resolveActiveProjectRegistryPath", () => {
 	});
 
 	afterEach(() => {
-		fs.rmSync(tmpDir, { recursive: true, force: true });
+		removeSyncWithRetries(tmpDir);
 	});
 
 	it("walk-up finds nearest .omp/ directory", async () => {
@@ -158,8 +159,8 @@ describe("listClaudePluginRoots — project shadows user", () => {
 	afterEach(() => {
 		// Cache is keyed by home:projectPath — must clear between tests.
 		clearClaudePluginRootsCache();
-		fs.rmSync(tmpHome, { recursive: true, force: true });
-		fs.rmSync(tmpProject, { recursive: true, force: true });
+		removeSyncWithRetries(tmpHome);
+		removeSyncWithRetries(tmpProject);
 	});
 
 	it("project entry shadows user entry when plugin IDs match", async () => {

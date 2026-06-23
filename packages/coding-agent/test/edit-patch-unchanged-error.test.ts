@@ -6,6 +6,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { DEFAULT_FUZZY_THRESHOLD, executePatchSingle } from "@oh-my-pi/pi-coding-agent/edit";
 import type { FileDiagnosticsResult } from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function makeSession(cwd: string): ToolSession {
 	return {
@@ -47,7 +48,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	resetSettingsForTest();
-	await fs.rm(tempDir, { recursive: true, force: true });
+	await removeWithRetries(tempDir);
 });
 
 describe("executePatchSingle — post-write verification error path", () => {

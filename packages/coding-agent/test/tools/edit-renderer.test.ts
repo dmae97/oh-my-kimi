@@ -9,6 +9,7 @@ import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -288,7 +289,7 @@ describe("editToolRenderer", () => {
 			expect(rendered).toContain("export const b = 22;");
 			expect(rendered).not.toContain("No changes would be made");
 		} finally {
-			await fs.rm(tmpDir, { recursive: true, force: true });
+			await removeWithRetries(tmpDir);
 		}
 	});
 
@@ -319,7 +320,7 @@ describe("editToolRenderer", () => {
 			expect(rendered).toContain("export const b = 22;");
 			expect(rendered).not.toContain(" …");
 		} finally {
-			await fs.rm(tmpDir, { recursive: true, force: true });
+			await removeWithRetries(tmpDir);
 		}
 	});
 

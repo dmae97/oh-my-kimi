@@ -12,6 +12,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -577,7 +578,7 @@ describe("wave 3 commands", () => {
 			expect(output[0]).toBe(`Wrote todos to ${target}`);
 			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
 		} finally {
-			await fs.rm(tempRoot, { recursive: true, force: true });
+			await removeWithRetries(tempRoot);
 		}
 	});
 
@@ -594,7 +595,7 @@ describe("wave 3 commands", () => {
 			expect(output[0]).toBe(`Wrote todos to ${target}`);
 			expect(await fs.readFile(target, "utf8")).toBe("# Work\n- [ ] Ship it\n");
 		} finally {
-			await fs.rm(tempRoot, { recursive: true, force: true });
+			await removeWithRetries(tempRoot);
 		}
 	});
 
@@ -613,7 +614,7 @@ describe("wave 3 commands", () => {
 				{ name: "Imported", tasks: [{ content: "Active task", status: "in_progress" }] },
 			]);
 		} finally {
-			await fs.rm(tempRoot, { recursive: true, force: true });
+			await removeWithRetries(tempRoot);
 		}
 	});
 
@@ -633,7 +634,7 @@ describe("wave 3 commands", () => {
 				{ name: "Default", tasks: [{ content: "From cwd", status: "in_progress" }] },
 			]);
 		} finally {
-			await fs.rm(tempRoot, { recursive: true, force: true });
+			await removeWithRetries(tempRoot);
 		}
 	});
 
@@ -651,7 +652,7 @@ describe("wave 3 commands", () => {
 			expect(output[0]).toContain(`Could not parse ${target}:`);
 			expect(session._todoPhases).toEqual([]);
 		} finally {
-			await fs.rm(tempRoot, { recursive: true, force: true });
+			await removeWithRetries(tempRoot);
 		}
 	});
 

@@ -11,7 +11,7 @@ import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensi
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 interface SessionDirs {
 	cwd: string;
@@ -147,7 +147,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		for (const dir of tempDirs.splice(0)) {
-			fs.rmSync(dir, { recursive: true, force: true });
+			removeSyncWithRetries(dir);
 		}
 	});
 

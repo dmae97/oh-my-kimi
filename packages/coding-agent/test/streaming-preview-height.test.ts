@@ -9,6 +9,7 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { previewWindowRows } from "@oh-my-pi/pi-coding-agent/tools/render-utils";
 import { TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 // The streaming edit preview is a fixed-height tail window ("cursor"): the last
@@ -51,7 +52,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 
 	afterEach(async () => {
 		resetSettingsForTest();
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	// Char-by-char partials of the new function body.

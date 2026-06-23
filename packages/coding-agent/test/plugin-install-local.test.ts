@@ -21,6 +21,7 @@ import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/m
 import { MarketplaceManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import type { InstalledPlugin } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/types";
 import * as piUtils from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const FAKE_INSTALLED: InstalledPlugin = {
 	name: "kimi-datasource",
@@ -74,7 +75,7 @@ describe("runPluginCommand({ action: 'install', args: [<local>] })", () => {
 		// stubs leak into sibling test files (e.g. marketplace/manager.test.ts
 		// breaks because listMarketplaces() still returns []).
 		mock.restore();
-		await fs.rm(tmpRoot, { recursive: true, force: true });
+		await removeWithRetries(tmpRoot);
 	});
 
 	for (const spec of [".", "./pkg", "../pkg", "/abs/pkg", "~/pkg"]) {
