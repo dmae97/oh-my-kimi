@@ -42,6 +42,8 @@ export interface Config {
 	install: "local" | "published";
 	version: string | null;
 	tarball: string | null;
+	binaryArm64: string | null;
+	binaryX64: string | null;
 	build: boolean;
 	jobsDir: string;
 	jobName: string | null;
@@ -77,6 +79,8 @@ function defaultConfig(): Config {
 		install: "local",
 		version: null,
 		tarball: null,
+		binaryArm64: null,
+		binaryX64: null,
 		build: true,
 		jobsDir: path.join(REPO_ROOT, "runs", "tb2"),
 		jobName: null,
@@ -196,6 +200,15 @@ export function parseArgs(argv: string[]): Config {
 				cfg.tarball = path.resolve(take(arg));
 				cfg.build = false;
 				break;
+			case "--binary": {
+				const p = path.resolve(take(arg));
+				const base = path.basename(p);
+				if (/arm64|aarch64/.test(base)) cfg.binaryArm64 = p;
+				else if (/x64|x86[_-]?64|amd64/.test(base)) cfg.binaryX64 = p;
+				else throw new Error(`--binary: cannot infer arch from ${base} (expect arm64/x64 in filename)`);
+				cfg.build = false;
+				break;
+			}
 			case "--no-build":
 				cfg.build = false;
 				break;
@@ -918,6 +931,8 @@ export function buildHarborEnv(
 	env.OMP_TB_INSTALL = cfg.install;
 	env.OMP_TB_VERSION = cfg.version ?? version;
 	if (tarball) env.OMP_TB_TARBALL = tarball;
+	if (cfg.binaryArm64) env.OMP_TB_BINARY_ARM64 = cfg.binaryArm64;
+	if (cfg.binaryX64) env.OMP_TB_BINARY_X64 = cfg.binaryX64;
 	if (cfg.thinking) env.OMP_TB_THINKING = cfg.thinking;
 	if (cfg.advisorModel) {
 		env.OMP_TB_ADVISOR_MODEL = cfg.advisorModel;
@@ -1068,7 +1083,7 @@ async function main(): Promise<void> {
 
 	// tarball (local install only)
 	let tarball: string | null = cfg.tarball;
-	if (cfg.agent === "omp" && cfg.install === "local") {
+	if (cfg.agent === "omp" && cfg.install === "local" && !cfg.binaryArm64 && !cfg.binaryX64) {
 		if (tarball) {
 			process.stdout.write(dim(`using tarball ${tarball}\n`));
 		} else if (cfg.build) {

@@ -195,6 +195,9 @@ class OmpLocal(BaseInstalledAgent):
         self._home = "/root"
         self._bun = "/root/.bun/bin/bun"
         self._cli = "/root/.omp-bench/app/dist/cli.js"
+        self._binary_arm64 = _env("OMP_TB_BINARY_ARM64")
+        self._binary_x64 = _env("OMP_TB_BINARY_X64")
+        self._binary = bool(self._binary_arm64 or self._binary_x64)
 
     @staticmethod
     @override
@@ -207,6 +210,8 @@ class OmpLocal(BaseInstalledAgent):
 
     @override
     def get_version_command(self) -> str | None:
+        if self._binary:
+            return f"{shlex.quote(self._cli)} --version"
         return self._wrap(f"{shlex.quote(self._bun)} {shlex.quote(self._cli)} --version")
 
     @override
@@ -229,41 +234,44 @@ class OmpLocal(BaseInstalledAgent):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        # 1) System deps (root). curl+unzip for the Bun installer; ca-certs for TLS.
-        await self.exec_as_root(
-            environment,
-            command=(
-                "set -e; "
-                "if command -v apt-get >/dev/null 2>&1; then "
-                "  apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip ca-certificates tar; "
-                "elif command -v apk >/dev/null 2>&1; then "
-                "  echo 'ERROR: Alpine/musl base image; @oh-my-pi/pi-natives ships no musl prebuilt' >&2; exit 3; "
-                "elif command -v dnf >/dev/null 2>&1; then dnf install -y curl unzip tar; "
-                "elif command -v yum >/dev/null 2>&1; then yum install -y curl unzip tar; "
-                "fi"
-            ),
-        )
-
-        # Resolve the agent user's HOME (root vs non-root tasks differ).
+        # Resolve the agent user's HOME first (root vs non-root tasks differ).
         home = (await self.exec_as_agent(environment, command='printf %s "$HOME"')).stdout
         self._home = (home or "/root").strip() or "/root"
 
-        # 2) Bun (agent user).
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -e; "
-                f"export BUN_INSTALL={shlex.quote(self._home + '/.bun')}; "
-                f'curl -fsSL https://bun.sh/install | bash -s "bun-v{self._bun_version}"; '
-                f'{shlex.quote(self._home + "/.bun/bin/bun")} --version'
-            ),
-        )
-        self._bun = f"{self._home}/.bun/bin/bun"
-
-        if self._install_mode == "published":
-            self._cli = await self._install_published(environment)
+        if self._binary:
+            # Self-contained binary mode: upload + chmod only. No apt/curl/bun/npm, so
+            # trial setup needs zero outbound network (no_network tasks set up cleanly).
+            await self._install_binary(environment)
         else:
-            self._cli = await self._install_local(environment)
+            # 1) System deps (root). curl+unzip for the Bun installer; ca-certs for TLS.
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then "
+                    "  apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip ca-certificates tar; "
+                    "elif command -v apk >/dev/null 2>&1; then "
+                    "  echo 'ERROR: Alpine/musl base image; @oh-my-pi/pi-natives ships no musl prebuilt' >&2; exit 3; "
+                    "elif command -v dnf >/dev/null 2>&1; then dnf install -y curl unzip tar; "
+                    "elif command -v yum >/dev/null 2>&1; then yum install -y curl unzip tar; "
+                    "fi"
+                ),
+            )
+            # 2) Bun (agent user).
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -e; "
+                    f"export BUN_INSTALL={shlex.quote(self._home + '/.bun')}; "
+                    f'curl -fsSL https://bun.sh/install | bash -s "bun-v{self._bun_version}"; '
+                    f'{shlex.quote(self._home + "/.bun/bin/bun")} --version'
+                ),
+            )
+            self._bun = f"{self._home}/.bun/bin/bun"
+            if self._install_mode == "published":
+                self._cli = await self._install_published(environment)
+            else:
+                self._cli = await self._install_local(environment)
 
         # 3) Auth + model config under $HOME/.omp/agent.
         if self._gateway_on:
@@ -298,6 +306,29 @@ class OmpLocal(BaseInstalledAgent):
             timeout_sec=900,
         )
         return f"{app}/dist/cli.js"
+
+    async def _install_binary(self, environment: BaseEnvironment) -> str:
+        """Probe container arch, upload only the matching self-contained omp binary."""
+        arch = (await self.exec_as_agent(environment, command="uname -m")).stdout.strip()
+        if arch in ("aarch64", "arm64"):
+            hostbin = self._binary_arm64
+        elif arch in ("x86_64", "amd64"):
+            hostbin = self._binary_x64
+        else:
+            raise RuntimeError(f"binary mode: unsupported container arch {arch!r}")
+        if not hostbin:
+            raise RuntimeError(f"binary mode: no omp binary provided for container arch {arch}")
+        app_dir = f"{self._home}/.omp-bench"
+        dst = f"{app_dir}/omp"
+        staging = "/tmp/omp-bin"
+        await self.exec_as_agent(environment, command=f"mkdir -p {shlex.quote(app_dir)}")
+        await environment.upload_file(hostbin, staging)
+        await self.exec_as_agent(
+            environment,
+            command=f"cp {shlex.quote(staging)} {shlex.quote(dst)} && chmod +x {shlex.quote(dst)}",
+        )
+        self._cli = dst
+        return dst
 
     async def _install_published(self, environment: BaseEnvironment) -> str:
         app = f"{self._home}/.omp-bench/app"
@@ -415,9 +446,11 @@ class OmpLocal(BaseInstalledAgent):
             raise ValueError("model must be 'provider/model' (e.g. anthropic/claude-sonnet-4-6)")
         provider, model = self.model_name.split("/", 1)
 
-        parts = [
-            shlex.quote(self._bun),
-            shlex.quote(self._cli),
+        if self._binary:
+            parts = [shlex.quote(self._cli)]
+        else:
+            parts = [shlex.quote(self._bun), shlex.quote(self._cli)]
+        parts += [
             "--print",
             "--mode json",
             f"--provider {shlex.quote(provider)}",
@@ -451,7 +484,7 @@ class OmpLocal(BaseInstalledAgent):
         if not self._gateway_on:
             run_env.update(self._collect_provider_keys(provider))
         run_env.update(self._forward_env)
-        await self.exec_as_agent(environment, command=self._wrap(run), env=run_env or None)
+        await self.exec_as_agent(environment, command=run if self._binary else self._wrap(run), env=run_env or None)
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
