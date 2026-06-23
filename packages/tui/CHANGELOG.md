@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed the 30-second OSC 11 background-color poll that ran on terminals without DEC Mode 2031 support (macOS Terminal.app, Warp, VS Code's built-in terminal, older Alacritty/WezTerm). Each poll's OSC 11 + DA1 write wiped the user's active text selection on several of those terminals, causing intermittent "can't copy" failures whenever a poll fired mid-drag — most visibly during the Ask tool dialog when the user wants to quote text back from the conversation ([#3297](https://github.com/can1357/oh-my-pi/issues/3297)). Theme detection now relies on the initial startup probe plus Mode 2031 push notifications; affected terminals pick up OS-theme changes on next launch.
+
 ## [16.1.10] - 2026-06-21
 
 ### Fixed
