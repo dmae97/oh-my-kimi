@@ -5,6 +5,7 @@ import {
 	Input,
 	matchesKey,
 	padding,
+	parseSgrMouse,
 	replaceTabs,
 	ScrollView,
 	Spacer,
@@ -161,6 +162,12 @@ export function mergeSessionRanking(
 class SessionList implements Component {
 	#filteredSessions: SessionInfo[] = [];
 	#selectedIndex: number = 0;
+	// Maps a 0-based line within this list's own render to a filtered-session
+	// index, or undefined for chrome rows (search line, blanks, scrollbar gap).
+	// Rebuilt every render so the picker's mouse hit-testing tracks the live
+	// scroll window. Only consulted while the picker holds the alternate screen
+	// (where the overlay enables mouse tracking and paints from screen row 0).
+	#hitRows: (number | undefined)[] = [];
 	readonly #searchInput: Input;
 	onSelect?: (session: SessionInfo) => void;
 	onCancel?: () => void;
@@ -257,12 +264,32 @@ class SessionList implements Component {
 		}
 	}
 
+	/** Resolve a list-local rendered-line index to a filtered-session index. */
+	hitTestSession(line: number): number | undefined {
+		return this.#hitRows[line];
+	}
+
+	/** Wheel notch: move the selection one step (clamped, no wrap). */
+	handleWheel(delta: -1 | 1): void {
+		if (this.#filteredSessions.length === 0) return;
+		this.#selectedIndex = Math.max(0, Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + delta));
+	}
+
+	/** Mouse click: select the session under the pointer and resume it. */
+	selectAndConfirm(index: number): void {
+		const session = this.#filteredSessions[index];
+		if (!session) return;
+		this.#selectedIndex = index;
+		this.onSelect?.(session);
+	}
+
 	invalidate(): void {
 		// No cached state to invalidate currently
 	}
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
+		this.#hitRows = [];
 
 		// Render search input
 		lines.push(...this.#searchInput.render(width));
@@ -311,9 +338,11 @@ class SessionList implements Component {
 		// Each session block is built into sessionLines, then wrapped by ScrollView
 		// so the right-edge scrollbar is proportional at the physical-line level.
 		const sessionLines: string[] = [];
+		const sessionRowIndex: number[] = [];
 		const overflow = this.#filteredSessions.length > maxVisible;
 		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
 		for (let i = startIndex; i < endIndex; i++) {
+			const blockStart = sessionLines.length;
 			const session = this.#filteredSessions[i];
 			const isSelected = i === this.#selectedIndex;
 
@@ -363,6 +392,7 @@ class SessionList implements Component {
 
 			sessionLines.push(metadataLine);
 			sessionLines.push(""); // Blank line between sessions
+			for (let k = blockStart; k < sessionLines.length; k++) sessionRowIndex[k] = i;
 		}
 
 		// Wrap the rendered window in a ScrollView for a proportional right-edge bar.
@@ -375,16 +405,10 @@ class SessionList implements Component {
 			theme: { track: t => theme.fg("muted", t), thumb: t => theme.fg("accent", t) },
 		});
 		sv.setScrollOffset(Math.round(startIndex * linesPerItem));
-		lines.push(...sv.render(width));
-
-		// Add keybinding hint
-		lines.push("");
-		lines.push(
-			theme.fg(
-				"muted",
-				`  [Del delete · Enter select · Tab ${this.#showCwd ? "current folder" : "all projects"} · Esc cancel]`,
-			),
-		);
+		const sessionRegionStart = lines.length;
+		const svLines = sv.render(width);
+		for (let k = 0; k < svLines.length; k++) this.#hitRows[sessionRegionStart + k] = sessionRowIndex[k];
+		lines.push(...svLines);
 
 		return lines;
 	}
@@ -462,6 +486,13 @@ export interface SessionSelectorOptions {
 	 * Omitted only in tests; defaults to a conservative 24 rows.
 	 */
 	getTerminalRows?: () => number;
+	/**
+	 * Fill the whole viewport and pin the footer (hint + bottom border) to the
+	 * last rows, so the footer stops drifting as the list window changes height.
+	 * Set by the standalone `--resume` picker (fullscreen alternate screen); the
+	 * in-editor selector leaves it off and renders compactly.
+	 */
+	fillHeight?: boolean;
 }
 
 /**
@@ -479,6 +510,18 @@ export class SessionSelectorComponent extends Container {
 	#globalSessions: SessionInfo[] | null = null;
 	#scope: "folder" | "all" = "folder";
 	#toggling = false;
+	// 0-based line where the session list begins within this component's own
+	// render, captured each frame. The fullscreen picker overlay paints from
+	// screen row 0, so a mouse row maps to `row - #listLineOffset` inside the
+	// list. Only meaningful while the picker holds the alternate screen.
+	#listLineOffset = 0;
+	// 0-based line where the pinned footer begins; clicks at or below it never
+	// hit-test the list, so a footer click on a cramped (trimmed) frame can't
+	// resume a session scrolled off-screen.
+	#footerStart = 0;
+	readonly #getTerminalRows: () => number;
+	readonly #fillHeight: boolean;
+	readonly #bottomBorder = new DynamicBorder();
 
 	constructor(
 		sessions: SessionInfo[],
@@ -494,6 +537,8 @@ export class SessionSelectorComponent extends Container {
 		this.#loadAllSessions = options.loadAllSessions;
 		this.#folderSessions = sessions;
 		this.#globalSessions = options.allSessions ?? null;
+		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
+		this.#fillHeight = options.fillHeight ?? false;
 		// Add header
 		this.addChild(new Spacer(1));
 		this.#headerText = new Text(this.#headerLabel(), 1, 0);
@@ -518,10 +563,6 @@ export class SessionSelectorComponent extends Container {
 			};
 		}
 		this.addChild(this.#sessionList);
-
-		// Add bottom border
-		this.addChild(new Spacer(1));
-		this.addChild(new DynamicBorder());
 	}
 
 	#headerLabel(): string {
@@ -615,12 +656,71 @@ export class SessionSelectorComponent extends Container {
 		this.addChild(this.#confirmationDialog);
 	}
 
+	/**
+	 * Concatenate the children's renders (like {@link Container}) while recording
+	 * the line where the session list begins, so the fullscreen picker can hit-
+	 * test mouse rows against the live list window. SessionList rebuilds its lines
+	 * every frame, so Container's reference-memoization never applied here.
+	 *
+	 * In fill-height mode the body is padded (or, on a cramped terminal, trimmed)
+	 * to leave exactly enough room for the footer at the screen bottom, so the
+	 * footer is always visible and never drifts as the list window resizes. The
+	 * in-editor selector just appends the footer directly.
+	 */
+	render(width: number): readonly string[] {
+		const lines: string[] = [];
+		for (const child of this.children) {
+			const childLines = child.render(width);
+			if (child === this.#sessionList) this.#listLineOffset = lines.length;
+			for (const line of childLines) lines.push(line);
+		}
+		const footer = this.#footerLines(width);
+		if (this.#fillHeight) {
+			const target = Math.max(0, this.#getTerminalRows() - footer.length);
+			if (lines.length > target) lines.length = target;
+			else for (let i = lines.length; i < target; i++) lines.push("");
+		}
+		this.#footerStart = lines.length;
+		for (const line of footer) lines.push(line);
+		return lines;
+	}
+
+	/** Blank · keybinding hint · bottom border. Rendered by {@link render}. */
+	#footerLines(width: number): string[] {
+		const scopeHint = this.#scope === "all" ? "current folder" : "all projects";
+		const hint = theme.fg("muted", `  [Del delete · Enter select · Tab ${scopeHint} · Esc cancel]`);
+		return ["", hint, "", ...this.#bottomBorder.render(width)];
+	}
+
 	handleInput(keyData: string): void {
+		if (keyData.startsWith("\x1b[<")) {
+			this.#handleMouse(keyData);
+			return;
+		}
 		if (this.#confirmationDialog) {
 			this.#confirmationDialog.handleInput(keyData);
 		} else {
 			this.#sessionList.handleInput(keyData);
 		}
+	}
+
+	/**
+	 * SGR mouse reports, delivered only while the picker holds the alternate
+	 * screen (the fullscreen overlay enables tracking and paints from screen row
+	 * 0). Wheel scrolls the list; a left click resumes the session under the
+	 * pointer. Mouse is inert while the delete-confirmation dialog is open.
+	 */
+	#handleMouse(data: string): void {
+		if (this.#confirmationDialog) return;
+		const event = parseSgrMouse(data);
+		if (!event) return;
+		if (event.wheel !== null) {
+			this.#sessionList.handleWheel(event.wheel);
+			return;
+		}
+		if (!event.leftClick || event.row >= this.#footerStart) return;
+		const index = this.#sessionList.hitTestSession(event.row - this.#listLineOffset);
+		if (index !== undefined) this.#sessionList.selectAndConfirm(index);
 	}
 
 	getSessionList(): SessionList {

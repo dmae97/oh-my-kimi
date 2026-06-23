@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the eval `agent()` helper parameters `agent_type` → `agent` and `return_handle` → `handle` across every workflow runtime (Python, JavaScript, Ruby, Julia), so the names are identical in every language (no camelCase/snake_case split) and the agent-selection parameter matches the `task` tool's `agent`. The `__agent__` eval bridge wire protocol was renamed to match.
@@ -12,12 +13,15 @@
 
 ### Changed
 
+- Made the session picker fullscreen with mouse support for clicking rows and scrolling
+- Pinned the session picker footer to the bottom of the screen to prevent layout flickering
 - Simplified `eval` tool to accept a single logical step (code block) instead of an array of cells
 - Updated `eval` tool documentation to emphasize incremental, single-step execution
 - Restricted `bash` tool from using `ls` or `find`, requiring the use of `read` or `find` tools
 - Simplified `todo` tool interface to accept a single operation directly instead of an array of ops
 - Reinforced routing of fragile, multi-step shell logic to the `eval` tool over `bash`. The system-prompt tool policy, `bash.md`, and `eval.md` now treat loops, conditionals, heredocs, inline `-e`/`-c` scripts, multi-stage pipelines, and quote/JSON escaping as the signal to write an `eval` cell; bash's "compute a fact" carveout is narrowed to single short pipelines, and `eval.md` now actively claims that territory with runtime-templated examples (only enabled backends are advertised).
 - Made `eval` an essential built-in tool (`loadMode: "essential"`, added to the default essential tool set) so it stays active under `tools.discoveryMode: "all"` instead of being hidden behind `search_tool_bm25`.
+- Made the `--resume` session picker fullscreen on the terminal's alternate screen, so the list scrolls with the mouse wheel and a row resumes its session on left click. Rows are hit-tested against the live scroll window, and the keybinding hint + bottom border are now pinned to the screen bottom instead of drifting up and down as the visible window changes height.
 
 ### Removed
 
@@ -29,7 +33,6 @@
 ### Fixed
 
 - Fixed the `eval` tool card not streaming a still-running cell's stdout: a long-running cell (e.g. a `time.sleep()` monitor loop) showed nothing until it returned or was interrupted, then dumped everything at once. The renderer draws cell output from `details.cells[i].output`, which was only populated after `backend.execute()` resolved — live stdout streamed into the transient result `content` tail (and `renderContext.output`), which the per-cell render branch ignores. Streamed chunks now append to the active cell's `output` (a dedicated per-cell tail buffer, capped like the aggregate) as they arrive, so the card shows progress live; on completion the authoritative full output overwrites the live tail. `log()`/`phase()`/`display()` and status ops were unaffected because they already stream via the status channel.
-
 - Fixed Escape doing nothing in the Settings text-input fields (e.g. "Python Interpreter") on terminals with the kitty keyboard protocol active (ghostty/kitty). Inside the fullscreen settings overlay the protocol reports Escape as the CSI-u sequence `\x1b[27u`, which the text-input submenu's raw `\x1b` compare missed; `handleInputOrEscape` now decodes Escape via `matchesKey`, matching every other Escape-to-cancel path.
 - Fixed Julia `eval` graph/plot visualization (Plots.jl, GraphRecipes, Makie, etc.) never rendering inline. Two bugs: (1) the runner's `build_mime_bundle`/`emit_error` dispatched `show`/`showable`/`showerror` directly from the long-lived `main()` loop, whose world age is frozen before any cell ran, so rich `show(::IO, ::MIME"image/png", …)` methods registered when a plotting package is `using`-ed inside a cell were invisible — `show` fell back to the default struct repr (which itself threw on Julia 1.12, aborting the whole result). These calls now route through `Base.invokelatest`, and the `text/plain` probe is guarded so a failing repr can no longer suppress the image MIME. (2) The default GR backend popped up a native `gksqt` GUI window on each plot; the runner now defaults `GKSwstype=100` (headless, overridable) so plots render only as inline PNGs, mirroring the Python runner's `MPLBACKEND=Agg` default.
 - Fixed streaming output blocks incorrectly calculating preview height, preventing flickering banners
