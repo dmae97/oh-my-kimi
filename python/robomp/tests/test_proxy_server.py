@@ -165,11 +165,13 @@ async def _async_client(app) -> httpx.AsyncClient:
     )
 
 
-def test_read_origin_url_uses_safe_directory_and_slot_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_remote_urls_uses_safe_directory_and_slot_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from robomp.proxy import server as proxy_server
 
     captured: dict[str, object] = {}
     repo_dir = tmp_path / "repo"
+    monkeypatch.setenv("GITHUB_TOKEN", "parent-token")
+    monkeypatch.setenv("ROBOMP_GIT_HTTP_AUTH", "parent-auth")
 
     def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         captured["cmd"] = cmd
@@ -182,13 +184,16 @@ def test_read_origin_url_uses_safe_directory_and_slot_identity(tmp_path: Path, m
         lambda uid: {"user": uid, "group": uid, "extra_groups": [2000], "umask": 0o002},
     )
 
-    assert proxy_server._read_origin_url(repo_dir, slot_uid=2001) == "https://github.com/octo/widget.git"
+    result = proxy_server._read_remote_urls(repo_dir, slot_uid=2001)
+    assert "https://github.com/octo/widget.git" in result
 
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["GIT_CONFIG_COUNT"] == "1"
     assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
     assert env["GIT_CONFIG_VALUE_0"] == str(repo_dir)
+    assert "GITHUB_TOKEN" not in env
+    assert "ROBOMP_GIT_HTTP_AUTH" not in env
     assert captured["user"] == 2001
     assert captured["group"] == 2001
     assert captured["extra_groups"] == [2000]
@@ -735,6 +740,31 @@ async def test_git_clone_creates_pool_dir(proxy_settings: Settings, upstream_rep
     assert (pool_dir / "HEAD").exists() or (pool_dir / ".git" / "HEAD").exists()
 
 
+async def test_git_clone_github_url_passes_scoped_token(
+    proxy_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_git_clone(target: Path, **kwargs: object) -> None:
+        captured["target"] = target
+        captured.update(kwargs)
+
+    monkeypatch.setattr("robomp.proxy.server.git_clone", fake_git_clone)
+    app = _build_app(proxy_settings)
+    body = b'{"repo":"octo/widget","clone_url":"https://github.com/octo/widget","default_branch":"main"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/clone",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/clone", body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert captured["clone_url"] == "https://github.com/octo/widget.git"
+    assert captured["token"] == _TOKEN
+    assert captured["auth_url"] == "https://github.com/octo/widget.git"
+
+
 async def test_git_fetch_repairs_missing_alternate_and_bad_ref(proxy_settings: Settings, upstream_repo: Path) -> None:
     pool_dir = Path(proxy_settings.workspace_root) / "_pool" / "octo__widget"
     pool_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -760,6 +790,35 @@ async def test_git_fetch_repairs_missing_alternate_and_bad_ref(proxy_settings: S
     assert Path(resp.json()["pool_dir"]) == pool_dir
     assert not bad_ref.exists()
     assert not alternates.exists()
+
+
+async def test_git_fetch_github_origin_uses_explicit_scoped_remote(
+    proxy_settings: Settings, upstream_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pool_dir = _stage_pool(proxy_settings, upstream_repo)
+    _git(["-C", str(pool_dir), "remote", "set-url", "origin", "https://github.com/octo/widget"], pool_dir)
+    captured: dict[str, object] = {}
+
+    def fake_fetch_prune(path: Path, **kwargs: object) -> None:
+        _git(["-C", str(path), "remote", "set-url", "origin", "ext::sh -c env"], path)
+        captured["path"] = path
+        captured.update(kwargs)
+
+    monkeypatch.setattr("robomp.proxy.server.git_fetch_prune", fake_fetch_prune)
+    app = _build_app(proxy_settings)
+    body = b'{"repo":"octo/widget"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch", body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert captured["path"] == pool_dir
+    assert captured["remote_url"] == "https://github.com/octo/widget.git"
+    assert captured["token"] == _TOKEN
+    assert captured["auth_url"] == "https://github.com/octo/widget.git"
 
 
 async def test_git_push_happy_path(proxy_settings: Settings, upstream_repo: Path) -> None:
@@ -1054,12 +1113,32 @@ async def test_git_fetch_endpoints_reject_attacker_origin(
     assert resp.status_code == 400, resp.text
 
 
+async def test_git_fetch_rejects_ext_remote_helper(proxy_settings: Settings, upstream_repo: Path) -> None:
+    pool_dir = _stage_pool(proxy_settings, upstream_repo)
+    _git(["-C", str(pool_dir), "remote", "set-url", "origin", "ext::sh -c env"], pool_dir)
+
+    app = _build_app(proxy_settings)
+    body = b'{"repo":"octo/widget"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch", body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 400, resp.text
+
+
+
 @pytest.mark.parametrize(
     "clone_url",
     [
         "https://evil.example.com/octo/widget.git",  # wrong host
         "https://github.com/attacker/other.git",  # wrong repo
         "https://user:pass@github.com/octo/widget.git",  # embedded credentials
+        "http://github.com/octo/widget.git",  # plain http would ship the PAT in cleartext
+        "https://github.com/octo/widget.git%0dhost=evil.example",  # credential-protocol injection
+        "ext::sh -c env",  # remote helper transports can execute code
     ],
 )
 async def test_git_clone_rejects_unsafe_url(proxy_settings: Settings, clone_url: str) -> None:
@@ -1075,3 +1154,32 @@ async def test_git_clone_rejects_unsafe_url(proxy_settings: Settings, clone_url:
         )
     assert resp.status_code == 400, resp.text
     assert not (Path(proxy_settings.workspace_root) / "_pool" / "octo__widget").exists()
+
+
+async def test_git_push_rejects_attacker_pushurl(proxy_settings: Settings, upstream_repo: Path) -> None:
+    """`origin` keeps a legit fetch URL but a separate `pushurl` points at an
+    attacker host. `git push` would use the pushurl, so the guard MUST refuse
+    before the PAT ships — a fetch-URL-only check would miss this."""
+    branch = "farm/abc/pushurl"
+    repo_dir, head = _stage_workspace(proxy_settings, upstream_repo, "octo/widget", 1, branch)
+    _git(
+        ["-C", str(repo_dir), "remote", "set-url", "--push", "origin", "https://evil.example.com/octo/widget.git"],
+        repo_dir,
+    )
+
+    app = _build_app(proxy_settings)
+    body = (
+        b'{"repo":"octo/widget","workspace_key":"octo__widget__1","branch":"'
+        + branch.encode()
+        + b'","expected_head":"'
+        + head.encode()
+        + b'"}'
+    )
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/push",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/push", body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400, resp.text
+    assert not _bare_has_branch(upstream_repo, branch)

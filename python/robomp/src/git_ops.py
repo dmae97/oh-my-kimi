@@ -30,6 +30,62 @@ log = logging.getLogger(__name__)
 # Per-call env var name. `git --config-env` reads the header value from this
 # env entry inside the spawned process — never persisted into `.git/config`.
 AUTH_ENV_VAR = "ROBOMP_GIT_HTTP_AUTH"
+_TOKEN_ALLOWED_PROTOCOLS = "https"
+_TOKEN_SAFE_CONFIG = [
+    "protocol.allow=never",
+    "protocol.https.allow=always",
+    "protocol.http.allow=never",
+    "protocol.git.allow=never",
+    "protocol.ssh.allow=never",
+    "protocol.file.allow=never",
+    "protocol.ext.allow=never",
+    "credential.helper=",
+    "core.askPass=",
+    "core.hooksPath=/dev/null",
+    "http.proxy=",
+    "http.sslVerify=true",
+    "http.sslCAInfo=",
+    "http.sslCAPath=",
+    "http.extraHeader=",
+]
+_GIT_SUBPROCESS_SCRUBBED_ENV_KEYS = (
+    AUTH_ENV_VAR,
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_WEBHOOK_SECRET",
+    "ROBOMP_REPLAY_TOKEN",
+    "ROBOMP_GH_PROXY_HMAC_KEY",
+)
+
+
+def _git_subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    for key in _GIT_SUBPROCESS_SCRUBBED_ENV_KEYS:
+        env.pop(key, None)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = ""
+    env["SSH_ASKPASS"] = ""
+    return env
+
+
+
+def _token_url_safe_config(auth_url: str | None) -> list[str]:
+    if auth_url is None:
+        return []
+    return [
+        f"http.{auth_url}.proxy=",
+        f"http.{auth_url}.sslVerify=true",
+        f"http.{auth_url}.sslCAInfo=",
+        f"http.{auth_url}.sslCAPath=",
+        f"http.{auth_url}.extraHeader=",
+    ]
+
+
+def _http_extra_header_key(auth_url: str | None) -> str:
+    if auth_url is None:
+        return "http.extraHeader"
+    return f"http.{auth_url}.extraHeader"
+
 
 _CRED_URL = re.compile(r"(https?://)([^:/@\s]+):([^@/\s]+)@")
 _BAD_OBJECT_REF_RE = re.compile(
@@ -125,6 +181,7 @@ def _run_git(
     *,
     cwd: Path | None,
     token: str | None,
+    auth_url: str | None = None,
     extra_env: Mapping[str, str] | None = None,
     safe_directory: Path | None = None,
     user: int | None = None,
@@ -135,17 +192,18 @@ def _run_git(
 ) -> subprocess.CompletedProcess[str]:
     """Run `git <args>` with optional PAT injection via `--config-env`.
 
+    When `auth_url` is supplied, the PAT header is scoped to that exact
+    HTTPS URL (`http.<url>.extraHeader`) and git is restricted to the HTTPS
+    transport. That keeps a token-bearing invocation from handing the header
+    to another host, following `url.*.insteadOf` to `ext::`/ssh/file helpers,
+    or running workspace hooks with the token in the environment.
+
     A returncode of 0 returns the populated `CompletedProcess`. Non-zero exit
     returns the same shape; callers either `_check` it or inspect manually
     (e.g. when probing for ref existence). Stdout/stderr are always
     credential-redacted before being returned.
-
-    On `timeout` expiry the child (and any descendants spawned by git's
-    helpers) is killed and `GitCommandError` is raised with a synthetic
-    returncode (124, matching coreutils `timeout`). `None` uses
-    `_DEFAULT_GIT_TIMEOUT_SECONDS`.
     """
-    env: dict[str, str] = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env = _git_subprocess_env()
     if user is not None and _AGENT_HOME.is_dir():
         env["HOME"] = str(_AGENT_HOME)
     if extra_env:
@@ -153,10 +211,17 @@ def _run_git(
     if safe_directory is not None:
         _append_safe_directory(env, safe_directory)
 
-    cmd: list[str] = ["git"]
+    cmd: list[str] = ["git", "-c", "protocol.ext.allow=never"]
     if token:
         env[AUTH_ENV_VAR] = _basic_auth_header(token)
-        cmd.extend(["--config-env", f"http.extraHeader={AUTH_ENV_VAR}"])
+        if auth_url is not None:
+            env["GIT_ALLOW_PROTOCOL"] = _TOKEN_ALLOWED_PROTOCOLS
+            env["GIT_CONFIG_NOSYSTEM"] = "1"
+            env["GIT_CONFIG_SYSTEM"] = os.devnull
+            env["GIT_CONFIG_GLOBAL"] = os.devnull
+            for item in [*_TOKEN_SAFE_CONFIG, *_token_url_safe_config(auth_url)]:
+                cmd.extend(["-c", item])
+        cmd.extend(["--config-env", f"{_http_extra_header_key(auth_url)}={AUTH_ENV_VAR}"])
     cmd.extend(args)
     log.debug("git", extra={"cmd": _redacted_cmd(cmd), "cwd": str(cwd) if cwd else None})
     effective_timeout = _DEFAULT_GIT_TIMEOUT_SECONDS if timeout is None else timeout
@@ -378,6 +443,24 @@ def _repair_fetch_prune_failure(repo_dir: Path, output: str) -> bool:
     return pruned_alternates or deleted_refs
 
 
+def _explicit_remote_env(remote_url: str | None, *, cwd: Path) -> dict[str, str] | None:
+    if remote_url is None:
+        return None
+    local_remote = _local_remote_safe_directory(remote_url, cwd=cwd)
+    if local_remote is None:
+        return None
+    env: dict[str, str] = {}
+    _append_safe_directory(env, local_remote)
+    return env
+
+
+def _branch_refspec(ref: str) -> str:
+    if ":" in ref or ref.startswith("refs/") and not ref.startswith("refs/heads/"):
+        return ref
+    branch = ref.removeprefix("refs/heads/")
+    return f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+
+
 # ---------- Public primitives ----------
 
 
@@ -387,6 +470,7 @@ def clone(
     clone_url: str,
     default_branch: str,
     token: str | None,
+    auth_url: str | None = None,
     safe_directory: Path | None = None,
 ) -> None:
     """Fresh `git clone --filter=blob:none` into `target`."""
@@ -400,24 +484,47 @@ def clone(
         clone_url,
         str(target),
     ]
-    _check(_run_git(args, cwd=None, token=token, safe_directory=safe_directory), ["git", *args])
+    _check(_run_git(args, cwd=None, token=token, auth_url=auth_url, safe_directory=safe_directory), ["git", *args])
 
 
-def fetch_prune(repo_dir: Path, *, token: str | None, safe_directory: Path | None = None) -> None:
-    """`git fetch --prune origin` on the shared pool clone.
+def fetch_prune(
+    repo_dir: Path,
+    *,
+    token: str | None,
+    remote_url: str | None = None,
+    auth_url: str | None = None,
+    safe_directory: Path | None = None,
+) -> None:
+    """Refresh `refs/remotes/origin/*` on the shared pool clone.
 
-    Pool clones are long-lived. If a transient git object alternate leaks into
-    the pool and later disappears, `git fetch` can fail before it has a chance
-    to refresh from origin because a local ref points at an object that only
-    existed in that missing alternate. Repair that exact corruption in-place:
-    drop dead alternates, delete refs Git already reported as invalid, then
-    retry the fetch.
+    When `remote_url` is supplied the fetch bypasses on-disk `origin` and uses
+    an explicit branch refspec so checkout and push-lease logic still see
+    fresh `refs/remotes/origin/*`.
     """
-    args = ["fetch", "--prune", "origin"]
     _prune_missing_alternates(repo_dir)
     last_proc: subprocess.CompletedProcess[str] | None = None
+    extra_env = _explicit_remote_env(remote_url, cwd=repo_dir)
+    args = (
+        ["fetch", "--prune", "origin"]
+        if remote_url is None
+        else [
+            "fetch",
+            "--prune",
+            "--no-tags",
+            "--filter=blob:none",
+            remote_url,
+            "+refs/heads/*:refs/remotes/origin/*",
+        ]
+    )
     for _ in range(_FETCH_PRUNE_REPAIR_ATTEMPTS):
-        proc = _run_git(args, cwd=repo_dir, token=token, safe_directory=safe_directory)
+        proc = _run_git(
+            args,
+            cwd=repo_dir,
+            token=token,
+            auth_url=auth_url,
+            extra_env=extra_env,
+            safe_directory=safe_directory,
+        )
         if proc.returncode == 0:
             return
         last_proc = proc
@@ -428,7 +535,15 @@ def fetch_prune(repo_dir: Path, *, token: str | None, safe_directory: Path | Non
     _check(last_proc, ["git", *args])
 
 
-def fetch_ref(repo_dir: Path, ref: str, *, token: str | None, safe_directory: Path | None = None) -> None:
+def fetch_ref(
+    repo_dir: Path,
+    ref: str,
+    *,
+    token: str | None,
+    remote_url: str | None = None,
+    auth_url: str | None = None,
+    safe_directory: Path | None = None,
+) -> None:
     """Fetch ``<ref>`` from origin AND materialize every reachable blob locally.
 
     Callers invoke this immediately before a ``git worktree add`` / checkout
@@ -451,8 +566,16 @@ def fetch_ref(repo_dir: Path, ref: str, *, token: str | None, safe_directory: Pa
     caller still attempts the checkout (and a stale-ref worktree add will
     surface a more actionable error than this fetch ever could).
     """
-    args = ["fetch", "--refetch", "--no-filter", "origin", ref]
-    proc = _run_git(args, cwd=repo_dir, token=token, safe_directory=safe_directory)
+    remote = remote_url or "origin"
+    args = ["fetch", "--refetch", "--no-filter", remote, _branch_refspec(ref) if remote_url else ref]
+    proc = _run_git(
+        args,
+        cwd=repo_dir,
+        token=token,
+        auth_url=auth_url,
+        extra_env=_explicit_remote_env(remote_url, cwd=repo_dir),
+        safe_directory=safe_directory,
+    )
     if proc.returncode != 0:
         log.debug(
             "fetch_ref non-fatal failure",
@@ -465,6 +588,8 @@ def fetch_pr_head(
     pr_number: int,
     *,
     token: str | None,
+    remote_url: str | None = None,
+    auth_url: str | None = None,
     safe_directory: Path | None = None,
 ) -> None:
     """Fetch ``refs/pull/<n>/head`` into FETCH_HEAD with all reachable blobs.
@@ -477,8 +602,20 @@ def fetch_pr_head(
     """
     if pr_number <= 0:
         raise ValueError(f"invalid PR number: {pr_number!r}")
-    args = ["fetch", "--refetch", "--no-filter", "origin", f"pull/{pr_number}/head"]
-    _check(_run_git(args, cwd=repo_dir, token=token, safe_directory=safe_directory), ["git", *args])
+    remote = remote_url or "origin"
+    ref = f"refs/pull/{pr_number}/head" if remote_url else f"pull/{pr_number}/head"
+    args = ["fetch", "--refetch", "--no-filter", remote, ref]
+    _check(
+        _run_git(
+            args,
+            cwd=repo_dir,
+            token=token,
+            auth_url=auth_url,
+            extra_env=_explicit_remote_env(remote_url, cwd=repo_dir),
+            safe_directory=safe_directory,
+        ),
+        ["git", *args],
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -612,10 +749,12 @@ def push(
     branch: str,
     expected_head: str | None,
     token: str | None,
+    remote_url: str | None = None,
+    auth_url: str | None = None,
     slot_uid: int | None = None,
     safe_directory: Path | None = None,
 ) -> PushResult:
-    """`git push --force-with-lease=<ref>:<sha> --set-upstream origin <branch>` from `repo_dir`.
+    """Push `HEAD` with a lease, optionally to an explicit remote URL.
 
     The lease is pinned to whatever SHA the local `refs/remotes/origin/<branch>`
     currently records — i.e. what the workspace last fetched. The push only
@@ -661,23 +800,57 @@ def push(
         **slot_kwargs,
     )
     expected_remote = probe.stdout.strip() if probe.returncode == 0 else ""
-    push_extra_env: dict[str, str] | None = None
-    origin = _run_git(
-        ["remote", "get-url", "origin"], cwd=repo_dir, token=None, safe_directory=git_safe_directory, **slot_kwargs
-    )
-    if origin.returncode == 0:
-        local_remote = _local_remote_safe_directory(origin.stdout, cwd=repo_dir)
-        if local_remote is not None:
-            push_extra_env = {}
-            _append_safe_directory(push_extra_env, local_remote)
+    if remote_url is None:
+        push_extra_env: dict[str, str] | None = None
+        origin = _run_git(
+            ["remote", "get-url", "origin"], cwd=repo_dir, token=None, safe_directory=git_safe_directory, **slot_kwargs
+        )
+        if origin.returncode == 0:
+            local_remote = _local_remote_safe_directory(origin.stdout, cwd=repo_dir)
+            if local_remote is not None:
+                push_extra_env = {}
+                _append_safe_directory(push_extra_env, local_remote)
+        destination = "origin"
+        refspec = branch
+        set_upstream = True
+    else:
+        push_extra_env = _explicit_remote_env(remote_url, cwd=repo_dir)
+        destination = remote_url
+        refspec = f"HEAD:refs/heads/{branch}"
+        set_upstream = False
     lease = f"--force-with-lease=refs/heads/{branch}:{expected_remote}"
-    args = ["push", lease, "--set-upstream", "origin", branch]
+    args = ["push"]
+    if token:
+        args.append("--no-verify")
+    args.append(lease)
+    if set_upstream:
+        args.append("--set-upstream")
+    args.extend([destination, refspec])
     _check(
         _run_git(
-            args, cwd=repo_dir, token=token, extra_env=push_extra_env, safe_directory=git_safe_directory, **slot_kwargs
+            args,
+            cwd=repo_dir,
+            token=token,
+            auth_url=auth_url,
+            extra_env=push_extra_env,
+            safe_directory=git_safe_directory,
+            **slot_kwargs,
         ),
         ["git", *args],
     )
+    if remote_url is not None:
+        update = _run_git(
+            ["update-ref", f"refs/remotes/origin/{branch}", head],
+            cwd=repo_dir,
+            token=None,
+            safe_directory=git_safe_directory,
+            **slot_kwargs,
+        )
+        if update.returncode != 0:
+            log.warning(
+                "failed to refresh remote-tracking ref after explicit-url push",
+                extra={"repo_dir": str(repo_dir), "branch": branch, "stderr": update.stderr[:500]},
+            )
     return PushResult(head=head, branch=branch)
 
 
