@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added contract tests for `resolveUsedFraction` covering all four resolution paths (explicit fraction, used/limit, percent+used, inverted remaining) and their precedence ordering
+
 ## [16.1.16] - 2026-06-23
 
 ### Fixed
