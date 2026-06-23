@@ -466,6 +466,10 @@ class OmpLocal(BaseInstalledAgent):
             parts.append(f"--thinking {shlex.quote(self._thinking)}")
         if self._extra_args:
             parts.append(self._extra_args)
+        # POSIX positional separator: some task prompts start with "-" (e.g. a
+        # markdown bullet, as in pytorch-model-recovery). Without this, omp parses
+        # the prompt as an unknown flag and exits 2. `--` forces positional mode.
+        parts.append("--")
         parts.append(shlex.quote(instruction))
         # No pipes/stdbuf (absent in minimal images): redirect raw JSONL to the
         # mounted agent log dir; populate_context_post_run parses it on the host.

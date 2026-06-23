@@ -103,6 +103,14 @@ def _stage_workspace(cfg: Settings, upstream: Path, repo: str, number: int, bran
     return repo_dir, proc.stdout.strip()
 
 
+def _stage_pool(cfg: Settings, upstream: Path, repo: str = "octo/widget") -> Path:
+    """Pre-stage the shared pool clone that the fetch endpoints operate on."""
+    pool_dir = Path(cfg.workspace_root) / "_pool" / repo.replace("/", "__")
+    pool_dir.parent.mkdir(parents=True, exist_ok=True)
+    _git(["clone", "--filter=blob:none", str(upstream), str(pool_dir)], Path(cfg.workspace_root))
+    return pool_dir
+
+
 def _bare_has_branch(bare: Path, branch: str) -> bool:
     proc = subprocess.run(
         ["git", "-C", str(bare), "branch", "--list", branch],
@@ -1012,3 +1020,58 @@ async def test_git_push_rejects_origin_with_wrong_repo(proxy_settings: Settings,
         )
     assert resp.status_code == 400, resp.text
     assert not _bare_has_branch(upstream_repo, branch)
+
+
+# ============================================================================
+# Finding 6 — fetch + clone refuse attacker-controlled origin (PAT exfil guard)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        ("/gh/v1/git/fetch", b'{"repo":"octo/widget"}'),
+        ("/gh/v1/git/fetch_ref", b'{"repo":"octo/widget","ref":"refs/heads/main"}'),
+        ("/gh/v1/git/fetch_pr_head", b'{"repo":"octo/widget","pr_number":1}'),
+    ],
+)
+async def test_git_fetch_endpoints_reject_attacker_origin(
+    proxy_settings: Settings, upstream_repo: Path, endpoint: str, body: bytes
+) -> None:
+    """An agent with group write to the shared pool can rewrite its `origin`;
+    every token-bearing fetch MUST refuse with 400 before git carries the PAT
+    to that host."""
+    pool_dir = _stage_pool(proxy_settings, upstream_repo)
+    _git(["-C", str(pool_dir), "remote", "set-url", "origin", "https://evil.example.com/octo/widget.git"], pool_dir)
+
+    app = _build_app(proxy_settings)
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            endpoint,
+            content=body,
+            headers={**_signed("POST", endpoint, body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.parametrize(
+    "clone_url",
+    [
+        "https://evil.example.com/octo/widget.git",  # wrong host
+        "https://github.com/attacker/other.git",  # wrong repo
+        "https://user:pass@github.com/octo/widget.git",  # embedded credentials
+    ],
+)
+async def test_git_clone_rejects_unsafe_url(proxy_settings: Settings, clone_url: str) -> None:
+    """`clone_url` is caller-supplied; an HTTP(S) URL that doesn't resolve to
+    github.com/<repo> MUST be refused before git carries the PAT to it."""
+    app = _build_app(proxy_settings)
+    body = b'{"repo":"octo/widget","clone_url":"' + clone_url.encode() + b'","default_branch":"main"}'
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/clone",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/clone", body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400, resp.text
+    assert not (Path(proxy_settings.workspace_root) / "_pool" / "octo__widget").exists()
