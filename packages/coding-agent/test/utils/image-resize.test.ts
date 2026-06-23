@@ -25,8 +25,8 @@ async function makeRedWebP(width: number, height: number): Promise<string> {
 // its input, so a single decodable source per shape serves every test. Real image
 // encode/decode is the only cost here, so each source is the smallest solid-red
 // image that still crosses the threshold under test:
-//   - oversizedPng: a thin strip whose long edge exceeds the 1568 default cap, so
-//     re-encodes touch ~1568×98 px instead of 1568×1568. A uniform red keeps format
+//   - oversizedPng: a strip whose long edge exceeds the 1568 default cap, so
+//     re-encodes touch ~1568×392 px instead of 1568×1568. A uniform red keeps format
 //     selection deterministic (WebP is always smallest; PNG always beats JPEG), so
 //     the strip exercises the same format/budget logic as a large square.
 //   - smallPng / smallWebp: 200×200, comfortably inside every default cap (fast path).
@@ -36,7 +36,7 @@ let smallWebp: string;
 
 beforeAll(async () => {
 	[oversizedPng, smallPng, smallWebp] = await Promise.all([
-		makeRedPng(1600, 100),
+		makeRedPng(1600, 400),
 		makeRedPng(200, 200),
 		makeRedWebP(200, 200),
 	]);
@@ -50,8 +50,8 @@ describe("resizeImage defaults", () => {
 		expect(result.wasResized).toBe(true);
 		expect(result.width).toBeLessThanOrEqual(1568);
 		expect(result.height).toBeLessThanOrEqual(1568);
-		// Aspect ratio of the 1600x100 source preserved (with rounding tolerance).
-		expect(Math.abs(result.width / result.height - 1600 / 100)).toBeLessThan(0.01);
+		// Aspect ratio of the 1600x400 source preserved (with rounding tolerance).
+		expect(Math.abs(result.width / result.height - 1600 / 400)).toBeLessThan(0.01);
 	});
 
 	it("preserves inputs already within budget and dimensions (fast path)", async () => {

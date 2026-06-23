@@ -161,7 +161,7 @@ describe("InspectImageTool", () => {
 		const stub = createCompleteSimpleSuccessStub("Attached image inspected");
 		const missingCwd = path.join(testDir, "missing-cwd");
 		const tool = new InspectImageTool(
-			createSession(missingCwd, visionModel, "test-key", Settings.isolated(), {
+			createSession(missingCwd, visionModel, "test-key", Settings.isolated({ "images.autoResize": false }), {
 				imageAttachments: [{ label: "Image #1", uri: "attachment://1", image }],
 			}),
 			stub.fn,

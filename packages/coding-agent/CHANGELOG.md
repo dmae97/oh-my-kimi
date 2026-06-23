@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the eval `agent()` helper parameters `agent_type` → `agent` and `return_handle` → `handle` across every workflow runtime (Python, JavaScript, Ruby, Julia), so the names are identical in every language (no camelCase/snake_case split) and the agent-selection parameter matches the `task` tool's `agent`. The `__agent__` eval bridge wire protocol was renamed to match.
@@ -22,13 +23,6 @@
 - Made `eval` an essential built-in tool (`loadMode: "essential"`, added to the default essential tool set) so it stays active under `tools.discoveryMode: "all"` instead of being hidden behind `search_tool_bm25`.
 - Made the `--resume` session picker fullscreen on the terminal's alternate screen, so the list scrolls with the mouse wheel and a row resumes its session on left click. Rows are hit-tested against the live scroll window, and the keybinding hint + bottom border are now pinned to the screen bottom instead of drifting up and down as the visible window changes height.
 
-### Removed
-
-- Removed `append`, `tree`, and `diff` eval helper functions from Python, JavaScript, and Ruby
-- Removed `sort`, `uniq`, and `counter` text processing eval helpers from Python, JavaScript, and Ruby
-- Removed the `append(path, content)`, `tree(path, max_depth?, show_hidden?)`, and `diff(a, b)` eval prelude helpers from every workflow runtime (Python, JavaScript, Ruby, Julia), along with their status renderers, icon entries, and tool/`docs` references. Use `write`/`read` for file mutation and `tool.<name>(...)` for richer filesystem operations.
-- Removed the `sort(text, reverse?, unique?)`, `uniq(text, count?)`, and `counter(items, limit?, reverse?)` eval text helpers from the Python, JavaScript, and Ruby prelude surfaces (Julia never defined them), along with the JS `HelperBundle`/`HelperOptions` members and `docs` references. Sort/dedupe/count inline in cell code instead.
-
 ### Fixed
 
 - Fixed `local://` URLs decoding images as corrupted text (mojibake) instead of showing the image
@@ -46,6 +40,13 @@
 - Fixed `ask` returning `(cancelled)` or aborting the tool when Escape dismissed `Other (type your own)` custom input; it now returns to the option selector so the user can pick a listed answer instead. ([#3269](https://github.com/can1357/oh-my-pi/issues/3269))
 - Fixed `/goal` threshold auto-compaction skipping real sessions through three paths: per-turn supersede/drop-useless pruning no longer deflates the threshold trigger below the last provider-billed context; active-goal text stops now attempt threshold maintenance before unexpected-stop retry continuations can return from post-turn handling; and empty `toolUse` stops keep the existing cleanup pass that strips the orphan assistant from active context + session history before any compaction continuation. Active-goal compaction continuations now also resolve completed retry gates before returning, preventing `isRetrying` from staying stuck after a retry succeeds over the threshold. Added `agent_end maintenance routing` and `Auto-compaction threshold decision` debug logs so future no-start reports identify the exact early-return branch and the billed/stored/resolved/post-maintenance token counts that fed `shouldCompact`. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
 - Fixed active `/goal` runs that never reached `agent_end` because the model kept emitting tool calls inside one agent run. Threshold maintenance now runs between tool-call turns, compacts the live loop context in place, and suppresses queued continuations that would race the still-running goal loop. ([#3174](https://github.com/can1357/oh-my-pi/issues/3174))
+
+### Removed
+
+- Removed `append`, `tree`, and `diff` eval helper functions from Python, JavaScript, and Ruby
+- Removed `sort`, `uniq`, and `counter` text processing eval helpers from Python, JavaScript, and Ruby
+- Removed the `append(path, content)`, `tree(path, max_depth?, show_hidden?)`, and `diff(a, b)` eval prelude helpers from every workflow runtime (Python, JavaScript, Ruby, Julia), along with their status renderers, icon entries, and tool/`docs` references. Use `write`/`read` for file mutation and `tool.<name>(...)` for richer filesystem operations.
+- Removed the `sort(text, reverse?, unique?)`, `uniq(text, count?)`, and `counter(items, limit?, reverse?)` eval text helpers from the Python, JavaScript, and Ruby prelude surfaces (Julia never defined them), along with the JS `HelperBundle`/`HelperOptions` members and `docs` references. Sort/dedupe/count inline in cell code instead.
 
 ## [16.1.15] - 2026-06-22
 
