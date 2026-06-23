@@ -213,9 +213,23 @@ export function resolveProfileAliasCommandFromProcess(
 
 /** Normalize backslashes to forward slashes for POSIX-shell paths.
  *  path.posix.join only adds / separators — it preserves existing backslashes
- *  in input segments like homeDir ("C:\Users\me"), producing mixed paths. */
+ *  in input segments like homeDir ("C:\Users\me"), producing mixed paths.
+ *  Windows UNC paths (\\server\share) become //server/share — path.posix.join
+ *  would collapse the leading // to /, so we restore it after joining. */
 function toPosix(p: string): string {
 	return p.replace(/\\/g, "/");
+}
+
+/** Like path.posix.join, but preserves leading // (UNC roots) which
+ *  path.posix.join collapses to a single /. */
+function posixJoinUnc(...segments: string[]): string {
+	const joined = path.posix.join(...segments);
+	// path.posix.join normalizes // at the start to /, breaking UNC roots.
+	// Restore it if any input segment started with // (a toPosix'd UNC path).
+	if (segments.some(s => s.startsWith("//") && !s.startsWith("///"))) {
+		return `/${joined}`;
+	}
+	return joined;
 }
 
 function resolveShellConfigPath(
@@ -232,22 +246,20 @@ function resolveShellConfigPath(
 	const posixHome = toPosix(homeDir);
 	switch (shell) {
 		case "zsh":
-			return path.posix.join(env.ZDOTDIR ? toPosix(env.ZDOTDIR) : posixHome, ".zshrc");
+			return posixJoinUnc(env.ZDOTDIR ? toPosix(env.ZDOTDIR) : posixHome, ".zshrc");
 		case "bash":
-			return platform === "darwin"
-				? path.posix.join(posixHome, ".bash_profile")
-				: path.posix.join(posixHome, ".bashrc");
+			return platform === "darwin" ? posixJoinUnc(posixHome, ".bash_profile") : posixJoinUnc(posixHome, ".bashrc");
 		case "fish": {
 			// fish sources conf.d from $XDG_CONFIG_HOME/fish (default ~/.config/fish);
 			// a hard-coded ~/.config would be silently ignored when the user relocates
 			// their XDG config root, leaving the alias unsourced after a restart.
-			const configHome = env.XDG_CONFIG_HOME ? toPosix(env.XDG_CONFIG_HOME) : path.posix.join(posixHome, ".config");
-			return path.posix.join(configHome, "fish", "conf.d", "omp-profiles.fish");
+			const configHome = env.XDG_CONFIG_HOME ? toPosix(env.XDG_CONFIG_HOME) : posixJoinUnc(posixHome, ".config");
+			return posixJoinUnc(configHome, "fish", "conf.d", "omp-profiles.fish");
 		}
 		case "pwsh":
 			return platform === "win32"
 				? path.join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
-				: path.posix.join(posixHome, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+				: posixJoinUnc(posixHome, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
 		case "powershell":
 			return path.join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
 	}

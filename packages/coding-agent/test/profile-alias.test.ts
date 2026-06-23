@@ -421,4 +421,24 @@ describe("profile alias installer", () => {
 		expect(result.configPath).toBe("D:/xdg/fish/conf.d/omp-profiles.fish");
 		expect(result.reloadedWith).toBe("source 'D:/xdg/fish/conf.d/omp-profiles.fish'");
 	});
+
+	it("preserves UNC path roots when normalizing POSIX shell config paths", async () => {
+		const files = new Map<string, string>();
+
+		const result = await installProfileAlias({
+			profile: "work",
+			aliasName: "omp-work",
+			shellPath: "/bin/bash",
+			platform: "win32",
+			homeDir: "\\\\server\\share\\me",
+			readFile: async filePath => files.get(filePath) ?? "",
+			writeFile: async (filePath, content) => {
+				files.set(filePath, content);
+			},
+		});
+
+		// UNC path //server/share/me must NOT be collapsed to /server/share/me
+		expect(result.configPath).toBe("//server/share/me/.bashrc");
+		expect(result.reloadedWith).toBe(". '//server/share/me/.bashrc'");
+	});
 });
