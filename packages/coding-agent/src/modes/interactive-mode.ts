@@ -414,7 +414,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * respects the user's intent when they set thinking to "off" (#626).
 	 */
 	get effectiveHideThinkingBlock(): boolean {
-		return this.hideThinkingBlock || (this.session?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		return this.hideThinkingBlock || (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
 	}
 	proseOnlyThinking = true;
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];

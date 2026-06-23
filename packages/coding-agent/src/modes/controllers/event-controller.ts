@@ -5,7 +5,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
-import type { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
@@ -120,7 +120,20 @@ export class EventController {
 			thinking_level_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
-				this.ctx.ui.requestRender();
+				// Propagate visibility to existing rendered messages — thinking level
+				// changes mid-session must update already-rendered AssistantMessageComponents,
+				// not just new ones. Streaming reads effectiveHideThinkingBlock at construction.
+				const hideThinking = this.ctx.effectiveHideThinkingBlock;
+				for (const child of this.ctx.chatContainer.children) {
+					if (child instanceof AssistantMessageComponent) {
+						child.setHideThinkingBlock(hideThinking);
+					}
+				}
+				if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
+					this.ctx.streamingComponent.setHideThinkingBlock(hideThinking);
+					this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
+				}
+				this.ctx.ui.resetDisplay();
 			},
 			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;
