@@ -496,39 +496,6 @@ fn normalize_path_segment(segment: &str) -> String {
 	normalized.to_string_lossy().to_ascii_lowercase()
 }
 
-/// Check if a command is resolvable in the given PATH string.
-/// Returns true if the command exists and is executable in one of the PATH
-/// directories.
-fn command_is_resolvable(command: &str, path: &str) -> bool {
-	for dir in std::env::split_paths(path) {
-		let full_path = dir.join(command);
-		#[cfg(unix)]
-		{
-			use std::os::unix::fs::PermissionsExt;
-			if full_path.exists() {
-				if let Ok(metadata) = full_path.metadata() {
-					let permissions = metadata.permissions();
-					if permissions.mode() & 0o111 != 0 {
-						return true;
-					}
-				}
-			}
-		}
-		#[cfg(windows)]
-		{
-			if full_path.exists() {
-				// On Windows, .exe/.bat/.cmd extensions are automatically tried
-				for ext in ["", ".exe", ".bat", ".cmd"] {
-					let with_ext = dir.join(format!("{}{}", command, ext));
-					if with_ext.exists() {
-						return true;
-					}
-				}
-			}
-		}
-	}
-	false
-}
 #[cfg(not(windows))]
 fn merge_path_values(_existing: &str, incoming: &str) -> String {
 	incoming.to_string()
@@ -1966,13 +1933,16 @@ impl builtins::Command for NohupCommand {
 				return Ok(ExecutionResult::new(125));
 			}
 
-			// Detach the operand into a new session / process group (like `setsid`)
-			// so a backgrounded server survives this embedded shell's kill-on-drop
-			// teardown, which SIGKILLs the shell's own process group when the host
-			// process exits. Agents reach for `nohup <server> &` expecting exactly
-			// this persistence; a real coreutils `nohup` would NOT help, since it
-			// stays in the shell's process group and dies with it. The new session
-			// is applied below via ProcessGroupPolicy::NewProcessGroup.
+			// `nohup <cmd>` (foreground) runs the operand directly and surfaces its
+			// exit status — the contract pinned by
+			// `nohup_builtin_propagates_command_exit_code`. Persistence across the
+			// host's teardown is a *background* concern that never reaches this
+			// builtin: the agent writes `nohup <server> &`, and brush's
+			// `transparent_background_wrapper` unwraps that to spawn the operand
+			// directly with `detach_reparent`, double-forking it out of the shell's
+			// descendant tree (see `execute_external_command` / `detach_session_reparent`).
+			// Like coreutils, we run the operand here; we only differ by not masking
+			// SIGHUP (see `nohup_builtin_does_not_mask_sighup`).
 			let mut command_line = String::new();
 			for (idx, arg) in command.iter().enumerate() {
 				if idx > 0 {

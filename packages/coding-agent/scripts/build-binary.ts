@@ -53,7 +53,9 @@ async function main(): Promise<void> {
 		await runCommand(["bun", "scripts/generate-docs-index.ts", "--generate"]);
 		await runCommand(
 			["bun", "--cwd=../natives", "run", "embed:native"],
-			crossTarget ? { ...Bun.env, TARGET_PLATFORM: crossPlatform as string, TARGET_ARCH: crossArch as string } : Bun.env,
+			crossTarget
+				? { ...Bun.env, TARGET_PLATFORM: crossPlatform as string, TARGET_ARCH: crossArch as string }
+				: Bun.env,
 		);
 		await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--generate"]);
 		try {

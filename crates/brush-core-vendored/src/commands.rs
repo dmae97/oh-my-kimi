@@ -632,7 +632,13 @@ pub(crate) fn execute_external_command(
 	match session_action {
 		ChildSessionAction::DetachSession => {
 			// setsid() creates the fresh session + process group; no process_group().
-			cmd.detach_session();
+			// A reparenting operand (`nohup cmd &`) additionally double-forks so it
+			// leaves the host's descendant tree and survives the teardown walk.
+			if context.params.detach_reparent {
+				cmd.detach_session_reparent();
+			} else {
+				cmd.detach_session();
+			}
 		}
 		ChildSessionAction::TakeForeground if command_leads_session => {
 			// Don't set process_group(0) - setsid() in pre_exec will handle it.

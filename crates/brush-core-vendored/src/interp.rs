@@ -73,6 +73,11 @@ pub struct ExecutionParameters {
 	open_files:               openfiles::OpenFiles,
 	/// Policy for how to manage spawned external processes.
 	pub process_group_policy: ProcessGroupPolicy,
+	/// Whether external commands spawned in this context should reparent out of
+	/// the shell's descendant tree (double-fork on Unix) so they survive the
+	/// host's descendant-walk teardown. Set for the operand of a transparent
+	/// background wrapper such as `nohup cmd &`.
+	pub detach_reparent: bool,
 	/// Optional cancellation token shared with callers.
 	cancel_token:             Option<CancellationToken>,
 	/// Optional command-output marker hook.
@@ -382,7 +387,12 @@ async fn spawn_async_ao_list_as_job<'a, SE: extensions::ShellExtensions>(
 
 	let direct_pipeline =
 		background_process_pipeline_for_async_job(ao_list, shell, &async_params).await?;
-	let job = if let Some(pipeline) = direct_pipeline {
+	let job = if let Some((pipeline, detach_reparent)) = direct_pipeline {
+		// A transparent background wrapper (e.g. `nohup cmd &`) was unwrapped to its
+		// operand. Reparent that operand out of the shell's descendant tree so it
+		// survives the host's descendant-walk teardown — the persistence agents
+		// reach for `nohup` expecting.
+		async_params.detach_reparent = detach_reparent;
 		match try_spawn_pipeline_as_job(&pipeline, ao_list.to_string(), shell, &async_params).await? {
 			Some(job) => job,
 			None => spawn_async_ao_list_in_task(ao_list, shell, &async_params),
@@ -404,16 +414,22 @@ async fn background_process_pipeline_for_async_job<SE: extensions::ShellExtensio
 	ao_list: &ast::AndOrList,
 	shell: &mut Shell<SE>,
 	params: &ExecutionParameters,
-) -> Result<Option<ast::Pipeline>, error::Error> {
+) -> Result<Option<(ast::Pipeline, bool)>, error::Error> {
 	if !ao_list.additional.is_empty() {
 		return Ok(None);
 	}
 
 	let mut pipeline = ao_list.first.clone();
+	let mut detach_reparent = false;
 	for _ in 0..8 {
 		match classify_background_process_pipeline(&pipeline, shell, params).await? {
-			BackgroundProcessPipeline::Direct => return Ok(Some(pipeline)),
-			BackgroundProcessPipeline::Wrapper(unwrapped) => pipeline = unwrapped,
+			BackgroundProcessPipeline::Direct => return Ok(Some((pipeline, detach_reparent))),
+			BackgroundProcessPipeline::Wrapper(unwrapped) => {
+				// Unwrapping a transparent background wrapper (`nohup`) means the
+				// operand should reparent away from the shell when finally spawned.
+				detach_reparent = true;
+				pipeline = unwrapped;
+			},
 			BackgroundProcessPipeline::Internal => return Ok(None),
 		}
 	}
