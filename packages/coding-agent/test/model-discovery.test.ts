@@ -741,6 +741,46 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("llama.cpp", "sleeping-model")?.contextWindow).toBe(239104);
 	});
 
+	test("llama.cpp selected model refresh preserves same-id custom limits", async () => {
+		writeRawModelsJson({
+			"llama.cpp": {
+				baseUrl: "http://127.0.0.1:8080",
+				api: "openai-responses",
+				auth: "none",
+				discovery: { type: "llama.cpp" },
+				models: [
+					{
+						id: "pinned-model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 88832,
+						maxTokens: 4096,
+					},
+				],
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(JSON.stringify({ data: [{ id: "pinned-model", meta: { n_ctx: 239104 } }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const pinned = registry.find("llama.cpp", "pinned-model");
+		if (!pinned) throw new Error("custom llama.cpp model missing");
+		const refreshed = await registry.refreshSelectedModelMetadata(pinned);
+		expect(refreshed.contextWindow).toBe(88832);
+		expect(refreshed.maxTokens).toBe(4096);
+		const registryModel = registry.find("llama.cpp", "pinned-model");
+		expect(registryModel?.contextWindow).toBe(88832);
+		expect(registryModel?.maxTokens).toBe(4096);
+	});
+
 	test("llama.cpp refresh bypasses fresh cache so server restarts update n_ctx", async () => {
 		writeModelCache(
 			"llama.cpp",

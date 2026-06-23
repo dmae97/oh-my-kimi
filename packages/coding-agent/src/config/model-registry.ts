@@ -776,12 +776,21 @@ export class ModelRegistry {
 		}
 		const current = this.find(model.provider, model.id) ?? model;
 		const override = this.#resolveLiveModelOverride(current);
+		const customModel = this.#resolveLiveCustomModelOverlay(current);
 		const patch: ModelPatch = {};
-		if (override?.contextWindow === undefined && current.contextWindow !== contextWindow) {
+		if (
+			override?.contextWindow === undefined &&
+			customModel?.contextWindow === undefined &&
+			current.contextWindow !== contextWindow
+		) {
 			patch.contextWindow = contextWindow;
 		}
 		const maxTokens = Math.min(contextWindow, DISCOVERY_DEFAULT_MAX_TOKENS);
-		if (override?.maxTokens === undefined && current.maxTokens !== maxTokens) {
+		if (
+			override?.maxTokens === undefined &&
+			customModel?.maxTokens === undefined &&
+			current.maxTokens !== maxTokens
+		) {
 			patch.maxTokens = maxTokens;
 		}
 		if (patch.contextWindow === undefined && patch.maxTokens === undefined) {
@@ -1619,6 +1628,13 @@ export class ModelRegistry {
 			providerOverrides,
 			model,
 			(provider, id) => this.find(provider, id) !== undefined,
+		);
+	}
+
+	#resolveLiveCustomModelOverlay(model: Model<Api>): CustomModelOverlay | undefined {
+		return (
+			this.#customModelOverlays.find(overlay => overlay.provider === model.provider && overlay.id === model.id) ??
+			this.#runtimeModelOverlays.find(overlay => overlay.provider === model.provider && overlay.id === model.id)
 		);
 	}
 
