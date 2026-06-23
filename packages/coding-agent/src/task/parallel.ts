@@ -85,6 +85,10 @@ export async function mapWithConcurrencyLimit<T, R>(
 
 /**
  * Simple counting semaphore for limiting concurrency across independently-scheduled async work.
+ *
+ * `max <= 0` (or any non-finite input) means unbounded — every `acquire()` resolves
+ * immediately — matching `task.maxConcurrency = 0`'s "Unlimited" semantics in the
+ * settings UI ([#3305](https://github.com/can1357/oh-my-pi/issues/3305)).
  */
 export class Semaphore {
 	#max: number;
@@ -92,7 +96,7 @@ export class Semaphore {
 	#queue: Array<() => void> = [];
 
 	constructor(max: number) {
-		this.#max = Math.max(1, max);
+		this.#max = Number.isFinite(max) && max > 0 ? Math.trunc(max) : Number.POSITIVE_INFINITY;
 	}
 
 	async acquire(): Promise<void> {
