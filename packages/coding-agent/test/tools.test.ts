@@ -803,7 +803,12 @@ describe("Coding Agent Tools", () => {
 			fs.writeFileSync(testFile, pngBuffer);
 
 			const legacyReadTool = wrapToolWithMetaNotice(
-				new ReadTool(createTestToolSession(testDir, Settings.isolated({ "inspect_image.enabled": false, "images.autoResize": false }))),
+				new ReadTool(
+					createTestToolSession(
+						testDir,
+						Settings.isolated({ "inspect_image.enabled": false, "images.autoResize": false }),
+					),
+				),
 			);
 			const result = await legacyReadTool.execute("test-call-img-1", { path: testFile });
 

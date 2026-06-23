@@ -351,6 +351,7 @@ describe("OpenRouter Responses request shape", () => {
 			id: "rs_1",
 			encrypted_content: "encrypted-reasoning",
 			summary: [],
+			format: "google-gemini-v1",
 		};
 		const replayItem = {
 			type: nativeItem.type,

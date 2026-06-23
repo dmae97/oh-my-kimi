@@ -78,6 +78,7 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 ): OpenAIResponsesReplayItem | undefined {
 	if (item.type === "item_reference") return undefined;
 	if (item.type === "image_generation_call") return sanitizeOpenAIResponsesImageGenerationCallForReplay(item);
+	if (item.type === "reasoning") return sanitizeOpenAIResponsesReasoningItemForReplay(item);
 
 	// providerPayload stores raw output items; replay strips item ids and keeps only normalized call_id.
 	const { id: _id, ...sanitizedItem } = item;
@@ -85,6 +86,19 @@ function sanitizeOpenAIResponsesHistoryItemForReplay(
 		sanitizedItem.call_id = normalizeReplayedResponsesHistoryCallId(item.call_id, normalizedCallIds);
 	}
 
+	return sanitizedItem as unknown as OpenAIResponsesReplayItem;
+}
+
+function sanitizeOpenAIResponsesReasoningItemForReplay(item: Record<string, unknown>): OpenAIResponsesReplayItem {
+	const sanitizedItem: Record<string, unknown> = { type: "reasoning" };
+	if (Array.isArray(item.summary)) sanitizedItem.summary = item.summary;
+	if (Array.isArray(item.content)) sanitizedItem.content = item.content;
+	if (typeof item.encrypted_content === "string" || item.encrypted_content === null) {
+		sanitizedItem.encrypted_content = item.encrypted_content;
+	}
+	if (item.status === "in_progress" || item.status === "completed" || item.status === "incomplete") {
+		sanitizedItem.status = item.status;
+	}
 	return sanitizedItem as unknown as OpenAIResponsesReplayItem;
 }
 
