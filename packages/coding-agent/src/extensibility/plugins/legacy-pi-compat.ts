@@ -105,11 +105,10 @@ const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
  * - the module's own source directory if a future Bun release switches to
  *   module-specific `import.meta.dir` values:
  *   `<bunfs>/packages/coding-agent/src/extensibility/plugins`.
- *
- * The bunfs-root-with-binary branch slices the original `metaDir` (rather
- * than re-joining the normalized parent) so the bunfs-native prefix is
- * preserved verbatim — `path.posix.join` collapses `//root` to `/root` and
- * Bun's bunfs lookup is keyed on the exact `//root` form.
+ * The bunfs-root-with-binary branch slices the original `metaDir`, and
+ * `bunfsPath` uses a matching double-slash-preserving join, so the bunfs-native
+ * prefix is preserved verbatim — `path.posix.join` collapses `//root` to
+ * `/root`, but Bun's bunfs lookup is keyed on the exact `//root` form.
  *
  * Exported for tests; production callers use `BUNFS_PACKAGE_ROOT` below.
  */
@@ -150,11 +149,27 @@ export function __computeBundledSelfPackageRoot(metaDir: string, pathImpl: typeo
 
 const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
 
+/**
+ * Join a computed bunfs package root with descendants without collapsing
+ * Bun's POSIX `//root` mount prefix.
+ *
+ * Exported for tests; production callers use `bunfsPath` below.
+ */
+export function __joinBunfsPath(root: string, segments: readonly string[], pathImpl: typeof path = path): string {
+	const joined = pathImpl.join(root, ...segments);
+	const doubleRootPrefix = pathImpl.sep + pathImpl.sep;
+	const tripleRootPrefix = doubleRootPrefix + pathImpl.sep;
+	if (root.startsWith(doubleRootPrefix) && !root.startsWith(tripleRootPrefix) && !joined.startsWith(doubleRootPrefix)) {
+		return pathImpl.sep + joined;
+	}
+	return joined;
+}
+
 function bunfsPath(...segments: string[]): string {
 	if (!BUNFS_PACKAGE_ROOT) {
 		throw new Error("bunfsPath is only valid in compiled-binary mode");
 	}
-	return path.join(BUNFS_PACKAGE_ROOT, ...segments);
+	return __joinBunfsPath(BUNFS_PACKAGE_ROOT, segments);
 }
 
 function resolveBundledSelfPackageRoot(): string | undefined {
