@@ -128,13 +128,23 @@ describe("openai-codex usage parser", () => {
 	});
 
 	it("surfaces rate_limit_reset_credits.available_count as report.resetCredits", async () => {
-		const payload = { ...makePayload(), rate_limit_reset_credits: { available_count: 1 } };
+		const usagePayload = { ...makePayload(), rate_limit_reset_credits: { available_count: 1 } };
+		const fetchImpl: FetchImpl = (async (url: string | URL | Request) => {
+			const path = typeof url === "string" ? url : url.toString();
+			// Return an empty credits list for the detail endpoint — the count
+			// from /wham/usage should be synced from the live response.
+			const body = path.includes("rate-limit-reset-credits") ? { available_count: 1, credits: [] } : usagePayload;
+			return new Response(JSON.stringify(body), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		}) as unknown as FetchImpl;
 		const report = await openaiCodexUsageProvider.fetchUsage(
 			{
 				provider: "openai-codex",
 				credential: { type: "oauth", accessToken: accessTokenFixture, accountId: "acct-1", email: "u@example.com" },
 			},
-			{ fetch: fakeFetch(payload) },
+			{ fetch: fetchImpl },
 		);
 		expect(report?.resetCredits).toEqual({ availableCount: 1 });
 	});

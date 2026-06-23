@@ -488,6 +488,11 @@ export const openaiCodexUsageProvider: UsageProvider = {
 							expiresAt: c.expiresAt,
 							status: c.status,
 						}));
+				}
+				// Always sync the live count from the detail endpoint — it may report
+				// fewer or zero available credits after expiry/redeem, even when the
+				// /wham/usage payload still has a stale count.
+				if (list) {
 					resetCredits.availableCount = list.availableCount;
 				}
 			} catch (error) {
