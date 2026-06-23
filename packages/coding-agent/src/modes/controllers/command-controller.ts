@@ -10,7 +10,7 @@ import {
 	type UsageReport,
 } from "@oh-my-pi/pi-ai";
 import { Loader, Markdown, padding, Spacer, Text, visibleWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, Snowflake } from "@oh-my-pi/pi-utils";
+import { formatDuration, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { shareSession } from "../../export/share";
@@ -44,7 +44,7 @@ import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../sess
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
-import { replaceTabs } from "../../tools/render-utils";
+import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import { getChangelogPath, parseChangelog } from "../../utils/changelog";
 import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
@@ -1587,7 +1587,9 @@ function renderUsageReports(
 		// above the per-account sections instead of duplicating onto every limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
 		if (providerNotes.length > 0) {
-			lines.push(`  ${uiTheme.fg("dim", providerNotes.join(" • "))}`.trimEnd());
+			lines.push(
+				`  ${uiTheme.fg("dim", replaceTabs(truncateToWidth(sanitizeText(providerNotes.join(" • ")), 110)))}`.trimEnd(),
+			);
 		}
 
 		const resetAccountLines: string[] = [];
@@ -1660,7 +1662,9 @@ function renderUsageReports(
 			}
 			const notes = [...new Set(sortedLimits.flatMap(limit => limit.notes ?? []))];
 			if (notes.length > 0) {
-				lines.push(`  ${uiTheme.fg("dim", notes.join(" • "))}`.trimEnd());
+				lines.push(
+					`  ${uiTheme.fg("dim", replaceTabs(truncateToWidth(sanitizeText(notes.join(" • ")), 110)))}`.trimEnd(),
+				);
 			}
 		}
 
