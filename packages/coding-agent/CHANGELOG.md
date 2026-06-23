@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed llama.cpp discovery to prefer per-model `/v1/models` `meta.n_ctx`/`meta.n_ctx_train` values, refresh selected models after lazy load, and bypass fresh-cache reuse so server restarts update context windows. ([#3310](https://github.com/can1357/oh-my-pi/issues/3310))
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes
@@ -27,7 +31,6 @@
 
 ### Fixed
 
-- Fixed llama.cpp discovery to prefer per-model `/v1/models` `meta.n_ctx`/`meta.n_ctx_train` values, refresh selected models after lazy load, and bypass fresh-cache reuse so server restarts update context windows. ([#3310](https://github.com/can1357/oh-my-pi/issues/3310))
 - Fixed `local://` URLs decoding images as corrupted text (mojibake) instead of showing the image
 - Fixed `omp --resume` hanging instead of exiting when the startup session picker is cancelled (Esc) or there are no sessions to resume. Startup arms long-lived handles (theme/appearance listeners, settings save timer, model registry), so the cancel/empty paths' bare `return` left the event loop alive and the process stuck after the picker cleared the alternate screen. These paths now exit cleanly via `process.exit(0)`, matching the `--version`/`--export` early-exit convention. The in-session `/resume` picker is unaffected — it keeps its own cancel handler that just closes the overlay.
 - Fixed the `/resume` session picker scrolling down after a session is deleted. The delete-confirmation dialog was mounted as a sibling below the picker's bottom border, briefly growing the picker past the terminal height; the TUI committed the picker's header rows into native scrollback to fit, and when the dialog closed `windowTop` stayed pinned at the new commit boundary, leaving the header stranded above the viewport. The picker now hosts the `SessionList` in a single content slot and swaps the dialog INTO that slot (replacing the `SessionList`) while it is open, so the dialog only competes with the `SessionList`'s rendered budget — not the `SessionList` AND the picker chrome — and the picker frame stays inside the viewport. ([#3283](https://github.com/can1357/oh-my-pi/issues/3283))
