@@ -93,14 +93,22 @@ const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
 // so they keep working when on-disk layout differs from the monorepo tree.
 /**
  * Compute the bunfs package root from the compiled binary's `import.meta.dir`
- * (or any stand-in supplied by tests). Bun 1.3 reports the bunfs mount root
- * (`/$bunfs/root` or `<drive>:\~BUN\root`) for imported modules as well as the
- * entrypoint, so the normal path is `<root>/packages`.
+ * (or any stand-in supplied by tests). Bun compiled binaries report one of:
  *
- * The suffix branch preserves correctness if a future Bun release switches to
- * module-specific `import.meta.dir` values inside compiled binaries, matching
- * the source layout:
- * `<bunfs>/packages/coding-agent/src/extensibility/plugins`.
+ * - the bunfs mount root itself — `/$bunfs/root` or `<drive>:\~BUN\root` (Bun
+ *   1.2.x and early 1.3.x). Append `packages` for the canonical layout.
+ * - the bunfs mount root followed by the binary's basename — `//root/<bin>`
+ *   on POSIX or `<drive>:\~BUN\root\<bin>.exe` on Windows (observed on Bun
+ *   1.3.14 with the cross-compiled `omp-darwin-arm64` release asset — issue
+ *   #3329). The trailing segment is stripped so the result still lands on
+ *   `<root>/packages`.
+ * - the module's own source directory if a future Bun release switches to
+ *   module-specific `import.meta.dir` values:
+ *   `<bunfs>/packages/coding-agent/src/extensibility/plugins`.
+ * The bunfs-root-with-binary branch slices the original `metaDir`, and
+ * `bunfsPath` uses a matching double-slash-preserving join, so the bunfs-native
+ * prefix is preserved verbatim — `path.posix.join` collapses `//root` to
+ * `/root`, but Bun's bunfs lookup is keyed on the exact `//root` form.
  *
  * Exported for tests; production callers use `BUNFS_PACKAGE_ROOT` below.
  */
@@ -109,6 +117,10 @@ export function __computeBunfsPackageRoot(metaDir: string, pathImpl: typeof path
 	const normalizedMetaDir = pathImpl.normalize(metaDir);
 	if (normalizedMetaDir.endsWith(pluginsDirSuffix)) {
 		return pathImpl.resolve(metaDir, "..", "..", "..", "..");
+	}
+	const parent = pathImpl.dirname(metaDir);
+	if (pathImpl.basename(pathImpl.normalize(parent)) === "root") {
+		return `${parent + pathImpl.sep}packages`;
 	}
 	return pathImpl.join(metaDir, "packages");
 }
@@ -137,11 +149,31 @@ export function __computeBundledSelfPackageRoot(metaDir: string, pathImpl: typeo
 
 const BUNFS_PACKAGE_ROOT = IS_COMPILED_BINARY ? __computeBunfsPackageRoot(import.meta.dir) : null;
 
+/**
+ * Join a computed bunfs package root with descendants without collapsing
+ * Bun's POSIX `//root` mount prefix.
+ *
+ * Exported for tests; production callers use `bunfsPath` below.
+ */
+export function __joinBunfsPath(root: string, segments: readonly string[], pathImpl: typeof path = path): string {
+	const joined = pathImpl.join(root, ...segments);
+	const doubleRootPrefix = pathImpl.sep + pathImpl.sep;
+	const tripleRootPrefix = doubleRootPrefix + pathImpl.sep;
+	if (
+		root.startsWith(doubleRootPrefix) &&
+		!root.startsWith(tripleRootPrefix) &&
+		!joined.startsWith(doubleRootPrefix)
+	) {
+		return pathImpl.sep + joined;
+	}
+	return joined;
+}
+
 function bunfsPath(...segments: string[]): string {
 	if (!BUNFS_PACKAGE_ROOT) {
 		throw new Error("bunfsPath is only valid in compiled-binary mode");
 	}
-	return path.join(BUNFS_PACKAGE_ROOT, ...segments);
+	return __joinBunfsPath(BUNFS_PACKAGE_ROOT, segments);
 }
 
 function resolveBundledSelfPackageRoot(): string | undefined {

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
 	__computeBundledSelfPackageRoot,
 	__computeBunfsPackageRoot,
+	__joinBunfsPath,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 
 // Regression for issue #1514: legacy pi compat shim paths were built from a
@@ -33,6 +34,24 @@ describe("legacy pi compat bunfs root computation (issue #1514)", () => {
 		expect(__computeBunfsPackageRoot(winMetaDir, path.win32)).toBe("B:\\~BUN\\root\\packages");
 		const posixMetaDir = "/$bunfs/root/packages/coding-agent/src/extensibility/plugins";
 		expect(__computeBunfsPackageRoot(posixMetaDir, path.posix)).toBe("/$bunfs/root/packages");
+	});
+
+	it("preserves the double-slash bunfs prefix through production shim path joins (issue #3329)", () => {
+		// Bun 1.3.14 on the cross-compiled `omp-darwin-arm64` release asset
+		// reports `import.meta.dir` as `//root/omp-darwin-arm64`. The leading
+		// `//` is part of Bun's bunfs identifier, so both the root computation
+		// and the production shim-path join must preserve it.
+		const root = __computeBunfsPackageRoot("//root/omp-darwin-arm64", path.posix);
+		expect(root).toBe("//root/packages");
+		expect(__joinBunfsPath(root, ["coding-agent", "src", "extensibility", "typebox.js"], path.posix)).toBe(
+			"//root/packages/coding-agent/src/extensibility/typebox.js",
+		);
+
+		// `$bunfs`-prefixed variant is also handled.
+		expect(__computeBunfsPackageRoot("/$bunfs/root/omp", path.posix)).toBe("/$bunfs/root/packages");
+		// Windows variant: bunfs mount at `<drive>:\~BUN\root` with the binary
+		// basename appended.
+		expect(__computeBunfsPackageRoot("B:\\~BUN\\root\\omp.exe", path.win32)).toBe("B:\\~BUN\\root\\packages");
 	});
 
 	it("uses the current host path implementation for production calls", () => {
