@@ -576,6 +576,36 @@ describe("anthropic stream envelope handling", () => {
 		expect(capturedParams?.tools?.map(tool => tool.name)).toEqual(["web_search"]);
 		expect(capturedOptions?.headers).toEqual({ "X-Umans-Websearch-Provider": "exa" });
 	});
+
+	it("does not send context_management through injected clients", async () => {
+		type CapturedPayload = {
+			thinking?: { type?: string };
+			context_management?: unknown;
+		};
+		let capturedParams: CapturedPayload | undefined;
+		const client: AnthropicMessagesClientLike = {
+			messages: {
+				create(params) {
+					capturedParams = params as CapturedPayload;
+					return createMockRequest(createTextSuccessEvents("done"));
+				},
+			},
+		};
+
+		const stream = streamAnthropic(model, context, {
+			client,
+			thinkingEnabled: true,
+		});
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.content).toEqual([{ type: "text", text: "done" }]);
+		expect(capturedParams?.thinking?.type).toBe("enabled");
+		expect(capturedParams?.context_management).toBeUndefined();
+	});
 	it("unwraps thinking blocks that Anthropic streams with literal thinking tags", async () => {
 		const wrappedThinking =
 			"<thinking>\n<thinking>\nCheck logs before accepting container health.\n</thinking></thinking>";

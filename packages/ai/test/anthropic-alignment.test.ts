@@ -406,6 +406,41 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
 	});
 
+	it("adds the context-management beta to API-key thinking requests", async () => {
+		let capturedBeta: string | undefined;
+		const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+			capturedBeta = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
+			return new Response(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+				{ status: 400, headers: { "Content-Type": "application/json" } },
+			);
+		}) as typeof fetch;
+
+		// `context_management.clear_thinking_20251015` is rejected without
+		// the `context-management-2025-06-27` beta. OAuth requests carry it
+		// via `claudeCodeAgentBetaDefaults`; API-key requests must add it
+		// explicitly whenever thinking is enabled so the field is honored
+		// instead of dropped on the floor (#3288).
+		await streamAnthropic(
+			ANTHROPIC_MODEL,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "sk-ant-api-test", thinkingEnabled: true, fetch: fetchMock },
+		).result();
+
+		expect(capturedBeta).toContain("context-management-2025-06-27");
+
+		capturedBeta = undefined;
+		await streamAnthropic(
+			ANTHROPIC_MODEL,
+			{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "sk-ant-api-test", thinkingEnabled: false, fetch: fetchMock },
+		).result();
+
+		// No context_management field is sent when thinking is disabled, so the
+		// beta MUST NOT be advertised either.
+		expect(capturedBeta ?? "").not.toContain("context-management-2025-06-27");
+	});
+
 	it("billing-header fingerprint uses first user message, not leading developer message", async () => {
 		const userText = "Hello from user with enough chars padding here";
 
@@ -1870,7 +1905,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(maxPayload.output_config).toEqual({ effort: "max" });
 	});
 
-	it("keeps summarized adaptive thinking by default for API-key Opus 4.7+ requests", async () => {
+	it("keeps summarized adaptive thinking and context management for API-key Opus 4.7+ requests", async () => {
 		const payload = (await captureAnthropicPayload(
 			buildModel({
 				...ANTHROPIC_MODEL_SPEC,
@@ -1892,12 +1927,14 @@ describe("Anthropic request fingerprint alignment", () => {
 			},
 		)) as {
 			thinking?: { type?: string; display?: string };
-			context_management?: unknown;
+			context_management?: { edits?: Array<{ type?: string; keep?: string | number }> };
 			output_config?: { effort?: string };
 		};
 
 		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
-		expect(payload.context_management).toBeUndefined();
+		expect(payload.context_management).toEqual({
+			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+		});
 		expect(payload.output_config).toEqual({ effort: "xhigh" });
 	});
 

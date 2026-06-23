@@ -101,6 +101,29 @@ describe("Anthropic-compatible unsigned thinking replay (#2005)", () => {
 		expect(blocks[1]).toEqual({ type: "text", text: "Sure." });
 	});
 
+	it("sends context_management for API-key Anthropic-compatible thinking requests", async () => {
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamAnthropic(
+			makeModel(),
+			{ systemPrompt: [], messages: [makeUser("continue")] },
+			{
+				apiKey: "sk-ant-api-test",
+				signal: AbortSignal.abort(),
+				thinkingEnabled: true,
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as {
+			thinking?: { type?: string };
+			context_management?: { edits?: Array<{ type?: string; keep?: string }> };
+		};
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.context_management).toEqual({
+			edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+		});
+	});
+
 	it("sanitizes lone surrogates in tool arguments regardless of origin API", () => {
 		const loneSurrogate = "broken \ud83d end";
 		const makeToolCallAssistant = (api: AssistantMessage["api"]): AssistantMessage => ({

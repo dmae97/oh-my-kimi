@@ -120,10 +120,11 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 }
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
+const contextManagementBeta = "context-management-2025-06-27";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"context-management-2025-06-27",
+	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
 	"structured-outputs-2025-12-15",
 ] as const;
@@ -131,7 +132,7 @@ const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
-	"context-management-2025-06-27",
+	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
 	midConversationSystemBeta,
 	"advanced-tool-use-2025-11-20",
@@ -1680,6 +1681,22 @@ const streamAnthropicOnce = (
 					// carry it in the Claude Code list).
 					extraBetas.push(midConversationSystemBeta);
 				}
+				// `context_management.clear_thinking_20251015` requires this beta. OAuth
+				// requests carry it in `claudeCodeAgentBetaDefaults`; API-key requests
+				// need it added explicitly so the field is honored instead of rejected
+				// (#3288). Skip transports where this package cannot deliver the beta
+				// in the form their adapter accepts: Copilot strips Anthropic betas,
+				// and Vertex rawPredict needs betas in the body (`anthropic_beta`),
+				// not as an `anthropic-beta` HTTP header.
+				if (
+					model.reasoning &&
+					options?.thinkingEnabled &&
+					model.provider !== "github-copilot" &&
+					model.provider !== "google-vertex" &&
+					!extraBetas.includes(contextManagementBeta)
+				) {
+					extraBetas.push(contextManagementBeta);
+				}
 
 				const created = createClient(model, {
 					model,
@@ -2944,11 +2961,28 @@ function buildParams(
 		}
 	}
 
-	// Pre-compute context_management (depends on thinking).
-	const contextManagement =
-		isOAuthToken && thinking?.type === "adaptive"
-			? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
-			: undefined;
+	// Pre-compute context_management. Send keep: "all" for every enabled or
+	// adaptive thinking request (OAuth + API-key) — not just OAuth. Without
+	// this directive Anthropic-compatible backends (Z.AI, Kimi, DeepSeek, …)
+	// strip the replayed thinking blocks `replayUnsignedThinking` puts back
+	// on the wire, so the model loses the prior reasoning chain across turns
+	// and the KV cache misses every turn (#3288). Narrowing this guard back
+	// to `isOAuthToken` regresses every API-key thinking provider. Skip
+	// injected clients because this code cannot add the required
+	// `context-management-2025-06-27` beta to caller-owned SDK clients. Skip
+	// Copilot because its proxy strips Anthropic betas and demotes thinking
+	// blocks to text upstream, so `keep: "all"` is a no-op that risks proxy
+	// rejection of an unrecognized field. Skip Vertex rawPredict because that
+	// adapter requires betas in the JSON body (`anthropic_beta`) instead of the
+	// Anthropic HTTP beta header this code can add.
+	const shouldKeepThinkingContext =
+		!options?.client &&
+		model.provider !== "github-copilot" &&
+		model.provider !== "google-vertex" &&
+		(thinking?.type === "adaptive" || thinking?.type === "enabled");
+	const contextManagement = shouldKeepThinkingContext
+		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
+		: undefined;
 
 	// Pre-compute output_config.
 	const outputConfigEntries: AnthropicOutputConfig = {};
