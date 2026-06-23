@@ -35,6 +35,20 @@ describe("legacy pi compat bunfs root computation (issue #1514)", () => {
 		expect(__computeBunfsPackageRoot(posixMetaDir, path.posix)).toBe("/$bunfs/root/packages");
 	});
 
+	it("strips the trailing binary-name segment when Bun reports `<bunfs-root>/<binary>` (issue #3329)", () => {
+		// Bun 1.3.14 on the Homebrew darwin-arm64 compiled binary reports
+		// `import.meta.dir` as `//root/omp-darwin-arm64`. The leading `//`
+		// is part of Bun's bunfs identifier — `path.posix.join("//root", ...)`
+		// would collapse it to `/root`, so the strip path must preserve the
+		// original prefix verbatim.
+		expect(__computeBunfsPackageRoot("//root/omp-darwin-arm64", path.posix)).toBe("//root/packages");
+		// `$bunfs`-prefixed variant is also handled.
+		expect(__computeBunfsPackageRoot("/$bunfs/root/omp", path.posix)).toBe("/$bunfs/root/packages");
+		// Windows variant: bunfs mount at `<drive>:\~BUN\root` with the binary
+		// basename appended.
+		expect(__computeBunfsPackageRoot("B:\\~BUN\\root\\omp.exe", path.win32)).toBe("B:\\~BUN\\root\\packages");
+	});
+
 	it("uses the current host path implementation for production calls", () => {
 		const metaDir = path.join("/", "anywhere", "root");
 		expect(__computeBunfsPackageRoot(metaDir)).toBe(path.join("/", "anywhere", "root", "packages"));
