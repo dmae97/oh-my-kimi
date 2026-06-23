@@ -38,6 +38,7 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 
 const model: Model<"gitlab-duo-agent"> = buildModel({
@@ -1503,7 +1504,51 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(result.errorMessage).toContain("GitLab Duo Workflow direct_access failed");
 		expect(result.errorMessage).toContain("USAGE_QUOTA_EXCEEDED");
 		expect(result.errorMessage).toContain("Usage quota exceeded");
-		expect(result.errorMessage).not.toBe("GitLab Duo Workflow direct_access failed with HTTP 403");
+		// The body message must be preserved AND the HTTP status embedded so the
+		// streaming auth-retry path can recover it (`extractStatusFromAssistantError`
+		// -> `extractHttpStatusFromError`) and rotate the parked credential.
+		expect(result.errorMessage).toContain("HTTP 403");
+		expect(extractHttpStatusFromError({ message: result.errorMessage })).toBe(403);
+	});
+
+	it("preserves the 401 status for an Unauthorized direct_access body so the credential can rotate", async () => {
+		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				// An expired OAuth token: GitLab returns a terse `Unauthorized` body
+				// with no status digits. Without embedding the HTTP status, the message
+				// alone ("...failed: Unauthorized") would surface as a hard failure and
+				// the broker could never refresh/rotate the credential.
+				return new Response(JSON.stringify({ message: "Unauthorized" }), { status: 401 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			fetch: fetchImpl,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Unauthorized");
+		expect(result.errorMessage).toContain("HTTP 401");
+		expect(extractHttpStatusFromError({ message: result.errorMessage })).toBe(401);
 	});
 
 	it("auto-discovers a namespace project for the inline flow when none is configured", async () => {

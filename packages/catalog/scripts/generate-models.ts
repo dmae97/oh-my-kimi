@@ -500,10 +500,15 @@ async function generateModels() {
 	}
 	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
 	// dynamic discovery/cache yet) still surfaces the provider's default model in the
-	// built-in catalog. The provider is dynamicModelsAuthoritative, so when live
-	// `aiChatAvailableModels` discovery succeeds during generation its entries win the
-	// id-keyed dedup above (catalogProviderModels precede this seed); the seed only
-	// lands on a credential-less or failed regen.
+	// built-in catalog. The descriptor deliberately has NO `catalogDiscovery`, so it is
+	// excluded from the generator's discovery loop (`isCatalogDescriptor` filter above):
+	// generation never fetches `aiChatAvailableModels` for it. That is intentional —
+	// Duo discovery is credential- and namespace-scoped, so running it during generation
+	// would bundle one private account's pinned/selectable models (and its
+	// `gitlabDuoWorkflowRootNamespaceId`) as authoritative for every fresh install.
+	// The generic fallback is the only thing bundled; live namespace-scoped models are
+	// discovered at runtime per credential/workspace. The `authoritativeCatalogProviders`
+	// guard therefore always passes for this id, kept only to mirror the Sakana seed shape.
 	if (!authoritativeCatalogProviders.has("gitlab-duo-agent")) {
 		allModels.push(buildGitLabDuoWorkflowFallbackModel());
 	}

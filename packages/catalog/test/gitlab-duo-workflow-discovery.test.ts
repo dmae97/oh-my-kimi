@@ -3,12 +3,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	buildGitLabDuoWorkflowFallbackModel,
 	buildGitLabDuoWorkflowModelSpec,
 	discoverGitLabDuoWorkflowNamespace,
 	discoverGitLabDuoWorkflowRuntimeNamespace,
 	fetchGitLabDuoWorkflowModels,
 } from "@oh-my-pi/pi-catalog/discovery/gitlab-duo-workflow";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { isCatalogDescriptor } from "@oh-my-pi/pi-catalog/provider-models/descriptor-types";
+import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models/descriptors";
 import { gitLabDuoWorkflowModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/special";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 
@@ -523,6 +526,35 @@ describe("GitLab Duo Workflow discovery", () => {
 		expect(seed?.provider).toBe("gitlab-duo-agent");
 		expect(seed?.api).toBe("gitlab-duo-agent");
 		expect(seed?.reasoning).toBe(false);
+	});
+
+	it("keeps the gitlab-duo-agent descriptor out of catalog generation discovery", () => {
+		// The descriptor must NOT carry `catalogDiscovery`: that field is the sole gate
+		// for the generator's discovery loop (`isCatalogDescriptor`). Were it present,
+		// `generate-models` running on a machine with GitLab credentials would fetch the
+		// account's namespace-scoped `aiChatAvailableModels` and bundle one private
+		// namespace's pinned/selectable catalog into models.json as authoritative for
+		// every fresh install. Only the generic, namespace-free fallback may be bundled;
+		// live namespace-scoped models are discovered at runtime per credential/workspace.
+		const descriptor = PROVIDER_DESCRIPTORS.find(entry => entry.providerId === "gitlab-duo-agent");
+		expect(descriptor).toBeDefined();
+		expect(descriptor?.catalogDiscovery).toBeUndefined();
+		expect(descriptor && isCatalogDescriptor(descriptor)).toBe(false);
+	});
+
+	it("seeds a namespace-free fallback model carrying no account-scoped namespace id", () => {
+		// The bundled seed must never leak the generating machine's root namespace.
+		const seed = buildGitLabDuoWorkflowFallbackModel();
+		expect(seed.id).toBe("claude_sonnet_4_6_vertex");
+		expect(seed.provider).toBe("gitlab-duo-agent");
+		expect(seed).not.toHaveProperty("gitlabDuoWorkflowRootNamespaceId");
+		// A credentialed runtime discovery, by contrast, pins the namespace it resolved.
+		const scoped = buildGitLabDuoWorkflowModelSpec(
+			{ name: "Sonnet", ref: "claude_sonnet_4_6_vertex" },
+			undefined,
+			"root-namespace-123",
+		);
+		expect(scoped.gitlabDuoWorkflowRootNamespaceId).toBe("root-namespace-123");
 	});
 
 	it("does not include bearer credentials in namespace discovery errors", async () => {

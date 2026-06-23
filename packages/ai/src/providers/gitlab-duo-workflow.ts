@@ -1400,10 +1400,17 @@ async function requestGitLabDuoWorkflowDirectAccess(
 	});
 	if (!response.ok) {
 		const message = await readGitLabDuoWorkflowResponseErrorMessage(response);
-		if (message) {
-			throw new Error(`GitLab Duo Workflow direct_access failed: ${message}`);
-		}
-		throw new Error(`GitLab Duo Workflow direct_access failed with HTTP ${response.status}`);
+		// Always embed the HTTP status, even when the body carries a message: the
+		// streaming auth-retry/rotation path (`extractStatusFromAssistantError` ->
+		// `extractHttpStatusFromError`) refreshes/rotates broker credentials only
+		// when the assistant error exposes `errorStatus` or the message embeds an
+		// `HTTP <status>` token. A 401 `{"message":"Unauthorized"}` or a 429 quota
+		// body would otherwise surface as a hard failure with no recoverable status.
+		throw new Error(
+			message
+				? `GitLab Duo Workflow direct_access failed with HTTP ${response.status}: ${message}`
+				: `GitLab Duo Workflow direct_access failed with HTTP ${response.status}`,
+		);
 	}
 	const payload = (await response.json()) as GitLabDirectAccessResponse;
 	const token = extractGitLabWorkflowToken(payload);
