@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as path from "node:path";
 import {
 	installProfileAlias,
 	readProfileAliasConfigFile,
@@ -30,10 +31,15 @@ describe("profile alias installer", () => {
 	it("resolves source invocations without forcing the source checkout as cwd", () => {
 		const command = resolveProfileAliasCommandFromProcess(["/bin/bun", "src/cli.ts"], "/repo/packages/coding-agent");
 
-		expect(command.display).toBe("/bin/bun /repo/packages/coding-agent/src/cli.ts");
-		expect(command.posix).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
-		expect(command.fish).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
-		expect(command.powerShell).toBe("'/bin/bun' '/repo/packages/coding-agent/src/cli.ts'");
+		// path.resolve is platform-dependent (adds drive letter on Windows);
+		// the code normalizes to forward slashes for POSIX shell fields.
+		const expectedScriptPath = path.resolve("/repo/packages/coding-agent", "src/cli.ts");
+		const expectedPosixPath = expectedScriptPath.replace(/\\/g, "/");
+
+		expect(command.display).toBe(`/bin/bun ${expectedPosixPath}`);
+		expect(command.posix).toBe(`'/bin/bun' '${expectedPosixPath}'`);
+		expect(command.fish).toBe(`'/bin/bun' '${expectedPosixPath}'`);
+		expect(command.powerShell).toBe(`'/bin/bun' '${expectedScriptPath}'`);
 	});
 
 	it("can target the current source invocation instead of the installed omp binary", async () => {
@@ -140,7 +146,8 @@ describe("profile alias installer", () => {
 			},
 		});
 
-		const content = files.get("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1") ?? "";
+		const psConfigPath = path.join("C:\\Users\\me", "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1");
+		const content = files.get(psConfigPath) ?? "";
 		expect(content).toContain("function omp-work");
 		expect(content).toContain("& omp --profile=work @args");
 	});
@@ -164,7 +171,8 @@ describe("profile alias installer", () => {
 		});
 
 		expect(result.shell).toBe("pwsh");
-		expect(result.configPath).toBe("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+		const psConfigPath = path.join("C:\\Users\\me", "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1");
+		expect(result.configPath).toBe(psConfigPath);
 		expect(files.get(result.configPath)).toContain("& omp --profile=work @args");
 	});
 
@@ -187,7 +195,13 @@ describe("profile alias installer", () => {
 		});
 
 		expect(result.shell).toBe("powershell");
-		expect(result.configPath).toBe("C:\\Users\\me/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1");
+		const psConfigPath = path.join(
+			"C:\\Users\\me",
+			"Documents",
+			"WindowsPowerShell",
+			"Microsoft.PowerShell_profile.ps1",
+		);
+		expect(result.configPath).toBe(psConfigPath);
 	});
 
 	it("treats POWERSHELL_DISTRIBUTION_CHANNEL as a pwsh hint when no module paths disambiguate", async () => {
@@ -206,7 +220,8 @@ describe("profile alias installer", () => {
 		});
 
 		expect(result.shell).toBe("pwsh");
-		expect(result.configPath).toBe("C:\\Users\\me/Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+		const psConfigPath = path.join("C:\\Users\\me", "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1");
+		expect(result.configPath).toBe(psConfigPath);
 	});
 
 	it("replaces a previous block for the same alias", async () => {

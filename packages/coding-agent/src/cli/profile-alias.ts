@@ -198,9 +198,12 @@ export function resolveProfileAliasCommandFromProcess(
 	if (!runtime || !script || !/\.[cm]?[jt]s$/.test(script)) return DEFAULT_ALIAS_COMMAND;
 
 	const scriptPath = path.resolve(cwd, script);
-	const posix = `${quoteForShell(runtime)} ${quoteForShell(scriptPath)}`;
+	// Normalize to forward slashes for POSIX shell fields — bash/zsh/fish
+	// can't resolve backslash-separated paths, even on Windows (Git Bash, WSL).
+	const posixScriptPath = scriptPath.replace(/\\/g, "/");
+	const posix = `${quoteForShell(runtime)} ${quoteForShell(posixScriptPath)}`;
 	return {
-		display: `${runtime} ${scriptPath}`,
+		display: `${runtime} ${posixScriptPath}`,
 		posix,
 		fish: posix,
 		powerShell: `${quoteForPowerShell(runtime)} ${quoteForPowerShell(scriptPath)}`,
@@ -213,24 +216,29 @@ function resolveShellConfigPath(
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv,
 ): string {
+	// Use POSIX path joining for non-Windows platforms so bash/zsh/fish config
+	// paths always use forward slashes, even when the test runs on Windows.
+	// On Windows, path.join produces backslashes which are correct for
+	// PowerShell profiles but wrong for POSIX shell configs.
+	const join = platform === "win32" ? path.join : path.posix.join;
 	switch (shell) {
 		case "zsh":
-			return path.join(env.ZDOTDIR || homeDir, ".zshrc");
+			return join(env.ZDOTDIR || homeDir, ".zshrc");
 		case "bash":
-			return platform === "darwin" ? path.join(homeDir, ".bash_profile") : path.join(homeDir, ".bashrc");
+			return platform === "darwin" ? join(homeDir, ".bash_profile") : join(homeDir, ".bashrc");
 		case "fish": {
 			// fish sources conf.d from $XDG_CONFIG_HOME/fish (default ~/.config/fish);
 			// a hard-coded ~/.config would be silently ignored when the user relocates
 			// their XDG config root, leaving the alias unsourced after a restart.
-			const configHome = env.XDG_CONFIG_HOME || path.join(homeDir, ".config");
-			return path.join(configHome, "fish", "conf.d", "omp-profiles.fish");
+			const configHome = env.XDG_CONFIG_HOME || join(homeDir, ".config");
+			return join(configHome, "fish", "conf.d", "omp-profiles.fish");
 		}
 		case "pwsh":
 			return platform === "win32"
-				? path.join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
-				: path.join(homeDir, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+				? join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+				: join(homeDir, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
 		case "powershell":
-			return path.join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
+			return join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
 	}
 }
 

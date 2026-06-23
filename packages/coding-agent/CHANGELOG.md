@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed profile-alias installer producing backslash-separated paths for bash/zsh/fish config files on Windows. `path.join` was used unconditionally, producing Windows-style paths that POSIX shells can't resolve. The installer now uses `path.posix.join` for non-Windows platforms and normalizes script paths to forward slashes for POSIX shell alias blocks, so `omp --alias` works correctly in Git Bash and WSL.
+
 - Fixed all extension loading silently failing on the cross-compiled `omp-darwin-arm64` release binary (downloaded directly or via a Homebrew tap wrapper) because `__computeBunfsPackageRoot` mis-handled `import.meta.dir = "//root/omp-darwin-arm64"`. Bun 1.3.14 reports `<bunfs-root>/<binary-name>` for the compiled entry's `import.meta.dir`, but the pre-fix function joined `metaDir + "packages"` and produced `/root/omp-darwin-arm64/packages` — the binary basename was baked into every bunfs path, so the TypeBox/legacy-pi shims and every `@oh-my-pi/pi-*` package-root override failed `existsSync` validation and `resolveCanonicalPiSpecifier` fell through to a bunfs `Bun.resolveSync` that also could not find the module. The function now detects the bunfs-root + binary-basename shape (`path.basename(path.dirname(metaDir)) === "root"`) and strips the trailing binary segment by slicing the original `metaDir`; the production bunfs shim join path also preserves Bun's bunfs-native `//root` / `B:\~BUN\root` prefix that `path.join` would otherwise collapse. ([#3329](https://github.com/can1357/oh-my-pi/issues/3329))
 ## [16.1.16] - 2026-06-23
 
