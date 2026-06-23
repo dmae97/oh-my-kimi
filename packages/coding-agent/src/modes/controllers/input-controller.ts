@@ -1525,8 +1525,9 @@ export class InputController {
 	toggleThinkingBlockVisibility(): void {
 		// When thinking is "off", thinking blocks are always hidden (some
 		// providers return them regardless). The toggle is meaningless in
-		// that state — inform the user instead of silently no-op'ing.
-		if (this.ctx.effectiveHideThinkingBlock && !this.ctx.hideThinkingBlock) {
+		// that state regardless of the persisted preference — inform the
+		// user instead of silently flipping the persisted value.
+		if (this.ctx.effectiveHideThinkingBlock) {
 			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
 			return;
 		}
