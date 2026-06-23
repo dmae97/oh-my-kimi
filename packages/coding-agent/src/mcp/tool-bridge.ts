@@ -58,6 +58,31 @@ function normalizeToolArgs(value: unknown): MCPToolArgs {
 	return value as MCPToolArgs;
 }
 
+function isUnusedOptionalPlaceholder(value: unknown): boolean {
+	return (
+		value === undefined ||
+		value === "" ||
+		(typeof value === "object" && value !== null && !Array.isArray(value) && Object.keys(value).length === 0)
+	);
+}
+
+function omitUnusedOptionalArgs(args: MCPToolArgs, inputSchema: MCPToolDefinition["inputSchema"]): MCPToolArgs {
+	const properties = inputSchema.properties;
+	if (!properties) return args;
+
+	let cleaned: MCPToolArgs | undefined;
+	const required = new Set(inputSchema.required ?? []);
+	for (const [key, value] of Object.entries(args)) {
+		if (required.has(key) || !Object.hasOwn(properties, key) || !isUnusedOptionalPlaceholder(value)) {
+			continue;
+		}
+		cleaned ??= { ...args };
+		delete cleaned[key];
+	}
+
+	return cleaned ?? args;
+}
+
 /** Details included in MCP tool results for rendering */
 export interface MCPToolDetails {
 	/** Server name */
@@ -261,7 +286,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const args = normalizeToolArgs(params);
+		const args = omitUnusedOptionalArgs(normalizeToolArgs(params), this.tool.inputSchema);
 		const provider = this.connection._source?.provider;
 		const providerName = this.connection._source?.providerName;
 
@@ -360,7 +385,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		signal?: AbortSignal,
 	): Promise<CustomToolResult<MCPToolDetails>> {
 		throwIfAborted(signal);
-		const args = normalizeToolArgs(params);
+		const args = omitUnusedOptionalArgs(normalizeToolArgs(params), this.tool.inputSchema);
 		const provider = this.#fallbackProvider;
 		const providerName = this.#fallbackProviderName;
 
