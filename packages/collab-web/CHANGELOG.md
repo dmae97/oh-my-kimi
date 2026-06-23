@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.16] - 2026-06-23
+
 ### Added
 
 - Added support for Ruby and Julia code cells in the eval tool

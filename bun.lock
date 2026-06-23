@@ -21,7 +21,7 @@
     },
     "packages/agent": {
       "name": "@oh-my-pi/pi-agent-core",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -39,7 +39,7 @@
     },
     "packages/ai": {
       "name": "@oh-my-pi/pi-ai",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-catalog": "catalog:",
@@ -55,7 +55,7 @@
     },
     "packages/catalog": {
       "name": "@oh-my-pi/pi-catalog",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@bufbuild/protobuf": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -69,7 +69,7 @@
     },
     "packages/coding-agent": {
       "name": "@oh-my-pi/pi-coding-agent",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "bin": {
         "omp": "src/cli.ts",
       },
@@ -137,7 +137,7 @@
     },
     "packages/hashline": {
       "name": "@oh-my-pi/hashline",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "diff": "catalog:",
         "lru-cache": "catalog:",
@@ -148,7 +148,7 @@
     },
     "packages/mnemopi": {
       "name": "@oh-my-pi/pi-mnemopi",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "bin": {
         "mnemopi": "src/cli.ts",
       },
@@ -174,7 +174,7 @@
     },
     "packages/natives": {
       "name": "@oh-my-pi/pi-natives",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "devDependencies": {
         "@napi-rs/cli": "catalog:",
         "@types/bun": "catalog:",
@@ -182,7 +182,7 @@
     },
     "packages/snapcompact": {
       "name": "@oh-my-pi/snapcompact",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@oh-my-pi/pi-ai": "catalog:",
         "@oh-my-pi/pi-natives": "catalog:",
@@ -195,7 +195,7 @@
     },
     "packages/stats": {
       "name": "@oh-my-pi/omp-stats",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "bin": {
         "omp-stats": "./src/index.ts",
       },
@@ -221,7 +221,7 @@
     },
     "packages/swarm-extension": {
       "name": "@oh-my-pi/swarm-extension",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "bin": {
         "omp-swarm": "src/cli.ts",
       },
@@ -247,7 +247,7 @@
     },
     "packages/tui": {
       "name": "@oh-my-pi/pi-tui",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "@oh-my-pi/pi-utils": "catalog:",
@@ -288,7 +288,7 @@
     },
     "packages/utils": {
       "name": "@oh-my-pi/pi-utils",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "dependencies": {
         "@oh-my-pi/pi-natives": "catalog:",
         "handlebars": "catalog:",
@@ -301,7 +301,7 @@
     },
     "packages/wire": {
       "name": "@oh-my-pi/pi-wire",
-      "version": "16.1.15",
+      "version": "16.1.16",
       "devDependencies": {
         "@types/bun": "catalog:",
       },
@@ -338,18 +338,18 @@
     "@huggingface/transformers": "^4.2.0",
     "@mozilla/readability": "^0.6.0",
     "@napi-rs/cli": "3.7.0",
-    "@oh-my-pi/hashline": "16.1.15",
-    "@oh-my-pi/omp-stats": "16.1.15",
-    "@oh-my-pi/pi-agent-core": "16.1.15",
-    "@oh-my-pi/pi-ai": "16.1.15",
-    "@oh-my-pi/pi-catalog": "16.1.15",
-    "@oh-my-pi/pi-coding-agent": "16.1.15",
-    "@oh-my-pi/pi-mnemopi": "16.1.15",
-    "@oh-my-pi/pi-natives": "16.1.15",
-    "@oh-my-pi/pi-tui": "16.1.15",
-    "@oh-my-pi/pi-utils": "16.1.15",
-    "@oh-my-pi/pi-wire": "16.1.15",
-    "@oh-my-pi/snapcompact": "16.1.15",
+    "@oh-my-pi/hashline": "16.1.16",
+    "@oh-my-pi/omp-stats": "16.1.16",
+    "@oh-my-pi/pi-agent-core": "16.1.16",
+    "@oh-my-pi/pi-ai": "16.1.16",
+    "@oh-my-pi/pi-catalog": "16.1.16",
+    "@oh-my-pi/pi-coding-agent": "16.1.16",
+    "@oh-my-pi/pi-mnemopi": "16.1.16",
+    "@oh-my-pi/pi-natives": "16.1.16",
+    "@oh-my-pi/pi-tui": "16.1.16",
+    "@oh-my-pi/pi-utils": "16.1.16",
+    "@oh-my-pi/pi-wire": "16.1.16",
+    "@oh-my-pi/snapcompact": "16.1.16",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.7.1",
     "@opentelemetry/exporter-trace-otlp-proto": "^0.218.0",
@@ -969,7 +969,7 @@
 
     "chalk": ["chalk@5.6.2", "", {}, "sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA=="],
 
-    "chardet": ["chardet@2.1.1", "", {}, "sha512-PsezH1rqdV9VvyNhxxOW32/d75r01NY7TQCmOqomRo15ZSOKbpTFVsfjghxo6JloQUCGnH4k1LGu0R4yCLlWQQ=="],
+    "chardet": ["chardet@2.2.0", "", {}, "sha512-rddelWYNPRrXq6PtNEN2S3f6t9ILzvqaN5pVgi4kqt9jHQaXIial9PznB5iSPVlQSLNaaH22ItWz3EJtQ10+OA=="],
 
     "chart.js": ["chart.js@4.5.1", "", { "dependencies": { "@kurkle/color": "^0.3.0" } }, "sha512-GIjfiT9dbmHRiYi6Nl2yFCq7kkwdkp1W/lp2J99rX0yo9tgJGn3lKQATztIjb5tVtevcBtIdICNWqlq5+E8/Pw=="],
 
@@ -1323,7 +1323,7 @@
 
     "scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
 
-    "semver": ["semver@7.8.4", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-rUCObTnP32Q08R2uuIrt7r9PlEonuTmtuXYcW6s5kjdlj3xbnwe+21yXptAUYcMAABLkYYTtnmzb3w3EDZfueA=="],
+    "semver": ["semver@7.8.5", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA=="],
 
     "semver-compare": ["semver-compare@1.0.0", "", {}, "sha512-YM3/ITh2MJ5MtzaM429anh+x2jiLVjqILF4m4oyQB18W7Ggea7BfqdH/wGMK7dDiMghv/6WG7znWMwUDzJiXow=="],
 

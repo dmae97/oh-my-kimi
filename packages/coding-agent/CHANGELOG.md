@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.16] - 2026-06-23
+
 ### Breaking Changes
 
 - Renamed the eval `agent()` helper parameters `agent_type` → `agent` and `return_handle` → `handle` across every workflow runtime (Python, JavaScript, Ruby, Julia), so the names are identical in every language (no camelCase/snake_case split) and the agent-selection parameter matches the `task` tool's `agent`. The `__agent__` eval bridge wire protocol was renamed to match.
