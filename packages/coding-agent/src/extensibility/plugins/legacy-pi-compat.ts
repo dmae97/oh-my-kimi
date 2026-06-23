@@ -159,7 +159,11 @@ export function __joinBunfsPath(root: string, segments: readonly string[], pathI
 	const joined = pathImpl.join(root, ...segments);
 	const doubleRootPrefix = pathImpl.sep + pathImpl.sep;
 	const tripleRootPrefix = doubleRootPrefix + pathImpl.sep;
-	if (root.startsWith(doubleRootPrefix) && !root.startsWith(tripleRootPrefix) && !joined.startsWith(doubleRootPrefix)) {
+	if (
+		root.startsWith(doubleRootPrefix) &&
+		!root.startsWith(tripleRootPrefix) &&
+		!joined.startsWith(doubleRootPrefix)
+	) {
 		return pathImpl.sep + joined;
 	}
 	return joined;
