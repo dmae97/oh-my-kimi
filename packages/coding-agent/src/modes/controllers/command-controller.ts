@@ -1583,6 +1583,13 @@ function renderUsageReports(
 			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
 		}
 
+		// Provider-wide disclaimers (e.g. "OMP-observed spend only") render once
+		// above the per-account sections instead of duplicating onto every limit.
+		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
+		if (providerNotes.length > 0) {
+			lines.push(`  ${uiTheme.fg("dim", providerNotes.join(" • "))}`.trimEnd());
+		}
+
 		const resetAccountLines: string[] = [];
 		for (const report of providerReports) {
 			const count = report.resetCredits?.availableCount ?? 0;
@@ -1651,7 +1658,7 @@ function renderUsageReports(
 			if (resetText) {
 				lines.push(`  ${uiTheme.fg("dim", resetText)}`.trimEnd());
 			}
-			const notes = sortedLimits.flatMap(limit => limit.notes ?? []);
+			const notes = [...new Set(sortedLimits.flatMap(limit => limit.notes ?? []))];
 			if (notes.length > 0) {
 				lines.push(`  ${uiTheme.fg("dim", notes.join(" • "))}`.trimEnd());
 			}

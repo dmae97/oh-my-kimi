@@ -52,6 +52,9 @@ function renderUsageReports(
 	)) {
 		lines.push("", formatProviderName(provider));
 		const activeAccount = resolveActiveAccount?.(provider);
+		// Provider-wide disclaimers render once per provider, not per limit.
+		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
+		for (const note of providerNotes) lines.push(`  ${note}`);
 		for (const report of providerReports) {
 			const inUse = reportMatchesActiveAccount(report, activeAccount);
 			const savedResets = report.resetCredits?.availableCount ?? 0;

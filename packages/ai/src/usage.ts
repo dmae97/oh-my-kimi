@@ -82,6 +82,13 @@ export interface UsageReport {
 	limits: UsageLimit[];
 	/** Saved rate-limit resets the account can redeem, when the provider reports them. */
 	resetCredits?: UsageResetCredits;
+	/**
+	 * Provider-wide disclaimers shown once above per-account sections.
+	 * Use this for caveats that apply to every limit (e.g. "OMP-observed
+	 * spend only"). Per-limit notes that differ per window (e.g. "Overage
+	 * requests: N") stay on {@link UsageLimit.notes}.
+	 */
+	notes?: string[];
 	metadata?: Record<string, unknown>;
 	raw?: unknown;
 }
@@ -204,6 +211,7 @@ export const usageReportSchema = type({
 	fetchedAt: "number",
 	limits: usageLimitSchema.array(),
 	"resetCredits?": usageResetCreditsSchema,
+	"notes?": "string[]",
 	"metadata?": { "[string]": "unknown" },
 	// `raw` is provider-specific and may be anything; the broker strips it before
 	// sending the report over the wire, so accept-but-ignore here.

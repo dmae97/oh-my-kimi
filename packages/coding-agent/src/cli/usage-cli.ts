@@ -450,6 +450,9 @@ export function formatUsageBreakdown(
 		lines.push(
 			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`)}`,
 		);
+		// Provider-wide disclaimers render once per provider, not per limit.
+		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
+		for (const note of providerNotes) lines.push(`  ${chalk.dim(note)}`);
 
 		const labelWidth = providerReports
 			.flatMap(report => report.limits)
