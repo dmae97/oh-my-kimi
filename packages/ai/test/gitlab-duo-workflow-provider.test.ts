@@ -207,20 +207,23 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(GITLAB_DUO_WORKFLOW_CLIENT_CAPABILITIES).not.toContain("tool_call_pattern_approval");
 	});
 
-	it("advertises OMP tools with the official GitLab MCP schema", () => {
+	it("advertises OMP tools under their bare names with the official GitLab MCP schema", () => {
 		const mcpTools = buildGitLabDuoWorkflowMcpTools([...nativeTools, editTool]);
+		// Bare names: the server binds the model schema and matches tool calls under the
+		// exact wire name (no prefix stripping), so the registered name must equal the
+		// bare name OMP's own tool docs use.
 		expect(mcpTools.map(tool => tool.name)).toEqual([
-			"mcp__omp__read",
-			"mcp__omp__write",
-			"mcp__omp__search",
-			"mcp__omp__find",
-			"mcp__omp__bash",
-			"mcp__omp__lsp",
-			"mcp__omp__todo",
-			"mcp__omp__edit",
+			"read",
+			"write",
+			"search",
+			"find",
+			"bash",
+			"lsp",
+			"todo",
+			"edit",
 		]);
 		expect(mcpTools[0]).toMatchObject({
-			name: "mcp__omp__read",
+			name: "read",
 			originalToolName: "read",
 			serverName: "omp",
 			isApproved: true,
@@ -245,14 +248,14 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.clientCapabilities).not.toContain("web_search");
 		expect(payload.clientCapabilities).not.toContain("tool_call_pattern_approval");
 		expect(payload.mcpTools.map(tool => tool.name)).toEqual([
-			"mcp__omp__read",
-			"mcp__omp__write",
-			"mcp__omp__search",
-			"mcp__omp__find",
-			"mcp__omp__bash",
-			"mcp__omp__lsp",
-			"mcp__omp__todo",
-			"mcp__omp__edit",
+			"read",
+			"write",
+			"search",
+			"find",
+			"bash",
+			"lsp",
+			"todo",
+			"edit",
 		]);
 		expect(payload.preapproved_tools).toEqual(payload.mcpTools.map(tool => tool.name));
 	});
