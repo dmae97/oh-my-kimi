@@ -17,6 +17,7 @@ import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { $env } from "@oh-my-pi/pi-utils";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
+import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { createModelManager } from "../src/model-manager";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
@@ -496,6 +497,15 @@ async function generateModels() {
 	// Sakana is authoritative and stale seed IDs must stay out.
 	if (!authoritativeCatalogProviders.has("sakana")) {
 		allModels.push(...SAKANA_FUGU_STATIC_MODELS);
+	}
+	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
+	// dynamic discovery/cache yet) still surfaces the provider's default model in the
+	// built-in catalog. The provider is dynamicModelsAuthoritative, so when live
+	// `aiChatAvailableModels` discovery succeeds during generation its entries win the
+	// id-keyed dedup above (catalogProviderModels precede this seed); the seed only
+	// lands on a credential-less or failed regen.
+	if (!authoritativeCatalogProviders.has("gitlab-duo-agent")) {
+		allModels.push(buildGitLabDuoWorkflowFallbackModel());
 	}
 	// Seed Fireworks "Fast" serving-path variants (`<id>-fast`). Fast routers are
 	// not enumerated by the serverless control-plane list, so discovery never

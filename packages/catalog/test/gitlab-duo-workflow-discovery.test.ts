@@ -9,6 +9,7 @@ import {
 	fetchGitLabDuoWorkflowModels,
 } from "@oh-my-pi/pi-catalog/discovery/gitlab-duo-workflow";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { gitLabDuoWorkflowModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/special";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
 
 const TEST_TOKEN = "redacted-test-token";
@@ -507,6 +508,21 @@ describe("GitLab Duo Workflow discovery", () => {
 		const spec = buildGitLabDuoWorkflowModelSpec({ name: "Opus", ref: "claude_opus_4_8" });
 		expect(spec.reasoning).toBe(false);
 		expect(getSupportedEfforts(spec)).toEqual([]);
+	});
+
+	it("seeds the fallback model as a static catalog entry so a fresh install surfaces a default", () => {
+		// The generator bundles this descriptor's static model into models.json, and the
+		// runtime manager exposes it before any credentialed dynamic discovery runs. Both
+		// the fresh-install bundle and the pre-discovery runtime list depend on this seed,
+		// so assert the descriptor (not the bundled JSON) carries the fallback model.
+		const options = gitLabDuoWorkflowModelManagerOptions();
+		expect(options.providerId).toBe("gitlab-duo-agent");
+		expect(options.dynamicModelsAuthoritative).toBe(true);
+		expect(options.staticModels?.map(model => model.id)).toEqual(["claude_sonnet_4_6_vertex"]);
+		const seed = options.staticModels?.[0];
+		expect(seed?.provider).toBe("gitlab-duo-agent");
+		expect(seed?.api).toBe("gitlab-duo-agent");
+		expect(seed?.reasoning).toBe(false);
 	});
 
 	it("does not include bearer credentials in namespace discovery errors", async () => {
