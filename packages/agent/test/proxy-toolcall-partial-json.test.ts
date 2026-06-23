@@ -105,6 +105,66 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 		expect(toolCall.arguments).toEqual({ command: "ls" });
 	});
 
+	it("exposes partialJson on content during streaming for renderers", async () => {
+		// Downstream renderers (event-controller.ts) read content.partialJson
+		// during toolcall_delta to pace streaming previews. The field must be
+		// present on the partial snapshot while streaming is in progress.
+		// Note: partial is a shared mutable reference, so we snapshot the
+		// partialJson value during iteration — by the time the stream completes,
+		// scrubPartialJson will have deleted it.
+		const events: ProxyAssistantMessageEvent[] = [
+			{ type: "start" },
+			{ type: "toolcall_start", contentIndex: 0, id: "call_1", toolName: "bash" },
+			{ type: "toolcall_delta", contentIndex: 0, delta: '{"comm' },
+			{ type: "toolcall_delta", contentIndex: 0, delta: 'and":"ls"}' },
+			{ type: "toolcall_end", contentIndex: 0 },
+			{ type: "done", reason: "toolUse", usage: { ...baseUsage } },
+		];
+		const body = buildSseBody(events);
+		const fetchMock: FetchImpl = () => Promise.resolve(new Response(body, { status: 200 }));
+
+		const stream = streamProxy(mockModel, mockContext, {
+			proxyUrl: "http://localhost:0",
+			authToken: "test",
+			fetch: fetchMock,
+		});
+
+		// Collect delta events and snapshot partialJson during iteration,
+		// before the done event scrubs it from the shared partial reference.
+		const deltaSnapshots: Array<{ hasPartialJson: boolean; value: string | undefined }> = [];
+		const iterator = stream[Symbol.asyncIterator]();
+		const deadline = Date.now() + 2000;
+		while (Date.now() < deadline) {
+			const { promise: timeoutPromise, resolve: timeoutResolve } =
+				Promise.withResolvers<IteratorResult<AssistantMessageEvent>>();
+			const timer = setTimeout(
+				() => timeoutResolve({ value: undefined, done: true } as IteratorResult<AssistantMessageEvent>),
+				2000,
+			);
+			const result = await Promise.race([iterator.next(), timeoutPromise]);
+			clearTimeout(timer);
+			if (result.done) break;
+			if (result.value.type === "toolcall_delta") {
+				const content = result.value.partial.content[0];
+				deltaSnapshots.push({
+					hasPartialJson: "partialJson" in (content ?? {}),
+					value: (content as (ToolCall & { partialJson?: string }) | undefined)?.partialJson,
+				});
+			}
+		}
+
+		expect(deltaSnapshots.length).toBe(2);
+		for (const snap of deltaSnapshots) {
+			expect(snap.hasPartialJson).toBe(true);
+			expect(snap.value).toBeTruthy();
+		}
+
+		// After completion, partialJson must be gone
+		const result = await stream.result();
+		const toolCall = extractToolCall(result);
+		expect("partialJson" in toolCall).toBe(false);
+	});
+
 	it("does not leak partialJson field into the final ToolCall object", async () => {
 		const events: ProxyAssistantMessageEvent[] = [
 			{ type: "start" },

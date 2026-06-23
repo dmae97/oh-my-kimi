@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `streamProxy` leaking internal `partialJson` streaming state onto typed `ToolCall` objects via `as any` casts. Streaming JSON accumulation now uses a side-channel `Map` keyed by `contentIndex`, eliminating all `as any` casts and guaranteeing `partialJson` never appears on the final `AssistantMessage` content — even when the stream ends without a `toolcall_end` event.
+- Fixed `streamProxy` leaking internal `partialJson` streaming state onto the final `AssistantMessage` when the stream ended without a `toolcall_end` event. The field is now accumulated in a side-channel `Map` (eliminating `as any` casts on the accumulation path), written onto the content object via a typed `ToolCall & { partialJson: string }` intersection so downstream renderers can still read it during streaming, and scrubbed from all content blocks at `toolcall_end`, `done`, and `error` — guaranteeing it never appears on the final message.
 
 ## [16.1.16] - 2026-06-23
 

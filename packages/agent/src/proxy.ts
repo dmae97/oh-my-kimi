@@ -202,13 +202,26 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 }
 
 /**
+ * Remove the `partialJson` streaming field from any tool-call content blocks
+ * that still carry it (e.g. when the stream ended without a `toolcall_end`).
+ */
+function scrubPartialJson(partial: AssistantMessage): void {
+	for (const block of partial.content) {
+		if (block?.type === "toolCall") {
+			delete (block as ToolCall & { partialJson?: string }).partialJson;
+		}
+	}
+}
+
+/**
  * Process a proxy event and update the partial message.
  *
- * Streaming `partialJson` for in-progress tool calls is kept in a side-channel
- * map keyed by `contentIndex` rather than stored on the `ToolCall` object
- * itself. This avoids `as any` casts to smuggle non-spec fields through the
- * typed `ToolCall` interface and guarantees the field never leaks into the
- * final message if `toolcall_end` is skipped (e.g. on stream error).
+ * Streaming `partialJson` for in-progress tool calls is accumulated in a
+ * side-channel map keyed by `contentIndex` and also written onto the content
+ * object (as a typed intersection field) so downstream renderers can read it
+ * during streaming. The field is deleted at `toolcall_end` and scrubbed from
+ * any remaining blocks at `done`/`error` to guarantee it never leaks into the
+ * final `AssistantMessage`.
  */
 function processProxyEvent(
 	model: Model,
@@ -302,16 +315,17 @@ function processProxyEvent(
 				id: proxyEvent.id,
 				name: proxyEvent.toolName,
 				arguments: {},
-			} satisfies ToolCall;
+				partialJson: "",
+			} as ToolCall & { partialJson: string };
 			partialJsonByIndex.set(proxyEvent.contentIndex, "");
 			return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
-
 		case "toolcall_delta": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
 				const acc = (partialJsonByIndex.get(proxyEvent.contentIndex) ?? "") + proxyEvent.delta;
 				partialJsonByIndex.set(proxyEvent.contentIndex, acc);
 				content.arguments = parseStreamingJson(acc) || {};
+				(content as ToolCall & { partialJson: string }).partialJson = acc;
 				partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
 				return {
 					type: "toolcall_delta",
@@ -327,6 +341,7 @@ function processProxyEvent(
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
 				partialJsonByIndex.delete(proxyEvent.contentIndex);
+				delete (content as ToolCall & { partialJson?: string }).partialJson;
 				return {
 					type: "toolcall_end",
 					contentIndex: proxyEvent.contentIndex,
@@ -341,6 +356,7 @@ function processProxyEvent(
 			partial.stopReason = proxyEvent.reason;
 			partial.usage = proxyEvent.usage;
 			calculateCost(model, partial.usage);
+			scrubPartialJson(partial);
 			return { type: "done", reason: proxyEvent.reason, message: partial };
 
 		case "error":
@@ -348,6 +364,7 @@ function processProxyEvent(
 			partial.errorMessage = proxyEvent.errorMessage;
 			partial.usage = proxyEvent.usage;
 			calculateCost(model, partial.usage);
+			scrubPartialJson(partial);
 			return { type: "error", reason: proxyEvent.reason, error: partial };
 	}
 }
