@@ -21,7 +21,7 @@ describe("InputController thinking visibility", () => {
 			hideThinkingBlock: false,
 			effectiveHideThinkingBlock: false,
 			settings: { set },
-			session: { agent: { hideThinkingSummary: false } },
+			session: { agent: { hideThinkingSummary: false }, thinkingLevel: "high" },
 			chatContainer,
 			streamingComponent: undefined,
 			streamingMessage: undefined,
@@ -57,7 +57,7 @@ describe("InputController thinking visibility", () => {
 			hideThinkingBlock: false,
 			effectiveHideThinkingBlock: true, // thinking is off → effective is true
 			settings: { set },
-			session: { agent: { hideThinkingSummary: false } },
+			session: { agent: { hideThinkingSummary: false }, thinkingLevel: "off" },
 			chatContainer: { children: [assistant], clear: vi.fn(), addChild: vi.fn() },
 			streamingComponent: undefined,
 			streamingMessage: undefined,
@@ -88,7 +88,7 @@ describe("InputController thinking visibility", () => {
 			hideThinkingBlock: true,
 			effectiveHideThinkingBlock: true, // thinking is off → effective is true
 			settings: { set },
-			session: { agent: { hideThinkingSummary: false } },
+			session: { agent: { hideThinkingSummary: false }, thinkingLevel: "off" },
 			chatContainer: { children: [assistant], clear: vi.fn(), addChild: vi.fn() },
 			streamingComponent: undefined,
 			streamingMessage: undefined,
