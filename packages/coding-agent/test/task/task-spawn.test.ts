@@ -206,10 +206,16 @@ describe("task spawn routing", () => {
 			});
 
 			const manager = createManager();
-			const tool = await TaskTool.create(createSession({ manager, settings: { "task.maxConcurrency": maxConcurrency } }));
+			const tool = await TaskTool.create(
+				createSession({ manager, settings: { "task.maxConcurrency": maxConcurrency } }),
+			);
 
 			const first = await tool.execute("tc-1", { agent: "task", id: "First", assignment: "Work A." } as TaskParams);
-			const second = await tool.execute("tc-2", { agent: "task", id: "Second", assignment: "Work B." } as TaskParams);
+			const second = await tool.execute("tc-2", {
+				agent: "task",
+				id: "Second",
+				assignment: "Work B.",
+			} as TaskParams);
 			const third = await tool.execute("tc-3", { agent: "task", id: "Third", assignment: "Work C." } as TaskParams);
 
 			// All three job bodies clear the spawn semaphore in parallel — none stays queued.
