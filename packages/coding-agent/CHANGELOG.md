@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed the eval `agent()` helper parameters `agent_type` → `agent` and `return_handle` → `handle` across every workflow runtime (Python, JavaScript, Ruby, Julia), so the names are identical in every language (no camelCase/snake_case split) and the agent-selection parameter matches the `task` tool's `agent`. The `__agent__` eval bridge wire protocol was renamed to match.
@@ -32,6 +31,8 @@
 
 ### Fixed
 
+- Fixed `local://` URLs decoding images as corrupted text (mojibake) instead of showing the image
+- Fixed `omp --resume` hanging instead of exiting when the startup session picker is cancelled (Esc) or there are no sessions to resume. Startup arms long-lived handles (theme/appearance listeners, settings save timer, model registry), so the cancel/empty paths' bare `return` left the event loop alive and the process stuck after the picker cleared the alternate screen. These paths now exit cleanly via `process.exit(0)`, matching the `--version`/`--export` early-exit convention. The in-session `/resume` picker is unaffected — it keeps its own cancel handler that just closes the overlay.
 - Fixed the `/resume` session picker scrolling down after a session is deleted. The delete-confirmation dialog was mounted as a sibling below the picker's bottom border, briefly growing the picker past the terminal height; the TUI committed the picker's header rows into native scrollback to fit, and when the dialog closed `windowTop` stayed pinned at the new commit boundary, leaving the header stranded above the viewport. The picker now hosts the `SessionList` in a single content slot and swaps the dialog INTO that slot (replacing the `SessionList`) while it is open, so the dialog only competes with the `SessionList`'s rendered budget — not the `SessionList` AND the picker chrome — and the picker frame stays inside the viewport. ([#3283](https://github.com/can1357/oh-my-pi/issues/3283))
 - Fixed the `eval` tool card not streaming a still-running cell's stdout: a long-running cell (e.g. a `time.sleep()` monitor loop) showed nothing until it returned or was interrupted, then dumped everything at once. The renderer draws cell output from `details.cells[i].output`, which was only populated after `backend.execute()` resolved — live stdout streamed into the transient result `content` tail (and `renderContext.output`), which the per-cell render branch ignores. Streamed chunks now append to the active cell's `output` (a dedicated per-cell tail buffer, capped like the aggregate) as they arrive, so the card shows progress live; on completion the authoritative full output overwrites the live tail. `log()`/`phase()`/`display()` and status ops were unaffected because they already stream via the status channel.
 - Fixed Escape doing nothing in the Settings text-input fields (e.g. "Python Interpreter") on terminals with the kitty keyboard protocol active (ghostty/kitty). Inside the fullscreen settings overlay the protocol reports Escape as the CSI-u sequence `\x1b[27u`, which the text-input submenu's raw `\x1b` compare missed; `handleInputOrEscape` now decodes Escape via `matchesKey`, matching every other Escape-to-cancel path.

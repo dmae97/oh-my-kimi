@@ -169,6 +169,96 @@ export function buildEvalUrlRoots(options: LocalProtocolOptions): Record<string,
 	return { local: resolveLocalRoot(options) };
 }
 
+const LOCAL_WRITE_NOTE = "Use write path local://<file> to persist large intermediate artifacts across turns.";
+
+type ResolvedLocalTarget =
+	| { kind: "listing"; root: string }
+	| { kind: "directory"; path: string }
+	| { kind: "file"; path: string; size: number };
+
+/**
+ * Resolve a local:// URL to its on-disk target with realpath + containment
+ * checks on the root, parent, and target so symlinks cannot escape the session
+ * local root. Does NOT read or decode file contents — callers decide how to
+ * consume the resolved path. Shared by {@link LocalProtocolHandler.resolve} and
+ * {@link resolveLocalUrlToFile}.
+ */
+async function resolveLocalTarget(url: InternalUrl, opts: LocalProtocolOptions): Promise<ResolvedLocalTarget> {
+	const localRoot = path.resolve(resolveLocalRoot(opts));
+	await fs.mkdir(localRoot, { recursive: true });
+
+	let resolvedRoot: string;
+	try {
+		resolvedRoot = await fs.realpath(localRoot);
+	} catch (error) {
+		if (isEnoent(error)) {
+			throw new Error("Unable to initialize local:// root");
+		}
+		throw error;
+	}
+
+	const relativePath = extractRelativePath(url);
+	const targetPath = relativePath ? path.resolve(resolvedRoot, relativePath) : resolvedRoot;
+	ensureWithinRoot(targetPath, resolvedRoot);
+
+	if (targetPath === resolvedRoot) {
+		return { kind: "listing", root: resolvedRoot };
+	}
+
+	const parentDir = path.dirname(targetPath);
+	try {
+		const realParent = await fs.realpath(parentDir);
+		ensureWithinRoot(realParent, resolvedRoot);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+
+	let realTargetPath: string;
+	try {
+		realTargetPath = await fs.realpath(targetPath);
+	} catch (error) {
+		if (isEnoent(error)) {
+			throw new Error(`Local file not found: ${url.href}`);
+		}
+		throw error;
+	}
+
+	ensureWithinRoot(realTargetPath, resolvedRoot);
+
+	const stat = await fs.stat(realTargetPath);
+	if (stat.isDirectory()) {
+		return { kind: "directory", path: realTargetPath };
+	}
+	if (!stat.isFile()) {
+		throw new Error(`local:// URL must resolve to a file or directory: ${url.href}`);
+	}
+	return { kind: "file", path: realTargetPath, size: stat.size };
+}
+
+/**
+ * Resolve a local:// URL to a regular on-disk file, applying the same
+ * realpath + containment guarantees as {@link LocalProtocolHandler.resolve}
+ * but WITHOUT reading or UTF-8-decoding its contents. Returns null when there
+ * is no active session or when the URL targets the root listing or a directory;
+ * throws the handler's not-found and "escapes local root" errors for missing
+ * files and symlink escapes.
+ *
+ * Options are resolved via {@link LocalProtocolHandler.resolveOptions} so the
+ * caller-options → override → registry order matches router resolution exactly.
+ * The read tool uses this to detect and emit image files from their real path
+ * before the text-only resource contract would decode the binary into mojibake.
+ */
+export async function resolveLocalUrlToFile(
+	input: string | InternalUrl,
+	context?: ResolveContext,
+): Promise<{ path: string; size: number } | null> {
+	const opts = LocalProtocolHandler.resolveOptions(context);
+	if (!opts) return null;
+	const url = typeof input === "string" ? parseLocalUrl(input) : input;
+	const resolved = await resolveLocalTarget(url, opts);
+	return resolved.kind === "file" ? { path: resolved.path, size: resolved.size } : null;
+}
+
 /**
  * Protocol handler for local:// URLs.
  *
@@ -238,65 +328,22 @@ export class LocalProtocolHandler implements ProtocolHandler {
 			throw new Error("No session - local:// unavailable");
 		}
 
-		const localRoot = path.resolve(resolveLocalRoot(opts));
-		await fs.mkdir(localRoot, { recursive: true });
-
-		let resolvedRoot: string;
-		try {
-			resolvedRoot = await fs.realpath(localRoot);
-		} catch (error) {
-			if (isEnoent(error)) {
-				throw new Error("Unable to initialize local:// root");
-			}
-			throw error;
+		const resolved = await resolveLocalTarget(url, opts);
+		if (resolved.kind === "listing") {
+			return buildListing(url, resolved.root);
+		}
+		if (resolved.kind === "directory") {
+			return buildDirectoryResource(url.href, resolved.path, [LOCAL_WRITE_NOTE]);
 		}
 
-		const relativePath = extractRelativePath(url);
-		const targetPath = relativePath ? path.resolve(resolvedRoot, relativePath) : resolvedRoot;
-		ensureWithinRoot(targetPath, resolvedRoot);
-
-		if (targetPath === resolvedRoot) {
-			return buildListing(url, resolvedRoot);
-		}
-
-		const parentDir = path.dirname(targetPath);
-		try {
-			const realParent = await fs.realpath(parentDir);
-			ensureWithinRoot(realParent, resolvedRoot);
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-		}
-
-		let realTargetPath: string;
-		try {
-			realTargetPath = await fs.realpath(targetPath);
-		} catch (error) {
-			if (isEnoent(error)) {
-				throw new Error(`Local file not found: ${url.href}`);
-			}
-			throw error;
-		}
-
-		ensureWithinRoot(realTargetPath, resolvedRoot);
-
-		const stat = await fs.stat(realTargetPath);
-		if (stat.isDirectory()) {
-			return buildDirectoryResource(url.href, realTargetPath, [
-				"Use write path local://<file> to persist large intermediate artifacts across turns.",
-			]);
-		}
-		if (!stat.isFile()) {
-			throw new Error(`local:// URL must resolve to a file or directory: ${url.href}`);
-		}
-
-		const content = await Bun.file(realTargetPath).text();
+		const content = await Bun.file(resolved.path).text();
 		return {
 			url: url.href,
 			content,
-			contentType: getContentType(realTargetPath),
+			contentType: getContentType(resolved.path),
 			size: Buffer.byteLength(content, "utf-8"),
-			sourcePath: realTargetPath,
-			notes: ["Use write path local://<file> to persist large intermediate artifacts across turns."],
+			sourcePath: resolved.path,
+			notes: [LOCAL_WRITE_NOTE],
 		};
 	}
 

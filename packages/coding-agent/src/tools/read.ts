@@ -8,7 +8,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
-import { getRemoteDir, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
+import { getRemoteDir, type ImageMetadata, logger, prompt, readImageMetadata, untilAborted } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { LRUCache } from "lru-cache/raw";
 import {
@@ -22,7 +22,7 @@ import {
 import { normalizeToLF } from "../edit/normalize";
 import { isNotebookPath, readEditableNotebookText } from "../edit/notebook";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { InternalUrlRouter } from "../internal-urls";
+import { InternalUrlRouter, resolveLocalUrlToFile } from "../internal-urls";
 import { parseInternalUrl } from "../internal-urls/parse";
 import type { InternalUrl } from "../internal-urls/types";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
@@ -1112,6 +1112,79 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			.done();
 	}
 
+	/**
+	 * Build content blocks for an on-disk image file: an `inspect_image`
+	 * metadata note when inspection is enabled, otherwise the decoded image
+	 * block. Shared by the plain-file read path and the `local://` image fast
+	 * path so both honor `inspect_image.enabled`, the size cap, and auto-resize
+	 * identically. Too-large / unsupported images surface as {@link ToolError}.
+	 */
+	async #loadImageContent(options: {
+		readPath: string;
+		absolutePath: string;
+		mimeType: string;
+		imageMetadata: ImageMetadata | null;
+		fileSize: number;
+	}): Promise<{ content: Array<TextContent | ImageContent>; details: ReadToolDetails; sourcePath: string }> {
+		const { readPath, absolutePath, mimeType, imageMetadata, fileSize } = options;
+		if (this.#inspectImageEnabled) {
+			const outputMime = imageMetadata?.mimeType ?? mimeType;
+			const metadataLines = [
+				"Image metadata:",
+				`- MIME: ${outputMime}`,
+				`- Bytes: ${fileSize} (${formatBytes(fileSize)})`,
+				imageMetadata?.width !== undefined && imageMetadata.height !== undefined
+					? `- Dimensions: ${imageMetadata.width}x${imageMetadata.height}`
+					: "- Dimensions: unknown",
+				imageMetadata?.channels !== undefined ? `- Channels: ${imageMetadata.channels}` : "- Channels: unknown",
+				imageMetadata?.hasAlpha === true
+					? "- Alpha: yes"
+					: imageMetadata?.hasAlpha === false
+						? "- Alpha: no"
+						: "- Alpha: unknown",
+				"",
+				`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
+					absolutePath,
+					this.session.cwd,
+				)}" and a question describing what to inspect and the desired output format.`,
+			];
+			return { content: [{ type: "text", text: metadataLines.join("\n") }], details: {}, sourcePath: absolutePath };
+		}
+
+		if (fileSize > MAX_IMAGE_SIZE) {
+			const sizeStr = formatBytes(fileSize);
+			const maxStr = formatBytes(MAX_IMAGE_SIZE);
+			throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
+		}
+		try {
+			const imageInput = await loadImageInput({
+				path: readPath,
+				cwd: this.session.cwd,
+				autoResize: this.#autoResizeImages,
+				maxBytes: MAX_IMAGE_SIZE,
+				resolvedPath: absolutePath,
+				detectedMimeType: mimeType,
+				excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
+			});
+			if (!imageInput) {
+				throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
+			}
+			return {
+				content: [
+					{ type: "text", text: imageInput.textNote },
+					{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
+				],
+				details: {},
+				sourcePath: imageInput.resolvedPath,
+			};
+		} catch (error) {
+			if (error instanceof ImageInputTooLargeError) {
+				throw new ToolError(error.message);
+			}
+			throw error;
+		}
+	}
+
 	#buildInMemoryTextResult(
 		text: string,
 		offset: number | undefined,
@@ -2132,64 +2205,13 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			| undefined;
 
 		if (mimeType) {
-			if (this.#inspectImageEnabled) {
-				const metadata = imageMetadata;
-				const outputMime = metadata?.mimeType ?? mimeType;
-				const outputBytes = fileSize;
-				const metadataLines = [
-					"Image metadata:",
-					`- MIME: ${outputMime}`,
-					`- Bytes: ${outputBytes} (${formatBytes(outputBytes)})`,
-					metadata?.width !== undefined && metadata.height !== undefined
-						? `- Dimensions: ${metadata.width}x${metadata.height}`
-						: "- Dimensions: unknown",
-					metadata?.channels !== undefined ? `- Channels: ${metadata.channels}` : "- Channels: unknown",
-					metadata?.hasAlpha === true
-						? "- Alpha: yes"
-						: metadata?.hasAlpha === false
-							? "- Alpha: no"
-							: "- Alpha: unknown",
-					"",
-					`If you want to analyze the image, call inspect_image with path="${formatPathRelativeToCwd(
-						absolutePath,
-						this.session.cwd,
-					)}" and a question describing what to inspect and the desired output format.`,
-				];
-				content = [{ type: "text", text: metadataLines.join("\n") }];
-				details = {};
-				sourcePath = absolutePath;
-			} else {
-				if (fileSize > MAX_IMAGE_SIZE) {
-					const sizeStr = formatBytes(fileSize);
-					const maxStr = formatBytes(MAX_IMAGE_SIZE);
-					throw new ToolError(`Image file too large: ${sizeStr} exceeds ${maxStr} limit.`);
-				}
-				try {
-					const imageInput = await loadImageInput({
-						path: readPath,
-						cwd: this.session.cwd,
-						autoResize: this.#autoResizeImages,
-						maxBytes: MAX_IMAGE_SIZE,
-						resolvedPath: absolutePath,
-						detectedMimeType: mimeType,
-						excludeWebP: webpExclusionForModel(this.session.getActiveModel?.()),
-					});
-					if (!imageInput) {
-						throw new ToolError(`Read image file [${mimeType}] failed: unsupported image format.`);
-					}
-					content = [
-						{ type: "text", text: imageInput.textNote },
-						{ type: "image", data: imageInput.data, mimeType: imageInput.mimeType },
-					];
-					details = {};
-					sourcePath = imageInput.resolvedPath;
-				} catch (error) {
-					if (error instanceof ImageInputTooLargeError) {
-						throw new ToolError(error.message);
-					}
-					throw error;
-				}
-			}
+			({ content, details, sourcePath } = await this.#loadImageContent({
+				readPath,
+				absolutePath,
+				mimeType,
+				imageMetadata,
+				fileSize,
+			}));
 		} else if (isNotebookPath(absolutePath) && !isRawSelector(parsed)) {
 			const notebookText = await readEditableNotebookText(absolutePath, localReadPath);
 			if (isMultiRange(parsed) && parsed.kind === "lines") {
@@ -2727,6 +2749,17 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			hasExtraction = hasPathExtraction || hasQueryExtraction;
 		}
 
+		// local:// files are real on-disk paths. Detect image files and emit a
+		// decoded image block before the text-only resource contract UTF-8
+		// decodes the binary into mojibake. The fast path returns null for
+		// non-images, directories, listings, or any resolution failure, so the
+		// text path below reproduces the router's not-found / symlink-escape
+		// behavior unchanged.
+		if (scheme === "local") {
+			const imageResult = await this.#tryReadLocalImage(urlMeta, signal);
+			if (imageResult) return imageResult;
+		}
+
 		// Reject line selectors when query extraction is used
 		if (hasExtraction && parsedSel.kind !== "none" && parsedSel.kind !== "raw") {
 			throw new ToolError("Cannot combine query extraction with line selectors");
@@ -2768,6 +2801,49 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			immutable: resource.immutable,
 			raw,
 		});
+	}
+
+	/**
+	 * Fast path for `local://` image files. Resolves the URL to its real
+	 * on-disk path with the same realpath + containment checks as
+	 * {@link LocalProtocolHandler.resolve} (via {@link resolveLocalUrlToFile}),
+	 * and — only when the target is a genuine image — emits a decoded image
+	 * block. Returns null for non-images, directories, listings, or any
+	 * resolution failure (not-found, symlink escape) so the caller falls back to
+	 * normal text resolution, which reproduces the router's errors. Errors from
+	 * a confirmed image (too large / unsupported) propagate rather than
+	 * degrading into a corrupted text read.
+	 */
+	async #tryReadLocalImage(url: InternalUrl, signal?: AbortSignal): Promise<AgentToolResult<ReadToolDetails> | null> {
+		let file: { path: string; size: number } | null;
+		try {
+			file = await resolveLocalUrlToFile(url, {
+				cwd: this.session.cwd,
+				settings: this.session.settings,
+				signal,
+				localProtocolOptions: this.session.localProtocolOptions,
+			});
+		} catch {
+			// Not found / containment escape / no session — let the text path
+			// surface the router's canonical error.
+			return null;
+		}
+		if (!file) return null;
+
+		const imageMetadata = await readImageMetadata(file.path);
+		const mimeType = imageMetadata?.mimeType;
+		if (!mimeType) return null;
+
+		const { content, details, sourcePath } = await this.#loadImageContent({
+			readPath: url.href,
+			absolutePath: file.path,
+			mimeType,
+			imageMetadata,
+			fileSize: file.size,
+		});
+		const resultBuilder = toolResult(details).content(content).sourceInternal(url.href);
+		if (sourcePath) resultBuilder.sourcePath(sourcePath);
+		return resultBuilder.done();
 	}
 
 	/** Read directory contents as a formatted listing */
