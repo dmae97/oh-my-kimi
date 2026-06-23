@@ -201,9 +201,10 @@ export function resolveProfileAliasCommandFromProcess(
 	// Normalize to forward slashes for POSIX shell fields — bash/zsh/fish
 	// can't resolve backslash-separated paths, even on Windows (Git Bash, WSL).
 	const posixScriptPath = scriptPath.replace(/\\/g, "/");
-	const posix = `${quoteForShell(runtime)} ${quoteForShell(posixScriptPath)}`;
+	const posixRuntime = runtime.replace(/\\/g, "/");
+	const posix = `${quoteForShell(posixRuntime)} ${quoteForShell(posixScriptPath)}`;
 	return {
-		display: `${runtime} ${posixScriptPath}`,
+		display: `${posixRuntime} ${posixScriptPath}`,
 		posix,
 		fish: posix,
 		powerShell: `${quoteForPowerShell(runtime)} ${quoteForPowerShell(scriptPath)}`,
@@ -216,29 +217,28 @@ function resolveShellConfigPath(
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv,
 ): string {
-	// Use POSIX path joining for non-Windows platforms so bash/zsh/fish config
-	// paths always use forward slashes, even when the test runs on Windows.
-	// On Windows, path.join produces backslashes which are correct for
-	// PowerShell profiles but wrong for POSIX shell configs.
-	const join = platform === "win32" ? path.join : path.posix.join;
+	// POSIX shells (bash/zsh/fish) always need forward-slash config paths,
+	// even on Windows — path.posix.join guarantees that regardless of platform.
+	// PowerShell profiles use the platform-native path.join (backslashes on
+	// Windows, forward slashes elsewhere).
 	switch (shell) {
 		case "zsh":
-			return join(env.ZDOTDIR || homeDir, ".zshrc");
+			return path.posix.join(env.ZDOTDIR || homeDir, ".zshrc");
 		case "bash":
-			return platform === "darwin" ? join(homeDir, ".bash_profile") : join(homeDir, ".bashrc");
+			return platform === "darwin" ? path.posix.join(homeDir, ".bash_profile") : path.posix.join(homeDir, ".bashrc");
 		case "fish": {
 			// fish sources conf.d from $XDG_CONFIG_HOME/fish (default ~/.config/fish);
 			// a hard-coded ~/.config would be silently ignored when the user relocates
 			// their XDG config root, leaving the alias unsourced after a restart.
-			const configHome = env.XDG_CONFIG_HOME || join(homeDir, ".config");
-			return join(configHome, "fish", "conf.d", "omp-profiles.fish");
+			const configHome = env.XDG_CONFIG_HOME || path.posix.join(homeDir, ".config");
+			return path.posix.join(configHome, "fish", "conf.d", "omp-profiles.fish");
 		}
 		case "pwsh":
 			return platform === "win32"
-				? join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
-				: join(homeDir, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+				? path.join(homeDir, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+				: path.posix.join(homeDir, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
 		case "powershell":
-			return join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
+			return path.join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
 	}
 }
 
