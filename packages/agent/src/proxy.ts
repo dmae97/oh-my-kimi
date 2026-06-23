@@ -157,11 +157,12 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 			}
 
 			let sawTerminalEvent = false;
+			const partialJsonByIndex = new Map<number, string>();
 			for await (const event of readSseJson<ProxyAssistantMessageEvent>(
 				response.body as ReadableStream<Uint8Array>,
 				options.signal,
 			)) {
-				const parsedEvent = processProxyEvent(model, event, partial);
+				const parsedEvent = processProxyEvent(model, event, partial, partialJsonByIndex);
 				if (parsedEvent) {
 					if (parsedEvent.type === "done" || parsedEvent.type === "error") {
 						sawTerminalEvent = true;
@@ -202,11 +203,18 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 
 /**
  * Process a proxy event and update the partial message.
+ *
+ * Streaming `partialJson` for in-progress tool calls is kept in a side-channel
+ * map keyed by `contentIndex` rather than stored on the `ToolCall` object
+ * itself. This avoids `as any` casts to smuggle non-spec fields through the
+ * typed `ToolCall` interface and guarantees the field never leaks into the
+ * final message if `toolcall_end` is skipped (e.g. on stream error).
  */
 function processProxyEvent(
 	model: Model,
 	proxyEvent: ProxyAssistantMessageEvent,
 	partial: AssistantMessage,
+	partialJsonByIndex: Map<number, string>,
 ): AssistantMessageEvent | undefined {
 	switch (proxyEvent.type) {
 		case "start":
@@ -294,15 +302,16 @@ function processProxyEvent(
 				id: proxyEvent.id,
 				name: proxyEvent.toolName,
 				arguments: {},
-				partialJson: "",
-			} satisfies ToolCall & { partialJson: string } as ToolCall;
+			} satisfies ToolCall;
+			partialJsonByIndex.set(proxyEvent.contentIndex, "");
 			return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
 
 		case "toolcall_delta": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
-				(content as any).partialJson += proxyEvent.delta;
-				content.arguments = parseStreamingJson((content as any).partialJson) || {};
+				const acc = (partialJsonByIndex.get(proxyEvent.contentIndex) ?? "") + proxyEvent.delta;
+				partialJsonByIndex.set(proxyEvent.contentIndex, acc);
+				content.arguments = parseStreamingJson(acc) || {};
 				partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
 				return {
 					type: "toolcall_delta",
@@ -317,7 +326,7 @@ function processProxyEvent(
 		case "toolcall_end": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
-				delete (content as any).partialJson;
+				partialJsonByIndex.delete(proxyEvent.contentIndex);
 				return {
 					type: "toolcall_end",
 					contentIndex: proxyEvent.contentIndex,
