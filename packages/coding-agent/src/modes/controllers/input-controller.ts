@@ -29,18 +29,18 @@ import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title
 
 /**
  * Slash commands that may carry secrets in their arguments should never be
- * persisted to history. /login <url> receives an OAuth callback URL containing
- * code= and state= params. /mcp add --token <token> receives a bearer token.
+ * persisted to history. /login accepts three callback forms (redirect URL,
+ * query string, raw auth code) — all can contain OAuth code=/state= params,
+ * so skip any /login with arguments. /mcp add --token <token> carries a
+ * bearer token.
  */
 export function shouldSkipHistory(slashText: string): boolean {
 	if (!slashText.startsWith("/")) return false;
 	const name = slashText.slice(1).split(/\s+/, 1)[0];
-	// /login <url> — the redirect URL carries OAuth code= and state= params.
-	// /login <provider> (e.g. "anthropic") is safe — it just opens the selector.
-	if (name === "login" && slashText.length > "/login".length) {
-		const arg = slashText.slice("/login".length).trim();
-		return arg.includes("://") || arg.startsWith("http");
-	}
+	// /login <anything> — parseCallbackInput() accepts redirect URLs, query
+	// strings (?code=...), and raw auth codes, all of which carry secrets.
+	// Skipping all /login-with-args is safer than pattern-matching each form.
+	if (name === "login" && slashText.length > "/login".length) return true;
 	if (name === "mcp") {
 		const args = slashText.slice("/mcp".length).trim();
 		return args.startsWith("add") && /--token\s/.test(args);

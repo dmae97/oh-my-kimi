@@ -10,8 +10,12 @@ describe("shouldSkipHistory — security filter for slash command history", () =
 		expect(shouldSkipHistory("/login")).toBe(false);
 	});
 
-	it("does not skip /login with a provider name only", () => {
-		expect(shouldSkipHistory("/login anthropic")).toBe(false);
+	it("skips /login with any argument (provider name or callback — all forms can carry secrets)", () => {
+		// parseCallbackInput() accepts redirect URLs, query strings, and raw auth codes.
+		// All /login-with-args are skipped to prevent any OAuth secret leakage.
+		expect(shouldSkipHistory("/login anthropic")).toBe(true);
+		expect(shouldSkipHistory("/login ?code=abc&state=xyz")).toBe(true);
+		expect(shouldSkipHistory("/login raw-auth-code-xyz")).toBe(true);
 	});
 
 	it("skips /mcp add with --token flag (contains bearer token)", () => {
