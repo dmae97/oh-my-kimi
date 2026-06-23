@@ -37,6 +37,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { getOverflowPatterns } from "@oh-my-pi/pi-ai/utils/overflow";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
@@ -367,11 +368,16 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.goal).toContain("Synthetic tool result.");
 		expect(payload.goal).toContain("Latest user request.");
 		expect(payload.goal.trimEnd().endsWith("<|im_end|>")).toBe(true);
-		// tool_call linkage: the assistant turn renders the call it issued (name + args),
-		// and the following tool turn references the same call id.
-		expect(payload.goal).toContain("read");
-		expect(payload.goal).toContain("src/main.ts");
-		expect(payload.goal).toContain("call-1");
+		// tool_call linkage: the assistant turn renders the call it issued (name + args)
+		// and the following tool turn renders `<tool_response name=read>`. The pair is
+		// linked by ADJACENCY (1 call/turn, result rides the very next turn), so the
+		// OMP-internal call id is omitted from the transcript — it is dead weight the
+		// model never reads.
+		expect(payload.goal).toContain('<tool_call>{"name":"read","arguments":{"path":"src/main.ts"}}</tool_call>');
+		expect(payload.goal).toContain("<tool_response name=read>");
+		expect(payload.goal).not.toContain("call-1");
+		expect(payload.goal).not.toContain('"id":');
+		expect(payload.goal).not.toContain(" id=");
 		// Content is forwarded verbatim — the provider performs no credential redaction.
 		for (const token of credentialTokens) {
 			expect(payload.goal).toContain(token);
@@ -389,6 +395,54 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		const flowPrompt = payload.flowConfig?.prompts[0];
 		expect(flowPrompt?.prompt_template.system).toContain("OMP system instructions: preserve the local tool bridge.");
 		expect(flowPrompt?.prompt_template.system).toContain(patToken);
+	});
+
+	it("strips the OMP-internal intent (i) field from replayed tool-call args", () => {
+		const replayContext: Context = {
+			systemPrompt: ["system"],
+			messages: [
+				{ role: "user", content: "Do the thing.", timestamp: 1 },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-1",
+							name: "bash",
+							arguments: { command: "ls -la", i: "Listing files for the user" },
+						},
+					],
+					api: "gitlab-duo-agent",
+					provider: "gitlab-duo-agent",
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "bash",
+					content: [{ type: "text", text: "total 0" }],
+					isError: false,
+					timestamp: 3,
+				},
+				{ role: "user", content: "Next.", timestamp: 4 },
+			],
+		};
+
+		const payload = buildGitLabDuoWorkflowStartRequest("workflow-1", model, replayContext);
+		// Real argument survives; the intent narration is dropped from the transcript.
+		expect(payload.goal).toContain('"command":"ls -la"');
+		expect(payload.goal).not.toContain("Listing files for the user");
+		expect(payload.goal).not.toContain('"i":');
 	});
 
 	it("keeps local paths out of workflowMetadata while preserving official routing metadata", () => {
@@ -1241,6 +1295,209 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		// A genuine failure terminates the run — no fresh workflow is created.
 		expect(createCount).toBe(1);
 		expect(sockets).toHaveLength(1);
+	});
+
+	it("proactively reports overflow without opening a socket when the goal is in the hard-fail zone", async () => {
+		// A single ~2.5MB user message renders verbatim as the goal (a lone turn is sent
+		// as-is), past the hard byte budget. The provider must NOT spend the request: no
+		// WebSocket is opened, and the stream ends with an OVERFLOW_PATTERNS-matching
+		// error so the session auto-compacts. The created workflow is still stopped.
+		const bigGoal: Context = {
+			messages: [{ role: "user", content: "x".repeat(2_500_000), timestamp: Date.now() }],
+		};
+		const stopped: string[] = [];
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows/") && init?.method === "PATCH") {
+				stopped.push(url);
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows") && init?.method === "POST") {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		let socketOpened = false;
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			socketOpened = true;
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send() {},
+				close() {},
+			};
+			return socket;
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, bigGoal, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			fetch: fetchImpl,
+			webSocketFactory,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(getOverflowPatterns().some(p => p.test(result.errorMessage ?? ""))).toBe(true);
+		expect(result.errorMessage).toContain("prompt is too long");
+		// The request was never spent and the created workflow was stopped.
+		expect(socketOpened).toBe(false);
+		expect(stopped).toHaveLength(1);
+	});
+
+	it("relabels a FAILED in the jitter zone as a context overflow after attempting once", async () => {
+		// A ~1.5MB goal is in the jitter zone (≥ soft, < hard): the provider DOES open a
+		// socket and try once. When the server FAILs, the size is the likely cause, so
+		// the raw error is re-labeled as an OVERFLOW_PATTERNS-matching message. The raw
+		// server text must NOT leak through.
+		const jitterGoal: Context = {
+			messages: [{ role: "user", content: "x".repeat(1_500_000), timestamp: Date.now() }],
+		};
+		let socketOpened = false;
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows/")) {
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows") && init?.method === "POST") {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			socketOpened = true;
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send() {},
+				close() {},
+			};
+			queueMicrotask(() => {
+				socket.onopen?.(new Event("open"));
+				socket.onmessage?.(
+					new MessageEvent("message", {
+						data: JSON.stringify({ status: "FAILED", error: "Internal server error processing the request" }),
+					}),
+				);
+			});
+			return socket;
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, jitterGoal, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			fetch: fetchImpl,
+			webSocketFactory,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		// The request WAS attempted (jitter zone can succeed), then relabeled on failure.
+		expect(socketOpened).toBe(true);
+		expect(getOverflowPatterns().some(p => p.test(result.errorMessage ?? ""))).toBe(true);
+		expect(result.errorMessage).toContain("prompt is too long");
+		expect(result.errorMessage).not.toContain("Internal server error");
+	});
+
+	it("surfaces the raw error verbatim when an erroring goal is within the byte budget", async () => {
+		// A small goal that FAILs is a genuine fault, not an overflow — the raw message
+		// must surface unchanged so it is NOT misclassified as a context overflow.
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows/")) {
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows") && init?.method === "POST") {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send() {},
+				close() {},
+			};
+			queueMicrotask(() => {
+				socket.onopen?.(new Event("open"));
+				socket.onmessage?.(
+					new MessageEvent("message", {
+						data: JSON.stringify({ status: "FAILED", error: "Internal server error processing the request" }),
+					}),
+				);
+			});
+			return socket;
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			fetch: fetchImpl,
+			webSocketFactory,
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Internal server error");
+		expect(result.errorMessage).not.toContain("prompt is too long");
 	});
 
 	it("enables the namespace Duo settings once per account before running the flow", async () => {
@@ -3660,8 +3917,11 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(goal).toContain("ALPHA_FILE_CONTENT"); // the prior tool RESULT is present
 		expect(goal).toContain("It contains ALPHA.");
 		expect(goal).toContain("Now summarize it.");
-		// The prior tool call and its result are paired by id in the transcript.
-		expect(goal).toContain("req-prior-1");
+		// The prior tool call and its result are paired by ADJACENCY (call turn followed
+		// by its tool-result turn); the OMP-internal id is omitted from the transcript.
+		expect(goal).toContain('<tool_call>{"name":"read","arguments":{"path":"a.ts"}}</tool_call>');
+		expect(goal).toContain("<tool_response name=read>");
+		expect(goal).not.toContain("req-prior-1");
 	});
 
 	it("finalizes the resumed stream when the socket closes without a terminal status", async () => {

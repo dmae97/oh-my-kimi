@@ -60,6 +60,36 @@ const GITLAB_DUO_WORKFLOW_MAX_STEP_LIMIT_RESTARTS = 4;
  * looping on quota.
  */
 const GITLAB_DUO_WORKFLOW_MAX_GENERIC_ERROR_RETRIES = 1;
+/**
+ * Two rendered-`goal` byte thresholds bounding three reliability zones. Empirically
+ * the DWS/Workhorse transport accepts no fixed token wall (it has tokenized
+ * 970k-token goals) but its failure probability rises with the rendered-goal BYTE
+ * size: ≤~1.25MB basically always succeeds, ~1.4–1.7MB is a jitter band where a
+ * request fails more often than not but can still go through, ≥~2MB basically always
+ * fails, and 4MB is the DWS gRPC `MAX_MESSAGE_SIZE` hard cap.
+ *
+ * - `[0, SOFT)` reliable zone: send normally; an error here is a genuine upstream
+ *   fault and surfaces verbatim.
+ * - `[SOFT, HARD)` jitter zone: still attempt once (it can succeed); if the run then
+ *   ERRORS, the size is the likely cause, so re-label it as a context-overflow to
+ *   drive auto-compaction.
+ * - `[HARD, ∞)` necessary-fail zone: do NOT spend the request — proactively end the
+ *   stream with the overflow error so the session compacts immediately.
+ *
+ * `SOFT` is the measured last-guaranteed-success ceiling; `HARD` is the necessary-fail
+ * floor. Re-labeling uses {@link buildGitLabDuoWorkflowGoalOverflowMessage}.
+ */
+const GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES = 1_250_000;
+const GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES = 2_000_000;
+
+// An overflow-pattern message for an oversized goal. The "prompt is too long" prefix
+// is one of the shared `OVERFLOW_PATTERNS` (packages/ai/src/utils/overflow.ts), so
+// `isContextOverflow` recognizes it and the session triggers auto-compaction instead
+// of surfacing a hard failure. Byte counts (not tokens) are reported because the
+// budget is a byte budget.
+function buildGitLabDuoWorkflowGoalOverflowMessage(goalBytes: number): string {
+	return `prompt is too long: ${goalBytes} bytes exceeds the GitLab Duo Agent goal byte budget (soft ${GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES}, hard ${GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES})`;
+}
 const GITLAB_DUO_WORKFLOW_LANGUAGE_SERVER_VERSION = "8.104.0";
 const GITLAB_DUO_WORKFLOW_AVAILABLE_MODELS_QUERY = `query omp_gitlabDuoWorkflowAvailableModels($rootNamespaceId: GroupID!) {
   aiChatAvailableModels(rootNamespaceId: $rootNamespaceId) {
@@ -304,6 +334,11 @@ export interface GitLabDuoWorkflowStreamState {
 	retryableErrorRequested?: boolean;
 	providerSessionState?: GitLabDuoWorkflowProviderSessionState;
 	lastApprovalStatus?: string;
+	// When the rendered goal exceeds the byte budget, this carries an overflow-pattern
+	// message. A terminal/exhausted error then surfaces THIS instead of the raw server
+	// error so `isContextOverflow` recognizes it and the agent loop auto-compacts. Left
+	// undefined for a goal within budget, so ordinary errors surface verbatim.
+	goalOverflowMessage?: string;
 }
 
 type GitLabDuoWorkflowSocketResult =
@@ -342,7 +377,10 @@ export const streamGitLabDuoWorkflow: StreamFunction<"gitlab-duo-agent"> = (
 		const errorText = gitLabDuoWorkflowErrorText(error);
 		if (!stream.done) {
 			output.stopReason = "error";
-			output.errorMessage = errorText;
+			// A throw (socket reject, abnormal 1006 close, …) on a goal already past the
+			// byte budget is almost certainly the oversized request — surface it as a
+			// context-overflow so the session auto-compacts rather than hard-failing.
+			output.errorMessage = state.goalOverflowMessage ?? errorText;
 			stream.push({ type: "error", reason: "error", error: output });
 		}
 	});
@@ -811,11 +849,6 @@ export function gitLabDuoWorkflowErrorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function safeGitLabDuoWorkflowGoalJson(value: unknown): string {
-	const json = JSON.stringify(value) ?? "null";
-	return json.replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-}
-
 async function readGitLabDuoWorkflowResponseErrorMessage(response: Response): Promise<string | undefined> {
 	try {
 		const payload: unknown = await response.json();
@@ -1109,6 +1142,42 @@ async function runGitLabDuoWorkflow(
 	const selectedModelIdentifier = setup.selectedModelIdentifier;
 	let workflowId = setup.workflowId;
 	let startPayload = setup.startPayload;
+	// Three byte zones (see GITLAB_DUO_WORKFLOW_GOAL_*_OVERFLOW_BYTES):
+	//  - [HARD, ∞): necessary-fail. Do NOT spend the request — emit the overflow error
+	//    now so the session compacts immediately. The fresh-workflow already created in
+	//    setup is stopped by the `finally` below.
+	//  - [SOFT, HARD): jitter. Attempt once (it can succeed); stash the overflow label so
+	//    that IF the run errors it is re-labeled as a context-overflow rather than a
+	//    transient fault.
+	//  - [0, SOFT): reliable. Leave the label undefined; ordinary errors surface verbatim.
+	const renderedGoalBytes = Buffer.byteLength(startPayload.goal, "utf8");
+	if (renderedGoalBytes >= GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES) {
+		traceGitLabDuoWorkflow("goal.over_budget", {
+			renderedGoalBytes,
+			zone: "hard",
+			soft: GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES,
+			hard: GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES,
+		});
+		if (!state.stream.done) {
+			state.output.stopReason = "error";
+			state.output.errorMessage = buildGitLabDuoWorkflowGoalOverflowMessage(renderedGoalBytes);
+			state.stream.push({ type: "error", reason: "error", error: state.output });
+		}
+		// Stop the freshly created server-side workflow so it is not stranded, then
+		// return without opening the socket — the request is never spent.
+		if (providerSessionState) providerSessionState.active = undefined;
+		await stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, workflowId);
+		return;
+	}
+	if (renderedGoalBytes >= GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES) {
+		state.goalOverflowMessage = buildGitLabDuoWorkflowGoalOverflowMessage(renderedGoalBytes);
+		traceGitLabDuoWorkflow("goal.over_budget", {
+			renderedGoalBytes,
+			zone: "jitter",
+			soft: GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES,
+			hard: GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES,
+		});
+	}
 	let lastSocketResult: GitLabDuoWorkflowSocketResult = "closed";
 	let timeoutReconnected = false;
 	let stepLimitRestarts = 0;
@@ -1234,6 +1303,10 @@ async function runGitLabDuoWorkflow(
 			// now before falling through to the terminal break.
 			if (lastSocketResult === "retryable_error" && !state.stream.done) {
 				state.output.stopReason = "error";
+				// An oversized goal that exhausted its retry is almost certainly failing on
+				// the byte size, not a transient fault — surface it as a context-overflow so
+				// the session auto-compacts instead of hard-failing.
+				if (state.goalOverflowMessage) state.output.errorMessage = state.goalOverflowMessage;
 				state.stream.push({ type: "error", reason: "error", error: state.output });
 			}
 			break;
@@ -1851,7 +1924,9 @@ async function handleGitLabDuoWorkflowSocketMessage(
 		}
 		traceGitLabDuoWorkflow("websocket.failed", { status });
 		state.output.stopReason = "error";
-		state.output.errorMessage = message;
+		// An oversized goal that fails terminally is almost certainly failing on the byte
+		// size — surface it as a context-overflow so the session auto-compacts.
+		state.output.errorMessage = state.goalOverflowMessage ?? message;
 		state.stream.push({ type: "error", reason: "error", error: state.output });
 		return "terminal";
 	}
@@ -2281,16 +2356,20 @@ function gitLabDuoWorkflowChatMlToolResultHeader(message: GitLabDuoWorkflowRepla
 	if (!message.toolName && !message.toolCallId) return undefined;
 	const status = message.isError ? " status=error" : "";
 	const name = message.toolName ?? "";
-	const id = message.toolCallId ? ` id=${message.toolCallId}` : "";
-	return `<tool_response name=${name}${id}${status}>`;
+	// The call id is omitted on purpose: the result rides the turn immediately after
+	// its call (1:1, adjacent), so the model pairs them by position; the UUID is dead
+	// transcript weight. `toolCallId` is still kept on the replay struct because the
+	// header is emitted whenever a result has either a name OR an id.
+	return `<tool_response name=${name}${status}>`;
 }
 
 function renderGitLabDuoWorkflowChatMlToolCall(toolCall: GitLabDuoWorkflowReplayToolCall): string {
-	const payload = safeGitLabDuoWorkflowGoalJson({
-		name: toolCall.name,
-		id: toolCall.id,
-		arguments: toolCall.arguments,
-	});
+	// The goal is a plain text transcript fed to the model, not an HTML/script
+	// context, so `<`/`>` need no escaping. The call id is OMP-internal wiring the
+	// model never reads (call→result pair by adjacency in the transcript), so it is
+	// omitted to save bytes. `arguments` carries the `i` (intent) key only at live
+	// dispatch; on replay it is stripped (see gitLabDuoWorkflowAssistantToolCalls).
+	const payload = JSON.stringify({ name: toolCall.name, arguments: toolCall.arguments }) ?? "null";
 	return `<tool_call>${payload}</tool_call>`;
 }
 
@@ -2335,10 +2414,25 @@ function gitLabDuoWorkflowAssistantToolCalls(message: AssistantMessage): GitLabD
 	const toolCalls: GitLabDuoWorkflowReplayToolCall[] = [];
 	for (const item of message.content) {
 		if (item.type === "toolCall") {
-			toolCalls.push({ id: item.id, name: item.name, arguments: item.arguments });
+			toolCalls.push({
+				id: item.id,
+				name: item.name,
+				arguments: stripGitLabDuoWorkflowReplayIntent(item.arguments),
+			});
 		}
 	}
 	return toolCalls;
+}
+
+// The `i` key is OMP's per-call intent narration (e.g. "Reading kernel smoke body").
+// It is UI-time metadata describing the call as it is made; on replay the tool name
+// plus arguments already say what the call did, so the intent is dead transcript
+// weight. Drop it from the rendered history. (Live dispatch never reads the replayed
+// args, so this only affects the bytes the model sees, never tool execution.)
+function stripGitLabDuoWorkflowReplayIntent(args: Record<string, unknown>): Record<string, unknown> {
+	if (!("i" in args)) return args;
+	const { i: _intent, ...rest } = args;
+	return rest;
 }
 
 function extractLatestUserPrompt(messages: readonly Message[]): string {
