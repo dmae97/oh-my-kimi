@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added contract tests for `getLanguageFromPath` and `detectLanguageId` in `packages/coding-agent/test/utils/lang-from-path.test.ts`, covering extension detection, special filenames (Dockerfile, Containerfile, .emacs, justfile, CMakeLists.txt, Makefile), case-insensitivity, unknown extensions, and the `.txt`-wins-over-basename limitation in `getLanguageFromPath`.
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes
