@@ -4,6 +4,8 @@ import type { TinyTitleWorkerInbound, TinyTitleWorkerOutbound } from "@oh-my-pi/
 
 class FakeTinyWorker {
 	terminated = false;
+	refCalls = 0;
+	unrefCalls = 0;
 	#messageHandlers = new Set<(message: TinyTitleWorkerOutbound) => void>();
 	#errorHandlers = new Set<(error: Error) => void>();
 	#onSend: (message: TinyTitleWorkerInbound, worker: FakeTinyWorker) => void;
@@ -28,6 +30,14 @@ class FakeTinyWorker {
 
 	async terminate(): Promise<void> {
 		this.terminated = true;
+	}
+
+	ref(): void {
+		this.refCalls += 1;
+	}
+
+	unref(): void {
+		this.unrefCalls += 1;
 	}
 
 	emit(message: TinyTitleWorkerOutbound): void {
@@ -138,6 +148,31 @@ describe("issue #1940 — local model failures release the worker process", () =
 			expect(first.terminated).toBe(true);
 			expect(await client.generate("lfm2-350m", "retry title")).toBe("recovered title");
 			expect(nextWorker).toBe(2);
+		} finally {
+			await client.terminate();
+		}
+	});
+});
+
+describe("issue #3291 — tiny-model downloads keep the worker referenced", () => {
+	it("references the worker while a download request is pending", async () => {
+		let downloadRequestId = "";
+		const worker = new FakeTinyWorker(message => {
+			if (message.type === "download") downloadRequestId = message.id;
+		});
+		const client = new TinyTitleClient(() => worker);
+
+		try {
+			const download = client.downloadModel("lfm2-700m");
+
+			expect(downloadRequestId).not.toBe("");
+			expect(worker.refCalls).toBe(1);
+			expect(worker.unrefCalls).toBe(0);
+
+			worker.emit({ type: "downloaded", id: downloadRequestId });
+
+			expect(await download).toBe(true);
+			expect(worker.unrefCalls).toBe(1);
 		} finally {
 			await client.terminate();
 		}
