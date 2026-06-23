@@ -2966,12 +2966,15 @@ function buildParams(
 	// on the wire, so the model loses the prior reasoning chain across turns
 	// and the KV cache misses every turn (#3288). Narrowing this guard back
 	// to `isOAuthToken` regresses every API-key thinking provider. Skip
-	// Copilot — its proxy strips Anthropic betas (so the required
-	// `context-management-2025-06-27` header never lands) and the compat
-	// flag demotes thinking blocks to text, so `keep: "all"` is a no-op
-	// that risks the proxy rejecting an unrecognized field.
+	// injected clients because this code cannot add the required
+	// `context-management-2025-06-27` beta to caller-owned SDK clients. Skip
+	// Copilot because its proxy strips Anthropic betas and demotes thinking
+	// blocks to text upstream, so `keep: "all"` is a no-op that risks proxy
+	// rejection of an unrecognized field.
 	const shouldKeepThinkingContext =
-		model.provider !== "github-copilot" && (thinking?.type === "adaptive" || thinking?.type === "enabled");
+		!options?.client &&
+		model.provider !== "github-copilot" &&
+		(thinking?.type === "adaptive" || thinking?.type === "enabled");
 	const contextManagement = shouldKeepThinkingContext
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
 		: undefined;
