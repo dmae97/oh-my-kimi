@@ -1,9 +1,10 @@
 """Low-level git primitives with ephemeral PAT injection.
 
-The PAT is supplied through `git --config-env=http.extraHeader=ENVVAR`. Git
-expands the env var inside the spawned process; the secret only appears in
-the spawned process's environment, never in argv visible to other UIDs via
-`/proc/<pid>/cmdline`. The env var is wiped from the parent after each call.
+The PAT is supplied through `git --config-env=http.<url>.extraHeader=ENVVAR`
+when a verified HTTPS remote is known, or the legacy global `http.extraHeader`
+path for older direct callers. Git expands the env var inside the spawned
+process; the secret never appears in argv visible to other UIDs via
+`/proc/<pid>/cmdline`.
 
 Used by:
 - `robomp.sandbox.LocalGitTransport` for in-process git operations when no
