@@ -67,7 +67,7 @@ export class HookEditorComponent extends Container {
 
 		// Hint
 		const hint = this.#promptStyle
-			? "enter submit  esc cancel  ctrl+g external editor"
+			? "enter or ctrl+q submit  esc cancel  ctrl+g external editor"
 			: "ctrl+q/ctrl+enter submit  esc cancel  ctrl+g external editor";
 		this.addChild(new Text(theme.fg("dim", hint), 1, 0));
 
@@ -95,8 +95,21 @@ export class HookEditorComponent extends Container {
 		this.#editor.pasteText(text);
 	}
 
-	/** Prompt-style: raw Enter submits; Editor owns newline-producing sequences. */
+	/**
+	 * Prompt-style: raw Enter submits; Editor owns newline-producing sequences.
+	 * The follow-up chord (`app.message.followUp` → Ctrl+Q / Ctrl+Enter) also
+	 * submits, so muscle memory from the main editor / hook-style surface works
+	 * here and Windows Terminal — which can't deliver a distinct Ctrl+Enter
+	 * event (#1903) — still has a working chord via Ctrl+Q (#3353).
+	 */
 	#handlePromptStyleInput(keyData: string): void {
+		// Submit on the follow-up chord first so it wins over Editor's own
+		// Ctrl+Enter newline handling. Mirrors #handleHookStyleInput.
+		if (matchesAppFollowUp(keyData)) {
+			this.#submitCurrentText();
+			return;
+		}
+
 		// Prompt-style keeps Escape as an explicit cancel key and also honors app.interrupt remaps.
 		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc") || matchesAppInterrupt(keyData)) {
 			this.#onCancelCallback();
