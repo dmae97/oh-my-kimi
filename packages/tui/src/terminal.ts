@@ -4,10 +4,29 @@ import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
 import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
+import { type HangulCompatibilityJamoWidth, setHangulCompatibilityJamoWidth } from "./utils";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
 const TERMINAL_PROGRESS_CLEAR_SEQUENCE = "\x1b]9;4;0;\x07";
+// Hangul Compatibility Jamo (U+3131..=U+318E) render width is terminal-dependent:
+// Ghostty follows UAX#11 (2 cells); Terminal.app and iTerm2 render narrow (1),
+// matching the macOS platform default. Override only for terminals known to
+// disagree — the rest keep the platform default (macOS narrow, otherwise UAX#11),
+// so this is a no-op everywhere except Ghostty. A runtime DSR/CPR probe that
+// auto-detects the width on unknown terminals is tracked separately.
+export function resolveHangulCompatibilityJamoWidthFromTerminalIdentity(
+	env: NodeJS.ProcessEnv = Bun.env,
+): HangulCompatibilityJamoWidth {
+	if (
+		env.GHOSTTY_RESOURCES_DIR ||
+		env.TERM_PROGRAM?.toLowerCase() === "ghostty" ||
+		env.TERM?.toLowerCase().includes("ghostty")
+	) {
+		return 2;
+	}
+	return "platform";
+}
 
 /**
  * Maximum encoded UTF-8 bytes per `process.stdout.write` call on Windows.
@@ -508,6 +527,7 @@ export class ProcessTerminal implements Terminal {
 		// The query handler intercepts input temporarily, then installs the user's handler
 		// See: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
 		this.#queryAndEnableKittyProtocol();
+		setHangulCompatibilityJamoWidth(resolveHangulCompatibilityJamoWidthFromTerminalIdentity());
 
 		// Query terminal background color via OSC 11 for dark/light detection.
 		// Uses DA1 (Primary Device Attributes) as a sentinel: terminals process
