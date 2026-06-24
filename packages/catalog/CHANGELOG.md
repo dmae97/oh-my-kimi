@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenRouter Anthropic compat to strip Responses reasoning history during replay so signed thinking blocks are not sent back to routed Anthropic providers. ([#3399](https://github.com/can1357/oh-my-pi/issues/3399))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added

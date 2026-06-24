@@ -345,7 +345,7 @@ describe("OpenRouter Responses request shape", () => {
 		expect(headers.get("X-OpenRouter-Cache-TTL")).toBe("7");
 	});
 
-	it("replays native Responses history after a pseudo OpenRouter turn", async () => {
+	it("omits native reasoning history for OpenRouter Anthropic turns", async () => {
 		const nativeItem = {
 			type: "reasoning",
 			id: "rs_1",
@@ -416,10 +416,7 @@ describe("OpenRouter Responses request shape", () => {
 			if (event.type === "error") throw event.error;
 		}
 
-		expect(bodies[1]?.input).toEqual([
-			replayItem,
-			{ role: "user", content: [{ type: "input_text", text: "continue" }] },
-		]);
+		expect(bodies[1]?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "continue" }] }]);
 	});
 });
 
