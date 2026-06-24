@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OpenRouter Anthropic models on the Responses path omitting `cache_control`, so prompt caching engages without forcing Chat Completions. ([#3397](https://github.com/can1357/oh-my-pi/issues/3397))
+
 ## [16.1.16] - 2026-06-23
 
 ### Fixed

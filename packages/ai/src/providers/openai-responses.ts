@@ -3,6 +3,7 @@ import { $flag, extractHttpStatusFromError, logger, structuredCloneJSON } from "
 import { getEnvApiKey } from "../stream";
 import type {
 	AssistantMessage,
+	CacheRetention,
 	Context,
 	Model,
 	OpenAICompat,
@@ -324,6 +325,8 @@ function markOpenAIResponsesChainZeroDataRetention(chain: OpenAIResponsesChainSt
 	});
 }
 
+type OpenRouterAnthropicCacheControl = { type: "ephemeral" };
+
 type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	top_p?: number;
 	top_k?: number;
@@ -334,7 +337,17 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	stream_options?: { include_obfuscation?: boolean };
 	provider?: OpenAICompat["openRouterRouting"];
 	reasoning?: { effort?: string } | { enabled: false };
+	cache_control?: OpenRouterAnthropicCacheControl;
 };
+
+function maybeAddOpenRouterAnthropicCacheControl(
+	params: OpenAIResponsesSamplingParams,
+	model: Model<"openai-responses">,
+	cacheRetention: CacheRetention,
+): void {
+	if (cacheRetention === "none" || !isOpenRouterAnthropicModel(model)) return;
+	params.cache_control ??= { type: "ephemeral" };
+}
 
 /**
  * Generate function for OpenAI Responses API
@@ -823,6 +836,7 @@ export function buildParams(
 		store: false,
 		stream_options: model.compat.supportsObfuscationOptOut ? { include_obfuscation: false } : undefined,
 	};
+	maybeAddOpenRouterAnthropicCacheControl(params, model, cacheRetention);
 	const outputToken = resolveOpenAIOutputTokenParam({
 		field: "max_output_tokens",
 		maxTokens: options?.maxTokens,
