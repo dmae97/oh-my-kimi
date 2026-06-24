@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an interactive `/move` overlay: typing `/move` with no argument opens a path autocomplete picker (type to filter, ↑↓ to navigate, Tab to accept, Enter to confirm). `/move <path>` still works for direct invocation. The command now starts a fresh empty session in the target directory instead of relocating the current session file, leaving the previous session resumable via `/resume`. If the target directory does not exist, a confirmation prompt offers to create it. Empty move sessions (no user/assistant messages) are automatically cleaned up on shutdown so they don't accumulate.
+
 ### Fixed
 
 - Fixed all extension loading silently failing on the cross-compiled `omp-darwin-arm64` release binary (downloaded directly or via a Homebrew tap wrapper) because `__computeBunfsPackageRoot` mis-handled `import.meta.dir = "//root/omp-darwin-arm64"`. Bun 1.3.14 reports `<bunfs-root>/<binary-name>` for the compiled entry's `import.meta.dir`, but the pre-fix function joined `metaDir + "packages"` and produced `/root/omp-darwin-arm64/packages` — the binary basename was baked into every bunfs path, so the TypeBox/legacy-pi shims and every `@oh-my-pi/pi-*` package-root override failed `existsSync` validation and `resolveCanonicalPiSpecifier` fell through to a bunfs `Bun.resolveSync` that also could not find the module. The function now detects the bunfs-root + binary-basename shape (`path.basename(path.dirname(metaDir)) === "root"`) and strips the trailing binary segment by slicing the original `metaDir`; the production bunfs shim join path also preserves Bun's bunfs-native `//root` / `B:\~BUN\root` prefix that `path.join` would otherwise collapse. ([#3329](https://github.com/can1357/oh-my-pi/issues/3329))
