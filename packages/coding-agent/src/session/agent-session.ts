@@ -420,14 +420,17 @@ export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "la
 
 const RETRY_BACKOFF_JITTER_RATIO = 0.25;
 /**
- * Hysteresis band for the post-shake "did we actually create headroom?" check.
- * Shake counts as having resolved threshold pressure only when residual context
- * lands at or below `SHAKE_RECOVERY_BAND × threshold`. Re-checking against the
- * raw threshold lets shake keep reclaiming a trickle of the previous turn's
- * output and land just under the line every turn, sustaining the auto-continue
- * dead loop reported in #2275.
+ * Hysteresis band for the post-maintenance "did we actually create headroom?"
+ * check shared by the shake tail and the context-full / snapcompact tail. A
+ * pass counts as having resolved threshold pressure only when residual context
+ * lands at or below `COMPACTION_RECOVERY_BAND × threshold`. Re-checking against
+ * the raw threshold lets a pass keep reclaiming a trickle of the previous
+ * turn's output and land just under the line every turn, sustaining the
+ * auto-continue dead loop reported in #2275; the same band stops the
+ * context-full / snapcompact tail from re-firing on a history whose single
+ * most-recent kept turn already exceeds the threshold (the snapcompact thrash).
  */
-const SHAKE_RECOVERY_BAND = 0.8;
+const COMPACTION_RECOVERY_BAND = 0.8;
 
 function calculateRetryBackoffDelayMs(baseDelayMs: number, attempt: number): number {
 	const cappedDelayMs = Math.min(Math.max(0, baseDelayMs) * 2 ** Math.max(0, attempt - 1), RETRY_BACKOFF_MAX_DELAY_MS);
@@ -8862,7 +8865,15 @@ export class AgentSession {
 		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
 		const pruneResult = await this.#pruneToolOutputs();
 		const maintenanceTokensFreed = (supersedeResult?.tokensSaved ?? 0) + (pruneResult?.tokensSaved ?? 0);
-		const assistantUsageContextTokens = calculateContextTokens(assistantMessage.usage);
+		// An assistant that predates the latest compaction carries stale, pre-rewrite
+		// `usage`: the scheduled auto-continue re-enters this check with the kept
+		// assistant (#promptWithMessage → #checkCompaction), and its old high prompt
+		// count would re-trip the threshold on a freshly compacted history. Drop the
+		// stale provider number for those messages and let the live stored estimate
+		// (the floor applied below) drive the decision instead.
+		const assistantUsageContextTokens = errorIsFromBeforeCompaction
+			? 0
+			: calculateContextTokens(assistantMessage.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
@@ -10113,6 +10124,46 @@ export class AgentSession {
 	}
 
 	/**
+	 * Post-maintenance progress check for the context-full / snapcompact tail.
+	 *
+	 * After `appendCompaction` rewrote history and `replaceMessages` swapped in the
+	 * compacted context, measure the residual context off the live message set and
+	 * decide whether maintenance actually created headroom. Mirrors the shake
+	 * recovery-band logic (#2275): a session whose single most-recent turn already
+	 * blows the threshold cannot be reduced by compaction (findCutPoint keeps that
+	 * turn verbatim), so re-firing on the next agent_end just thrashes. We only
+	 * report progress when residual context lands at or below
+	 * `COMPACTION_RECOVERY_BAND × threshold`.
+	 *
+	 * When the model/window is unknown we cannot evaluate the band, so we
+	 * optimistically allow the continuation (preserving prior behavior).
+	 */
+	#compactionCreatedHeadroom(triggerContextTokens?: number): boolean {
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (contextWindow <= 0) return true;
+		const compactionSettings = this.settings.getGroup("compaction");
+		const residualTokens = compactionContextTokens(
+			this.getContextUsage({ contextWindow })?.tokens ?? 0,
+			this.#estimateStoredContextTokens(),
+		);
+		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
+		const recoveryBand = Math.floor(thresholdTokens * COMPACTION_RECOVERY_BAND);
+		// A genuine reduction past the band always counts as progress. The
+		// triggerContextTokens comparison is a secondary guard: if residual context
+		// is not meaningfully smaller than what triggered this pass, treat it as a
+		// no-op even when it nominally sits under the band.
+		if (residualTokens > recoveryBand) return false;
+		if (
+			typeof triggerContextTokens === "number" &&
+			Number.isFinite(triggerContextTokens) &&
+			triggerContextTokens > 0
+		) {
+			return residualTokens < triggerContextTokens;
+		}
+		return true;
+	}
+
+	/**
 	 * Internal: Run auto-compaction with events.
 	 *
 	 * @param allowDefer If true (default), threshold-driven handoff strategy is allowed to
@@ -10601,11 +10652,17 @@ export class AgentSession {
 			};
 			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
 
+			// Post-maintenance progress guard. Snapcompact can project over budget and
+			// fall back to a context-full summary; the summarizer keeps `keepRecentTokens`
+			// of recent history verbatim and findCutPoint can only cut at turn
+			// boundaries (never tool results), so a single oversized recent turn (e.g. a
+			// huge tool result) leaves the rewritten context still above threshold.
+			// Scheduling the auto-continue regardless means the next agent_end re-enters
+			// #checkCompaction over the same oversized tail and re-fires forever
+			// (the snapcompact thrash). Mirror the shake recovery-band check: only
+			// auto-continue when compaction actually created headroom.
 			let continuationScheduled = false;
-			if (!willRetry && reason !== "idle" && shouldAutoContinue) {
-				this.#scheduleAutoContinuePrompt(generation);
-				continuationScheduled = true;
-			}
+			const madeProgress = this.#compactionCreatedHeadroom(options.triggerContextTokens);
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
@@ -10624,7 +10681,27 @@ export class AgentSession {
 					}
 				}
 
-				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				// Only retry when maintenance actually created headroom. An
+				// overflow/incomplete recovery whose kept recent turn alone still
+				// exceeds the window would retry straight back into the same
+				// overflow/length failure — the recovery-side twin of the threshold
+				// auto-continue thrash. Pause and surface the dead-end instead.
+				if (madeProgress) {
+					this.#scheduleAgentContinue({ delayMs: 100, generation });
+					continuationScheduled = true;
+				}
+			} else if (reason !== "idle" && shouldAutoContinue && madeProgress) {
+				// Post-maintenance progress guard. Snapcompact can project over budget
+				// and fall back to a context-full summary; the summarizer keeps
+				// `keepRecentTokens` of recent history verbatim and findCutPoint can
+				// only cut at turn boundaries (never tool results), so a single
+				// oversized recent turn (e.g. a huge tool result) leaves the rewritten
+				// context still above threshold. Scheduling the auto-continue regardless
+				// means the next agent_end re-enters #checkCompaction over the same
+				// oversized tail and re-fires forever (the snapcompact thrash). Mirror
+				// the shake recovery-band check: only auto-continue when compaction
+				// actually created headroom.
+				this.#scheduleAutoContinuePrompt(generation);
 				continuationScheduled = true;
 			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
@@ -10635,6 +10712,17 @@ export class AgentSession {
 					shouldContinue: () => this.agent.hasQueuedMessages(),
 				});
 				continuationScheduled = true;
+			}
+
+			// A non-idle pass that wanted to continue (auto-continue or retry) but
+			// made no headroom is a dead-end: warn once so the user understands why
+			// maintenance paused instead of silently looping.
+			if (!madeProgress && reason !== "idle" && (willRetry || shouldAutoContinue)) {
+				this.emitNotice(
+					"warning",
+					"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. The most recent turn alone is too large to reduce further; shrink it (e.g. clear large tool output) or switch to a larger-context model.",
+					"compaction",
+				);
 			}
 			return continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE;
 		} catch (error) {
@@ -10734,7 +10822,7 @@ export class AgentSession {
 				if (typeof triggerContextTokens === "number" && Number.isFinite(triggerContextTokens)) {
 					const correctedTokens = Math.max(0, triggerContextTokens - result.tokensFreed);
 					const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
-					const recoveryBand = Math.floor(thresholdTokens * SHAKE_RECOVERY_BAND);
+					const recoveryBand = Math.floor(thresholdTokens * COMPACTION_RECOVERY_BAND);
 					stillOverThreshold = correctedTokens > recoveryBand;
 				} else {
 					const postShakeTokens = this.getContextUsage({ contextWindow })?.tokens ?? 0;
