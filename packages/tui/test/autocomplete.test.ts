@@ -232,6 +232,23 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(values.some(value => value.includes("/deep/"))).toBe(false);
 		});
 
+		it("normalizes backslash separators in a relative @..\\ prefix (Windows-style input)", async () => {
+			// Mirrors the @../ test but with Windows-native backslashes. The fix
+			// normalizes "\\" -> "/" before the path splitting/joining, so this is
+			// catchable on POSIX CI. On the pre-fix code POSIX path.dirname/basename
+			// treat "\\" as a literal char and the prefix yields no suggestions.
+			fs.mkdirSync(path.join(outsideDir, "workspace"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "workflows"), { recursive: true });
+
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const line = "@..\\outside\\wor";
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			const values = result?.items.map(item => item.value) ?? [];
+			expect(values).toContain("@../outside/workspace/");
+			expect(values).toContain("@../outside/workflows/");
+		});
+
 		it("lists entries inside an absolute @/abs/ path without walking recursively", async () => {
 			fs.mkdirSync(path.join(outsideDir, "alpha"), { recursive: true });
 			fs.mkdirSync(path.join(outsideDir, "beta"), { recursive: true });
