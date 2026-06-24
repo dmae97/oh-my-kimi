@@ -3540,6 +3540,366 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(secondMessage.content).toEqual([{ type: "text", text: "POST_TOOL" }]);
 	});
 
+	it("settles stalled when consecutive tool-call boundaries carry byte-identical checkpoints", async () => {
+		// A healthy turn emits checkpoints whose byte size progresses; a stalled workflow
+		// re-emits a byte-identical checkpoint. When a tool-call boundary's checkpoint byte
+		// length exactly equals the previous boundary's of the same workflow, the server-side
+		// turn did not progress: detection must settle "stalled" and NOT emit the doomed tool
+		// call that would feed the loop. Detection needs a prior comparable boundary, so this
+		// drives two checkpoint+boundary cycles whose checkpoints are byte-identical in length.
+		const sent: string[] = [];
+		let closed = false;
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send(data) {
+				sent.push(data);
+			},
+			close() {
+				closed = true;
+			},
+		};
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const providerSessionState: GitLabDuoWorkflowProviderSessionState = {
+			close() {},
+			active: {
+				workflowId: "workflow-1",
+				startPayload: buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+				ws: socket,
+				// Previous tool-call boundary already recorded this checkpoint byte length.
+				lastToolBoundaryContentLength: JSON.stringify({
+					channel_values: {
+						ui_chat_log: [{ message_type: "agent", message_id: "a", content: "Reasoning" }],
+					},
+				}).length,
+			},
+		};
+		const state: GitLabDuoWorkflowStreamState = {
+			stream: new AssistantMessageEventStream(),
+			output,
+			started: true,
+			providerSessionState,
+		};
+		const streamPromise = runGitLabDuoWorkflowSocket(
+			socket,
+			buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+			state,
+			{ apiKey: "[REDACTED]" },
+		);
+		socket.onopen?.(new Event("open"));
+		// A checkpoint byte-identical to the previous boundary's recorded length (same
+		// message_id "a"/content "Reasoning") → the server replayed non-advancing state.
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "RUNNING",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [{ message_type: "agent", message_id: "a", content: "Reasoning" }],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+		// A tool-call boundary at the non-advancing checkpoint length → stall.
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-stall-1",
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "src/index.ts" }) },
+				}),
+			}),
+		);
+
+		await expect(streamPromise).resolves.toBe("stalled");
+		expect(state.stalledRequested).toBe(true);
+		// No tool call emitted — the boundary that would loop was suppressed.
+		expect(output.content.some(block => block.type === "toolCall")).toBe(false);
+		expect(closed).toBe(true);
+	});
+
+	it("emits action normally when a tool-call boundary's checkpoint byte length advanced", async () => {
+		// Control for the stall test: a checkpoint whose byte length differs from the
+		// previous boundary's is a healthy, advancing boundary and must settle "action",
+		// emitting the tool call and recording the new length on the session.
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send() {},
+			close() {},
+		};
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "gitlab-duo-agent",
+			provider: "gitlab-duo-agent",
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const advancingCheckpoint = JSON.stringify({
+			channel_values: {
+				ui_chat_log: [
+					{ message_type: "agent", message_id: "a", content: "Reasoning" },
+					{ message_type: "agent", message_id: "b", content: "More" },
+					{ message_type: "agent", message_id: "c", content: "Even more" },
+				],
+			},
+		});
+		const providerSessionState: GitLabDuoWorkflowProviderSessionState = {
+			close() {},
+			active: {
+				workflowId: "workflow-1",
+				startPayload: buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+				ws: socket,
+				// Previous boundary recorded a shorter checkpoint; the next one is longer.
+				lastToolBoundaryContentLength: 1,
+			},
+		};
+		const state: GitLabDuoWorkflowStreamState = {
+			stream: new AssistantMessageEventStream(),
+			output,
+			started: true,
+			providerSessionState,
+		};
+		const streamPromise = runGitLabDuoWorkflowSocket(
+			socket,
+			buildGitLabDuoWorkflowStartRequest("workflow-1", model, context),
+			state,
+			{ apiKey: "[REDACTED]" },
+		);
+		socket.onopen?.(new Event("open"));
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: { status: "RUNNING", checkpoint: advancingCheckpoint },
+				}),
+			}),
+		);
+		socket.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-ok-1",
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "src/index.ts" }) },
+				}),
+			}),
+		);
+
+		await expect(streamPromise).resolves.toBe("action");
+		expect(state.stalledRequested).toBeUndefined();
+		expect(output.content).toContainEqual({
+			type: "toolCall",
+			id: "req-ok-1",
+			name: "read",
+			arguments: { path: "src/index.ts" },
+		});
+		// The boundary recorded the advancing checkpoint's byte length on the session.
+		expect(providerSessionState.active?.lastToolBoundaryContentLength).toBe(advancingCheckpoint.length);
+	});
+
+	it("re-seeds a fresh workflow when a resumed workflow re-emits byte-identical checkpoints", async () => {
+		// End-to-end stall recovery: the first workflow issues a tool call, the resume
+		// returns the result, but the server's next checkpoint is byte-identical in length
+		// and it re-issues another tool call. The provider must stop the stalled workflow and
+		// re-seed a FRESH one (whose rebuilt goal carries the tool result) that completes.
+		const createdWorkflowIds: string[] = [];
+		let createCount = 0;
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const fetchImpl: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Default", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "workflow-token" } }), { status: 201 });
+			}
+			// Stop (PATCH) targets a specific workflow id; succeed without counting.
+			if (/\/workflows\/[^/]+$/.test(url.split("?")[0] ?? url)) {
+				return new Response("{}", { status: 200 });
+			}
+			if (url.includes("/workflows") && init?.method === "POST") {
+				createCount += 1;
+				const id = `workflow-${createCount}`;
+				createdWorkflowIds.push(id);
+				return new Response(JSON.stringify({ id }), { status: 201 });
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const sockets: GitLabDuoWorkflowWebSocketLike[] = [];
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = () => {
+			const socket: GitLabDuoWorkflowWebSocketLike = {
+				onopen: null,
+				onmessage: null,
+				onerror: null,
+				onclose: null,
+				send() {},
+				close() {},
+			};
+			sockets.push(socket);
+			return socket;
+		};
+
+		// Turn 1: first workflow streams a checkpoint (total 1) then a tool call.
+		const firstStream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			fetch: fetchImpl,
+			rootNamespaceId: "gid://gitlab/Group/root",
+			providerSessionState,
+			webSocketFactory,
+		});
+		for (let attempt = 0; attempt < 20 && sockets.length < 1; attempt++) {
+			await Bun.sleep(0);
+		}
+		expect(sockets).toHaveLength(1);
+		sockets[0]?.onopen?.(new Event("open"));
+		sockets[0]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "RUNNING",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [{ message_type: "agent", message_id: "pre-1", content: "Start" }],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+		sockets[0]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-read-1",
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "README.md" }) },
+				}),
+			}),
+		);
+		const firstAssistant = await firstStream.result();
+		if (firstAssistant.role !== "assistant") throw new Error("Expected assistant message");
+		expect(firstAssistant.content).toContainEqual({
+			type: "toolCall",
+			id: "req-read-1",
+			name: "read",
+			arguments: { path: "README.md" },
+		});
+
+		// Turn 2: resume on the same socket; the server replies with a checkpoint whose byte
+		// length matches the prior boundary (message_id "pre-2" is the same length as "pre-1",
+		// content unchanged) and another tool call → stall → fresh workflow.
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: "req-read-1",
+			toolName: "read",
+			content: [{ type: "text", text: "README file text" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const secondStream = streamGitLabDuoWorkflow(
+			model,
+			{ messages: [...context.messages, firstAssistant, toolResult] },
+			{
+				apiKey: "[REDACTED]",
+				fetch: fetchImpl,
+				rootNamespaceId: "gid://gitlab/Group/root",
+				providerSessionState,
+				webSocketFactory,
+			},
+		);
+		// Resume reuses socket 0 (no new socket yet).
+		for (let attempt = 0; attempt < 20 && sockets.length < 1; attempt++) {
+			await Bun.sleep(0);
+		}
+		sockets[0]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "RUNNING",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [{ message_type: "agent", message_id: "pre-2", content: "Start" }],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+		sockets[0]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					requestID: "req-read-2",
+					runMCPTool: { name: "mcp__omp__read", args: JSON.stringify({ path: "README.md" }) },
+				}),
+			}),
+		);
+		// The stall triggers a fresh workflow → a second socket opens; complete it.
+		for (let attempt = 0; attempt < 50 && sockets.length < 2; attempt++) {
+			await Bun.sleep(0);
+		}
+		expect(sockets).toHaveLength(2);
+		sockets[1]?.onopen?.(new Event("open"));
+		sockets[1]?.onmessage?.(
+			new MessageEvent("message", {
+				data: JSON.stringify({
+					newCheckpoint: {
+						status: "INPUT_REQUIRED",
+						checkpoint: JSON.stringify({
+							channel_values: {
+								ui_chat_log: [{ message_type: "agent", message_id: "final", content: "All done" }],
+							},
+						}),
+					},
+				}),
+			}),
+		);
+		const secondMessage = await secondStream.result();
+		expect(secondMessage.role).toBe("assistant");
+		expect(secondMessage.content).toContainEqual({ type: "text", text: "All done" });
+		expect(secondMessage.stopReason).not.toBe("error");
+		// workflow-1 created on turn 1; workflow-2 is the fresh re-seed after the stall.
+		expect(createdWorkflowIds).toEqual(["workflow-1", "workflow-2"]);
+	});
+
 	it("re-seeds a fresh workflow when the user steers after a pending tool result", async () => {
 		const patchedWorkflows: string[] = [];
 		let createCount = 0;

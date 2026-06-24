@@ -61,6 +61,29 @@ const GITLAB_DUO_WORKFLOW_MAX_STEP_LIMIT_RESTARTS = 4;
  */
 const GITLAB_DUO_WORKFLOW_MAX_GENERIC_ERROR_RETRIES = 1;
 /**
+ * How many times a single stream may restart on a FRESH workflow after detecting a
+ * stalled workflow: the server emitted a fresh checkpoint at a tool-call boundary
+ * but its `ui_chat_log` total did NOT advance past the previous tool-call boundary
+ * of the SAME workflow. A healthy run strictly grows the log each turn (agent
+ * reasoning + tool boundary entries); a flat total means the server-side turn did
+ * not progress — the model re-issues the same tool call against a history that
+ * never gained its prior call/result (captured live: total pinned at 2 while the
+ * model repeated `next_step({"n":1})`). Restarting on a fresh workflow resends the
+ * full goal transcript (rebuilt from the agent loop's intact `context.messages`,
+ * so no in-flight tool result is lost) and the new run progresses. Bounded so a
+ * persistently stalling endpoint degrades to a surfaced result instead of a quota
+ * sink.
+ */
+const GITLAB_DUO_WORKFLOW_MAX_STALL_RESTARTS = 2;
+/**
+ * Surfaced when a workflow stalled (its `ui_chat_log` total stopped advancing) and
+ * every bounded fresh-workflow restart also stalled. Phrased as a transient
+ * server-side failure so the agent loop treats it as a normal error rather than a
+ * client bug.
+ */
+const GITLAB_DUO_WORKFLOW_STALL_ERROR_MESSAGE =
+	"GitLab Duo Agent stopped making progress (the workflow's visible history did not advance after multiple restarts).";
+/**
  * Two rendered-`goal` byte thresholds bounding three reliability zones. Empirically
  * the DWS/Workhorse transport accepts no fixed token wall (it has tokenized
  * 970k-token goals) but its failure probability rises with the rendered-goal BYTE
@@ -314,6 +337,13 @@ export interface GitLabDuoWorkflowActiveSession {
 	checkpointAgentContentSignatures?: Record<string, true>;
 	paused?: boolean;
 	pauseBuffer?: unknown[];
+	// Byte length of the server's last checkpoint observed at this workflow's tool-call
+	// boundaries. The control experiment proved a healthy turn emits checkpoints whose
+	// byte size varies and progresses, while a stalled workflow re-emits a byte-identical
+	// checkpoint — so equal lengths across consecutive boundaries flag a stall (see
+	// GITLAB_DUO_WORKFLOW_MAX_STALL_RESTARTS). Persisted on the session so the comparison
+	// survives the resume that reuses this socket.
+	lastToolBoundaryContentLength?: number;
 }
 
 export interface GitLabDuoWorkflowProviderSessionState extends ProviderSessionState {
@@ -332,6 +362,13 @@ export interface GitLabDuoWorkflowStreamState {
 	pauseRequested?: boolean;
 	stepLimitRequested?: boolean;
 	retryableErrorRequested?: boolean;
+	// Byte length of the server's latest checkpoint seen this socket run; the action
+	// handler compares it against the previous tool-call boundary's length to detect a
+	// stall (a byte-identical checkpoint means the server-side turn did not advance).
+	lastCheckpointContentLength?: number;
+	// Set when a tool-call boundary's checkpoint byte length did not change from the
+	// previous boundary — the socket settles "stalled" so the run restarts fresh.
+	stalledRequested?: boolean;
 	providerSessionState?: GitLabDuoWorkflowProviderSessionState;
 	lastApprovalStatus?: string;
 	// When the rendered goal exceeds the byte budget, this carries an overflow-pattern
@@ -349,7 +386,8 @@ type GitLabDuoWorkflowSocketResult =
 	| "pause"
 	| "timeout"
 	| "step_limit"
-	| "retryable_error";
+	| "retryable_error"
+	| "stalled";
 
 export interface GitLabAvailableModel {
 	name?: string | null;
@@ -663,6 +701,28 @@ function emitGitLabDuoWorkflowActionToolCall(
 	}
 }
 
+// Decide whether THIS tool-call boundary signals a stalled workflow. The control
+// experiment proved the checkpoint `ui_chat_log` length (messageCount) is an
+// incremental-streaming slice window capped at ~2 even on a healthy FINISHED run,
+// so it cannot discriminate a loop. The raw server checkpoint BYTE size does: a
+// healthy turn emits checkpoints whose size varies and progresses, while a stalled
+// workflow re-emits a byte-identical checkpoint (the server replays the same
+// non-advancing state). So a fresh tool-call boundary whose checkpoint byte length
+// exactly equals the previous boundary's length of the same workflow means the
+// server-side turn did not progress. Persist the last length on the session so the
+// comparison survives the resume that reuses this socket. Returns false until a
+// comparable prior reading exists (first boundary of a workflow, or checkpoints that
+// never carried a length) so a single boundary is never falsely flagged.
+function detectGitLabDuoWorkflowStall(state: GitLabDuoWorkflowStreamState): boolean {
+	const active = state.providerSessionState?.active;
+	const length = state.lastCheckpointContentLength;
+	if (!active || length === undefined) return false;
+	const previousLength = active.lastToolBoundaryContentLength;
+	const stalled = previousLength !== undefined && length === previousLength;
+	active.lastToolBoundaryContentLength = length;
+	return stalled;
+}
+
 function buildGitLabDuoWorkflowActionToolCall(action: GitLabDuoWorkflowActionDescriptor): ToolCall {
 	const args =
 		action.args && typeof action.args === "object" && !Array.isArray(action.args)
@@ -921,11 +981,15 @@ async function runGitLabDuoWorkflow(
 			buildGitLabDuoWorkflowActionResponse(requestID, buildGitLabDuoWorkflowResponseFromToolResult(result)),
 		);
 		pendingSession.pendingActions = undefined;
-		await resumeGitLabDuoWorkflowSocket(
+		const resumeResult = await resumeGitLabDuoWorkflowSocket(
 			{ fetchImpl, baseUrl, apiKey, workflowId: pendingSession.workflowId, state, providerSessionState },
 			() => runGitLabDuoWorkflowSocket(pendingSession.ws, pendingSession.startPayload, state, options, responses),
 		);
-		return;
+		// A stall on the resumed socket means the server-side turn stopped advancing even
+		// after the tool result was returned. The helper already stopped that workflow and
+		// dropped `active`; fall through to seed a FRESH workflow whose rebuilt goal
+		// transcript includes the just-returned tool result, breaking the loop.
+		if (resumeResult !== "stalled") return;
 	}
 	if (providerSessionState?.active?.paused) {
 		const session = providerSessionState.active;
@@ -933,11 +997,13 @@ async function runGitLabDuoWorkflow(
 		session.paused = false;
 		session.pauseBuffer = [];
 		const sessionWorkflowId = session.workflowId;
-		await resumeGitLabDuoWorkflowSocket(
+		const resumeResult = await resumeGitLabDuoWorkflowSocket(
 			{ fetchImpl, baseUrl, apiKey, workflowId: sessionWorkflowId, state, providerSessionState },
 			() => runGitLabDuoWorkflowSocket(session.ws, session.startPayload, state, options, undefined, replay),
 		);
-		return;
+		// As with the action resume, a stall falls through to a fresh-workflow seed
+		// (the helper already stopped the stalled workflow and dropped `active`).
+		if (resumeResult !== "stalled") return;
 	}
 	// Two cases reach here with a live `pendingSession` that must be abandoned before
 	// seeding a fresh workflow:
@@ -1182,6 +1248,7 @@ async function runGitLabDuoWorkflow(
 	let timeoutReconnected = false;
 	let stepLimitRestarts = 0;
 	let genericErrorRetries = 0;
+	let stallRestarts = 0;
 	let settledNormally = false;
 	try {
 		for (let attempt = 0; attempt < 12; attempt++) {
@@ -1270,6 +1337,33 @@ async function runGitLabDuoWorkflow(
 				startPayload = { ...startPayload, workflowID: workflowId };
 				continue;
 			}
+			// The server emitted a fresh tool-call boundary whose `ui_chat_log` total did
+			// not advance past the previous boundary of this workflow — the server-side
+			// turn stopped progressing (captured live: total pinned while the model
+			// repeated one tool call). Recover exactly like step_limit: stop the stalled
+			// workflow and create a FRESH one (a new id with no checkpoint replay), then
+			// reopen the socket. The conversation replays through the goal transcript,
+			// rebuilt from the agent loop's intact `context.messages`, so no in-flight
+			// tool result is lost. Bounded so a persistently stalling endpoint degrades to
+			// a surfaced result instead of looping on quota.
+			if (lastSocketResult === "stalled" && stallRestarts < GITLAB_DUO_WORKFLOW_MAX_STALL_RESTARTS) {
+				stallRestarts++;
+				state.stalledRequested = false;
+				traceGitLabDuoWorkflow("websocket.stall_restart", { workflowId, restart: stallRestarts });
+				await stopGitLabDuoWorkflow(fetchImpl, baseUrl, apiKey, workflowId);
+				workflowId = await createGitLabDuoWorkflow(
+					fetchImpl,
+					baseUrl,
+					apiKey,
+					createNamespaceId,
+					goal,
+					restProjectId,
+					workflowDefinition,
+					options.signal,
+				);
+				startPayload = { ...startPayload, workflowID: workflowId };
+				continue;
+			}
 			// The server returned its de-identified catch-all FAILED — a wrapper over a
 			// transient upstream fault (model 5xx, AgentStuckError, …). Retry on a FRESH
 			// workflow exactly like step_limit (same-id reconnect is broken on inline
@@ -1309,6 +1403,14 @@ async function runGitLabDuoWorkflow(
 				if (state.goalOverflowMessage) state.output.errorMessage = state.goalOverflowMessage;
 				state.stream.push({ type: "error", reason: "error", error: state.output });
 			}
+			// A stall that exhausted its fresh-workflow restarts is a persistent failure to
+			// progress; surface it as a real error so the run does not stop silently.
+			if (lastSocketResult === "stalled" && !state.stream.done) {
+				state.output.stopReason = "error";
+				state.output.errorMessage =
+					state.goalOverflowMessage ?? state.output.errorMessage ?? GITLAB_DUO_WORKFLOW_STALL_ERROR_MESSAGE;
+				state.stream.push({ type: "error", reason: "error", error: state.output });
+			}
 			break;
 		}
 		settledNormally = true;
@@ -1318,15 +1420,23 @@ async function runGitLabDuoWorkflow(
 		// and `active` referencing a dead socket: a user abort; `runGitLabDuoWorkflowSocket`
 		// rejecting (e.g. `ws.onerror`) so the settle block never ran (`settledNormally`
 		// stays false); or the socket reached a half-open/stuck terminal state with no
-		// real completion — `lastSocketResult === "closed"` (proxy/server drop) or
-		// `"timeout"` (idle deadline, retry already exhausted). In all of these the
-		// local stream is finalized but the server workflow has no explicit stop, so drop
-		// the resumable session and stop it with a FRESH signal (the request's own signal
-		// may be aborted, which would cancel the PATCH before it is sent). The happy path
-		// that intentionally keeps `active` for an `action`/`pause` resume reaches a real
-		// terminal status, never "closed"/"timeout", so it is not affected.
+		// real completion — `lastSocketResult === "closed"` (proxy/server drop),
+		// `"timeout"` (idle deadline, retry already exhausted), or `"stalled"` (the
+		// workflow's visible history stopped advancing and the bounded restarts were
+		// exhausted). In all of these the local stream is finalized but the server
+		// workflow has no explicit stop, so drop the resumable session and stop it with a
+		// FRESH signal (the request's own signal may be aborted, which would cancel the
+		// PATCH before it is sent). The happy path that intentionally keeps `active` for
+		// an `action`/`pause` resume reaches a real terminal status, never
+		// "closed"/"timeout"/"stalled", so it is not affected.
 		const aborted = options.signal?.aborted ?? false;
-		if (aborted || !settledNormally || lastSocketResult === "closed" || lastSocketResult === "timeout") {
+		if (
+			aborted ||
+			!settledNormally ||
+			lastSocketResult === "closed" ||
+			lastSocketResult === "timeout" ||
+			lastSocketResult === "stalled"
+		) {
 			if (providerSessionState) {
 				providerSessionState.active = undefined;
 			}
@@ -1827,7 +1937,8 @@ type GitLabDuoWorkflowMessageResult =
 	| "action"
 	| "pause"
 	| "step_limit"
-	| "retryable_error";
+	| "retryable_error"
+	| "stalled";
 
 type GitLabDuoWorkflowCheckpointKind = "text" | "thinking";
 
@@ -1855,7 +1966,6 @@ interface GitLabDuoWorkflowContextUsage {
 interface GitLabDuoWorkflowCheckpointContent {
 	entries: GitLabDuoWorkflowCheckpointEntry[];
 	contentLength: number;
-	messageCount?: number;
 	latestMessageType?: string;
 	contextUsage?: GitLabDuoWorkflowContextUsage;
 }
@@ -1941,6 +2051,19 @@ async function handleGitLabDuoWorkflowSocketMessage(
 			getRecordString(action.args as Record<string, unknown>, "tool_name"),
 		argKeys: Object.keys(action.args as Record<string, unknown>).slice(0, 20),
 	});
+	// A fresh tool-call boundary whose `ui_chat_log` total did not advance past the
+	// previous boundary of this workflow means the server-side turn did not progress:
+	// emitting and answering this tool call would only feed the same non-advancing loop.
+	// Settle "stalled" so the socket loop restarts on a fresh workflow (resending the
+	// full goal transcript) instead of running the doomed tool call.
+	if (detectGitLabDuoWorkflowStall(state)) {
+		traceGitLabDuoWorkflow("websocket.stalled", {
+			checkpointLength: state.lastCheckpointContentLength,
+			actionName: action.name,
+		});
+		state.stalledRequested = true;
+		return "stalled";
+	}
 	// Finalize this tool_call as its own assistant message and commit it as the
 	// single pending action; the socket loop settles "action" so the agent loop
 	// runs the tool and resumes.
@@ -2053,6 +2176,11 @@ function emitGitLabDuoWorkflowCheckpoint(
 	if (checkpoint.contextUsage) {
 		applyGitLabDuoWorkflowContextUsage(state, checkpoint.contextUsage);
 	}
+	// Track the server's latest checkpoint byte length so the action handler can detect
+	// a workflow whose state stopped advancing (stall). The control experiment proved a
+	// healthy turn emits checkpoints whose byte size varies and grows, while a stalled
+	// workflow re-emits a byte-identical checkpoint.
+	state.lastCheckpointContentLength = checkpoint.contentLength;
 	// GitLab checkpoints are full ui_chat_log snapshots, so a later frame replays
 	// earlier request/tool boundaries before the new agent delta. Pause only on a
 	// boundary that follows a delta emitted in THIS checkpoint (`deltaThisCheckpoint`),
@@ -2244,11 +2372,12 @@ function finalizeGitLabDuoWorkflowResumeResult(
 }
 
 // Run a resume on a preserved socket (action-result or pause replay) and finalize it
-// the same way the fresh-workflow loop does. If the resume rejects — the preserved
-// WebSocket errored, or `ws.send` threw because it closed while the local tool ran —
-// the preserved session would otherwise be left with `active` still set and the
-// server workflow still running. Drop `active` and fire a best-effort stop before
-// rethrowing so the next turn never resumes a dead socket or strands the workflow.
+// the same way the fresh-workflow loop does, returning the settled socket result so
+// the caller can react to a stall. If the resume rejects — the preserved WebSocket
+// errored, or `ws.send` threw because it closed while the local tool ran — the
+// preserved session would otherwise be left with `active` still set and the server
+// workflow still running. Drop `active` and fire a best-effort stop before rethrowing
+// so the next turn never resumes a dead socket or strands the workflow.
 async function resumeGitLabDuoWorkflowSocket(
 	args: {
 		fetchImpl: FetchImpl;
@@ -2259,7 +2388,7 @@ async function resumeGitLabDuoWorkflowSocket(
 		providerSessionState: GitLabDuoWorkflowProviderSessionState | undefined;
 	},
 	run: () => Promise<GitLabDuoWorkflowSocketResult>,
-): Promise<void> {
+): Promise<GitLabDuoWorkflowSocketResult> {
 	let socketResult: GitLabDuoWorkflowSocketResult;
 	try {
 		socketResult = await run();
@@ -2270,6 +2399,15 @@ async function resumeGitLabDuoWorkflowSocket(
 		await stopGitLabDuoWorkflow(args.fetchImpl, args.baseUrl, args.apiKey, args.workflowId);
 		throw error;
 	}
+	// A stall on the resumed socket must NOT finalize the stream: the caller re-seeds a
+	// fresh workflow (rebuilt goal includes the just-returned tool result) to break the
+	// non-advancing loop. Stop the stalled workflow and drop `active` here so the caller
+	// owns a clean slate, but leave the stream open for the fresh run.
+	if (socketResult === "stalled") {
+		if (args.providerSessionState) args.providerSessionState.active = undefined;
+		await stopGitLabDuoWorkflow(args.fetchImpl, args.baseUrl, args.apiKey, args.workflowId);
+		return socketResult;
+	}
 	finalizeGitLabDuoWorkflowResumeResult(args.state, args.providerSessionState, socketResult);
 	// `action`/`pause` keep the session alive for the next resume; `terminal` is a real
 	// server completion. But `closed`/`timeout` (and an exhausted `approval`) settle the
@@ -2279,6 +2417,7 @@ async function resumeGitLabDuoWorkflowSocket(
 	if (socketResult === "closed" || socketResult === "timeout") {
 		await stopGitLabDuoWorkflow(args.fetchImpl, args.baseUrl, args.apiKey, args.workflowId);
 	}
+	return socketResult;
 }
 
 function pauseGitLabDuoWorkflowStream(state: GitLabDuoWorkflowStreamState): void {
@@ -2774,7 +2913,6 @@ function extractGitLabCheckpointEntries(checkpointJson: string): GitLabDuoWorkfl
 	return {
 		entries,
 		contentLength: checkpointJson.length,
-		messageCount: chatLog.length,
 		latestMessageType: getGitLabDuoWorkflowLatestMessageType(chatLog),
 	};
 }
