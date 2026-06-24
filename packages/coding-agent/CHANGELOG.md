@@ -83,6 +83,10 @@
 
 - Fixed marketplace plugin installs registering only in `installed_plugins.json` and never in the runtime plugin tree, leaving slash commands and extensions unavailable after `omp plugin install name@marketplace`. The runtime loader now also enumerates the project-scope plugins root (`<projectAnchor>/.omp/plugins`) so `--scope project` installs surface alongside user-scope installs, with project entries shadowing same-named user entries ([#3244](https://github.com/can1357/oh-my-pi/issues/3244)).
 
+### Fixed
+
+- Fixed `umans` requests with more than 10 live context images still sending every image despite the provider budget; outgoing provider contexts now drop the oldest images above the active provider cap while preserving text and newest images ([#3230](https://github.com/can1357/oh-my-pi/issues/3230)).
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
