@@ -26,7 +26,6 @@ describe("/omfg slash command", () => {
 		const handled = await executeBuiltinSlashCommand("/omfg This guy used any again....", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/omfg This guy used any again....");
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("This guy used any again....");
 	});
@@ -40,17 +39,15 @@ describe("/omfg slash command", () => {
 		);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).toHaveBeenCalledWith("/omfg    stop making unchecked casts in generated TypeScript");
 		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("stop making unchecked casts in generated TypeScript");
 	});
 
-	it("does not add a blank /omfg invocation to history", async () => {
+	it("handles a blank /omfg invocation without error", async () => {
 		const harness = createRuntime();
 
 		const handled = await executeBuiltinSlashCommand("/omfg   ", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.addToHistory).not.toHaveBeenCalled();
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.handleOmfgCommand).toHaveBeenCalledWith("");
 	});

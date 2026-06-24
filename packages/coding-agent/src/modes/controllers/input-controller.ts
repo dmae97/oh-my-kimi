@@ -29,6 +29,39 @@ import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } fr
 import { resizeImage } from "../../utils/image-resize";
 import { generateSessionTitle, setSessionTerminalTitle } from "../../utils/title-generator";
 
+/**
+ * Slash commands that may carry secrets in their arguments should never be
+ * persisted to history.
+ *
+ * - /login accepts three callback forms (redirect URL, query string, raw auth
+ *   code) — all can contain OAuth code=/state= params.
+ * - /join <link> carries a 32-byte room key and optional write token.
+ * - /mcp add --token <token> carries a bearer token.
+ *
+ * The command name is extracted the same way as parseSlashCommand() — splitting
+ * on the earliest whitespace or colon — so /login:?code=... is correctly matched.
+ */
+export function shouldSkipHistory(slashText: string): boolean {
+	if (!slashText.startsWith("/")) return false;
+	const body = slashText.slice(1);
+	// Match parseSlashCommand: split on earliest whitespace or colon.
+	const firstWs = body.search(/\s/);
+	const firstColon = body.indexOf(":");
+	const sep = firstWs === -1 ? firstColon : firstColon === -1 ? firstWs : Math.min(firstWs, firstColon);
+	const name = sep === -1 ? body : body.slice(0, sep);
+	const hasArgs = sep !== -1;
+	// /login <anything> — parseCallbackInput() accepts redirect URLs, query
+	// strings (?code=...), and raw auth codes, all of which carry secrets.
+	if (name === "login" && hasArgs) return true;
+	// /join <link> — the link carries the 32-byte room key and write token.
+	if (name === "join" && hasArgs) return true;
+	if (name === "mcp") {
+		const args = body.slice(sep + 1).trim();
+		return args.startsWith("add") && /--token\s/.test(args);
+	}
+	return false;
+}
+
 interface Expandable {
 	setExpanded(expanded: boolean): void;
 }
@@ -589,10 +622,14 @@ export class InputController {
 				ctx: this.ctx,
 			});
 			if (slashResult === true) {
+				if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 				return;
 			}
 			if (typeof slashResult === "string") {
-				// Command handled but returned remaining text to use as prompt
+				// Command handled but returned remaining text to use as prompt.
+				// Record the original slash command text so Up Arrow recalls
+				// "/loop 10 fix bug" rather than just "fix bug".
+				if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 				text = slashResult;
 			}
 
@@ -1028,9 +1065,13 @@ export class InputController {
 			ctx: this.ctx,
 		});
 		if (slashResult === true) {
+			if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 			return;
 		}
 		if (typeof slashResult === "string") {
+			// Command handled but returned remaining text to use as prompt.
+			// Record the original slash command text so Up Arrow recalls it.
+			if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 			text = slashResult;
 		}
 
