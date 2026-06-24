@@ -790,7 +790,7 @@ export function buildParams(
 			replay: shouldReplayNativeHistory,
 			filterReasoning: policy.reasoning.filterReasoningHistory,
 		},
-		includeThinkingSignatures: shouldReplayNativeHistory,
+		includeThinkingSignatures: shouldReplayNativeHistory && !policy.reasoning.filterReasoningHistory,
 		repairOrphanOutputs: true,
 	});
 
