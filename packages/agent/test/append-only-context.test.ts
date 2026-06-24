@@ -572,6 +572,32 @@ describe("message sync", () => {
 		expect((entries[2] as { content: unknown }).content).toBe("a1-pruned");
 	});
 
+	it("does not reuse a stable prefix longer than the current log after direct log clear (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+		] as any);
+		expect(mgr.log.length).toBe(2);
+
+		// Public log clear used by advisor reset: it intentionally empties the
+		// provider-bound message log but does not touch the private sync cursor.
+		mgr.log.clear();
+		expect(mgr.log.length).toBe(0);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1-rewritten" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(2);
+		expect((entries[0] as { content: unknown }).content).toBe("q1");
+		expect((entries[1] as { content: unknown }).content).toBe("a1-rewritten");
+	});
+
 	it("preserves the prefix when the tail is rewritten (#3406)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
