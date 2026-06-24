@@ -16,6 +16,8 @@
 
 
 
+- Fixed `omp usage` and the `/usage` command duplicating provider-wide disclaimer notes (e.g. OpenCode Go's "OMP-observed spend only") once per account × limit window. Provider-level notes now render once above the per-account sections in the TUI, CLI, and ACP render paths, and identical per-limit notes are deduplicated in the TUI aggregate renderer. ([#3268](https://github.com/can1357/oh-my-pi/issues/3268))
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes

@@ -192,6 +192,7 @@ const arkUsageReportSchema = type({
 	fetchedAt: "number",
 	limits: usageLimitSchema.array(),
 	"resetCredits?": usageResetCreditsSchema,
+	"notes?": "string[]",
 	"metadata?": { "[string]": "unknown" },
 	"raw?": "unknown",
 });

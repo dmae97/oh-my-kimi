@@ -15,7 +15,7 @@ import {
 	type UsageReport,
 	type UsageUnit,
 } from "@oh-my-pi/pi-ai";
-import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { ModelRegistry } from "../config/model-registry";
 import { discoverAuthStorage } from "../sdk";
@@ -450,6 +450,10 @@ export function formatUsageBreakdown(
 		lines.push(
 			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`)}`,
 		);
+		// Provider-wide disclaimers render once per provider, not per limit.
+		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
+		for (const note of providerNotes)
+			lines.push(`  ${chalk.dim(sanitizeText(note.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ")))}`);
 
 		const labelWidth = providerReports
 			.flatMap(report => report.limits)
