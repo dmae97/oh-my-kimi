@@ -1095,8 +1095,15 @@ async function runGitLabDuoWorkflow(
 				fromRemote: Boolean(namespaceSelection.projectPath),
 			});
 		}
-		const projectPath = configuredProjectPath ?? discoveredProject?.path;
-		const projectId = configuredProjectId ?? discoveredProject?.id;
+		// A configured `projectId` that carries a slash is really a full `group/project`
+		// path (namespace discovery accepts that form too): route it through the path flow
+		// so `webSocketProjectId` is resolved to a numeric id instead of sending the raw
+		// path string as `project_id` on the WebSocket, which fails project-scoped routing.
+		const configuredProjectIdIsPath = Boolean(configuredProjectId?.includes("/"));
+		const numericConfiguredProjectId = configuredProjectIdIsPath ? undefined : configuredProjectId;
+		const pathConfiguredProjectId = configuredProjectIdIsPath ? configuredProjectId : undefined;
+		const projectPath = configuredProjectPath ?? pathConfiguredProjectId ?? discoveredProject?.path;
+		const projectId = numericConfiguredProjectId ?? discoveredProject?.id;
 		const restProjectId = configuredProjectPath ?? configuredProjectId ?? discoveredProject?.path;
 		const webSocketProjectId =
 			projectId ??
@@ -1256,8 +1263,13 @@ async function runGitLabDuoWorkflow(
 			const ws = openGitLabDuoWorkflowSocket(workflowConnection.baseUrl ?? baseUrl, {
 				token: workflowConnection.token,
 				projectId: webSocketProjectId,
-				namespaceId: webSocketProjectId ? restNamespaceId : undefined,
-				rootNamespaceId: webSocketProjectId ? restNamespaceId : undefined,
+				// Pass the resolved namespace/root even when no numeric project id is
+				// available (project path unresolved, or auto-discovery found none): the
+				// REST direct_access/create calls may be namespace- or path-scoped, but the
+				// socket must still route inside the selected namespace. Dropping them with
+				// the project left the socket scope-less and could route/fail outside it.
+				namespaceId: restNamespaceId,
+				rootNamespaceId: restNamespaceId,
 				selectedModelIdentifier,
 				workflowDefinition,
 				serviceEndpoint: workflowConnection.serviceEndpoint,

@@ -900,14 +900,18 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		const wsUrl = new URL(capturedUrl);
 		expect(wsUrl.origin).toBe("wss://gitlab.example.com");
 		expect(wsUrl.pathname).toBe("/api/v4/ai/duo_workflows/ws");
-		expect(wsUrl.searchParams.has("namespace_id")).toBe(false);
-		expect(wsUrl.searchParams.has("root_namespace_id")).toBe(false);
+		// The resolved namespace/root scope the socket even with no project configured,
+		// so the run cannot route outside the selected namespace.
+		expect(wsUrl.searchParams.get("namespace_id")).toBe("1");
+		expect(wsUrl.searchParams.get("root_namespace_id")).toBe("1");
+		expect(wsUrl.searchParams.has("project_id")).toBe(false);
 		expect(capturedHeaders?.authorization).toBe("Bearer rails-token");
 		expect(capturedHeaders?.authorization).not.toBe("Bearer pat-token");
 		expect(capturedHeaders).not.toHaveProperty("Authorization");
 		expect(capturedHeaders?.["x-gitlab-realm"]).toBeUndefined();
-		expect(capturedHeaders).not.toHaveProperty("x-gitlab-namespace-id");
-		expect(capturedHeaders).not.toHaveProperty("x-gitlab-root-namespace-id");
+		expect(capturedHeaders?.["x-gitlab-namespace-id"]).toBe("1");
+		expect(capturedHeaders?.["x-gitlab-root-namespace-id"]).toBe("1");
+		expect(capturedHeaders).not.toHaveProperty("x-gitlab-project-id");
 		expect(capturedHeaders?.origin).toBe("https://gitlab.example.com");
 		expect(capturedHeaders).not.toHaveProperty("x-gitlab-workflow-token");
 		socket.onopen?.(new Event("open"));
@@ -2065,6 +2069,140 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(startRequest?.additional_context).toEqual([]);
 		socket.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
 
+		await stream.result();
+	});
+
+	it("resolves a path-valued projectId to a numeric id for WebSocket routing", async () => {
+		// `projectId: "group/project"` (a full path, not a numeric id) must route through
+		// the path-resolution flow so the WebSocket sends the numeric id, not the raw path.
+		let projectLookupHit = false;
+		let capturedUrl = "";
+		const socketReady = Promise.withResolvers<GitLabDuoWorkflowWebSocketLike>();
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send() {},
+			close() {},
+		};
+		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/api/v4/projects/group%2Fproject")) {
+				projectLookupHit = true;
+				return new Response(JSON.stringify({ id: 4242 }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = url => {
+			capturedUrl = url;
+			socketReady.resolve(socket);
+			return socket;
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			projectId: "group/project",
+			fetch: fetchImpl,
+			webSocketFactory,
+		});
+		await socketReady.promise;
+
+		// The path was resolved via the projects API and the numeric id rode the socket.
+		expect(projectLookupHit).toBe(true);
+		const wsUrl = new URL(capturedUrl);
+		expect(wsUrl.searchParams.get("project_id")).toBe("4242");
+		expect(wsUrl.searchParams.get("namespace_id")).toBe("1");
+		expect(wsUrl.searchParams.get("root_namespace_id")).toBe("1");
+		socket.onopen?.(new Event("open"));
+		socket.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
+		await stream.result();
+	});
+
+	it("keeps namespace routing on the WebSocket when the project id cannot be resolved", async () => {
+		// When a configured project path cannot be resolved to a numeric id (lookup 404),
+		// the socket must still carry the selected namespace/root, not open scope-less.
+		let capturedUrl = "";
+		const socketReady = Promise.withResolvers<GitLabDuoWorkflowWebSocketLike>();
+		const socket: GitLabDuoWorkflowWebSocketLike = {
+			onopen: null,
+			onmessage: null,
+			onerror: null,
+			onclose: null,
+			send() {},
+			close() {},
+		};
+		const fetchImpl: FetchImpl = async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/api/v4/projects/")) {
+				// Project lookup fails → webSocketProjectId stays undefined.
+				return new Response("{}", { status: 404 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/direct_access")) {
+				return new Response(JSON.stringify({ gitlab_rails: { token: "rails-token" } }), { status: 200 });
+			}
+			if (url.includes("/api/v4/ai/duo_workflows/workflows")) {
+				return new Response(JSON.stringify({ id: "workflow-1" }), { status: 200 });
+			}
+			if (url.includes("/api/graphql")) {
+				return new Response(
+					JSON.stringify({
+						data: {
+							aiChatAvailableModels: {
+								defaultModel: { name: "Claude", ref: "claude_sonnet_4_6_vertex" },
+								selectableModels: [],
+								pinnedModel: null,
+							},
+						},
+					}),
+					{ status: 200 },
+				);
+			}
+			return new Response("{}", { status: 404 });
+		};
+		const webSocketFactory: GitLabDuoWorkflowWebSocketFactory = url => {
+			capturedUrl = url;
+			socketReady.resolve(socket);
+			return socket;
+		};
+
+		const stream = streamGitLabDuoWorkflow(model, context, {
+			apiKey: "[REDACTED]",
+			rootNamespaceId: "gid://gitlab/Group/1",
+			projectPath: "group/project",
+			fetch: fetchImpl,
+			webSocketFactory,
+		});
+		await socketReady.promise;
+
+		const wsUrl = new URL(capturedUrl);
+		// No numeric project id resolved, but the namespace/root still scope the socket.
+		expect(wsUrl.searchParams.get("project_id")).toBeNull();
+		expect(wsUrl.searchParams.get("namespace_id")).toBe("1");
+		expect(wsUrl.searchParams.get("root_namespace_id")).toBe("1");
+		socket.onopen?.(new Event("open"));
+		socket.onmessage?.(new MessageEvent("message", { data: JSON.stringify({ status: "INPUT_REQUIRED" }) }));
 		await stream.result();
 	});
 
