@@ -19,6 +19,19 @@ const openRouterResponsesModel: Model<"openai-responses"> = {
 		baseUrl: "https://openrouter.ai/api/v1",
 	}),
 };
+const openRouterAnthropicResponsesModel: Model<"openai-responses"> = {
+	...model,
+	id: "anthropic/claude-sonnet-4.5",
+	name: "OpenRouter Claude Sonnet 4.5",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+	compat: buildOpenAIResponsesCompat({
+		id: "anthropic/claude-sonnet-4.5",
+		name: "OpenRouter Claude Sonnet 4.5",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+	}),
+};
 const xaiOAuthResponsesModel: Model<"openai-responses"> = {
 	...model,
 	id: "grok-build",
@@ -247,6 +260,14 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.body?.session_id).toBe("workflow-123");
 		expect(captured.body?.prompt_cache_key).toBe("cache-key-123");
 	});
+	it("sets Anthropic cache control for OpenRouter Anthropic Responses requests", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{ sessionId: "workflow-123" },
+			openRouterAnthropicResponsesModel,
+		);
+
+		expect(captured.body?.cache_control).toEqual({ type: "ephemeral" });
+	});
 
 	it("lets explicit headers override OpenRouter Responses defaults", async () => {
 		const captured = await captureOpenAIResponseHeaders(
@@ -437,10 +458,11 @@ describe("openai-responses cache affinity", () => {
 	it("omits OpenRouter Responses session_id when cache retention is disabled", async () => {
 		const captured = await captureOpenAIResponseHeaders(
 			{ cacheRetention: "none", sessionId: "workflow-123" },
-			openRouterResponsesModel,
+			openRouterAnthropicResponsesModel,
 		);
 
 		expect(captured.body?.session_id).toBeUndefined();
 		expect(captured.body?.prompt_cache_key).toBeUndefined();
+		expect(captured.body?.cache_control).toBeUndefined();
 	});
 });
