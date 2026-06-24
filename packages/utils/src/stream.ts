@@ -307,7 +307,7 @@ function scanJsonState(trimmed: string): ScanResult | null {
 				if (stack.length > 0) {
 					const top = stack[stack.length - 1];
 					if (top.state === "expect_comma_or_close") {
-						top.state = "expect_key";
+						top.state = top.type === "object" ? "expect_key" : "expect_value";
 					} else {
 						return null;
 					}

@@ -248,6 +248,7 @@ describe("readSseJson", () => {
 			'data: {"id":"x", "name":',
 			'data: {"id":"x", "name": "y',
 			'data: {"id":"x",',
+			"data: [1,2,",
 		];
 		for (const dataChunk of testCases) {
 			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
