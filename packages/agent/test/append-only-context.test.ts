@@ -572,6 +572,49 @@ describe("message sync", () => {
 		expect((entries[2] as { content: unknown }).content).toBe("a1-pruned");
 	});
 
+	it("detects providerPayload-only rewrites before preserving a later prefix (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = {
+			role: "assistant",
+			content: [{ type: "text", text: "same visible output" }],
+			id: "assistant-1",
+			providerPayload: {
+				type: "openaiResponsesHistory",
+				provider: "openai",
+				items: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "old native" }] }],
+			},
+		} as any;
+		const original2 = { role: "user", content: "q2" } as any;
+		mgr.syncMessages([original0, original1, original2]);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "same visible output" }],
+				id: "assistant-1",
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: "openai",
+					items: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "new native" }] }],
+				},
+			},
+			{ role: "user", content: "q2-rewritten" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect(
+			(entries[1] as { providerPayload?: { items?: Array<{ content?: Array<{ text?: string }> }> } }).providerPayload
+				?.items?.[0]?.content?.[0]?.text,
+		).toBe("new native");
+		expect((entries[2] as { content: unknown }).content).toBe("q2-rewritten");
+	});
+
 	it("does not reuse a stable prefix longer than the current log after direct log clear (#3406)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
