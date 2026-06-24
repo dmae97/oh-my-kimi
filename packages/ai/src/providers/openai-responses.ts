@@ -325,7 +325,7 @@ function markOpenAIResponsesChainZeroDataRetention(chain: OpenAIResponsesChainSt
 	});
 }
 
-type OpenRouterAnthropicCacheControl = { type: "ephemeral" };
+type OpenRouterAnthropicCacheControl = { type: "ephemeral"; ttl?: "1h" };
 
 type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	top_p?: number;
@@ -346,7 +346,8 @@ function maybeAddOpenRouterAnthropicCacheControl(
 	cacheRetention: CacheRetention,
 ): void {
 	if (cacheRetention === "none" || !isOpenRouterAnthropicModel(model)) return;
-	params.cache_control ??= { type: "ephemeral" };
+	if (params.cache_control != null) return;
+	params.cache_control = cacheRetention === "long" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
 }
 
 /**

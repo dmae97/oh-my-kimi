@@ -215,6 +215,7 @@ describe("OpenRouter pseudo API dual-surface request parity", () => {
 			session_id: "workflow-123",
 			provider: routing,
 			include: ["reasoning.encrypted_content"],
+			cache_control: { type: "ephemeral" },
 		});
 		expect(chatBody).not.toHaveProperty("max_tokens");
 		expect(chatBody).not.toHaveProperty("max_completion_tokens");
@@ -352,11 +353,6 @@ describe("OpenRouter Responses request shape", () => {
 			encrypted_content: "encrypted-reasoning",
 			summary: [],
 			format: "google-gemini-v1",
-		};
-		const replayItem = {
-			type: nativeItem.type,
-			encrypted_content: nativeItem.encrypted_content,
-			summary: nativeItem.summary,
 		};
 		const firstResponse = new Response(
 			`${[

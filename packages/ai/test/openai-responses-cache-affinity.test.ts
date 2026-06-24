@@ -269,6 +269,15 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.body?.cache_control).toEqual({ type: "ephemeral" });
 	});
 
+	it("upgrades to 1h ttl when cacheRetention is long for OpenRouter Anthropic Responses requests", async () => {
+		const captured = await captureOpenAIResponseHeaders(
+			{ sessionId: "workflow-123", cacheRetention: "long" },
+			openRouterAnthropicResponsesModel,
+		);
+
+		expect(captured.body?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+	});
+
 	it("lets explicit headers override OpenRouter Responses defaults", async () => {
 		const captured = await captureOpenAIResponseHeaders(
 			{
