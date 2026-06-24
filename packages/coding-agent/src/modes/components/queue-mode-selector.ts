@@ -1,4 +1,4 @@
-import { Container, type SelectItem, SelectList } from "@oh-my-pi/pi-tui";
+import { Container, type SelectItem, SelectList, type SgrMouseEvent } from "@oh-my-pi/pi-tui";
 import { getSelectListTheme } from "../../modes/theme/theme";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -52,5 +52,10 @@ export class QueueModeSelectorComponent extends Container {
 
 	getSelectList(): SelectList {
 		return this.#selectList;
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		const topBorderRows = 1;
+		this.#selectList.routeMouse(event, line - topBorderRows, col);
 	}
 }

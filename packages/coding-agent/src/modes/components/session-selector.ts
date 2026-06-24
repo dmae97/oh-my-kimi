@@ -5,8 +5,8 @@ import {
 	Input,
 	matchesKey,
 	padding,
-	parseSgrMouse,
 	replaceTabs,
+	routeSgrMouseInput,
 	ScrollView,
 	Spacer,
 	Text,
@@ -726,15 +726,16 @@ export class SessionSelectorComponent extends Container {
 	 */
 	#handleMouse(data: string): void {
 		if (this.#confirmationDialog) return;
-		const event = parseSgrMouse(data);
-		if (!event) return;
-		if (event.wheel !== null) {
-			this.#sessionList.handleWheel(event.wheel);
-			return;
-		}
-		if (!event.leftClick || event.row >= this.#footerStart) return;
-		const index = this.#sessionList.hitTestSession(event.row - this.#listLineOffset);
-		if (index !== undefined) this.#sessionList.selectAndConfirm(index);
+		routeSgrMouseInput(data, event => {
+			if (event.wheel !== null) {
+				this.#sessionList.handleWheel(event.wheel);
+				return true;
+			}
+			if (!event.leftClick || event.row >= this.#footerStart) return true;
+			const index = this.#sessionList.hitTestSession(event.row - this.#listLineOffset);
+			if (index !== undefined) this.#sessionList.selectAndConfirm(index);
+			return true;
+		});
 	}
 
 	getSessionList(): SessionList {
