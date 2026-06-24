@@ -536,6 +536,42 @@ describe("message sync", () => {
 		expect((entries[1] as { content: unknown }).content).toBe("[pruned]");
 	});
 
+	it("detects tool-result metadata-only rewrites before preserving a later prefix (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = {
+			role: "toolResult",
+			content: [{ type: "text", text: "same output" }],
+			toolCallId: "old-call",
+			toolName: "read",
+			isError: false,
+		} as any;
+		const original2 = { role: "assistant", content: "a1" } as any;
+		mgr.syncMessages([original0, original1, original2]);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{
+				role: "toolResult",
+				content: [{ type: "text", text: "same output" }],
+				toolCallId: "new-call",
+				toolName: "write",
+				isError: true,
+			},
+			{ role: "assistant", content: "a1-pruned" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect((entries[1] as { toolCallId: unknown }).toolCallId).toBe("new-call");
+		expect((entries[1] as { toolName: unknown }).toolName).toBe("write");
+		expect((entries[1] as { isError: unknown }).isError).toBe(true);
+		expect((entries[2] as { content: unknown }).content).toBe("a1-pruned");
+	});
+
 	it("preserves the prefix when the tail is rewritten (#3406)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);

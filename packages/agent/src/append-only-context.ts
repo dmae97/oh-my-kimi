@@ -284,8 +284,9 @@ export class AppendOnlyContextManager {
 
 	/** Deterministic digest over every field the provider may serialize — role,
 	 * content, tool calls (both `toolCalls` and OpenAI-wire `tool_calls`),
-	 * `tool_call_id`, `name`, `id` — so an in-place rewrite of *any* of these
-	 * fields is visible to {@link #longestStablePrefix}. */
+	 * tool-result ids/names/error flags (both internal camelCase and wire
+	 * snake_case), and assistant `id` — so an in-place rewrite of *any* of
+	 * these fields is visible to {@link #longestStablePrefix}. */
 	#messageDigest(msg: unknown): number {
 		if (!msg || typeof msg !== "object") return 0;
 		const m = msg as Record<string, unknown>;
@@ -293,8 +294,9 @@ export class AppendOnlyContextManager {
 			r: m.role ?? null,
 			c: m.content ?? null,
 			tc: m.toolCalls ?? m.tool_calls ?? null,
-			tcid: m.tool_call_id ?? null,
-			n: m.name ?? null,
+			tcid: m.toolCallId ?? m.tool_call_id ?? null,
+			tn: m.toolName ?? m.name ?? null,
+			err: m.isError ?? null,
 			id: m.id ?? null,
 		});
 		let hash = 0;
