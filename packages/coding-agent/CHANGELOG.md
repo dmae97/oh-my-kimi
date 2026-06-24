@@ -14,6 +14,7 @@
 - Fixed MCP tool calls forwarding empty optional placeholder arguments (`""` and `{}`) to `tools/call`; optional placeholders are now omitted while required fields and meaningful falsy values are preserved. ([#3302](https://github.com/can1357/oh-my-pi/issues/3302))
 
 
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes

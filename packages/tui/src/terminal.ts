@@ -435,7 +435,6 @@ export class ProcessTerminal implements Terminal {
 	#inBandResizeBuffer = "";
 	#reportedColumns?: number;
 	#reportedRows?: number;
-	#osc11PollTimer?: Timer;
 	#mode2031DebounceTimer?: Timer;
 	#progressTimer?: Timer;
 
@@ -527,24 +526,18 @@ export class ProcessTerminal implements Terminal {
 		// actual background color (following Neovim convention) with 100ms debounce.
 		this.#safeWrite("\x1b[?2031h");
 
-		// Start periodic OSC 11 re-query for terminals without Mode 2031
-		// (Warp, Alacritty, older WezTerm). Stops once Mode 2031 support is
-		// confirmed via DECRQM (probed below) or a Mode 2031 change notification
-		// fires — push notifications supersede polling, and the poll's repeated
-		// OSC 11/DA1 writes clear the user's active text selection on some
-		// terminals (copy breaks every 2s).
-		// Windows Terminal under WSL has been observed to close the hosting tab
-		// after repeated OSC 11/DA1 probes. Keep the initial/event-driven probes,
-		// but avoid background polling there.
-		const isWSL = process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
-		if (!isWSL) {
-			this.#startOsc11Poll();
-		}
+		// Theme detection relies on (1) the startup OSC 11 probe above and
+		// (2) DEC Mode 2031 push notifications. Terminals without Mode 2031
+		// (macOS Terminal.app, Warp, VS Code's built-in, older Alacritty/
+		// WezTerm) detect the appearance once at startup and pick up later OS
+		// theme changes on next launch. Earlier builds polled OSC 11 every 30 s
+		// here for those terminals, but each poll's OSC 11/DA1 write wiped the
+		// user's active text selection on several of them (#3297).
 
 		// Probe DEC private-mode support via DECRQM. 2026 (synchronized output)
 		// gates the renderer's begin/end markers; 2048 (in-band resize) is enabled
 		// only after the terminal confirms support; 2031 (appearance change
-		// notifications) stops the OSC 11 poll once confirmed. Xterm ?1010/?1011
+		// notifications) drives mid-session theme tracking. Xterm ?1010/?1011
 		// are disabled while OMP owns the TTY so typing in the editor does not
 		// force a reader scrolled into native history back to the tail. Each probe
 		// rides the shared DA1 sentinel, so terminals that ignore DECRQM resolve as
@@ -869,7 +862,6 @@ export class ProcessTerminal implements Terminal {
 			// (Neovim convention — coalesces rapid notifications during transitions)
 			const appearanceMatch = sequence.match(appearanceDsrPattern);
 			if (appearanceMatch) {
-				this.#stopOsc11Poll();
 				if (this.#mode2031DebounceTimer) clearTimeout(this.#mode2031DebounceTimer);
 				this.#mode2031DebounceTimer = setTimeout(() => {
 					this.#mode2031DebounceTimer = undefined;
@@ -985,32 +977,6 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	/**
-	 * Start periodic OSC 11 re-queries for terminals without Mode 2031 (Warp, Alacritty, WezTerm).
-	 * Self-disables once Mode 2031 fires (push-based is better than polling).
-	 * The interval is deliberately long: each poll's OSC 11 + DA1 write clears
-	 * an active text selection on several terminals, so polling exists only to
-	 * eventually notice a rare OS theme switch, not to track it promptly.
-	 */
-	#startOsc11Poll(): void {
-		this.#stopOsc11Poll();
-		this.#osc11PollTimer = setInterval(() => {
-			if (this.#dead) {
-				this.#stopOsc11Poll();
-				return;
-			}
-			this.#queryBackgroundColor();
-		}, 30_000);
-		this.#osc11PollTimer.unref();
-	}
-
-	#stopOsc11Poll(): void {
-		if (this.#osc11PollTimer) {
-			clearInterval(this.#osc11PollTimer);
-			this.#osc11PollTimer = undefined;
-		}
-	}
-
-	/**
 	 * Query terminal for Kitty keyboard protocol support and enable if available.
 	 *
 	 * Sends CSI ? u to query current flags. If terminal responds with CSI ? <flags> u,
@@ -1060,9 +1026,7 @@ export class ProcessTerminal implements Terminal {
 	/**
 	 * Record DECRQM support for a private mode (idempotent — first result wins)
 	 * and notify subscribers. Enables DEC 2048 in-band resize when 2048 resolves
-	 * supported, and stops the OSC 11 poll when 2031 resolves supported (Mode 2031
-	 * push notifications make periodic re-querying redundant — and the poll's
-	 * OSC 11/DA1 writes clobber active text selections on some terminals).
+	 * supported.
 	 */
 	#resolvePrivateMode(mode: number, supported: boolean): void {
 		if (this.#privateModeSupport.has(mode)) return;
@@ -1075,7 +1039,6 @@ export class ProcessTerminal implements Terminal {
 			}
 		}
 		if (mode === 2048 && supported) this.#enableInBandResize();
-		if (mode === 2031 && supported) this.#stopOsc11Poll();
 	}
 
 	#disableXtermScrollToBottomMode(mode: number): void {
@@ -1224,7 +1187,6 @@ export class ProcessTerminal implements Terminal {
 			this.#safeWrite("\x1b[?2048l");
 			this.#inBandResizeActive = false;
 		}
-		this.#stopOsc11Poll();
 		if (this.#mode2031DebounceTimer) {
 			clearTimeout(this.#mode2031DebounceTimer);
 			this.#mode2031DebounceTimer = undefined;
