@@ -1523,7 +1523,7 @@ function resolveColumnWidth(count: number, available: number, trailing: number):
 	return ideal;
 }
 
-function renderUsageReports(
+export function renderUsageReports(
 	reports: UsageReport[],
 	uiTheme: typeof theme,
 	nowMs: number,
