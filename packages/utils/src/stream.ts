@@ -220,6 +220,7 @@ interface JsonLevel {
 interface ScanResult {
 	stack: JsonLevel[];
 	inString: boolean;
+	escaped: boolean;
 }
 
 function scanJsonState(trimmed: string): ScanResult | null {
@@ -338,7 +339,7 @@ function scanJsonState(trimmed: string): ScanResult | null {
 		}
 	}
 
-	return { stack, inString };
+	return { stack, inString, escaped };
 }
 
 function hasValidPredecessorForComma(trimmed: string): boolean {
@@ -362,10 +363,22 @@ function getClosingSuffix(data: string): string | null {
 	const scan = scanJsonState(trimmed);
 	if (!scan) return null;
 
-	const { stack, inString } = scan;
+	const { stack, inString, escaped } = scan;
 	let suffix = "";
 
 	if (inString) {
+		if (escaped) {
+			suffix += "\\";
+		} else {
+			const match = trimmed.match(/(\\+)u([0-9a-fA-F]{0,3})$/);
+			if (match) {
+				const backslashes = match[1].length;
+				if (backslashes % 2 === 1) {
+					const digits = match[2].length;
+					suffix += "0".repeat(4 - digits);
+				}
+			}
+		}
 		suffix += '"';
 	}
 
