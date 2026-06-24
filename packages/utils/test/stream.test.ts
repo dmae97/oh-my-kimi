@@ -241,16 +241,26 @@ describe("readSseJson", () => {
 	});
 
 	it("completes cleanly when the final data chunk is truncated JSON", async () => {
-		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode('data: {"b":2')];
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				for (const chunk of chunks) controller.enqueue(chunk);
-				controller.close();
-			},
-		});
+		const testCases = [
+			'data: {"b":2',
+			'data: {"id":"x", "na',
+			'data: {"id":"x", "name"',
+			'data: {"id":"x", "name":',
+			'data: {"id":"x", "name": "y',
+			'data: {"id":"x",',
+		];
+		for (const dataChunk of testCases) {
+			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			});
 
-		const output = await collectAsync(readSseJson(stream));
-		expect(output).toEqual([{ a: 1 }]);
+			const output = await collectAsync(readSseJson(stream));
+			expect(output).toEqual([{ a: 1 }]);
+		}
 	});
 
 	it("completes cleanly when the final data chunk is cut inside a JSON literal at EOF", async () => {

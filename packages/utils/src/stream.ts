@@ -212,42 +212,43 @@ function notifySseEventObserver(observer: SseEventObserver | undefined, event: S
 	}
 }
 
+interface JsonLevel {
+	type: "object" | "array";
+	state?: "expect_key" | "expect_colon" | "expect_value" | "expect_comma_or_close";
+}
+
 function getClosingSuffix(data: string): string | null {
 	let trimmed = data.trim();
 	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
 		return null;
 	}
 
-	let suffix = "";
 	if (trimmed.endsWith(",")) {
 		trimmed = trimmed.slice(0, -1).trim();
 	}
 
-	if (trimmed.endsWith(":")) {
-		suffix = "null";
-	} else {
-		const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
-		if (match) {
-			const partial = match[0].toLowerCase();
-			const completions: Record<string, string> = {
-				t: "rue",
-				tr: "ue",
-				tru: "e",
-				f: "alse",
-				fa: "lse",
-				fal: "se",
-				fals: "e",
-				n: "ull",
-				nu: "ll",
-				nul: "l",
-			};
-			if (completions[partial]) {
-				suffix = completions[partial];
-			}
-		}
+	let literalCompletion = "";
+	const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
+	if (match) {
+		const partial = match[0].toLowerCase();
+		const completions: Record<string, string> = {
+			t: "rue",
+			tr: "ue",
+			tru: "e",
+			f: "alse",
+			fa: "lse",
+			fal: "se",
+			fals: "e",
+			n: "ull",
+			nu: "ll",
+			nul: "l",
+		};
+		literalCompletion = completions[partial] ?? "";
 	}
 
-	const stack: string[] = [];
+	let suffix = literalCompletion;
+
+	const stack: JsonLevel[] = [];
 	let inString = false;
 	let escaped = false;
 
@@ -263,32 +264,126 @@ function getClosingSuffix(data: string): string | null {
 		}
 		if (char === '"') {
 			inString = !inString;
+			if (stack.length > 0) {
+				const top = stack[stack.length - 1];
+				if (top.type === "object") {
+					if (!inString) {
+						if (top.state === "expect_key") {
+							top.state = "expect_colon";
+						} else if (top.state === "expect_value") {
+							top.state = "expect_comma_or_close";
+						}
+					}
+				}
+			}
 			continue;
 		}
 		if (!inString) {
-			if (char === "{" || char === "[") {
-				stack.push(char);
+			if (char === "{") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+				stack.push({ type: "object", state: "expect_key" });
+			} else if (char === "[") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+				stack.push({ type: "array" });
 			} else if (char === "}") {
-				if (stack.pop() !== "{") return null;
+				if (stack.length === 0 || stack[stack.length - 1].type !== "object") {
+					return null;
+				}
+				stack.pop();
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
 			} else if (char === "]") {
-				if (stack.pop() !== "[") return null;
+				if (stack.length === 0 || stack[stack.length - 1].type !== "array") {
+					return null;
+				}
+				stack.pop();
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+			} else if (char === ":") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_colon") {
+						top.state = "expect_value";
+					}
+				}
+			} else if (char === ",") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_comma_or_close") {
+						top.state = "expect_key";
+					}
+				}
 			}
 		}
 	}
 
 	if (inString) {
-		return `"${stack
-			.reverse()
-			.map(c => (c === "{" ? "}" : "]"))
-			.join("")}`;
+		suffix += '"';
+		if (stack.length > 0) {
+			const top = stack[stack.length - 1];
+			if (top.type === "object") {
+				if (top.state === "expect_key") {
+					top.state = "expect_colon";
+				} else if (top.state === "expect_value") {
+					top.state = "expect_comma_or_close";
+				}
+			}
+		}
 	}
-	return (
-		suffix +
-		stack
-			.reverse()
-			.map(c => (c === "{" ? "}" : "]"))
-			.join("")
-	);
+
+	for (let i = stack.length - 1; i >= 0; i--) {
+		const level = stack[i];
+		if (level.type === "array") {
+			suffix += "]";
+		} else {
+			let state = level.state;
+			if (state === "expect_value") {
+				const lower = trimmed.toLowerCase();
+				if (
+					literalCompletion !== "" ||
+					lower.endsWith("true") ||
+					lower.endsWith("false") ||
+					lower.endsWith("null") ||
+					/\d$/.test(trimmed) ||
+					trimmed.endsWith('"') ||
+					trimmed.endsWith("}") ||
+					trimmed.endsWith("]")
+				) {
+					state = "expect_comma_or_close";
+				}
+			}
+
+			if (state === "expect_key") {
+				suffix += "}";
+			} else if (state === "expect_colon") {
+				suffix += ":null}";
+			} else if (state === "expect_value") {
+				suffix += "null}";
+			} else if (state === "expect_comma_or_close") {
+				suffix += "}";
+			}
+		}
+	}
+
+	return suffix;
 }
 
 function isJsonTruncated(data: string): boolean {
