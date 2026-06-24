@@ -282,6 +282,26 @@ function convertTools(tools: Tool[] | undefined): OllamaFunctionTool[] | undefin
 	}));
 }
 
+/**
+ * Ollama Cloud rejects `num_predict` above this value with HTTP 400
+ * (`max_tokens (...) exceeds model's maximum output tokens (65536)`).
+ * The cap currently applies uniformly to cloud-served models; the cloud-side
+ * limit was confirmed empirically against `deepseek-v4-pro`/`-flash` and is
+ * the same cap surfaced for every other Ollama Cloud model we've probed.
+ *
+ * Acts as a wire-level safety net so stale `models.db` rows (or custom
+ * `modelOverrides` re-enabling `num_predict`) cannot 400 the request — even
+ * when `model.omitMaxOutputTokens` was never applied. See #3392.
+ */
+const OLLAMA_CLOUD_NUM_PREDICT_CAP = 65_536;
+
+function resolveNumPredict(model: Model<"ollama-chat">, requested: number): number {
+	if (model.provider === "ollama-cloud") {
+		return Math.min(requested, OLLAMA_CLOUD_NUM_PREDICT_CAP);
+	}
+	return requested;
+}
+
 function createChatBody(model: Model<"ollama-chat">, context: Context, options: OllamaChatOptions | undefined) {
 	const think = mapReasoning(model, options?.reasoning, options?.disableReasoning);
 	const toolChoice = mapToolChoice(options?.toolChoice);
@@ -294,7 +314,7 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 		...(think !== undefined ? { think } : {}),
 		...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
 		...(options?.maxTokens !== undefined && !model.omitMaxOutputTokens
-			? { options: { num_predict: options.maxTokens } }
+			? { options: { num_predict: resolveNumPredict(model, options.maxTokens) } }
 			: {}),
 		stream: true,
 	};
