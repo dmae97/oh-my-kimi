@@ -190,9 +190,7 @@ describe("terminal notifications", () => {
 
 		// Single write — both pieces must reach tmux as one contiguous chunk so a
 		// concurrent renderer cannot interleave between the OSC and the BEL.
-		expect(writes).toEqual([
-			"\x1bPtmux;\x1b\x1b]99;;ping\x1b\x1b\\\x1b\\\x07",
-		]);
+		expect(writes).toEqual(["\x1bPtmux;\x1b\x1b]99;;ping\x1b\x1b\\\x1b\\\x07"]);
 	});
 
 	it("under tmux, Bell-protocol sendNotification stays a plain BEL (no DCS wrap)", () => {
