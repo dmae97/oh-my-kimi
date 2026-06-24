@@ -5,12 +5,12 @@ import {
 	createWorkerHandle,
 	createWorkerSubprocess,
 	logWorkerMessage,
+	type RefCountedWorkerHandle,
 	resolveWorkerSpawnCmd,
 	SMOKE_TEST_TIMEOUT_MS,
 	type SpawnedSubprocess,
 	smokeTestWorker,
 	spawnWorkerOrUnavailable,
-	type WorkerHandle,
 	workerEnvFromParent,
 } from "../subprocess/worker-client";
 import { safeSend } from "../utils/ipc";
@@ -128,33 +128,60 @@ export function createTinyTitleSubprocess(): SpawnedSubprocess<TinyTitleWorkerOu
 
 function wrapSubprocess(
 	spawned: SpawnedSubprocess<TinyTitleWorkerOutbound>,
-): WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
+): RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
 	const { proc } = spawned;
-	return createWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>(spawned, message =>
-		safeSend(proc, message, "tiny-title"),
-	);
+	return {
+		...createWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>(spawned, message =>
+			safeSend(proc, message, "tiny-title"),
+		),
+		ref() {
+			try {
+				proc.ref();
+			} catch {
+				// Already gone.
+			}
+		},
+		unref() {
+			try {
+				proc.unref();
+			} catch {
+				// Already gone.
+			}
+		},
+	};
 }
 
-function spawnTinyTitleWorker(): WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
+function spawnInlineUnavailableWorker(
+	error: unknown,
+): RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
+	return {
+		...createUnavailableWorker<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>(error),
+		ref() {},
+		unref() {},
+	};
+}
+
+function spawnTinyTitleWorker(): RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
 	return spawnWorkerOrUnavailable(
 		() => wrapSubprocess(createTinyTitleSubprocess()),
-		createUnavailableWorker<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>,
+		spawnInlineUnavailableWorker,
 		"Tiny title worker spawn failed; local titles disabled",
 	);
 }
 
 export class TinyTitleClient {
-	#worker: WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> | null = null;
+	#worker: RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> | null = null;
 	#unsubscribeMessage: (() => void) | null = null;
 	#unsubscribeError: (() => void) | null = null;
 	#pending = new Map<string, PendingRequest>();
 	#failedModels = new Set<TinyLocalModelKey>();
 	#progressListeners = new Set<(event: TinyTitleProgressEvent) => void>();
 	#nextRequestId = 0;
-	#spawnWorker: () => WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>;
+	#refed = false;
+	#spawnWorker: () => RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound>;
 
 	constructor(
-		spawnWorker: () => WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> = spawnTinyTitleWorker,
+		spawnWorker: () => RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> = spawnTinyTitleWorker,
 	) {
 		this.#spawnWorker = spawnWorker;
 	}
@@ -179,11 +206,11 @@ export class TinyTitleClient {
 			const worker = this.#ensureWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<string | null>();
-			this.#pending.set(id, { kind: "generate", modelKey, resolve });
+			this.#addPending(id, { kind: "generate", modelKey, resolve });
 			const abort = (): void => {
 				const pending = this.#pending.get(id);
 				if (pending?.kind !== "generate") return;
-				this.#pending.delete(id);
+				this.#deletePending(id);
 				pending.resolve(null);
 			};
 			options.signal?.addEventListener("abort", abort, { once: true });
@@ -195,7 +222,7 @@ export class TinyTitleClient {
 				return await promise;
 			} finally {
 				options.signal?.removeEventListener("abort", abort);
-				this.#pending.delete(id);
+				this.#deletePending(id);
 			}
 		} catch (error) {
 			logger.debug("tiny-title: local generation failed", {
@@ -218,11 +245,11 @@ export class TinyTitleClient {
 			const worker = this.#ensureWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<string | null>();
-			this.#pending.set(id, { kind: "complete", modelKey, resolve });
+			this.#addPending(id, { kind: "complete", modelKey, resolve });
 			const abort = (): void => {
 				const pending = this.#pending.get(id);
 				if (pending?.kind !== "complete") return;
-				this.#pending.delete(id);
+				this.#deletePending(id);
 				pending.resolve(null);
 			};
 			options.signal?.addEventListener("abort", abort, { once: true });
@@ -231,7 +258,7 @@ export class TinyTitleClient {
 				return await promise;
 			} finally {
 				options.signal?.removeEventListener("abort", abort);
-				this.#pending.delete(id);
+				this.#deletePending(id);
 			}
 		} catch (error) {
 			logger.debug("tiny-model: local completion failed", {
@@ -251,11 +278,11 @@ export class TinyTitleClient {
 			const worker = this.#ensureWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<boolean>();
-			this.#pending.set(id, { kind: "download", modelKey, resolve });
+			this.#addPending(id, { kind: "download", modelKey, resolve });
 			const abort = (): void => {
 				const pending = this.#pending.get(id);
 				if (pending?.kind !== "download") return;
-				this.#pending.delete(id);
+				this.#deletePending(id);
 				pending.resolve(false);
 			};
 			options.signal?.addEventListener("abort", abort, { once: true });
@@ -264,7 +291,7 @@ export class TinyTitleClient {
 				return await promise;
 			} finally {
 				options.signal?.removeEventListener("abort", abort);
-				this.#pending.delete(id);
+				this.#deletePending(id);
 			}
 		} catch (error) {
 			logger.debug("tiny-title: local model download failed", {
@@ -290,6 +317,7 @@ export class TinyTitleClient {
 			else pending.resolve(false);
 		}
 		this.#pending.clear();
+		this.#refed = false;
 		try {
 			await worker?.terminate();
 		} catch {
@@ -297,13 +325,39 @@ export class TinyTitleClient {
 		}
 	}
 
-	#ensureWorker(): WorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
+	#ensureWorker(): RefCountedWorkerHandle<TinyTitleWorkerInbound, TinyTitleWorkerOutbound> {
 		if (this.#worker) return this.#worker;
 		const worker = this.#spawnWorker();
 		this.#worker = worker;
 		this.#unsubscribeMessage = worker.onMessage(message => this.#handleMessage(message));
 		this.#unsubscribeError = worker.onError(error => this.#handleWorkerError(error));
 		return worker;
+	}
+
+	/** Register a pending request and keep the worker referenced while work is in flight. */
+	#addPending(id: string, request: PendingRequest): void {
+		this.#pending.set(id, request);
+		this.#syncWorkerRef();
+	}
+
+	/** Drop a pending request and unref the worker once nothing is in flight. */
+	#deletePending(id: string): void {
+		if (this.#pending.delete(id)) this.#syncWorkerRef();
+	}
+
+	/**
+	 * Tiny-model workers are spawned `unref`'d so idle TUI sessions can exit.
+	 * Short-lived CLI downloads need the opposite while awaiting worker IPC, or
+	 * Bun can drain the event loop before the subprocess answers.
+	 */
+	#syncWorkerRef(): void {
+		const worker = this.#worker;
+		if (!worker) return;
+		const shouldRef = this.#pending.size > 0;
+		if (shouldRef === this.#refed) return;
+		this.#refed = shouldRef;
+		if (shouldRef) worker.ref();
+		else worker.unref();
 	}
 
 	#handleMessage(message: TinyTitleWorkerOutbound): void {
@@ -319,7 +373,7 @@ export class TinyTitleClient {
 
 		const pending = this.#pending.get(message.id);
 		if (!pending) return;
-		this.#pending.delete(message.id);
+		this.#deletePending(message.id);
 		if (message.type === "title") {
 			if (pending.kind === "generate") pending.resolve(message.title);
 			return;
