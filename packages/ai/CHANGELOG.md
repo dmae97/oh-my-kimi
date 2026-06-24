@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.17] - 2026-06-24
+
 ### Added
 
 - Added provider-level `notes?: string[]` field to `UsageReport` for disclaimers that apply to every limit (e.g. "OMP-observed spend only"). The field is declared in both the `usage.ts` schema and the auth-broker wire schema copy so it survives the `"+": "reject"` deserialization gate. ([#3268](https://github.com/can1357/oh-my-pi/issues/3268))

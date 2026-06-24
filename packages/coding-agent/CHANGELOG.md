@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.17] - 2026-06-24
+
 ### Fixed
 
 - Fixed mnemopi auto-retain extracting facts/entities from assistant-authored transcript turns. `MnemopiSessionState.retainMessages` still stores the full multi-role window for episodic recall, but passes only user-authored turns as `extractText`, so assistant prose containing `always`/`never` no longer becomes durable user `Instruction:` memory. ([#3372](https://github.com/can1357/oh-my-pi/issues/3372))

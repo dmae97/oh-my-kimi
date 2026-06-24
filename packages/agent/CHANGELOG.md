@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.17] - 2026-06-24
+
 ### Fixed
 
 - Hardened the agent-loop cooperative yield against backward wall-clock jumps. A stale future timestamp left in the shared yield gate (NTP step, or a fake-timer test mocking `Date.now`) could make `yieldIfDue()` gate forever and stop yielding to the event loop; the gate now treats a backward clock delta as due and re-anchors. The gate is exposed as an injectable `YieldGate` (with `yieldIfDue()` retained as the shared singleton) so it can be exercised without mocking process-global timers.
