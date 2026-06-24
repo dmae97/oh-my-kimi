@@ -511,36 +511,85 @@ describe("message sync", () => {
 		expect(result.messages[0]!.content).toBe("fresh");
 	});
 
-	it("detects in-place rewrite of already-synced messages", () => {
+	it("preserves the byte-stable prefix when a deep message is rewritten (#3406)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
-		// Sync two messages
+		const original0 = { role: "user", content: "q1" } as Message;
+		const original1 = { role: "assistant", content: "original long result" } as Message;
+		mgr.syncMessages([original0, original1]);
+		expect(mgr.log.length).toBe(2);
+
+		// Same length, but the second message's content changed (simulates per-turn
+		// tool-output pruning / transformContext re-render).
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
-			{ role: "assistant", content: "original long result" },
+			{ role: "assistant", content: "[pruned]" } as Message,
 		]);
 		expect(mgr.log.length).toBe(2);
 
-		// Same length, but second message content changed (simulates tool-output pruning)
-		mgr.syncMessages([
-			{ role: "user", content: "q1" },
-			{ role: "assistant", content: "[pruned]" },
-		]);
-		// Log should have been reset and re-synced with the new content
-		expect(mgr.log.length).toBe(2);
-		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
-		expect(msgs[1]!.content).toBe("[pruned]");
+		const entries = mgr.log.entries();
+		// The first message MUST keep its on-the-wire identity — that's what
+		// stops llama.cpp from re-prefilling the entire prior context.
+		expect(entries[0]).toBe(original0);
+		// The diverged tail is re-synced with the new bytes.
+		expect((entries[1] as { content: unknown }).content).toBe("[pruned]");
 	});
 
-	it("detects in-place rewrite via digest mismatch", () => {
+	it("preserves the prefix when the tail is rewritten (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as Message;
+		const original1 = { role: "assistant", content: "a1" } as Message;
+		mgr.syncMessages([original0, original1, { role: "user", content: "q2" } as Message]);
+
+		// Tail-only rewrite (e.g. per-turn pruning of the most recent tool result):
+		// the first two messages MUST stay byte-stable; only the tail re-syncs.
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "q2-rewritten" } as Message,
+		]);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect(entries[1]).toBe(original1);
+		expect((entries[2] as { content: unknown }).content).toBe("q2-rewritten");
+	});
+
+	it("appended new messages keep the prefix stable even when the prior tail also diverged (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as Message;
+		const original1 = { role: "assistant", content: "a1" } as Message;
+		mgr.syncMessages([original0, original1]);
+
+		// Re-sync with: (a) message #1 rewritten in place; (b) a brand-new tail
+		// appended. The prefix [original0] MUST stay byte-stable.
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1-pruned" } as Message,
+			{ role: "user", content: "q2" } as Message,
+		]);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect((entries[1] as { content: unknown }).content).toBe("a1-pruned");
+		expect((entries[2] as { content: unknown }).content).toBe("q2");
+	});
+
+	it("rewriting the first message still re-syncs from scratch", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([{ role: "user", content: "hello" }]);
 		expect(mgr.log.length).toBe(1);
 
-		// Content changed but length same
+		// No byte-stable prefix — the only message diverged.
 		mgr.syncMessages([{ role: "user", content: "world" }]);
 
 		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
