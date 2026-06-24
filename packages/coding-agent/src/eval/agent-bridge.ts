@@ -385,6 +385,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		// must not be killed by `task.maxRuntimeMs`. Force the limit off
 		// regardless of the inherited session setting.
 		maxRuntimeMs: 0,
+		keepAlive: false,
 		mcpManager,
 		contextFiles,
 		skills: availableSkills,

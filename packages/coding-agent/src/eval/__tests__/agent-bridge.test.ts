@@ -246,6 +246,7 @@ describe("runEvalAgent", () => {
 		const options = runSpy.mock.calls[0]?.[0];
 		if (!options) throw new Error("runSubprocess was not called");
 		expect(options.enableLsp).toBe(false);
+		expect(options.keepAlive).toBe(false);
 	});
 
 	it("maps successful and failed subagent results", async () => {

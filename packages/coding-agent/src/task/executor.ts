@@ -368,6 +368,12 @@ export interface ExecutorOptions {
 	 * passes its own `getAgentId()`).
 	 */
 	parentAgentId?: string;
+	/**
+	 * Keep the finished subagent addressable in the registry for IRC/revival.
+	 * Defaults to true. Eval bridge agents are programmatic one-shot helpers and
+	 * set this false so disposal unregisters them instead of leaving idle peers.
+	 */
+	keepAlive?: boolean;
 }
 
 function parseStringifiedJson(value: unknown): unknown {
@@ -2263,6 +2269,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				if (aborted) {
 					// Hard abort (caller signal / wall-clock / budget): terminal teardown.
 					registry.setStatus(id, "aborted");
+					try {
+						await untilAborted(AbortSignal.timeout(5000), () => session.dispose());
+					} catch {
+						// Ignore cleanup errors
+					}
+				} else if (options.keepAlive === false) {
+					// One-shot helper: dispose and unregister. No IRC, no revival.
 					try {
 						await untilAborted(AbortSignal.timeout(5000), () => session.dispose());
 					} catch {
