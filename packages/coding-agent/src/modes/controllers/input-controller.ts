@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -19,6 +20,7 @@ import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
+import { resolveReadPath } from "../../tools/path-utils";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
@@ -69,6 +71,20 @@ function wrapPasteInAttachmentBlock(content: string): string {
 	return `<attachment>\n${content}\n</attachment>`;
 }
 
+const FILE_URI_REGEX = /^file:\/\//i;
+
+function pastedFileAttachmentExtension(sourcePath: string): string {
+	const ext = path.extname(sourcePath);
+	const bareExt = ext.slice(1);
+	if (!bareExt || bareExt.length > 32 || !/^[a-z0-9][a-z0-9._-]*$/i.test(bareExt)) return "";
+	return ext;
+}
+
+function resolvePastedFilePath(filePath: string, cwd: string): string {
+	if (FILE_URI_REGEX.test(filePath)) return fileURLToPath(filePath);
+	return resolveReadPath(filePath, cwd);
+}
+
 const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 // A cached model fires its file-load events in a short burst and then goes silent
 // while onnxruntime builds the session; a genuine download keeps streaming progress
@@ -104,8 +120,8 @@ export class InputController {
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
-	// Sequential index for `local://attachment-N` references created by the large-paste local-file
-	// action. Seeded from 0 and bumped past any existing attachment files in #attachPasteAsFile.
+	// Sequential index for `local://attachment-N` references created by large-paste and
+	// pasted-file attachments. Seeded from 0 and bumped past existing attachment files.
 	#attachmentCounter = 0;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
@@ -343,6 +359,7 @@ export class InputController {
 		);
 		this.ctx.editor.onPasteImage = () => this.handleImagePaste();
 		this.ctx.editor.onPasteImagePath = path => this.handleImagePathPaste(path);
+		this.ctx.editor.onPasteFilePath = path => this.handleFilePathPaste(path);
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.pasteTextRaw",
 			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
@@ -1203,6 +1220,37 @@ export class InputController {
 		}
 	}
 
+	async handleFilePathPaste(filePath: string): Promise<void> {
+		try {
+			const resolvedPath = resolvePastedFilePath(filePath, this.ctx.sessionManager.getCwd());
+			const stat = await Bun.file(resolvedPath).stat();
+			if (!stat.isFile()) {
+				this.ctx.editor.pasteText(filePath);
+				this.ctx.ui.requestRender();
+				this.ctx.showStatus("Pasted path is not a file");
+				return;
+			}
+
+			const reference = await this.#attachExistingFileAsLocal(resolvedPath);
+			this.ctx.editor.insertText(`${reference} `);
+			this.ctx.ui.requestRender();
+			this.ctx.showStatus(`Attached file as ${reference}`);
+		} catch (error) {
+			if (isEnoent(error)) {
+				this.ctx.editor.pasteText(filePath);
+				this.ctx.ui.requestRender();
+				this.ctx.showStatus("Pasted file path was not found");
+				return;
+			}
+			logger.warn("failed to attach pasted file path", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			this.ctx.editor.pasteText(filePath);
+			this.ctx.ui.requestRender();
+			this.ctx.showError("Failed to attach pasted file path — pasted path inline instead");
+		}
+	}
+
 	async handleImagePathPaste(path: string): Promise<void> {
 		try {
 			const image = await loadImageInput({
@@ -1371,6 +1419,29 @@ export class InputController {
 				break;
 		}
 		this.ctx.ui.requestRender();
+	}
+
+	async #attachExistingFileAsLocal(sourcePath: string): Promise<string> {
+		const localRoot = resolveLocalRoot({
+			getArtifactsDir: () => this.ctx.sessionManager.getArtifactsDir(),
+			getSessionId: () => this.ctx.sessionManager.getSessionId(),
+		});
+		await fs.mkdir(localRoot, { recursive: true });
+		const ext = pastedFileAttachmentExtension(sourcePath);
+		let name: string;
+		let filePath: string;
+		do {
+			this.#attachmentCounter++;
+			name = `attachment-${this.#attachmentCounter}${ext}`;
+			filePath = path.join(localRoot, name);
+		} while (await Bun.file(filePath).exists());
+
+		try {
+			await fs.link(sourcePath, filePath);
+		} catch {
+			await fs.copyFile(sourcePath, filePath);
+		}
+		return `local://${name}`;
 	}
 
 	/**
