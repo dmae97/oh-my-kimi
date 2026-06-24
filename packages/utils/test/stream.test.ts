@@ -296,6 +296,7 @@ describe("readSseJson", () => {
 			'data: {"b":2,}', // balanced but malformed trailing comma
 			'data: {"b":,', // invalid predecessor before comma
 			"data: [,,", // invalid predecessor before comma
+			'data: {"b",', // invalid predecessor after key
 		];
 		for (const dataChunk of testCases) {
 			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];

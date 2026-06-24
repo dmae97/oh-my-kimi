@@ -217,10 +217,136 @@ interface JsonLevel {
 	state?: "expect_key" | "expect_colon" | "expect_value" | "expect_comma_or_close";
 }
 
+interface ScanResult {
+	stack: JsonLevel[];
+	inString: boolean;
+}
+
+function scanJsonState(trimmed: string): ScanResult | null {
+	const stack: JsonLevel[] = [];
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < trimmed.length; i++) {
+		const char = trimmed[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+			if (stack.length > 0) {
+				const top = stack[stack.length - 1];
+				if (inString) {
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				} else {
+					if (top.type === "object" && top.state === "expect_key") {
+						top.state = "expect_colon";
+					}
+				}
+			}
+			continue;
+		}
+		if (!inString) {
+			if (char === "{") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+				stack.push({ type: "object", state: "expect_key" });
+			} else if (char === "[") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+				stack.push({ type: "array", state: "expect_value" });
+			} else if (char === "}") {
+				if (stack.length === 0 || stack[stack.length - 1].type !== "object") {
+					return null;
+				}
+				stack.pop();
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+			} else if (char === "]") {
+				if (stack.length === 0 || stack[stack.length - 1].type !== "array") {
+					return null;
+				}
+				stack.pop();
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+			} else if (char === ":") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.type === "object" && top.state === "expect_colon") {
+						top.state = "expect_value";
+					} else {
+						return null;
+					}
+				} else {
+					return null;
+				}
+			} else if (char === ",") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_comma_or_close") {
+						top.state = "expect_key";
+					} else {
+						return null;
+					}
+				} else {
+					return null;
+				}
+			} else if (char !== " " && char !== "\t" && char !== "\n" && char !== "\r") {
+				if (stack.length > 0) {
+					const top = stack[stack.length - 1];
+					if (top.state === "expect_value") {
+						top.state = "expect_comma_or_close";
+					}
+				}
+			}
+		}
+	}
+
+	if (inString) {
+		if (stack.length > 0) {
+			const top = stack[stack.length - 1];
+			if (top.type === "object") {
+				if (top.state === "expect_key") {
+					top.state = "expect_colon";
+				} else if (top.state === "expect_value") {
+					top.state = "expect_comma_or_close";
+				}
+			}
+		}
+	}
+
+	return { stack, inString };
+}
+
 function hasValidPredecessorForComma(trimmed: string): boolean {
 	if (!trimmed.endsWith(",")) return false;
 	const beforeComma = trimmed.slice(0, -1).trim();
-	return /["}\]\d]$|[elEL]$/.test(beforeComma);
+	const scan = scanJsonState(beforeComma);
+	if (!scan || scan.stack.length === 0) return false;
+	return scan.stack[scan.stack.length - 1].state === "expect_comma_or_close";
 }
 
 function getClosingSuffix(data: string): string | null {
@@ -232,6 +358,17 @@ function getClosingSuffix(data: string): string | null {
 	if (hasValidPredecessorForComma(trimmed)) {
 		trimmed = trimmed.slice(0, -1).trim();
 	}
+
+	const scan = scanJsonState(trimmed);
+	if (!scan) return null;
+
+	const { stack, inString } = scan;
+	let suffix = "";
+
+	if (inString) {
+		suffix += '"';
+	}
+
 	let literalCompletion = "";
 	const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
 	if (match) {
@@ -251,108 +388,7 @@ function getClosingSuffix(data: string): string | null {
 		literalCompletion = completions[partial] ?? "";
 	}
 
-	let suffix = literalCompletion;
-
-	const stack: JsonLevel[] = [];
-	let inString = false;
-	let escaped = false;
-
-	for (let i = 0; i < trimmed.length; i++) {
-		const char = trimmed[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (char === '"') {
-			inString = !inString;
-			if (stack.length > 0) {
-				const top = stack[stack.length - 1];
-				if (top.type === "object") {
-					if (!inString) {
-						if (top.state === "expect_key") {
-							top.state = "expect_colon";
-						} else if (top.state === "expect_value") {
-							top.state = "expect_comma_or_close";
-						}
-					}
-				}
-			}
-			continue;
-		}
-		if (!inString) {
-			if (char === "{") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-				stack.push({ type: "object", state: "expect_key" });
-			} else if (char === "[") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-				stack.push({ type: "array" });
-			} else if (char === "}") {
-				if (stack.length === 0 || stack[stack.length - 1].type !== "object") {
-					return null;
-				}
-				stack.pop();
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-			} else if (char === "]") {
-				if (stack.length === 0 || stack[stack.length - 1].type !== "array") {
-					return null;
-				}
-				stack.pop();
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-			} else if (char === ":") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_colon") {
-						top.state = "expect_value";
-					}
-				}
-			} else if (char === ",") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_comma_or_close") {
-						top.state = "expect_key";
-					}
-				}
-			}
-		}
-	}
-
-	if (inString) {
-		suffix += '"';
-		if (stack.length > 0) {
-			const top = stack[stack.length - 1];
-			if (top.type === "object") {
-				if (top.state === "expect_key") {
-					top.state = "expect_colon";
-				} else if (top.state === "expect_value") {
-					top.state = "expect_comma_or_close";
-				}
-			}
-		}
-	}
+	suffix += literalCompletion;
 
 	for (let i = stack.length - 1; i >= 0; i--) {
 		const level = stack[i];
