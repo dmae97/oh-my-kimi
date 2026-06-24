@@ -302,6 +302,7 @@ describe("readSseJson", () => {
 			'data: {"b":,', // invalid predecessor before comma
 			"data: [,,", // invalid predecessor before comma
 			'data: {"b",', // invalid predecessor after key
+			'data: {"s":"\\u12,', // comma inside unterminated string
 		];
 		for (const dataChunk of testCases) {
 			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];

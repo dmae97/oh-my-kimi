@@ -346,7 +346,7 @@ function hasValidPredecessorForComma(trimmed: string): boolean {
 	if (!trimmed.endsWith(",")) return false;
 	const beforeComma = trimmed.slice(0, -1).trim();
 	const scan = scanJsonState(beforeComma);
-	if (!scan || scan.stack.length === 0) return false;
+	if (!scan || scan.stack.length === 0 || scan.inString) return false;
 	return scan.stack[scan.stack.length - 1].state === "expect_comma_or_close";
 }
 
