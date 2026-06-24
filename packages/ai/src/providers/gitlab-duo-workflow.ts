@@ -2471,9 +2471,11 @@ const GITLAB_DUO_WORKFLOW_CHATML_END = "<|im_end|>";
 
 // Render the flat transcript as literal ChatML. Each turn is
 // `<|im_start|>role\n<body><|im_end|>`. An assistant turn that issued tool calls
-// renders them after its text as `<tool_call>{json}</tool_call>` blocks (name +
-// arguments), and the paired result rides the next `tool` turn tagged with the same
-// call id, so the "who called what → what came back" chain stays intact.
+// renders them after its text as `<ran NAME>{args}</ran>` records — a PAST-tense log
+// of a call that already executed, deliberately NOT the `{name,arguments}` shape the
+// live structured tool-use channel uses, so the model reads history as a record and
+// does not mimic it as emittable call grammar. The paired result rides the next
+// `tool` turn, linked by adjacency (1 call/turn), so the chain stays intact.
 function renderGitLabDuoWorkflowChatMl(conversation: readonly GitLabDuoWorkflowReplayMessage[]): string {
 	return conversation.map(renderGitLabDuoWorkflowChatMlTurn).join("\n");
 }
@@ -2501,22 +2503,23 @@ function gitLabDuoWorkflowChatMlBody(message: GitLabDuoWorkflowReplayMessage): s
 function gitLabDuoWorkflowChatMlToolResultHeader(message: GitLabDuoWorkflowReplayMessage): string | undefined {
 	if (!message.toolName && !message.toolCallId) return undefined;
 	const status = message.isError ? " status=error" : "";
-	const name = message.toolName ?? "";
-	// The call id is omitted on purpose: the result rides the turn immediately after
-	// its call (1:1, adjacent), so the model pairs them by position; the UUID is dead
-	// transcript weight. `toolCallId` is still kept on the replay struct because the
-	// header is emitted whenever a result has either a name OR an id.
-	return `<tool_response name=${name}${status}>`;
+	// The tool name is omitted: the result rides the turn immediately after its call
+	// (1:1, adjacent), so the model pairs them by position; repeating the name is dead
+	// weight and makes the result read like an independent construct. `<ran:result>` is
+	// past-tense — the adjacent output of the prior historical run, not emittable grammar.
+	return `<ran:result${status}>`;
 }
 
 function renderGitLabDuoWorkflowChatMlToolCall(toolCall: GitLabDuoWorkflowReplayToolCall): string {
 	// The goal is a plain text transcript fed to the model, not an HTML/script
-	// context, so `<`/`>` need no escaping. The call id is OMP-internal wiring the
-	// model never reads (call→result pair by adjacency in the transcript), so it is
-	// omitted to save bytes. `arguments` carries the `i` (intent) key only at live
-	// dispatch; on replay it is stripped (see gitLabDuoWorkflowAssistantToolCalls).
-	const payload = JSON.stringify({ name: toolCall.name, arguments: toolCall.arguments }) ?? "null";
-	return `<tool_call>${payload}</tool_call>`;
+	// context, so `<`/`>` need no escaping. Render as a past-tense `<ran NAME>` record:
+	// the tag names the tool, the body is just the arguments JSON (the `{name,arguments}`
+	// wrapper is dropped — it was the exact shape the model copied as a would-be live
+	// call). The call id is OMP-internal wiring the model never reads (call→result pair
+	// by adjacency), so it is omitted to save bytes. `arguments` carries the `i` (intent)
+	// key only at live dispatch; on replay it is stripped (see gitLabDuoWorkflowAssistantToolCalls).
+	const args = JSON.stringify(toolCall.arguments) ?? "null";
+	return `<ran ${toolCall.name}>${args}</ran>`;
 }
 
 // The whole session as a flat, equal-weight transcript. Every turn — including the

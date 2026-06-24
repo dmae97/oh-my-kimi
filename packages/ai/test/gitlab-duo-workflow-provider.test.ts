@@ -294,7 +294,7 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload).not.toHaveProperty("flowConfigId");
 	});
 
-	it("builds startRequest goal as a bare ChatML transcript with tool_call linkage", () => {
+	it("builds startRequest goal as a bare ChatML transcript with tool-run linkage", () => {
 		const patToken = `${"glpat"}-abcdefgh12345678ijkl`;
 		const sessionCookie = "_gitlab_session=0123456789abcdef0123456789abcdef";
 		const credentialTokens = [patToken, sessionCookie];
@@ -371,13 +371,16 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.goal).toContain("Synthetic tool result.");
 		expect(payload.goal).toContain("Latest user request.");
 		expect(payload.goal.trimEnd().endsWith("<|im_end|>")).toBe(true);
-		// tool_call linkage: the assistant turn renders the call it issued (name + args)
-		// and the following tool turn renders `<tool_response name=read>`. The pair is
-		// linked by ADJACENCY (1 call/turn, result rides the very next turn), so the
-		// OMP-internal call id is omitted from the transcript — it is dead weight the
-		// model never reads.
-		expect(payload.goal).toContain('<tool_call>{"name":"read","arguments":{"path":"src/main.ts"}}</tool_call>');
-		expect(payload.goal).toContain("<tool_response name=read>");
+		// Tool linkage: the assistant turn renders the call it issued as a past-tense
+		// `<ran NAME>{args}</ran>` record (NOT the `{name,arguments}` live-call shape, so
+		// the model does not mimic it as emittable grammar), and the following tool turn
+		// renders `<ran:result>`. The pair is linked by ADJACENCY (1 call/turn, result
+		// rides the very next turn), so the OMP-internal call id is omitted from the
+		// transcript — it is dead weight the model never reads.
+		expect(payload.goal).toContain('<ran read>{"path":"src/main.ts"}</ran>');
+		expect(payload.goal).not.toContain("<tool_call>");
+		expect(payload.goal).not.toContain('{"name":"read","arguments":');
+		expect(payload.goal).toContain("<ran:result>");
 		expect(payload.goal).not.toContain("call-1");
 		expect(payload.goal).not.toContain('"id":');
 		expect(payload.goal).not.toContain(" id=");
@@ -4282,8 +4285,9 @@ describe("GitLab Duo Workflow WebSocket state machine", () => {
 		expect(goal).toContain("Now summarize it.");
 		// The prior tool call and its result are paired by ADJACENCY (call turn followed
 		// by its tool-result turn); the OMP-internal id is omitted from the transcript.
-		expect(goal).toContain('<tool_call>{"name":"read","arguments":{"path":"a.ts"}}</tool_call>');
-		expect(goal).toContain("<tool_response name=read>");
+		// The call is a past-tense `<ran NAME>{args}</ran>` record, the result `<ran:result>`.
+		expect(goal).toContain('<ran read>{"path":"a.ts"}</ran>');
+		expect(goal).toContain("<ran:result>");
 		expect(goal).not.toContain("req-prior-1");
 	});
 
