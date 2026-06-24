@@ -210,7 +210,15 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 			}
 		});
 
-		await expect(session.compact(undefined, { mode: "snapcompact" })).rejects.toThrow();
+		// After the skip, the manual /compact path falls through to the LLM
+		// summarizer; its outcome (resolve once a summary lands, reject when no
+		// credentials/network are available) is provider-dependent and NOT this
+		// test's contract. Tolerate either so the suite never depends on network
+		// or auth (chatgpt-codex review on #3249). The skip itself is the pin.
+		await session.compact(undefined, { mode: "snapcompact" }).then(
+			() => {},
+			() => {},
+		);
 
 		// snapcompact.compact() MUST NOT be invoked when the budget cannot
 		// fit even one frame — running it just to reject the result and
@@ -220,7 +228,7 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		// than the misleading "could not bring the context under the limit"
 		// (which implied snapcompact had run and produced an oversized result).
 		expect(notices.some(n => n.level === "warning" && n.message.includes("kept history"))).toBe(true);
-	});
+	}, 30_000);
 
 	it("still invokes snapcompact with maxFrames=1 when residual headroom is below the summary-text reserve", async () => {
 		// Reviewer (chatgpt-codex on #3249, second pass): when kept-recent +
