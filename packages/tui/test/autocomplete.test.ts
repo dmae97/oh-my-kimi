@@ -242,11 +242,30 @@ describe("CombinedAutocompleteProvider", () => {
 			const result = await provider.getSuggestions([line], 0, line.length);
 
 			const values = result?.items.map(item => item.value) ?? [];
-			expect(values).toContain(`@${outsideDir}/alpha/`);
-			expect(values).toContain(`@${outsideDir}/beta/`);
+			// Normalize to forward slashes — the provider normalizes suggestion paths
+			// so they work consistently on all platforms (forward slashes are valid on Windows).
+			const normalizedOutsideDir = outsideDir.replace(/\\/g, "/");
+			expect(values).toContain(`@${normalizedOutsideDir}/alpha/`);
+			expect(values).toContain(`@${normalizedOutsideDir}/beta/`);
 			expect(values.some(value => value.endsWith("nested.ts"))).toBe(false);
 		});
+
+		it("preserves the full absolute prefix when completing a partial leaf", async () => {
+			fs.mkdirSync(path.join(outsideDir, "alpha"), { recursive: true });
+			fs.mkdirSync(path.join(outsideDir, "beta"), { recursive: true });
+
+			const provider = new CombinedAutocompleteProvider([], baseDir);
+			const line = `@${outsideDir}/a`;
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			const values = result?.items.map(item => item.value) ?? [];
+			const normalizedOutsideDir = outsideDir.replace(/\\/g, "/");
+			expect(values).toContain(`@${normalizedOutsideDir}/alpha/`);
+			// The parent path must be preserved, not stripped to just the leaf name
+			expect(values.some(v => v === "@alpha/")).toBe(false);
+		});
 	});
+
 	describe("dot-slash path completion", () => {
 		let baseDir: string;
 

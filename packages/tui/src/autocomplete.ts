@@ -678,31 +678,39 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const { rawPrefix, isAtPrefix, isQuotedPrefix } = parsePathPrefix(prefix);
 			let expandedPrefix = rawPrefix;
 
+			// Normalize backslashes to forward slashes so Windows native paths
+			// (C:\tmp\foo) work with the /-based splitting/joining below.
+			expandedPrefix = expandedPrefix.replace(/\\/g, "/");
+
+			// Capture the pre-expansion prefix so root checks can still
+			// detect bare "~" and "~/" after #expandHomePath rewrites them.
+			const preExpand = expandedPrefix;
+
 			// Handle home directory expansion
 			if (expandedPrefix.startsWith("~")) {
 				expandedPrefix = this.#expandHomePath(expandedPrefix);
 			}
 
 			const isRootPrefix =
-				rawPrefix === "" ||
-				rawPrefix === "./" ||
-				rawPrefix === "../" ||
-				rawPrefix === "~" ||
-				rawPrefix === "~/" ||
-				rawPrefix === "/" ||
-				(isAtPrefix && rawPrefix === "");
+				preExpand === "" ||
+				preExpand === "./" ||
+				preExpand === "../" ||
+				preExpand === "~" ||
+				preExpand === "~/" ||
+				preExpand === "/" ||
+				(isAtPrefix && preExpand === "");
 
 			if (isRootPrefix) {
 				// Complete from specified position
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
 				}
 				searchPrefix = "";
-			} else if (rawPrefix.endsWith("/")) {
+			} else if (expandedPrefix.endsWith("/")) {
 				// If prefix ends with /, show contents of that directory
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = expandedPrefix;
 				} else {
 					searchDir = path.join(this.#basePath, expandedPrefix);
@@ -712,7 +720,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				// Split into directory and file prefix
 				const dir = path.dirname(expandedPrefix);
 				const file = path.basename(expandedPrefix);
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+				if (expandedPrefix.startsWith("~") || path.isAbsolute(expandedPrefix)) {
 					searchDir = dir;
 				} else {
 					searchDir = path.join(this.#basePath, dir);
@@ -746,7 +754,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 				let relativePath: string;
 				const name = entry.name;
-				const displayPrefix = rawPrefix;
+				const displayPrefix = rawPrefix.replace(/\\/g, "/");
 
 				if (displayPrefix.endsWith("/")) {
 					// If prefix ends with /, append entry to the prefix
@@ -757,14 +765,13 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						const homeRelativeDir = displayPrefix.slice(2); // Remove ~/
 						const dir = path.dirname(homeRelativeDir);
 						relativePath = `~/${dir === "." ? name : path.join(dir, name)}`;
-					} else if (displayPrefix.startsWith("/")) {
-						// Absolute path - construct properly
-						const dir = path.dirname(displayPrefix);
-						if (dir === "/") {
-							relativePath = `/${name}`;
-						} else {
-							relativePath = `${dir}/${name}`;
-						}
+					} else if (path.isAbsolute(displayPrefix)) {
+						// Absolute path — covers both /unix/paths and Windows C:/drive/paths.
+						// Use string concat with / instead of path.join (which uses platform-native
+						// separators and produces drive-relative results like "C:alpha" when
+						// dirname returns "C:" without a trailing slash).
+						const dir = displayPrefix.slice(0, displayPrefix.lastIndexOf("/"));
+						relativePath = dir === "" || dir === "/" ? `/${name}` : `${dir}/${name}`;
 					} else {
 						relativePath = path.join(path.dirname(displayPrefix), name);
 						if (displayPrefix.startsWith("./") && !relativePath.startsWith("./")) {
@@ -780,6 +787,10 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					}
 				}
 
+				// Normalize backslashes to forward slashes so suggestions are consistent
+				// with the user's input (which uses / on all platforms) and work correctly
+				// when inserted back into the editor. Forward slashes are valid on Windows.
+				relativePath = relativePath.replace(/\\/g, "/");
 				const pathValue = isDirectory ? `${relativePath}/` : relativePath;
 				const value = buildCompletionValue(pathValue, {
 					isDirectory,
