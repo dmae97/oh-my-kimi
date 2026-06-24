@@ -566,7 +566,9 @@ const UMANS_REASONING_EFFORT_BY_LEVEL: Record<string, Effort> = {
 	medium: Effort.Medium,
 	high: Effort.High,
 	xhigh: Effort.XHigh,
+	max: Effort.XHigh,
 };
+const UMANS_MAX_REASONING_EFFORT_MAP = { [Effort.XHigh]: "max" } as const;
 const UMANS_DEFAULT_REASONING_EFFORTS = [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
 const UMANS_VIA_HANDOFF_MODEL_IDS = ["umans-glm-5.1", "umans-glm-5.2"] as const;
 
@@ -620,10 +622,20 @@ function mapUmansReasoningEfforts(value: unknown): readonly Effort[] {
 	return efforts.length > 0 ? efforts : UMANS_DEFAULT_REASONING_EFFORTS;
 }
 
+function umansHasMaxReasoningLevel(value: unknown): boolean {
+	return isRecord(value) && Array.isArray(value.levels) && value.levels.includes("max");
+}
+
 function mapUmansThinkingConfig(value: unknown): ThinkingConfig | undefined {
 	if (!umansReasoningSupported(value)) return undefined;
 	const efforts = mapUmansReasoningEfforts(value);
-	const thinking: ThinkingConfig = { mode: "budget", efforts };
+	const thinking: ThinkingConfig = {
+		mode: umansHasMaxReasoningLevel(value) ? "anthropic-budget-effort" : "budget",
+		efforts,
+	};
+	if (thinking.mode === "anthropic-budget-effort") {
+		thinking.effortMap = UMANS_MAX_REASONING_EFFORT_MAP;
+	}
 	if (isRecord(value)) {
 		if (value.can_disable === false) {
 			thinking.requiresEffort = true;
