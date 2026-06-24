@@ -108,6 +108,10 @@
 
 - Fixed `umans` requests with more than 10 live context images still sending every image despite the provider budget; outgoing provider contexts now drop the oldest images above the active provider cap while preserving text and newest images ([#3230](https://github.com/can1357/oh-my-pi/issues/3230)).
 
+### Fixed
+
+- Fixed snapcompact auto-compaction looping the "snapcompact could not bring the context under the limit — using an LLM summary instead" warning on every threshold tick for sub-1M-token models (Claude Sonnet 4.5, GPT-5.x, Gemini 2.x). `snapcompact.compact()` was called with no `maxFrames` override, so it defaulted to `MAX_FRAMES_DEFAULT = 80`; the projection in `AgentSession` charges `FRAME_TOKEN_ESTIMATE = 5024` per frame block (the conservative high-res Anthropic ceiling), making 80 × 5024 ≈ 402k frame-token projections that always overflow a 200k budget. `AgentSession.#computeSnapcompactMaxFrames` now sizes the `maxFrames` cap from a **shape-aware** reserve — `2 × geometry(shape).capacity` worth of verbatim text-edge chars billed at the tiktoken cl100k 4-chars/token baseline (with a 1.15 multiplier for tokenizer drift), plus a 2k summary-template allowance — mirroring what `#projectSnapcompactContextTokens` will charge once frames land. The shape comes from the same `snapcompact.resolveShape(model, settings)` call the auto and manual paths pass into `snapcompact.compact()`. The cap reserve applies **only** to the frame-cap math, not the skip decision: snapcompact is skipped outright only when `kept-recent + non-message ≥ ctxWindow − reserve` (no headroom at all), so the frame-less `text.length <= 2 * edgeCap` short-circuit in `planArchive` can still land a valid text-only archive when residual headroom is positive but below the cap reserve. The projection guard catches any actual frame-bearing archive that overflows. ([#3247](https://github.com/can1357/oh-my-pi/issues/3247))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
