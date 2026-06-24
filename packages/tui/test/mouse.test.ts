@@ -65,8 +65,8 @@ describe("routeSgrMouseInput", () => {
 			return true;
 		});
 		expect(handled).toBe(true);
-		expect(received).not.toBeNull();
-		const event = received as unknown as SgrMouseEvent;
+		if (received === null) throw new Error("expected routeSgrMouseInput to forward an event");
+		const event: SgrMouseEvent = received;
 		expect(event.row).toBe(2);
 		expect(event.col).toBe(1);
 		expect(event.leftClick).toBe(true);
