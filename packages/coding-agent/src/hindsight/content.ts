@@ -189,6 +189,22 @@ export interface RetentionTranscript {
  * Messages are tag-stripped before framing to break the recall→retain loop.
  * Returns `{ transcript: null }` when nothing meaningful survives.
  */
+function formatRetentionMessages(messages: HindsightMessage[]): RetentionTranscript {
+	const parts: string[] = [];
+	for (const msg of messages) {
+		const content = stripMemoryTags(msg.content).trim();
+		if (!hasSubstantiveContent(content)) continue;
+		parts.push(`[role: ${msg.role}]\n${content}\n[${msg.role}:end]`);
+	}
+
+	if (parts.length === 0) return { transcript: null, messageCount: 0 };
+
+	const transcript = parts.join("\n\n");
+	if (transcript.trim().length < 10) return { transcript: null, messageCount: 0 };
+
+	return { transcript, messageCount: parts.length };
+}
+
 export function prepareRetentionTranscript(
 	messages: HindsightMessage[],
 	retainFullWindow = false,
@@ -210,17 +226,10 @@ export function prepareRetentionTranscript(
 		targetMessages = messages.slice(lastUserIdx);
 	}
 
-	const parts: string[] = [];
-	for (const msg of targetMessages) {
-		const content = stripMemoryTags(msg.content).trim();
-		if (!hasSubstantiveContent(content)) continue;
-		parts.push(`[role: ${msg.role}]\n${content}\n[${msg.role}:end]`);
-	}
+	return formatRetentionMessages(targetMessages);
+}
 
-	if (parts.length === 0) return { transcript: null, messageCount: 0 };
-
-	const transcript = parts.join("\n\n");
-	if (transcript.trim().length < 10) return { transcript: null, messageCount: 0 };
-
-	return { transcript, messageCount: parts.length };
+/** Format only user-authored messages for memory fact/entity extraction. */
+export function prepareUserRetentionTranscript(messages: HindsightMessage[]): RetentionTranscript {
+	return formatRetentionMessages(messages.filter(message => message.role === "user"));
 }

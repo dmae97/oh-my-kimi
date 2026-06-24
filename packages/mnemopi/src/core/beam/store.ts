@@ -36,6 +36,7 @@ type StoreRememberOptions = RememberOptions & {
 	author_type?: string | null;
 	extractEntities?: boolean;
 	extract_entities?: boolean;
+	extract_text?: string;
 	channelId?: string | null;
 	channel_id?: string | null;
 };
@@ -429,7 +430,16 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 			trustTier,
 		);
 	addTemporalAnnotations(beam, memoryId, timestamp, source);
-	proactiveLinkIfEnabled(beam, memoryId, content, Boolean(options.extractEntities ?? options.extract_entities));
+	// `extractText` lets a caller decouple "what gets stored" from "what facts are
+	// mined". coding-agent retains full multi-author transcripts but wants
+	// fact/entity heuristics to read only the user-authored turns (issue #3372).
+	const extractionSource = options.extractText ?? options.extract_text ?? content;
+	proactiveLinkIfEnabled(
+		beam,
+		memoryId,
+		extractionSource,
+		Boolean(options.extractEntities ?? options.extract_entities),
+	);
 	trimWorkingMemory(beam);
 	emitEvent(beam, "MEMORY_ADDED", {
 		memoryId,
@@ -439,7 +449,7 @@ export function remember(beam: BeamMemoryState, content: string, options: StoreR
 		metadata: metadata ?? undefined,
 	});
 	scheduleEmbedding(beam, [{ memoryId, content }]);
-	if (options.extract === true) scheduleFactExtraction(beam, memoryId, content);
+	if (options.extract === true) scheduleFactExtraction(beam, memoryId, extractionSource);
 	invalidateCaches(beam);
 	return memoryId;
 }

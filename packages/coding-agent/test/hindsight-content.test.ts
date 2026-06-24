@@ -6,6 +6,7 @@ import {
 	type HindsightMessage,
 	hasSubstantiveContent,
 	prepareRetentionTranscript,
+	prepareUserRetentionTranscript,
 	sliceLastTurnsByUserBoundary,
 	stripMemoryTags,
 	truncateRecallQuery,
@@ -200,6 +201,20 @@ describe("prepareRetentionTranscript", () => {
 		expect(transcript).not.toContain("[role: assistant]\n.\n[assistant:end]");
 		expect(transcript).not.toContain("[role: assistant]\n...\n[assistant:end]");
 		expect(transcript).toContain("done — here are the results");
+	});
+
+	it("formats only user-authored messages for extraction", () => {
+		const messages: HindsightMessage[] = [
+			{ role: "user", content: "I always prefer tabs" },
+			{ role: "assistant", content: "the panel never initializes" },
+			{ role: "user", content: "<memories>old</memories>\nI never use semicolons" },
+		];
+		const { transcript, messageCount } = prepareUserRetentionTranscript(messages);
+		expect(messageCount).toBe(2);
+		expect(transcript).toContain("[role: user]\nI always prefer tabs\n[user:end]");
+		expect(transcript).toContain("I never use semicolons");
+		expect(transcript).not.toContain("panel never initializes");
+		expect(transcript).not.toContain("<memories>");
 	});
 });
 

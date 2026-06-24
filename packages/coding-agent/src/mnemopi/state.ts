@@ -9,6 +9,7 @@ import {
 	composeRecallQuery,
 	formatCurrentTime,
 	prepareRetentionTranscript,
+	prepareUserRetentionTranscript,
 	truncateRecallQuery,
 } from "../hindsight/content";
 import { extractMessages } from "../hindsight/transcript";
@@ -352,6 +353,7 @@ export class MnemopiSessionState {
 	async retainMessages(messages: Array<{ role: string; content: string }>, sourceId: string): Promise<void> {
 		const { transcript, messageCount } = prepareRetentionTranscript(messages, true);
 		if (!transcript) return;
+		const { transcript: extractText } = prepareUserRetentionTranscript(messages);
 		this.rememberInScope(transcript, {
 			source: "coding-agent-transcript",
 			importance: 0.65,
@@ -362,8 +364,9 @@ export class MnemopiSessionState {
 				cwd: this.session.sessionManager.getCwd(),
 			},
 			scope: "bank",
-			extract: true,
-			extractEntities: true,
+			extract: extractText !== null,
+			extractEntities: extractText !== null,
+			extractText,
 			veracity: "unknown",
 			memoryType: "episode",
 		});
