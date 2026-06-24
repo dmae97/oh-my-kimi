@@ -45,6 +45,7 @@ const USER_MESSAGES_BACKFILL_KEY = "user_messages_v6";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
 const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
 const AGENT_TYPE_BACKFILL_KEY = "agent_type_v1";
+const FORK_DEDUPE_KEY = "fork_dedupe_v1";
 function shouldResetBackfill(value: string | undefined): boolean {
 	return value !== BACKFILL_COMPLETE && value !== BACKFILL_PENDING;
 }
@@ -218,6 +219,7 @@ export async function initDb(): Promise<Database> {
 	backfillPriorityPremiumRequests(db);
 	backfillAgentType(db);
 	backfillMissingCatalogCosts(db);
+	backfillForkDuplicates(db);
 	return db;
 }
 
@@ -334,22 +336,34 @@ export function setFileOffset(sessionFile: string, offset: number, lastModified:
 
 /**
  * Insert message stats into the database.
+ *
+ * Forked / branched sessions (see `SessionManager.fork()` and
+ * `createBranchedSession()` in `@oh-my-pi/pi-coding-agent`) deep-copy a parent
+ * session's entries into a new JSONL — same `entry_id`, `timestamp`, `model`,
+ * `provider`, token counts, and `responseId`. The `UNIQUE(session_file,
+ * entry_id)` constraint alone keys each row by file, so without the guard
+ * below the same provider request would land twice and inflate every
+ * aggregate. The `WHERE NOT EXISTS` clause skips inserts whose
+ * `(entry_id, timestamp)` already exists under a different `session_file` —
+ * first-write-wins across the lineage. Same-file re-syncs still hit the
+ * `ON CONFLICT(session_file, entry_id)` upsert below so historical
+ * `premium_requests` fix-ups continue to work.
  */
 export function insertMessageStats(stats: MessageStats[]): number {
 	if (!db || stats.length === 0) return 0;
 
-	// Use UPSERT so a re-sync can fix up `premium_requests` for rows persisted
-	// before priority service-tier traffic was counted as premium. The guard
-	// `WHERE messages.premium_requests < excluded.premium_requests` keeps every
-	// other column immutable and never demotes an existing count (e.g. when a
-	// later parse drops back to 0 for the same row).
 	const stmt = db.prepare(`
 		INSERT INTO messages (
 			session_file, entry_id, folder, model, provider, api, timestamp,
 			duration, ttft, stop_reason, error_message,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, total_tokens, premium_requests,
 			cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total, agent_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM messages
+			WHERE entry_id = ? AND timestamp = ? AND session_file <> ?
+		)
 		ON CONFLICT(session_file, entry_id) DO UPDATE SET
 			premium_requests = excluded.premium_requests
 		WHERE messages.premium_requests < excluded.premium_requests
@@ -383,6 +397,11 @@ export function insertMessageStats(stats: MessageStats[]): number {
 				cost.cacheWrite,
 				cost.total,
 				s.agentType,
+				// `WHERE NOT EXISTS` binds: skip when a different session_file
+				// already holds this (entry_id, timestamp).
+				s.entryId,
+				s.timestamp,
+				s.sessionFile,
 			);
 			if (result.changes > 0) inserted++;
 		}
@@ -894,6 +913,46 @@ function backfillAgentType(database: Database): void {
 }
 
 /**
+ * One-shot collapse of forked-session duplicates that landed under the old
+ * `UNIQUE(session_file, entry_id)`-only invariant. `SessionManager.fork()`
+ * and `createBranchedSession()` deep-copy a parent's entries into the new
+ * JSONL — same `entry_id`, `timestamp`, `model`, `responseId`, token counts,
+ * cost — and the previous insert path counted both files toward request /
+ * token / cost totals. The migration keeps the lowest-`id` row per
+ * `(entry_id, timestamp)` group (almost always the parent — sessions are
+ * filename-timestamped and sync processes them in name order, so the
+ * originating file lands first) and drops every other copy. Same fix on
+ * `user_messages` since forks copy user entries too. Idempotent and
+ * crash-safe: enrolled at module-load via the `meta` sentinel, marked
+ * COMPLETE inside the same transaction so an aborted run rolls back and
+ * retries on the next init.
+ */
+function backfillForkDuplicates(database: Database): void {
+	const row = database.prepare("SELECT value FROM meta WHERE key = ?").get(FORK_DEDUPE_KEY) as
+		| { value: string }
+		| undefined;
+	if (row?.value === BACKFILL_COMPLETE) return;
+
+	const markComplete = database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+	const apply = database.transaction(() => {
+		database.run(`
+			DELETE FROM messages
+			WHERE id NOT IN (
+				SELECT MIN(id) FROM messages GROUP BY entry_id, timestamp
+			)
+		`);
+		database.run(`
+			DELETE FROM user_messages
+			WHERE id NOT IN (
+				SELECT MIN(id) FROM user_messages GROUP BY entry_id, timestamp
+			)
+		`);
+		markComplete.run(FORK_DEDUPE_KEY, BACKFILL_COMPLETE);
+	});
+	apply();
+}
+
+/**
  * One-shot wipe of `file_offsets` to force `parseSessionFile` to re-parse
  * every session from byte zero. We don't touch `user_messages`; the parser
  * now emits a `UserMessageLink` for every assistant->parent pair, and the
@@ -961,6 +1020,9 @@ export function markUserMessageLinksRepairComplete(): void {
 
 /**
  * Insert user-message stats. Idempotent via UNIQUE(session_file, entry_id).
+ * The `WHERE NOT EXISTS` clause matches {@link insertMessageStats}: forks
+ * copy user entries verbatim into the child JSONL, so the same
+ * `(entry_id, timestamp)` must not land twice across different session files.
  */
 export function insertUserMessageStats(stats: UserMessageStats[]): number {
 	if (!db || stats.length === 0) return 0;
@@ -970,7 +1032,12 @@ export function insertUserMessageStats(stats: UserMessageStats[]): number {
 			session_file, entry_id, folder, timestamp, model, provider,
 			chars, words, yelling, profanity, anguish,
 			negation, repetition, blame
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM user_messages
+			WHERE entry_id = ? AND timestamp = ? AND session_file <> ?
+		)
 	`);
 
 	let inserted = 0;
@@ -991,6 +1058,11 @@ export function insertUserMessageStats(stats: UserMessageStats[]): number {
 				s.negation,
 				s.repetition,
 				s.blame,
+				// `WHERE NOT EXISTS` binds: skip when a different session_file
+				// already holds this (entry_id, timestamp).
+				s.entryId,
+				s.timestamp,
+				s.sessionFile,
 			);
 			if (result.changes > 0) inserted++;
 		}
