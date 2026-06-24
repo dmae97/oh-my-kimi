@@ -370,22 +370,24 @@ function getClosingSuffix(data: string): string | null {
 	}
 
 	let literalCompletion = "";
-	const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
-	if (match) {
-		const partial = match[0].toLowerCase();
-		const completions: Record<string, string> = {
-			t: "rue",
-			tr: "ue",
-			tru: "e",
-			f: "alse",
-			fa: "lse",
-			fal: "se",
-			fals: "e",
-			n: "ull",
-			nu: "ll",
-			nul: "l",
-		};
-		literalCompletion = completions[partial] ?? "";
+	if (!inString) {
+		const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
+		if (match) {
+			const partial = match[0].toLowerCase();
+			const completions: Record<string, string> = {
+				t: "rue",
+				tr: "ue",
+				tru: "e",
+				f: "alse",
+				fa: "lse",
+				fal: "se",
+				fals: "e",
+				n: "ull",
+				nu: "ll",
+				nul: "l",
+			};
+			literalCompletion = completions[partial] ?? "";
+		}
 	}
 
 	suffix += literalCompletion;
