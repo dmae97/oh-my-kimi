@@ -3,14 +3,14 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 	let tempDir: string;
-	let storage: { deleteSessionWithArtifacts(sessionPath: string): Promise<void> };
+	let storage: FileSessionStorage;
 
 	beforeEach(async () => {
 		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
-		const { FileSessionStorage } = await import("@oh-my-pi/pi-coding-agent/session/session-storage");
 		storage = new FileSessionStorage();
 	});
 
@@ -70,7 +70,6 @@ describe("FileSessionStorage.writeTextSync", () => {
 	});
 
 	it("replaces the file identity so transcript tailers detect rewrites", async () => {
-		const { FileSessionStorage } = await import("@oh-my-pi/pi-coding-agent/session/session-storage");
 		const storage = new FileSessionStorage();
 		const sessionPath = path.join(tempDir, "session.jsonl");
 
