@@ -13,7 +13,15 @@ import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as markit from "@oh-my-pi/pi-coding-agent/utils/markit";
-import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+import { __resetProfileSnapshotForTests, refreshDirsFromEnv, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -103,7 +111,9 @@ describe("read PDF with a line-range selector", () => {
 	});
 
 	it("reuses cached converted markdown across full and selector reads of an unchanged PDF", async () => {
-		const originalAgentDir = getAgentDir();
+		const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalOmpProfile = process.env.OMP_PROFILE;
+		const originalPiProfile = process.env.PI_PROFILE;
 		setAgentDir(path.join(testDir, "agent"));
 		try {
 			const convert = vi
@@ -130,7 +140,11 @@ describe("read PDF with a line-range selector", () => {
 
 			expect(convert).toHaveBeenCalledTimes(1);
 		} finally {
-			setAgentDir(originalAgentDir);
+			restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+			restoreEnv("OMP_PROFILE", originalOmpProfile);
+			restoreEnv("PI_PROFILE", originalPiProfile);
+			__resetProfileSnapshotForTests();
+			refreshDirsFromEnv();
 		}
 	});
 });

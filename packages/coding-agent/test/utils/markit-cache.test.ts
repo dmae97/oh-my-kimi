@@ -13,14 +13,34 @@ import * as path from "node:path";
 import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import { convertBufferWithMarkit, convertFileWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { pruneMarkitConversionCache } from "@oh-my-pi/pi-coding-agent/utils/markit-cache";
-import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+import {
+	__resetProfileSnapshotForTests,
+	getAgentDir,
+	refreshDirsFromEnv,
+	Snowflake,
+	setAgentDir,
+} from "@oh-my-pi/pi-utils";
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
 
 describe("document conversion cache", () => {
 	let testDir: string;
-	let originalAgentDir: string;
+	let originalPiCodingAgentDir: string | undefined;
+	let originalOmpProfile: string | undefined;
+	let originalPiProfile: string | undefined;
+	let originalXdgCacheHome: string | undefined;
 
 	beforeEach(async () => {
-		originalAgentDir = getAgentDir();
+		originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalOmpProfile = process.env.OMP_PROFILE;
+		originalPiProfile = process.env.PI_PROFILE;
+		originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 		testDir = path.join(os.tmpdir(), `markit-cache-${Snowflake.next()}`);
 		await fs.mkdir(testDir, { recursive: true });
 		setAgentDir(path.join(testDir, "agent"));
@@ -28,7 +48,12 @@ describe("document conversion cache", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		setAgentDir(originalAgentDir);
+		restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+		restoreEnv("OMP_PROFILE", originalOmpProfile);
+		restoreEnv("PI_PROFILE", originalPiProfile);
+		restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
+		__resetProfileSnapshotForTests();
+		refreshDirsFromEnv();
 		await fs.rm(testDir, { recursive: true, force: true });
 	});
 

@@ -2,28 +2,46 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir, getConfigDirName, getDocumentConversionCacheDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
+import {
+	__resetProfileSnapshotForTests,
+	getConfigDirName,
+	getDocumentConversionCacheDir,
+	refreshDirsFromEnv,
+	setAgentDir,
+} from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
 
 describe("document conversion cache directory", () => {
 	let tempRoot = "";
-	let originalAgentDir = "";
+	let originalPiCodingAgentDir: string | undefined;
+	let originalOmpProfile: string | undefined;
+	let originalPiProfile: string | undefined;
 	let originalXdgCacheHome: string | undefined;
 
 	beforeEach(async () => {
-		originalAgentDir = getAgentDir();
+		originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalOmpProfile = process.env.OMP_PROFILE;
+		originalPiProfile = process.env.PI_PROFILE;
 		originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 		tempRoot = path.join(os.tmpdir(), "pi-utils-document-cache", Snowflake.next());
 		await fs.mkdir(tempRoot, { recursive: true });
 	});
 
 	afterEach(async () => {
-		if (originalXdgCacheHome === undefined) {
-			delete process.env.XDG_CACHE_HOME;
-		} else {
-			process.env.XDG_CACHE_HOME = originalXdgCacheHome;
-		}
-		setAgentDir(originalAgentDir);
+		restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+		restoreEnv("OMP_PROFILE", originalOmpProfile);
+		restoreEnv("PI_PROFILE", originalPiProfile);
+		restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
+		__resetProfileSnapshotForTests();
+		refreshDirsFromEnv();
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	});
 

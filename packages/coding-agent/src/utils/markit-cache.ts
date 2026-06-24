@@ -47,7 +47,7 @@ function parseCacheEntry(raw: string): MarkitConversionCacheEntry | null {
 	const parsed: unknown = JSON.parse(raw);
 	if (typeof parsed !== "object" || parsed === null) return null;
 	if (!("version" in parsed) || parsed.version !== MARKIT_CONVERSION_CACHE_VERSION) return null;
-	if (!("content" in parsed) || typeof parsed.content !== "string") return null;
+	if (!("content" in parsed) || typeof parsed.content !== "string" || parsed.content.length === 0) return null;
 	return { version: MARKIT_CONVERSION_CACHE_VERSION, content: parsed.content };
 }
 
