@@ -498,7 +498,7 @@ export class SettingsList implements Component {
 		const labelPadded = item.label + padding(Math.max(0, maxLabelWidth - visibleWidth(item.label)));
 		const separator = "  ";
 		const valueMaxWidth = rowWidth - prefixWidth - maxLabelWidth - visibleWidth(separator) - 2;
-		const valuePlain = truncateToWidth(item.currentValue, valueMaxWidth, Ellipsis.Omit);
+		const valuePlain = truncateToWidth(String(item.currentValue ?? ""), valueMaxWidth, Ellipsis.Omit);
 		const hovered = !isSelected && this.#theme.hovered !== undefined && item.id === this.#hoveredItemId;
 		// De-emphasized rows (outside the active section) render as plain text
 		// under one dim wash so inner label/value colors don't fight it.

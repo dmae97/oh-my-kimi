@@ -108,6 +108,25 @@ describe("SettingsList", () => {
 		expect(list.render(16)[0]).toBe("→ Mode  123456");
 	});
 
+	it("renders a non-string currentValue without crashing the row", () => {
+		const list = new SettingsList(
+			[
+				{
+					id: "advisor.syncBacklog",
+					label: "Advisor Sync Backlog",
+					currentValue: JSON.parse("1"),
+					values: ["off", "1", "3", "5"],
+				},
+			],
+			3,
+			testTheme,
+			() => {},
+			() => {},
+		);
+
+		expect(list.render(40)[0]).toBe("→ Advisor Sync Backlog  1");
+	});
+
 	it("filters settings with printable search text", () => {
 		const list = new SettingsList(
 			[
