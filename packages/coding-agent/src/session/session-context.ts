@@ -314,7 +314,12 @@ export function buildSessionContext(
 		// Find compaction index in path
 		const compactionIdx = path.findIndex(e => e.type === "compaction" && e.id === compaction.id);
 
-		if (!remoteReplacementHistory) {
+		// The remote replacement payload (OpenAI remote compaction) carries the
+		// kept turns for the LLM context only; it is not rendered as visible
+		// messages. The collapsed display transcript must still emit the kept
+		// SessionEntry rows so a remotely-compacted session keeps its recent
+		// turns visible instead of showing only the summary and post-compaction.
+		if (!remoteReplacementHistory || options?.transcript) {
 			// Emit kept messages (before compaction, starting from firstKeptEntryId)
 			let foundFirstKept = false;
 			for (let i = 0; i < compactionIdx; i++) {

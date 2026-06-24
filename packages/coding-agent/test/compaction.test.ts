@@ -955,6 +955,39 @@ describe("buildSessionContext", () => {
 		expect(transcript.cacheMissExplainedAt).toEqual([false, false, false]);
 	});
 
+	it("keeps kept turns visible when collapsing a remote (OpenAI) compaction", () => {
+		const uOld = createMessageEntry(createUserMessage("old-before-keep"));
+		const uKept = createMessageEntry(createUserMessage("kept-user"));
+		const aKept = createMessageEntry(createAssistantMessage("kept-assistant"));
+		const compaction = createCompactionEntry("Remote summary", uKept.id);
+		compaction.preserveData = {
+			openaiRemoteCompaction: {
+				provider: "openai",
+				replacementHistory: [
+					{ type: "message", role: "user", content: [{ type: "input_text", text: "preserved" }] },
+					{ type: "compaction", encrypted_content: "enc" },
+				],
+				compactionItem: { type: "compaction", encrypted_content: "enc" },
+			},
+		};
+		const uAfter = createMessageEntry(createUserMessage("after-compact"));
+		const entries: SessionEntry[] = [uOld, uKept, aKept, compaction, uAfter];
+
+		const transcript = buildSessionContext(entries, undefined, undefined, {
+			transcript: true,
+			collapseCompactedHistory: true,
+		});
+
+		// The provider payload is attached to the summary for LLM replay only; the
+		// collapsed display must still emit the kept SessionEntry rows so a
+		// remotely-compacted session keeps its recent turns visible.
+		expect(transcript.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "assistant", "user"]);
+		const dump = JSON.stringify(transcript.messages);
+		expect(dump).toContain("kept-user");
+		expect(dump).toContain("kept-assistant");
+		expect(dump).toContain("after-compact");
+	});
+
 	it("should handle multiple compactions (only latest matters)", () => {
 		// First batch
 		const u1 = createMessageEntry(createUserMessage("1"));
