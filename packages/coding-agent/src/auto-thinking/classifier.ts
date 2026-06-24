@@ -55,10 +55,15 @@ export interface ClassifyDifficultyDeps {
 }
 
 /**
- * Classify `promptText` and return a concrete effort clamped to `deps.model`.
+ * Classify `promptText` and return a concrete effort clamped to `deps.model`,
+ * or `undefined` when the model has no controllable effort surface (auto has
+ * nothing to pick — the caller leaves the prior reasoning level in place).
  * @throws when the backend cannot produce a usable classification.
  */
-export async function classifyDifficulty(promptText: string, deps: ClassifyDifficultyDeps): Promise<Effort> {
+export async function classifyDifficulty(
+	promptText: string,
+	deps: ClassifyDifficultyDeps,
+): Promise<Effort | undefined> {
 	const backend = deps.settings.get("providers.autoThinkingModel");
 	const input = prepareClassifierInput(promptText);
 	const effort =

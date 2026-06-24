@@ -180,10 +180,17 @@ export function parseCliThinkingLevel(value: string | null | undefined): Configu
  * above Low (falling back to the full supported set only when the model maxes
  * out below Low). Within that pool the request snaps to the highest level not
  * exceeding it, or the pool minimum when the request is below the pool.
+ *
+ * Returns `undefined` for reasoning-capable models without a controllable
+ * effort surface (`thinking.efforts` empty — e.g. devin-agent models, where
+ * Cascade selects effort by routing to sibling model ids). Matches
+ * {@link clampThinkingLevelForModel}: with no effort to pick, `auto` must not
+ * forward a concrete effort that would then trip {@link requireSupportedEffort}
+ * downstream.
  */
-export function clampAutoThinkingEffort(model: Model | undefined, effort: Effort): Effort {
+export function clampAutoThinkingEffort(model: Model | undefined, effort: Effort): Effort | undefined {
 	const supported = model ? getSupportedEfforts(model) : THINKING_EFFORTS;
-	if (supported.length === 0) return effort;
+	if (supported.length === 0) return undefined;
 	const lowIndex = THINKING_EFFORTS.indexOf(Effort.Low);
 	const eligible = supported.filter(level => THINKING_EFFORTS.indexOf(level) >= lowIndex);
 	const pool = eligible.length > 0 ? eligible : supported;

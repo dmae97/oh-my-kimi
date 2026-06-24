@@ -28,6 +28,7 @@
 
 
 - Fixed the welcome panel advertising `? for keyboard shortcuts` after the `?` shortcut was deliberately removed (commit dcf482c4c). The tips section now points users at `/hotkeys` instead. ([#1614](https://github.com/can1357/oh-my-pi/issues/1614))
+- Fixed Devin provider models silently producing empty responses under the default `defaultThinkingLevel: auto`. Devin models advertise `reasoning: true` but no `thinking.efforts` (Cascade selects effort by routing to sibling model ids, not a wire param), so `getSupportedEfforts(model)` was empty; `clampAutoThinkingEffort` returned the classifier-picked effort as-is, which then tripped `requireSupportedEffort` in `pi-ai/stream.ts` with `Thinking effort low is not supported by devin/<id>. Supported efforts: ` (silently swallowed by the TUI). `clampAutoThinkingEffort` now returns `undefined` when the model has no controllable effort surface, matching `clampThinkingLevelForModel`; the auto-thinking turn hook also short-circuits the classifier call for these models. ([#3356](https://github.com/can1357/oh-my-pi/issues/3356))
 
 ## [16.1.16] - 2026-06-23
 
