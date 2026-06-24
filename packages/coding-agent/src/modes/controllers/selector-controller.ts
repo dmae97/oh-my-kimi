@@ -84,6 +84,22 @@ export class SelectorController {
 			),
 		);
 	}
+
+	/**
+	 * Restore keyboard focus to whatever currently owns the editor slot. The
+	 * slot can hold the editor itself or a hook selector/input/editor pushed
+	 * in by `ExtensionUiController` — e.g. an approval prompt that fired while
+	 * a fullscreen overlay was up. `overlayHandle.hide()` restores focus to
+	 * the component focused when the overlay opened, which is stale in that
+	 * case (the editor was swapped out): keys land on a hidden editor and the
+	 * visible prompt receives nothing (issue #3349). Call this after the
+	 * overlay hides to re-target focus at the visible slot owner.
+	 */
+	focusActiveEditorArea(): void {
+		const visible = this.ctx.editorContainer.children[0] ?? this.ctx.editor;
+		this.ctx.ui.setFocus(visible);
+	}
+
 	/**
 	 * Shows a selector component in place of the editor.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
@@ -109,7 +125,7 @@ export class SelectorController {
 			let overlayHandle: OverlayHandle | undefined;
 			const done = () => {
 				overlayHandle?.hide();
-				this.ctx.ui.setFocus(this.ctx.editor);
+				this.focusActiveEditorArea();
 				this.ctx.ui.requestRender();
 			};
 			const selector = new SettingsSelectorComponent(
@@ -224,6 +240,7 @@ export class SelectorController {
 		});
 		dashboard.onClose = () => {
 			overlay.hide();
+			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		dashboard.onRequestRender = () => {
@@ -251,6 +268,7 @@ export class SelectorController {
 		});
 		dashboard.onClose = () => {
 			overlay.hide();
+			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		dashboard.onRequestRender = () => {
