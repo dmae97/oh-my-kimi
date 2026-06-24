@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import subprocess
@@ -1203,3 +1204,50 @@ async def test_git_push_rejects_attacker_pushurl(proxy_settings: Settings, upstr
         )
     assert resp.status_code == 400, resp.text
     assert not _bare_has_branch(upstream_repo, branch)
+
+# ============================================================================
+# fetch_ref refuses refspec / option injection in `ref`
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "bad_ref",
+    [
+        "refs/heads/x:refs/heads/evil",  # `:` -> refspec injection (arbitrary local ref write)
+        "--upload-pack=env",  # leading dash -> argv option injection
+        "+refs/heads/*:refs/remotes/origin/x",  # `+`/`*` wildcard refspec
+        "refs/heads/*",  # wildcard
+        "a..b",  # `..` range token
+        "ref with space",  # whitespace / control
+        "feature/",  # trailing slash
+    ],
+)
+async def test_git_fetch_ref_rejects_injection_refs(proxy_settings: Settings, bad_ref: str) -> None:
+    """`ref` is interpolated into the fetch refspec, so a `:`/leading-dash/
+    wildcard ref MUST be refused with 400 — validation runs before any git op,
+    so no pool needs to exist."""
+    app = _build_app(proxy_settings)
+    body = json.dumps({"repo": "octo/widget", "ref": bad_ref}).encode()
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch_ref",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch_ref", body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 400, resp.text
+
+
+async def test_git_fetch_ref_allows_slashy_branch_name(proxy_settings: Settings, upstream_repo: Path) -> None:
+    """A normal PR-head-style branch (`contrib/fix-parser`) MUST pass validation.
+    fetch_ref is best-effort, so a clean ref against the staged pool returns 200
+    even though that branch isn't on the local upstream."""
+    _stage_pool(proxy_settings, upstream_repo)
+    app = _build_app(proxy_settings)
+    body = json.dumps({"repo": "octo/widget", "ref": "contrib/fix-parser"}).encode()
+    async with await _async_client(app) as client:
+        resp = await client.post(
+            "/gh/v1/git/fetch_ref",
+            content=body,
+            headers={**_signed("POST", "/gh/v1/git/fetch_ref", body), "Content-Type": "application/json"},
+        )
+    assert resp.status_code == 200, resp.text
