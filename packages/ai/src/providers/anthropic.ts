@@ -193,10 +193,18 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
 	const stream = options.stream ?? false;
-	// `enforcedHeaderKeys` strips User-Agent out of modelHeaders so a spread can't
-	// produce case-duplicate keys; re-add the caller's value explicitly per branch
-	// (OAuth replaces non-claude-cli values, the other branches forward verbatim).
+	// `enforcedHeaderKeys` strips User-Agent / X-Api-Key / Authorization out of
+	// modelHeaders so a case-insensitive spread can't produce duplicate keys; each
+	// branch re-adds the caller's value explicitly. User-Agent and X-Api-Key are
+	// always honored (with branch-specific defaults filling in when absent), while
+	// Authorization is honored for every non-OAuth, non-Cloudflare-gateway branch —
+	// OAuth requests MUST carry `Authorization: Bearer <oauth-token>` (the OAuth
+	// credential itself) and Cloudflare AI Gateway authenticates via
+	// `cf-aig-authorization`, so user-supplied auth there would just leak. Both of
+	// those cases drop + log the caller value (#3391).
 	const incomingUserAgent = getHeaderCaseInsensitive(options.modelHeaders, "User-Agent");
+	const incomingAuthorization = getHeaderCaseInsensitive(options.modelHeaders, "Authorization");
+	const incomingApiKey = getHeaderCaseInsensitive(options.modelHeaders, "X-Api-Key");
 	// Claude Code betas (oauth-2025-04-20, claude-code-20250219, …) are part of
 	// the OAuth fingerprint; API-key requests default to extras only, matching
 	// the streaming path (buildAnthropicClientOptions passes [] for non-OAuth).
@@ -205,14 +213,21 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		extraBetas,
 	);
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
+	const isCloudflare = options.isCloudflareAiGateway ?? false;
+	const honorAuthorization = !oauthToken && !isCloudflare;
+	const honorApiKey = !isCloudflare;
 	const modelHeaders: Record<string, string> = {};
 	const filteredEnforcedKeys: string[] = [];
 	for (const [key, value] of Object.entries(options.modelHeaders ?? {})) {
 		const lowerKey = key.toLowerCase();
 		if (enforcedHeaderKeys.has(lowerKey)) {
-			// User-Agent is filtered only to dedup the spread; every branch re-adds
-			// the caller's value explicitly, so it is not "ignored".
-			if (lowerKey !== "user-agent") filteredEnforcedKeys.push(key);
+			// user-agent is always re-applied explicitly. authorization / x-api-key
+			// are silently re-applied in honoring branches and dropped + logged
+			// where the branch enforces its own credential.
+			if (lowerKey === "user-agent") continue;
+			if (lowerKey === "authorization" && honorAuthorization) continue;
+			if (lowerKey === "x-api-key" && honorApiKey) continue;
+			filteredEnforcedKeys.push(key);
 			continue;
 		}
 		modelHeaders[key] = value;
@@ -226,7 +241,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		});
 	}
 
-	if (options.isCloudflareAiGateway) {
+	if (isCloudflare) {
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
@@ -251,15 +266,17 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...(options.claudeCodeSessionId ? { "X-Claude-Code-Session-Id": options.claudeCodeSessionId } : {}),
 			"x-client-request-id": nodeCrypto.randomUUID(),
 			"User-Agent": userAgent,
+			...(incomingApiKey ? { "X-Api-Key": incomingApiKey } : {}),
 		};
 	} else if (!isOfficialAnthropicApiUrl(options.baseUrl)) {
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
-			Authorization: `Bearer ${options.apiKey}`,
+			Authorization: incomingAuthorization ?? `Bearer ${options.apiKey}`,
 			...sharedHeaders,
 			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
 			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+			...(incomingApiKey ? { "X-Api-Key": incomingApiKey } : {}),
 		};
 	} else {
 		return {
@@ -268,7 +285,8 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			...sharedHeaders,
 			...(incomingUserAgent ? { "User-Agent": incomingUserAgent } : {}),
 			...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-			"X-Api-Key": options.apiKey,
+			...(incomingAuthorization ? { Authorization: incomingAuthorization } : {}),
+			"X-Api-Key": incomingApiKey ?? options.apiKey,
 		};
 	}
 }
@@ -2547,12 +2565,15 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
+	// Suppress the client-level `X-Api-Key` whenever an `Authorization` header
+	// already sits in `defaultHeaders` for a non-official, non-OAuth endpoint —
+	// either our auto-built `Bearer <apiKey>` or a caller-supplied custom auth
+	// scheme via `model.headers` (#3391). Adding a bonus `X-Api-Key` would force
+	// the proxy to deal with two competing credentials when the user explicitly
+	// asked for one.
 	const authorizationHeader = getHeaderCaseInsensitive(defaultHeaders, "Authorization");
 	const shouldSuppressClientApiKey =
-		!oauthToken &&
-		!model.compat.officialEndpoint &&
-		typeof authorizationHeader === "string" &&
-		/^Bearer\s+/i.test(authorizationHeader);
+		!oauthToken && !model.compat.officialEndpoint && typeof authorizationHeader === "string";
 
 	return {
 		isOAuthToken: oauthToken,

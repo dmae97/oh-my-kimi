@@ -513,6 +513,89 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["X-Api-Key"]).toBeUndefined();
 	});
 
+	it("honors caller-supplied Authorization on non-official Anthropic endpoints (#3391)", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			baseUrl: "https://proxy.example.com/anthropic",
+			stream: true,
+			modelHeaders: { Authorization: "secret-proxy-key" },
+		});
+
+		expect(headers.Authorization).toBe("secret-proxy-key");
+		expect(headers["X-Api-Key"]).toBeUndefined();
+	});
+
+	it("honors lowercase `authorization` from caller without duplicating the header key", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			baseUrl: "https://proxy.example.com/anthropic",
+			stream: true,
+			modelHeaders: { authorization: "secret-proxy-key" },
+		});
+
+		const authKeys = Object.keys(headers).filter(key => key.toLowerCase() === "authorization");
+		expect(authKeys).toHaveLength(1);
+		expect(headers[authKeys[0]]).toBe("secret-proxy-key");
+	});
+
+	it("honors caller-supplied X-Api-Key on official Anthropic endpoints", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			baseUrl: "https://api.anthropic.com",
+			stream: true,
+			modelHeaders: { "X-Api-Key": "custom-api-key" },
+		});
+
+		expect(headers["X-Api-Key"]).toBe("custom-api-key");
+		expect(headers.Authorization).toBeUndefined();
+	});
+
+	it("honors caller-supplied Authorization alongside X-Api-Key on official endpoints", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-api-test",
+			baseUrl: "https://api.anthropic.com",
+			stream: true,
+			modelHeaders: { Authorization: "Token tok-abc" },
+		});
+
+		// Official endpoint keeps X-Api-Key as the primary credential but also
+		// forwards the caller's custom Authorization so a fronting proxy/gateway
+		// can read it.
+		expect(headers.Authorization).toBe("Token tok-abc");
+		expect(headers["X-Api-Key"]).toBe("sk-ant-api-test");
+	});
+
+	it("forces OAuth bearer auth and ignores caller-supplied Authorization under OAuth", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-oat-test",
+			isOAuth: true,
+			stream: true,
+			modelHeaders: { Authorization: "should-not-leak" },
+		});
+
+		expect(headers.Authorization).toBe("Bearer sk-ant-oat-test");
+	});
+
+	it("suppresses the client-level X-Api-Key when model.headers carries a custom Authorization (#3391)", () => {
+		const options = buildAnthropicClientOptions({
+			model: buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "proxy-claude",
+				name: "Proxy Claude",
+				baseUrl: "https://proxy.example.com/anthropic",
+				headers: { Authorization: "secret-proxy-key" },
+			}),
+			apiKey: "sk-ant-api-test",
+			stream: true,
+		});
+
+		// `apiKey: null` keeps the lower-level client from adding an `X-Api-Key`
+		// header alongside the caller-supplied custom Authorization.
+		expect(options.apiKey).toBeNull();
+		expect(options.defaultHeaders.Authorization).toBe("secret-proxy-key");
+		expect(options.defaultHeaders["X-Api-Key"]).toBeUndefined();
+	});
+
 	it("keeps Umans Anthropic-compatible requests on X-Api-Key auth", () => {
 		const options = buildAnthropicClientOptions({
 			model: buildModel({
