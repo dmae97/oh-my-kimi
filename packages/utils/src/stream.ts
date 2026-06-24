@@ -217,16 +217,21 @@ interface JsonLevel {
 	state?: "expect_key" | "expect_colon" | "expect_value" | "expect_comma_or_close";
 }
 
+function hasValidPredecessorForComma(trimmed: string): boolean {
+	if (!trimmed.endsWith(",")) return false;
+	const beforeComma = trimmed.slice(0, -1).trim();
+	return /["}\]\d]$|[elEL]$/.test(beforeComma);
+}
+
 function getClosingSuffix(data: string): string | null {
 	let trimmed = data.trim();
 	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
 		return null;
 	}
 
-	if (trimmed.endsWith(",")) {
+	if (hasValidPredecessorForComma(trimmed)) {
 		trimmed = trimmed.slice(0, -1).trim();
 	}
-
 	let literalCompletion = "";
 	const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
 	if (match) {
@@ -388,7 +393,7 @@ function getClosingSuffix(data: string): string | null {
 
 function isJsonTruncated(data: string): boolean {
 	let trimmed = data.trim();
-	if (trimmed.endsWith(",")) {
+	if (hasValidPredecessorForComma(trimmed)) {
 		trimmed = trimmed.slice(0, -1).trim();
 	}
 	const suffix = getClosingSuffix(data);

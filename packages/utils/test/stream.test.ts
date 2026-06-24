@@ -292,18 +292,22 @@ describe("readSseJson", () => {
 	});
 
 	it("throws SyntaxError when a final event is complete but malformed JSON", async () => {
-		const chunks = [
-			encoder.encode('data: {"a":1}\n\n'),
-			encoder.encode('data: {"b":2,}'), // balanced but malformed trailing comma
+		const testCases = [
+			'data: {"b":2,}', // balanced but malformed trailing comma
+			'data: {"b":,', // invalid predecessor before comma
+			"data: [,,", // invalid predecessor before comma
 		];
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				for (const chunk of chunks) controller.enqueue(chunk);
-				controller.close();
-			},
-		});
+		for (const dataChunk of testCases) {
+			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			});
 
-		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+			await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+		}
 	});
 
 	it("throws SyntaxError when a final event is plain text", async () => {
