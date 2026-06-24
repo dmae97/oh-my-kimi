@@ -22,6 +22,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
+import chatmlHistoryNote from "./gitlab-duo-workflow-chatml-note.md" with { type: "text" };
 
 export const GITLAB_DUO_WORKFLOW_PROVIDER_ID = "gitlab-duo-agent";
 export const GITLAB_DUO_WORKFLOW_API = "gitlab-duo-agent";
@@ -2442,12 +2443,28 @@ interface GitLabDuoWorkflowReplayMessage {
 	isError?: boolean;
 }
 
+// Trimmed once: the static note tells the model the goal transcript's ChatML/`<ran>`
+// markers are a historical record, not a syntax to emit.
+const GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE = chatmlHistoryNote.trim();
+
 // The OMP system prompt that rides the inline flow's `prompt_template.system` slot.
 // DWS wraps it in its own gateway boilerplate, but the slot content is delivered to
 // the model verbatim, so OMP's authoritative rules go here directly — no redirect
-// preamble and no embedding inside the goal.
+// preamble and no embedding inside the goal. When the goal is a multi-turn ChatML
+// transcript (not a lone bare-text prompt), append the history-note so the model does
+// not mimic the transcript's `<|im_start|>`/`<ran …>` markers as its own tool-call
+// output — markers it kept copying even after they were reframed to past tense.
 function buildGitLabDuoWorkflowSystemPrompt(context: Context): string {
-	return normalizeSystemPrompts(context.systemPrompt).join("\n\n");
+	const base = normalizeSystemPrompts(context.systemPrompt).join("\n\n");
+	if (!isGitLabDuoWorkflowChatMlGoal(context)) return base;
+	return base ? `${base}\n\n${GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE}` : GITLAB_DUO_WORKFLOW_CHATML_HISTORY_NOTE;
+}
+
+// A goal renders as a literal ChatML transcript only when more than one turn survives
+// the replay filter; a lone turn is sent as bare text (see buildGitLabDuoWorkflowGoal),
+// so the history-note would describe markers that are not present.
+function isGitLabDuoWorkflowChatMlGoal(context: Context): boolean {
+	return buildGitLabDuoWorkflowConversationHistory(context.messages).length > 1;
 }
 
 // The goal carries ONLY the conversation, rendered as a bare ChatML transcript. The

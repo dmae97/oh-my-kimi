@@ -283,6 +283,9 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		// The system slot carries OMP's real system prompt verbatim — no gateway preamble.
 		expect(prompt?.prompt_template.system).toContain("OMP authoritative operating rules.");
 		expect(prompt?.prompt_template.user).toBe("{{goal}}");
+		// A single-turn goal is bare text (no ChatML markers), so the history-note that
+		// warns against mimicking transcript markers must NOT be appended.
+		expect(prompt?.prompt_template.system).not.toContain("written as a plain-text log");
 	});
 
 	it("always emits the inline flowConfig (no server-side registry path)", () => {
@@ -401,6 +404,11 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		const flowPrompt = payload.flowConfig?.prompts[0];
 		expect(flowPrompt?.prompt_template.system).toContain("OMP system instructions: preserve the local tool bridge.");
 		expect(flowPrompt?.prompt_template.system).toContain(patToken);
+		// This goal IS a multi-turn ChatML transcript, so the system slot appends the
+		// history-note telling the model the `<|im_start|>`/`<ran …>` markers are a past
+		// record, not a tool-call syntax to emit.
+		expect(flowPrompt?.prompt_template.system).toContain("written as a plain-text log");
+		expect(flowPrompt?.prompt_template.system).toContain("never write `<ran …>`");
 	});
 
 	it("strips the OMP-internal intent (i) field from replayed tool-call args", () => {
