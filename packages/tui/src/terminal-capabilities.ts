@@ -98,8 +98,47 @@ export class TerminalInfo {
 
 	sendNotification(message: string | TerminalNotification): void {
 		if (isNotificationSuppressed() || isTerminalHeadless()) return;
-		process.stdout.write(this.formatNotification(message));
+		const formatted = this.formatNotification(message);
+		// Under tmux, terminals whose notify protocol is OSC 9 / OSC 99 would
+		// otherwise lose the notification entirely: tmux does not forward bare
+		// OSC 9/99 to the outer terminal, and the bare sequence does not flag
+		// tmux's own `monitor-bell` / `monitor-activity`. Wrap the OSC in tmux's
+		// DCS passthrough envelope so users with `allow-passthrough on` still
+		// get the desktop toast, then append a BEL so `monitor-bell` flags the
+		// pane/window for everyone else — the only signal a backgrounded pane
+		// has that the agent finished or is waiting for input. `Bell` protocol
+		// already self-flags via tmux's bell monitoring, so leave it alone.
+		if (this.notifyProtocol !== NotifyProtocol.Bell && isInsideTmux()) {
+			process.stdout.write(`${wrapTmuxPassthrough(formatted)}\x07`);
+			return;
+		}
+		process.stdout.write(formatted);
 	}
+}
+
+/**
+ * Whether the agent process is running inside a tmux session. Read fresh on
+ * each call so tests can toggle `Bun.env.TMUX` per case without re-importing
+ * the module and so a tmux session attached/detached mid-run is observed.
+ */
+export function isInsideTmux(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	return Boolean(env.TMUX);
+}
+
+/**
+ * Wrap a control-sequence payload in tmux's DCS passthrough envelope. Each
+ * ESC byte inside `payload` is doubled per tmux's escape rules. tmux strips
+ * the envelope and forwards the unwrapped payload to the outer terminal only
+ * when the user opts in with `set -g allow-passthrough on`; otherwise tmux
+ * silently consumes the envelope, which is identical to the pre-wrap baseline
+ * (tmux already swallowed the bare OSC).
+ *
+ * Used by `TerminalInfo.sendNotification` and the OSC 99 capability probe in
+ * `terminal.ts` to keep notifications alive for terminals that understand
+ * OSC 9 / OSC 99 (kitty, ghostty, wezterm, iterm2) when running under tmux.
+ */
+export function wrapTmuxPassthrough(payload: string): string {
+	return `\x1bPtmux;${payload.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`;
 }
 
 export function isNotificationSuppressed(): boolean {

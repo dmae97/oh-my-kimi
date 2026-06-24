@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import { $env, isBunTestRuntime, isTerminalHeadless, logger } from "@oh-my-pi/pi-utils";
 import { setKittyProtocolActive } from "./keys";
 import { StdinBuffer } from "./stdin-buffer";
-import { NotifyProtocol, setCellDimensions, setOsc99Supported, TERMINAL } from "./terminal-capabilities";
+import {
+	isInsideTmux,
+	NotifyProtocol,
+	setCellDimensions,
+	setOsc99Supported,
+	TERMINAL,
+	wrapTmuxPassthrough,
+} from "./terminal-capabilities";
 import { type HangulCompatibilityJamoWidth, setHangulCompatibilityJamoWidth } from "./utils";
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
@@ -948,7 +955,14 @@ export class ProcessTerminal implements Terminal {
 		const id = `omp-probe-${nextOsc99ProbeId++}`;
 		this.#osc99PendingId = id;
 		this.#da1SentinelOwners.push({ kind: "osc99Probe", id });
-		this.#safeWrite(`\x1b]99;i=${id}:p=?;\x1b\\\x1b[c`);
+		// Wrap the probe under tmux so terminals behind `allow-passthrough on`
+		// can still respond (mirroring how `TerminalInfo.sendNotification`
+		// wraps notification deliveries). Without it the probe is swallowed
+		// inside tmux even when the outer terminal speaks OSC 99, and rich
+		// notifications stay permanently downgraded to the single-line fallback.
+		const probe = `\x1b]99;i=${id}:p=?;\x1b\\`;
+		const sequence = isInsideTmux() ? wrapTmuxPassthrough(probe) : probe;
+		this.#safeWrite(`${sequence}\x1b[c`);
 	}
 
 	#handleOsc99CapabilityResponse(metaRaw: string, payload: string): boolean {
