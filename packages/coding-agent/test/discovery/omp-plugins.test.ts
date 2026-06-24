@@ -209,6 +209,27 @@ test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `
 	expect(found).toBeDefined();
 });
 
+test("project-scoped installed plugins surface project-level sub-discovery", async () => {
+	const pluginsDir = path.join(project, ".omp", "plugins");
+	const installed = path.join(pluginsDir, "node_modules", "my-project-ext");
+	fs.mkdirSync(installed, { recursive: true });
+	fs.cpSync(ext, installed, { recursive: true });
+	writeFile(
+		path.join(pluginsDir, "omp-plugins.lock.json"),
+		JSON.stringify({
+			plugins: { "my-project-ext": { version: "1.0.0", enabled: true, enabledFeatures: null } },
+			settings: {},
+		}),
+	);
+
+	const skills = await loadFromPlugin<{ name: string; path: string; level: "user" | "project" }>(
+		skillCapability.id,
+		ctx(),
+	);
+	const found = skills.find(s => s.name === "my-skill" && s.path.includes("my-project-ext"));
+	expect(found?.level).toBe("project");
+});
+
 test("disabled installed plugins do not contribute sub-discovery", async () => {
 	const pluginsDir = path.join(home, ".omp", "plugins");
 	const installed = path.join(pluginsDir, "node_modules", "my-disabled-ext");

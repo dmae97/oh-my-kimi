@@ -180,9 +180,7 @@ export async function listOmpExtensionRoots(ctx: LoadContext): Promise<OmpExtens
 async function listInstalledPluginRoots(ctx: LoadContext): Promise<InjectedRoot[]> {
 	try {
 		const plugins = await getEnabledPlugins(ctx.cwd, { home: ctx.home });
-		// Installed plugins are always user-scope; project disablement is already
-		// honored by `getEnabledPlugins` via `loadProjectOverrides`.
-		return plugins.map(({ path: p }) => ({ path: p, level: "user" }));
+		return plugins.map(({ path: p, scope }) => ({ path: p, level: scope }));
 	} catch (err) {
 		logger.debug("listInstalledPluginRoots: enumeration failed", { error: String(err) });
 		return [];
