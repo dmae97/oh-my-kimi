@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed GitHub Copilot business and enterprise endpoints accepting image inputs that they reject with `400 vision is not supported`. The Copilot `/models` response advertises `capabilities.supports.vision = true` for Claude/GPT chat models on every host, but only the canonical personal endpoint (`https://api.githubcopilot.com`) actually serves them; `githubCopilotModelManagerOptions` now forces `input: ["text"]` whenever discovery resolves to a non-personal base URL, and `mergeDynamicModel` honours the dynamic value (instead of OR-upgrading) when the merged endpoint differs from the bundled reference. ([#3387](https://github.com/can1357/oh-my-pi/issues/3387))
+
 ## [16.1.14] - 2026-06-22
 
 ### Added
