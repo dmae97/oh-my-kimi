@@ -1441,9 +1441,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	rebuildChatFromMessages(): void {
 		this.chatContainer.clear();
-		// Full-history transcript: compactions render as inline dividers instead
-		// of restarting the visible conversation (the LLM context still resets).
-		const context = this.viewSession.buildTranscriptSessionContext();
+		// Live display uses the compacted transcript tail; export/resume callers
+		// can still request the full inline compaction history.
+		const context = this.viewSession.buildTranscriptSessionContext({ collapseCompactedHistory: true });
 		this.renderSessionContext(context);
 		// During the pre-streaming window — after `startPendingSubmission` has
 		// optimistically rendered the user's message but before the user

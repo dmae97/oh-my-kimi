@@ -304,7 +304,7 @@ import {
 	stripImagesFromMessage,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
-import type { SessionContext } from "./session-context";
+import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getLatestCompactionEntry, getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
 import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions } from "./session-entries";
@@ -5289,13 +5289,21 @@ export class AgentSession {
 	}
 
 	/**
-	 * Full-history transcript for TUI display: every path entry in
-	 * chronological order with compactions rendered inline at the point they
-	 * fired (instead of replacing prior history). Display-only — NEVER feed
-	 * the result to `agent.replaceMessages` or a provider.
+	 * Transcript for TUI display. Full history is kept for export/resume-style
+	 * callers; live chat can collapse compacted history to keep the hot render
+	 * surface bounded. Display-only — NEVER feed the result to
+	 * `agent.replaceMessages` or a provider.
 	 */
-	buildTranscriptSessionContext(): SessionContext {
-		return deobfuscateSessionContext(this.sessionManager.buildSessionContext({ transcript: true }), this.#obfuscator);
+	buildTranscriptSessionContext(
+		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory">,
+	): SessionContext {
+		return deobfuscateSessionContext(
+			this.sessionManager.buildSessionContext({
+				transcript: true,
+				collapseCompactedHistory: options?.collapseCompactedHistory,
+			}),
+			this.#obfuscator,
+		);
 	}
 
 	#obfuscateTextForProvider(text: string | undefined): string | undefined {

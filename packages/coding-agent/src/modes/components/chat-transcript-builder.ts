@@ -103,6 +103,12 @@ export class ChatTranscriptBuilder {
 		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
 	}
 
+	/** Append newly persisted entries without rebuilding already rendered rows. */
+	append(entries: SessionMessageEntry[]): void {
+		for (const entry of entries) this.#appendChatMessage(entry.message);
+		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
+	}
+
 	/** Toggle tool-output expansion across every expandable component. */
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;

@@ -62,13 +62,14 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
 
 export interface BuildSessionContextOptions {
 	/**
-	 * Build the full-history display transcript instead of the LLM context:
-	 * every path entry in chronological order, with each compaction emitted
-	 * inline as a `compactionSummary` message at the position it fired rather
-	 * than replacing the history before it. Display-only — never send the
-	 * result to a provider.
+	 * Build the display transcript instead of the LLM context. By default this
+	 * preserves every path entry with compactions inline; set
+	 * `collapseCompactedHistory` for the live TUI surface to render only the
+	 * latest compacted tail.
 	 */
 	transcript?: boolean;
+	/** In transcript mode, elide entries replaced by the latest compaction. */
+	collapseCompactedHistory?: boolean;
 }
 
 /**
@@ -255,7 +256,7 @@ export function buildSessionContext(
 		}
 	};
 
-	if (options?.transcript) {
+	if (options?.transcript && !options.collapseCompactedHistory) {
 		// Display transcript: every entry in chronological order. Compactions do
 		// not erase prior history here — each renders inline (as a divider in the
 		// TUI) at the point it fired, with any snapcompact frames re-attached so
@@ -294,6 +295,7 @@ export function buildSessionContext(
 		})();
 		const remoteReplacementHistory = providerPayload?.items;
 
+		if (options?.transcript) handleEntryResetTracking(compaction);
 		// Emit summary first; re-attach any archived snapcompact frames so the
 		// model can keep reading the archived history after every context rebuild.
 		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
