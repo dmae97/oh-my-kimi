@@ -515,8 +515,8 @@ describe("message sync", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
-		const original0 = { role: "user", content: "q1" } as Message;
-		const original1 = { role: "assistant", content: "original long result" } as Message;
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "original long result" } as any;
 		mgr.syncMessages([original0, original1]);
 		expect(mgr.log.length).toBe(2);
 
@@ -524,8 +524,8 @@ describe("message sync", () => {
 		// tool-output pruning / transformContext re-render).
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
-			{ role: "assistant", content: "[pruned]" } as Message,
-		]);
+			{ role: "assistant", content: "[pruned]" },
+		] as any);
 		expect(mgr.log.length).toBe(2);
 
 		const entries = mgr.log.entries();
@@ -540,17 +540,18 @@ describe("message sync", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
-		const original0 = { role: "user", content: "q1" } as Message;
-		const original1 = { role: "assistant", content: "a1" } as Message;
-		mgr.syncMessages([original0, original1, { role: "user", content: "q2" } as Message]);
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "a1" } as any;
+		const original2 = { role: "user", content: "q2" } as any;
+		mgr.syncMessages([original0, original1, original2]);
 
 		// Tail-only rewrite (e.g. per-turn pruning of the most recent tool result):
 		// the first two messages MUST stay byte-stable; only the tail re-syncs.
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
 			{ role: "assistant", content: "a1" },
-			{ role: "user", content: "q2-rewritten" } as Message,
-		]);
+			{ role: "user", content: "q2-rewritten" },
+		] as any);
 
 		const entries = mgr.log.entries();
 		expect(entries).toHaveLength(3);
@@ -563,17 +564,17 @@ describe("message sync", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
-		const original0 = { role: "user", content: "q1" } as Message;
-		const original1 = { role: "assistant", content: "a1" } as Message;
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "a1" } as any;
 		mgr.syncMessages([original0, original1]);
 
 		// Re-sync with: (a) message #1 rewritten in place; (b) a brand-new tail
 		// appended. The prefix [original0] MUST stay byte-stable.
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
-			{ role: "assistant", content: "a1-pruned" } as Message,
-			{ role: "user", content: "q2" } as Message,
-		]);
+			{ role: "assistant", content: "a1-pruned" },
+			{ role: "user", content: "q2" },
+		] as any);
 
 		const entries = mgr.log.entries();
 		expect(entries).toHaveLength(3);
