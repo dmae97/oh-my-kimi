@@ -1,3 +1,5 @@
+const trailingEvents = new WeakSet<ServerSentEvent>();
+
 import { abortableSource } from "./abortable";
 
 const LF = 0x0a;
@@ -210,19 +212,122 @@ function notifySseEventObserver(observer: SseEventObserver | undefined, event: S
 	}
 }
 
+function getClosingSuffix(data: string): string | null {
+	let trimmed = data.trim();
+	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+		return null;
+	}
+
+	let suffix = "";
+	if (trimmed.endsWith(",")) {
+		trimmed = trimmed.slice(0, -1).trim();
+	}
+
+	if (trimmed.endsWith(":")) {
+		suffix = "null";
+	} else {
+		const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
+		if (match) {
+			const partial = match[0].toLowerCase();
+			const completions: Record<string, string> = {
+				t: "rue",
+				tr: "ue",
+				tru: "e",
+				f: "alse",
+				fa: "lse",
+				fal: "se",
+				fals: "e",
+				n: "ull",
+				nu: "ll",
+				nul: "l",
+			};
+			if (completions[partial]) {
+				suffix = completions[partial];
+			}
+		}
+	}
+
+	const stack: string[] = [];
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < trimmed.length; i++) {
+		const char = trimmed[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (char === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (!inString) {
+			if (char === "{" || char === "[") {
+				stack.push(char);
+			} else if (char === "}") {
+				if (stack.pop() !== "{") return null;
+			} else if (char === "]") {
+				if (stack.pop() !== "[") return null;
+			}
+		}
+	}
+
+	if (inString) {
+		return `"${stack
+			.reverse()
+			.map(c => (c === "{" ? "}" : "]"))
+			.join("")}`;
+	}
+	return (
+		suffix +
+		stack
+			.reverse()
+			.map(c => (c === "{" ? "}" : "]"))
+			.join("")
+	);
+}
+
+function isJsonTruncated(data: string): boolean {
+	let trimmed = data.trim();
+	if (trimmed.endsWith(",")) {
+		trimmed = trimmed.slice(0, -1).trim();
+	}
+	const suffix = getClosingSuffix(data);
+	if (suffix === null || suffix === "") return false;
+
+	try {
+		JSON.parse(trimmed + suffix);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export async function* readSseJson<T>(
 	stream: ReadableStream<Uint8Array>,
 	signal?: AbortSignal,
 	onEvent?: SseEventObserver,
 ): AsyncGenerator<T> {
 	for await (const sse of readSseEvents(stream, signal)) {
+		const isTrailing = trailingEvents.has(sse);
 		notifySseEventObserver(onEvent, sse);
 		const data = sse.data;
 		if (data === "" || data === "[DONE]") {
 			if (data === "[DONE]") return;
 			continue;
 		}
-		yield JSON.parse(data) as T;
+		try {
+			yield JSON.parse(data) as T;
+		} catch (err) {
+			if (err instanceof SyntaxError && isTrailing && isJsonTruncated(data)) {
+				return;
+			}
+			throw err;
+		}
 	}
 }
 
@@ -353,12 +458,18 @@ export async function* readSseEvents(
 			if (tail) {
 				lineBuffer.clear();
 				const event = pushSseLine(tail, state);
-				if (event) yield event;
+				if (event) {
+					trailingEvents.add(event);
+					yield event;
+				}
 			}
 		}
 		// Real services don't always close on a blank line — flush any pending event.
 		const trailing = flushSseEvent(state);
-		if (trailing) yield trailing;
+		if (trailing) {
+			trailingEvents.add(trailing);
+			yield trailing;
+		}
 	} catch (err) {
 		if (signal?.aborted) return;
 		throw err;
