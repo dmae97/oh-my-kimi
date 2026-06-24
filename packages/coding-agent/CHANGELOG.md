@@ -529,6 +529,9 @@
 ### Security
 
 - Secured PDF image reads by validating requested image members against the extracted member list before opening files and refusing traversal-style names
+### Fixed
+
+- Fixed status-line `usage` segment ignoring Codex subscription limits that carry a `scope.tier` ([#2877](https://github.com/can1357/oh-my-pi/issues/2877)).
 
 ## [16.0.5] - 2026-06-17
 

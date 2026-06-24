@@ -2326,8 +2326,13 @@ export class AuthStorage {
 		const last = this.#usageHeaderIngestAt.get(cacheKey);
 		if (last !== undefined && now - last < USAGE_HEADER_INGEST_INTERVAL_MS) return false;
 
-		const report = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders?.(headers, now);
-		if (!report) return false;
+		const parsedReport = this.#usageProviderResolver?.(provider)?.parseRateLimitHeaders?.(headers, now);
+		if (!parsedReport) return false;
+		const metadata: Record<string, unknown> = { ...(parsedReport.metadata ?? {}) };
+		if (credential.accountId && metadata.accountId === undefined) metadata.accountId = credential.accountId;
+		if (credential.email && metadata.email === undefined) metadata.email = credential.email;
+		if (credential.projectId && metadata.projectId === undefined) metadata.projectId = credential.projectId;
+		const report: UsageReport = { ...parsedReport, metadata };
 
 		const prior = this.#usageCache.getStale<UsageReport | null>(cacheKey)?.value;
 		let merged = report;
@@ -2351,6 +2356,7 @@ export class AuthStorage {
 				fetchedAt: now,
 				limits,
 				metadata: {
+					...(report.metadata ?? {}),
 					...(prior.metadata ?? {}),
 					headersUpdatedAt: now,
 				},
