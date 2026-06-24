@@ -15,15 +15,17 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 function createContext(options?: { threshold?: number; choice?: string; artifactsDir?: string }) {
 	const insertPaste = vi.fn();
 	const insertText = vi.fn();
+	const pasteText = vi.fn();
 	const requestRender = vi.fn();
 	const showStatus = vi.fn();
 	const showError = vi.fn();
 	const showHookSelector = vi.fn(async (_title: string, _options: unknown, _dialog?: unknown) => options?.choice);
 	const ctx = {
-		editor: { insertPaste, insertText } as unknown as InteractiveModeContext["editor"],
+		editor: { insertPaste, insertText, pasteText } as unknown as InteractiveModeContext["editor"],
 		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
 		settings: { get: () => options?.threshold ?? 100 } as unknown as InteractiveModeContext["settings"],
 		sessionManager: {
+			getCwd: () => process.cwd(),
 			getArtifactsDir: () => options?.artifactsDir ?? null,
 			getSessionId: () => "test-session",
 		} as unknown as InteractiveModeContext["sessionManager"],
@@ -32,7 +34,10 @@ function createContext(options?: { threshold?: number; choice?: string; artifact
 		showError,
 	} as unknown as InteractiveModeContext;
 	const controller = new InputController(ctx);
-	return { controller, spies: { insertPaste, insertText, requestRender, showStatus, showError, showHookSelector } };
+	return {
+		controller,
+		spies: { insertPaste, insertText, pasteText, requestRender, showStatus, showError, showHookSelector },
+	};
 }
 
 afterEach(() => {
@@ -143,5 +148,37 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 		expect(spies.insertText).toHaveBeenCalledWith("local://attachment-2 ");
 		expect(await Bun.file(path.join(dir, "local", "attachment-1")).text()).toBe("previous");
 		expect(await Bun.file(path.join(dir, "local", "attachment-2")).text()).toBe("fresh");
+	});
+
+	it("attaches an existing pasted file as a local:// reference with its extension", async () => {
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-test-"));
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-source-"));
+		const sourcePath = path.join(sourceDir, "report.csv");
+		await Bun.write(sourcePath, "name,value\nalpha,1\n");
+		const { controller, spies } = createContext({ artifactsDir: dir });
+
+		try {
+			await controller.handleFilePathPaste(sourcePath);
+		} finally {
+			await fs.rm(sourceDir, { recursive: true, force: true });
+		}
+
+		expect(spies.insertText).toHaveBeenCalledWith("local://attachment-1.csv ");
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.requestRender).toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("Attached file as local://attachment-1.csv");
+		expect(await Bun.file(path.join(dir, "local", "attachment-1.csv")).text()).toBe("name,value\nalpha,1\n");
+	});
+
+	it("falls back to inline text when the pasted file path does not exist", async () => {
+		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-test-"));
+		const missing = path.join(dir, "missing.txt");
+		const { controller, spies } = createContext({ artifactsDir: dir });
+
+		await controller.handleFilePathPaste(missing);
+
+		expect(spies.insertText).not.toHaveBeenCalled();
+		expect(spies.pasteText).toHaveBeenCalledWith(missing);
+		expect(spies.showStatus).toHaveBeenCalledWith("Pasted file path was not found");
 	});
 });

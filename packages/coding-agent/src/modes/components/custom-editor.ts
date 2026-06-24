@@ -62,7 +62,6 @@ function buildMatchKeys(keys: readonly KeyId[]): Set<string> {
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 const BRACKETED_IMAGE_PATH_REGEX = /\.(?:png|jpe?g|gif|webp)$/i;
-const BRACKETED_IMAGE_PATH_BOUNDARY_REGEX = /\.(?:png|jpe?g|gif|webp)(?=$|["']?\s)/gi;
 const SHELL_ESCAPED_PATH_CHAR_REGEX = /\\([\\\s'"()[\]{}&;<>|?*!$`])/g;
 const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 const FILE_URI_REGEX = /^file:\/\//i;
@@ -100,19 +99,7 @@ function isPastedPathSeparator(char: string | undefined): boolean {
 	return char === undefined || char === " " || char === "\t" || char === "\r" || char === "\n";
 }
 
-function imagePathBoundaryEnd(payload: string, segmentStart: number, extensionEnd: number): number | undefined {
-	const quote = payload[segmentStart];
-	const afterExtension = payload[extensionEnd];
-	if (quote === '"' || quote === "'") {
-		return afterExtension === quote && isPastedPathSeparator(payload[extensionEnd + 1])
-			? extensionEnd + 1
-			: undefined;
-	}
-	if (isPastedPathSeparator(afterExtension)) return extensionEnd;
-	return undefined;
-}
-
-function normalizePastedImagePath(path: string): string {
+function normalizePastedPath(path: string): string {
 	const trimmed = path.trim();
 	const first = trimmed[0];
 	const last = trimmed[trimmed.length - 1];
@@ -121,13 +108,60 @@ function normalizePastedImagePath(path: string): string {
 	return unquoted.replace(SHELL_ESCAPED_PATH_CHAR_REGEX, "$1");
 }
 
-function isExplicitPastedImagePath(path: string): boolean {
+function isExplicitPastedPath(path: string): boolean {
 	if (WINDOWS_DRIVE_PATH_REGEX.test(path) || FILE_URI_REGEX.test(path)) return true;
 	if (URI_SCHEME_REGEX.test(path)) return false;
 	return path.includes("/") || path.includes("\\");
 }
 
-export function extractBracketedImagePastePaths(data: string): string[] | undefined {
+function isImagePath(path: string): boolean {
+	return BRACKETED_IMAGE_PATH_REGEX.test(path);
+}
+
+function splitPastedPathSegments(payload: string): string[] | undefined {
+	const segments: string[] = [];
+	let segment = "";
+	let quote: string | undefined;
+	let escaped = false;
+
+	for (let i = 0; i < payload.length; i++) {
+		const char = payload[i];
+		if (escaped) {
+			segment += char;
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			segment += char;
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			segment += char;
+			if (char === quote) quote = undefined;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			segment += char;
+			quote = char;
+			continue;
+		}
+		if (isPastedPathSeparator(char)) {
+			if (segment) {
+				segments.push(segment);
+				segment = "";
+			}
+			continue;
+		}
+		segment += char;
+	}
+
+	if (escaped || quote) return undefined;
+	if (segment) segments.push(segment);
+	return segments.length > 0 ? segments : undefined;
+}
+
+export function extractBracketedPastePaths(data: string): string[] | undefined {
 	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
 	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
 	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
@@ -135,31 +169,21 @@ export function extractBracketedImagePastePaths(data: string): string[] | undefi
 	const pasted = data.slice(BRACKETED_PASTE_START.length, endIndex).trim();
 	if (!pasted) return undefined;
 
+	const segments = splitPastedPathSegments(pasted);
+	if (!segments) return undefined;
+
 	const paths: string[] = [];
-	let segmentStart = 0;
-	BRACKETED_IMAGE_PATH_BOUNDARY_REGEX.lastIndex = 0;
-	for (
-		let match = BRACKETED_IMAGE_PATH_BOUNDARY_REGEX.exec(pasted);
-		match;
-		match = BRACKETED_IMAGE_PATH_BOUNDARY_REGEX.exec(pasted)
-	) {
-		const extensionEnd = match.index + match[0].length;
-		const boundaryEnd = imagePathBoundaryEnd(pasted, segmentStart, extensionEnd);
-		if (boundaryEnd === undefined) continue;
-
-		const path = normalizePastedImagePath(pasted.slice(segmentStart, boundaryEnd));
-		if (!path || !BRACKETED_IMAGE_PATH_REGEX.test(path) || !isExplicitPastedImagePath(path)) return undefined;
+	for (const segment of segments) {
+		const path = normalizePastedPath(segment);
+		if (!path || !isExplicitPastedPath(path)) return undefined;
 		paths.push(path);
-
-		segmentStart = boundaryEnd;
-		while (segmentStart < pasted.length && isPastedPathSeparator(pasted[segmentStart])) {
-			segmentStart++;
-		}
-		BRACKETED_IMAGE_PATH_BOUNDARY_REGEX.lastIndex = segmentStart;
 	}
-
-	if (paths.length === 0 || segmentStart !== pasted.length) return undefined;
 	return paths;
+}
+
+export function extractBracketedImagePastePaths(data: string): string[] | undefined {
+	const paths = extractBracketedPastePaths(data);
+	return paths?.every(isImagePath) ? paths : undefined;
 }
 
 export function extractBracketedImagePastePath(data: string): string | undefined {
@@ -294,6 +318,8 @@ export class CustomEditor extends Editor {
 	onPasteImage?: () => Promise<boolean>;
 	/** Called when a bracketed paste contains one or more image-file paths. */
 	onPasteImagePath?: (path: string) => void | Promise<void>;
+	/** Called when a bracketed paste contains one or more non-image file paths. */
+	onPasteFilePath?: (path: string) => void | Promise<void>;
 	/** Called when the configured raw text-paste shortcut is pressed. */
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
@@ -479,14 +505,20 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		const pastedImagePaths = extractBracketedImagePastePaths(data);
-		if (pastedImagePaths && this.onPasteImagePath) {
-			void (async () => {
-				for (const path of pastedImagePaths) {
-					await this.onPasteImagePath?.(path);
-				}
-			})();
-			return;
+		const pastedPaths = extractBracketedPastePaths(data);
+		if (pastedPaths) {
+			const canHandlePaths = pastedPaths.every(path =>
+				isImagePath(path) ? this.onPasteImagePath !== undefined : this.onPasteFilePath !== undefined,
+			);
+			if (canHandlePaths) {
+				void (async () => {
+					for (const path of pastedPaths) {
+						if (isImagePath(path)) await this.onPasteImagePath?.(path);
+						else await this.onPasteFilePath?.(path);
+					}
+				})();
+				return;
+			}
 		}
 
 		const parsedKey = parseKey(data);
