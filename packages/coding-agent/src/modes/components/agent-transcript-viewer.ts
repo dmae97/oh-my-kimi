@@ -231,7 +231,15 @@ export class AgentTranscriptViewer implements Component {
 		if (state.path !== sessionFile || state.dev !== stat.dev || state.ino !== stat.ino || stat.size < state.size)
 			return false;
 		for (const sentinel of state.sentinels) {
-			const current = readFileRangeSync(sessionFile, sentinel.offset, sentinel.bytes.byteLength);
+			let current: Buffer;
+			try {
+				current = readFileRangeSync(sessionFile, sentinel.offset, sentinel.bytes.byteLength);
+			} catch (err) {
+				// The file can be unlinked/rotated between statSync and this read.
+				// Treat as not-appendable so #refresh falls back to a guarded full load.
+				logger.debug("transcript viewer: sentinel read failed", { err: String(err) });
+				return false;
+			}
 			if (!current.equals(sentinel.bytes)) return false;
 		}
 		return true;
@@ -293,13 +301,23 @@ export class AgentTranscriptViewer implements Component {
 		const complete = lastNewline >= 0 ? combined.slice(0, lastNewline + 1) : "";
 		const previousModel = this.#model;
 		const parsed = complete ? this.#extractMessages(parseSessionEntries(complete)) : [];
+		let sentinels: LocalTranscriptSentinel[];
+		try {
+			sentinels = sentinelsFromFile(sessionFile, stat.size);
+		} catch (err) {
+			// File unlinked/rotated mid-poll: fall back to a guarded full reload
+			// instead of letting the open escape the poll timer.
+			logger.debug("transcript viewer: sentinel recompute failed", { err: String(err) });
+			this.#loadLocalFull(sessionFile, stat);
+			return;
+		}
 		this.#localState = {
 			...state,
 			size: stat.size,
 			mtimeMs: stat.mtimeMs,
 			offset: stat.size,
 			pending: lastNewline >= 0 ? combined.slice(lastNewline + 1) : combined,
-			sentinels: sentinelsFromFile(sessionFile, stat.size),
+			sentinels,
 		};
 		if (parsed.length > 0) {
 			this.#append(parsed);

@@ -396,4 +396,38 @@ describe("AgentTranscriptViewer", () => {
 			viewer.dispose();
 		}
 	});
+
+	it("does not let a poll throw when the file is unlinked between stat and the sentinel read", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-"));
+		const file = path.join(dir, "__advisor.jsonl");
+		fs.writeFileSync(file, buildJsonl());
+		const realStat = fs.statSync(file);
+		vi.useFakeTimers();
+		// First #refresh runs in the constructor with real fs and populates state.
+		const viewer = makeViewer(file);
+		try {
+			// Stat reports growth (same identity), but every subsequent open of the
+			// session file fails as if it was unlinked in the window between the
+			// statSync and the sentinel read. The 250ms poll must not throw.
+			vi.spyOn(fs, "statSync").mockImplementation(((p: fs.PathLike) => {
+				if (String(p) === file)
+					return { ...realStat, size: realStat.size + 200, mtimeMs: realStat.mtimeMs + 10 } as fs.Stats;
+				throw new Error("unexpected stat");
+			}) as typeof fs.statSync);
+			vi.spyOn(fs, "openSync").mockImplementation(((p: fs.PathLike) => {
+				if (String(p) === file) {
+					const e = new Error("ENOENT: no such file or directory, open") as NodeJS.ErrnoException;
+					e.code = "ENOENT";
+					throw e;
+				}
+				throw new Error("unexpected open");
+			}) as typeof fs.openSync);
+			expect(() => vi.advanceTimersByTime(250)).not.toThrow();
+		} finally {
+			vi.restoreAllMocks();
+			vi.useRealTimers();
+			viewer.dispose();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
