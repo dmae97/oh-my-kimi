@@ -10,6 +10,9 @@ const PROJECTS_PATH = "/api/v4/projects";
 const GROUPS_PATH = "/api/v4/groups";
 const FALLBACK_MODEL_ID = "claude_sonnet_4_6_vertex";
 const FALLBACK_MODEL_NAME = "Claude Sonnet 4.6 - Vertex";
+// Bound the top-level group pagination so a misbehaving server cannot loop forever.
+// 50 pages × 100/page covers 5000 top-level groups, far beyond any realistic account.
+const GITLAB_DUO_WORKFLOW_MAX_GROUP_PAGES = 50;
 
 // GitLab Duo Workflow does not expose a context window via the model catalog GraphQL.
 // The Duo Workflow Service streams the real per-agent window in each checkpoint's
@@ -447,46 +450,55 @@ async function fetchTopLevelGroupNamespaceCandidates(
 	baseUrl: string,
 ): Promise<GitLabDuoWorkflowCandidate[]> {
 	const fetchImpl = config.fetch ?? fetch;
-	const url = new URL(`${baseUrl}${GROUPS_PATH}`);
-	url.searchParams.set("top_level_only", "true");
-	url.searchParams.set("per_page", "100");
-	url.searchParams.set("order_by", "name");
-	url.searchParams.set("sort", "asc");
-
-	let response: Response;
-	try {
-		response = await fetchImpl(url, {
-			method: "GET",
-			headers: buildGitLabJsonHeaders(config.apiKey),
-		});
-	} catch {
-		return [];
-	}
-	if (!response.ok) {
-		return [];
-	}
-	let payload: unknown;
-	try {
-		payload = await response.json();
-	} catch {
-		return [];
-	}
-	if (!Array.isArray(payload)) {
-		return [];
-	}
 	const candidates: (GitLabDuoWorkflowCandidate & { preferred: boolean })[] = [];
-	for (const group of payload) {
-		const rootNamespaceId = extractRootNamespaceId(group);
-		if (!rootNamespaceId) {
-			continue;
+	// GitLab paginates `/groups`; a token can belong to more than one page of top-level
+	// groups, and a usable Duo namespace may live on a later page. Follow the keyset/
+	// offset pages (via the `x-next-page` header GitLab sends) until exhausted, bounded
+	// so a misbehaving server cannot loop forever.
+	let nextPage: string | undefined = "1";
+	for (let page = 0; page < GITLAB_DUO_WORKFLOW_MAX_GROUP_PAGES && nextPage; page++) {
+		const url = new URL(`${baseUrl}${GROUPS_PATH}`);
+		url.searchParams.set("top_level_only", "true");
+		url.searchParams.set("per_page", "100");
+		url.searchParams.set("order_by", "name");
+		url.searchParams.set("sort", "asc");
+		url.searchParams.set("page", nextPage);
+
+		let response: Response;
+		try {
+			response = await fetchImpl(url, {
+				method: "GET",
+				headers: buildGitLabJsonHeaders(config.apiKey),
+			});
+		} catch {
+			break;
 		}
-		const namespacePath = extractNamespacePath(group);
-		candidates.push({
-			rootNamespaceId,
-			...(namespacePath ? { namespacePath } : {}),
-			source: "group",
-			preferred: hasDuoFeatureFlag(group),
-		});
+		if (!response.ok) {
+			break;
+		}
+		let payload: unknown;
+		try {
+			payload = await response.json();
+		} catch {
+			break;
+		}
+		if (!Array.isArray(payload)) {
+			break;
+		}
+		for (const group of payload) {
+			const rootNamespaceId = extractRootNamespaceId(group);
+			if (!rootNamespaceId) {
+				continue;
+			}
+			const namespacePath = extractNamespacePath(group);
+			candidates.push({
+				rootNamespaceId,
+				...(namespacePath ? { namespacePath } : {}),
+				source: "group",
+				preferred: hasDuoFeatureFlag(group),
+			});
+		}
+		nextPage = nonEmptyHeader(response.headers.get("x-next-page"));
 	}
 	candidates.sort((left, right) => Number(right.preferred) - Number(left.preferred));
 	return candidates.map(candidate => ({
@@ -494,6 +506,10 @@ async function fetchTopLevelGroupNamespaceCandidates(
 		...(candidate.namespacePath ? { namespacePath: candidate.namespacePath } : {}),
 		source: candidate.source,
 	}));
+}
+
+function nonEmptyHeader(value: string | null): string | undefined {
+	return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 async function postGraphQL(
@@ -773,7 +789,7 @@ function parseGitLabRemoteProjectPath(remoteUrl: string, expectedHost: string | 
 	if (!parsed) {
 		return null;
 	}
-	if (expectedHost && parsed.host.toLowerCase() !== expectedHost.toLowerCase()) {
+	if (expectedHost && !gitLabRemoteHostMatches(parsed.host, parsed.portInsensitive, expectedHost)) {
 		return null;
 	}
 	// A self-managed GitLab under a relative install path (e.g. https://host/gitlab) yields
@@ -787,17 +803,35 @@ function parseGitLabRemoteProjectPath(remoteUrl: string, expectedHost: string | 
 	return projectPath.includes("/") ? projectPath : null;
 }
 
-function parseRemoteUrl(remoteUrl: string): { host: string; projectPath: string } | null {
+// Match a remote's host against the configured GitLab `baseUrl` host. HTTP(S) URL
+// remotes compare host:port strictly so a self-managed GitLab on a non-default port
+// is not confused with another service on the same hostname. `ssh://` and SCP-style
+// `git@host:path` remotes name the SSH port (commonly distinct from the web UI port)
+// or carry none, so they compare on the bare hostname only — stripping any port the
+// base URL carried — instead of being rejected for a port mismatch.
+function gitLabRemoteHostMatches(remoteHost: string, portInsensitive: boolean, expectedHost: string): boolean {
+	if (!portInsensitive) {
+		return remoteHost.toLowerCase() === expectedHost.toLowerCase();
+	}
+	const remoteHostname = remoteHost.split(":")[0] ?? remoteHost;
+	const expectedHostname = expectedHost.split(":")[0] ?? expectedHost;
+	return remoteHostname.toLowerCase() === expectedHostname.toLowerCase();
+}
+
+function parseRemoteUrl(remoteUrl: string): { host: string; projectPath: string; portInsensitive: boolean } | null {
 	try {
 		const url = new URL(remoteUrl);
 		// `host` (not `hostname`) keeps any explicit port so a self-managed GitLab on a
-		// non-default port is not confused with another service on the same hostname.
-		return { host: url.host, projectPath: url.pathname };
+		// non-default HTTP(S) port is not confused with another service on the same
+		// hostname. An `ssh://` remote, however, names the SSH port (commonly distinct
+		// from the web UI port), so it must compare on the bare hostname only.
+		const portInsensitive = url.protocol === "ssh:";
+		return { host: url.host, projectPath: url.pathname, portInsensitive };
 	} catch {
 		// SCP-style `git@host:path` has no port concept; bare host is the only key.
 		const scpMatch = remoteUrl.match(/^(?:[^@]+@)?([^:]+):(.+)$/);
 		if (scpMatch?.[1] && scpMatch[2]) {
-			return { host: scpMatch[1], projectPath: scpMatch[2] };
+			return { host: scpMatch[1], projectPath: scpMatch[2], portInsensitive: true };
 		}
 		return null;
 	}

@@ -745,4 +745,86 @@ describe("GitLab Duo Workflow discovery", () => {
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it("accepts an SSH remote whose port differs from the web base URL", async () => {
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gitlab-duo-workflow-"));
+		try {
+			await fs.mkdir(path.join(tmpDir, ".git"));
+			// Self-managed GitLab: web UI on https://host (443), SSH on a dedicated port.
+			// The SSH port must NOT cause the remote to be rejected as a different host.
+			await fs.writeFile(
+				path.join(tmpDir, ".git", "config"),
+				`[remote "origin"]\n\turl = ssh://git@gitlab.example.com:2222/group/project.git\n`,
+			);
+			const { fetch, calls } = createMockFetch({
+				projects: {
+					"group/project": { id: 7, namespace: { rootAncestor: { id: "remote-root" } } },
+				},
+				groups: [{ id: "group-root" }],
+				models: {
+					"remote-root": availableModels("remote_model"),
+					"group-root": availableModels("group_model"),
+				},
+			});
+
+			const selection = await discoverGitLabDuoWorkflowNamespace({
+				apiKey: TEST_TOKEN,
+				baseUrl: "https://gitlab.example.com",
+				cwd: tmpDir,
+				fetch,
+			});
+
+			// The SSH-port remote resolves the workspace project, not the group fallback.
+			expect(selection).toEqual({ rootNamespaceId: "remote-root", source: "remote" });
+			expect(calls.some(call => call.url.includes("/api/v4/projects/group%2Fproject"))).toBe(true);
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("pages through top-level groups to find a usable Duo namespace on a later page", async () => {
+		// The token belongs to >1 page of top-level groups; the only usable namespace is
+		// on page 2. Discovery must follow `x-next-page` rather than stop at page 1.
+		const calls: { url: string }[] = [];
+		const fetch: FetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			calls.push({ url });
+			const parsed = new URL(url);
+			if (parsed.pathname === "/api/v4/groups") {
+				const page = parsed.searchParams.get("page") ?? "1";
+				if (page === "1") {
+					return new Response(JSON.stringify([{ id: "page1-root" }]), {
+						status: 200,
+						headers: { "content-type": "application/json", "x-next-page": "2" },
+					});
+				}
+				return new Response(JSON.stringify([{ id: "page2-root" }]), {
+					status: 200,
+					headers: { "content-type": "application/json", "x-next-page": "" },
+				});
+			}
+			if (parsed.pathname === "/api/graphql") {
+				const body =
+					typeof init?.body === "string"
+						? (JSON.parse(init.body) as { variables?: { rootNamespaceId?: string } })
+						: null;
+				const rootNamespaceId = body?.variables?.rootNamespaceId ?? "";
+				// Only the page-2 group has usable models; the page-1 candidate is rejected,
+				// forcing discovery to continue onto the second page.
+				const models = rootNamespaceId === "page2-root" ? availableModels("page2_model") : null;
+				return jsonResponse({ data: { aiChatAvailableModels: models } });
+			}
+			return jsonResponse({ message: "not found" }, 404);
+		}) as FetchImpl;
+
+		const selection = await discoverGitLabDuoWorkflowNamespace({ apiKey: TEST_TOKEN, fetch });
+
+		// The candidate from page 2 was discovered and validated.
+		expect(selection.rootNamespaceId).toBe("page2-root");
+		// Both pages were fetched (page=1 then page=2).
+		const groupPages = calls
+			.filter(call => new URL(call.url).pathname === "/api/v4/groups")
+			.map(call => new URL(call.url).searchParams.get("page"));
+		expect(groupPages).toEqual(["1", "2"]);
+	});
 });

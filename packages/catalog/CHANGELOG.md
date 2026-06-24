@@ -24,6 +24,8 @@
 ### Fixed
 
 - Fixed the bundled catalog omitting the GitLab Duo Agent provider so a fresh install (before any credentialed dynamic discovery populates the cache) could not surface its default model. The generator now seeds the `gitlab-duo-agent` fallback model (`claude_sonnet_4_6_vertex`) into `models.json`, deduped behind live `aiChatAvailableModels` discovery when generation has credentials.
+- Fixed GitLab Duo Agent namespace discovery only inspecting the first page of top-level groups, so a token belonging to more than 100 top-level groups could miss a usable Duo namespace on a later page and fail or select the wrong group. Discovery now follows GitLab's `x-next-page` pagination (bounded) and validates candidates across all pages.
+- Fixed GitLab Duo Agent namespace discovery rejecting a workspace SSH remote whose port differs from the configured web `baseUrl` (self-managed GitLab commonly exposes SSH on a dedicated port, e.g. `ssh://git@host:2222/group/project.git` against `https://host`). SSH and SCP-style remotes now compare on the bare hostname; HTTP(S) remotes still compare host:port strictly so a different service on the same host is not adopted.
 
 ## [16.1.14] - 2026-06-22
 
