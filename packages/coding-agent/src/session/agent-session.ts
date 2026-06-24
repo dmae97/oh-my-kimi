@@ -1366,6 +1366,13 @@ export class AgentSession {
 	#pendingRewindReport: string | undefined = undefined;
 	#rewoundToolResultIds = new Set<string>();
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
+	/**
+	 * Sticky across an in-flight prompt run: a successful `yield` makes the run
+	 * terminal for execution purposes, so any trailing empty/aborted assistant
+	 * stop must NOT trigger empty-stop/unexpected-stop/compaction continuations.
+	 * Cleared in `#promptWithMessage` so the next prompt evaluates cleanly.
+	 */
+	#yieldTerminationPending = false;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
@@ -2555,6 +2562,7 @@ export class AgentSession {
 		}
 		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
 			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
+			this.#yieldTerminationPending = true;
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -2825,15 +2833,24 @@ export class AgentSession {
 			}
 
 			const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
-			if (this.#assistantEndedWithSuccessfulYield(msg)) {
+			const yieldOnThisMessage = this.#assistantEndedWithSuccessfulYield(msg);
+			// A successful `yield` in this run is terminal for execution purposes.
+			// Suppress empty-stop retry, unexpected-stop retry, queued-message drain,
+			// and compaction-driven continuations for the rest of this prompt cycle:
+			// the executor consumed the yield as the terminal result, so a trailing
+			// empty/aborted assistant stop must NOT revive the agent loop. The
+			// `#yieldTerminationPending` sticky flag clears on the next `prompt()`.
+			if (yieldOnThisMessage || this.#yieldTerminationPending) {
 				this.#lastSuccessfulYieldToolCallId = undefined;
-				if (activeGoal) {
+				if (yieldOnThisMessage && activeGoal) {
 					maintenanceRoute("successful-yield-active-goal-checkCompaction");
 					const compactionTask = this.#checkCompaction(msg);
 					this.#trackPostPromptTask(compactionTask);
 					await compactionTask;
-				} else {
+				} else if (yieldOnThisMessage) {
 					maintenanceRoute("successful-yield-no-active-goal");
+				} else {
+					maintenanceRoute("post-yield-trailing-stop-suppressed");
 				}
 				await emitAgentEndNotification();
 				return;
@@ -6009,6 +6026,10 @@ export class AgentSession {
 			this.#todoReminderAwaitingProgress = false;
 			this.#emptyStopRetryCount = 0;
 			this.#unexpectedStopRetryCount = 0;
+			// A new prompt cycle starts: drop any sticky yield-termination from the
+			// previous run so empty-stop / unexpected-stop / compaction maintenance
+			// can evaluate this turn normally.
+			this.#yieldTerminationPending = false;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
 

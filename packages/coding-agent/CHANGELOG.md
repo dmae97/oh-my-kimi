@@ -27,6 +27,7 @@
 - Fixed large-session TUI stalls by tailing appended transcript JSONL and collapsing compacted history on the live display surface ([#3258](https://github.com/can1357/oh-my-pi/issues/3258)).
 - Fixed status-line `usage` segment ignoring Codex subscription limits that carry a `scope.tier` ([#2877](https://github.com/can1357/oh-my-pi/issues/2877)).
 - Fixed extension `tool_call`/`tool_result` events for hashline `edit` calls to expose `event.input.path` for single-file edits and `event.input.paths` for every parsed target, so planning-mode gates can allow one markdown plan edit but still block multi-file hashline calls that cannot be represented by one path ([#1678](https://github.com/can1357/oh-my-pi/issues/1678)).
+- Fixed scripted `eval` `agent()` subagents continuing after a successful `yield` when a trailing empty assistant `stop` arrived after the executor's yield-triggered abort. The session's `agent_end` maintenance compared `#assistantEndedWithSuccessfulYield(msg)` against the trailing empty-stop message — not the prior yield-bearing one — so the empty-stop recovery path appended a retry reminder and scheduled `agent.continue()`, reviving the already-yielded child. The yield handler now sets a sticky `#yieldTerminationPending` flag (cleared on the next `prompt()`) that short-circuits empty-stop / unexpected-stop / compaction continuations for the rest of the run, so a successful yield is terminal regardless of trailing stops ([#3389](https://github.com/can1357/oh-my-pi/issues/3389)).
 
 ## [16.1.16] - 2026-06-23
 
