@@ -60,7 +60,10 @@ export interface ClassifyDifficultyDeps {
  * nothing to pick — the caller leaves the prior reasoning level in place).
  * @throws when the backend cannot produce a usable classification.
  */
-export async function classifyDifficulty(promptText: string, deps: ClassifyDifficultyDeps): Promise<Effort | undefined> {
+export async function classifyDifficulty(
+	promptText: string,
+	deps: ClassifyDifficultyDeps,
+): Promise<Effort | undefined> {
 	const backend = deps.settings.get("providers.autoThinkingModel");
 	const input = prepareClassifierInput(promptText);
 	const effort =
