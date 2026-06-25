@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed cross-API 3p ↔ 3p mid-session switches (Z.AI Anthropic → Z.AI OpenAI, Kimi Anthropic → Kimi OpenAI, custom `models.yaml` provider switches that cross API types) demoting every prior `thinking` block to plain text on the cross-API path of `transformMessages`, so the next request shipped the reasoning chain as conversation text instead of structured `reasoning_content`. `transformMessages` now preserves the prior reasoning as a native, signature-stripped `thinking` block whenever the `openai-completions` target accepts `reasoning_content` as a continuation hint (`requiresReasoningContentForToolCalls` or `thinkingFormat: "zai"`), and the `openai-completions` encoder now surfaces those preserved blocks via `reasoningContentField` for Z.AI-format hosts that don't strictly require the field. Other cross-API targets (encrypted reasoning blobs, signed thought parts) still demote to text so reasoning survives at minimum as visible conversation context. ([#3434](https://github.com/can1357/oh-my-pi/issues/3434))
+
 ## [16.1.18] - 2026-06-25
 
 ### Added
