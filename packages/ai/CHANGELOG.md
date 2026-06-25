@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `listOAuthAccounts` for retrieving a read-only list of stored OAuth account identities
+- Added `getOAuthAccessAt` to resolve an OAuth token exclusively for a specific account position
 
 ### Fixed
 

@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added --list flag to view stored OAuth accounts for a provider
+- Added --account flag to select a specific OAuth account by index for token retrieval
 - Added mouse support for navigation, selection, and toggling in the extensions dashboard
 
 ### Changed

@@ -673,6 +673,20 @@ export interface OAuthAccountIdentity {
 }
 
 export type OAuthAccessResolution = ({ ok: true } & OAuthAccess) | ({ ok: false } & OAuthAccessFailure);
+
+/**
+ * Read-only identity of one stored OAuth account, in stable storage order.
+ * Returned by {@link AuthStorage.listOAuthAccounts}; `position` (0-based) is the
+ * selector accepted by {@link AuthStorage.getOAuthAccessAt}.
+ */
+export interface OAuthAccountSummary {
+	position: number;
+	credentialId: number;
+	accountId?: string;
+	email?: string;
+	projectId?: string;
+	enterpriseUrl?: string;
+}
 export interface InvalidateCredentialMatchingOptions {
 	signal?: AbortSignal;
 	sessionId?: string;
@@ -887,6 +901,7 @@ class AuthStorageUsageCache implements UsageCache {
 
 type StoredCredential = { id: number; credential: AuthCredential };
 type OAuthSelection = { credential: OAuthCredential; index: number };
+type StoredOAuthSelection = { credentialId: number; credential: OAuthCredential; index: number };
 
 type OAuthCandidate = {
 	selection: OAuthSelection;
@@ -3460,6 +3475,8 @@ export class AuthStorage {
 			strategy?: CredentialRankingStrategy;
 			rankingContext?: CredentialRankingContext;
 			blockScope?: string;
+			/** When false, a definitive failure of THIS credential returns undefined instead of falling back to the ranked/round-robin selector (target-only resolution). */
+			allowFallback?: boolean;
 		},
 	): Promise<OAuthResolutionResult | undefined> {
 		const {
@@ -3471,6 +3488,7 @@ export class AuthStorage {
 			strategy,
 			rankingContext,
 			blockScope,
+			allowFallback = true,
 		} = usageOptions;
 		if (!allowBlocked && this.#isCredentialBlocked(providerKey, selection.index, blockScope)) {
 			return undefined;
@@ -3618,7 +3636,7 @@ export class AuthStorage {
 							credentialId,
 						});
 						await this.reload();
-						return this.#resolveOAuthSelection(provider, sessionId, options);
+						if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
 					}
 				}
 				// Permanently disable invalid credentials with an explicit cause for inspection/debugging.
@@ -3637,10 +3655,10 @@ export class AuthStorage {
 						index: selection.index,
 					});
 					await this.reload();
-					return this.#resolveOAuthSelection(provider, sessionId, options);
+					if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
 				}
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
-					return this.#resolveOAuthSelection(provider, sessionId, options);
+					if (allowFallback) return this.#resolveOAuthSelection(provider, sessionId, options);
 				}
 			} else {
 				// Block temporarily for transient failures (5 minutes)
@@ -3784,6 +3802,83 @@ export class AuthStorage {
 		};
 	}
 
+	/** Stored OAuth credentials for `provider` in stable order, paired with their full-list index and row id. */
+	#getStoredOAuthSelections(provider: string): StoredOAuthSelection[] {
+		return this.#getStoredCredentials(provider)
+			.map((entry, index) => ({ credentialId: entry.id, credential: entry.credential, index }))
+			.filter((entry): entry is StoredOAuthSelection => entry.credential.type === "oauth");
+	}
+
+	/** Refresh one stored OAuth selection and shape it as an {@link OAuthAccessResolution}. */
+	async #resolveStoredOAuthAccess(
+		provider: string,
+		selection: StoredOAuthSelection,
+		providerKey: string,
+		options: AuthApiKeyOptions | undefined,
+	): Promise<OAuthAccessResolution> {
+		try {
+			const resolved = await this.#tryOAuthCredential(
+				provider,
+				{ credential: selection.credential, index: selection.index },
+				providerKey,
+				undefined,
+				options,
+				{ checkUsage: false, allowBlocked: true, allowFallback: false },
+			);
+			if (!resolved) {
+				return {
+					ok: false,
+					credentialId: selection.credentialId,
+					accountId: selection.credential.accountId,
+					email: selection.credential.email,
+					projectId: selection.credential.projectId,
+					enterpriseUrl: selection.credential.enterpriseUrl,
+					error: "OAuth access unavailable",
+				};
+			}
+			const { credential } = resolved;
+			return {
+				ok: true,
+				credentialId: selection.credentialId,
+				accessToken: credential.access,
+				accountId: credential.accountId,
+				email: credential.email,
+				projectId: credential.projectId,
+				enterpriseUrl: credential.enterpriseUrl,
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				credentialId: selection.credentialId,
+				accountId: selection.credential.accountId,
+				email: selection.credential.email,
+				projectId: selection.credential.projectId,
+				enterpriseUrl: selection.credential.enterpriseUrl,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
+
+	/**
+	 * Read-only list of stored OAuth accounts for `provider` in stable storage
+	 * order, WITHOUT refreshing any token. The array position (0-based) is the
+	 * selector accepted by {@link AuthStorage.getOAuthAccessAt}; a "pick the Nth
+	 * account" UI should render `position + 1`.
+	 */
+	listOAuthAccounts(provider: string): OAuthAccountSummary[] {
+		if (this.#runtimeOverrides.has(provider) || this.#configOverrides.has(provider)) {
+			return [];
+		}
+		return this.#getStoredOAuthSelections(provider).map((selection, position) => ({
+			position,
+			credentialId: selection.credentialId,
+			accountId: selection.credential.accountId,
+			email: selection.credential.email,
+			projectId: selection.credential.projectId,
+			enterpriseUrl: selection.credential.enterpriseUrl,
+		}));
+	}
+
 	/**
 	 * Resolve every stored OAuth credential for `provider` independently.
 	 *
@@ -3797,60 +3892,36 @@ export class AuthStorage {
 			return [];
 		}
 		const providerKey = this.#getProviderTypeKey(provider, "oauth");
-		const selections = this.#getStoredCredentials(provider)
-			.map((entry, index) => ({ credentialId: entry.id, credential: entry.credential, index }))
-			.filter(
-				(entry): entry is { credentialId: number; credential: OAuthCredential; index: number } =>
-					entry.credential.type === "oauth",
-			);
 		return Promise.all(
-			selections.map(async (selection): Promise<OAuthAccessResolution> => {
-				try {
-					const resolved = await this.#tryOAuthCredential(
-						provider,
-						{ credential: selection.credential, index: selection.index },
-						providerKey,
-						undefined,
-						options,
-						{
-							checkUsage: false,
-							allowBlocked: true,
-						},
-					);
-					if (!resolved) {
-						return {
-							ok: false,
-							credentialId: selection.credentialId,
-							accountId: selection.credential.accountId,
-							email: selection.credential.email,
-							projectId: selection.credential.projectId,
-							enterpriseUrl: selection.credential.enterpriseUrl,
-							error: "OAuth access unavailable",
-						};
-					}
-					const { credential } = resolved;
-					return {
-						ok: true,
-						credentialId: selection.credentialId,
-						accessToken: credential.access,
-						accountId: credential.accountId,
-						email: credential.email,
-						projectId: credential.projectId,
-						enterpriseUrl: credential.enterpriseUrl,
-					};
-				} catch (error) {
-					return {
-						ok: false,
-						credentialId: selection.credentialId,
-						accountId: selection.credential.accountId,
-						email: selection.credential.email,
-						projectId: selection.credential.projectId,
-						enterpriseUrl: selection.credential.enterpriseUrl,
-						error: error instanceof Error ? error.message : String(error),
-					};
-				}
-			}),
+			this.#getStoredOAuthSelections(provider).map(selection =>
+				this.#resolveStoredOAuthAccess(provider, selection, providerKey, options),
+			),
 		);
+	}
+
+	/**
+	 * Resolve a single stored OAuth credential by its account position (0-based,
+	 * matching {@link AuthStorage.listOAuthAccounts}). Refreshes ONLY that
+	 * credential ({@link #resolveStoredOAuthAccess} runs with `allowFallback:
+	 * false`), so — unlike {@link AuthStorage.getOAuthAccesses} — a definitive
+	 * failure of the targeted account surfaces as a failed resolution rather than
+	 * silently rotating or rate-tripping a sibling.
+	 *
+	 * Returns `undefined` when `position` is out of range or runtime/config
+	 * overrides have replaced OAuth with an explicit API key.
+	 */
+	async getOAuthAccessAt(
+		provider: string,
+		position: number,
+		options?: AuthApiKeyOptions,
+	): Promise<OAuthAccessResolution | undefined> {
+		if (this.#runtimeOverrides.has(provider) || this.#configOverrides.has(provider)) {
+			return undefined;
+		}
+		const selection = this.#getStoredOAuthSelections(provider)[position];
+		if (!selection) return undefined;
+		const providerKey = this.#getProviderTypeKey(provider, "oauth");
+		return this.#resolveStoredOAuthAccess(provider, selection, providerKey, options);
 	}
 
 	/**
