@@ -206,4 +206,29 @@ describe("transformMessages drops malformed (empty-name) tool calls", () => {
 		expect(toolResults[0]?.content).toEqual([{ type: "text", text: "real file contents" }]);
 		expect(toolResults[0]?.toolName).toBe("read");
 	});
+
+	it("does not let a missing malformed-result consume a later valid call with the same id", () => {
+		const sharedId = "toolu_reused";
+		const messages: Message[] = [
+			{ role: "user", content: "first read", timestamp: 1 },
+			assistant([{ type: "toolCall", id: sharedId, name: "", arguments: {} }], 2),
+			// No `Tool  not found` result arrived for the malformed call before the
+			// conversation moved on. That stale malformed occurrence must not drop
+			// the next valid call's real output when the id is reused.
+			{ role: "user", content: "second read", timestamp: 3 },
+			assistant([{ type: "toolCall", id: sharedId, name: "read", arguments: { path: "foo" } }], 4),
+			toolResult(sharedId, "real file contents", 5),
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		const survivingCalls = getToolCalls(transformed);
+		expect(survivingCalls).toHaveLength(1);
+		expect(survivingCalls[0]).toMatchObject({ name: "read" });
+
+		const toolResults = transformed.filter((m): m is ToolResultMessage => m.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]?.content).toEqual([{ type: "text", text: "real file contents" }]);
+		expect(toolResults[0]?.toolName).toBe("read");
+	});
 });

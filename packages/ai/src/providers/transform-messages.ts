@@ -160,18 +160,21 @@ function sanitizeMalformedToolCalls(messages: Message[]): Message[] {
 	}
 	if (!hasMalformed) return messages;
 
-	// Positional FIFO pairing: a tool-call id can repeat across history when an
-	// OpenAI-Responses composite id (`callId|itemId`) collapses on the wire to
-	// the same `callId` (see `deduplicateToolCallIds` + `transform-messages-dedup`).
-	// A set-based "drop every result for this id" loses the real output for the
-	// surviving valid occurrence whenever one duplicate is malformed. Track each
-	// `toolCall` occurrence's malformed-ness on a per-id queue and pop on the
-	// first unconsumed matching `toolResult` so we drop only the one tied to the
-	// malformed call.
+	// Positional FIFO pairing within one assistant→tool-result window: a tool-call
+	// id can repeat across history when an OpenAI-Responses composite id
+	// (`callId|itemId`) collapses on the wire to the same `callId` (see
+	// `deduplicateToolCallIds` + `transform-messages-dedup`). A set-based "drop
+	// every result for this id" loses the real output for the surviving valid
+	// occurrence whenever one duplicate is malformed. Track each `toolCall`
+	// occurrence's malformed-ness on a per-id queue and pop on matching
+	// `toolResult`, but clear the queues at every non-result boundary so a
+	// malformed call whose rejection result never arrived cannot consume a later
+	// valid call's real result when the id is reused.
 	const dropQueues = new Map<string, boolean[]>();
 	const result: Message[] = [];
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
+			dropQueues.clear();
 			const filtered: AssistantMessage["content"] = [];
 			for (const block of msg.content) {
 				if (block.type === "toolCall") {
@@ -189,10 +192,15 @@ function sanitizeMalformedToolCalls(messages: Message[]): Message[] {
 		}
 		if (msg.role === "toolResult") {
 			const queue = dropQueues.get(msg.toolCallId);
-			if (queue && queue.length > 0 && queue.shift() === true) continue;
+			if (queue && queue.length > 0) {
+				const drop = queue.shift() === true;
+				if (queue.length === 0) dropQueues.delete(msg.toolCallId);
+				if (drop) continue;
+			}
 			result.push(msg);
 			continue;
 		}
+		dropQueues.clear();
 		result.push(msg);
 	}
 	return result;
