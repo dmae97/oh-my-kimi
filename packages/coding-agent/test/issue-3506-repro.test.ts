@@ -156,6 +156,52 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		expect(spies.pendingImages.length).toBe(1);
 	});
 
+	it("attaches every image-shaped file URL from a multi-file Finder selection", async () => {
+		// Cmd+C on multiple image files in Finder hands the AppleScript bridge
+		// back the whole `public.file-url` list. The controller MUST attach
+		// every image in the list, not stop after the first — matches the
+		// bracketed-paste handler in `CustomEditor.handleInput`.
+		const { ctx, spies } = createCtx();
+		const secondImg = path.join(tmpDir, "second.jpg");
+		const thirdImg = path.join(tmpDir, "third.png");
+		await fs.writeFile(secondImg, ONE_PX_PNG);
+		await fs.writeFile(thirdImg, ONE_PX_PNG);
+		const readMacFileUrls = vi.fn(async () => [imgPath, secondImg, thirdImg]);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => "",
+			readMacFileUrls,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(readMacFileUrls).toHaveBeenCalled();
+		expect(spies.pendingImages.length).toBe(3);
+		expect(spies.pasteText).not.toHaveBeenCalled();
+	});
+
+	it("skips non-image URLs in a mixed Finder selection but still attaches the image siblings", async () => {
+		const { ctx, spies } = createCtx();
+		const readMacFileUrls = vi.fn(async () => [
+			"/Users/me/Documents/report.pdf",
+			imgPath,
+			"/Users/me/Documents/notes.txt",
+		]);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => "should-not-be-pasted",
+			readMacFileUrls,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(spies.pendingImages.length).toBe(1);
+		// File-URL fallback owned the outcome — text fallback MUST NOT run.
+		expect(spies.pasteText).not.toHaveBeenCalled();
+	});
+
 	it("ignores non-image macOS file URLs and falls through to the text fallback", async () => {
 		const { ctx, spies } = createCtx();
 		const readMacFileUrls = vi.fn(async () => ["/Users/me/Documents/report.pdf"]);

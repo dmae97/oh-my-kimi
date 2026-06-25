@@ -1412,19 +1412,22 @@ export class InputController {
 			// for `readText` on Darwin) only surfaces plain text / RTF / EPS,
 			// so it returns empty for file-url-only pasteboards — the smart
 			// text fallback below would dead-end with "Clipboard is empty".
-			// Reach the file URL directly via AppleScript and route the first
+			// Reach the file URL directly via AppleScript and route every
 			// image-shaped path through {@link handleImagePathPaste}, matching
-			// what the terminal-mediated bracketed paste already does. Returns
-			// an empty list off Darwin, so the check is free on every other
-			// platform.
+			// the bracketed-paste handler in `CustomEditor.handleInput` which
+			// iterates every extracted image path. Multi-image Finder
+			// selections must not silently drop after the first attach.
+			// `readMacFileUrls` returns an empty list off Darwin, so the
+			// check is free on every other platform.
 			const fileUrls = (await this.clipboard.readMacFileUrls?.()) ?? [];
+			let attachedFromFileUrls = false;
 			for (const url of fileUrls) {
 				const candidate = extractImagePathFromText(url);
-				if (candidate) {
-					await this.handleImagePathPaste(candidate);
-					return true;
-				}
+				if (!candidate) continue;
+				await this.handleImagePathPaste(candidate);
+				attachedFromFileUrls = true;
 			}
+			if (attachedFromFileUrls) return true;
 			// Smart paste (#1628): no image on the clipboard — fall back to
 			// pasting its text so the same chord covers both payload kinds.
 			// Hosts that pre-empt the terminal's own paste (VS Code's
