@@ -3,9 +3,9 @@ import type { AgentMessage, AgentTelemetryConfig } from "@oh-my-pi/pi-agent-core
 import { type } from "arktype";
 import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
 import { getThemeByName } from "../../modes/theme/theme";
+import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
-import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { YieldQueue } from "../../session/yield-queue";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
