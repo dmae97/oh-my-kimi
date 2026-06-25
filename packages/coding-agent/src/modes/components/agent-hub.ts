@@ -425,6 +425,9 @@ export class AgentHubOverlayComponent extends Container {
 		const parts: string[] = [statusBadge(ref.status), theme.bold(replaceTabs(ref.id))];
 		parts.push(theme.fg("dim", replaceTabs(ref.displayName)));
 		parts.push(theme.fg("dim", ref.parentId ? `${ref.kind} · of ${ref.parentId}` : ref.kind));
+		if (ref.kind === "advisor") {
+			parts.push(theme.fg("warning", "read-only"));
+		}
 		const observed = this.#observableFor(ref.id);
 		const task = observed?.description ?? observed?.progress?.task;
 		if (task) {
