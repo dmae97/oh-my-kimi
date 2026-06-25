@@ -10,8 +10,14 @@ import { __validateLegacyPiPackageRootOverrides } from "@oh-my-pi/pi-coding-agen
 // `getResolvedSpecifier` path. The fix validates each override at module
 // init so missing entries fall through to canonical resolution and Bun
 // resolves the import from the extension's own `node_modules`.
+//
+// Follow-up (issue #3423): on Bun 1.3.14 the compiled binary's
+// `/$bunfs/...` paths are unreachable via every filesystem API, so
+// compiled-binary mode now routes through `omp-legacy-pi-bundled:` virtual
+// specifiers instead. Those entries must always pass validation because
+// the bundled registry — not the filesystem — is the source of truth.
 describe("legacy pi compat package-root override validation (issue #2168)", () => {
-	it("keeps overrides whose targets exist", () => {
+	it("keeps overrides whose filesystem targets exist", () => {
 		const candidates = {
 			"@oh-my-pi/pi-ai": "/tmp/exists-ai.js",
 			"@oh-my-pi/pi-utils": "/tmp/exists-utils.js",
@@ -20,7 +26,7 @@ describe("legacy pi compat package-root override validation (issue #2168)", () =
 		expect(result).toEqual(candidates);
 	});
 
-	it("drops overrides whose targets are missing on disk", () => {
+	it("drops overrides whose filesystem targets are missing on disk", () => {
 		const candidates = {
 			"@oh-my-pi/pi-ai": "/tmp/exists-ai.js",
 			"@oh-my-pi/pi-coding-agent": "/tmp/exists-shim.js",
@@ -41,12 +47,48 @@ describe("legacy pi compat package-root override validation (issue #2168)", () =
 		expect(result).not.toHaveProperty("@oh-my-pi/pi-tui");
 	});
 
-	it("drops every override when none of the targets exist", () => {
+	it("drops every override when none of the filesystem targets exist", () => {
 		const candidates = {
 			"@oh-my-pi/pi-utils": "/$bunfs/root/packages/utils/src/index.js",
 			"@oh-my-pi/pi-tui": "/$bunfs/root/packages/tui/src/index.js",
 		};
 		const result = __validateLegacyPiPackageRootOverrides(candidates, () => false);
 		expect(result).toEqual({});
+	});
+
+	it("keeps virtual omp-legacy-pi-bundled: entries without touching the filesystem (issue #3423)", () => {
+		// Bun 1.3.14 `fs.existsSync` returns false for every bunfs path, so the
+		// pre-#3423 fix dropped every override in compiled mode. The new
+		// virtual scheme is the source of truth in compiled-binary mode; the
+		// validator MUST short-circuit before any filesystem probe.
+		let probed = false;
+		const candidates = {
+			"@oh-my-pi/pi-ai": "omp-legacy-pi-bundled:@oh-my-pi/pi-ai",
+			"@oh-my-pi/pi-coding-agent": "omp-legacy-pi-bundled:@oh-my-pi/pi-coding-agent",
+			"@oh-my-pi/pi-agent-core": "omp-legacy-pi-bundled:@oh-my-pi/pi-agent-core",
+			"@oh-my-pi/pi-natives": "omp-legacy-pi-bundled:@oh-my-pi/pi-natives",
+			"@oh-my-pi/pi-tui": "omp-legacy-pi-bundled:@oh-my-pi/pi-tui",
+			"@oh-my-pi/pi-utils": "omp-legacy-pi-bundled:@oh-my-pi/pi-utils",
+		};
+		const result = __validateLegacyPiPackageRootOverrides(candidates, () => {
+			probed = true;
+			return false;
+		});
+		expect(result).toEqual(candidates);
+		expect(probed).toBe(false);
+	});
+
+	it("mixes virtual and filesystem entries: virtuals always pass, filesystems gated", () => {
+		const candidates = {
+			"@oh-my-pi/pi-ai": "omp-legacy-pi-bundled:@oh-my-pi/pi-ai",
+			"@oh-my-pi/pi-coding-agent": "/dev/source/legacy-pi-coding-agent-shim.ts",
+			"@oh-my-pi/pi-tui": "/missing/path.ts",
+		};
+		const missing = new Set(["/missing/path.ts"]);
+		const result = __validateLegacyPiPackageRootOverrides(candidates, p => !missing.has(p));
+		expect(result).toEqual({
+			"@oh-my-pi/pi-ai": "omp-legacy-pi-bundled:@oh-my-pi/pi-ai",
+			"@oh-my-pi/pi-coding-agent": "/dev/source/legacy-pi-coding-agent-shim.ts",
+		});
 	});
 });
