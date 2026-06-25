@@ -482,65 +482,88 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
  * - Custom extensions and tools
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-	return messages
-		.map((m): Message | undefined => {
-			switch (m.role) {
-				case "bashExecution":
-					if (m.excludeFromContext) {
-						return undefined;
-					}
-					return {
+	return messages.flatMap((m): Message[] => {
+		switch (m.role) {
+			case "bashExecution":
+				if (m.excludeFromContext) {
+					return [];
+				}
+				return [
+					{
 						role: "user",
 						content: [{ type: "text", text: bashExecutionToText(m) }],
 						attribution: "user",
 						timestamp: m.timestamp,
-					};
-				case "pythonExecution":
-					if (m.excludeFromContext) {
-						return undefined;
-					}
-					return {
+					},
+				];
+			case "pythonExecution":
+				if (m.excludeFromContext) {
+					return [];
+				}
+				return [
+					{
 						role: "user",
 						content: [{ type: "text", text: pythonExecutionToText(m) }],
 						attribution: "user",
 						timestamp: m.timestamp,
-					};
-				case "fileMention": {
-					const fileContents = m.files
-						.map(file => {
-							const inner = file.content ? `\n${file.content}\n` : "\n";
-							return `<file path="${file.path}">${inner}</file>`;
-						})
-						.join("\n");
-					const content: (TextContent | ImageContent)[] = [{ type: "text" as const, text: fileContents }];
-					for (const file of m.files) {
-						if (file.image) {
-							content.push(file.image);
-						}
-					}
-					return {
+					},
+				];
+			case "fileMention": {
+				// One `fileMention` can mix `@notes.md` (text) and `@screenshot.png` (image)
+				// in the same turn (`generateFileMentionMessages` packs every `@…` into a
+				// single message). Splitting by image presence keeps text-only mentions on
+				// the higher-priority `developer` slot while routing image attachments
+				// through `user`, the only Responses content slot that legitimately accepts
+				// `input_image` (Codex chatgpt.com /codex/responses rejects everything else
+				// with `Invalid value: 'input_image'`, #3443).
+				const wrap = (file: FileMentionMessage["files"][number]): string => {
+					const inner = file.content ? `\n${file.content}\n` : "\n";
+					return `<file path="${file.path}">${inner}</file>`;
+				};
+				const textFiles = m.files.filter(file => !file.image);
+				const imageFiles = m.files.filter(file => file.image);
+				const out: Message[] = [];
+				if (textFiles.length > 0) {
+					out.push({
 						role: "developer",
+						content: [{ type: "text" as const, text: textFiles.map(wrap).join("\n") }],
+						attribution: "user",
+						timestamp: m.timestamp,
+					});
+				}
+				if (imageFiles.length > 0) {
+					const content: (TextContent | ImageContent)[] = [
+						{ type: "text" as const, text: imageFiles.map(wrap).join("\n") },
+					];
+					for (const file of imageFiles) {
+						if (file.image) content.push(file.image);
+					}
+					out.push({
+						role: "user",
 						content,
 						attribution: "user",
 						timestamp: m.timestamp,
-					};
+					});
 				}
-				case "custom":
-				case "hookMessage":
-				case "branchSummary":
-				case "compactionSummary":
-				case "user":
-				case "developer":
-				case "assistant":
-				case "toolResult":
-					// Core roles share one transformer with agent-core —
-					// duplicating them here is how snapcompact frames once
-					// silently fell off the provider request.
-					return convertMessageToLlm(m);
-				default:
-					m satisfies never;
-					return undefined;
+				return out;
 			}
-		})
-		.filter(m => m !== undefined);
+			case "custom":
+			case "hookMessage":
+			case "branchSummary":
+			case "compactionSummary":
+			case "user":
+			case "developer":
+			case "assistant":
+			case "toolResult": {
+				// Core roles share one transformer with agent-core —
+				// duplicating them here is how snapcompact frames once
+				// silently fell off the provider request.
+				const converted = convertMessageToLlm(m);
+				return converted ? [converted] : [];
+			}
+			default:
+				m satisfies never;
+				return [];
+		}
+	});
 }
