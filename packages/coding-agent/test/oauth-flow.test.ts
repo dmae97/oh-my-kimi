@@ -652,6 +652,27 @@ describe("mcp oauth flow", () => {
 			expect(tokenParams.get("resource")).toBe("https://gateway.example.com/my-service/mcp");
 		});
 
+		it("keeps a path-scoped resource embedded in the authorization URL even when the caller resource is fallback", async () => {
+			let tokenRequestBody = "";
+			const flow = await buildFlow({
+				authorizationUrl:
+					"https://gateway.example.com/authorize?resource=https%3A%2F%2Fgateway.example.com%2Fsvc%2Fmcp",
+				resource: "https://gateway.example.com",
+				stripSameOriginResource: true,
+				onTokenBody: body => {
+					tokenRequestBody = body;
+				},
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+			await flow.exchangeToken("test-code", "state-x", REDIRECT_URI);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(new URL(url).searchParams.get("resource")).toBe("https://gateway.example.com/svc/mcp");
+			expect(flow.resource).toBe("https://gateway.example.com/svc/mcp");
+			expect(tokenParams.get("resource")).toBe("https://gateway.example.com/svc/mcp");
+		});
+
 		it("strips a fallback server URL resource when it points at a path under the auth-server origin", async () => {
 			let tokenRequestBody = "";
 			const flow = await buildFlow({

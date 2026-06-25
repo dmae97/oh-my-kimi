@@ -333,15 +333,17 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		}
 		const existingResource = params.get("resource")?.trim();
 		if (existingResource) {
-			const filtered = this.#filterResourceIndicator(resolveResourceUri(existingResource));
+			// A resource already embedded in the provider's authorization URL is
+			// provider-authored, not OMP's server-URL fallback. Preserve
+			// path-scoped same-host values here even when the caller marked its
+			// separate `config.resource` as fallback; gateway-hosted MCP servers
+			// can use that path as the token audience.
+			const filtered = filterResourceIndicator(resolveResourceUri(existingResource), this.config.authorizationUrl);
 			if (filtered) {
 				this.#resource = filtered;
 			} else {
-				// Some authorization servers (e.g. mcp.plane.so) reject same-origin
-				// `resource` values with `server_error`, including path-bearing MCP
-				// endpoints like `/http/mcp`. RFC 8707 indicators distinguish other
-				// resource servers, so drop same-origin values from both the authorize
-				// URL and the matching token request.
+				// Exact auth-server-origin resources are redundant — drop them from
+				// both the authorize URL and the matching token request.
 				params.delete("resource");
 				this.#resource = undefined;
 			}
