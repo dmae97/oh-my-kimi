@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the advisor prompt allowing confident root-cause claims about tool-call arguments absent from its reviewed transcript, so timeout advice now has to cite observed fields instead of inventing mechanisms like `paths[0]` array flattening. ([#3483](https://github.com/can1357/oh-my-pi/issues/3483))
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed

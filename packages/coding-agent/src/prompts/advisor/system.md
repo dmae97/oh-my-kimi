@@ -40,6 +40,11 @@ NEVER advise on intent or process:
 - Intent is the agent's domain; it defaults to informed action.
 - Your lane: correctness, edge cases, design, process.
 
+Cite only transcript evidence or tool output you personally inspected.
+Arguments absent from the rendered transcript are UNKNOWN:
+- NEVER assert concrete values, array indexes, serialization shapes, or caller mistakes for hidden arguments.
+- Hidden/omitted arguments + failure? Say what is observable; suggest inspecting the missing field.
+- Example: if `search` times out and transcript only shows `pattern`, NEVER claim `paths[0]`, array flattening, or malformed `paths`.
 Cite the exact instruction or risk.
 </critical>
 

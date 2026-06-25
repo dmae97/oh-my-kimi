@@ -5,6 +5,7 @@ import { createAdvisorMessageCard } from "../../modes/components/advisor-message
 import { getThemeByName } from "../../modes/theme/theme";
 import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
+import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "text" };
 import { YieldQueue } from "../../session/yield-queue";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
@@ -21,6 +22,14 @@ import {
 } from "..";
 
 describe("advisor", () => {
+	describe("advisor system prompt", () => {
+		it("forbids concrete claims about hidden arguments", () => {
+			expect(advisorSystemPrompt).toContain("Arguments absent from the rendered transcript are UNKNOWN");
+			expect(advisorSystemPrompt).toContain("NEVER assert concrete values, array indexes");
+			expect(advisorSystemPrompt).toContain("NEVER claim `paths[0]`, array flattening, or malformed `paths`");
+		});
+	});
+
 	describe("formatSessionHistoryMarkdown includeThinking", () => {
 		it("includes thinking text when includeThinking is true", () => {
 			const thinking = "I should check the edge case first.";
