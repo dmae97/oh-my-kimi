@@ -62,6 +62,7 @@ describe("MCPManager OAuth refresh failure", () => {
 	});
 
 	afterEach(() => {
+		authStorage.close();
 		vi.restoreAllMocks();
 	});
 

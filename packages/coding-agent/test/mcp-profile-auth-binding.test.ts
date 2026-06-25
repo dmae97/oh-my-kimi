@@ -41,6 +41,7 @@ describe("per-profile MCP OAuth binding", () => {
 	});
 
 	afterEach(() => {
+		authStorage.close();
 		setProfile(originalProfile);
 		vi.restoreAllMocks();
 	});
