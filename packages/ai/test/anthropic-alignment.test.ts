@@ -2032,6 +2032,63 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(payload.output_config).toEqual({ effort: "max" });
 	});
 
+	it("omits output_config.effort on direct Anthropic Sonnet/Haiku 4.5 budget thinking (#3497)", async () => {
+		// Anthropic's first-party Messages API rejects `output_config.effort` on
+		// Claude Sonnet 4.5 and Haiku 4.5 with HTTP 400 "This model does not
+		// support the effort parameter." These SKUs must serialize as plain
+		// budget-token thinking while still honoring the requested effort tier
+		// via `thinking.budget_tokens`. Opus 4.5 supports the field and keeps
+		// emitting it — covered in the next test.
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				isOAuth: false,
+				thinkingEnabled: true,
+				reasoning: Effort.Medium,
+			},
+		)) as {
+			thinking?: { type?: string; budget_tokens?: number; display?: string };
+			output_config?: { effort?: string };
+		};
+
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.thinking?.budget_tokens).toBeGreaterThan(0);
+		expect(payload.output_config).toBeUndefined();
+	});
+
+	it("emits output_config.effort on direct Anthropic Opus 4.5 budget thinking (#3497)", async () => {
+		// Opus 4.5 supports `output_config.effort` alongside `thinking.budget_tokens`.
+		// The catalog flips Opus 4.5 specifically back to `anthropic-budget-effort`
+		// while Sonnet 4.5 / Haiku 4.5 stay on plain `budget`.
+		const payload = (await captureAnthropicPayload(
+			buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "claude-opus-4-5",
+				name: "Claude Opus 4.5",
+			}),
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				isOAuth: false,
+				thinkingEnabled: true,
+				reasoning: Effort.Medium,
+			},
+		)) as {
+			thinking?: { type?: string; budget_tokens?: number; display?: string };
+			output_config?: { effort?: string };
+		};
+
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.thinking?.budget_tokens).toBeGreaterThan(0);
+		expect(payload.output_config).toEqual({ effort: "medium" });
+	});
+
 	it("keeps summarized adaptive thinking and context management for API-key Opus 4.7+ requests", async () => {
 		const payload = (await captureAnthropicPayload(
 			buildModel({

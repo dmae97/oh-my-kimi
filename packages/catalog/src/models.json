@@ -7965,7 +7965,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -7994,7 +7994,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -8569,7 +8569,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -8598,7 +8598,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -8882,7 +8882,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -8911,7 +8911,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -9050,7 +9050,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -9079,7 +9079,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -10361,7 +10361,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -10390,7 +10390,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -11272,7 +11272,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -11302,7 +11302,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -12859,7 +12859,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -12921,7 +12921,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -16750,7 +16750,7 @@
 				"X-GitHub-Api-Version": "2026-06-01"
 			},
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -19846,7 +19846,7 @@
 			"contextWindow": 200000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -59487,7 +59487,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -75664,7 +75664,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
@@ -82640,7 +82640,7 @@
 			"contextWindow": 1000000,
 			"maxTokens": 64000,
 			"thinking": {
-				"mode": "anthropic-budget-effort",
+				"mode": "budget",
 				"efforts": [
 					"minimal",
 					"low",
