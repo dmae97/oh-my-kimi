@@ -10742,9 +10742,11 @@ export class AgentSession {
 				} else {
 					noProgressDeadEnd = true;
 				}
-			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
+			}
+			if (!continuationScheduled && !suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-				// Kick the loop so queued messages are actually delivered.
+				// Kick the loop so queued messages are actually delivered. This remains separate
+				// from the no-progress warning: pausing maintenance must not strand user input.
 				this.#scheduleAgentContinue({
 					delayMs: 100,
 					generation,
