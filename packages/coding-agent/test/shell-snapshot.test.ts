@@ -1,9 +1,20 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getOrCreateSnapshot, sanitizeSnapshotForBrush } from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
 import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "text" };
+
+// macOS ships bash at `/bin/bash`, not `/usr/bin/bash`; resolve a real bash the
+// same way `bash-executor.test.ts` does so these e2e tests stay portable. The
+// `getOrCreateSnapshot` tests below symlink this under a unique name and skip
+// when no bash is present.
+const REAL_BASH = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
+// Likewise resolve `echo` (the stand-in for the mise binary the captured
+// function invokes): macOS has no `/usr/bin/echo`, so hard-coding it makes the
+// replay fail with `No such file or directory` even though the export landed.
+const REAL_ECHO = Bun.which("echo") ?? "/bin/echo";
 
 // `sanitizeSnapshotForBrush` is the snapshot-side mitigation for brush's
 // whitespace-only alias expander (`crates/brush-core-vendored/src/interp.rs:1500`,
@@ -228,7 +239,7 @@ describe("getOrCreateSnapshot", () => {
 		await fs.writeFile(
 			path.join(home, ".bashrc"),
 			[
-				`export __MISE_EXE=/usr/bin/echo`,
+				`export __MISE_EXE=${REAL_ECHO}`,
 				`export FOO_TEST_DIR=/opt/foo`,
 				`mise () { command "$__MISE_EXE" "$@"; }`,
 				`shout () { echo "$FOO_TEST_DIR"; }`,
@@ -240,7 +251,8 @@ describe("getOrCreateSnapshot", () => {
 		// snapshot cache (`cachedSnapshotPaths` is keyed on the shell path, and
 		// sibling tests in the same worker create a cached `/usr/bin/bash` entry
 		// from a different HOME before this test runs).
-		const realBash = "/usr/bin/bash";
+		const realBash = REAL_BASH;
+		if (!existsSync(realBash)) return;
 		const shellLink = path.join(home, "bash-omp-3470");
 		await fs.symlink(realBash, shellLink);
 
@@ -251,7 +263,7 @@ describe("getOrCreateSnapshot", () => {
 		expect(snapshotPath).not.toBeNull();
 		const content = await fs.readFile(snapshotPath!, "utf8");
 
-		expect(content).toContain(`export __MISE_EXE='/usr/bin/echo'`);
+		expect(content).toContain(`export __MISE_EXE='${REAL_ECHO}'`);
 		expect(content).toContain(`export FOO_TEST_DIR='/opt/foo'`);
 
 		// Replay the snapshot in a fresh bash with `set -u` and confirm the
@@ -284,10 +296,11 @@ describe("getOrCreateSnapshot", () => {
 		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-umask-"));
 		await fs.writeFile(
 			path.join(home, ".bashrc"),
-			[`umask 022`, `export __MISE_EXE=/usr/bin/echo`, `mise () { command "$__MISE_EXE" "$@"; }`, ``].join("\n"),
+			[`umask 022`, `export __MISE_EXE=${REAL_ECHO}`, `mise () { command "$__MISE_EXE" "$@"; }`, ``].join("\n"),
 		);
 
-		const realBash = "/usr/bin/bash";
+		const realBash = REAL_BASH;
+		if (!existsSync(realBash)) return;
 		const shellLink = path.join(home, "bash-omp-umask");
 		await fs.symlink(realBash, shellLink);
 
@@ -300,6 +313,6 @@ describe("getOrCreateSnapshot", () => {
 		const fileStat = await fs.stat(snapshotPath!);
 		expect(fileStat.mode & 0o077).toBe(0);
 		const content = await fs.readFile(snapshotPath!, "utf8");
-		expect(content).toContain(`export __MISE_EXE='/usr/bin/echo'`);
+		expect(content).toContain(`export __MISE_EXE='${REAL_ECHO}'`);
 	});
 });
