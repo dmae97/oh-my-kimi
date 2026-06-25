@@ -109,6 +109,49 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		expect(spies.pendingImages[0]?.type).toBe("image");
 	});
 
+	it("attaches the image via the macOS file-URL pasteboard when readText is empty (pbpaste limitation)", async () => {
+		// macOS `Cmd+C` on a file in Finder puts only a `public.file-url`
+		// pasteboard item; `pbpaste(1)` (the backing call for `readText` on
+		// Darwin) only surfaces plain text / RTF / EPS, so it returns empty.
+		// The Darwin-only `readMacFileUrls` AppleScript bridge reaches the
+		// file-URL representation and the controller MUST route it through
+		// `handleImagePathPaste` instead of bailing with "Clipboard is empty".
+		const { ctx, spies } = createCtx();
+		const readText = vi.fn(async () => ""); // pbpaste output
+		const readMacFileUrls = vi.fn(async () => [imgPath]);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText,
+			readMacFileUrls,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(readMacFileUrls).toHaveBeenCalled();
+		// "Clipboard is empty" MUST NOT fire — the file URL recovered the image.
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Clipboard is empty");
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.pendingImages.length).toBe(1);
+	});
+
+	it("ignores non-image macOS file URLs and falls through to the text fallback", async () => {
+		const { ctx, spies } = createCtx();
+		const readMacFileUrls = vi.fn(async () => ["/Users/me/Documents/report.pdf"]);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => "fallback text",
+			readMacFileUrls,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(readMacFileUrls).toHaveBeenCalled();
+		expect(spies.pendingImages.length).toBe(0);
+		expect(spies.pasteText).toHaveBeenCalledWith("fallback text");
+	});
+
 	it("preserves #1628 smart-paste behavior for non-image text", async () => {
 		const { ctx, spies } = createCtx();
 		const controller = new InputController(ctx, {

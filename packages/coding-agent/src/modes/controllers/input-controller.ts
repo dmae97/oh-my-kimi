@@ -21,7 +21,12 @@ import { isLowSignalTitleInput } from "../../tiny/text";
 import { tinyTitleClient } from "../../tiny/title-client";
 import type { TinyTitleProgressEvent } from "../../tiny/title-protocol";
 import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
-import { copyToClipboard, readImageFromClipboard, readTextFromClipboard } from "../../utils/clipboard";
+import {
+	copyToClipboard,
+	readImageFromClipboard,
+	readMacFileUrlsFromClipboard,
+	readTextFromClipboard,
+} from "../../utils/clipboard";
 import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
@@ -127,7 +132,12 @@ export class InputController {
 		private clipboard: {
 			readImage: typeof readImageFromClipboard;
 			readText: typeof readTextFromClipboard;
-		} = { readImage: readImageFromClipboard, readText: readTextFromClipboard },
+			readMacFileUrls?: typeof readMacFileUrlsFromClipboard;
+		} = {
+			readImage: readImageFromClipboard,
+			readText: readTextFromClipboard,
+			readMacFileUrls: readMacFileUrlsFromClipboard,
+		},
 	) {}
 
 	#enhancedPaste?: EnhancedPasteController;
@@ -1387,47 +1397,62 @@ export class InputController {
 	async handleImagePaste(): Promise<boolean> {
 		try {
 			const image = await this.clipboard.readImage();
-			if (!image) {
-				// Smart paste (#1628): no image on the clipboard — fall back to
-				// pasting its text so the same chord covers both payload kinds.
-				// Hosts that pre-empt the terminal's own paste (VS Code's
-				// integrated terminal, Win+V clipboard history) deliver only
-				// this keypress, so a miss here must not dead-end.
-				const text = await this.clipboard.readText();
-				if (!text) {
-					this.ctx.showStatus("Clipboard is empty");
-					return false;
-				}
-				// #3506: when the clipboard text is an explicit image file path,
-				// route through {@link handleImagePathPaste} so the image is
-				// loaded and attached instead of pasting the path as literal
-				// text. macOS Finder `Cmd+C` on an image file is the canonical
-				// case — the pasteboard exposes the file URL with no raw image
-				// bytes, so `clipboard.readImage()` cannot recover it but the
-				// path itself is loadable. Matches the bracketed-paste path
-				// in `CustomEditor` (`extractBracketedImagePastePaths`) so the
-				// keybind and a terminal-mediated paste agree.
-				const imagePath = extractImagePathFromText(text);
-				if (imagePath) {
-					await this.handleImagePathPaste(imagePath);
+			if (image) {
+				return await this.#normalizeAndInsertPastedImage(
+					{
+						type: "image",
+						data: image.data.toBase64(),
+						mimeType: image.mimeType,
+					},
+					`Unsupported clipboard image format: ${image.mimeType}`,
+				);
+			}
+			// #3506: macOS Finder `Cmd+C` puts only a `public.file-url`
+			// representation on the pasteboard. `pbpaste` (the backing call
+			// for `readText` on Darwin) only surfaces plain text / RTF / EPS,
+			// so it returns empty for file-url-only pasteboards — the smart
+			// text fallback below would dead-end with "Clipboard is empty".
+			// Reach the file URL directly via AppleScript and route the first
+			// image-shaped path through {@link handleImagePathPaste}, matching
+			// what the terminal-mediated bracketed paste already does. Returns
+			// an empty list off Darwin, so the check is free on every other
+			// platform.
+			const fileUrls = (await this.clipboard.readMacFileUrls?.()) ?? [];
+			for (const url of fileUrls) {
+				const candidate = extractImagePathFromText(url);
+				if (candidate) {
+					await this.handleImagePathPaste(candidate);
 					return true;
 				}
-				// Route to the focused component when it accepts pastes (modal
-				// Input prompts), matching the enhanced-paste text path (#2127).
-				const focused = this.ctx.ui.getFocused();
-				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
-				target.pasteText(text);
-				this.ctx.ui.requestRender();
+			}
+			// Smart paste (#1628): no image on the clipboard — fall back to
+			// pasting its text so the same chord covers both payload kinds.
+			// Hosts that pre-empt the terminal's own paste (VS Code's
+			// integrated terminal, Win+V clipboard history) deliver only
+			// this keypress, so a miss here must not dead-end.
+			const text = await this.clipboard.readText();
+			if (!text) {
+				this.ctx.showStatus("Clipboard is empty");
+				return false;
+			}
+			// #3506: when the clipboard text is an explicit image file path,
+			// route through {@link handleImagePathPaste} so the image is
+			// loaded and attached instead of pasting the path as literal
+			// text. Covers terminals that paste the Finder file path as
+			// plain text rather than as a `public.file-url` (most macOS
+			// terminals do this for image clipboards).
+			const imagePath = extractImagePathFromText(text);
+			if (imagePath) {
+				await this.handleImagePathPaste(imagePath);
 				return true;
 			}
-			return await this.#normalizeAndInsertPastedImage(
-				{
-					type: "image",
-					data: image.data.toBase64(),
-					mimeType: image.mimeType,
-				},
-				`Unsupported clipboard image format: ${image.mimeType}`,
-			);
+			// Route to the focused component when it accepts pastes (modal
+			// Input prompts), matching the enhanced-paste text path (#2127).
+			const focused = this.ctx.ui.getFocused();
+			const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
+			target.pasteText(text);
+			this.ctx.ui.requestRender();
+			return true;
 		} catch {
 			this.ctx.showStatus("Failed to read clipboard");
 			return false;
