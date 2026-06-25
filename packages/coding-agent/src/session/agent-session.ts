@@ -2797,6 +2797,9 @@ export class AgentSession {
 				return;
 			}
 
+			const successfulYieldMessage = this.#findSuccessfulYieldAssistantMessage(settledMessages);
+			const yieldOnThisMessage = this.#assistantEndedWithSuccessfulYield(msg);
+
 			const maintenanceRoute = (route: string, extra?: Record<string, unknown>) => {
 				logger.debug("agent_end maintenance routing", {
 					route,
@@ -2808,7 +2811,7 @@ export class AgentSession {
 					hasText: msg.content.some(content => content.type === "text"),
 					goalModeEnabled: this.#goalModeState?.enabled === true,
 					goalStatus: this.#goalModeState?.goal.status,
-					successfulYield: this.#assistantEndedWithSuccessfulYield(msg),
+					successfulYield: successfulYieldMessage !== undefined,
 					...extra,
 				});
 			};
@@ -2833,8 +2836,6 @@ export class AgentSession {
 			}
 
 			const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
-			const successfulYieldMessage = this.#findSuccessfulYieldAssistantMessage(settledMessages);
-			const yieldOnThisMessage = successfulYieldMessage === msg;
 			// A successful `yield` in this run is terminal for execution purposes.
 			// Suppress empty-stop retry, unexpected-stop retry, queued-message drain,
 			// and compaction-driven continuations for the rest of this prompt cycle:
