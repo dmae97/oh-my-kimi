@@ -168,10 +168,10 @@ describe("agent_type migration backfill", () => {
 				cost_input, cost_output, cost_cache_read, cost_cache_write, cost_total
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
-		for (const file of [mainFile, subFile, advisorFile]) {
+		for (const [index, file] of [mainFile, subFile, advisorFile].entries()) {
 			insert.run(
 				file,
-				"e1",
+				`e${index + 1}`,
 				"/work/pi",
 				"claude-sonnet-4.5",
 				"anthropic",

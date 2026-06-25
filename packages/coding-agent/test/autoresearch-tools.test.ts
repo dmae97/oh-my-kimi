@@ -83,7 +83,7 @@ let templateBaselineCommit: string;
 beforeAll(async () => {
 	templateRepo = makeTempDir("@pi-autoresearch-template-");
 	await Bun.write(path.join(templateRepo.path(), "README.md"), "# baseline\n");
-	await $`git init --initial-branch=main && git config core.autocrlf false && git config user.email tester@example.com && git config user.name Tester && git add -A && git commit -m baseline`
+	await $`git init --initial-branch=main && git config core.autocrlf false && git config core.fsmonitor false && git config user.email tester@example.com && git config user.name Tester && git add -A && git commit -m baseline`
 		.cwd(templateRepo.path())
 		.quiet();
 	templateBaselineCommit = (await $`git rev-parse HEAD`.cwd(templateRepo.path()).text()).trim();

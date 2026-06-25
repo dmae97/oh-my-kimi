@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -36,6 +36,24 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 	let tmpDir: string;
 	let file: string;
 	let themed = false;
+
+	// The streaming edit window is sized as min(EDIT_STREAMING_PREVIEW_LINES,
+	// previewWindowRows()), and previewWindowRows() reads process.stdout.rows.
+	// Pin a tall, stable viewport so the "full window of real diff" height
+	// assertions don't shrink (and flake) under a short ambient terminal when the
+	// file runs inside the full suite. Restored in afterAll.
+	let originalRowsDescriptor: PropertyDescriptor | undefined;
+	beforeAll(() => {
+		originalRowsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { value: 50, configurable: true });
+	});
+	afterAll(() => {
+		if (originalRowsDescriptor) {
+			Object.defineProperty(process.stdout, "rows", originalRowsDescriptor);
+		} else {
+			delete (process.stdout as { rows?: number }).rows;
+		}
+	});
 
 	beforeEach(async () => {
 		if (!themed) {
