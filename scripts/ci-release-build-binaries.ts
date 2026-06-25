@@ -14,10 +14,11 @@ interface BinaryTarget {
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = "./packages/coding-agent/src/cli.ts";
-// Legacy extension shims and package barrels in the build argv below are still
-// explicit `--compile` entrypoints because they are reached via computed bunfs
-// paths. Worker threads spawn `new Worker(Bun.main, { argv })` — they re-enter
-// the binary's own entry module — so no separate worker modules are compiled.
+// Worker threads spawn `new Worker(Bun.main, { argv })` — they re-enter the
+// binary's own entry module — so no separate worker modules are compiled.
+// Legacy pi-* extension compat surfaces are served through an in-process
+// virtual namespace (`legacy-pi-compat.ts`), reached via the main module
+// graph, so no extra `--compile` entrypoints are required (issue #3423).
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [
 	{

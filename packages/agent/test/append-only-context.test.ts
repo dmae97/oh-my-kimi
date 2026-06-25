@@ -511,36 +511,191 @@ describe("message sync", () => {
 		expect(result.messages[0]!.content).toBe("fresh");
 	});
 
-	it("detects in-place rewrite of already-synced messages", () => {
+	it("preserves the byte-stable prefix when a deep message is rewritten (#3406)", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
-		// Sync two messages
-		mgr.syncMessages([
-			{ role: "user", content: "q1" },
-			{ role: "assistant", content: "original long result" },
-		]);
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "original long result" } as any;
+		mgr.syncMessages([original0, original1]);
 		expect(mgr.log.length).toBe(2);
 
-		// Same length, but second message content changed (simulates tool-output pruning)
+		// Same length, but the second message's content changed (simulates per-turn
+		// tool-output pruning / transformContext re-render).
 		mgr.syncMessages([
 			{ role: "user", content: "q1" },
 			{ role: "assistant", content: "[pruned]" },
-		]);
-		// Log should have been reset and re-synced with the new content
+		] as any);
 		expect(mgr.log.length).toBe(2);
-		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
-		expect(msgs[1]!.content).toBe("[pruned]");
+
+		const entries = mgr.log.entries();
+		// The first message MUST keep its on-the-wire identity — that's what
+		// stops llama.cpp from re-prefilling the entire prior context.
+		expect(entries[0]).toBe(original0);
+		// The diverged tail is re-synced with the new bytes.
+		expect((entries[1] as { content: unknown }).content).toBe("[pruned]");
 	});
 
-	it("detects in-place rewrite via digest mismatch", () => {
+	it("detects tool-result metadata-only rewrites before preserving a later prefix (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = {
+			role: "toolResult",
+			content: [{ type: "text", text: "same output" }],
+			toolCallId: "old-call",
+			toolName: "read",
+			isError: false,
+		} as any;
+		const original2 = { role: "assistant", content: "a1" } as any;
+		mgr.syncMessages([original0, original1, original2]);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{
+				role: "toolResult",
+				content: [{ type: "text", text: "same output" }],
+				toolCallId: "new-call",
+				toolName: "write",
+				isError: true,
+			},
+			{ role: "assistant", content: "a1-pruned" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect((entries[1] as { toolCallId: unknown }).toolCallId).toBe("new-call");
+		expect((entries[1] as { toolName: unknown }).toolName).toBe("write");
+		expect((entries[1] as { isError: unknown }).isError).toBe(true);
+		expect((entries[2] as { content: unknown }).content).toBe("a1-pruned");
+	});
+
+	it("detects providerPayload-only rewrites before preserving a later prefix (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = {
+			role: "assistant",
+			content: [{ type: "text", text: "same visible output" }],
+			id: "assistant-1",
+			providerPayload: {
+				type: "openaiResponsesHistory",
+				provider: "openai",
+				items: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "old native" }] }],
+			},
+		} as any;
+		const original2 = { role: "user", content: "q2" } as any;
+		mgr.syncMessages([original0, original1, original2]);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "same visible output" }],
+				id: "assistant-1",
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: "openai",
+					items: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "new native" }] }],
+				},
+			},
+			{ role: "user", content: "q2-rewritten" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect(
+			(entries[1] as { providerPayload?: { items?: Array<{ content?: Array<{ text?: string }> }> } }).providerPayload
+				?.items?.[0]?.content?.[0]?.text,
+		).toBe("new native");
+		expect((entries[2] as { content: unknown }).content).toBe("q2-rewritten");
+	});
+
+	it("does not reuse a stable prefix longer than the current log after direct log clear (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+		] as any);
+		expect(mgr.log.length).toBe(2);
+
+		// Public log clear used by advisor reset: it intentionally empties the
+		// provider-bound message log but does not touch the private sync cursor.
+		mgr.log.clear();
+		expect(mgr.log.length).toBe(0);
+
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1-rewritten" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(2);
+		expect((entries[0] as { content: unknown }).content).toBe("q1");
+		expect((entries[1] as { content: unknown }).content).toBe("a1-rewritten");
+	});
+
+	it("preserves the prefix when the tail is rewritten (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "a1" } as any;
+		const original2 = { role: "user", content: "q2" } as any;
+		mgr.syncMessages([original0, original1, original2]);
+
+		// Tail-only rewrite (e.g. per-turn pruning of the most recent tool result):
+		// the first two messages MUST stay byte-stable; only the tail re-syncs.
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1" },
+			{ role: "user", content: "q2-rewritten" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect(entries[1]).toBe(original1);
+		expect((entries[2] as { content: unknown }).content).toBe("q2-rewritten");
+	});
+
+	it("appended new messages keep the prefix stable even when the prior tail also diverged (#3406)", () => {
+		const mgr = new AppendOnlyContextManager();
+		mgr.build(makeContext(), BUILD_OPTS);
+
+		const original0 = { role: "user", content: "q1" } as any;
+		const original1 = { role: "assistant", content: "a1" } as any;
+		mgr.syncMessages([original0, original1]);
+
+		// Re-sync with: (a) message #1 rewritten in place; (b) a brand-new tail
+		// appended. The prefix [original0] MUST stay byte-stable.
+		mgr.syncMessages([
+			{ role: "user", content: "q1" },
+			{ role: "assistant", content: "a1-pruned" },
+			{ role: "user", content: "q2" },
+		] as any);
+
+		const entries = mgr.log.entries();
+		expect(entries).toHaveLength(3);
+		expect(entries[0]).toBe(original0);
+		expect((entries[1] as { content: unknown }).content).toBe("a1-pruned");
+		expect((entries[2] as { content: unknown }).content).toBe("q2");
+	});
+
+	it("rewriting the first message still re-syncs from scratch", () => {
 		const mgr = new AppendOnlyContextManager();
 		mgr.build(makeContext(), BUILD_OPTS);
 
 		mgr.syncMessages([{ role: "user", content: "hello" }]);
 		expect(mgr.log.length).toBe(1);
 
-		// Content changed but length same
+		// No byte-stable prefix — the only message diverged.
 		mgr.syncMessages([{ role: "user", content: "world" }]);
 
 		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;

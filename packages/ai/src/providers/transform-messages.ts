@@ -143,6 +143,44 @@ function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messa
 	return model.api === "anthropic-messages";
 }
 
+/**
+ * Cross-API `openai-completions` targets that can replay a prior turn's
+ * reasoning as a native, signature-stripped `thinking` block on the wire.
+ * Anthropic's same-API path (`replayUnsignedThinking`) covers
+ * `anthropic-messages` targets directly; this is the analogue for the
+ * `openai-completions` branch of the cross-API path (#3433/#3434). 3p ↔ 3p
+ * replays between an Anthropic-compatible source (Z.AI Anthropic, Kimi
+ * Anthropic, …) and an OpenAI-compat reasoning target on the same vendor must
+ * keep reasoning as structured `reasoning_content` instead of degrading it to
+ * conversation text.
+ *
+ * `compat` MUST be the request-time RESOLVED compat that `convertMessages`
+ * threads into `transformMessages`, not `model.compat`. OpenCode-hosted
+ * reasoning models (`opencode-go`/`opencode-zen`) keep
+ * `requiresReasoningContentForToolCalls` off on the base compat to dodge the
+ * thinking-off `Extra inputs are not permitted` 400 (#1071) and reactivate it
+ * on `compat.whenThinking` for thinking-engaged requests to dodge the
+ * `thinking is enabled but reasoning_content is missing` 400 (#1484).
+ * `resolveOpenAICompatPolicy` already swaps in `whenThinking` for thinking-on
+ * requests, so basing this decision on the resolved compat keeps the predicate
+ * and the encoder in lockstep; reading `model.compat` would re-open #1484 for
+ * every cross-API switch into an OpenCode reasoning model.
+ *
+ * The downstream encoder MUST then surface the preserved block on the wire via
+ * `reasoningContentField` — see `openai-completions.ts` for the matching
+ * branch.
+ */
+function openAICompletionsReplaysUnsignedThinking(model: Model, compat: Model["compat"]): boolean {
+	if (model.api !== "openai-completions" || !model.reasoning) return false;
+	if (compat === undefined || !("requiresReasoningContentForToolCalls" in compat)) return false;
+	if (compat.requiresThinkingAsText) return false;
+	// Hosts that REQUIRE `reasoning_content` on tool-call turns (DeepSeek
+	// reasoning, Kimi, OpenRouter reasoning, OpenCode thinking-on) already
+	// accept the replay; Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi native,
+	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint.
+	return compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai";
+}
+
 const ANTHROPIC_TOOL_CALL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 function isValidAnthropicToolCallId(id: string): boolean {
@@ -181,6 +219,7 @@ export function transformMessages<TApi extends Api>(
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 	maxNormalizedToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
 	duplicateToolCallIdSuffixPrefix = "_dup",
+	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -316,13 +355,34 @@ export function transformMessages<TApi extends Api>(
 						}
 						return sanitized;
 					}
-					// Cross-API target: keep the existing text-demotion fallback.
-					// For same model: keep thinking blocks with signatures (needed for replay)
-					// even if the thinking text is empty (OpenAI encrypted reasoning)
+					// Cross-API target: same-model replay keeps signatures untouched
+					// (the encoder needs them for native replay; an OpenAI encrypted
+					// reasoning blob has empty text but a load-bearing signature).
 					if (isSameModel && sanitized.thinkingSignature) return sanitized;
-					// Skip empty thinking blocks, convert others to plain text
+					// Nothing left for the next turn to replay: drop empty/no-anchor
+					// thinking blocks before the cross-model paths.
 					if (!sanitized.thinking || sanitized.thinking.trim() === "") return [];
 					if (isSameModel) return sanitized;
+					// Cross-model + cross-API: preserve as a native, signature-stripped
+					// `thinking` block whenever the target encoder can re-emit it on the
+					// wire (today: `openai-completions` reasoning targets that accept
+					// `reasoning_content` as a continuation hint — Z.AI, Zhipu, DeepSeek
+					// reasoning, Kimi native, MiMo, OpenRouter reasoning, …). The source
+					// signature is always dropped because it is bound to the source
+					// wire-format (Anthropic crypto sig / OpenAI Responses encrypted
+					// blob) and would be rejected by the target. Without this branch
+					// every cross-API 3p ↔ 3p switch (Z.AI Anthropic → Z.AI OpenAI,
+					// Kimi Anthropic → Kimi OpenAI, etc.) demoted prior reasoning to
+					// conversation text and lost it as structured reasoning context
+					// (#3433/#3434).
+					if (openAICompletionsReplaysUnsignedThinking(model, targetCompat)) {
+						return sanitized.thinkingSignature ? { ...sanitized, thinkingSignature: undefined } : sanitized;
+					}
+					// Other cross-API targets (openai-responses encrypted blobs, google
+					// signed thought parts, anthropic-target from a non-Anthropic source,
+					// or any reasoning-disabled target) can't usefully replay an unsigned
+					// thinking block. Demote to text so the reasoning survives at least
+					// as visible conversation context.
 					return {
 						type: "text" as const,
 						text: sanitized.thinking,

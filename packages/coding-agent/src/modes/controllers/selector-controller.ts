@@ -232,11 +232,15 @@ export class SelectorController {
 	 */
 	async showExtensionsDashboard(): Promise<void> {
 		const dashboard = await ExtensionDashboard.create(getProjectDir(), this.ctx.settings, this.ctx.ui.terminal.rows);
+		// Fullscreen dashboard on the alternate screen (the /settings idiom): the
+		// overlay borrows the terminal's alt buffer and enables mouse tracking for
+		// its lifetime, leaving the transcript untouched underneath.
 		const overlay = this.ctx.ui.showOverlay(dashboard, {
 			width: "100%",
 			maxHeight: "100%",
 			anchor: "top-left",
 			margin: 0,
+			fullscreen: true,
 		});
 		dashboard.onClose = () => {
 			overlay.hide();
