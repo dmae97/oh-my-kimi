@@ -139,10 +139,13 @@ export class InputController {
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
 	// Streaming turns use a two-step Esc: first press arms this token, second press
-	// within the window aborts the same live assistant message.
+	// within the window aborts the same live assistant message. The arm is cleared on
+	// every session lifecycle transition (`agent_start`/`agent_end`) so a fallback
+	// arm taken pre-`message_start` cannot carry over and abort a fresh turn.
 	#streamingEscapeArmedToken: object | undefined;
 	#streamingEscapeArmedUntil = 0;
 	#streamingEscapeTimer: NodeJS.Timeout | undefined;
+	#streamingEscapeSessionSubscribed = false;
 	// Sequential index for `local://attachment-N` references created by large-paste and
 	// pasted-file attachments. Seeded from 0 and bumped past existing attachment files.
 	#attachmentCounter = 0;
@@ -224,6 +227,14 @@ export class InputController {
 
 	setupKeyHandlers(): void {
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
+		if (!this.#streamingEscapeSessionSubscribed && typeof this.ctx.session.subscribe === "function") {
+			this.#streamingEscapeSessionSubscribed = true;
+			this.ctx.session.subscribe(event => {
+				if (event.type === "agent_start" || event.type === "agent_end") {
+					this.#clearStreamingEscapeArm();
+				}
+			});
+		}
 		if (!this.#focusedLeftTapListenerInstalled) {
 			this.#focusedLeftTapListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {

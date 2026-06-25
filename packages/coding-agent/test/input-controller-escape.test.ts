@@ -81,6 +81,7 @@ function createContext(): {
 		updatePendingMessagesDisplay: Spy;
 	};
 	inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined>;
+	sessionListeners: Array<(event: { type: string }) => void>;
 } {
 	let editorText = "";
 	const abort = vi.fn();
@@ -96,6 +97,7 @@ function createContext(): {
 	const resetDisplay = vi.fn();
 	const showStatus = vi.fn();
 	const inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
+	const sessionListeners: Array<(event: { type: string }) => void> = [];
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
 	const hasActiveBtw = vi.fn(() => false);
@@ -160,6 +162,13 @@ function createContext(): {
 			clearQueue,
 			getQueuedMessages,
 			prompt,
+			subscribe: vi.fn((listener: (event: { type: string }) => void) => {
+				sessionListeners.push(listener);
+				return () => {
+					const index = sessionListeners.indexOf(listener);
+					if (index >= 0) sessionListeners.splice(index, 1);
+				};
+			}),
 		} as unknown as InteractiveModeContext["session"],
 		viewSession: {
 			isCompacting: false,
@@ -240,6 +249,7 @@ function createContext(): {
 			updatePendingMessagesDisplay,
 		},
 		inputListeners,
+		sessionListeners,
 	};
 }
 beforeEach(async () => {
@@ -462,6 +472,33 @@ describe("InputController escape behavior", () => {
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
 		(ctx as unknown as { streamingMessage: object }).streamingMessage = secondMessage;
+		now.mockReturnValue(1_500);
+		editor.onEscape?.();
+
+		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+	});
+
+	it("clears the streaming Esc arm when the current turn ends", () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const { ctx, editor, spies, sessionListeners } = createContext();
+		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		// Fallback arm (no streamingMessage/streamingComponent yet — pre-message_start).
+		editor.onEscape?.();
+		expect(sessionListeners).toHaveLength(1);
+
+		// Turn 1 ends; a new turn starts. session.subscribe receives both transitions,
+		// either of which must invalidate the still-armed fallback token so it cannot
+		// fast-abort the new turn's first Esc.
+		for (const listener of sessionListeners) {
+			listener({ type: "agent_end" });
+			listener({ type: "agent_start" });
+		}
+
 		now.mockReturnValue(1_500);
 		editor.onEscape?.();
 
