@@ -95,6 +95,23 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		expect(ctx.editor.pendingImageLinks).toEqual([]);
 	});
 
+	it("queues image-only follow-ups while streaming", async () => {
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aW1hZ2U=" };
+		const { ctx, editor, prompt } = createContext({ isStreaming: true, pendingImages: [image] });
+
+		const controller = new InputController(ctx);
+		editor.setText("");
+		await controller.handleFollowUp();
+
+		expect(prompt).toHaveBeenCalledTimes(1);
+		const call = prompt.mock.calls[0];
+		if (!call) throw new Error("expected session.prompt to be called");
+		expect(call[0]).toBe("");
+		expect(call[1]?.streamingBehavior).toBe("followUp");
+		expect(call[1]?.images).toEqual([image]);
+		expect(ctx.editor.pendingImages).toEqual([]);
+	});
+
 	it("forwards pending images when not streaming", async () => {
 		const image: ImageContent = { type: "image", mimeType: "image/png", data: "d29ybGQ=" };
 		const { ctx, editor, prompt } = createContext({ isStreaming: false, pendingImages: [image] });
