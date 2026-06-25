@@ -2,9 +2,24 @@
 
 ## [Unreleased]
 
+## [16.1.18] - 2026-06-25
+
+### Added
+
+- Added `listOAuthAccounts` for retrieving a read-only list of stored OAuth account identities
+- Added `getOAuthAccessAt` to resolve an OAuth token exclusively for a specific account position
+
+### Changed
+
+- Refactored OAuth token persistence and disable logic to use stable credential IDs instead of positional indices to prevent race conditions during concurrent updates
+- Updated OAuth failure classification to treat 403 status codes, rate limits, and network errors as transient, preventing unnecessary credential invalidation
+
 ### Fixed
 
 - Fixed Codex Responses Lite staying enabled for image prompts, which caused GPT/Codex image turns to be rejected as `Invalid value: 'input_image'`; image-bearing Codex requests now fall back to the full Responses transport. ([#3421](https://github.com/can1357/oh-my-pi/issues/3421))
+- Fixed the auth-broker background refresher disabling OAuth credentials unconditionally (`disableCredentialById`) on a definitive refresh failure, so a credential another process or a fresh login rotated mid-refresh could be torn down even though the stored row already held a valid token. The definitive-failure teardown now happens inside `AuthStorage.refreshCredentialById` via the same compare-and-set the in-stream and usage-probe paths use — it disables only when the persisted row still matches the credential the refresh actually attempted, and reloads on a CAS loss; the refresher now only logs.
+- Fixed OAuth refresh persisting the rotated token by a positional index captured before the refresh `await`. A concurrent disable could reorder or shrink a provider's credential array while the refresh was in flight, landing the new token on the wrong row (or silently dropping it) and leaving accounts with a stale refresh token that failed — and was then disabled — on the next cycle. Refresh persistence, selection-index resync, and CAS-disable now address the row by id across `forceRefreshCredentialById`, candidate preflight, and in-stream selection (`#replaceCredentialById` / `#disableCredentialByIdIfMatches`).
+- Fixed `isDefinitiveOAuthFailure` treating a bare HTTP 403 (and generic `unauthorized` / access-token-expired wording) as a definitive credential failure, which permanently disabled healthy OAuth accounts on WAF, egress rate-limit, permission, and account-verification responses. Bare 403, rate limits (429), gateway/5xx, and more network errors (`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, …) are now classified transient; only explicit dead-grant errors (`invalid_grant`, `invalid_token`, `unauthorized_client`, revoked, `refresh token … expired`) or a bare 401 tear the credential down.
 
 ## [16.1.17] - 2026-06-24
 
