@@ -283,6 +283,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				settings: this.session.settings,
 				signal,
 				localProtocolOptions: this.session.localProtocolOptions,
+				skills: this.session.skills,
 			});
 			const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
 
