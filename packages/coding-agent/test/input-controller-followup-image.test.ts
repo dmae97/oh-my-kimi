@@ -51,6 +51,7 @@ function createContext(opts: {
 	const prompt = vi.fn(async (_text: string, _options?: PromptOptionsLike) => {});
 	const updatePendingMessagesDisplay = vi.fn();
 	const requestRender = vi.fn();
+	const showError = vi.fn();
 
 	const ctx = {
 		editor,
@@ -68,11 +69,11 @@ function createContext(opts: {
 		compactionQueuedMessages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
 		updatePendingMessagesDisplay,
-		showError: vi.fn(),
+		showError,
 		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
 	} as unknown as InteractiveModeContext;
 
-	return { ctx, editor, prompt, showError: ctx.showError as ReturnType<typeof vi.fn> };
+	return { ctx, editor, prompt, showError };
 }
 
 describe("InputController.handleFollowUp image forwarding", () => {

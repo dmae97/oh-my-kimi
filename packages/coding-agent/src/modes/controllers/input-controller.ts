@@ -719,11 +719,25 @@ export class InputController {
 				// (a user-role `message_start` event) leaves any draft the user has
 				// typed since queuing intact. Same protection as #783, applied to
 				// the streaming/queue path.
-				await this.ctx.withLocalSubmission(
-					text,
-					() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
-					{ imageCount: images?.length ?? 0 },
-				);
+				try {
+					await this.ctx.withLocalSubmission(
+						text,
+						() => this.ctx.session.prompt(text, { streamingBehavior: "steer", images }),
+						{ imageCount: images?.length ?? 0 },
+					);
+				} catch (error) {
+					// Don't lose the queued steer draft: restore text and images so
+					// the user can retry after dispatch validation/queue failures.
+					this.ctx.editor.setText(text);
+					if (images && images.length > 0) {
+						this.ctx.editor.pendingImages = [...images];
+						this.ctx.editor.pendingImageLinks = inputImageLinks
+							? [...inputImageLinks]
+							: images.map(() => undefined);
+						this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+					}
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				}
 				this.ctx.updatePendingMessagesDisplay();
 				this.ctx.ui.requestRender();
 				return;
