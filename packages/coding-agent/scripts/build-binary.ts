@@ -2,7 +2,6 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { LEGACY_COMPAT_BUILD_ENTRYPOINTS } from "../../../scripts/binary-entrypoints";
 
 const packageDir = path.join(import.meta.dir, "..");
 const repoRoot = path.join(packageDir, "..", "..");
@@ -83,7 +82,15 @@ async function main(): Promise<void> {
 					"--root",
 					".",
 					"./packages/coding-agent/src/cli.ts",
-					...LEGACY_COMPAT_BUILD_ENTRYPOINTS,
+					// Legacy pi-* extension compat surfaces (host packages + shims)
+					// were previously listed as explicit `--compile` entries so the
+					// rewrite path could emit `/$bunfs/root/...` URLs against them.
+					// Bun 1.3.14 made bunfs files unreachable at runtime (issue
+					// #3423), so `legacy-pi-compat.ts` now serves them through a
+					// virtual namespace backed by `legacy-pi-bundled-registry.ts`,
+					// which static-imports each surface — the bundler already
+					// includes them via the main module graph, so no `--compile`
+					// extras are required.
 					"--outfile",
 					`packages/coding-agent/dist/${outName}`,
 				],
