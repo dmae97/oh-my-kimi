@@ -123,7 +123,7 @@ describe("AgentTranscriptViewer", () => {
 		await Settings.init({ inMemory: true });
 		initTheme();
 		rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
-		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 24 });
+		Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => 24, set: () => {} });
 	});
 
 	afterEach(() => {

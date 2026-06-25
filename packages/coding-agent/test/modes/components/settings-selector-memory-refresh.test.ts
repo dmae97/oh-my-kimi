@@ -25,8 +25,8 @@ function stubStdoutGeometry(cols: number): { restore(): void } {
 	const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 	const colsDesc = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 	const rows = 40;
-	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => rows });
-	Object.defineProperty(process.stdout, "columns", { configurable: true, get: () => cols });
+	Object.defineProperty(process.stdout, "rows", { configurable: true, get: () => rows, set: () => {} });
+	Object.defineProperty(process.stdout, "columns", { configurable: true, get: () => cols, set: () => {} });
 	const restoreOne = (key: "rows" | "columns", desc: PropertyDescriptor | undefined) => {
 		if (desc) Object.defineProperty(process.stdout, key, desc);
 		else Object.defineProperty(process.stdout, key, { configurable: true, value: undefined, writable: true });
