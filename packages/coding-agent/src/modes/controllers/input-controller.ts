@@ -139,9 +139,11 @@ export class InputController {
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
 	// Streaming turns use a two-step Esc: first press arms this token, second press
-	// within the window aborts the same live assistant message. The arm is cleared on
-	// every session lifecycle transition (`agent_start`/`agent_end`) so a fallback
-	// arm taken pre-`message_start` cannot carry over and abort a fresh turn.
+	// within the window aborts the same live assistant turn. The token is a per-turn
+	// sentinel minted lazily on demand and reset on every `agent_start`/`agent_end`
+	// (see setupKeyHandlers), so it survives `message_start`/`message_update`
+	// transitions inside a single turn but cannot leak across turn boundaries.
+	#streamingEscapeTurnSentinel: object | undefined;
 	#streamingEscapeArmedToken: object | undefined;
 	#streamingEscapeArmedUntil = 0;
 	#streamingEscapeTimer: NodeJS.Timeout | undefined;
@@ -205,15 +207,10 @@ export class InputController {
 	}
 
 	#handleStreamingEscape(): void {
-		// `ctx.streamingMessage` is replaced on every `message_update` (agent-loop
-		// hands the EventController a fresh immutable snapshot per delta), so keying
-		// on it would invalidate the arm between the first and second Esc as soon as
-		// the next token arrived. `ctx.streamingComponent` is created once per
-		// `message_start` and survives every delta until the message ends; the
-		// session fallback covers the pre-`message_start` window and is cleared on
-		// every `agent_start`/`agent_end` (see setupKeyHandlers) so it cannot carry
-		// across turn boundaries.
-		const token = this.ctx.streamingComponent ?? this.ctx.session;
+		if (!this.#streamingEscapeTurnSentinel) {
+			this.#streamingEscapeTurnSentinel = {};
+		}
+		const token = this.#streamingEscapeTurnSentinel;
 		const now = Date.now();
 		if (this.#streamingEscapeArmedToken === token && now <= this.#streamingEscapeArmedUntil) {
 			this.#clearStreamingEscapeArm();
@@ -239,6 +236,7 @@ export class InputController {
 			this.#streamingEscapeSessionSubscribed = true;
 			this.ctx.session.subscribe(event => {
 				if (event.type === "agent_start" || event.type === "agent_end") {
+					this.#streamingEscapeTurnSentinel = undefined;
 					this.#clearStreamingEscapeArm();
 				}
 			});

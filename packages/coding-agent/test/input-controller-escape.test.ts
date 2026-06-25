@@ -459,37 +459,35 @@ describe("InputController escape behavior", () => {
 		expect(spies.showStatus).toHaveBeenCalledTimes(2);
 	});
 
-	it("re-arms when the streaming component is replaced between the two Esc presses", () => {
+	it("preserves the streaming Esc arm when streamingComponent appears between presses", () => {
+		// Pre-`message_start`: first Esc arms on the per-turn sentinel. `message_start`
+		// then publishes `ctx.streamingComponent`; the second Esc must still abort the
+		// same live turn instead of re-arming on the new component reference.
 		const now = vi.spyOn(Date, "now");
 		now.mockReturnValue(1_000);
 		const { ctx, editor, spies } = createContext();
-		const firstComponent = {};
-		const secondComponent = {};
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = firstComponent;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = secondComponent;
+		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
 		now.mockReturnValue(1_500);
 		editor.onEscape?.();
 
-		expect(spies.abort).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+		expect(spies.abort).toHaveBeenCalledTimes(1);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 	});
 
 	it("aborts on the second Esc even when ctx.streamingMessage was replaced by a delta in between", () => {
 		// `EventController` replaces `ctx.streamingMessage` with a fresh immutable
-		// snapshot on every `message_update`; only `streamingComponent` is stable
-		// across the streaming window, so swapping the message must not invalidate
-		// the armed token.
+		// snapshot on every `message_update`; the per-turn sentinel is unaffected so
+		// swapping the message must not invalidate the armed token.
 		const now = vi.spyOn(Date, "now");
 		now.mockReturnValue(1_000);
 		const { ctx, editor, spies } = createContext();
-		const streamingComponent = {};
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		(ctx as unknown as { streamingComponent: object }).streamingComponent = streamingComponent;
+		(ctx as unknown as { streamingComponent: object }).streamingComponent = {};
 		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: [] };
 		const controller = new InputController(ctx);
 
