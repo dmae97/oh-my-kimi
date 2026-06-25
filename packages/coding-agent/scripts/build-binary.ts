@@ -2,6 +2,7 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { LEGACY_COMPAT_BUILD_ENTRYPOINTS } from "../../../scripts/binary-entrypoints";
 
 const packageDir = path.join(import.meta.dir, "..");
 const repoRoot = path.join(packageDir, "..", "..");
@@ -82,22 +83,7 @@ async function main(): Promise<void> {
 					"--root",
 					".",
 					"./packages/coding-agent/src/cli.ts",
-					// Legacy pi-* extension compat entrypoints served by
-					// `legacy-pi-compat.ts`. These are reached via computed bunfs paths
-					// (which `--compile`'s static analyzer cannot trace), so each must be
-					// listed here to land in bunfs at
-					// `/$bunfs/root/packages/<pkg>/<entry>.js`. The coding-agent's own
-					// `./src/index.ts` is intentionally NOT listed: bun --compile silently
-					// breaks the CLI entry when the same package's barrel appears as an
-					// extra entrypoint (issue #1474), so legacy `pi-coding-agent` imports
-					// resolve through `legacy-pi-coding-agent-shim.ts` instead.
-					"./packages/agent/src/index.ts",
-					"./packages/natives/native/index.js",
-					"./packages/tui/src/index.ts",
-					"./packages/utils/src/index.ts",
-					"./packages/coding-agent/src/extensibility/typebox.ts",
-					"./packages/coding-agent/src/extensibility/legacy-pi-ai-shim.ts",
-					"./packages/coding-agent/src/extensibility/legacy-pi-coding-agent-shim.ts",
+					...LEGACY_COMPAT_BUILD_ENTRYPOINTS,
 					"--outfile",
 					`packages/coding-agent/dist/${outName}`,
 				],

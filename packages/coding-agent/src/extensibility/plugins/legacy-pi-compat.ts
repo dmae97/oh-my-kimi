@@ -189,9 +189,35 @@ function sourceShimPath(file: string): string {
 		: path.resolve(import.meta.dir, "..", file);
 }
 
-const TYPEBOX_SHIM_PATH = BUNFS_PACKAGE_ROOT
-	? bunfsPath("coding-agent", "src", "extensibility", "typebox.js")
-	: sourceShimPath("typebox.ts");
+/**
+ * Resolve the path the TypeBox compatibility shim ships at — bunfs in compiled
+ * mode, on-disk source elsewhere — then drop it when the file is missing.
+ *
+ * Validation mirrors `__validateLegacyPiPackageRootOverrides` (#2168): if the
+ * computed candidate doesn't exist (e.g. a release build silently omitted the
+ * `--compile` entrypoint — issue #3414), `resolveTypeBoxSpecifier` returns
+ * `undefined` and `rewriteLegacyExtensionSource` leaves bare `typebox` /
+ * `@sinclair/typebox` specifiers alone, so Bun falls through to native
+ * resolution against the extension's own `node_modules`.
+ *
+ * Exported for tests; production callers use `TYPEBOX_SHIM_PATH`.
+ */
+export function __resolveTypeBoxShimPath(
+	bunfsRoot: string | null,
+	bundledSelfRoot: string | undefined,
+	metaDir: string,
+	pathExistsSync: (p: string) => boolean = fs.existsSync,
+	pathImpl: typeof path = path,
+): string | null {
+	const candidate = bunfsRoot
+		? __joinBunfsPath(bunfsRoot, ["coding-agent", "src", "extensibility", "typebox.js"], pathImpl)
+		: bundledSelfRoot
+			? pathImpl.join(bundledSelfRoot, "src", "extensibility", "typebox.ts")
+			: pathImpl.resolve(metaDir, "..", "typebox.ts");
+	return pathExistsSync(candidate) ? candidate : null;
+}
+
+const TYPEBOX_SHIM_PATH = __resolveTypeBoxShimPath(BUNFS_PACKAGE_ROOT, BUNDLED_SELF_PACKAGE_ROOT, import.meta.dir);
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
@@ -341,12 +367,17 @@ const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'
  */
 async function rewriteLegacyExtensionSource(source: string, importerPath: string): Promise<string> {
 	const withPi = rewriteLegacyPiImports(source);
-	const withTypeBox = withPi.replace(
-		TYPEBOX_IMPORT_SPECIFIER_REGEX,
-		(_match, prefix: string, _specifier: string, suffix: string) => {
-			return `${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`;
-		},
-	);
+	// When the TypeBox shim is missing (release build dropped the entrypoint —
+	// issue #3414), leave bare specifiers untouched so Bun resolves a real
+	// `typebox` / `@sinclair/typebox` install from the extension's own
+	// `node_modules`. `resolveTypeBoxSpecifier` mirrors the fall-through.
+	const withTypeBox = TYPEBOX_SHIM_PATH
+		? withPi.replace(
+				TYPEBOX_IMPORT_SPECIFIER_REGEX,
+				(_match, prefix: string, _specifier: string, suffix: string) =>
+					`${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`,
+			)
+		: withPi;
 	return rewriteExtensionPackageImports(withTypeBox, importerPath);
 }
 
@@ -719,8 +750,8 @@ function resolveLegacyPiSpecifier(args: { path: string; importer: string }): { p
 	}
 }
 
-function resolveTypeBoxSpecifier(): { path: string } {
-	return { path: TYPEBOX_SHIM_PATH };
+function resolveTypeBoxSpecifier(): { path: string } | undefined {
+	return TYPEBOX_SHIM_PATH ? { path: TYPEBOX_SHIM_PATH } : undefined;
 }
 
 export function installLegacyPiSpecifierShim(): void {
