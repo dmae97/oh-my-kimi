@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
+	getTerminalInfo,
 	hyperlinksUserOverride,
+	ImageProtocol,
+	NotifyProtocol,
+	resolveWarpImageProtocol,
 	shouldEnableHyperlinksByDefault,
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
@@ -257,5 +261,28 @@ describe("shouldEnableHyperlinksByDefault", () => {
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1" }, "base")).toBe(true);
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", TMUX: "1" }, "wezterm")).toBe(true);
 		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1", STY: "1.pts-0" }, "kitty")).toBe(true);
+	});
+});
+
+describe("Warp terminal capabilities", () => {
+	it("is Kitty-capable with true color but no OSC 8 hyperlinks", () => {
+		const warp = getTerminalInfo("warp");
+		expect(warp.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(warp.trueColor).toBe(true);
+		expect(warp.hyperlinks).toBe(false);
+		expect(warp.notifyProtocol).toBe(NotifyProtocol.Bell);
+		expect(warp.textSizing).toBe(false);
+	});
+
+	it("keeps Kitty inline images on macOS/Linux but drops them on Windows", () => {
+		expect(resolveWarpImageProtocol("darwin")).toBe(ImageProtocol.Kitty);
+		expect(resolveWarpImageProtocol("linux")).toBe(ImageProtocol.Kitty);
+		expect(resolveWarpImageProtocol("win32")).toBeNull();
+	});
+
+	it("leaves OSC 8 hyperlinks off by default since Warp renders the escape as literal text", () => {
+		expect(shouldEnableHyperlinksByDefault({}, "warp")).toBe(false);
+		// The shared force-on override still wins for users on a Warp build that adds support.
+		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1" }, "warp")).toBe(true);
 	});
 });

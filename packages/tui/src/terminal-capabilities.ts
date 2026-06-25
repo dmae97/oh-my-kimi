@@ -21,7 +21,16 @@ export enum NotifyProtocol {
 	Osc9 = "\x1b]9;",
 }
 
-export type TerminalId = "kitty" | "ghostty" | "wezterm" | "iterm2" | "vscode" | "alacritty" | "base" | "trueColor";
+export type TerminalId =
+	| "kitty"
+	| "ghostty"
+	| "wezterm"
+	| "iterm2"
+	| "vscode"
+	| "alacritty"
+	| "warp"
+	| "base"
+	| "trueColor";
 
 function hasNeedleBefore(line: string, needle: string, limit: number): boolean {
 	const index = line.indexOf(needle);
@@ -374,6 +383,19 @@ function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null 
 	}
 	return null;
 }
+
+/**
+ * Warp implements the Kitty graphics protocol only on macOS/Linux; its Windows
+ * build ships without it, so the same APC sequences render as visible garbage
+ * there (warpdotdev/Warp#26 landed Mac/Linux only). Warp is marked Kitty-capable
+ * in {@link KNOWN_TERMINALS}; the {@link TERMINAL} builder calls this to drop the
+ * protocol on win32. Kept pure (platform injected) so the carve-out is testable
+ * without mutating `process.platform`.
+ */
+export function resolveWarpImageProtocol(platform: NodeJS.Platform = process.platform): ImageProtocol | null {
+	return platform === "win32" ? null : ImageProtocol.Kitty;
+}
+
 const KNOWN_TERMINALS = Object.freeze({
 	// Fallback terminals
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
@@ -385,6 +407,13 @@ const KNOWN_TERMINALS = Object.freeze({
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9),
 	vscode: new TerminalInfo("vscode", null, true, true, NotifyProtocol.Bell),
 	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell),
+	// Warp identifies via TERM_PROGRAM=WarpTerminal and ships the Kitty graphics
+	// protocol on macOS/Linux (direct placement only — no Unicode placeholders, so
+	// detectKittyUnicodePlaceholdersSupport correctly excludes it). It does not
+	// honor OSC 8 yet (the escape renders as visible text), so hyperlinks stay off;
+	// the win32 Kitty carve-out lives in the TERMINAL builder via
+	// resolveWarpImageProtocol.
+	warp: new TerminalInfo("warp", ImageProtocol.Kitty, true, false, NotifyProtocol.Bell),
 });
 
 export const TERMINAL_ID: TerminalId = (() => {
@@ -418,6 +447,7 @@ export const TERMINAL_ID: TerminalId = (() => {
 		if (caseEq(TERM_PROGRAM, "iterm.app")) return "iterm2";
 		if (caseEq(TERM_PROGRAM, "vscode")) return "vscode";
 		if (caseEq(TERM_PROGRAM, "alacritty")) return "alacritty";
+		if (caseEq(TERM_PROGRAM, "warpterminal")) return "warp";
 	}
 
 	if (TERM?.toLowerCase().includes("ghostty")) return "ghostty";
@@ -448,6 +478,9 @@ export const TERMINAL: RuntimeTerminal = (() => {
 	const forcedImageProtocol = getForcedImageProtocol();
 	if (forcedImageProtocol !== undefined) {
 		resolved.imageProtocol = forcedImageProtocol;
+	} else if (resolved.id === "warp") {
+		// Warp advertises Kitty graphics on macOS/Linux only; drop it on win32.
+		resolved.imageProtocol = resolveWarpImageProtocol();
 	} else if (!resolved.imageProtocol) {
 		const fallbackImageProtocol = getFallbackImageProtocol(resolved.id);
 		if (fallbackImageProtocol) resolved.imageProtocol = fallbackImageProtocol;
