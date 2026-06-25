@@ -215,6 +215,48 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
+	it("marks manual compaction active before abort teardown can yield", async () => {
+		session.settings.set("compaction.keepRecentTokens", 1);
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "previous answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage: {
+				input: 1_000,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		});
+		sessionManager.appendMessage({
+			role: "user",
+			content: "second turn",
+			timestamp: Date.now(),
+		});
+
+		const abortEntered = Promise.withResolvers<void>();
+		const releaseAbort = Promise.withResolvers<void>();
+		let compactingDuringAbort: boolean | undefined;
+		vi.spyOn(session, "abort").mockImplementation(async () => {
+			compactingDuringAbort = session.isCompacting;
+			abortEntered.resolve();
+			await releaseAbort.promise;
+		});
+
+		const compactPromise = session.compact();
+		await abortEntered.promise;
+		releaseAbort.resolve();
+		await compactPromise;
+
+		expect(compactingDuringAbort).toBe(true);
+	});
+
 	it("runs threshold compaction for active goal turns that end with yield", async () => {
 		const now = Date.now();
 		session.setGoalModeState({
