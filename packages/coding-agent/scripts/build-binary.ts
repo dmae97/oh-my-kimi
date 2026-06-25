@@ -58,6 +58,15 @@ async function main(): Promise<void> {
 				: Bun.env,
 		);
 		await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--generate"]);
+		// Regenerate the bundled-pi registry + key set before the compile so any
+		// new pi-* subpath export added under `packages/*/package.json` is served
+		// from the host's in-process copy. Without this, `bun build --compile`
+		// would freeze whatever the committed registry happened to enumerate at
+		// the time of the last manual `--generate`, and a new subpath added
+		// since then would crash extension validation with `Cannot find module`
+		// (issue #3442). The generator also normalizes formatting, so the diff
+		// against the committed copy stays clean.
+		await runCommand(["bun", "scripts/generate-legacy-pi-bundled-registry.ts", "--generate"]);
 		try {
 			const buildEnv = shouldAdhocSignDarwinBinary() ? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" } : Bun.env;
 			await runCommand(
