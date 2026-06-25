@@ -115,6 +115,63 @@ describe("formatSessionHistoryMarkdown", () => {
 		expect(output).toContain("→ search() ⇒ ok · 1 line");
 	});
 
+	it("renders find paths without falling back to JSON arguments", () => {
+		const output = formatSessionHistoryMarkdown([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-find",
+						name: "find",
+						arguments: { paths: ["packages/coding-agent/src/**/*.ts"] },
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-find",
+				toolName: "find",
+				content: [{ type: "text", text: "session-history-format.ts" }],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+
+		expect(output).toContain("→ find(packages/coding-agent/src/**/*.ts) ⇒ ok · 1 line");
+		expect(output).not.toContain('{"paths"');
+	});
+
+	it("renders search path scope alongside the pattern", () => {
+		const output = formatSessionHistoryMarkdown([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-search",
+						name: "search",
+						arguments: { pattern: "PRIMARY_ARG_KEYS", paths: ["packages/coding-agent/src/session"] },
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-search",
+				toolName: "search",
+				content: [{ type: "text", text: "timed out" }],
+				isError: true,
+				timestamp: 2,
+			},
+		]);
+
+		expect(output).toContain(
+			"→ search(PRIMARY_ARG_KEYS @ packages/coding-agent/src/session) ⇒ error · 1 line — timed out",
+		);
+	});
+
 	it("renders tool intent comments immediately before tool call lines when includeToolIntent is true", () => {
 		const messages = [
 			{
