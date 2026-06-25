@@ -45,8 +45,15 @@ let bundledRegistryPromise: Promise<BundledRegistry> | null = null;
 
 /**
  * Lazy-load the bundled host-package registry and stash it on `globalThis`
- * for the synthetic loader emitted by `synthesizeBundledModuleSource`. The
- * dynamic import is gated by `IS_COMPILED_BINARY` so dev/test runs (where
+ * for the synthetic loader emitted by `synthesizeBundledModuleSource`.
+ *
+ * `globalThis` is the bridge, not laziness: each synthesized
+ * `omp-legacy-pi-bundled:<key>` module is a *separate* ES module Bun compiles
+ * from a source string, so it cannot close over the registry in this file's
+ * lexical scope and the live (non-serializable) function/object exports cannot
+ * be inlined — the only runtime channel back to the host objects is a global.
+ *
+ * The dynamic import is gated by `IS_COMPILED_BINARY` so dev/test runs (where
  * the registry's transitive deps include build-time-generated artifacts)
  * never trigger the cascade.
  */
@@ -116,16 +123,6 @@ async function synthesizeBundledModuleSource(registryKey: string): Promise<strin
 }
 
 /**
- * Test seam: lazily loads the canonical-specifier → live module registry used
- * by the compiled-binary virtual loader. The synthesizer enumerates this at
- * extension load time, so the test only needs to confirm registry shape +
- * identity. In non-compiled mode this rejects — callers MUST guard.
- */
-export function __getLegacyPiBundledRegistry(): Promise<BundledRegistry> {
-	return ensureBundledRegistryLoaded();
-}
-
-/**
  * Test seam: builds the synthetic ES module source for a virtual specifier
  * against an explicit registry. Pure (no globalThis read); the emitted source
  * still routes runtime lookups through `globalThis[BUNDLED_REGISTRY_GLOBAL]`.
@@ -135,15 +132,6 @@ export function __synthesizeLegacyPiBundledSourceWithRegistry(
 	registry: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): string {
 	return synthesizeBundledModuleSourceFromRegistry(registryKey, registry);
-}
-
-/**
- * Test seam: returns the synthetic ES module source served for a virtual
- * specifier. Convenience wrapper around the lazy registry load + synth path
- * for tests that already run in compiled-binary mode.
- */
-export function __synthesizeLegacyPiBundledSource(registryKey: string): Promise<string> {
-	return synthesizeBundledModuleSource(registryKey);
 }
 
 /**
