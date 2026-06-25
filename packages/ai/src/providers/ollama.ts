@@ -192,14 +192,14 @@ function toPlainContent(
 	};
 }
 
-function convertMessage(message: Message, supportsImages: boolean): OllamaMessage {
+function convertMessage(message: Message, supportsImages: boolean, developerRole: "system" | "user" = "user"): OllamaMessage {
 	if (message.role === "user") {
 		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "user", ...converted };
 	}
 	if (message.role === "developer") {
 		const converted = toPlainContent(message.content, supportsImages);
-		return { role: "system", ...converted };
+		return { role: developerRole, ...converted };
 	}
 	if (message.role === "toolResult") {
 		const converted = toPlainContent(message.content, supportsImages);
@@ -240,23 +240,18 @@ function convertMessage(message: Message, supportsImages: boolean): OllamaMessag
 }
 
 function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaMessage[] {
-	const messages: Message[] = [];
-	// Emit one developer message per ordered system prompt. The wire role is mapped to "system"
-	// by `convertMessage`, but keeping the prompts separate preserves prefix-cache stability:
-	// if only the trailing prompt changes between calls, the leading system messages keep
-	// their identical token prefix so KV-cache reuse covers them.
-	for (const systemPrompt of normalizeSystemPrompts(context.systemPrompt)) {
-		messages.push({
-			role: "developer",
-			content: systemPrompt,
-			timestamp: Date.now(),
-		});
-	}
-	messages.push(...context.messages);
+	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+	const systemMessages: Message[] = systemPrompts.map(systemPrompt => ({
+		role: "developer",
+		content: systemPrompt,
+		timestamp: Date.now(),
+	}));
+	const messages: Message[] = [...systemMessages, ...context.messages];
 	const isCloud = model.provider === "ollama-cloud";
 	const supportsImages = model.input.includes("image");
-	return transformMessages(messages, model).map(msg => {
-		const converted = convertMessage(msg, supportsImages);
+	return transformMessages(messages, model).map((msg, index) => {
+		const developerRole = msg.role === "developer" && index < systemPrompts.length ? "system" : "user";
+		const converted = convertMessage(msg, supportsImages, developerRole);
 		// Ollama cloud rejects requests when assistant history messages contain the `thinking`
 		// field — it's valid in model responses but not accepted as a history input. Strip it
 		// to prevent HTTP 400 errors. Local Ollama instances are unaffected.
