@@ -136,12 +136,13 @@ describe("convertToLlm custom message mapping", () => {
 		expect(text).toContain("export const config = {};");
 	});
 
-	it("routes image-bearing file mentions through user role to satisfy Codex schema (#3443)", () => {
-		// `developer` (and `system`) Responses messages reject `input_image`
-		// with `Invalid value: 'input_image'. Supported values are: 'input_text'.`
-		// Issue #3421's earlier fix only disabled Codex Responses Lite for image
-		// turns; the role-promotion here closes the bug at the source so every
-		// Responses-family provider accepts attached images.
+	it("splits mixed text + image file mentions into developer + user messages (#3443)", () => {
+		// `developer` (and `system`) Responses messages reject `input_image` with
+		// `Invalid value: 'input_image'. Supported values are: 'input_text'.`
+		// `generateFileMentionMessages` packs every `@…` into one `fileMention`,
+		// so a `@notes.md @diagram.png` turn would have demoted the text payload
+		// to `user` (losing the instruction-priority intent) before #3443; now the
+		// text-only file stays on `developer` and only the image file rides as `user`.
 		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
 		const messages: AgentMessage[] = [
 			{
@@ -156,17 +157,50 @@ describe("convertToLlm custom message mapping", () => {
 
 		const converted = convertToLlm(messages);
 
+		expect(converted).toHaveLength(2);
+
+		const dev = converted[0];
+		expect(dev?.role).toBe("developer");
+		expectAttribution(dev, "user");
+		if (dev?.role !== "developer" || !Array.isArray(dev.content)) {
+			throw new Error("Expected developer array content for text mention");
+		}
+		const devText = dev.content.find(content => content.type === "text")?.text ?? "";
+		expect(devText).toContain('<file path="notes/log.txt">');
+		expect(devText).toContain("alpha");
+		expect(devText).not.toContain('<file path="diagram.png">');
+		expect(dev.content.some(content => content.type === "image")).toBe(false);
+
+		const user = converted[1];
+		expect(user?.role).toBe("user");
+		expectAttribution(user, "user");
+		if (user?.role !== "user" || !Array.isArray(user.content)) {
+			throw new Error("Expected user array content for image mention");
+		}
+		const userText = user.content.find(content => content.type === "text")?.text ?? "";
+		expect(userText).toContain('<file path="diagram.png">');
+		expect(userText).not.toContain('<file path="notes/log.txt">');
+		expect(user.content.filter(content => content.type === "image")).toEqual([image]);
+	});
+
+	it("emits a user-only message when every mention is an image (#3443)", () => {
+		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+		const messages: AgentMessage[] = [
+			{
+				role: "fileMention",
+				files: [{ path: "screenshot.png", content: "", image }],
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
 		expect(converted).toHaveLength(1);
 		expect(converted[0]?.role).toBe("user");
-		expectAttribution(converted[0], "user");
 		if (converted[0]?.role !== "user" || !Array.isArray(converted[0].content)) {
 			throw new Error("Expected user array content");
 		}
-		const text = converted[0].content.find(content => content.type === "text")?.text ?? "";
-		expect(text).toContain('<file path="notes/log.txt">');
-		expect(text).toContain('<file path="diagram.png">');
-		const images = converted[0].content.filter(content => content.type === "image") as ImageContent[];
-		expect(images).toEqual([image]);
+		expect(converted[0].content.filter(content => content.type === "image")).toEqual([image]);
 	});
 
 	it("allows custom messages to opt into user attribution", () => {
