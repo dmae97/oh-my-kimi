@@ -2083,7 +2083,25 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					`Invalid selector ':${internalTarget.sel}' on '${internalTarget.path}'. Use :N, :N-M, :N+K, :N- (open-ended), a comma-separated list of ranges, :raw, or a range combined with raw (e.g. :raw:50-100).`,
 				);
 			}
-			return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+			const urlMeta = parseInternalUrl(internalTarget.path);
+			const scheme = urlMeta.protocol.replace(/:$/, "").toLowerCase();
+			if (scheme === "local") {
+				const localFile = await resolveLocalUrlToFile(urlMeta, {
+					cwd: this.session.cwd,
+					settings: this.session.settings,
+					signal,
+					localProtocolOptions: this.session.localProtocolOptions,
+					skills: this.session.skills,
+				});
+				if (localFile) {
+					readPath =
+						internalTarget.sel === undefined ? localFile.path : `${localFile.path}:${internalTarget.sel}`;
+				} else {
+					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+				}
+			} else {
+				return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+			}
 		}
 
 		// One suffix-glob memo per read call — archive, sqlite, and plain-path

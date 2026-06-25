@@ -12,7 +12,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { InternalUrlRouter, LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { InternalUrlRouter, LocalProtocolHandler, parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 
@@ -87,6 +87,28 @@ describe("read local:// images", () => {
 
 		expect(result.content.some(c => c.type === "image")).toBe(false);
 		expect(joinText(result.content)).toContain("hello world");
+	});
+
+	it("rejects a local:// non-image binary without emitting decoded bytes", async () => {
+		await Bun.write(path.join(localRoot, "clip.mp4"), new Uint8Array([0, 1, 2, 3, 4, 5]));
+		const tool = new ReadTool(makeSession(testDir));
+
+		const result = await tool.execute("call", { path: "local://clip.mp4" });
+		const text = joinText(result.content);
+
+		expect(text).toContain("Cannot read binary file");
+		expect(text).toContain("clip.mp4");
+		expect(text).not.toContain("\u0000");
+	});
+
+	it("does not materialize local:// binary resources in the protocol handler", async () => {
+		await Bun.write(path.join(localRoot, "archive.zip"), new Uint8Array([0, 1, 2, 3, 4, 5]));
+
+		const resource = await new LocalProtocolHandler().resolve(parseInternalUrl("local://archive.zip"));
+
+		expect(resource.content).toContain("Cannot read binary local:// file");
+		expect(resource.content).toContain("archive.zip");
+		expect(resource.content).not.toContain("\u0000");
 	});
 
 	it("does not read an image symlinked outside the local root", async () => {
