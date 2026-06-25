@@ -183,18 +183,18 @@ interface ResourceIndicatorFilterOptions {
 }
 
 /**
- * Drop a redundant resource indicator relative to {@link serverUrl}.
+ * Drop a redundant fallback resource indicator relative to {@link serverUrl}.
  *
- * Exact auth-server-origin values are always redundant: they don't identify a
- * distinct resource server. Path-bearing same-origin resources are different:
- * protected-resource discovery can advertise them for gateway-hosted MCP
- * services (`https://gateway.example.com/my-service/mcp`), and those values
- * must be preserved because they identify the service audience by path.
+ * Provider-advertised resource indicators are authoritative even when they are
+ * origin-only (`https://gateway.example.com`) or path-scoped same-origin
+ * (`https://gateway.example.com/my-service/mcp`): servers can use either form
+ * as the audience they require for the grant.
  *
  * Plane is stricter for OMP-synthesized fallback resources (e.g. using the
  * configured server URL `https://mcp.plane.so/http/mcp` as `resource`), so
- * fallback callers opt into `stripSameOriginResource` while provider-advertised
- * `oauth.resource` values keep the path-preserving default.
+ * fallback callers opt into `stripSameOriginResource`. Provider-advertised
+ * `oauth.resource` values and authorization-URL `?resource=` values keep the
+ * preserving default.
  */
 function filterResourceIndicator(
 	resource: string | undefined,
@@ -206,9 +206,7 @@ function filterResourceIndicator(
 		const origin = new URL(serverUrl).origin;
 		const parsedResource = new URL(resource);
 		if (parsedResource.origin !== origin) return resource;
-		if (options.stripSameOriginResource || (parsedResource.pathname === "/" && parsedResource.search === "")) {
-			return undefined;
-		}
+		if (options.stripSameOriginResource) return undefined;
 	} catch {
 		// Malformed serverUrl will fail elsewhere; fall through.
 	}
@@ -334,16 +332,16 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		const existingResource = params.get("resource")?.trim();
 		if (existingResource) {
 			// A resource already embedded in the provider's authorization URL is
-			// provider-authored, not OMP's server-URL fallback. Preserve
-			// path-scoped same-host values here even when the caller marked its
-			// separate `config.resource` as fallback; gateway-hosted MCP servers
-			// can use that path as the token audience.
+			// provider-authored, not OMP's server-URL fallback. Preserve same-host
+			// values here even when the caller marked its separate
+			// `config.resource` as fallback; gateway-hosted MCP servers can use
+			// origin-only or path-scoped values as the token audience.
 			const filtered = filterResourceIndicator(resolveResourceUri(existingResource), this.config.authorizationUrl);
 			if (filtered) {
 				this.#resource = filtered;
 			} else {
-				// Exact auth-server-origin resources are redundant — drop them from
-				// both the authorize URL and the matching token request.
+				// Defensive path for future policy additions: when filtering says
+				// "omit", drop it from both authorize and token requests.
 				params.delete("resource");
 				this.#resource = undefined;
 			}

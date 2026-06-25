@@ -551,10 +551,9 @@ describe("mcp oauth flow", () => {
 		expect(tokenParams.get("resource")).toBeNull();
 	});
 	describe("RFC 8707 resource indicator", () => {
-		// Exact auth-server-origin values are redundant, but path-scoped
-		// same-host values from protected-resource discovery identify a distinct
-		// MCP service and must be preserved. Plane's fallback-resource case opts
-		// into same-origin path stripping separately.
+		// Provider-advertised resource indicators are authoritative, including
+		// origin-only values. Plane's fallback-resource case opts into
+		// same-origin stripping separately.
 
 		const REDIRECT_URI = "http://127.0.0.1:14580/callback";
 
@@ -578,42 +577,41 @@ describe("mcp oauth flow", () => {
 			);
 		}
 
-		it("strips resource from generateAuthUrl when it equals the authorization-server origin", async () => {
+		it("keeps advertised resource from generateAuthUrl when it equals the authorization-server origin", async () => {
 			const flow = await buildFlow({
-				authorizationUrl: "https://mcp.plane.so/authorize",
-				resource: "https://mcp.plane.so",
+				authorizationUrl: "https://gateway.example.com/authorize",
+				resource: "https://gateway.example.com",
 			});
 
 			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
 
-			expect(new URL(url).searchParams.get("resource")).toBeNull();
-			expect(flow.resource).toBeUndefined();
+			expect(new URL(url).searchParams.get("resource")).toBe("https://gateway.example.com");
+			expect(flow.resource).toBe("https://gateway.example.com");
 		});
-
-		it("strips resource from generateAuthUrl when it equals the auth-server origin with trailing slash", async () => {
+		it("keeps advertised resource from generateAuthUrl when it equals the auth-server origin with trailing slash", async () => {
 			const flow = await buildFlow({
-				authorizationUrl: "https://mcp.plane.so/authorize",
-				resource: "https://mcp.plane.so/",
+				authorizationUrl: "https://gateway.example.com/authorize",
+				resource: "https://gateway.example.com/",
 			});
 
 			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
 
-			expect(new URL(url).searchParams.get("resource")).toBeNull();
-			expect(flow.resource).toBeUndefined();
+			expect(new URL(url).searchParams.get("resource")).toBe("https://gateway.example.com/");
+			expect(flow.resource).toBe("https://gateway.example.com/");
 		});
 
-		it("strips an origin-only resource that was pre-populated on the authorization URL", async () => {
+		it("keeps an origin-only resource that was pre-populated on the authorization URL", async () => {
 			const flow = await buildFlow({
-				authorizationUrl: "https://mcp.plane.so/authorize?resource=https%3A%2F%2Fmcp.plane.so",
+				authorizationUrl: "https://gateway.example.com/authorize?resource=https%3A%2F%2Fgateway.example.com",
 			});
 
 			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
 
-			expect(new URL(url).searchParams.get("resource")).toBeNull();
-			expect(flow.resource).toBeUndefined();
+			expect(new URL(url).searchParams.get("resource")).toBe("https://gateway.example.com");
+			expect(flow.resource).toBe("https://gateway.example.com");
 		});
 
-		it("omits resource from the matching token-exchange request when stripped from authorize", async () => {
+		it("omits resource from the matching token-exchange request when fallback origin is stripped from authorize", async () => {
 			// RFC 8707 §2.2 requires the token request's resource indicator to
 			// match the authorize request — so stripping in one mandates the
 			// other.
@@ -621,6 +619,7 @@ describe("mcp oauth flow", () => {
 			const flow = await buildFlow({
 				authorizationUrl: "https://mcp.plane.so/authorize",
 				resource: "https://mcp.plane.so",
+				stripSameOriginResource: true,
 				onTokenBody: body => {
 					tokenRequestBody = body;
 				},
@@ -707,13 +706,12 @@ describe("mcp oauth flow", () => {
 	});
 
 	describe("RFC 8707 resource indicator (refresh)", () => {
-		// Regression for the review on PR #3503: the initial grant stores
-		// `resource: undefined` for fallback same-origin Plane resources, but
-		// `MCPManager.prepareConfig` falls back to `config.url` when the stored
-		// material has no resource. `refreshMCPOAuthToken` must apply the
-		// fallback same-origin filter against the original authorization-server
-		// origin (falling back to `tokenUrl` for legacy credentials) while
-		// preserving advertised path-scoped resources.
+		// Regression for the review on PR #3503: fallback resources derived from
+		// `config.url` may be redundant for Plane and should be stripped, but
+		// provider-advertised origin-only/path-scoped resources are
+		// authoritative. Refresh must mirror the same provenance policy while
+		// filtering against the original authorization-server origin (falling
+		// back to `tokenUrl` for legacy credentials).
 
 		function mockArbitraryTokenEndpoint(targetUrl: string, onBody: (body: string) => void): FetchImpl {
 			return async (input, init) => {
@@ -733,44 +731,44 @@ describe("mcp oauth flow", () => {
 			};
 		}
 
-		it("strips a refresh resource that equals the token-server origin", async () => {
+		it("keeps an advertised refresh resource that equals the token-server origin", async () => {
 			let tokenRequestBody = "";
 
 			await refreshMCPOAuthToken(
-				"https://mcp.plane.so/token",
+				"https://gateway.example.com/token",
 				"refresh-token",
 				"client-id",
 				undefined,
-				"https://mcp.plane.so",
+				"https://gateway.example.com",
 				{
-					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+					fetch: mockArbitraryTokenEndpoint("https://gateway.example.com/token", body => {
 						tokenRequestBody = body;
 					}),
 				},
 			);
 			const tokenParams = new URLSearchParams(tokenRequestBody);
 
-			expect(tokenParams.get("resource")).toBeNull();
+			expect(tokenParams.get("resource")).toBe("https://gateway.example.com");
 		});
 
-		it("strips a refresh resource that equals the token-server origin with trailing slash", async () => {
+		it("keeps an advertised refresh resource that equals the token-server origin with trailing slash", async () => {
 			let tokenRequestBody = "";
 
 			await refreshMCPOAuthToken(
-				"https://mcp.plane.so/token",
+				"https://gateway.example.com/token",
 				"refresh-token",
 				"client-id",
 				undefined,
-				"https://mcp.plane.so/",
+				"https://gateway.example.com/",
 				{
-					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+					fetch: mockArbitraryTokenEndpoint("https://gateway.example.com/token", body => {
 						tokenRequestBody = body;
 					}),
 				},
 			);
 			const tokenParams = new URLSearchParams(tokenRequestBody);
 
-			expect(tokenParams.get("resource")).toBeNull();
+			expect(tokenParams.get("resource")).toBe("https://gateway.example.com/");
 		});
 
 		it("keeps an advertised refresh resource that points at a path under the token-server origin", async () => {
@@ -793,6 +791,27 @@ describe("mcp oauth flow", () => {
 			expect(tokenParams.get("resource")).toBe("https://gateway.example.com/my-service/mcp");
 		});
 
+		it("strips a fallback refresh resource that equals the token-server origin", async () => {
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://mcp.plane.so/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://mcp.plane.so",
+				{
+					stripSameOriginResource: true,
+					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+
 		it("strips a fallback refresh resource that points at a path under the token-server origin", async () => {
 			let tokenRequestBody = "";
 
@@ -813,11 +832,11 @@ describe("mcp oauth flow", () => {
 
 			expect(tokenParams.get("resource")).toBeNull();
 		});
-		it("strips a refresh resource that equals the authorization-server origin even when token endpoint lives on a different origin", async () => {
+		it("strips a fallback refresh resource that equals the authorization-server origin even when token endpoint lives on a different origin", async () => {
 			// Cross-origin case: RFC 8414 permits authorize and token endpoints
-			// on separate origins. The grant filters against `authorizationUrl`,
-			// so refresh MUST do the same — `tokenUrl`'s origin can no longer
-			// stand in for the auth-server origin. (Issue #3502 review #2.)
+			// on separate origins. Fallback resources filter against
+			// `authorizationUrl`, so `tokenUrl`'s origin cannot stand in for the
+			// auth-server origin. (Issue #3502 review #2.)
 			let tokenRequestBody = "";
 
 			await refreshMCPOAuthToken(
@@ -828,6 +847,7 @@ describe("mcp oauth flow", () => {
 				"https://auth.example.com",
 				{
 					authorizationUrl: "https://auth.example.com/authorize",
+					stripSameOriginResource: true,
 					fetch: mockArbitraryTokenEndpoint("https://token.example.com/token", body => {
 						tokenRequestBody = body;
 					}),
@@ -859,10 +879,7 @@ describe("mcp oauth flow", () => {
 			expect(tokenParams.get("resource")).toBe("https://api.example.com");
 		});
 
-		it("falls back to tokenUrl-anchored exact-origin filtering for legacy credentials without authorizationUrl", async () => {
-			// Documents the legacy path: credentials minted before this fix don't
-			// carry `authorizationUrl`, so refresh still strips exact origin-only
-			// resources against `tokenUrl`.
+		it("preserves tokenUrl-origin resources for legacy direct refresh calls without fallback provenance", async () => {
 			let tokenRequestBody = "";
 
 			await refreshMCPOAuthToken(
@@ -879,7 +896,7 @@ describe("mcp oauth flow", () => {
 			);
 			const tokenParams = new URLSearchParams(tokenRequestBody);
 
-			expect(tokenParams.get("resource")).toBeNull();
+			expect(tokenParams.get("resource")).toBe("https://token.example.com");
 		});
 	});
 
