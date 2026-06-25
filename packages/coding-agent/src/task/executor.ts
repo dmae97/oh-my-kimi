@@ -50,12 +50,12 @@ import {
 	type OutputValidator,
 	summarizeValidationFailure,
 } from "../tools/output-schema-validator";
-
 import { type ReportFindingDetails, toReviewFinding } from "../tools/review";
 import { ToolAbortError } from "../tools/tool-errors";
 import type { EventBus } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { WorkspaceTree } from "../workspace-tree";
+import { Semaphore } from "./parallel";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
@@ -192,6 +192,35 @@ function installSubagentRetryFallbackChain(args: {
 	}
 	settings.override("retry.fallbackChains", fallbackChains);
 	return role;
+}
+
+const PROVIDER_MAX_CONCURRENCY_SETTINGS: Record<string, SettingPath> = {
+	"ollama-cloud": "providers.ollama-cloud.maxConcurrency",
+};
+
+interface ProviderSemaphoreEntry {
+	limit: number;
+	semaphore: Semaphore;
+}
+
+const providerSemaphores = new Map<string, ProviderSemaphoreEntry>();
+
+function getProviderConcurrencyLimit(settings: Settings, provider: string): number {
+	const settingPath = PROVIDER_MAX_CONCURRENCY_SETTINGS[provider];
+	if (!settingPath) return 0;
+	const raw = settings.get(settingPath);
+	const limit = Number.isFinite(raw) ? Math.trunc(raw) : 0;
+	return limit > 0 ? limit : 0;
+}
+
+function getProviderSemaphore(settings: Settings, provider: string): Semaphore | undefined {
+	const limit = getProviderConcurrencyLimit(settings, provider);
+	if (limit <= 0) return undefined;
+	const existing = providerSemaphores.get(provider);
+	if (existing?.limit === limit) return existing.semaphore;
+	const semaphore = new Semaphore(limit);
+	providerSemaphores.set(provider, { limit, semaphore });
+	return semaphore;
 }
 
 function renderIrcPeerRoster(selfId: string): string {
@@ -1889,6 +1918,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let sessionOpenedAt: number | undefined;
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
+		let providerSemaphore: Semaphore | undefined;
+		let providerSemaphoreAcquired = false;
 
 		try {
 			checkAbort();
@@ -1957,6 +1988,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? resolvedThinkingLevel
 				: (thinkingLevel ?? resolvedThinkingLevel);
 			resolvedAt = performance.now();
+			if (model) {
+				providerSemaphore = getProviderSemaphore(settings, model.provider);
+				if (providerSemaphore) {
+					await awaitAbortable(providerSemaphore.acquire());
+					providerSemaphoreAcquired = true;
+					checkAbort();
+				}
+			}
 
 			const effectiveCwd = worktree ?? cwd;
 			const sessionManager = sessionFile
@@ -2246,6 +2285,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					abortReasonText ??= monitor.resolveAbortReasonText();
 				}
 				if (exitCode === 0) exitCode = 1;
+			}
+			if (providerSemaphoreAcquired) {
+				providerSemaphore?.release();
+				providerSemaphoreAcquired = false;
 			}
 			sessionAbortController.abort();
 			if (unsubscribe) {

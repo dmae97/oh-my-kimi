@@ -10619,7 +10619,16 @@ export class AgentSession {
 	#getRetryFallbackChains(): RetryFallbackChains {
 		const configuredChains = this.settings.get("retry.fallbackChains");
 		if (!configuredChains || typeof configuredChains !== "object") return {};
-		return configuredChains as RetryFallbackChains;
+		const chains: RetryFallbackChains = { ...(configuredChains as RetryFallbackChains) };
+		const defaultChain = chains.default;
+		if (Array.isArray(defaultChain)) {
+			for (const role of Object.keys(this.settings.getModelRoles())) {
+				if (role !== "default" && chains[role] === undefined) {
+					chains[role] = defaultChain;
+				}
+			}
+		}
+		return chains;
 	}
 
 	#validateRetryFallbackChains(): void {
