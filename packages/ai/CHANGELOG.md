@@ -20,6 +20,9 @@
 
 - Fixed Ollama/Ollama Cloud native chat responses that finish with `done_reason: "length"` and no assistant content surfacing as a normal empty stop; they now become a context-window error instead of entering empty-stop retry recovery. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed direct Anthropic Claude Sonnet/Haiku 4.5 requests serializing `output_config.effort`. The catalog classification (`packages/catalog/src/model-thinking.ts`) drove the `anthropic-budget-effort` branch in `buildParams`, which Anthropic's first-party Messages API rejects on Sonnet/Haiku 4.5 with HTTP 400 `This model does not support the effort parameter.` Sonnet/Haiku 4.5 now use plain `thinking.budget_tokens`; Opus 4.5 still emits `output_config.effort` because Anthropic supports it there. ([#3497](https://github.com/can1357/oh-my-pi/issues/3497))
+### Changed
+
+- Changed the GitLab Duo Agent rendered-`goal` soft overflow threshold from 1.25 MB to 1 MB (`1_048_576`), so a goal at or above 1 MB enters the jitter zone and an `There was an error` failure there is re-labeled as a context overflow to trigger auto-compaction earlier. The 1.25 MB ceiling almost never fired in practice; lowering it makes auto-compaction engage before the goal grows into the high-failure band. The hard (necessary-fail) threshold stays at 2 MB.
 
 ## [16.1.19] - 2026-06-25
 

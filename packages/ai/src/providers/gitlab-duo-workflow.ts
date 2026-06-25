@@ -88,9 +88,11 @@ const GITLAB_DUO_WORKFLOW_STALL_ERROR_MESSAGE =
  * Two rendered-`goal` byte thresholds bounding three reliability zones. Empirically
  * the DWS/Workhorse transport accepts no fixed token wall (it has tokenized
  * 970k-token goals) but its failure probability rises with the rendered-goal BYTE
- * size: ≤~1.25MB basically always succeeds, ~1.4–1.7MB is a jitter band where a
- * request fails more often than not but can still go through, ≥~2MB basically always
- * fails, and 4MB is the DWS gRPC `MAX_MESSAGE_SIZE` hard cap.
+ * size: ≤~1MB is the reliable floor we now treat as the auto-compaction trigger,
+ * ~1.4–1.7MB is a jitter band where a request fails more often than not but can still
+ * go through, ≥~2MB basically always fails, and 4MB is the DWS gRPC `MAX_MESSAGE_SIZE`
+ * hard cap. The soft threshold was lowered from 1.25MB to 1MB because the higher value
+ * almost never fired in practice — auto-compaction needs to engage earlier.
  *
  * - `[0, SOFT)` reliable zone: send normally; an error here is a genuine upstream
  *   fault and surfaces verbatim.
@@ -100,10 +102,10 @@ const GITLAB_DUO_WORKFLOW_STALL_ERROR_MESSAGE =
  * - `[HARD, ∞)` necessary-fail zone: do NOT spend the request — proactively end the
  *   stream with the overflow error so the session compacts immediately.
  *
- * `SOFT` is the measured last-guaranteed-success ceiling; `HARD` is the necessary-fail
- * floor. Re-labeling uses {@link buildGitLabDuoWorkflowGoalOverflowMessage}.
+ * `SOFT` is the auto-compaction trigger floor; `HARD` is the necessary-fail floor.
+ * Re-labeling uses {@link buildGitLabDuoWorkflowGoalOverflowMessage}.
  */
-const GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES = 1_250_000;
+const GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES = 1_048_576;
 const GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES = 2_000_000;
 
 // An overflow-pattern message for an oversized goal. The "prompt is too long" prefix
