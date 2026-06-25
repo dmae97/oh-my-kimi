@@ -650,6 +650,28 @@ function collectStoredAccounts(authStorage: AuthStorage): UsageAccountIdentity[]
 	return accounts;
 }
 
+/**
+ * Keep only accounts worth a usage row: those whose provider has a usage
+ * provider, so a missing report is a real gap rather than the absence of any
+ * usage concept. Providers with no usage endpoint (web-search keys, local /
+ * keyless servers, inference providers without a usage API) would only ever
+ * render as noise, so they are dropped.
+ *
+ * `hasUsageProvider` is injected (in practice {@link AuthStorage.usageProviderFor})
+ * so custom/broker resolvers stay authoritative — no provider list is duplicated
+ * here. An explicit `--provider` request bypasses the cull, so
+ * `omp usage --provider xai` can still confirm the stored credential has no
+ * usage endpoint.
+ */
+export function selectReportableAccounts(
+	accounts: UsageAccountIdentity[],
+	hasUsageProvider: (provider: string) => boolean,
+	explicitProvider?: string,
+): UsageAccountIdentity[] {
+	if (explicitProvider) return accounts;
+	return accounts.filter(account => hasUsageProvider(account.provider));
+}
+
 /** Apply a redaction mask to an optional identity field. */
 function maskIdentity(redaction: Map<string, string>, value: string | undefined): string | undefined {
 	return value === undefined ? undefined : (redaction.get(value) ?? value);
@@ -721,7 +743,12 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			(await authStorage.fetchUsageReports({
 				baseUrlResolver: provider => modelRegistry.getProviderBaseUrl(provider),
 			})) ?? [];
-		let accounts = collectStoredAccounts(authStorage);
+		const storedAccounts = collectStoredAccounts(authStorage);
+		let accounts = selectReportableAccounts(
+			storedAccounts,
+			provider => authStorage.usageProviderFor(provider) !== undefined,
+			cmd.provider,
+		);
 		let filteredReports = reports;
 		if (cmd.provider) {
 			const wanted = cmd.provider.toLowerCase();
@@ -764,9 +791,13 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 
 		if (filteredReports.length === 0 && accounts.length === 0) {
 			const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";
-			process.stderr.write(
-				chalk.yellow(`No credentials found${scope}. Run \`omp\` and use /login to add accounts.\n`),
-			);
+			// Credentials exist but every one is for a provider without a usage
+			// endpoint — say so rather than implying nothing is logged in.
+			const message =
+				storedAccounts.length > 0
+					? `No usage data${scope}. Stored credentials are for providers without a usage endpoint.\n`
+					: `No credentials found${scope}. Run \`omp\` and use /login to add accounts.\n`;
+			process.stderr.write(chalk.yellow(message));
 			process.exitCode = 1;
 			return;
 		}

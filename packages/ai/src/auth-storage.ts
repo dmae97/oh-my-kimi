@@ -2660,6 +2660,17 @@ export class AuthStorage {
 		);
 	}
 
+	/**
+	 * The {@link UsageProvider} registered for `provider`, or undefined when the
+	 * provider has no usage endpoint at all. Lets callers tell "a credential we
+	 * could have fetched usage for but didn't" apart from "a provider with no
+	 * usage concept" (web-search keys, local/keyless servers, inference
+	 * providers without a usage API) — the latter never warrants a usage row.
+	 */
+	usageProviderFor(provider: Provider): UsageProvider | undefined {
+		return this.#usageProviderResolver?.(provider);
+	}
+
 	async fetchUsageReports(options?: {
 		baseUrlResolver?: (provider: Provider) => string | undefined;
 		/** Caller's cancel signal; only rejects this caller, never the shared upstream fetch. */
