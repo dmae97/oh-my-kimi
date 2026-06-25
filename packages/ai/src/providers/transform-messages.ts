@@ -147,35 +147,53 @@ function isMalformedToolCallName(name: string | undefined): boolean {
 }
 
 function sanitizeMalformedToolCalls(messages: Message[]): Message[] {
-	const malformedIds = new Set<string>();
-	for (const msg of messages) {
+	// Fast path: skip the rewrite entirely when nothing is malformed.
+	let hasMalformed = false;
+	outer: for (const msg of messages) {
 		if (msg.role !== "assistant") continue;
 		for (const block of msg.content) {
 			if (block.type === "toolCall" && isMalformedToolCallName(block.name)) {
-				malformedIds.add(block.id);
+				hasMalformed = true;
+				break outer;
 			}
 		}
 	}
-	if (malformedIds.size === 0) return messages;
+	if (!hasMalformed) return messages;
 
+	// Positional FIFO pairing: a tool-call id can repeat across history when an
+	// OpenAI-Responses composite id (`callId|itemId`) collapses on the wire to
+	// the same `callId` (see `deduplicateToolCallIds` + `transform-messages-dedup`).
+	// A set-based "drop every result for this id" loses the real output for the
+	// surviving valid occurrence whenever one duplicate is malformed. Track each
+	// `toolCall` occurrence's malformed-ness on a per-id queue and pop on the
+	// first unconsumed matching `toolResult` so we drop only the one tied to the
+	// malformed call.
+	const dropQueues = new Map<string, boolean[]>();
 	const result: Message[] = [];
 	for (const msg of messages) {
+		if (msg.role === "assistant") {
+			const filtered: AssistantMessage["content"] = [];
+			for (const block of msg.content) {
+				if (block.type === "toolCall") {
+					const malformed = isMalformedToolCallName(block.name);
+					const queue = dropQueues.get(block.id);
+					if (queue) queue.push(malformed);
+					else dropQueues.set(block.id, [malformed]);
+					if (malformed) continue;
+				}
+				filtered.push(block);
+			}
+			if (filtered.length === 0) continue;
+			result.push(filtered.length === msg.content.length ? msg : { ...msg, content: filtered });
+			continue;
+		}
 		if (msg.role === "toolResult") {
-			if (malformedIds.has(msg.toolCallId)) continue;
+			const queue = dropQueues.get(msg.toolCallId);
+			if (queue && queue.length > 0 && queue.shift() === true) continue;
 			result.push(msg);
 			continue;
 		}
-		if (msg.role !== "assistant") {
-			result.push(msg);
-			continue;
-		}
-		const filtered = msg.content.filter(block => !(block.type === "toolCall" && isMalformedToolCallName(block.name)));
-		if (filtered.length === msg.content.length) {
-			result.push(msg);
-			continue;
-		}
-		if (filtered.length === 0) continue;
-		result.push({ ...msg, content: filtered });
+		result.push(msg);
 	}
 	return result;
 }

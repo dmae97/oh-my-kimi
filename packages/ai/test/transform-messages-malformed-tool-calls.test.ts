@@ -163,4 +163,47 @@ describe("transformMessages drops malformed (empty-name) tool calls", () => {
 		expect(getToolCalls(transformed)).toHaveLength(1);
 		expect(transformed.filter(m => m.role === "toolResult")).toHaveLength(1);
 	});
+
+	// Regression for PR #3459 review feedback: a tool-call id can legitimately
+	// repeat across history when an OpenAI-Responses composite id
+	// (`callId|itemId`) collapses on the wire — `deduplicateToolCallIds` exists
+	// specifically to support that shape (see `transform-messages-dedup.test.ts`).
+	// If one duplicate occurrence is malformed, only ITS tool result must be
+	// dropped — the valid sibling's real result must reach the wire.
+	it("only drops the toolResult tied to the malformed occurrence when the id repeats", () => {
+		const sharedId = "toolu_dup";
+		const messages: Message[] = [
+			{ role: "user", content: "first read", timestamp: 1 },
+			assistant([{ type: "toolCall", id: sharedId, name: "", arguments: {} }], 2),
+			{
+				role: "toolResult",
+				toolCallId: sharedId,
+				toolName: "",
+				content: [{ type: "text", text: "Tool  not found" }],
+				isError: true,
+				timestamp: 3,
+			},
+			{ role: "user", content: "second read", timestamp: 4 },
+			assistant([{ type: "toolCall", id: sharedId, name: "read", arguments: { path: "foo" } }], 5),
+			toolResult(sharedId, "real file contents", 6),
+			{ role: "user", content: "thanks", timestamp: 7 },
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		// The malformed call is gone; the valid call survives.
+		const survivingCalls = getToolCalls(transformed);
+		expect(survivingCalls).toHaveLength(1);
+		expect(survivingCalls[0]).toMatchObject({ name: "read" });
+
+		// The real "real file contents" result MUST reach the wire — only the
+		// "Tool  not found" result tied to the malformed occurrence is dropped.
+		const toolResults = transformed.filter((m): m is ToolResultMessage => m.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		// Assert by surviving content, not by id — `deduplicateToolCallIds`
+		// renames repeats AFTER our sanitize, so the surviving result's id may
+		// be the renamed form. What matters is the BYTES reach the wire.
+		expect(toolResults[0]?.content).toEqual([{ type: "text", text: "real file contents" }]);
+		expect(toolResults[0]?.toolName).toBe("read");
+	});
 });
