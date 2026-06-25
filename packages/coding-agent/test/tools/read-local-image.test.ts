@@ -101,6 +101,25 @@ describe("read local:// images", () => {
 		expect(text).not.toContain("\u0000");
 	});
 
+	it("rejects a large local:// binary whose first line exceeds the streaming byte budget", async () => {
+		// The streaming reader's byte budget is `max(DEFAULT_MAX_BYTES, defaultLimit*512)` —
+		// 150 KiB under default settings. A NUL-filled blob larger than that with no 0x0A
+		// byte forces streamLinesFromFile into the firstLineExceedsLimit path: collectedLines
+		// stays empty, so the NUL check that walks collectedLines never sees these bytes.
+		// Without the firstLinePreview guard, the preview would be decoded as UTF-8 and
+		// emitted as text (the reviewer's video/archive case).
+		const blob = new Uint8Array(256 * 1024);
+		await Bun.write(path.join(localRoot, "video.mp4"), blob);
+		const tool = new ReadTool(makeSession(testDir));
+
+		const result = await tool.execute("call", { path: "local://video.mp4" });
+		const text = joinText(result.content);
+
+		expect(text).toContain("Cannot read binary file");
+		expect(text).toContain("video.mp4");
+		expect(text).not.toContain("\u0000");
+	});
+
 	it("does not materialize local:// binary resources in the protocol handler", async () => {
 		await Bun.write(path.join(localRoot, "archive.zip"), new Uint8Array([0, 1, 2, 3, 4, 5]));
 
