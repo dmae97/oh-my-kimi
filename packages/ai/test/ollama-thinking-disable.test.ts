@@ -115,7 +115,6 @@ describe("Ollama chat thinking controls", () => {
 		expect(payload?.messages?.at(-1)?.content).toBe("Capture reusable lessons.");
 	});
 
-
 	it("omits tool-result images for text-only Ollama chat models", async () => {
 		let payload: OllamaChatRequestPayload | undefined;
 		const fetchMock = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {

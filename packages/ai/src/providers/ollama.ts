@@ -192,7 +192,11 @@ function toPlainContent(
 	};
 }
 
-function convertMessage(message: Message, supportsImages: boolean, developerRole: "system" | "user" = "user"): OllamaMessage {
+function convertMessage(
+	message: Message,
+	supportsImages: boolean,
+	developerRole: "system" | "user" = "user",
+): OllamaMessage {
 	if (message.role === "user") {
 		const converted = toPlainContent(message.content, supportsImages);
 		return { role: "user", ...converted };
