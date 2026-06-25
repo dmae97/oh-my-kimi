@@ -161,6 +161,23 @@ describe("extractImagePathFromText (issue #3506)", () => {
 	it("decodes a `file://` URL to its filesystem path", () => {
 		expect(extractImagePathFromText("file:///Users/me/Pictures/photo.png")).toBe("/Users/me/Pictures/photo.png");
 	});
+
+	it("recovers a single anchored image path containing unescaped spaces (macOS screenshot name)", () => {
+		const macScreenshot = "/Users/me/Desktop/Screenshot 2026-06-25 at 1.23.45 PM.png";
+		expect(extractImagePathFromText(macScreenshot)).toBe(macScreenshot);
+		expect(extractImagePathFromText("~/Pictures/Cleanshot 2026-06-25 at 12.00.png")).toBe(
+			"~/Pictures/Cleanshot 2026-06-25 at 12.00.png",
+		);
+		expect(extractImagePathFromText("C:\\Users\\me\\My Pictures\\img with space.jpg")).toBe(
+			"C:\\Users\\me\\My Pictures\\img with space.jpg",
+		);
+	});
+
+	it("does not hijack prose that happens to contain a path-shaped fragment", () => {
+		// The whole-text branch is gated on ABSOLUTE_PATH_PREFIX_REGEX, so a
+		// non-anchored prefix ("see ...") never triggers it.
+		expect(extractImagePathFromText("see /Users/me/Desktop/Screenshot 1.png")).toBeUndefined();
+	});
 });
 
 describe("extractPastePathsFromText", () => {

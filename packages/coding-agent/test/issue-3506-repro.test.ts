@@ -109,6 +109,27 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		expect(spies.pendingImages[0]?.type).toBe("image");
 	});
 
+	it("attaches the image when the clipboard text is a single anchored path containing spaces", async () => {
+		// macOS screenshots default to filenames like
+		// `Screenshot 2026-06-25 at 1.23.45 PM.png` — unescaped spaces. The
+		// bracketed-paste splitter shreds the path on whitespace, so the
+		// keybind text fallback MUST try the trimmed text as a single
+		// candidate before splitting.
+		const { ctx, spies } = createCtx();
+		const spaced = path.join(tmpDir, "Screenshot 2026-06-25 at 1.23.45 PM.png");
+		await fs.writeFile(spaced, ONE_PX_PNG);
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => spaced,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.pendingImages.length).toBe(1);
+	});
+
 	it("attaches the image via the macOS file-URL pasteboard when readText is empty (pbpaste limitation)", async () => {
 		// macOS `Cmd+C` on a file in Finder puts only a `public.file-url`
 		// pasteboard item; `pbpaste(1)` (the backing call for `readText` on

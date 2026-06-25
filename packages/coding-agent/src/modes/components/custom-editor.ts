@@ -67,6 +67,14 @@ const SHELL_ESCAPED_PATH_CHAR_REGEX = /\\([\\\s'"()[\]{}&;<>|?*!$`])/g;
 const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 const FILE_URI_REGEX = /^file:\/\//i;
 const WINDOWS_DRIVE_PATH_REGEX = /^[a-z]:[\\/]/i;
+/**
+ * Whole-string anchor for paths that are unambiguously absolute. Restricts the
+ * "treat the entire clipboard text as one path" branch of
+ * {@link extractImagePathFromText} to inputs that start with a clearly-anchored
+ * filesystem prefix, so prose containing a path-shaped fragment (e.g.
+ * "see /tmp/x.png") never hijacks the smart fallback.
+ */
+const ABSOLUTE_PATH_PREFIX_REGEX = /^(?:\/|~\/|file:\/\/|\\\\|[A-Za-z]:[\\/])/;
 
 /** Max gap (ms) between two spaces for the later one to count as OS key auto-repeat rather than a
  *  deliberate press. OS auto-repeat is fast; a deliberate tap (even a fast one) is slower. */
@@ -232,10 +240,35 @@ export function extractBracketedImagePastePath(data: string): string | undefined
  * `.webp`). Used by the keybind-driven clipboard image paste path so a
  * clipboard whose only payload is an image file (e.g. Finder `Cmd+C` on
  * macOS) attaches the image instead of pasting the path as literal text.
+ *
+ * Two-stage detection:
+ *
+ * 1. Splitter pass (shared with the bracketed-paste handler) — handles
+ *    quoted paths, shell-escaped spaces, and unambiguous single tokens.
+ *    Returns the single image path when it parses cleanly; explicitly
+ *    returns `undefined` when the splitter found multiple segments (so
+ *    ambiguous multi-path clipboard text like `/tmp/a.png /tmp/b.png`
+ *    still falls through to the text fallback instead of being mis-loaded
+ *    as one giant path).
+ * 2. Whole-text-as-path pass — only reached when the splitter failed
+ *    (every segment must look like an explicit path; an unescaped space in
+ *    a real path breaks that). Restricted to inputs anchored by
+ *    {@link ABSOLUTE_PATH_PREFIX_REGEX} so prose containing a path-shaped
+ *    fragment ("see /tmp/x.png") never hijacks the smart fallback. This
+ *    is what recovers macOS screenshot filenames like
+ *    `/Users/me/Desktop/Screenshot 2026-06-25 at 1.23.45 PM.png`.
  */
 export function extractImagePathFromText(text: string): string | undefined {
 	const paths = extractPastePathsFromText(text);
-	return paths?.length === 1 && isImagePath(paths[0]) ? paths[0] : undefined;
+	if (paths?.length === 1 && isImagePath(paths[0])) return paths[0];
+	if (paths !== undefined) return undefined;
+	const trimmed = text.trim();
+	if (!trimmed || /[\r\n]/.test(trimmed) || !ABSOLUTE_PATH_PREFIX_REGEX.test(trimmed)) return undefined;
+	const wholePath = normalizePastedPath(trimmed);
+	if (wholePath && isExplicitPastedPath(wholePath) && isImagePath(wholePath)) {
+		return wholePath;
+	}
+	return undefined;
 }
 
 /**
