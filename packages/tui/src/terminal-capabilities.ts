@@ -383,8 +383,14 @@ function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null 
 	}
 	return null;
 }
-function getWarpTerminalInfo(platform: NodeJS.Platform): TerminalInfo {
-	return platform === "win32"
+function getWarpTerminalInfo(platform: NodeJS.Platform, env: NodeJS.ProcessEnv = Bun.env): TerminalInfo {
+	// Warp for Windows still drives WSL shells from the Windows renderer, where
+	// the Kitty APC sequences print as visible garbage. Detect that case via the
+	// WSL host markers (Bun reports `process.platform === "linux"` inside WSL)
+	// and treat it the same as native win32.
+	const windowsHost =
+		platform === "win32" || (platform === "linux" && Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP));
+	return windowsHost
 		? new TerminalInfo("warp", null, true, false, NotifyProtocol.Bell)
 		: new TerminalInfo("warp", ImageProtocol.Kitty, true, false, NotifyProtocol.Bell);
 }
@@ -524,8 +530,12 @@ export function setTerminalTextSizing(enabled: boolean): void {
 	TERMINAL.textSizing = enabled;
 }
 
-export function getTerminalInfo(terminalId: TerminalId, platform: NodeJS.Platform = process.platform): TerminalInfo {
-	return terminalId === "warp" ? getWarpTerminalInfo(platform) : KNOWN_TERMINALS[terminalId];
+export function getTerminalInfo(
+	terminalId: TerminalId,
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = Bun.env,
+): TerminalInfo {
+	return terminalId === "warp" ? getWarpTerminalInfo(platform, env) : KNOWN_TERMINALS[terminalId];
 }
 
 export interface CellDimensions {

@@ -106,9 +106,9 @@ describe("shouldEnableSynchronizedOutputByDefault", () => {
 
 describe("Warp terminal capabilities", () => {
 	it("uses Kitty images on macOS/Linux and disables them on Windows", () => {
-		const mac = getTerminalInfo("warp", "darwin");
-		const linux = getTerminalInfo("warp", "linux");
-		const windows = getTerminalInfo("warp", "win32");
+		const mac = getTerminalInfo("warp", "darwin", {});
+		const linux = getTerminalInfo("warp", "linux", {});
+		const windows = getTerminalInfo("warp", "win32", {});
 
 		expect(mac.imageProtocol).toBe(ImageProtocol.Kitty);
 		expect(linux.imageProtocol).toBe(ImageProtocol.Kitty);
@@ -117,6 +117,16 @@ describe("Warp terminal capabilities", () => {
 		expect(linux.hyperlinks).toBe(false);
 		expect(linux.deccara).toBe(false);
 		expect(linux.textSizing).toBe(false);
+	});
+
+	it("treats WSL as the Windows host so Kitty APC garbage never reaches Warp for Windows", () => {
+		// Bun reports process.platform === "linux" inside WSL even though the
+		// renderer is the Windows Warp build, which lacks Kitty support.
+		const wslDistro = getTerminalInfo("warp", "linux", { WSL_DISTRO_NAME: "Ubuntu" });
+		const wslInterop = getTerminalInfo("warp", "linux", { WSL_INTEROP: "/run/WSL/1_interop" });
+
+		expect(wslDistro.imageProtocol).toBeNull();
+		expect(wslInterop.imageProtocol).toBeNull();
 	});
 
 	it("leaves synchronized output off by default and honors hyperlink force-on", () => {
