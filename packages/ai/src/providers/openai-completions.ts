@@ -1766,6 +1766,13 @@ export function convertMessages(
 			const thinkingBlocks = msg.content.filter(b => b.type === "thinking") as ThinkingContent[];
 			// Filter out empty thinking blocks to avoid API validation errors
 			const nonEmptyThinkingBlocks = thinkingBlocks.filter(b => b.thinking && b.thinking.trim().length > 0);
+			// Source identity: same-model history is replay we MUST NOT mutate
+			// beyond what the existing per-compat branches do. In particular,
+			// markup-healed thinking (MiniMax `<think>…</think>` and similar)
+			// arrives with `thinkingSignature: undefined` for same-model turns;
+			// it is private reasoning the model emitted, not cross-API preserved
+			// reasoning, and must not be promoted into visible `content`.
+			const isSameModelHistory = msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
 			if (nonEmptyThinkingBlocks.length > 0) {
 				if (compat.requiresThinkingAsText) {
 					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
@@ -1793,6 +1800,42 @@ export function convertMessages(
 					if (wireField) {
 						assistantMsg[wireField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
 					}
+				} else if (compat.thinkingFormat === "zai" && model.reasoning) {
+					// Z.AI / Zhipu / Moonshot Kimi (native) / Xiaomi MiMo accept
+					// `reasoning_content` as a continuation hint even when they don't
+					// strictly require it. Surfacing the preserved thinking text here
+					// keeps cross-API replays (Z.AI Anthropic → Z.AI OpenAI, etc.)
+					// shipping reasoning as structured `reasoning_content` rather than
+					// folded into conversation text (#3434). Signature is irrelevant on
+					// this path: `transform-messages` strips the source wire-format
+					// signature on cross-API replays before the block reaches us.
+					const reasoningField = compat.reasoningContentField ?? "reasoning_content";
+					assistantMsg[reasoningField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+				} else if (!isSameModelHistory && nonEmptyThinkingBlocks.every(b => !b.thinkingSignature)) {
+					// Cross-API preserved thinking (signature stripped by
+					// `transform-messages` on a non-same-model replay) that reached an
+					// encoder branch which can't surface `reasoning_content` for THIS
+					// request — most often an OpenCode-hosted reasoning model in
+					// thinking-disabled mode, where the resolved base compat must
+					// keep the field off to dodge the `Extra inputs are not permitted`
+					// 400 (#1071). Fold the reasoning into the visible content (same
+					// shape as `requiresThinkingAsText`) so the next turn at least sees
+					// the prior plan as conversation context, matching the pre-#3434
+					// cross-API text-demotion behavior.
+					//
+					// Gated on `!isSameModelHistory` because some same-model streams
+					// also produce unsigned thinking blocks — notably markup-healed
+					// `<think>…</think>` runs (MiniMax M3 on opencode-zen and the
+					// other `getStreamMarkupHealingPattern === "thinking"` hosts).
+					// That reasoning is PRIVATE to the source turn and must never be
+					// promoted into the next request's visible content; same-model
+					// history therefore keeps the legacy silently-dropped behavior
+					// when no per-compat branch above consumes it.
+					const thinkingText = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n\n");
+					assistantMsg.content =
+						typeof assistantMsg.content === "string" && assistantMsg.content.length > 0
+							? `${thinkingText}\n\n${assistantMsg.content}`
+							: thinkingText;
 				}
 			}
 
