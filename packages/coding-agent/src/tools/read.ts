@@ -2083,7 +2083,24 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					`Invalid selector ':${internalTarget.sel}' on '${internalTarget.path}'. Use :N, :N-M, :N+K, :N- (open-ended), a comma-separated list of ranges, :raw, or a range combined with raw (e.g. :raw:50-100).`,
 				);
 			}
-			return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+			const urlMeta = parseInternalUrl(internalTarget.path);
+			const scheme = urlMeta.protocol.replace(/:$/, "").toLowerCase();
+			if (scheme === "local") {
+				const localFile = await resolveLocalUrlToFile(urlMeta, {
+					cwd: this.session.cwd,
+					settings: this.session.settings,
+					signal,
+					localProtocolOptions: this.session.localProtocolOptions,
+					skills: this.session.skills,
+				});
+				if (localFile) {
+					readPath = internalTarget.sel === undefined ? localFile.path : `${localFile.path}:${internalTarget.sel}`;
+				} else {
+					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+				}
+			} else {
+				return this.#handleInternalUrl(internalTarget.path, parsed, signal);
+			}
 		}
 
 		// One suffix-glob memo per read call — archive, sqlite, and plain-path
@@ -2393,23 +2410,31 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// counts in `truncation` keep reflecting the source, not the trimmed
 					// view — column truncation surfaces separately via `.limits()`.
 					const rawSelector = isRawSelector(parsed);
-					// Binary sniff: NUL bytes in the collected window mean the file is
-					// not displayable text (binary, or UTF-16 which has NULs in the
-					// ASCII range) — emit a notice instead of mojibake filling the
-					// line budget. `:raw` stays an explicit escape hatch.
+					// Binary sniff: NUL bytes mean the file is not displayable text
+					// (binary, or UTF-16 which has NULs in the ASCII range) — emit a
+					// notice instead of mojibake filling the line budget. `:raw`
+					// stays an explicit escape hatch.
+					//
+					// `collectedLines` covers the common case where at least one
+					// physical line terminates within the byte budget. Binary blobs
+					// without newlines (videos, archives, packed JSON) leave it
+					// empty; their bytes only land in `firstLinePreview`, which the
+					// `firstLineExceedsLimit` branch below would otherwise emit
+					// verbatim. Sniffing the preview here keeps the refusal uniform.
 					if (!rawSelector) {
-						for (const line of collectedLines) {
-							if (line.includes("\u0000")) {
-								return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
-									.text(
-										prependSuffixResolutionNotice(
-											`[Cannot read binary file '${formatPathRelativeToCwd(absolutePath, this.session.cwd)}' (${formatBytes(fileSize)}); content contains NUL bytes (binary or UTF-16 encoded)]`,
-											suffixResolution,
-										),
-									)
-									.sourcePath(absolutePath)
-									.done();
-							}
+						const hasNul = (text: string): boolean => text.includes("\u0000");
+						const binaryDetected =
+							collectedLines.some(hasNul) || (firstLinePreview !== undefined && hasNul(firstLinePreview.text));
+						if (binaryDetected) {
+							return toolResult<ReadToolDetails>({ resolvedPath: absolutePath, suffixResolution })
+								.text(
+									prependSuffixResolutionNotice(
+										`[Cannot read binary file '${formatPathRelativeToCwd(absolutePath, this.session.cwd)}' (${formatBytes(fileSize)}); content contains NUL bytes (binary or UTF-16 encoded)]`,
+										suffixResolution,
+									),
+								)
+								.sourcePath(absolutePath)
+								.done();
 						}
 					}
 					const maxColumns = resolveOutputMaxColumns(this.session.settings);
