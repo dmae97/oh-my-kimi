@@ -348,6 +348,22 @@ export class PatchSection {
 			? { ...result, warnings: merged }
 			: { text: result.text, firstChangedLine: result.firstChangedLine };
 	}
+
+	/**
+	 * A copy of this section rebound to a different target `path`, preserving
+	 * the snapshot tag, diff body, and any cached parse result. Used by the
+	 * patcher's tag-based path recovery to redirect an edit whose authored
+	 * path does not exist onto the file its snapshot tag actually names.
+	 */
+	withPath(path: string): PatchSection {
+		const next = new PatchSection({
+			path,
+			...(this.fileHash !== undefined ? { fileHash: this.fileHash } : {}),
+			diff: this.diff,
+		});
+		next.#parsed = this.#parsed;
+		return next;
+	}
 }
 
 /**

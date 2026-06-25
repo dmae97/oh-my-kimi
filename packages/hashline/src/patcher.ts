@@ -22,13 +22,19 @@
  * The patcher itself is stateless across calls; reuse one instance per
  * filesystem configuration.
  */
+import * as path from "node:path";
 import { applyEdits } from "./apply";
 import { hasBlockEdit, resolveBlockEdits } from "./block";
 import { computeFileHash, formatHashlineHeader } from "./format";
 import type { Filesystem, WriteResult } from "./fs";
 import { isNotFound } from "./fs";
 import type { Patch, PatchSection } from "./input";
-import { HEADTAIL_DRIFT_WARNING, missingSnapshotTagMessage, unseenLinesMessage } from "./messages";
+import {
+	HEADTAIL_DRIFT_WARNING,
+	missingSnapshotTagMessage,
+	pathRecoveredFromTagMessage,
+	unseenLinesMessage,
+} from "./messages";
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
@@ -245,39 +251,89 @@ export class Patcher {
 	 * tag mismatch ({@link MismatchError}).
 	 */
 	async prepare(section: PatchSection): Promise<PreparedSection> {
-		const { edits, warnings: parseWarnings } = section.parse();
+		const parseWarnings = [...section.parse().warnings];
 		assertSectionHashPresent(section.path, section.fileHash);
 
-		const canonicalPath = this.fs.canonicalPath(section.path);
-		await this.fs.preflightWrite(section.path);
-		const { exists, rawContent } = await this.#tryRead(section.path);
-		if (!exists) {
-			throw new Error(`File not found: ${section.path}. Use the write tool to create new files.`);
+		let target = section;
+		let canonicalPath = this.fs.canonicalPath(target.path);
+		await this.fs.preflightWrite(target.path);
+		let read = await this.#tryRead(target.path);
+
+		// Path recovery: the authored path doesn't exist on disk, but its
+		// filename + snapshot tag may name a file the model read this session
+		// (it supplied a bare filename, or the wrong directory). Rebind to that
+		// file so the edit lands where the tag points, and warn.
+		if (!read.exists) {
+			const recovered = this.#recoverSectionPathFromTag(target, canonicalPath);
+			if (recovered && this.fs.allowTagPathRecovery(target.path, recovered.section.path)) {
+				parseWarnings.push(
+					pathRecoveredFromTagMessage(target.path, recovered.section.path, target.fileHash as string),
+				);
+				target = recovered.section;
+				canonicalPath = recovered.canonicalPath;
+				await this.fs.preflightWrite(target.path);
+				read = await this.#tryRead(target.path);
+			}
+		}
+		if (!read.exists) {
+			throw new Error(`File not found: ${target.path}. Use the write tool to create new files.`);
 		}
 
-		const { bom, text } = stripBom(rawContent);
+		const { bom, text } = stripBom(read.rawContent);
 		const lineEnding = detectLineEnding(text);
 		const normalized = normalizeToLF(text);
 
 		const applyResult = this.#applyWithRecovery({
-			section,
+			section: target,
 			canonicalPath,
-			exists,
+			exists: read.exists,
 			normalized,
-			edits,
+			edits: target.parse().edits,
 		});
 
 		return new PreparedSection(
-			section,
+			target,
 			canonicalPath,
-			exists,
-			rawContent,
+			read.exists,
+			read.rawContent,
 			bom,
 			lineEnding,
 			normalized,
 			applyResult,
 			parseWarnings,
 		);
+	}
+
+	/**
+	 * Resolve a missing authored path to a file read this session by matching
+	 * its filename and snapshot tag. Returns the section rebound to that file's
+	 * canonical path, or `null` when no unique filename+tag match exists.
+	 *
+	 * Resolution requires BOTH the bare filename (basename) and the section tag
+	 * to match a single retained file: a whole-file content hash plus an exact
+	 * filename is a strong identity signal, so the model almost certainly meant
+	 * that file but gave the wrong directory (or only the filename). A tie — two
+	 * retained files sharing the filename and tag — declines recovery. The
+	 * recorded path of the authored file itself is excluded so a deleted file
+	 * does not "recover" onto its own stale snapshot.
+	 */
+	#recoverSectionPathFromTag(
+		section: PatchSection,
+		originalCanonicalPath: string,
+	): { section: PatchSection; canonicalPath: string } | null {
+		if (section.fileHash === undefined) return null;
+		const authoredName = path.basename(section.path);
+		const candidates = [
+			...new Set(
+				this.snapshots
+					.findByHash(section.fileHash)
+					.filter(snapshot => path.basename(snapshot.path) === authoredName)
+					.map(snapshot => snapshot.path),
+			),
+		].filter(candidate => this.fs.canonicalPath(candidate) !== originalCanonicalPath);
+		if (candidates.length !== 1) return null;
+		const resolved = candidates[0];
+		return { section: section.withPath(resolved), canonicalPath: this.fs.canonicalPath(resolved) };
 	}
 
 	/**

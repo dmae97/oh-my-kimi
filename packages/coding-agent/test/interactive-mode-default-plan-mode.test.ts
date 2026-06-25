@@ -40,7 +40,6 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	});
 
 	beforeEach(async () => {
-		Bun.gc(true);
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-default-plan-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -60,7 +59,6 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		authStorage = undefined as unknown as AuthStorage;
 		tempDir = undefined as unknown as TempDir;
 		resetSettingsForTest();
-		Bun.gc(true);
 	});
 
 	function modelOrThrow(registry: ModelRegistry, id: string): Model<Api> {

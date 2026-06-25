@@ -85,4 +85,17 @@ describe("InMemorySnapshotStore", () => {
 		store.clear();
 		expect(store.byHash(OTHER, tagB)).toBeNull();
 	});
+
+	it("findByHash returns every retained version with that tag across paths", () => {
+		const store = new InMemorySnapshotStore();
+		const text = "shared\n";
+		const tag = store.record(PATH, text);
+		store.record(OTHER, text);
+
+		const matches = store.findByHash(tag);
+		expect(matches.map(snapshot => snapshot.path).sort()).toEqual([OTHER, PATH].sort());
+		expect(matches.every(snapshot => snapshot.hash === tag)).toBe(true);
+		// A tag no retained version carries yields no matches.
+		expect(store.findByHash(tag === "0000" ? "FFFF" : "0000")).toEqual([]);
+	});
 });

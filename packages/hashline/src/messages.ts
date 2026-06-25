@@ -176,6 +176,21 @@ export function missingSnapshotTagMessage(sectionPath: string): string {
 	return `Missing hashline snapshot tag for ${sectionPath}; use \`${HL_FILE_PREFIX}${sectionPath}${HL_FILE_HASH_SEP}tag${HL_FILE_SUFFIX}\` from your latest read/search output. To create a new file, use the write tool.`;
 }
 
+/**
+ * A section named a path that does not exist, but its filename and snapshot
+ * tag together match exactly one file read earlier this session — the model
+ * gave the bare filename (or wrong directory) for a file it just read. The
+ * edit was rebound to that file's full path. Surfaced as a warning so the
+ * model (and user) learn the corrected path and stop reusing the wrong one.
+ */
+export function pathRecoveredFromTagMessage(authoredPath: string, resolvedPath: string, tag: string): string {
+	return (
+		`Path "${authoredPath}" does not exist; matched its filename and snapshot tag ` +
+		`${HL_FILE_HASH_SEP}${tag} to ${resolvedPath} (read earlier this session). Anchor future edits on ` +
+		`${HL_FILE_PREFIX}${resolvedPath}${HL_FILE_HASH_SEP}TAG${HL_FILE_SUFFIX}.`
+	);
+}
+
 /** Compress a line list into a sorted `1-4, 7, 10-12` range string. */
 function formatLineRanges(lines: readonly number[]): string {
 	const sorted = [...new Set(lines)].sort((a, b) => a - b);

@@ -13,6 +13,7 @@ import {
 	type ExecuteHashlineSingleOptions,
 	executeHashlineSingle,
 	getFileSnapshotStore as getFileReadCache,
+	HashlineFilesystem,
 	hashlineEditParamsSchema,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -420,6 +421,59 @@ describe("hashline — anchor-stale recovery via read snapshot cache", () => {
 				executeHashlineSingle(hashlineExecuteOptions(tempDir, secondInput, undefined, session)),
 			).rejects.toThrow(HashlineMismatchError);
 			expect(await Bun.file(filePath).text()).toBe(`${v1Lines.join("\n")}\n`);
+		});
+	});
+});
+
+describe("hashline — filename+tag path recovery", () => {
+	it("redirects a bare filename to the full path of the file its tag names", async () => {
+		await withTempDir(async tempDir => {
+			const nestedDir = path.join(tempDir, "pkg", "test");
+			await fs.mkdir(nestedDir, { recursive: true });
+			const filePath = path.join(nestedDir, "autoresearch-tools.test.ts");
+			const source = "alpha\nbeta\ngamma\n";
+			await Bun.write(filePath, source);
+			const session = makeHashlineSession(tempDir);
+			const sourceTag = recordFullSnapshot(getFileReadCache(session), filePath, source);
+
+			// The model issues the edit with only the basename — the wrong path.
+			const input = `${header("autoresearch-tools.test.ts", sourceTag)}\n${sameLineRange(tag(2, "beta"))}\n${repl("BETA")}\n`;
+			const result = await executeHashlineSingle(hashlineExecuteOptions(tempDir, input, undefined, session));
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+			// The real nested file was edited despite the bare-filename header.
+			expect(await Bun.file(filePath).text()).toBe("alpha\nBETA\ngamma\n");
+			// The resolved full path is surfaced so the next turn anchors on it.
+			expect(text).toContain("does not exist");
+			expect(text).toContain(path.join("pkg", "test", "autoresearch-tools.test.ts"));
+			// The stray cwd-relative file was never created.
+			expect(await Bun.file(path.join(tempDir, "autoresearch-tools.test.ts")).exists()).toBe(false);
+		});
+	});
+
+	it("refuses redirects that escalate privilege or leave the working tree", async () => {
+		await withTempDir(async tempDir => {
+			const guardFs = new HashlineFilesystem({
+				session: makeHashlineSession(tempDir),
+				writethrough: async () => undefined,
+				beginDeferredDiagnosticsForPath: () => ({
+					onDeferredDiagnostics: () => {},
+					signal: new AbortController().signal,
+					finalize: () => {},
+				}),
+			});
+			const root = canonicalSnapshotKey(tempDir);
+			const inside = path.join(root, "pkg", "test", "file.ts");
+			// A sibling of the working tree stands in for the artifact sandbox / vault.
+			const outside = path.join(canonicalSnapshotKey(os.tmpdir()), "omp-artifacts", "file.ts");
+
+			// Internal-URL authored targets are approved at "read"; never redirect to a "write".
+			expect(guardFs.allowTagPathRecovery("local://file.ts", inside)).toBe(false);
+			expect(guardFs.allowTagPathRecovery("vault://store/file.ts", inside)).toBe(false);
+			// Plain authored path → a working-tree target is recoverable.
+			expect(guardFs.allowTagPathRecovery("file.ts", inside)).toBe(true);
+			// …but a target outside the working tree (sandbox/vault/out-of-tree) is refused.
+			expect(guardFs.allowTagPathRecovery("file.ts", outside)).toBe(false);
 		});
 	});
 });

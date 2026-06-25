@@ -60,6 +60,19 @@ export abstract class SnapshotStore {
 	abstract byHash(path: string, hash: string): Snapshot | null;
 
 	/**
+	 * Every retained version whose tag equals `hash`, across all tracked
+	 * paths. The patcher uses this to recover the intended file when a section
+	 * names a path that does not exist on disk but carries a tag the store
+	 * minted — the model mistyped the path of a file it read this session.
+	 *
+	 * The base returns no matches (recovery disabled); stores that can
+	 * enumerate their contents override it to enable tag-based path recovery.
+	 */
+	findByHash(_hash: string): Snapshot[] {
+		return [];
+	}
+
+	/**
 	 * Record the full normalized text of `path` and return its content tag.
 	 * `seenLines` (optional) are the 1-indexed lines the producer displayed;
 	 * they merge into {@link Snapshot.seenLines} across reads of identical text.
@@ -140,6 +153,16 @@ export class InMemorySnapshotStore extends SnapshotStore {
 	byHash(path: string, hash: string): Snapshot | null {
 		const history = this.#versions.get(path);
 		return history?.find(version => version.hash === hash) ?? null;
+	}
+
+	findByHash(hash: string): Snapshot[] {
+		const matches: Snapshot[] = [];
+		for (const history of this.#versions.values()) {
+			for (const version of history) {
+				if (version.hash === hash) matches.push(version);
+			}
+		}
+		return matches;
 	}
 
 	record(path: string, fullText: string, seenLines?: Iterable<number>): string {

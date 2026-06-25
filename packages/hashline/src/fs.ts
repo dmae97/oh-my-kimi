@@ -83,6 +83,21 @@ export abstract class Filesystem {
 	canonicalPath(path: string): string {
 		return path;
 	}
+
+	/**
+	 * Whether a section whose authored path is missing may be redirected to
+	 * the file its snapshot tag names (tag-based path recovery in
+	 * {@link Patcher.prepare}). `resolvedPath` is the canonical path the
+	 * redirect would read and write. Default: allow.
+	 *
+	 * Hosts that grant write privileges by path shape override this to refuse
+	 * redirects that could escalate beyond what the caller approved — e.g. an
+	 * internal-URL authored target (approved read-only), or a `resolvedPath`
+	 * outside the working tree (a sandbox/vault/out-of-tree write).
+	 */
+	allowTagPathRecovery(_authoredPath: string, _resolvedPath: string): boolean {
+		return true;
+	}
 }
 
 /**
