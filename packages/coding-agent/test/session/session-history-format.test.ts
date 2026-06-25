@@ -172,6 +172,64 @@ describe("formatSessionHistoryMarkdown", () => {
 		);
 	});
 
+	it("keeps the ast_grep pattern visible instead of only its paths scope", () => {
+		const output = formatSessionHistoryMarkdown([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-astgrep",
+						name: "ast_grep",
+						arguments: { pat: "console.log($$$)", paths: ["packages/coding-agent/src/**/*.ts"] },
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-astgrep",
+				toolName: "ast_grep",
+				content: [{ type: "text", text: "match" }],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+
+		expect(output).toContain("→ ast_grep(console.log($$$)) ⇒ ok · 1 line");
+	});
+
+	it("keeps the ast_edit op pattern visible instead of only its paths scope", () => {
+		const output = formatSessionHistoryMarkdown([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "tc-astedit",
+						name: "ast_edit",
+						arguments: {
+							ops: [{ pat: "oldApi($$$A)", out: "newApi($$$A)" }],
+							paths: ["packages/coding-agent/src/**/*.ts"],
+						},
+					},
+				],
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "tc-astedit",
+				toolName: "ast_edit",
+				content: [{ type: "text", text: "1 change" }],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+
+		expect(output).toContain("oldApi($$$A)");
+		expect(output).not.toContain("→ ast_edit(packages/coding-agent/src/**/*.ts)");
+	});
+
 	it("renders tool intent comments immediately before tool call lines when includeToolIntent is true", () => {
 		const messages = [
 			{

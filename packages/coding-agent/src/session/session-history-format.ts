@@ -53,7 +53,6 @@ const PRIMARY_ARG_KEYS = [
 	"command",
 	"cmd",
 	"pattern",
-	"paths",
 	"url",
 	"query",
 	"prompt",
@@ -111,6 +110,10 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 		const paths = primaryArgValue(args.paths);
 		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
 		if (pattern) return oneLine(pattern);
+		if (paths) return oneLine(paths);
+	}
+	if (name === "find") {
+		const paths = primaryArgValue(args.paths);
 		if (paths) return oneLine(paths);
 	}
 	for (const key of PRIMARY_ARG_KEYS) {
