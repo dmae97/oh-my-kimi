@@ -149,36 +149,4 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 		expect(await Bun.file(path.join(dir, "local", "attachment-1")).text()).toBe("previous");
 		expect(await Bun.file(path.join(dir, "local", "attachment-2")).text()).toBe("fresh");
 	});
-
-	it("attaches an existing pasted file as a local:// reference with its extension", async () => {
-		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-test-"));
-		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-source-"));
-		const sourcePath = path.join(sourceDir, "report.csv");
-		await Bun.write(sourcePath, "name,value\nalpha,1\n");
-		const { controller, spies } = createContext({ artifactsDir: dir });
-
-		try {
-			await controller.handleFilePathPaste(sourcePath);
-		} finally {
-			await fs.rm(sourceDir, { recursive: true, force: true });
-		}
-
-		expect(spies.insertText).toHaveBeenCalledWith("local://attachment-1.csv ");
-		expect(spies.pasteText).not.toHaveBeenCalled();
-		expect(spies.requestRender).toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Attached file as local://attachment-1.csv");
-		expect(await Bun.file(path.join(dir, "local", "attachment-1.csv")).text()).toBe("name,value\nalpha,1\n");
-	});
-
-	it("falls back to inline text when the pasted file path does not exist", async () => {
-		dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-paste-test-"));
-		const missing = path.join(dir, "missing.txt");
-		const { controller, spies } = createContext({ artifactsDir: dir });
-
-		await controller.handleFilePathPaste(missing);
-
-		expect(spies.insertText).not.toHaveBeenCalled();
-		expect(spies.pasteText).toHaveBeenCalledWith(missing);
-		expect(spies.showStatus).toHaveBeenCalledWith("Pasted file path was not found");
-	});
 });

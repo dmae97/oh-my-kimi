@@ -318,8 +318,6 @@ export class CustomEditor extends Editor {
 	onPasteImage?: () => Promise<boolean>;
 	/** Called when a bracketed paste contains one or more image-file paths. */
 	onPasteImagePath?: (path: string) => void | Promise<void>;
-	/** Called when a bracketed paste contains one or more non-image file paths. */
-	onPasteFilePath?: (path: string) => void | Promise<void>;
 	/** Called when the configured raw text-paste shortcut is pressed. */
 	onPasteTextRaw?: () => void;
 	/** Called when the configured dequeue shortcut is pressed. */
@@ -505,20 +503,12 @@ export class CustomEditor extends Editor {
 			return;
 		}
 
-		const pastedPaths = extractBracketedPastePaths(data);
-		if (pastedPaths) {
-			const canHandlePaths = pastedPaths.every(path =>
-				isImagePath(path) ? this.onPasteImagePath !== undefined : this.onPasteFilePath !== undefined,
-			);
-			if (canHandlePaths) {
-				void (async () => {
-					for (const path of pastedPaths) {
-						if (isImagePath(path)) await this.onPasteImagePath?.(path);
-						else await this.onPasteFilePath?.(path);
-					}
-				})();
-				return;
-			}
+		const pastedImagePaths = extractBracketedImagePastePaths(data);
+		if (pastedImagePaths && this.onPasteImagePath) {
+			void (async () => {
+				for (const path of pastedImagePaths) await this.onPasteImagePath?.(path);
+			})();
+			return;
 		}
 
 		const parsedKey = parseKey(data);
