@@ -132,6 +132,65 @@ describe("shell-snapshot fn-env helper", () => {
 		expect(out).not.toContain("NEVER_SET_TEST_VAR");
 	});
 
+	it("never emits export lines for likely-secret env var names", async () => {
+		const funcs = [
+			`deploy () { curl -H "Authorization: $GITHUB_TOKEN" .; }`,
+			`call_openai () { curl -H "Authorization: Bearer $OPENAI_API_KEY" .; }`,
+			`aws_sign () { echo "$AWS_SECRET_ACCESS_KEY"; }`,
+			`db () { mysql --password="$DB_PASSWORD" -u root; }`,
+			`legacy () { echo "$LDAP_PASSWD"; }`,
+			`vault () { echo "$VAULT_PRIVATE_KEY"; }`,
+			`session () { echo "$REDIS_SESSION_KEY"; }`,
+			`creds () { echo "$AZURE_CREDENTIAL"; }`,
+			// Control: non-secret-shaped var must still be emitted.
+			`mise () { command "$__MISE_EXE" "$@"; }`,
+			``,
+		].join("\n");
+
+		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+			env: {
+				PATH: process.env.PATH ?? "/usr/bin:/bin",
+				GITHUB_TOKEN: "ghp_REDACTED",
+				OPENAI_API_KEY: "sk-REDACTED",
+				AWS_SECRET_ACCESS_KEY: "REDACTED",
+				DB_PASSWORD: "hunter2",
+				LDAP_PASSWD: "hunter2",
+				VAULT_PRIVATE_KEY: "-----BEGIN-----",
+				REDIS_SESSION_KEY: "abc",
+				AZURE_CREDENTIAL: "xyz",
+				__MISE_EXE: "/opt/echo",
+			},
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		child.stdin.write(funcs);
+		await child.stdin.end();
+		const out = await readStream(child.stdout as ReadableStream<Uint8Array> | null);
+		await child.exited;
+		expect(child.exitCode).toBe(0);
+
+		for (const secret of [
+			"GITHUB_TOKEN",
+			"OPENAI_API_KEY",
+			"AWS_SECRET_ACCESS_KEY",
+			"DB_PASSWORD",
+			"LDAP_PASSWD",
+			"VAULT_PRIVATE_KEY",
+			"REDIS_SESSION_KEY",
+			"AZURE_CREDENTIAL",
+		]) {
+			expect(out).not.toContain(secret);
+		}
+		// And the secret VALUES — make sure nothing leaked through a different
+		// quoting path.
+		for (const value of ["ghp_REDACTED", "sk-REDACTED", "hunter2", "-----BEGIN-----"]) {
+			expect(out).not.toContain(value);
+		}
+		// The non-secret helper var still goes through.
+		expect(out).toContain("export __MISE_EXE='/opt/echo'");
+	});
+
 	it("single-quote-escapes values containing apostrophes and preserves newlines", async () => {
 		const funcs = `shout () { echo "$TRICKY_VAL $NL_VAL"; }\n`;
 		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
@@ -206,5 +265,13 @@ describe("getOrCreateSnapshot", () => {
 		await replay.exited;
 		expect({ exitCode: replay.exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
 		expect(stdout).toBe("hello world\n/opt/foo\n");
+
+		// PR-review hardening: snapshot file must be group/world-unreadable since
+		// it now inlines env-var values. Directory must be 0700 for the same
+		// reason — UUID filenames shouldn't leak via `ls /tmp/omp-shell-snapshots`.
+		const fileStat = await fs.stat(snapshotPath!);
+		expect(fileStat.mode & 0o077).toBe(0);
+		const dirStat = await fs.stat(path.dirname(snapshotPath!));
+		expect(dirStat.mode & 0o077).toBe(0);
 	});
 });

@@ -143,6 +143,13 @@ echo "shopt -s expand_aliases" >> "$SNAPSHOT_FILE"
 	return `
 SNAPSHOT_FILE='${escapedPath}'
 
+# Snapshot may inline env-var values referenced by captured functions (#3470).
+# Force 0600/0700 perms so a multi-user box can't read tokens out of the tmp
+# file. The JS caller also chmods the file/dir defensively after the script
+# exits, but the umask catches the file at first write so secrets never live
+# at 0644 even briefly.
+umask 077
+
 # Source user's rc file if it exists
 ${hasRcFile ? `source "${rcFile}" < /dev/null 2>/dev/null` : "# No user config file to source"}
 
@@ -218,9 +225,18 @@ export async function getOrCreateSnapshot(
 
 	const rcFile = getShellConfigFile(shell, env);
 
-	// Create snapshot directory
+	// Create snapshot directory with owner-only perms — the script may inline
+	// env vars referenced by captured functions (#3470) and `os.tmpdir()` is
+	// shared on Linux. `mode: 0o700` applies to a fresh mkdir; an existing dir
+	// keeps its mode, so chmod it defensively. Ignore EPERM (dir owned by
+	// another user on a shared box).
 	const snapshotDir = path.join(os.tmpdir(), "omp-shell-snapshots");
-	fs.mkdirSync(snapshotDir, { recursive: true });
+	fs.mkdirSync(snapshotDir, { recursive: true, mode: 0o700 });
+	try {
+		fs.chmodSync(snapshotDir, 0o700);
+	} catch {
+		// best-effort
+	}
 
 	// Generate unique snapshot path
 	const shellName = shell.includes("zsh") ? "zsh" : shell.includes("bash") ? "bash" : "sh";
@@ -248,6 +264,14 @@ export async function getOrCreateSnapshot(
 
 		await child.exited;
 		if (child.exitCode === 0 && fs.existsSync(snapshotPath)) {
+			// Defence-in-depth: the script's `umask 077` already locks the file at
+			// first write, but chmod again in case the umask didn't take (exotic
+			// shells) or a postmortem-restored file ended up looser.
+			try {
+				fs.chmodSync(snapshotPath, 0o600);
+			} catch {
+				// best-effort
+			}
 			scrubSnapshotInPlace(snapshotPath);
 			cachedSnapshotPaths.set(cacheKey, snapshotPath);
 			return snapshotPath;
