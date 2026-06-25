@@ -110,7 +110,7 @@ export interface TUIStartOptions {
 const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
 	now: () => performance.now(),
 	scheduleImmediate: callback => {
-		process.nextTick(callback);
+		setImmediate(callback);
 	},
 	scheduleRender: (callback, delayMs) => {
 		const timer = setTimeout(callback, delayMs);

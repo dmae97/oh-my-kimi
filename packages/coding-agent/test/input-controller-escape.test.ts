@@ -76,6 +76,7 @@ function createContext(): {
 		requestRender: Spy;
 		resetDisplay: Spy;
 		shutdown: Spy;
+		showStatus: Spy;
 		startPendingSubmission: StartPendingSubmissionSpy;
 		updatePendingMessagesDisplay: Spy;
 	};
@@ -93,6 +94,7 @@ function createContext(): {
 	const onInputCallback = vi.fn();
 	const requestRender = vi.fn();
 	const resetDisplay = vi.fn();
+	const showStatus = vi.fn();
 	const inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
 	const handleBtwCommand = vi.fn(async () => {});
 	const handleBtwEscape = vi.fn(() => true);
@@ -205,6 +207,7 @@ function createContext(): {
 		showSessionSelector: vi.fn(),
 		shutdown: vi.fn(async () => {}),
 		clearEditor: vi.fn(),
+		showStatus,
 	} as unknown as InteractiveModeContext;
 
 	return {
@@ -231,6 +234,7 @@ function createContext(): {
 			prompt,
 			requestRender,
 			resetDisplay,
+			showStatus,
 			shutdown: ctx.shutdown as Spy,
 			startPendingSubmission,
 			updatePendingMessagesDisplay,
@@ -407,7 +411,9 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("aborts streaming even when the working loader is no longer present", () => {
+	it("requires a second Esc within two seconds to abort streaming", () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
 		const { ctx, editor, spies } = createContext();
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;
 		const controller = new InputController(ctx);
@@ -417,7 +423,50 @@ describe("InputController escape behavior", () => {
 
 		expect(spies.cancelPendingSubmission).not.toHaveBeenCalled();
 		expect(spies.clearQueue).not.toHaveBeenCalled();
+		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
+
+		now.mockReturnValue(2_500);
+		editor.onEscape?.();
+
 		expect(spies.abort).toHaveBeenCalledTimes(1);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
+	});
+
+	it("expires the streaming Esc arm instead of aborting on a late second press", () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const { ctx, editor, spies } = createContext();
+		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		now.mockReturnValue(3_001);
+		editor.onEscape?.();
+
+		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not let a prior streaming Esc arm abort a new assistant message", () => {
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const { ctx, editor, spies } = createContext();
+		const firstMessage = {};
+		const secondMessage = {};
+		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		(ctx as unknown as { streamingMessage: object }).streamingMessage = firstMessage;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		(ctx as unknown as { streamingMessage: object }).streamingMessage = secondMessage;
+		now.mockReturnValue(1_500);
+		editor.onEscape?.();
+
+		expect(spies.abort).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledTimes(2);
 	});
 
 	it("returns focused subagent view to main on Esc instead of aborting", () => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed streaming Esc handling so the first Esc arms a 2s cancel hint and only a second Esc in that window aborts the active response ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed

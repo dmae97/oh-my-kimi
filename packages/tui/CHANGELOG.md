@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ordinary render scheduling to yield behind already-queued terminal input, preventing delayed Esc delivery during heavy streaming paints ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed

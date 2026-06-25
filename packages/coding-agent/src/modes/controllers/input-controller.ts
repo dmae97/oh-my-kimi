@@ -118,6 +118,7 @@ const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
 // deliberate human double-tap is always tens of milliseconds apart.
 const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
+const STREAMING_ESCAPE_CANCEL_WINDOW_MS = 2_000;
 
 export class InputController {
 	constructor(
@@ -137,6 +138,11 @@ export class InputController {
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
 	#leftTapCount = 0;
+	// Streaming turns use a two-step Esc: first press arms this token, second press
+	// within the window aborts the same live assistant message.
+	#streamingEscapeArmedToken: object | undefined;
+	#streamingEscapeArmedUntil = 0;
+	#streamingEscapeTimer: NodeJS.Timeout | undefined;
 	// Sequential index for `local://attachment-N` references created by large-paste and
 	// pasted-file attachments. Seeded from 0 and bumped past existing attachment files.
 	#attachmentCounter = 0;
@@ -184,6 +190,36 @@ export class InputController {
 			}
 		};
 		const unsubscribe = tinyTitleClient.onProgress(update);
+	}
+
+	#clearStreamingEscapeArm(): void {
+		this.#streamingEscapeArmedToken = undefined;
+		this.#streamingEscapeArmedUntil = 0;
+		if (this.#streamingEscapeTimer) {
+			clearTimeout(this.#streamingEscapeTimer);
+			this.#streamingEscapeTimer = undefined;
+		}
+	}
+
+	#handleStreamingEscape(): void {
+		const token = this.ctx.streamingMessage ?? this.ctx.streamingComponent ?? this.ctx.session;
+		const now = Date.now();
+		if (this.#streamingEscapeArmedToken === token && now <= this.#streamingEscapeArmedUntil) {
+			this.#clearStreamingEscapeArm();
+			void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+			return;
+		}
+
+		this.#clearStreamingEscapeArm();
+		this.#streamingEscapeArmedToken = token;
+		this.#streamingEscapeArmedUntil = now + STREAMING_ESCAPE_CANCEL_WINDOW_MS;
+		this.#streamingEscapeTimer = setTimeout(() => {
+			if (this.#streamingEscapeArmedToken === token && Date.now() >= this.#streamingEscapeArmedUntil) {
+				this.#clearStreamingEscapeArm();
+			}
+		}, STREAMING_ESCAPE_CANCEL_WINDOW_MS);
+		this.#streamingEscapeTimer.unref?.();
+		this.ctx.showStatus("Press Esc again within 2s to cancel streaming.");
 	}
 
 	setupKeyHandlers(): void {
@@ -263,7 +299,7 @@ export class InputController {
 			if (this.ctx.loopModeEnabled) {
 				this.ctx.pauseLoop();
 				if (this.ctx.session.isStreaming) {
-					void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+					this.#handleStreamingEscape();
 				} else {
 					this.ctx.cancelPendingSubmission();
 				}
@@ -314,12 +350,13 @@ export class InputController {
 				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
-				void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
+				this.#handleStreamingEscape();
 			} else if (this.ctx.editor.getText().trim()) {
 				// Esc with typed text clears the draft instead of (or before) any double-Esc action
 				this.ctx.editor.setText("");
 				this.ctx.ui.requestRender();
 				this.ctx.lastEscapeTime = 0;
+				this.#clearStreamingEscapeArm();
 			} else {
 				// Double-interrupt with empty editor triggers /tree, /branch, or nothing based on setting
 				const action = settings.get("doubleEscapeAction");
