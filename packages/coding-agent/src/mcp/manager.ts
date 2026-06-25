@@ -1231,9 +1231,9 @@ export class MCPManager {
 				const clientSecret = material?.clientSecret;
 				// `authorizationUrl` only lives on the embedded credential form;
 				// legacy `MCPAuthConfig` rows never carried it. Required to filter
-				// self-referential resource indicators on refresh when the
-				// authorize and token endpoints sit on different origins (issue
-				// #3502 review follow-up).
+				// same-origin resource indicators on refresh when the authorize and
+				// token endpoints sit on different origins (issue #3502 review
+				// follow-up).
 				const authorizationUrl = material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
 				const resource =
 					material?.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);

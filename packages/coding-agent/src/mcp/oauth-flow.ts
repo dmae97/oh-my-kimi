@@ -64,8 +64,8 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 	resource?: string;
 	/**
 	 * Authorization-server URL (the issuer the grant was minted against). Used
-	 * to filter self-referential resource indicators on refresh: RFC 8414 lets
-	 * the authorize and token endpoints sit on different origins, so refresh
+	 * to filter same-origin resource indicators on refresh: RFC 8414 lets the
+	 * authorize and token endpoints sit on different origins, so refresh
 	 * cannot infer the original auth-server origin from `tokenUrl` alone.
 	 * Unset on legacy credentials minted before issue #3502's fix.
 	 */
@@ -178,25 +178,25 @@ function resolveResourceUri(resource: string | undefined): string | undefined {
 }
 
 /**
- * Drop a resource indicator that equals the origin of {@link serverUrl}.
+ * Drop a resource indicator hosted on the same origin as {@link serverUrl}.
  *
  * Some authorization servers (Plane is the live example, see issue #3502)
- * reject `resource=<auth-server-origin>` with `server_error` before the
- * consent screen. Per RFC 8707 §2 the indicator distinguishes *other*
- * resource servers from the authorization server, so a self-referential
- * value is never required — silently strip it to stay compatible with strict
- * implementations.
+ * reject same-origin resource indicators with `server_error` before the
+ * consent screen, including path-bearing values such as
+ * `https://mcp.plane.so/http/mcp`. Per RFC 8707 §2 the indicator
+ * distinguishes *other* resource servers from the authorization server, so
+ * same-origin values are redundant for these MCP servers — silently strip
+ * them to stay compatible with strict implementations.
  *
- * RFC 8414 puts the authorize and token endpoints on the same issuer (and
- * MCP discovery follows that contract), so comparing against either endpoint
- * URL's origin gives the same answer in practice — callers in the authorize
- * leg pass `authorizationUrl`, callers in the refresh leg pass `tokenUrl`.
+ * New credentials pass the original authorization URL so refresh filters
+ * against the same issuer origin as the initial grant. Legacy credentials
+ * fall back to the token URL's origin.
  */
-function filterSelfReferentialResource(resource: string | undefined, serverUrl: string): string | undefined {
+function filterSameOriginResource(resource: string | undefined, serverUrl: string): string | undefined {
 	if (!resource) return undefined;
 	try {
 		const origin = new URL(serverUrl).origin;
-		if (resource === origin || resource === `${origin}/`) return undefined;
+		if (new URL(resource).origin === origin) return undefined;
 	} catch {
 		// Malformed serverUrl will fail elsewhere; fall through.
 	}
@@ -282,9 +282,9 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 	/**
 	 * Authorization-server URL the flow used. Persist alongside the credential
-	 * so refresh can filter self-referential resource indicators against the
-	 * issuer's origin even when `tokenUrl` lives on a different origin (RFC
-	 * 8414 permits the split).
+	 * so refresh can filter same-origin resource indicators against the issuer's
+	 * origin even when `tokenUrl` lives on a different origin (RFC 8414 permits
+	 * the split).
 	 */
 	get authorizationUrl(): string {
 		return this.config.authorizationUrl;
@@ -318,11 +318,11 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			if (filtered) {
 				this.#resource = filtered;
 			} else {
-				// Some authorization servers (e.g. mcp.plane.so) reject `resource`
-				// when it equals their own origin with `server_error`. RFC 8707
-				// indicators are for distinguishing other resource servers, so a
-				// self-referential value is redundant — drop it from both the
-				// authorize URL and the matching token request.
+				// Some authorization servers (e.g. mcp.plane.so) reject same-origin
+				// `resource` values with `server_error`, including path-bearing MCP
+				// endpoints like `/http/mcp`. RFC 8707 indicators distinguish other
+				// resource servers, so drop same-origin values from both the authorize
+				// URL and the matching token request.
 				params.delete("resource");
 				this.#resource = undefined;
 			}
@@ -450,13 +450,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	/**
-	 * Drop resource indicators that equal the authorization-server origin.
-	 * Delegates to {@link filterSelfReferentialResource}; the refresh-token
-	 * leg uses the same helper with `tokenUrl` so initial grant and refresh
-	 * stay in lock-step (RFC 8707 §2.2 requires matching indicators).
+	 * Drop resource indicators hosted on the authorization-server origin.
+	 * Delegates to {@link filterSameOriginResource}; the refresh-token leg uses
+	 * the same helper with the persisted authorization URL so initial grant and
+	 * refresh stay in lock-step (RFC 8707 §2.2 requires matching indicators).
 	 */
 	#filterResourceIndicator(resource: string | undefined): string | undefined {
-		return filterSelfReferentialResource(resource, this.config.authorizationUrl);
+		return filterSameOriginResource(resource, this.config.authorizationUrl);
 	}
 
 	/**
@@ -579,8 +579,8 @@ export interface RefreshMCPOAuthTokenOptions {
 	fetch?: FetchImpl;
 	/**
 	 * Authorization-server URL the original grant was minted against. Used to
-	 * filter self-referential resource indicators on refresh. Defaults to
-	 * `tokenUrl`'s origin when omitted (RFC 8414 same-origin case).
+	 * filter same-origin resource indicators on refresh. Defaults to `tokenUrl`'s
+	 * origin when omitted for legacy credentials.
 	 */
 	authorizationUrl?: string;
 }
@@ -610,9 +610,9 @@ export async function refreshMCPOAuthToken(
 		refresh_token: refreshToken,
 	});
 	if (clientId) params.set("client_id", clientId);
-	// Drop self-referential indicators so refresh stays consistent with the
-	// initial grant; see {@link filterSelfReferentialResource} for context.
-	const resolvedResource = filterSelfReferentialResource(resolveResourceUri(resource), filterAnchor);
+	// Drop same-origin indicators so refresh stays consistent with the initial
+	// grant; see {@link filterSameOriginResource} for context.
+	const resolvedResource = filterSameOriginResource(resolveResourceUri(resource), filterAnchor);
 	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
