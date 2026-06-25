@@ -924,6 +924,8 @@ export class TUI extends Container {
 	#renderScheduler: RenderScheduler;
 	#lastRenderAt = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
+	static readonly #INPUT_RENDER_GRACE_MS = TUI.#MIN_RENDER_INTERVAL_MS;
+	#inputRenderGraceUntilMs = 0;
 	// Pane-reflow settle window for tmux/screen/zellij. The host process gets
 	// SIGWINCH (and `process.stdout` already reports the new geometry) before
 	// the multiplexer finishes repainting the pane at the new size, and
@@ -2109,8 +2111,11 @@ export class TUI extends Container {
 		if (this.#multiplexerResizeTimer) {
 			return;
 		}
-		const elapsed = this.#renderScheduler.now() - this.#lastRenderAt;
-		const delay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		const now = this.#renderScheduler.now();
+		const elapsed = now - this.#lastRenderAt;
+		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		const inputGraceDelay = Math.max(0, this.#inputRenderGraceUntilMs - now);
+		const delay = Math.max(cadenceDelay, inputGraceDelay);
 		this.#renderTimer = this.#renderScheduler.scheduleRender(() => {
 			this.#renderTimer = undefined;
 			if (this.#stopped || !this.#renderRequested) {
@@ -2126,6 +2131,12 @@ export class TUI extends Container {
 	}
 
 	#handleInput(data: string): void {
+		// Raw-mode Ctrl+C/Esc arrive as stdin data, not process signals. If the
+		// first key in a double-key gesture schedules an immediate slow repaint,
+		// the queued second key can sit behind that repaint long enough for the
+		// app-level double-press window to expire. Give the input queue one frame
+		// before ordinary paints; forced repaints still bypass this path.
+		this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
 		if (this.#inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.#inputListeners) {
