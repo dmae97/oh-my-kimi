@@ -902,19 +902,19 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		// SIGTSTP is POSIX job-control: Windows has no equivalent and
-		// `process.kill(_, "SIGTSTP")` throws `TypeError: Unknown signal:
-		// SIGTSTP` there, taking the whole agent down via an uncaught
-		// exception (issue #2036). No-op on platforms that cannot suspend.
+		// Job-control suspend is POSIX-only: on Windows `process.kill(_, "SIGSTOP")`
+		// throws `TypeError: Unknown signal: SIGSTOP` and takes the whole agent down
+		// via an uncaught exception (issue #2036, originally for SIGTSTP — same
+		// shape for SIGSTOP). No-op on platforms that cannot suspend.
 		if (process.platform === "win32") {
 			this.ctx.showStatus("Suspend (Ctrl+Z) is not supported on this platform");
 			return;
 		}
 
-		// Capture the listener so we can detach it if the signal never
-		// fires; otherwise a failed suspend would leave a stale SIGCONT
-		// handler that fires on the next unrelated continue and tries to
-		// re-`start()` an already-running TUI.
+		// Capture the listener so we can detach it if the signal never fires;
+		// otherwise a failed suspend would leave a stale SIGCONT handler that
+		// fires on the next unrelated continue and tries to re-`start()` an
+		// already-running TUI.
 		const onResume = (): void => {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
@@ -926,14 +926,35 @@ export class InputController {
 		this.ctx.ui.stop();
 
 		try {
-			// pid=0 → entire foreground process group; the shell receives
-			// SIGTSTP and parks the job.
-			process.kill(0, "SIGTSTP");
+			// SIGSTOP — not SIGTSTP — and to our own PID, not the foreground process
+			// group. Two reasons:
+			//
+			//  1. brush-core (the embedded shell behind every bash tool call) installs
+			//     a tokio SIGTSTP listener on `Process::wait` to detect when its
+			//     children have been stopped (`crates/brush-core-vendored/src/sys/
+			//     unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::
+			//     signal(SIGTSTP)`). Per tokio's documented contract, the first call
+			//     for a given SignalKind permanently replaces the kernel-default
+			//     handler for the lifetime of the process. So once the user has
+			//     issued even one bash command — e.g. `/usr/bin/true` — SIGTSTP no
+			//     longer stops omp: tokio swallows it and the TUI ends up torn down
+			//     while the process keeps running with no live terminal (issue
+			//     [#3461]).
+			//     SIGSTOP cannot be caught, blocked, or ignored — it stops the
+			//     process at the kernel regardless of what handlers are installed.
+			//
+			//  2. Targeting our own PID instead of pgid=0 leaves long-lived children
+			//     (MCP stdio servers, the persistent brush native shell) running
+			//     while the agent is parked. Real terminal Ctrl+Z reaches the whole
+			//     foreground group only because the kernel delivers it there; an
+			//     internally-generated suspend has no reason to freeze the agent's
+			//     IPC partners mid-request, and the parent shell still detects
+			//     WIFSTOPPED via SIGCHLD and parks the job.
+			process.kill(process.pid, "SIGSTOP");
 		} catch (err) {
-			// Either the runtime refused the signal or the kernel rejected
-			// it (some sandboxes block sending to pid=0). Tear the resume
-			// hook down and bring the TUI back so the user is not stranded
-			// on a frozen prompt.
+			// The runtime refused the signal (e.g. seccomp filter blocks SIGSTOP
+			// delivery to self). Tear the resume hook down and bring the TUI back
+			// so the user is not stranded on a frozen prompt.
 			process.removeListener("SIGCONT", onResume);
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
