@@ -30,7 +30,14 @@ import {
 	statRemotePath,
 	writeRemoteFile,
 } from "../ssh/file-transfer";
-import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, WriteContext } from "./types";
+import type {
+	InternalResource,
+	InternalUrl,
+	ProtocolHandler,
+	ResolveContext,
+	UrlCompletion,
+	WriteContext,
+} from "./types";
 
 /** Largest remote text file `ssh://` will materialize (mirrors the local:// cap). */
 const SSH_TEXT_MAX_BYTES = 1024 * 1024;
@@ -78,31 +85,67 @@ function remotePathFromUrl(url: InternalUrl): string {
 	return decoded;
 }
 
+/** Load the configured SSH hosts from the `ssh` capability (managed/project `ssh.json`). */
+async function loadConfiguredHosts(cwd?: string): Promise<SSHHost[]> {
+	const { items } = await capability.loadCapability<SSHHost>(sshCapability.id, cwd ? { cwd } : {});
+	return items;
+}
+
+/** One-line address for a host, e.g. `deploy@10.0.0.1:2222`. */
+function hostAddress(host: SSHHost): string {
+	return `${host.username ? `${host.username}@` : ""}${host.host}${host.port ? `:${host.port}` : ""}`;
+}
+
+/** Render the configured-host index for a bare `ssh://` read (markdown with per-host links). */
+function formatHostIndex(hosts: readonly SSHHost[]): string {
+	if (hosts.length === 0) {
+		return "# SSH hosts\n\nNo SSH hosts are configured. Add hosts to an `ssh.json` capability file, or read `ssh://<host>/<path>` with any destination OpenSSH can resolve (e.g. a `~/.ssh/config` alias).\n";
+	}
+	const lines = hosts.map(host => {
+		const addr = hostAddress(host);
+		const suffix = addr === host.name ? "" : ` — \`${addr}\``;
+		const desc = host.description ? ` (${host.description})` : "";
+		return `- [${host.name}](ssh://${encodeURIComponent(host.name)}/)${suffix}${desc}`;
+	});
+	return `# SSH hosts\n\n${hosts.length} configured host${hosts.length === 1 ? "" : "s"}:\n\n${lines.join("\n")}\n`;
+}
+
 /**
- * Resolve the URL authority to an SSH connection target. Prefers an
- * OMP-discovered host by name; otherwise treats the authority as an opaque
- * OpenSSH destination so plain `~/.ssh/config` aliases work. User/port overrides
- * on a configured host name are rejected — the ControlMaster/host-info caches
- * key on `name` alone, so a different authority under the same alias would
- * collide.
+ * Resolve the URL authority to an SSH connection target. With no explicit
+ * user/port, the full DECODED authority (`url.rawHost`) is matched against a
+ * configured host name, so percent-encoded reserved-char aliases (e.g.
+ * `alice%40prod` → `alice@prod`) resolve correctly. A literal `user@`/`:port`
+ * in the URL is an override: it is rejected on a configured bare name (the
+ * ControlMaster/host-info caches key on `name` alone) and otherwise treated as
+ * an opaque OpenSSH destination so plain `~/.ssh/config` aliases work.
  */
 async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnectionTarget> {
-	const host = url.hostname;
-	if (!host) {
+	const bareHost = url.hostname;
+	const rawAuthority = url.rawHost || bareHost;
+	if (!bareHost && !rawAuthority) {
 		throw new Error("ssh:// requires a host: ssh://<host>/<absolute-path>");
 	}
 	const username = url.username || undefined;
 	const port = url.port ? Number(url.port) : undefined;
+	const items = await loadConfiguredHosts(cwd);
 
-	const { items } = await capability.loadCapability<SSHHost>(sshCapability.id, { cwd });
-	const match = items.find(entry => entry.name === host);
-
-	if (match) {
-		if (username || port !== undefined) {
+	// A literal user/port in the URL is an authority override. A configured alias
+	// is addressed only by its (percent-encoded) name, never with a separate
+	// user/port — so reject an override on a configured bare name, else opaque.
+	if (username || port !== undefined) {
+		if (items.some(entry => entry.name === bareHost)) {
 			throw new Error(
-				`ssh://: user/port overrides are not allowed for the configured host "${host}"; use ssh://${host}/<path> or an unconfigured hostname`,
+				`ssh://: user/port overrides are not allowed for the configured host "${bareHost}"; use ssh://${bareHost}/<path> or an unconfigured hostname`,
 			);
 		}
+		const name = `${username ? `${username}@` : ""}${bareHost}${port !== undefined ? `:${port}` : ""}`;
+		return { name, host: bareHost, username, port };
+	}
+
+	// No explicit user/port: match the full decoded authority against a
+	// configured name (so an encoded reserved-char alias resolves correctly).
+	const match = items.find(entry => entry.name === rawAuthority) ?? items.find(entry => entry.name === bareHost);
+	if (match) {
 		return {
 			name: match.name,
 			host: match.host,
@@ -112,9 +155,8 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 			compat: match.compat,
 		};
 	}
-
-	const name = `${username ? `${username}@` : ""}${host}${port !== undefined ? `:${port}` : ""}`;
-	return { name, host, username, port };
+	// Opaque OpenSSH destination (plain ~/.ssh/config alias, or any resolvable host).
+	return { name: rawAuthority, host: rawAuthority };
 }
 
 /** Format a one-level remote directory listing — mirrors buildDirectoryResource's plain `name/` lines. */
@@ -128,6 +170,18 @@ export class SshProtocolHandler implements ProtocolHandler {
 	readonly immutable = false;
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
+		// Bare `ssh://` (or `ssh:///`) with no host lists the configured hosts. A
+		// host-less URL that still carries a path (`ssh:///etc/hosts`) is malformed —
+		// reject it instead of silently dropping the path and listing hosts.
+		if (!(url.rawHost || url.hostname)) {
+			const rawPath = url.rawPathname ?? url.pathname;
+			if (rawPath && rawPath !== "/") {
+				throw new Error(
+					`ssh:// requires a host before the path: ssh://<host>${rawPath} (host-less ssh://${rawPath} is not valid)`,
+				);
+			}
+			return this.#resolveHostIndex(url, context?.cwd);
+		}
 		const target = await resolveTarget(url, context?.cwd);
 		const remotePath = remotePathFromUrl(url);
 		let fileResult: { bytes: Uint8Array; truncated: boolean };
@@ -186,6 +240,28 @@ export class SshProtocolHandler implements ProtocolHandler {
 			immutable: true,
 			isDirectory: true,
 		};
+	}
+
+	/** Resolve a bare `ssh://` to a listing of configured hosts (immutable; plain virtual text, so `search` can still grep host names). */
+	async #resolveHostIndex(url: InternalUrl, cwd?: string): Promise<InternalResource> {
+		const content = formatHostIndex(await loadConfiguredHosts(cwd));
+		return {
+			url: url.href,
+			content,
+			contentType: "text/markdown",
+			size: Buffer.byteLength(content, "utf-8"),
+			immutable: true,
+		};
+	}
+
+	/** Autocomplete the host segment of `ssh://` with the configured SSH hosts. */
+	async complete(_query?: string, cwd?: string): Promise<UrlCompletion[]> {
+		const hosts = await loadConfiguredHosts(cwd);
+		return hosts.map(host => ({
+			value: encodeURIComponent(host.name),
+			label: host.name,
+			description: host.description ?? hostAddress(host),
+		}));
 	}
 
 	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<void> {

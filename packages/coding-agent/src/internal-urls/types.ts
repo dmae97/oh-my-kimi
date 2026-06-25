@@ -157,6 +157,8 @@ export interface ProtocolHandler {
 	 * mcp://) omit it. The caller fuzzy-filters the returned set against the
 	 * partially typed `query`, so handlers return their full (bounded) candidate
 	 * list; `query` is provided only so handlers can scope expensive enumeration.
+	 * `cwd` is the caller's working dir, for handlers whose candidates are
+	 * project-scoped (e.g. ssh:// hosts from a project `ssh.json`).
 	 */
-	complete?(query: string): Promise<UrlCompletion[]>;
+	complete?(query: string, cwd?: string): Promise<UrlCompletion[]>;
 }

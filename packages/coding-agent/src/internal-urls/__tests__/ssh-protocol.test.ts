@@ -69,6 +69,22 @@ describe("SshProtocolHandler", () => {
 		expect(spy.mock.calls[0]?.[0]).toMatchObject({ name: "bob@h1:2222", host: "h1", username: "bob", port: 2222 });
 	});
 
+	it("matches a configured reserved-char host via its percent-encoded name", async () => {
+		mockHosts([{ _source: SOURCE, name: "alice@prod", host: "10.0.0.9", username: "alice" }]);
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://alice%40prod/etc/hostname"));
+		// Encoded `%40` authority decodes to the alias name → uses the alias's host/user.
+		expect(spy.mock.calls[0]?.[0]).toMatchObject({ name: "alice@prod", host: "10.0.0.9", username: "alice" });
+	});
+
+	it("treats a literal user@host as opaque, not the encoded alias", async () => {
+		mockHosts([{ _source: SOURCE, name: "alice@prod", host: "10.0.0.9", username: "alice" }]);
+		const spy = mockReadBytes("ok\n");
+		// Literal `@`: username=alice, bare host=prod (unconfigured) → opaque, NOT the alias's 10.0.0.9.
+		await handler.resolve(parseInternalUrl("ssh://alice@prod/etc/hostname"));
+		expect(spy.mock.calls[0]?.[0]).toMatchObject({ name: "alice@prod", host: "prod", username: "alice" });
+	});
+
 	it("lists the remote root directory for ssh://host/", async () => {
 		mockHosts();
 		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
@@ -153,5 +169,46 @@ describe("SshProtocolHandler", () => {
 		);
 		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("missing");
 		await expect(handler.resolve(parseInternalUrl("ssh://icaro/nope"))).rejects.toThrow(/No such file or directory/);
+	});
+
+	it("autocompletes configured hosts and threads cwd to the capability load", async () => {
+		const spy = vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [
+				{ name: "web1", host: "10.0.0.1", username: "deploy", _source: SOURCE },
+				{ name: "db", host: "db.internal", _source: SOURCE },
+			],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<SSHHost>);
+		const candidates = await handler.complete("", "/tmp/proj");
+		expect(candidates.map(c => c.value).sort()).toEqual(["db", "web1"]);
+		expect(candidates.find(c => c.value === "web1")?.description).toContain("deploy@10.0.0.1");
+		expect(spy.mock.calls[0]?.[1]).toEqual({ cwd: "/tmp/proj" });
+	});
+
+	it("lists configured hosts for a bare ssh:// read using the context cwd", async () => {
+		const spy = vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [{ name: "web1", host: "10.0.0.1", _source: SOURCE }],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<SSHHost>);
+		const res = await handler.resolve(parseInternalUrl("ssh://"), { cwd: "/tmp/proj" });
+		expect(res.immutable).toBe(true);
+		expect(res.sourcePath).toBeUndefined();
+		expect(res.content).toContain("[web1](ssh://web1/)");
+		expect(spy.mock.calls[0]?.[1]).toEqual({ cwd: "/tmp/proj" });
+	});
+
+	it("shows a helpful message when no hosts are configured", async () => {
+		mockHosts([]);
+		const res = await handler.resolve(parseInternalUrl("ssh://"));
+		expect(res.content).toMatch(/No SSH hosts are configured/);
+	});
+
+	it("rejects a host-less ssh:// URL that carries a path", async () => {
+		mockHosts();
+		await expect(handler.resolve(parseInternalUrl("ssh:///etc/hosts"))).rejects.toThrow(/requires a host/);
 	});
 });

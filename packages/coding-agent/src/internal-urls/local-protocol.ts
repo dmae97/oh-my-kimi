@@ -454,8 +454,8 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		return buildFileResource(url, resolved);
 	}
 
-	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
-		const opts = LocalProtocolHandler.resolveOptions(context);
+	async complete(_query?: string, _cwd?: string): Promise<UrlCompletion[]> {
+		const opts = LocalProtocolHandler.resolveOptions(undefined);
 		if (!opts) return [];
 		const localRoot = path.resolve(resolveLocalRoot(opts));
 		try {
