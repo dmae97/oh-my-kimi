@@ -22,7 +22,7 @@ function isWsl(): boolean {
 // `osascript` itself.
 const MAC_FILE_URL_SCRIPT = [
 	"on run",
-	"\tset output to \"\"",
+	'\tset output to ""',
 	"\ttry",
 	"\t\tset theClip to the clipboard as «class furl»",
 	"\t\tif class of theClip is list then",
