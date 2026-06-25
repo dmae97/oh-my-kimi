@@ -839,6 +839,8 @@ export class InputController {
 	async #submitToFocusedSession(text: string, streamingBehavior: "steer" | "followUp"): Promise<void> {
 		const target = this.ctx.viewSession;
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+		const imageLinks =
+			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) {
 			if (target.isStreaming && target.queuedMessageCount > 0) {
 				const aborting = target.abort({ reason: USER_INTERRUPT_LABEL });
@@ -859,7 +861,14 @@ export class InputController {
 				imageCount: images?.length ?? 0,
 			});
 		} catch (error) {
-			this.ctx.editor.setText(text); // hand the message back, mirroring the main submit error path
+			// Hand the message back, mirroring the main submit error path: restore
+			// pasted images so the user can retry an image-only or text+image draft.
+			this.ctx.editor.setText(text);
+			if (images && images.length > 0) {
+				this.ctx.editor.pendingImages = [...images];
+				this.ctx.editor.pendingImageLinks = imageLinks ? [...imageLinks] : images.map(() => undefined);
+				this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+			}
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}
 		this.ctx.updatePendingMessagesDisplay();
