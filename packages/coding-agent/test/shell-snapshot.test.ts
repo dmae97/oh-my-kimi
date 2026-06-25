@@ -274,4 +274,32 @@ describe("getOrCreateSnapshot", () => {
 		const dirStat = await fs.stat(path.dirname(snapshotPath!));
 		expect(dirStat.mode & 0o077).toBe(0);
 	});
+
+	it("keeps the snapshot file at 0600 even when the rc file resets umask to 022", async () => {
+		// PR-review regression: previous revision ran `umask 077` BEFORE sourcing
+		// the rc, so a typical `.bashrc` with `umask 022` reopened the world-read
+		// window between the shell's first `>|` and the JS post-spawn chmod.
+		// Fix: JS now pre-creates the file at 0600 (shell `>|`/`>>` preserve the
+		// inode mode) AND the script re-applies `umask 077` after the source.
+		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-umask-"));
+		await fs.writeFile(
+			path.join(home, ".bashrc"),
+			[`umask 022`, `export __MISE_EXE=/usr/bin/echo`, `mise () { command "$__MISE_EXE" "$@"; }`, ``].join("\n"),
+		);
+
+		const realBash = "/usr/bin/bash";
+		const shellLink = path.join(home, "bash-omp-umask");
+		await fs.symlink(realBash, shellLink);
+
+		const env = { ...process.env, HOME: home };
+		const snapshotPath = await getOrCreateSnapshot(shellLink, env);
+		expect(snapshotPath).not.toBeNull();
+
+		// Snapshot file must be 0600 — verifies the mode survives an rc-injected
+		// `umask 022` AND that captured env was actually written (sanity: non-empty).
+		const fileStat = await fs.stat(snapshotPath!);
+		expect(fileStat.mode & 0o077).toBe(0);
+		const content = await fs.readFile(snapshotPath!, "utf8");
+		expect(content).toContain(`export __MISE_EXE='/usr/bin/echo'`);
+	});
 });
