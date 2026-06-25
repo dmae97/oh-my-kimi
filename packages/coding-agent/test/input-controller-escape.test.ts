@@ -459,24 +459,48 @@ describe("InputController escape behavior", () => {
 		expect(spies.showStatus).toHaveBeenCalledTimes(2);
 	});
 
-	it("does not let a prior streaming Esc arm abort a new assistant message", () => {
+	it("re-arms when the streaming component is replaced between the two Esc presses", () => {
 		const now = vi.spyOn(Date, "now");
 		now.mockReturnValue(1_000);
 		const { ctx, editor, spies } = createContext();
-		const firstMessage = {};
-		const secondMessage = {};
+		const firstComponent = {};
+		const secondComponent = {};
 		(ctx.session as { isStreaming: boolean }).isStreaming = true;
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = firstMessage;
+		(ctx as unknown as { streamingComponent: object }).streamingComponent = firstComponent;
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.();
-		(ctx as unknown as { streamingMessage: object }).streamingMessage = secondMessage;
+		(ctx as unknown as { streamingComponent: object }).streamingComponent = secondComponent;
 		now.mockReturnValue(1_500);
 		editor.onEscape?.();
 
 		expect(spies.abort).not.toHaveBeenCalled();
 		expect(spies.showStatus).toHaveBeenCalledTimes(2);
+	});
+
+	it("aborts on the second Esc even when ctx.streamingMessage was replaced by a delta in between", () => {
+		// `EventController` replaces `ctx.streamingMessage` with a fresh immutable
+		// snapshot on every `message_update`; only `streamingComponent` is stable
+		// across the streaming window, so swapping the message must not invalidate
+		// the armed token.
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValue(1_000);
+		const { ctx, editor, spies } = createContext();
+		const streamingComponent = {};
+		(ctx.session as { isStreaming: boolean }).isStreaming = true;
+		(ctx as unknown as { streamingComponent: object }).streamingComponent = streamingComponent;
+		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: [] };
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+		(ctx as unknown as { streamingMessage: object }).streamingMessage = { content: ["delta"] };
+		now.mockReturnValue(1_500);
+		editor.onEscape?.();
+
+		expect(spies.abort).toHaveBeenCalledTimes(1);
+		expect(spies.abort).toHaveBeenCalledWith({ reason: USER_INTERRUPT_LABEL });
 	});
 
 	it("clears the streaming Esc arm when the current turn ends", () => {
