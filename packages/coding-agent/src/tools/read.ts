@@ -2094,8 +2094,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					skills: this.session.skills,
 				});
 				if (localFile) {
-					readPath =
-						internalTarget.sel === undefined ? localFile.path : `${localFile.path}:${internalTarget.sel}`;
+					readPath = internalTarget.sel === undefined ? localFile.path : `${localFile.path}:${internalTarget.sel}`;
 				} else {
 					return this.#handleInternalUrl(internalTarget.path, parsed, signal);
 				}

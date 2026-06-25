@@ -139,7 +139,10 @@ function isUtf8Text(bytes: Uint8Array): boolean {
 	}
 }
 
-async function buildFileResource(url: InternalUrl, resolved: Extract<ResolvedLocalTarget, { kind: "file" }>): Promise<InternalResource> {
+async function buildFileResource(
+	url: InternalUrl,
+	resolved: Extract<ResolvedLocalTarget, { kind: "file" }>,
+): Promise<InternalResource> {
 	if (BINARY_FILE_EXTENSIONS.has(path.extname(resolved.path).toLowerCase())) {
 		return buildNonTextLocalResource(url, resolved.path, resolved.size, "extension is a known binary/container type");
 	}
