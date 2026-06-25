@@ -798,13 +798,13 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					onSettled?.(true);
 					throw new Error("Aborted before execution");
 				}
-				markRunning();
-				progress.status = "running";
-				await reportProgress(
-					`Running background task ${agentId}...`,
-					buildDetails("running", ownJobId) as unknown as Record<string, unknown>,
-				);
 				try {
+					markRunning();
+					progress.status = "running";
+					await reportProgress(
+						`Running background task ${agentId}...`,
+						buildDetails("running", ownJobId) as unknown as Record<string, unknown>,
+					);
 					const result = await this.#executeSync(
 						toolCallId,
 						spawnParams,
