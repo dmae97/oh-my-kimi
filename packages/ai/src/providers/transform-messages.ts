@@ -124,6 +124,88 @@ function deduplicateToolCallIds(
 	});
 }
 
+/**
+ * Drop assistant `toolCall` blocks whose `name` is empty or whitespace-only,
+ * the `toolResult` messages they point at, and any assistant turn that has no
+ * replayable content left.
+ *
+ * Models occasionally emit `{ "name": "", "arguments": "{}" }` (observed:
+ * GLM-5.2 + thinking on long turns, #3458). The agent loop rejects the call
+ * at execution time with `Tool  not found`, but the malformed block and its
+ * error tool-result stay in `currentContext.messages`, so every subsequent
+ * request replays them. Every provider validates the function name —
+ * Anthropic 400s on `tool_use.name` (alongside an orphan `tool_result`),
+ * OpenAI Chat Completions 400s on `tool_calls[i].function.name` — wedging the
+ * session in a 400 loop until manual `/clear`.
+ *
+ * Run before any other transform so the rest of the pipeline never sees a
+ * malformed call. Idempotent: a re-run on an already-sanitized list returns
+ * the input untouched. Provider-agnostic — any wire model could surface this.
+ */
+function isMalformedToolCallName(name: string | undefined): boolean {
+	return !name || name.trim().length === 0;
+}
+
+function sanitizeMalformedToolCalls(messages: Message[]): Message[] {
+	// Fast path: skip the rewrite entirely when nothing is malformed.
+	let hasMalformed = false;
+	outer: for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		for (const block of msg.content) {
+			if (block.type === "toolCall" && isMalformedToolCallName(block.name)) {
+				hasMalformed = true;
+				break outer;
+			}
+		}
+	}
+	if (!hasMalformed) return messages;
+
+	// Positional FIFO pairing within one assistant→tool-result window: a tool-call
+	// id can repeat across history when an OpenAI-Responses composite id
+	// (`callId|itemId`) collapses on the wire to the same `callId` (see
+	// `deduplicateToolCallIds` + `transform-messages-dedup`). A set-based "drop
+	// every result for this id" loses the real output for the surviving valid
+	// occurrence whenever one duplicate is malformed. Track each `toolCall`
+	// occurrence's malformed-ness on a per-id queue and pop on matching
+	// `toolResult`, but clear the queues at every non-result boundary so a
+	// malformed call whose rejection result never arrived cannot consume a later
+	// valid call's real result when the id is reused.
+	const dropQueues = new Map<string, boolean[]>();
+	const result: Message[] = [];
+	for (const msg of messages) {
+		if (msg.role === "assistant") {
+			dropQueues.clear();
+			const filtered: AssistantMessage["content"] = [];
+			for (const block of msg.content) {
+				if (block.type === "toolCall") {
+					const malformed = isMalformedToolCallName(block.name);
+					const queue = dropQueues.get(block.id);
+					if (queue) queue.push(malformed);
+					else dropQueues.set(block.id, [malformed]);
+					if (malformed) continue;
+				}
+				filtered.push(block);
+			}
+			if (filtered.length === 0) continue;
+			result.push(filtered.length === msg.content.length ? msg : { ...msg, content: filtered });
+			continue;
+		}
+		if (msg.role === "toolResult") {
+			const queue = dropQueues.get(msg.toolCallId);
+			if (queue && queue.length > 0) {
+				const drop = queue.shift() === true;
+				if (queue.length === 0) dropQueues.delete(msg.toolCallId);
+				if (drop) continue;
+			}
+			result.push(msg);
+			continue;
+		}
+		dropQueues.clear();
+		result.push(msg);
+	}
+	return result;
+}
+
 function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
 	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
 	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
@@ -221,6 +303,11 @@ export function transformMessages<TApi extends Api>(
 	duplicateToolCallIdSuffixPrefix = "_dup",
 	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
+	// Drop assistant `toolCall` blocks with empty/whitespace `name` (and their
+	// matched `toolResult` messages) before anything else looks at the history.
+	// Replays of these would 400 every provider — see `sanitizeMalformedToolCalls`.
+	messages = sanitizeMalformedToolCalls(messages);
+
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 
