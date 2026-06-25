@@ -124,6 +124,62 @@ function deduplicateToolCallIds(
 	});
 }
 
+/**
+ * Drop assistant `toolCall` blocks whose `name` is empty or whitespace-only,
+ * the `toolResult` messages they point at, and any assistant turn that has no
+ * replayable content left.
+ *
+ * Models occasionally emit `{ "name": "", "arguments": "{}" }` (observed:
+ * GLM-5.2 + thinking on long turns, #3458). The agent loop rejects the call
+ * at execution time with `Tool  not found`, but the malformed block and its
+ * error tool-result stay in `currentContext.messages`, so every subsequent
+ * request replays them. Every provider validates the function name —
+ * Anthropic 400s on `tool_use.name` (alongside an orphan `tool_result`),
+ * OpenAI Chat Completions 400s on `tool_calls[i].function.name` — wedging the
+ * session in a 400 loop until manual `/clear`.
+ *
+ * Run before any other transform so the rest of the pipeline never sees a
+ * malformed call. Idempotent: a re-run on an already-sanitized list returns
+ * the input untouched. Provider-agnostic — any wire model could surface this.
+ */
+function isMalformedToolCallName(name: string | undefined): boolean {
+	return !name || name.trim().length === 0;
+}
+
+function sanitizeMalformedToolCalls(messages: Message[]): Message[] {
+	const malformedIds = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		for (const block of msg.content) {
+			if (block.type === "toolCall" && isMalformedToolCallName(block.name)) {
+				malformedIds.add(block.id);
+			}
+		}
+	}
+	if (malformedIds.size === 0) return messages;
+
+	const result: Message[] = [];
+	for (const msg of messages) {
+		if (msg.role === "toolResult") {
+			if (malformedIds.has(msg.toolCallId)) continue;
+			result.push(msg);
+			continue;
+		}
+		if (msg.role !== "assistant") {
+			result.push(msg);
+			continue;
+		}
+		const filtered = msg.content.filter(block => !(block.type === "toolCall" && isMalformedToolCallName(block.name)));
+		if (filtered.length === msg.content.length) {
+			result.push(msg);
+			continue;
+		}
+		if (filtered.length === 0) continue;
+		result.push({ ...msg, content: filtered });
+	}
+	return result;
+}
+
 function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage): boolean {
 	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
 	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
@@ -221,6 +277,11 @@ export function transformMessages<TApi extends Api>(
 	duplicateToolCallIdSuffixPrefix = "_dup",
 	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
+	// Drop assistant `toolCall` blocks with empty/whitespace `name` (and their
+	// matched `toolResult` messages) before anything else looks at the history.
+	// Replays of these would 400 every provider — see `sanitizeMalformedToolCalls`.
+	messages = sanitizeMalformedToolCalls(messages);
+
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 
