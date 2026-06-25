@@ -26,7 +26,9 @@ const INTERNAL_URL_SELECTOR_PART_RE = new RegExp(
 );
 // Schemes whose host grammar is identifier-shaped, so any trailing
 // `:<selector-chunk>` is unambiguously a read-tool selector. `mcp://` is
-// excluded because mcp resource URIs may legitimately contain colons.
+// excluded because mcp resource URIs may legitimately contain colons. `ssh://`
+// is included despite an optional `:port` — a selector only ever trails the
+// `/path`, which blocks the port colon from being peeled.
 const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	agent: true,
 	artifact: true,
@@ -37,6 +39,7 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	pr: true,
 	rule: true,
 	skill: true,
+	ssh: true,
 	vault: true,
 };
 // Schemes whose resource URIs are server-defined and may legitimately end
@@ -55,6 +58,7 @@ const TOP_LEVEL_INTERNAL_URL_PREFIXES = [
 	"rule://",
 	"local://",
 	"mcp://",
+	"ssh://",
 	"vault://",
 ] as const;
 

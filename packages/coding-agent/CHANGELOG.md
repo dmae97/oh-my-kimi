@@ -65,6 +65,9 @@
 - Fixed the per-provider subagent concurrency limiter (e.g. `providers.ollama-cloud.maxConcurrency`) being replaced with a fresh semaphore whenever the configured limit changed, which orphaned the in-flight slots on the old instance and let a runtime or mixed limit value exceed the cap. The limiter now resizes a single shared semaphore in place — raising the ceiling admits queued waiters immediately, lowering it drains in-flight holders without admitting past the new cap. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed a background-task spawn slot leaking from the `task.maxConcurrency` limiter when progress reporting threw between acquiring the slot and entering the guarded run: `markRunning`/`reportProgress` now run inside the try whose `finally` releases the semaphore, so a failed progress report can no longer permanently shrink subagent concurrency. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed active goal runs that successfully call `yield` and then receive a trailing empty assistant `stop` skipping threshold compaction; post-yield empty-stop suppression now still anchors active-goal compaction on the yield-bearing assistant turn, so long-running tasks continue after maintenance instead of settling early.
+### Added
+
+- Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); UTF-8 text only, up to 1 MiB.
 
 ## [16.1.19] - 2026-06-25
 

@@ -7,7 +7,7 @@ Read files, directories, archives, SQLite, images, documents, internal resources
 
 ## Parameters
 
-- `path` — required. Local path, internal URI (`skill://`, `agent://`, `artifact://`, `history://`, `memory://`, `rule://`, `local://`, `vault://`, `mcp://`, `omp://`, `issue://`, `pr://`), or URL. Append `:<sel>` for ranges/modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`, `db.sqlite:users:42`).
+- `path` — required. Local path, internal URI (`skill://`, `agent://`, `artifact://`, `history://`, `memory://`, `rule://`, `local://`, `vault://`, `mcp://`, `omp://`, `issue://`, `pr://`, `ssh://`), or URL. Append `:<sel>` for ranges/modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`, `db.sqlite:users:42`).
 
 ## Selectors
 
@@ -68,6 +68,8 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 # Internal URIs
 
 All URI schemes take the same line selectors. `artifact://<id>` recovers full output a bash/eval/tool result spilled or truncated. `history://<agentId>` = agent transcript; bare `history://` lists agents.
+
+`ssh://host/<absolute-path>` reads a single text file on a pre-configured SSH host or `~/.ssh/config` alias (UTF-8 text only, ≤1 MiB; no binary/recursive/glob). Also writable via `write` and searchable via `search`.
 
 <critical>
 - Line ranges go in the selector: `path="src/foo.ts:50-200"`.
