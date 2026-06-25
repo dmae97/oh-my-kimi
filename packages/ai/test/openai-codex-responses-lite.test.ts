@@ -266,7 +266,6 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		]);
 	});
 
-
 	it("omits the lite header and client_metadata when not requested", async () => {
 		const model = createCodexModel("gpt-5.1-codex");
 		let captured: CapturedCodexRequest | undefined;

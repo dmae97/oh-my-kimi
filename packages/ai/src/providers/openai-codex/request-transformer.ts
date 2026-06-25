@@ -79,7 +79,6 @@ export function shouldUseCodexResponsesLite(body: RequestBody, requested: boolea
 	return requested === true && !containsInputImage(body.input);
 }
 
-
 function getReasoningConfig(model: Model<Api>, options: CodexRequestOptions): ReasoningConfig {
 	const config: ReasoningConfig = {
 		effort:
