@@ -51,6 +51,17 @@ async function main(): Promise<void> {
 	try {
 		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--generate"]);
 		await runCommand(["bun", "scripts/generate-docs-index.ts", "--generate"]);
+		// `legacy-pi-bundled-registry.ts` static-imports
+		// `@oh-my-pi/pi-coding-agent/export/html` (one of pi-coding-agent's
+		// named subpath exports, see scripts/generate-legacy-pi-bundled-registry.ts),
+		// whose source pulls in `tool-views.generated.js`. The root
+		// `package.json` "prepare" lifecycle hook builds that file on
+		// `bun install`, but a clean binary build that skips install hooks
+		// would `bun build --compile` against the registry entry and fail
+		// resolving the missing generated bundle. Rebuilding the tool views
+		// here makes the compile self-contained and matches what `prepack`
+		// does for the npm bundle.
+		await runCommand(["bun", "--cwd=../collab-web", "run", "build:tool-views"]);
 		await runCommand(
 			["bun", "--cwd=../natives", "run", "embed:native"],
 			crossTarget
