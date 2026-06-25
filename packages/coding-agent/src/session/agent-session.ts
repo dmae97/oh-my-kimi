@@ -6833,7 +6833,17 @@ export class AgentSession {
 			this.abortRetry();
 			this.#promptGeneration++;
 			this.#scheduledHiddenNextTurnGeneration = undefined;
-			if (!options?.preserveCompaction) this.abortCompaction();
+			if (options?.preserveCompaction) {
+				// Manual `/compact` installed its own #compactionAbortController before
+				// this internal abort and must keep it alive (that marker is what makes
+				// isCompacting report true during startup). Any in-flight
+				// auto-compaction MUST still be cancelled, though: otherwise a
+				// background maintenance pass races the manual run and both
+				// appendCompaction/replaceMessages, double-rewriting session history.
+				this.#autoCompactionAbortController?.abort();
+			} else {
+				this.abortCompaction();
+			}
 			this.abortHandoff();
 			this.abortBash();
 			this.abortEval();
