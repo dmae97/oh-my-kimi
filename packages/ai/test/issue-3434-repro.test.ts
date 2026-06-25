@@ -303,4 +303,50 @@ describe("cross-API 3p ↔ 3p thinking-block preservation (#3434)", () => {
 		expect(content).toContain("Read README and answer.");
 		expect(content).toContain("Done.");
 	});
+
+	it("does not promote markup-healed same-model thinking into visible content", () => {
+		// Markup-healed streams (MiniMax `<think>…</think>`, Kimi K2 healed
+		// reasoning, …) record thinking blocks with `thinkingSignature: undefined`
+		// because the healer reconstructs them from raw text deltas. On a
+		// same-model continuation those blocks are PRIVATE reasoning the source
+		// emitted, not cross-API preserved reasoning. The text-fold fallback for
+		// signature-stripped blocks MUST therefore skip same-model history,
+		// otherwise it would leak the hidden chain-of-thought into the next
+		// request's visible `content`.
+		const target = opencodeGoKimiTarget();
+		const compat = target.compat;
+		const sameModelAssistant: AssistantMessage = {
+			role: "assistant",
+			api: target.api,
+			provider: target.provider,
+			model: target.id,
+			content: [
+				{ type: "thinking", thinking: "hidden chain-of-thought, must not leak" },
+				{ type: "text", text: "Visible answer." },
+			],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 0,
+		};
+		const messages: Message[] = [userMessage("Plan it."), sameModelAssistant, userMessage("Continue.")];
+
+		const wire = convertMessages(target, { messages }, compat);
+		const assistant = findAssistantMessage(wire);
+		expect(assistant).toBeDefined();
+		if (!assistant) throw new Error("assistant message missing");
+
+		// Visible content stays exactly what the model produced on the last turn.
+		expect(assistant.content).toBe("Visible answer.");
+		// And the private reasoning is not promoted anywhere on the wire.
+		expect(assistant.reasoning_content).toBeUndefined();
+		expect(assistant.reasoning).toBeUndefined();
+		expect(assistant.reasoning_text).toBeUndefined();
+	});
 });
