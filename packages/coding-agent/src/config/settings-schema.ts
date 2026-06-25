@@ -4041,6 +4041,17 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Provider selection
+	"providers.ollama-cloud.maxConcurrency": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Ollama Cloud Max Concurrency",
+			description:
+				"Maximum concurrent Ollama Cloud subagent runs per process; 0 disables the provider-specific limit",
+		},
+	},
 	"providers.webSearch": {
 		type: "enum",
 		values: SEARCH_PROVIDER_PREFERENCES,
