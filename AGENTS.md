@@ -22,6 +22,12 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Catalog import convention**: code in this repo imports catalog *values* (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort *types* its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
+## GitHub
+
+Unless user tells you exactly what to write:
+- **Never comment on GitHub** (issues, PRs, discussions).
+- **Never create issues on GitHub**.
+
 ## Code Quality
 
 - No `any` unless absolutely necessary.
