@@ -62,6 +62,14 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 	clientId?: string;
 	clientSecret?: string;
 	resource?: string;
+	/**
+	 * Authorization-server URL (the issuer the grant was minted against). Used
+	 * to filter self-referential resource indicators on refresh: RFC 8414 lets
+	 * the authorize and token endpoints sit on different origins, so refresh
+	 * cannot infer the original auth-server origin from `tokenUrl` alone.
+	 * Unset on legacy credentials minted before issue #3502's fix.
+	 */
+	authorizationUrl?: string;
 }
 
 const DEFAULT_PORT = 3000;
@@ -271,6 +279,15 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 	get resource(): string | undefined {
 		return this.#resource;
+	}
+	/**
+	 * Authorization-server URL the flow used. Persist alongside the credential
+	 * so refresh can filter self-referential resource indicators against the
+	 * issuer's origin even when `tokenUrl` lives on a different origin (RFC
+	 * 8414 permits the split).
+	 */
+	get authorizationUrl(): string {
+		return this.config.authorizationUrl;
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
@@ -555,6 +572,20 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 }
 
 /**
+ * Options for {@link refreshMCPOAuthToken}. Carried via the trailing object
+ * so positional callers keep working.
+ */
+export interface RefreshMCPOAuthTokenOptions {
+	fetch?: FetchImpl;
+	/**
+	 * Authorization-server URL the original grant was minted against. Used to
+	 * filter self-referential resource indicators on refresh. Defaults to
+	 * `tokenUrl`'s origin when omitted (RFC 8414 same-origin case).
+	 */
+	authorizationUrl?: string;
+}
+
+/**
  * Refresh an MCP OAuth token using the standard refresh_token grant.
  * Returns updated credentials; preserves the old refresh token if the server doesn't rotate it.
  */
@@ -563,11 +594,17 @@ export async function refreshMCPOAuthToken(
 	refreshToken: string,
 	clientId?: string,
 	clientSecret?: string,
-	resourceOrOpts?: string | { fetch?: FetchImpl },
-	opts?: { fetch?: FetchImpl },
+	resourceOrOpts?: string | RefreshMCPOAuthTokenOptions,
+	opts?: RefreshMCPOAuthTokenOptions,
 ): Promise<OAuthCredentials> {
-	const fetchImpl: FetchImpl = (typeof resourceOrOpts === "string" ? opts?.fetch : resourceOrOpts?.fetch) ?? fetch;
+	const optsFromTrailing = typeof resourceOrOpts === "string" ? opts : resourceOrOpts;
+	const fetchImpl: FetchImpl = optsFromTrailing?.fetch ?? fetch;
 	const resource = typeof resourceOrOpts === "string" ? resourceOrOpts : undefined;
+	// Filter against the authorization-server origin when known (RFC 8414
+	// permits authorize/token endpoints on separate origins). Fall back to
+	// `tokenUrl` for legacy credentials minted before the issuer was persisted
+	// — same-origin servers (the common case) still match correctly.
+	const filterAnchor = optsFromTrailing?.authorizationUrl ?? tokenUrl;
 	const params = new URLSearchParams({
 		grant_type: "refresh_token",
 		refresh_token: refreshToken,
@@ -575,7 +612,7 @@ export async function refreshMCPOAuthToken(
 	if (clientId) params.set("client_id", clientId);
 	// Drop self-referential indicators so refresh stays consistent with the
 	// initial grant; see {@link filterSelfReferentialResource} for context.
-	const resolvedResource = filterSelfReferentialResource(resolveResourceUri(resource), tokenUrl);
+	const resolvedResource = filterSelfReferentialResource(resolveResourceUri(resource), filterAnchor);
 	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 

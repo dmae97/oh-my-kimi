@@ -750,5 +750,87 @@ describe("mcp oauth flow", () => {
 
 			expect(tokenParams.get("resource")).toBe("https://mcp.plane.so/sse");
 		});
+		it("strips a refresh resource that equals the authorization-server origin even when token endpoint lives on a different origin", async () => {
+			// Cross-origin case: RFC 8414 permits authorize and token endpoints
+			// on separate origins. The grant filters against `authorizationUrl`,
+			// so refresh MUST do the same — `tokenUrl`'s origin can no longer
+			// stand in for the auth-server origin. (Issue #3502 review #2.)
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://token.example.com/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://auth.example.com",
+				{
+					authorizationUrl: "https://auth.example.com/authorize",
+					fetch: mockArbitraryTokenEndpoint("https://token.example.com/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+
+		it("keeps a refresh resource that points at a third origin when authorizationUrl is supplied", async () => {
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://token.example.com/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://api.example.com",
+				{
+					authorizationUrl: "https://auth.example.com/authorize",
+					fetch: mockArbitraryTokenEndpoint("https://token.example.com/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBe("https://api.example.com");
+		});
+
+		it("falls back to tokenUrl-anchored filtering for legacy credentials without authorizationUrl", async () => {
+			// Documents the legacy path: credentials minted before this fix
+			// don't carry `authorizationUrl`, so refresh still filters against
+			// `tokenUrl`'s origin — preserves the same-origin behavior of
+			// commit 1.
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://token.example.com/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://token.example.com",
+				{
+					fetch: mockArbitraryTokenEndpoint("https://token.example.com/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+	});
+
+	it("exposes authorizationUrl via a getter so callers can persist it on the credential", () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://auth.example.com/authorize",
+				tokenUrl: "https://token.example.com/token",
+				clientId: "client-id",
+			},
+			{},
+		);
+
+		expect(flow.authorizationUrl).toBe("https://auth.example.com/authorize");
 	});
 });

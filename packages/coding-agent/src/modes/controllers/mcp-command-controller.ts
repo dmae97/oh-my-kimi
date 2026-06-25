@@ -711,6 +711,7 @@ export class MCPCommandController {
 				clientId: flow.resolvedClientId ?? resolvedClientId,
 				clientSecret: flow.registeredClientSecret ?? resolvedClientSecret,
 				resource: flow.resource,
+				authorizationUrl: flow.authorizationUrl,
 			};
 
 			await authStorage.set(credentialId, oauthCredential);

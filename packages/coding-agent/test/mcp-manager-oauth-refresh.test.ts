@@ -84,6 +84,7 @@ describe("MCPManager OAuth refresh failure", () => {
 			undefined,
 			undefined,
 			"https://logfire.example.com/mcp",
+			{ authorizationUrl: undefined },
 		);
 		// The poisoned Bearer must not be re-injected — that is the loop the user
 		// reported (#1908).
