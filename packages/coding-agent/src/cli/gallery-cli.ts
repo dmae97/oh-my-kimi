@@ -21,12 +21,41 @@ import { captureGalleryScreenshots } from "./gallery-screenshot";
 export const GALLERY_STATES = ["streaming", "progress", "success", "error"] as const;
 export type GalleryState = (typeof GALLERY_STATES)[number];
 
-const STATE_LABELS: Record<GalleryState, string> = {
+/** User-facing labels printed above each rendered lifecycle state. */
+export const GALLERY_STATE_LABELS: Record<GalleryState, string> = {
 	streaming: "streaming args",
 	progress: "in progress",
 	success: "done",
 	error: "failed",
 };
+
+const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
+	streaming: "streaming",
+	"streaming args": "streaming",
+	progress: "progress",
+	"in progress": "progress",
+	success: "success",
+	done: "success",
+	error: "error",
+	failed: "error",
+};
+
+/** Accepted `--state` tokens, including legacy lifecycle names and displayed labels. */
+export const GALLERY_STATE_TOKENS = Object.keys(GALLERY_STATE_ALIASES);
+
+/** Normalize user-provided `--state` tokens to the internal gallery lifecycle states. */
+export function parseGalleryStates(states: readonly string[] | undefined): GalleryState[] | undefined {
+	if (!states || states.length === 0) return undefined;
+	const parsed: GalleryState[] = [];
+	for (const raw of states) {
+		const state = GALLERY_STATE_ALIASES[raw.trim().toLowerCase()];
+		if (!state) {
+			throw new Error(`Invalid --state '${raw}'. Valid values: ${GALLERY_STATE_TOKENS.join(", ")}`);
+		}
+		if (!parsed.includes(state)) parsed.push(state);
+	}
+	return parsed;
+}
 
 export interface GalleryCommandArgs {
 	/** Render width in columns (defaults to terminal width, clamped). */
@@ -166,7 +195,7 @@ async function renderGallerySections(
 		const heading = fixture.label && fixture.label !== name ? `${name} — ${fixture.label}` : name;
 		const lines: string[] = ["", sectionRule(heading, width)];
 		for (const state of states) {
-			lines.push("", theme.fg("dim", `  · ${STATE_LABELS[state]}`));
+			lines.push("", theme.fg("dim", `  · ${GALLERY_STATE_LABELS[state]}`));
 			try {
 				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
 			} catch (err) {

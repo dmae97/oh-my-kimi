@@ -514,6 +514,18 @@ function callMeta(args: IrcRenderArgs | undefined): string[] {
 	return meta;
 }
 
+function renderErrorResult(
+	result: { content: Array<{ type: string; text?: string }> },
+	args: IrcRenderArgs | undefined,
+	theme: Theme,
+): string[] {
+	const text = textContent(result) || "IRC call failed.";
+	return [
+		renderStatusLine({ icon: "error", title: callTitle(args, theme), meta: callMeta(args) }, theme),
+		formatErrorDetail(text, theme),
+	];
+}
+
 /**
  * Display-only transcript card for live IRC traffic: `irc:incoming` DMs
  * delivered to this session, `irc:autoreply` side-channel replies sent on
@@ -743,9 +755,11 @@ function buildResultLines(
 		case "wait":
 			return renderWaitResult(result, details, args, expanded, theme);
 		case "inbox":
-			return renderInboxResult(details, args, expanded, theme);
+			return result.isError
+				? renderErrorResult(result, args, theme)
+				: renderInboxResult(details, args, expanded, theme);
 		case "list":
-			return renderListResult(details, expanded, theme);
+			return result.isError ? renderErrorResult(result, args, theme) : renderListResult(details, expanded, theme);
 		default: {
 			const text = textContent(result) || (result.isError ? "IRC call failed." : "Done.");
 			return [
