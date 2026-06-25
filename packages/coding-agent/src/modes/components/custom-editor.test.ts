@@ -5,6 +5,8 @@ import {
 	CustomEditor,
 	extractBracketedImagePastePaths,
 	extractBracketedPastePaths,
+	extractImagePathFromText,
+	extractPastePathsFromText,
 	SPACE_HOLD_MECHANICAL_RUN,
 	SPACE_HOLD_RELEASE_MS,
 	SPACE_REPEAT_MAX_GAP_MS,
@@ -104,6 +106,47 @@ describe("CustomEditor bracketed path paste", () => {
 
 		expect(editor.getText()).toBe("/tmp/report.csv");
 		expect(imagePathCalls).toBe(0);
+	});
+});
+
+describe("extractImagePathFromText (issue #3506)", () => {
+	it("returns the path when the text is a single image file path", () => {
+		expect(extractImagePathFromText("/tmp/screenshot.png")).toBe("/tmp/screenshot.png");
+		expect(extractImagePathFromText("/Users/me/Pictures/photo.jpeg")).toBe("/Users/me/Pictures/photo.jpeg");
+		expect(extractImagePathFromText("C:\\Users\\me\\img.gif")).toBe("C:\\Users\\me\\img.gif");
+	});
+
+	it("ignores surrounding whitespace from a clipboard read", () => {
+		expect(extractImagePathFromText("  /tmp/photo.webp\n")).toBe("/tmp/photo.webp");
+	});
+
+	it("returns undefined for a bare filename (no explicit directory)", () => {
+		// Mirrors the bracketed-paste contract: a bare `.png` filename is
+		// almost always a project-relative reference the user wants as text,
+		// not a clipboard-anchored attachment.
+		expect(extractImagePathFromText("icon.png")).toBeUndefined();
+	});
+
+	it("returns undefined for non-image extensions", () => {
+		expect(extractImagePathFromText("/tmp/report.csv")).toBeUndefined();
+		expect(extractImagePathFromText("/tmp/notes.txt")).toBeUndefined();
+	});
+
+	it("returns undefined when the text contains anything beyond a single path", () => {
+		expect(extractImagePathFromText("see /tmp/screenshot.png")).toBeUndefined();
+		expect(extractImagePathFromText("/tmp/a.png /tmp/b.png")).toBeUndefined();
+	});
+
+	it("returns undefined for empty/whitespace-only input", () => {
+		expect(extractImagePathFromText("")).toBeUndefined();
+		expect(extractImagePathFromText("   ")).toBeUndefined();
+	});
+});
+
+describe("extractPastePathsFromText", () => {
+	it("delegates to the same logic the bracketed variant uses for path detection", () => {
+		expect(extractPastePathsFromText("/tmp/a.png /tmp/b.png")).toEqual(["/tmp/a.png", "/tmp/b.png"]);
+		expect(extractPastePathsFromText("just text")).toBeUndefined();
 	});
 });
 

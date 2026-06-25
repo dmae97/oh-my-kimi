@@ -161,12 +161,15 @@ function splitPastedPathSegments(payload: string): string[] | undefined {
 	return segments.length > 0 ? segments : undefined;
 }
 
-export function extractBracketedPastePaths(data: string): string[] | undefined {
-	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
-	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
-	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
-
-	const pasted = data.slice(BRACKETED_PASTE_START.length, endIndex).trim();
+/**
+ * Extract whitespace/quoted-separated path-like segments from `payload`.
+ * Shared backend of {@link extractBracketedPastePaths} and {@link extractPastePathsFromText}.
+ * Returns the segments only when EVERY segment looks like an explicit path
+ * (`/`, `\`, drive letter, or `file://`); otherwise undefined so the caller
+ * falls back to a plain text paste.
+ */
+function extractExplicitPathSegments(payload: string): string[] | undefined {
+	const pasted = payload.trim();
 	if (!pasted) return undefined;
 
 	const segments = splitPastedPathSegments(pasted);
@@ -181,6 +184,23 @@ export function extractBracketedPastePaths(data: string): string[] | undefined {
 	return paths;
 }
 
+/**
+ * Extract image-or-other file paths from plain (un-bracketed) clipboard text.
+ * Mirrors {@link extractBracketedPastePaths} for terminals/handlers that
+ * already stripped the `\x1b[200~`…`\x1b[201~` markers (e.g. clipboard text
+ * read directly via `pbpaste`/PowerShell).
+ */
+export function extractPastePathsFromText(text: string): string[] | undefined {
+	return extractExplicitPathSegments(text);
+}
+
+export function extractBracketedPastePaths(data: string): string[] | undefined {
+	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
+	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
+	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
+	return extractExplicitPathSegments(data.slice(BRACKETED_PASTE_START.length, endIndex));
+}
+
 export function extractBracketedImagePastePaths(data: string): string[] | undefined {
 	const paths = extractBracketedPastePaths(data);
 	return paths?.every(isImagePath) ? paths : undefined;
@@ -189,6 +209,18 @@ export function extractBracketedImagePastePaths(data: string): string[] | undefi
 export function extractBracketedImagePastePath(data: string): string | undefined {
 	const paths = extractBracketedImagePastePaths(data);
 	return paths?.length === 1 ? paths[0] : undefined;
+}
+
+/**
+ * Return a single image file path when `text` is exactly one explicit path
+ * pointing at a supported image extension (`.png`, `.jpg`/`.jpeg`, `.gif`,
+ * `.webp`). Used by the keybind-driven clipboard image paste path so a
+ * clipboard whose only payload is an image file (e.g. Finder `Cmd+C` on
+ * macOS) attaches the image instead of pasting the path as literal text.
+ */
+export function extractImagePathFromText(text: string): string | undefined {
+	const paths = extractPastePathsFromText(text);
+	return paths?.length === 1 && isImagePath(paths[0]) ? paths[0] : undefined;
 }
 
 /**

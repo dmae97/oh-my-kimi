@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the clipboard image-paste keybind dropping image-file-only pasteboards as literal text on macOS. When the clipboard exposes only the file URL (e.g. Finder `Cmd+C` on a `.png`, certain screenshot tools), `arboard::get_image()` returns `ContentNotAvailable`, so `InputController.handleImagePaste` fell through to the #1628 text fallback and pasted the path verbatim — while the terminal-mediated paste round-tripped through bracketed-paste's `extractBracketedImagePastePaths` and attached the image, producing the asymmetric "for image I need control+v which is very odd" symptom. The text fallback now reuses the same image-path detection (new `extractImagePathFromText` helper) and routes single image paths through `handleImagePathPaste`, so both keybind- and terminal-mediated paste agree. ([#3506](https://github.com/can1357/oh-my-pi/issues/3506))
+
 ## [16.1.20] - 2026-06-25
 
 ### Fixed

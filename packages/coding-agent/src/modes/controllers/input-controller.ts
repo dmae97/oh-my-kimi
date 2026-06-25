@@ -6,6 +6,7 @@ import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { extractImagePathFromText } from "../../modes/components/custom-editor";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
@@ -1396,6 +1397,20 @@ export class InputController {
 				if (!text) {
 					this.ctx.showStatus("Clipboard is empty");
 					return false;
+				}
+				// #3506: when the clipboard text is an explicit image file path,
+				// route through {@link handleImagePathPaste} so the image is
+				// loaded and attached instead of pasting the path as literal
+				// text. macOS Finder `Cmd+C` on an image file is the canonical
+				// case — the pasteboard exposes the file URL with no raw image
+				// bytes, so `clipboard.readImage()` cannot recover it but the
+				// path itself is loadable. Matches the bracketed-paste path
+				// in `CustomEditor` (`extractBracketedImagePastePaths`) so the
+				// keybind and a terminal-mediated paste agree.
+				const imagePath = extractImagePathFromText(text);
+				if (imagePath) {
+					await this.handleImagePathPaste(imagePath);
+					return true;
 				}
 				// Route to the focused component when it accepts pastes (modal
 				// Input prompts), matching the enhanced-paste text path (#2127).
