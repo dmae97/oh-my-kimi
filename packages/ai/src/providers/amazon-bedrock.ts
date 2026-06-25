@@ -87,6 +87,76 @@ function inferRegionFromBedrockArn(modelId: string): string | undefined {
 	return region || undefined;
 }
 
+/**
+ * Default AWS region for each Bedrock cross-region inference-profile geo prefix.
+ * A geo-prefixed profile (e.g. `eu.anthropic.claude-…`) is only servable from
+ * regions in its own geo, so routing one to `us-east-1` yields HTTP 400 "The
+ * provided model identifier is invalid." `global.` profiles are anchored in the
+ * us regions and intentionally absent here (they resolve fine via `us-east-1`).
+ */
+const INFERENCE_PROFILE_GEO_DEFAULT_REGION: Record<string, string> = {
+	us: "us-east-1",
+	"us-gov": "us-gov-west-1",
+	eu: "eu-west-1",
+	apac: "ap-southeast-1",
+	au: "ap-southeast-2",
+	jp: "ap-northeast-1",
+};
+
+/** Geo prefix of a cross-region inference-profile id, e.g. `eu.anthropic.…` → `eu`. */
+function inferenceProfileGeo(modelId: string): string | undefined {
+	const dot = modelId.indexOf(".");
+	if (dot <= 0) return undefined;
+	const prefix = modelId.slice(0, dot);
+	return prefix in INFERENCE_PROFILE_GEO_DEFAULT_REGION ? prefix : undefined;
+}
+
+/**
+ * Whether a concrete AWS region can serve a given inference-profile geo. The
+ * `ap-` regions overlap across `apac`/`au`/`jp` profiles, so the Australia and
+ * Japan geos pin their specific source regions rather than matching all `ap-*`.
+ */
+function regionServesGeo(region: string, geo: string): boolean {
+	switch (geo) {
+		case "us-gov":
+			return region.startsWith("us-gov-");
+		case "us":
+			return region.startsWith("us-") && !region.startsWith("us-gov-");
+		case "eu":
+			return region.startsWith("eu-");
+		case "apac":
+			return region.startsWith("ap-");
+		case "au":
+			return region === "ap-southeast-2" || region === "ap-southeast-4";
+		case "jp":
+			return region === "ap-northeast-1" || region === "ap-northeast-3";
+		default:
+			return false;
+	}
+}
+
+/**
+ * Resolve the Bedrock runtime region for a request. An explicit per-request
+ * region and an ARN-embedded region win outright. Otherwise, for a geo-prefixed
+ * cross-region inference profile (`us.`/`eu.`/`apac.`/`au.`/`jp.`/`us-gov.`), an
+ * ambient region (`AWS_REGION` / `AWS_DEFAULT_REGION`) is honored only when it
+ * can serve the profile's geo; a mismatched or absent ambient region is
+ * corrected to the geo default so an `eu.`/`apac.` profile never POSTs to a `us`
+ * endpoint (and vice versa). `global.` profiles have no geo entry, so the
+ * ambient region (or `us-east-1`) is used unchanged.
+ */
+function resolveBedrockRegion(modelId: string, options: BedrockOptions): string {
+	const explicit = options.region || inferRegionFromBedrockArn(modelId);
+	if (explicit) return explicit;
+	const ambient = $env.AWS_REGION || $env.AWS_DEFAULT_REGION;
+	const geo = inferenceProfileGeo(modelId);
+	if (geo) {
+		if (ambient && regionServesGeo(ambient, geo)) return ambient;
+		return INFERENCE_PROFILE_GEO_DEFAULT_REGION[geo];
+	}
+	return ambient || "us-east-1";
+}
+
 type Block = (TextContent | ThinkingContent | ToolCall) & {
 	index?: number;
 	partialJson?: string;
@@ -235,12 +305,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 
 		const blocks = output.content as Block[];
 		let rawRequestDump: RawHttpRequestDump | undefined;
-		const region =
-			options.region ||
-			inferRegionFromBedrockArn(model.id) ||
-			$env.AWS_REGION ||
-			$env.AWS_DEFAULT_REGION ||
-			"us-east-1";
+		const region = resolveBedrockRegion(model.id, options);
 
 		try {
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
