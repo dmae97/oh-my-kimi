@@ -14,6 +14,10 @@
 
 - Fixed `omp gallery --state` accepting lifecycle tokens that did not match displayed state labels and rendering unknown state values as `· undefined`; displayed labels now work as aliases, invalid values fail with a valid-token list, and failed gallery fixtures visibly render failures. ([#3473](https://github.com/can1357/oh-my-pi/issues/3473))
 
+### Fixed
+
+- Fixed the bash tool's snapshotted `mise()` shell function dying with `command: command not found:` because `$__MISE_EXE` was empty in the replay shell. `generateSnapshotScript` captured the function via `declare -f`/`typeset -f` but only ever re-exported `PATH`, so every other env var the rc file set (notably the `*_EXE` sidecar `mise activate` exports) was lost; the function body then expanded `command "$__MISE_EXE" "$@"` to `command "" …` and died with exit 127. The snapshot script now scans captured function bodies for `$VAR` / `${VAR…}` references and re-emits `export NAME='value'` for each referenced var that is currently set (with a denylist for shell-internal names like `PATH`/`HOME`/`BASH_*`/`LC_*` plus a likely-secret denylist for `*TOKEN*`/`*SECRET*`/`*API_KEY*`/`*PASSWORD*`/`*PRIVATE_KEY*`/`*ACCESS_KEY*`/`*CREDENTIAL*`/`*SESSION_KEY*`), the snapshot script `umask 077`s itself and the JS caller chmods the snapshot file/dir to `0600`/`0700` so the new export pass can't leak secrets into a shared tmp dir. Fixes mise, asdf shims, direnv-style helpers, and other activation idioms that pair a function with a helper env var. `getShellConfigFile` now also honours `env.HOME` (falling back to `os.homedir()`) so sandboxed callers can target a non-default rc. ([#3470](https://github.com/can1357/oh-my-pi/issues/3470))
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed
