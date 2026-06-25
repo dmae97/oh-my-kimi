@@ -902,19 +902,19 @@ export class InputController {
 	}
 
 	handleCtrlZ(): void {
-		// SIGTSTP is POSIX job-control: Windows has no equivalent and
-		// `process.kill(_, "SIGTSTP")` throws `TypeError: Unknown signal:
-		// SIGTSTP` there, taking the whole agent down via an uncaught
-		// exception (issue #2036). No-op on platforms that cannot suspend.
+		// Job-control suspend is POSIX-only: on Windows `process.kill(_, "SIGSTOP")`
+		// throws `TypeError: Unknown signal: SIGSTOP` and takes the whole agent down
+		// via an uncaught exception (issue #2036, originally for SIGTSTP — same
+		// shape for SIGSTOP). No-op on platforms that cannot suspend.
 		if (process.platform === "win32") {
 			this.ctx.showStatus("Suspend (Ctrl+Z) is not supported on this platform");
 			return;
 		}
 
-		// Capture the listener so we can detach it if the signal never
-		// fires; otherwise a failed suspend would leave a stale SIGCONT
-		// handler that fires on the next unrelated continue and tries to
-		// re-`start()` an already-running TUI.
+		// Capture the listener so we can detach it if the signal never fires;
+		// otherwise a failed suspend would leave a stale SIGCONT handler that
+		// fires on the next unrelated continue and tries to re-`start()` an
+		// already-running TUI.
 		const onResume = (): void => {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
@@ -926,14 +926,41 @@ export class InputController {
 		this.ctx.ui.stop();
 
 		try {
-			// pid=0 → entire foreground process group; the shell receives
-			// SIGTSTP and parks the job.
-			process.kill(0, "SIGTSTP");
+			// SIGSTOP — not SIGTSTP — to the foreground process group (pid=0).
+			//
+			// SIGTSTP: brush-core (the embedded shell behind every bash tool call)
+			// installs a tokio SIGTSTP listener on `Process::wait` to detect when
+			// its children have been stopped (`crates/brush-core-vendored/src/sys/
+			// unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::
+			// signal(SIGTSTP)`). Per tokio's documented contract, the first call
+			// for a given SignalKind permanently replaces the kernel-default
+			// handler for the lifetime of the process. So once the user has
+			// issued even one bash command — e.g. `/usr/bin/true` — SIGTSTP no
+			// longer stops omp: tokio swallows it and the TUI ends up torn down
+			// while the process keeps running with no live terminal (issue
+			// [#3461]). SIGSTOP cannot be caught, blocked, or ignored, so the
+			// kernel stops the process regardless of installed handlers.
+			//
+			// pid=0 (foreground process group, not just our PID): omp is not
+			// always the shell's direct child. Package-manager launchers (`npx`,
+			// `pnpm exec`, `bunx`, …) wait on the real CLI from a parent shim
+			// that shares omp's process group, and a `omp … | tee log` style
+			// pipeline puts a sibling foreground job member in the same group
+			// too. The shell sees the job as stopped only when its direct
+			// child / pipeline leader is stopped, so suspending only our PID
+			// leaves wrappers and pipeline peers running and the terminal
+			// hung — exactly the failure shape we're fixing. Stopping the whole
+			// group keeps the shell's job-control view consistent. Long-lived
+			// children that must survive the suspend (MCP stdio servers via
+			// the `detached: true` spawn in `mcp/transports/stdio.ts`, every
+			// brush external command via brush's per-child `setsid` in
+			// `crates/brush-core-vendored/src/commands.rs`) are already in
+			// their own sessions, so pgid=0 does not reach them.
+			process.kill(0, "SIGSTOP");
 		} catch (err) {
-			// Either the runtime refused the signal or the kernel rejected
-			// it (some sandboxes block sending to pid=0). Tear the resume
-			// hook down and bring the TUI back so the user is not stranded
-			// on a frozen prompt.
+			// The runtime refused the signal (e.g. seccomp filter blocks SIGSTOP
+			// delivery to the process group). Tear the resume hook down and
+			// bring the TUI back so the user is not stranded on a frozen prompt.
 			process.removeListener("SIGCONT", onResume);
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
