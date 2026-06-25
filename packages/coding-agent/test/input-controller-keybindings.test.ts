@@ -71,6 +71,7 @@ async function createContext() {
 	const resetDisplay = vi.fn();
 	const showModelSelector = vi.fn();
 	const requestRender = vi.fn();
+	const showError = vi.fn();
 	let focused: unknown;
 	const addInputListener = vi.fn((listener: InputListener) => {
 		void listener;
@@ -191,7 +192,7 @@ async function createContext() {
 		canBranchBtw,
 		canCopyBtw,
 		handleBtwCopyKey,
-		showError: vi.fn(),
+		showError,
 		showStatus: vi.fn(),
 	} as unknown as InteractiveModeContext;
 
@@ -217,6 +218,7 @@ async function createContext() {
 			canBranchBtw,
 			handleBtwCopyKey,
 			canCopyBtw,
+			showError,
 		},
 	};
 }
@@ -477,7 +479,7 @@ describe("InputController keybinding setup", () => {
 		expect(spies.prompt).toHaveBeenCalledWith("plain idle submit", { images: undefined });
 	});
 
-	it("removes the signature when an idle follow-up submission rejects", async () => {
+	it("surfaces and recovers from an idle follow-up dispatch failure", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		spies.prompt.mockImplementationOnce(async () => {
 			throw new Error("boom");
@@ -485,15 +487,21 @@ describe("InputController keybinding setup", () => {
 		editor.setText("doomed submit");
 		const controller = new InputController(ctx);
 
-		await expect(controller.handleFollowUp()).rejects.toThrow("boom");
+		// Dispatch failures are caught and surfaced (mirroring the main/focused
+		// submit paths), not rethrown, so the keybinding's fire-and-forget call
+		// never raises an unhandled rejection.
+		await controller.handleFollowUp();
 
-		// Contract: a thrown delivery error must not leave a stale signature
-		// behind, otherwise the next attempt with the same text would silently
-		// suppress the editor-clear protection that was meant for the failed call.
+		expect(spies.showError).toHaveBeenCalledWith("boom");
+		// Draft handed back so the user can retry.
+		expect(editor.getText()).toBe("doomed submit");
+		// Contract: a failed delivery must not leave a stale signature behind,
+		// otherwise the next attempt with the same text would silently suppress
+		// the editor-clear protection that was meant for the failed call.
 		expect(ctx.locallySubmittedUserSignatures.has("doomed submit\u00000")).toBe(false);
 	});
 
-	it("removes the signature when a streaming follow-up rejects", async () => {
+	it("surfaces and recovers from a streaming follow-up dispatch failure", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		const session = ctx.session as unknown as { isStreaming: boolean };
 		session.isStreaming = true;
@@ -503,8 +511,10 @@ describe("InputController keybinding setup", () => {
 		editor.setText("queued during stream");
 		const controller = new InputController(ctx);
 
-		await expect(controller.handleFollowUp()).rejects.toThrow("queue full");
+		await controller.handleFollowUp();
 
+		expect(spies.showError).toHaveBeenCalledWith("queue full");
+		expect(editor.getText()).toBe("queued during stream");
 		expect(ctx.locallySubmittedUserSignatures.has("queued during stream\u00000")).toBe(false);
 	});
 
