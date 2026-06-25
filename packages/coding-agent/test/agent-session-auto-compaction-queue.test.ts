@@ -275,6 +275,84 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
 	});
 
+	it("runs active-goal threshold compaction after yield followed by a trailing empty stop", async () => {
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-yield-empty-stop-threshold",
+				objective: "continue after compacting",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+
+		const yieldCall = {
+			type: "toolCall" as const,
+			id: "call_goal_yield_then_empty",
+			name: "yield",
+			arguments: { status: "progress" },
+		};
+		const yieldMsg = {
+			role: "assistant" as const,
+			content: [yieldCall],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "toolUse" as const,
+			usage: {
+				input: 190000,
+				output: 1000,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now,
+		};
+		const trailingEmptyStop = {
+			role: "assistant" as const,
+			content: [],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: {
+				input: 191000,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 191001,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: now + 1,
+		};
+
+		session.agent.emitExternalEvent({ type: "message_end", message: yieldMsg });
+		session.agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: yieldCall.id,
+			toolName: "yield",
+			isError: false,
+			result: {
+				content: [{ type: "text" as const, text: "Yielded." }],
+				details: { status: "success" },
+			},
+		});
+		session.agent.emitExternalEvent({ type: "message_end", message: trailingEmptyStop });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [yieldMsg, trailingEmptyStop] });
+
+		await session.waitForIdle();
+
+		const runtimeSignals = getRuntimeSignals();
+		expect(runtimeSignals).toContain("compaction:start:threshold");
+		expect(runtimeSignals.some(signal => signal.startsWith("compaction:end:"))).toBe(true);
+	});
+
 	it("triggers threshold compaction in active goals even when per-turn pruning shaves the post-prune estimate below threshold", async () => {
 		// Regression for #3174. Goal mode is the most common scenario: the agent
 		// runs many tool-result-heavy turns and the per-turn "useless" /
