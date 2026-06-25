@@ -1235,8 +1235,9 @@ export class MCPManager {
 				// token endpoints sit on different origins (issue #3502 review
 				// follow-up).
 				const authorizationUrl = material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-				const resource =
-					material?.resource ?? (config.type === "http" || config.type === "sse" ? config.url : undefined);
+				const resourceIsFallback =
+					!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+				const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
 				// Proactive refresh: 5-minute buffer before expiry
 				// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
 				const REFRESH_BUFFER_MS = 5 * 60_000;
@@ -1250,7 +1251,7 @@ export class MCPManager {
 							clientId,
 							clientSecret,
 							resource,
-							{ authorizationUrl },
+							{ authorizationUrl, stripSameOriginResource: resourceIsFallback },
 						);
 						// Spread the old credential first so embedded refresh material survives rotation.
 						const refreshedCredential: MCPStoredOAuthCredential = {
@@ -1259,7 +1260,7 @@ export class MCPManager {
 							tokenUrl,
 							clientId,
 							clientSecret,
-							resource,
+							resource: resourceIsFallback ? undefined : resource,
 							authorizationUrl,
 						};
 						await this.#authStorage.set(credentialId, refreshedCredential);

@@ -177,26 +177,38 @@ function resolveResourceUri(resource: string | undefined): string | undefined {
 	return trimmed;
 }
 
+interface ResourceIndicatorFilterOptions {
+	/** Strip any resource URL on the same origin as the authorization server. */
+	stripSameOriginResource?: boolean;
+}
+
 /**
- * Drop a resource indicator hosted on the same origin as {@link serverUrl}.
+ * Drop a redundant resource indicator relative to {@link serverUrl}.
  *
- * Some authorization servers (Plane is the live example, see issue #3502)
- * reject same-origin resource indicators with `server_error` before the
- * consent screen, including path-bearing values such as
- * `https://mcp.plane.so/http/mcp`. Per RFC 8707 §2 the indicator
- * distinguishes *other* resource servers from the authorization server, so
- * same-origin values are redundant for these MCP servers — silently strip
- * them to stay compatible with strict implementations.
+ * Exact auth-server-origin values are always redundant: they don't identify a
+ * distinct resource server. Path-bearing same-origin resources are different:
+ * protected-resource discovery can advertise them for gateway-hosted MCP
+ * services (`https://gateway.example.com/my-service/mcp`), and those values
+ * must be preserved because they identify the service audience by path.
  *
- * New credentials pass the original authorization URL so refresh filters
- * against the same issuer origin as the initial grant. Legacy credentials
- * fall back to the token URL's origin.
+ * Plane is stricter for OMP-synthesized fallback resources (e.g. using the
+ * configured server URL `https://mcp.plane.so/http/mcp` as `resource`), so
+ * fallback callers opt into `stripSameOriginResource` while provider-advertised
+ * `oauth.resource` values keep the path-preserving default.
  */
-function filterSameOriginResource(resource: string | undefined, serverUrl: string): string | undefined {
+function filterResourceIndicator(
+	resource: string | undefined,
+	serverUrl: string,
+	options: ResourceIndicatorFilterOptions = {},
+): string | undefined {
 	if (!resource) return undefined;
 	try {
 		const origin = new URL(serverUrl).origin;
-		if (new URL(resource).origin === origin) return undefined;
+		const parsedResource = new URL(resource);
+		if (parsedResource.origin !== origin) return resource;
+		if (options.stripSameOriginResource || (parsedResource.pathname === "/" && parsedResource.search === "")) {
+			return undefined;
+		}
 	} catch {
 		// Malformed serverUrl will fail elsewhere; fall through.
 	}
@@ -231,6 +243,13 @@ export interface MCPOAuthConfig {
 	callbackPath?: string;
 	/** MCP resource URI for RFC 8707 resource indicators */
 	resource?: string;
+	/**
+	 * True when `resource` was synthesized from the server URL fallback rather
+	 * than advertised by OAuth/protected-resource metadata. Fallback resources
+	 * are stripped when same-origin with the authorization server; advertised
+	 * path-scoped resources are preserved.
+	 */
+	stripSameOriginResource?: boolean;
 	/** Fetch implementation for token exchange and discovery requests. */
 	fetch?: FetchImpl;
 }
@@ -450,13 +469,14 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	/**
-	 * Drop resource indicators hosted on the authorization-server origin.
-	 * Delegates to {@link filterSameOriginResource}; the refresh-token leg uses
-	 * the same helper with the persisted authorization URL so initial grant and
-	 * refresh stay in lock-step (RFC 8707 §2.2 requires matching indicators).
+	 * Drop redundant resource indicators for this authorization server.
+	 * Provider-advertised path-scoped values are preserved; fallback server-URL
+	 * values opt into same-origin stripping via `stripSameOriginResource`.
 	 */
 	#filterResourceIndicator(resource: string | undefined): string | undefined {
-		return filterSameOriginResource(resource, this.config.authorizationUrl);
+		return filterResourceIndicator(resource, this.config.authorizationUrl, {
+			stripSameOriginResource: this.config.stripSameOriginResource,
+		});
 	}
 
 	/**
@@ -583,6 +603,12 @@ export interface RefreshMCPOAuthTokenOptions {
 	 * origin when omitted for legacy credentials.
 	 */
 	authorizationUrl?: string;
+	/**
+	 * True when the refresh `resource` was synthesized from the server URL
+	 * fallback because the credential/auth material carried no resource.
+	 * Preserved advertised resources leave this false/undefined.
+	 */
+	stripSameOriginResource?: boolean;
 }
 
 /**
@@ -610,9 +636,11 @@ export async function refreshMCPOAuthToken(
 		refresh_token: refreshToken,
 	});
 	if (clientId) params.set("client_id", clientId);
-	// Drop same-origin indicators so refresh stays consistent with the initial
-	// grant; see {@link filterSameOriginResource} for context.
-	const resolvedResource = filterSameOriginResource(resolveResourceUri(resource), filterAnchor);
+	// Drop redundant indicators so refresh stays consistent with the initial
+	// grant; see {@link filterResourceIndicator} for context.
+	const resolvedResource = filterResourceIndicator(resolveResourceUri(resource), filterAnchor, {
+		stripSameOriginResource: optsFromTrailing?.stripSameOriginResource,
+	});
 	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
