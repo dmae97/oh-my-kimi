@@ -40,6 +40,9 @@ export class ExtensionList implements Component {
 	#focused = false;
 	#masterSwitchProvider: string | null = null;
 	#maxVisible: number;
+	#hoveredIndex: number | null = null;
+	/** Item rows rendered in the last frame, for mouse hit-testing. */
+	#visibleCount = 0;
 
 	constructor(
 		private extensions: Extension[],
@@ -108,6 +111,7 @@ export class ExtensionList implements Component {
 
 	render(width: number): readonly string[] {
 		const lines: string[] = [];
+		this.#visibleCount = 0;
 
 		// Search bar
 		const searchPrefix = theme.fg("muted", "Search: ");
@@ -136,15 +140,20 @@ export class ExtensionList implements Component {
 		for (let i = startIdx; i < endIdx; i++) {
 			const listItem = this.#listItems[i];
 			const isSelected = this.#focused && i === this.#selectedIndex;
+			const isHovered = this.#focused && i === this.#hoveredIndex && !isSelected;
 
+			let rowStr: string;
 			if (listItem.type === "master") {
-				rows.push(this.#renderMasterSwitch(listItem, isSelected, rowWidth));
+				rowStr = this.#renderMasterSwitch(listItem, isSelected, rowWidth);
 			} else if (listItem.type === "kind-header") {
-				rows.push(this.#renderKindHeader(listItem, isSelected, rowWidth));
+				rowStr = this.#renderKindHeader(listItem, isSelected, rowWidth);
 			} else {
-				rows.push(this.#renderExtensionRow(listItem.item, isSelected, rowWidth, masterDisabled));
+				rowStr = this.#renderExtensionRow(listItem.item, isSelected, rowWidth, masterDisabled);
 			}
+			if (isHovered) rowStr = theme.bg("selectedBg", rowStr);
+			rows.push(rowStr);
 		}
+		this.#visibleCount = rows.length;
 
 		lines.push(
 			...renderScrollableList(rows, {
@@ -387,6 +396,57 @@ export class ExtensionList implements Component {
 		this.#scrollOffset = next.scrollOffset;
 	}
 
+	/** Toggle the selected item, or flip the provider master switch when on it. */
+	#activateSelected(): void {
+		const item = this.#listItems[this.#selectedIndex];
+		if (item?.type === "master") {
+			this.callbacks.onMasterToggle?.(item.providerId);
+		} else if (item?.type === "extension") {
+			// Only allow toggling if the provider master switch is enabled.
+			const masterDisabled = this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
+			if (!masterDisabled) {
+				const newEnabled = item.item.state === "disabled";
+				this.callbacks.onToggle?.(item.item.id, newEnabled);
+			}
+		}
+	}
+
+	/** Highlight the row under the pointer (null clears). */
+	setHoverIndex(index: number | null): void {
+		this.#hoveredIndex = index;
+	}
+
+	/**
+	 * Map a 0-based line within this component's render to the absolute list-item
+	 * index, or null when the line is the search banner, a padding row, or outside
+	 * the visible window. The first two lines are the search banner and a blank
+	 * separator; item rows follow, windowed at the current scroll offset.
+	 */
+	hitTest(line: number): number | null {
+		const rowLine = line - 2;
+		if (rowLine < 0 || rowLine >= this.#visibleCount) return null;
+		const index = this.#scrollOffset + rowLine;
+		return index < this.#listItems.length ? index : null;
+	}
+
+	/** Wheel notch: move the selection (and the inspector) one row. */
+	handleWheel(delta: -1 | 1): void {
+		if (delta < 0) this.#moveSelectionUp();
+		else this.#moveSelectionDown();
+	}
+
+	/** Click: select the row under the pointer, or activate it when already selected. */
+	handleClick(line: number): void {
+		const index = this.hitTest(line);
+		if (index === null) return;
+		if (index === this.#selectedIndex) {
+			this.#activateSelected();
+			return;
+		}
+		this.#selectedIndex = index;
+		this.#notifySelectionChange();
+	}
+
 	handleInput(data: string): void {
 		// Navigation
 		if (matchesSelectUp(data) || data === "k") {
@@ -399,36 +459,9 @@ export class ExtensionList implements Component {
 			return;
 		}
 
-		// Space: Toggle selected item
-		if (data === " ") {
-			const item = this.#listItems[this.#selectedIndex];
-			if (item?.type === "master") {
-				this.callbacks.onMasterToggle?.(item.providerId);
-			} else if (item?.type === "extension") {
-				// Only allow toggling if master is enabled
-				const masterDisabled =
-					this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
-				if (!masterDisabled) {
-					const newEnabled = item.item.state === "disabled";
-					this.callbacks.onToggle?.(item.item.id, newEnabled);
-				}
-			}
-			return;
-		}
-
-		// Enter: Same as space - toggle selected item
-		if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
-			const item = this.#listItems[this.#selectedIndex];
-			if (item?.type === "master") {
-				this.callbacks.onMasterToggle?.(item.providerId);
-			} else if (item?.type === "extension") {
-				const masterDisabled =
-					this.#masterSwitchProvider !== null && !isProviderEnabled(this.#masterSwitchProvider);
-				if (!masterDisabled) {
-					const newEnabled = item.item.state === "disabled";
-					this.callbacks.onToggle?.(item.item.id, newEnabled);
-				}
-			}
+		// Space or Enter: activate the selected row (toggle item / master switch)
+		if (data === " " || matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+			this.#activateSelected();
 			return;
 		}
 
