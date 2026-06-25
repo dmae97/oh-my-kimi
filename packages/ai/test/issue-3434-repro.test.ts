@@ -119,11 +119,12 @@ function opencodeGoKimiTarget(): Model<"openai-completions"> {
 	// OpenCode Go's reasoning-enabled Kimi. Base compat keeps
 	// `requiresReasoningContentForToolCalls: false` to dodge the
 	// `Extra inputs are not permitted` 400 (#1071); only the resolved
-	// `whenThinking` policy reactivates it (#1484). The predicate that
-	// gates cross-API preservation MUST consult `whenThinking`, otherwise
-	// the prior thinking is demoted to text and the next thinking-on
-	// request 400s with `thinking is enabled but reasoning_content is
-	// missing in assistant tool call message at index N`.
+	// `whenThinking` policy reactivates it (#1484). `convertMessages` threads
+	// that request-time resolved compat into `transformMessages`, so a
+	// thinking-on request preserves the prior reasoning; without the resolved
+	// compat the predicate would read base compat, demote to text, and the
+	// next thinking-on request would 400 with `thinking is enabled but
+	// reasoning_content is missing in assistant tool call message at index N`.
 	return buildModel({
 		id: "kimi-k2.6",
 		name: "Kimi K2.6",
@@ -248,9 +249,10 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		// (dodges the thinking-off `Extra inputs are not permitted` 400 — #1071)
 		// and reactivate the flag on `compat.whenThinking` for thinking-engaged
 		// requests (dodges the `thinking is enabled but reasoning_content is
-		// missing` 400 — #1484). Before this guard, the cross-API preservation
-		// predicate only read the base compat, so prior thinking was demoted
-		// to text and the next thinking-on request re-triggered #1484.
+		// missing` 400 — #1484). The cross-API preservation predicate must run
+		// against the resolved compat that `convertMessages` threads in (the
+		// `whenThinking` view here); reading base compat would demote the prior
+		// thinking to text and re-trigger #1484 on the next thinking-on request.
 		const target = opencodeGoKimiTarget();
 		const messages: Message[] = [
 			userMessage("Plan it."),
@@ -311,10 +313,11 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		// reasoning, …) record thinking blocks with `thinkingSignature: undefined`
 		// because the healer reconstructs them from raw text deltas. On a
 		// same-model continuation those blocks are PRIVATE reasoning the source
-		// emitted, not cross-API preserved reasoning. The text-fold fallback for
-		// signature-stripped blocks MUST therefore skip same-model history,
-		// otherwise it would leak the hidden chain-of-thought into the next
-		// request's visible `content`.
+		// emitted, not cross-API preserved reasoning. Same-model history is never
+		// signature-stripped or text-demoted by `transformMessages`, and no
+		// encoder branch consumes an unsigned same-model thinking block, so it
+		// falls through unemitted — the hidden chain-of-thought must never leak
+		// into the next request's visible `content`.
 		const target = opencodeGoKimiTarget();
 		const compat = target.compat;
 		const sameModelAssistant: AssistantMessage = {
