@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { sanitizeSnapshotForBrush } from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { getOrCreateSnapshot, sanitizeSnapshotForBrush } from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
+import fnEnvHelper from "../src/utils/shell-snapshot-fn-env.sh" with { type: "text" };
 
 // `sanitizeSnapshotForBrush` is the snapshot-side mitigation for brush's
 // whitespace-only alias expander (`crates/brush-core-vendored/src/interp.rs:1500`,
@@ -76,5 +80,131 @@ describe("sanitizeSnapshotForBrush", () => {
 		]) {
 			expect(result.content).toContain(keep);
 		}
+	});
+});
+
+// `__omp_emit_referenced_exports` (shell-snapshot-fn-env.sh) re-exports env
+// vars that snapshotted functions reference. mise activates a `mise()` shell
+// function whose body expands `$__MISE_EXE`; the snapshot used to persist the
+// function but discard the sidecar var, so the replay shell ran
+// `command "" "$@"` and died with `command: command not found:` (issue #3470).
+
+async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+	if (!stream) return "";
+	return await new Response(stream).text();
+}
+
+describe("shell-snapshot fn-env helper", () => {
+	it("emits export lines for env vars referenced by captured functions, skips unset and shell-internal names", async () => {
+		const funcs = [
+			`mise () { command "$__MISE_EXE" "$@"; }`,
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion `${FOO_TEST_DIR}`
+			'my_fn () { echo "$FOO_TEST_DIR ${FOO_TEST_DIR}"; }',
+			`uses_path () { echo "$PATH"; }`,
+			`uses_locale () { echo "$LC_ALL"; }`,
+			`secret () { : "$NEVER_SET_TEST_VAR"; }`,
+			``,
+		].join("\n");
+
+		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+			env: {
+				PATH: process.env.PATH ?? "/usr/bin:/bin",
+				__MISE_EXE: "/opt/echo",
+				FOO_TEST_DIR: "/opt/dir",
+				LC_ALL: "C",
+			},
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		child.stdin.write(funcs);
+		await child.stdin.end();
+		const out = await readStream(child.stdout as ReadableStream<Uint8Array> | null);
+		await child.exited;
+		expect(child.exitCode).toBe(0);
+
+		expect(out).toContain("export __MISE_EXE='/opt/echo'");
+		expect(out).toContain("export FOO_TEST_DIR='/opt/dir'");
+		// Shell-internal names must never be re-exported.
+		expect(out).not.toMatch(/^export PATH=/m);
+		expect(out).not.toMatch(/^export LC_ALL=/m);
+		// Unset names produce no line.
+		expect(out).not.toContain("NEVER_SET_TEST_VAR");
+	});
+
+	it("single-quote-escapes values containing apostrophes and preserves newlines", async () => {
+		const funcs = `shout () { echo "$TRICKY_VAL $NL_VAL"; }\n`;
+		const child = Bun.spawn(["bash", "-c", `${fnEnvHelper}\n__omp_emit_referenced_exports`], {
+			env: {
+				PATH: process.env.PATH ?? "/usr/bin:/bin",
+				TRICKY_VAL: "it's 'tricky'",
+				NL_VAL: "line1\nline2",
+			},
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "ignore",
+		});
+		child.stdin.write(funcs);
+		await child.stdin.end();
+		const out = await readStream(child.stdout as ReadableStream<Uint8Array> | null);
+		await child.exited;
+
+		expect(out).toContain(`export TRICKY_VAL='it'\\''s '\\''tricky'\\'''`);
+		expect(out).toContain(`export NL_VAL='line1\nline2'`);
+
+		// Eval the emitted lines and verify the round-trip values match.
+		const round = Bun.spawn(
+			["bash", "-c", `eval "$1"; printf '%s\\n' "$TRICKY_VAL"; printf '%s\\n' "$NL_VAL"`, "_", out],
+			{ stdout: "pipe", stderr: "ignore" },
+		);
+		const echoed = await readStream(round.stdout as ReadableStream<Uint8Array> | null);
+		await round.exited;
+		expect(echoed).toBe("it's 'tricky'\nline1\nline2\n");
+	});
+});
+
+describe("getOrCreateSnapshot", () => {
+	it("re-exports env vars referenced by snapshotted functions (issue #3470)", async () => {
+		const home = await fs.mkdtemp(path.join(os.tmpdir(), "omp-snap-3470-"));
+		await fs.writeFile(
+			path.join(home, ".bashrc"),
+			[
+				`export __MISE_EXE=/usr/bin/echo`,
+				`export FOO_TEST_DIR=/opt/foo`,
+				`mise () { command "$__MISE_EXE" "$@"; }`,
+				`shout () { echo "$FOO_TEST_DIR"; }`,
+				``,
+			].join("\n"),
+		);
+
+		// Symlink bash under a unique path so this call misses the process-wide
+		// snapshot cache (`cachedSnapshotPaths` is keyed on the shell path, and
+		// sibling tests in the same worker create a cached `/usr/bin/bash` entry
+		// from a different HOME before this test runs).
+		const realBash = "/usr/bin/bash";
+		const shellLink = path.join(home, "bash-omp-3470");
+		await fs.symlink(realBash, shellLink);
+
+		// `getShellConfigFile` honours `env.HOME` so the spawned shell sources
+		// our fixture bashrc rather than the test runner's home.
+		const env = { ...process.env, HOME: home };
+		const snapshotPath = await getOrCreateSnapshot(shellLink, env);
+		expect(snapshotPath).not.toBeNull();
+		const content = await fs.readFile(snapshotPath!, "utf8");
+
+		expect(content).toContain(`export __MISE_EXE='/usr/bin/echo'`);
+		expect(content).toContain(`export FOO_TEST_DIR='/opt/foo'`);
+
+		// Replay the snapshot in a fresh bash with `set -u` and confirm the
+		// mise() function resolves cleanly instead of dying on the empty var.
+		const replay = Bun.spawn(
+			[realBash, "--noprofile", "--norc", "-c", `set -u; source "$1"; mise hello world; shout`, "_", snapshotPath!],
+			{ stdout: "pipe", stderr: "pipe" },
+		);
+		const stdout = await readStream(replay.stdout as ReadableStream<Uint8Array> | null);
+		const stderr = await readStream(replay.stderr as ReadableStream<Uint8Array> | null);
+		await replay.exited;
+		expect({ exitCode: replay.exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+		expect(stdout).toBe("hello world\n/opt/foo\n");
 	});
 });
