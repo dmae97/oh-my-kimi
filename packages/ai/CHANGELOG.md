@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.19] - 2026-06-25
+
 ### Fixed
 
 - Fixed Ollama/llama.cpp chat payloads serializing user-attributed mid-conversation developer messages (auto-learn capture nudge, advisor cards, file-mention companions) as `system` turns; they now serialize as `user` so llama.cpp can reuse the warm prompt prefix instead of forcing full re-processing. Agent-owned developer reminders (`attribution: "agent"` — empty/unexpected-stop retries, checkpoint rewind warning, todo reminders) keep their `system` priority. ([#3456](https://github.com/can1357/oh-my-pi/issues/3456))

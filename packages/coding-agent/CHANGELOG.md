@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.19] - 2026-06-25
+
 ### Fixed
 
 - Fixed `omp install <plugin>` failing extension validation in compiled-binary mode with `Cannot find module '@(scope)/pi-ai/oauth' from '<plugin>/src/oauth.ts'` (and any other non-wildcard pi-* subpath import like `@oh-my-pi/pi-coding-agent/tools`). The bundled-registry override map seeded by `__buildLegacyPiPackageRootOverrides` only covered the bare package roots, so `rewriteLegacyPiImports` rewrote `@(scope)/pi-ai/oauth` to `@oh-my-pi/pi-ai/oauth`, fell through to `Bun.resolveSync` (which bunfs can't satisfy on Bun 1.3.14+), then left the original specifier alone — at which point Bun's native resolver failed because most plugins declare `@(scope)/pi-ai` as a `peerDependency` only and never materialize a real install. The new `scripts/generate-legacy-pi-bundled-registry.ts` reads every bundled pi-* package's non-wildcard `exports` field and emits both the heavy `legacy-pi-bundled-registry.ts` (static imports + map) and a light `legacy-pi-bundled-keys.ts` (statically imported by `legacy-pi-compat.ts` to seed the override map without the cascade through `legacy-pi-coding-agent-shim → ../index → export/html/...`). `scripts/build-binary.ts` now runs the generator before `bun build --compile`. ([#3442](https://github.com/can1357/oh-my-pi/issues/3442))
