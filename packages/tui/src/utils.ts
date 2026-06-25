@@ -121,7 +121,7 @@ export function truncateToWidth(
 	return nativeTruncateToWidth(
 		text,
 		maxWidth,
-		(ellipsisKind === "" ? Ellipsis.Omit : ellipsisKind) ?? Ellipsis.Unicode,
+		(typeof ellipsisKind === "string" ? Ellipsis.Omit : ellipsisKind) ?? Ellipsis.Unicode,
 		pad ?? false,
 		DEFAULT_TAB_WIDTH,
 	);
