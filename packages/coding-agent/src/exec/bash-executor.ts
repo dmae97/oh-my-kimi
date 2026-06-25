@@ -14,6 +14,7 @@ import { buildNonInteractiveEnv } from "./non-interactive-env";
 
 export interface BashExecutorOptions {
 	cwd?: string;
+	/** Milliseconds before aborting the command; 0 disables the executor deadline. */
 	timeout?: number;
 	onChunk?: (chunk: string) => void;
 	chunkThrottleMs?: number;
@@ -296,11 +297,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	let timeoutTimer: NodeJS.Timeout | undefined;
 	const timeoutDeferred = Promise.withResolvers<"timeout">();
-	const baseTimeoutMs = Math.max(1_000, options?.timeout ?? 300_000);
-	timeoutTimer = setTimeout(() => {
-		abortCurrentExecution();
-		timeoutDeferred.resolve("timeout");
-	}, baseTimeoutMs);
+	const requestedTimeoutMs = options?.timeout;
+	const deadlineTimeoutMs = requestedTimeoutMs === 0 ? undefined : Math.max(1_000, requestedTimeoutMs ?? 300_000);
+	const nativeTimeoutMs = requestedTimeoutMs !== undefined && requestedTimeoutMs > 0 ? requestedTimeoutMs : undefined;
+	if (deadlineTimeoutMs !== undefined) {
+		timeoutTimer = setTimeout(() => {
+			abortCurrentExecution();
+			timeoutDeferred.resolve("timeout");
+		}, deadlineTimeoutMs);
+	}
 
 	let resetSession = false;
 
@@ -311,7 +316,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 						command: finalCommand,
 						cwd: commandCwd,
 						env: commandEnv,
-						timeoutMs: options?.timeout,
+						timeoutMs: nativeTimeoutMs,
 						signal: runAbortController.signal,
 					},
 					(err, chunk) => {
@@ -328,7 +333,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 						sessionEnv: shellEnv,
 						snapshotPath: snapshotPath ?? undefined,
 						minimizer,
-						timeoutMs: options?.timeout,
+						timeoutMs: nativeTimeoutMs,
 						signal: runAbortController.signal,
 					},
 					(err, chunk) => {
@@ -359,8 +364,8 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 				exitCode: undefined,
 				cancelled: true,
 				...(await sink.dump(
-					winner.kind === "timeout"
-						? `Command timed out after ${Math.round(baseTimeoutMs / 1000)} seconds`
+					winner.kind === "timeout" && deadlineTimeoutMs !== undefined
+						? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
 						: "Command cancelled",
 				)),
 			};
