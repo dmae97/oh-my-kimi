@@ -131,7 +131,10 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
 	transportOpts = opts;
 	if (!winstonLogger) return; // applied lazily when the logger is first built
 	winstonLogger.clear();
-	for (const transport of buildTransports(opts)) winstonLogger.add(transport);
+	const transports = buildTransports(opts);
+	for (const transport of transports) winstonLogger.add(transport);
+	// Keep the logger silent when nothing is attached so winston doesn't warn on emit.
+	winstonLogger.silent = transports.length === 0;
 }
 
 /**
