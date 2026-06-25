@@ -550,4 +550,116 @@ describe("mcp oauth flow", () => {
 		expect(tokenParams.get("grant_type")).toBe("refresh_token");
 		expect(tokenParams.get("resource")).toBeNull();
 	});
+	describe("RFC 8707 resource indicator", () => {
+		// Regression for issue #3502: Plane (and other strict OAuth servers)
+		// return `server_error` when the resource indicator is self-referential.
+		// Per RFC 8707 §2 the indicator distinguishes *other* resource servers,
+		// so an auth-server-origin value is redundant.
+
+		const REDIRECT_URI = "http://127.0.0.1:14580/callback";
+
+		async function buildFlow(config: {
+			authorizationUrl: string;
+			resource?: string;
+			onTokenBody?: (body: string) => void;
+		}): Promise<MCPOAuthFlow> {
+			return new MCPOAuthFlow(
+				{
+					authorizationUrl: config.authorizationUrl,
+					tokenUrl: "https://provider.example/token",
+					clientId: "client-id",
+					resource: config.resource,
+					callbackPort: 14580,
+					fetch: mockProviderTokenEndpoint(body => config.onTokenBody?.(body)),
+				},
+				{},
+			);
+		}
+
+		it("strips resource from generateAuthUrl when it equals the authorization-server origin", async () => {
+			const flow = await buildFlow({
+				authorizationUrl: "https://mcp.plane.so/authorize",
+				resource: "https://mcp.plane.so",
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+
+			expect(new URL(url).searchParams.get("resource")).toBeNull();
+			expect(flow.resource).toBeUndefined();
+		});
+
+		it("strips resource from generateAuthUrl when it equals the auth-server origin with trailing slash", async () => {
+			const flow = await buildFlow({
+				authorizationUrl: "https://mcp.plane.so/authorize",
+				resource: "https://mcp.plane.so/",
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+
+			expect(new URL(url).searchParams.get("resource")).toBeNull();
+			expect(flow.resource).toBeUndefined();
+		});
+
+		it("strips a self-referential resource that was pre-populated on the authorization URL", async () => {
+			const flow = await buildFlow({
+				authorizationUrl: "https://mcp.plane.so/authorize?resource=https%3A%2F%2Fmcp.plane.so",
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+
+			expect(new URL(url).searchParams.get("resource")).toBeNull();
+			expect(flow.resource).toBeUndefined();
+		});
+
+		it("omits resource from the matching token-exchange request when stripped from authorize", async () => {
+			// RFC 8707 §2.2 requires the token request's resource indicator to
+			// match the authorize request — so stripping in one mandates the
+			// other.
+			let tokenRequestBody = "";
+			const flow = await buildFlow({
+				authorizationUrl: "https://mcp.plane.so/authorize",
+				resource: "https://mcp.plane.so",
+				onTokenBody: body => {
+					tokenRequestBody = body;
+				},
+			});
+
+			await flow.generateAuthUrl("state-x", REDIRECT_URI);
+			await flow.exchangeToken("test-code", "state-x", REDIRECT_URI);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+
+		it("keeps the resource when it points at a different path under the auth-server origin", async () => {
+			let tokenRequestBody = "";
+			const flow = await buildFlow({
+				authorizationUrl: "https://mcp.plane.so/authorize",
+				resource: "https://mcp.plane.so/sse",
+				onTokenBody: body => {
+					tokenRequestBody = body;
+				},
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+			await flow.exchangeToken("test-code", "state-x", REDIRECT_URI);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(new URL(url).searchParams.get("resource")).toBe("https://mcp.plane.so/sse");
+			expect(flow.resource).toBe("https://mcp.plane.so/sse");
+			expect(tokenParams.get("resource")).toBe("https://mcp.plane.so/sse");
+		});
+
+		it("keeps the resource when it points at a different host than the auth server", async () => {
+			const flow = await buildFlow({
+				authorizationUrl: "https://auth.example.com/authorize",
+				resource: "https://api.example.com",
+			});
+
+			const { url } = await flow.generateAuthUrl("state-x", REDIRECT_URI);
+
+			expect(new URL(url).searchParams.get("resource")).toBe("https://api.example.com");
+			expect(flow.resource).toBe("https://api.example.com");
+		});
+	});
 });

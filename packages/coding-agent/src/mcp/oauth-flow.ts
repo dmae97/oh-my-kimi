@@ -219,8 +219,8 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		super(ctrl, resolveCallbackOptions(config));
 		this.#resolvedClientId = this.#resolveClientId(config);
 		this.#fetch = config.fetch ?? ctrl.fetch ?? fetch;
-		this.#resource = resolveResourceUri(
-			config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl),
+		this.#resource = this.#filterResourceIndicator(
+			resolveResourceUri(config.resource ?? this.#resourceFromAuthorizationUrl(config.authorizationUrl)),
 		);
 	}
 
@@ -271,7 +271,18 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		}
 		const existingResource = params.get("resource")?.trim();
 		if (existingResource) {
-			this.#resource = resolveResourceUri(existingResource);
+			const filtered = this.#filterResourceIndicator(resolveResourceUri(existingResource));
+			if (filtered) {
+				this.#resource = filtered;
+			} else {
+				// Some authorization servers (e.g. mcp.plane.so) reject `resource`
+				// when it equals their own origin with `server_error`. RFC 8707
+				// indicators are for distinguishing other resource servers, so a
+				// self-referential value is redundant — drop it from both the
+				// authorize URL and the matching token request.
+				params.delete("resource");
+				this.#resource = undefined;
+			}
 		} else if (this.#resource) {
 			params.set("resource", this.#resource);
 		}
@@ -393,6 +404,27 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/**
+	 * Drop resource indicators that equal the authorization-server origin.
+	 *
+	 * Some servers (Plane is the live example, see issue #3502) reject
+	 * `resource=<auth-server-origin>` with `server_error` before the consent
+	 * screen. Per RFC 8707 §2 the indicator distinguishes *other* resource
+	 * servers from the authorization server, so a self-referential value is
+	 * never required — silently strip it to stay compatible with strict
+	 * implementations.
+	 */
+	#filterResourceIndicator(resource: string | undefined): string | undefined {
+		if (!resource) return undefined;
+		try {
+			const authOrigin = new URL(this.config.authorizationUrl).origin;
+			if (resource === authOrigin || resource === `${authOrigin}/`) return undefined;
+		} catch {
+			// Malformed authorizationUrl will fail elsewhere; fall through.
+		}
+		return resource;
 	}
 
 	/**
