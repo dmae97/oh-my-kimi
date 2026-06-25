@@ -2,6 +2,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { LEGACY_COMPAT_BUILD_ENTRYPOINTS } from "./binary-entrypoints";
 
 interface BinaryTarget {
 	id: string;
@@ -14,10 +15,14 @@ interface BinaryTarget {
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = "./packages/coding-agent/src/cli.ts";
-// Legacy extension shims and package barrels in the build argv below are still
-// explicit `--compile` entrypoints because they are reached via computed bunfs
-// paths. Worker threads spawn `new Worker(Bun.main, { argv })` — they re-enter
-// the binary's own entry module — so no separate worker modules are compiled.
+// Legacy extension shims and package barrels reached via computed bunfs paths.
+// Declared in `binary-entrypoints.ts` so the dev build script
+// (`packages/coding-agent/scripts/build-binary.ts`) and this release script
+// stay in sync — drifting them silently strips the shims from the release
+// `omp-<platform>` assets and breaks `omp install` for legacy pi extensions
+// (issue #3414). Worker threads spawn `new Worker(Bun.main, { argv })` — they
+// re-enter the binary's own entry module — so no separate worker modules
+// are compiled.
 const isDryRun = process.argv.includes("--dry-run");
 const targets: BinaryTarget[] = [
 	{
@@ -110,7 +115,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --minify-identifiers --keep-names --define process.env.PI_COMPILED="true" --root . --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --minify-identifiers --keep-names --define process.env.PI_COMPILED="true" --root . --target=${target.target} ${entrypoint} ${LEGACY_COMPAT_BUILD_ENTRYPOINTS.join(" ")} --outfile ${target.outfile}`);
 		return;
 	}
 
@@ -135,6 +140,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 			"--target",
 			target.target,
 			entrypoint,
+			...LEGACY_COMPAT_BUILD_ENTRYPOINTS,
 			"--outfile",
 			target.outfile,
 		],
