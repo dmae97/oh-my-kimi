@@ -33,6 +33,13 @@ export interface InternalResource {
 	 * resources. Mutable resources (e.g. local://) behave like editable files.
 	 */
 	immutable?: boolean;
+	/**
+	 * True when the resource is a directory listing rather than file content.
+	 * `search` refuses to grep such a resource when it has no `sourcePath` — a
+	 * remote `ssh://` listing has no local path to recurse, so its listing text
+	 * must never be mistaken for the directory's contents.
+	 */
+	isDirectory?: boolean;
 }
 
 /**

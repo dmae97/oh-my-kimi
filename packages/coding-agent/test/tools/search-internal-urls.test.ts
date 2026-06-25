@@ -244,6 +244,36 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).not.toContain("needle outside range");
 	});
 
+	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
+		const session = createSession();
+		const tool = new SearchTool(session);
+		await expect(tool.execute("bad-sel", { pattern: "needle", paths: ["artifact://5:-10"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		await expect(tool.execute("bad-mixed", { pattern: "needle", paths: ["artifact://5:1-1:-10"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		// Multi-range colon compounds are rejected by read's parseSel; search must match.
+		await expect(tool.execute("bad-multi", { pattern: "needle", paths: ["artifact://5:1-1:1-2"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		// A `conflicts` display chunk is not valid in a range compound (only `raw` is).
+		await expect(
+			tool.execute("bad-conflicts", { pattern: "needle", paths: ["artifact://5:conflicts:1-1"] }),
+		).rejects.toThrow(/invalid selector/i);
+	});
+
+	it("rejects an RE2-unsupported pattern on a pure-virtual search (dialect parity)", async () => {
+		registerVirtualDocs(new Map([["doc.md", "alpha line\nbeta line\n"]]));
+		const session = createSession();
+		const tool = new SearchTool(session);
+		// Lookbehind is valid JS RegExp but unsupported by the native RE2 dialect;
+		// the pure-virtual probe must reject it consistently with native search.
+		await expect(tool.execute("re2", { pattern: "(?<=alpha)line", paths: ["virtual://doc.md"] })).rejects.toThrow(
+			/Invalid regex/i,
+		);
+	});
+
 	it("expands omp:// root to grep embedded documentation files", async () => {
 		const session = createSession();
 		const tool = new SearchTool(session);
@@ -465,5 +495,21 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).toContain("No more results");
 		expect(text).toContain("2 files total");
 		expect(text).not.toContain("No matches found");
+	});
+
+	it("refuses to search a directory listing that has no backing local path", async () => {
+		// A directory resource with no sourcePath (e.g. a remote ssh:// listing) must
+		// not be virtual-grepped — its listing text is not the directory's contents.
+		InternalUrlRouter.instance().register({
+			scheme: "dirstub",
+			immutable: true,
+			async resolve(url: InternalUrl): Promise<InternalResource> {
+				return { url: url.href, content: "sub/\nfile.txt", contentType: "text/plain", isDirectory: true };
+			},
+		});
+		const tool = new SearchTool(createSession());
+		await expect(tool.execute("dir-search", { pattern: "x", paths: ["dirstub://host/dir"] })).rejects.toThrow(
+			/directory listing|cannot recurse/,
+		);
 	});
 });

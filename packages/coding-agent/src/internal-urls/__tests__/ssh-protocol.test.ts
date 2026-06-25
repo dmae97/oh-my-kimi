@@ -69,10 +69,15 @@ describe("SshProtocolHandler", () => {
 		expect(spy.mock.calls[0]?.[0]).toMatchObject({ name: "bob@h1:2222", host: "h1", username: "bob", port: 2222 });
 	});
 
-	it("rejects a host-only URL with no file path", async () => {
+	it("lists the remote root directory for ssh://host/", async () => {
 		mockHosts();
-		mockReadBytes("x");
-		await expect(handler.resolve(parseInternalUrl("ssh://icaro/"))).rejects.toThrow(/absolute file path/);
+		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("directory");
+		const listSpy = vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([{ name: "etc", isDirectory: true }]);
+		const res = await handler.resolve(parseInternalUrl("ssh://icaro/"));
+		expect(res.isDirectory).toBe(true);
+		expect(res.content).toBe("etc/");
+		expect(listSpy.mock.calls[0]?.[1]).toBe("/");
 	});
 
 	it("rejects a binary / non-UTF-8 file instead of returning a resource", async () => {
@@ -110,5 +115,43 @@ describe("SshProtocolHandler", () => {
 		await handler.write(parseInternalUrl("ssh://icaro/tmp/x"), "hi\n\t!\n");
 		expect(spy).toHaveBeenCalledTimes(1);
 		expect(spy.mock.calls[0]?.[2]).toEqual(new TextEncoder().encode("hi\n\t!\n"));
+	});
+
+	it("lists a remote directory when the path is not a readable file", async () => {
+		mockHosts();
+		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(
+			new Error("head: error reading '/etc': Is a directory"),
+		);
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("directory");
+		const listSpy = vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([
+			{ name: "conf.d", isDirectory: true },
+			{ name: "hosts", isDirectory: false },
+		]);
+		const res = await handler.resolve(parseInternalUrl("ssh://icaro/etc"));
+		expect(res.isDirectory).toBe(true);
+		expect(res.immutable).toBe(true);
+		expect(res.sourcePath).toBeUndefined();
+		expect(res.content).toBe("conf.d/\nhosts");
+		// read fail → stat → list must target the same remote path, not a peeled/normalized variant.
+		expect(listSpy.mock.calls[0]?.[1]).toBe("/etc");
+	});
+
+	it("renders an empty remote directory", async () => {
+		mockHosts();
+		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("directory");
+		vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([]);
+		const res = await handler.resolve(parseInternalUrl("ssh://icaro/empty"));
+		expect(res.content).toBe("(empty directory)");
+		expect(res.isDirectory).toBe(true);
+	});
+
+	it("rethrows the original read error when the path is missing, not a directory", async () => {
+		mockHosts();
+		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(
+			new Error("head: cannot open '/nope': No such file or directory"),
+		);
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("missing");
+		await expect(handler.resolve(parseInternalUrl("ssh://icaro/nope"))).rejects.toThrow(/No such file or directory/);
 	});
 });

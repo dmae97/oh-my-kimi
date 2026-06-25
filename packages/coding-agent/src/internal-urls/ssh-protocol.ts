@@ -1,15 +1,16 @@
 /**
  * Protocol handler for `ssh://host/path` URLs.
  *
- * Resolves a single remote text file on a pre-configured SSH host — or any
+ * Resolves a remote text file or directory listing on a pre-configured SSH host — or any
  * destination OpenSSH can resolve itself (e.g. a `~/.ssh/config` alias) — for
  * the read, search, and write tools, reusing the shared ControlMaster
  * connection in `../ssh/connection-manager`.
  *
- * Text only. Binary/non-UTF-8 files and files larger than 1 MiB are rejected
- * with an explicit error rather than returned as a resource: this handler
- * exposes no `sourcePath`, so a note-style resource would make `search` grep the
- * note text and report "No matches found", hiding the real condition.
+ * A remote path resolves to a UTF-8 text file (≤ 1 MiB) or, when it is a
+ * directory, a one-level listing. Binary/non-UTF-8 or oversized files are
+ * rejected with an explicit error. This handler exposes no `sourcePath`;
+ * directory listings carry `isDirectory` so `search` refuses to grep the
+ * listing text instead of the directory's real contents.
  *
  * `loadCapability` is imported from `../capability` (not the `../discovery`
  * barrel) on purpose — pulling the barrel here would route
@@ -21,7 +22,14 @@
 import * as capability from "../capability";
 import { type SSHHost, sshCapability } from "../capability/ssh";
 import type { SSHConnectionTarget } from "../ssh/connection-manager";
-import { readRemoteFile, writeRemoteFile } from "../ssh/file-transfer";
+import {
+	listRemoteDir,
+	type RemoteDirEntry,
+	type RemotePathKind,
+	readRemoteFile,
+	statRemotePath,
+	writeRemoteFile,
+} from "../ssh/file-transfer";
 import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, WriteContext } from "./types";
 
 /** Largest remote text file `ssh://` will materialize (mirrors the local:// cap). */
@@ -62,8 +70,10 @@ function remotePathFromUrl(url: InternalUrl): string {
 	} catch {
 		throw new Error(`Invalid URL encoding in ssh:// path: ${url.href}`);
 	}
-	if (!decoded || decoded === "/") {
-		throw new Error("ssh:// requires an absolute file path, e.g. ssh://host/etc/hosts");
+	if (!decoded) {
+		throw new Error(
+			"ssh:// requires an absolute path, e.g. ssh://host/etc/hosts or ssh://host/ for the root directory",
+		);
 	}
 	return decoded;
 }
@@ -107,6 +117,12 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	return { name, host, username, port };
 }
 
+/** Format a one-level remote directory listing — mirrors buildDirectoryResource's plain `name/` lines. */
+function formatDirListing(entries: readonly RemoteDirEntry[]): string {
+	if (entries.length === 0) return "(empty directory)";
+	return entries.map(entry => `${entry.name}${entry.isDirectory ? "/" : ""}`).join("\n");
+}
+
 export class SshProtocolHandler implements ProtocolHandler {
 	readonly scheme = "ssh";
 	readonly immutable = false;
@@ -114,16 +130,31 @@ export class SshProtocolHandler implements ProtocolHandler {
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const target = await resolveTarget(url, context?.cwd);
 		const remotePath = remotePathFromUrl(url);
-		const { bytes, truncated } = await readRemoteFile(target, remotePath, {
-			maxBytes: SSH_TEXT_MAX_BYTES,
-			signal: context?.signal,
-		});
-		if (truncated) {
+		let fileResult: { bytes: Uint8Array; truncated: boolean };
+		try {
+			fileResult = await readRemoteFile(target, remotePath, {
+				maxBytes: SSH_TEXT_MAX_BYTES,
+				signal: context?.signal,
+			});
+		} catch (err) {
+			// `head` fails on a directory (and on a missing/unreadable path). Re-classify:
+			// only a real directory becomes a listing; anything else rethrows the original
+			// error, which carries the remote stderr (e.g. "No such file or directory").
+			let kind: RemotePathKind | undefined;
+			try {
+				kind = await statRemotePath(target, remotePath, { signal: context?.signal });
+			} catch {
+				// Re-stat failed too (host/connection issue) — the original read error is clearer.
+			}
+			if (kind === "directory") return this.#resolveDirectory(target, remotePath, url, context?.signal);
+			throw err;
+		}
+		if (fileResult.truncated) {
 			throw new Error(
 				`ssh://: ${remotePath} exceeds the 1 MiB limit; ssh:// supports text files up to 1 MiB — use an sshfs mount for larger files`,
 			);
 		}
-		const content = decodeUtf8Text(bytes);
+		const content = decodeUtf8Text(fileResult.bytes);
 		if (content === null) {
 			throw new Error(
 				`ssh://: ${remotePath} is a binary or non-UTF-8 file; ssh:// supports UTF-8 text only — use the ssh tool or an sshfs mount`,
@@ -135,7 +166,25 @@ export class SshProtocolHandler implements ProtocolHandler {
 			url: url.href,
 			content,
 			contentType: contentTypeFor(remotePath),
-			size: bytes.length,
+			size: fileResult.bytes.length,
+		};
+	}
+
+	/** Resolve a remote directory to a one-level listing (no `sourcePath`; `isDirectory` so search refuses it; immutable). */
+	async #resolveDirectory(
+		target: SSHConnectionTarget,
+		remotePath: string,
+		url: InternalUrl,
+		signal?: AbortSignal,
+	): Promise<InternalResource> {
+		const content = formatDirListing(await listRemoteDir(target, remotePath, { signal }));
+		return {
+			url: url.href,
+			content,
+			contentType: "text/plain",
+			size: Buffer.byteLength(content, "utf-8"),
+			immutable: true,
+			isDirectory: true,
 		};
 	}
 

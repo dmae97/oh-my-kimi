@@ -123,6 +123,27 @@ interface SearchPathSpec {
 	ranges?: [LineRange, ...LineRange[]];
 }
 
+/**
+ * Mirror of read's `parseSel` selector grammar (`read.ts`) so `search` accepts
+ * exactly the internal-URL selectors `read`/`write` do: a single chunk that is a
+ * line range, `raw`, or `conflicts`; or a two-chunk compound of exactly one `raw`
+ * plus one line range. Everything else (`:-10`, `:1-1:1-2`, `:conflicts:1-1`,
+ * `:raw:conflicts`) is rejected. Keep in sync with read.parseSel.
+ */
+function isReadSelectorGrammar(sel: string): boolean {
+	if (sel.includes(":")) {
+		const chunks = sel.split(":");
+		if (chunks.length !== 2) return false;
+		const [a, b] = chunks as [string, string];
+		const aIsRaw = a.toLowerCase() === "raw";
+		const bIsRaw = b.toLowerCase() === "raw";
+		const rangeChunk = aIsRaw ? b : bIsRaw ? a : null;
+		return rangeChunk !== null && parseLineRanges(rangeChunk) !== null;
+	}
+	const lower = sel.toLowerCase();
+	return lower === "raw" || lower === "conflicts" || parseLineRanges(sel) !== null;
+}
+
 function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 	const specs: SearchPathSpec[] = [];
 	for (const entry of rawEntries) {
@@ -134,11 +155,14 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 		// still honor any embedded line range as a match filter.
 		const internalSplit = splitInternalUrlSel(entry);
 		if (internalSplit.sel !== undefined) {
-			specs.push({
-				original: entry,
-				clean: internalSplit.path,
-				ranges: selectorLineRanges(internalSplit.sel),
-			});
+			// Reject selectors read's parseSel would reject (`:-10`, `:1-1:1-2`,
+			// `:conflicts:1-1`) instead of silently widening the search or dropping a chunk.
+			if (!isReadSelectorGrammar(internalSplit.sel)) {
+				throw new ToolError(
+					`paths entry "${entry}" has an invalid selector ":${internalSplit.sel}" — use ":N-M" line ranges, ":raw"/":conflicts", a range plus ":raw", or percent-encode a literal ":" as %3A`,
+				);
+			}
+			specs.push({ original: entry, clean: internalSplit.path, ranges: selectorLineRanges(internalSplit.sel) });
 			continue;
 		}
 		const split = splitPathAndSel(entry);
@@ -160,6 +184,43 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 		specs.push({ original: entry, clean, ranges });
 	}
 	return specs;
+}
+
+/**
+ * Validate a search pattern against the native RE2 dialect by probing a scratch
+ * byte with `grep`. Used before a pure-virtual search (where no native grep ran
+ * to validate it), so an RE2-unsupported pattern (lookbehind, backreference) is
+ * rejected consistently instead of silently matching via JS `RegExp`. Throws the
+ * native `regex parse error`, which the caller normalizes to a `ToolError`.
+ */
+async function probeRegexDialect(
+	pattern: string,
+	ignoreCase: boolean,
+	multiline: boolean,
+	signal?: AbortSignal,
+): Promise<void> {
+	const dir = await mkdtemp(path.join(tmpdir(), "omp-search-probe-"));
+	try {
+		const probeFile = path.join(dir, "probe");
+		await writeFile(probeFile, "\n");
+		await grep(
+			{
+				pattern,
+				path: probeFile,
+				ignoreCase,
+				multiline,
+				hidden: true,
+				gitignore: false,
+				maxCount: 1,
+				mode: GrepOutputMode.Content,
+				signal,
+				timeoutMs: SEARCH_GREP_TIMEOUT_MS,
+			},
+			undefined,
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
+	}
 }
 
 function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: readonly LineRange[]): void {
@@ -612,6 +673,14 @@ async function resolveInternalSearchInputs(opts: {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
 		const resource = await internalRouter.resolve(rawPath, context);
+		// A directory listing with no backing local path (e.g. a remote ssh:// dir)
+		// has no real contents to grep — searching its listing text would be
+		// misleading. Local/skill/vault dir resources set `sourcePath` and skip this.
+		if (resource.isDirectory && !resource.sourcePath) {
+			throw new ToolError(
+				`search cannot recurse the directory listing at ${rawPath}; search a specific file under it (e.g. ${rawPath.replace(/\/+$/, "")}/<file>) or read ${rawPath} to list its entries`,
+			);
+		}
 		if (resource.sourcePath) {
 			paths[idx] = resource.sourcePath;
 			if (resource.immutable) {
@@ -965,15 +1034,33 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					throw err;
 				}
-				const virtualResult = searchVirtualResources(
-					virtualResources,
-					normalizedPattern,
-					ignoreCase,
-					effectiveMultiline,
-					normalizedContextBefore,
-					normalizedContextAfter,
-					INTERNAL_TOTAL_CAP,
-				);
+				let virtualResult: GrepResult;
+				try {
+					// A purely virtual scope skipped native grep, so the pattern was
+					// never validated against the RE2 dialect. Probe it so an
+					// RE2-unsupported regex is rejected consistently instead of
+					// silently matching through JS `RegExp`.
+					if (searchablePaths.length === 0 && virtualResources.length > 0) {
+						await probeRegexDialect(normalizedPattern, ignoreCase, effectiveMultiline, signal);
+					}
+					virtualResult = searchVirtualResources(
+						virtualResources,
+						normalizedPattern,
+						ignoreCase,
+						effectiveMultiline,
+						normalizedContextBefore,
+						normalizedContextAfter,
+						INTERNAL_TOTAL_CAP,
+					);
+				} catch (err) {
+					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {
+						throw new ToolError(err.message.replace(/^regex(?: parse)? error:?\s*/i, "Invalid regex: "));
+					}
+					if (err instanceof SyntaxError) {
+						throw new ToolError(`Invalid regex: ${err.message}`);
+					}
+					throw err;
+				}
 				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
 				if (rangesByAbsPath.size > 0) {
 					const filteredMatches: GrepMatch[] = [];
