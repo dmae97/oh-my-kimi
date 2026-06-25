@@ -167,7 +167,9 @@ describe("formatSessionHistoryMarkdown", () => {
 			},
 		]);
 
-		expect(output).toContain("→ search(PRIMARY_ARG_KEYS @ packages/coding-agent/src/session) ⇒ error · 1 line — timed out");
+		expect(output).toContain(
+			"→ search(PRIMARY_ARG_KEYS @ packages/coding-agent/src/session) ⇒ error · 1 line — timed out",
+		);
 	});
 
 	it("renders tool intent comments immediately before tool call lines when includeToolIntent is true", () => {
