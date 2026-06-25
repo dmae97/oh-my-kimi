@@ -53,6 +53,7 @@ const PRIMARY_ARG_KEYS = [
 	"command",
 	"cmd",
 	"pattern",
+	"paths",
 	"url",
 	"query",
 	"prompt",
@@ -86,6 +87,14 @@ function lineCount(text: string): number {
 	return text.split("\n").length;
 }
 
+function primaryArgValue(value: unknown): string {
+	if (typeof value === "string" && value.length > 0) return value;
+	if (Array.isArray(value) && value.length > 0 && value.every(v => typeof v === "string")) {
+		return value.join(", ");
+	}
+	return "";
+}
+
 /** Pick the most informative scalar argument of a tool call. */
 function primaryArg(name: string, args: Record<string, unknown> | undefined): string {
 	if (!args || typeof args !== "object") return "";
@@ -97,12 +106,17 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
 	}
+	if (name === "search") {
+		const pattern = primaryArgValue(args.pattern);
+		const paths = primaryArgValue(args.paths);
+		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
+		if (pattern) return oneLine(pattern);
+		if (paths) return oneLine(paths);
+	}
 	for (const key of PRIMARY_ARG_KEYS) {
 		const value = args[key];
-		if (typeof value === "string" && value.length > 0) return oneLine(value);
-		if (Array.isArray(value) && value.length > 0 && value.every(v => typeof v === "string")) {
-			return oneLine(value.join(", "));
-		}
+		const summary = primaryArgValue(value);
+		if (summary) return oneLine(summary);
 	}
 	// Fallback: first non-intent string arg, then a compact JSON of the args.
 	const rest: Record<string, unknown> = {};
