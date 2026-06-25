@@ -269,7 +269,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		// No `default` model role configured: forces the step-4 startup fallback.
-		const settings = Settings.isolated();
+		const settings = Settings.isolated({ enabledModels: ["anthropic/*"] });
 
 		const { session } = await createAgentSession({
 			cwd: tempDir,
