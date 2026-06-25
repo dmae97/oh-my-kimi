@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.18] - 2026-06-25
+
 ### Added
 
 - Added --list flag to view stored OAuth accounts for a provider

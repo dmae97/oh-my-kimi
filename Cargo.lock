@@ -385,13 +385,13 @@ dependencies = [
 
 [[package]]
 name = "bstr"
-version = "1.12.1"
+version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63044e1ae8e69f3b5a92c736ca6269b8d12fa7efe39bf34ddb06d102cf0e2cab"
+checksum = "a4e308e67087593070530a666f7fe8815cbd2e61d8f5b7313b71b7d721d1dfde"
 dependencies = [
  "memchr",
  "regex-automata",
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.1.17"
+version = "16.1.18"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.1.17"
+version = "16.1.18"
 dependencies = [
  "async-trait",
  "libc",
@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.1.17"
+version = "16.1.18"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.1.17"
+version = "16.1.18"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -4138,9 +4138,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.23.3"
+version = "1.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "144d6b123cef80b301b8f72a9e2ca4370ddec21950d0a103dd22c437006d2db7"
+checksum = "bf80a72845275afea99e7f2b434723d3bc7e38470fcd1c7ed39a599c73319a53"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.18] - 2026-06-25
+
 ### Added
 
 - Added `listOAuthAccounts` for retrieving a read-only list of stored OAuth account identities
