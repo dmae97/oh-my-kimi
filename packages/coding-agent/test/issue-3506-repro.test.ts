@@ -92,6 +92,23 @@ describe("InputController.handleImagePaste (issue #3506)", () => {
 		expect(spies.pendingImages[0]?.type).toBe("image");
 	});
 
+	it("attaches the image when the clipboard exposes a `file://` URL (Codex parity)", async () => {
+		const { ctx, spies } = createCtx();
+		const fileUrl = new URL(`file://${imgPath}`).href;
+		const controller = new InputController(ctx, {
+			readImage: async () => null,
+			readText: async () => fileUrl,
+		});
+
+		const result = await controller.handleImagePaste();
+
+		expect(result).toBe(true);
+		// Neither the bare URL nor the decoded path may land in the editor as text.
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.pendingImages.length).toBe(1);
+		expect(spies.pendingImages[0]?.type).toBe("image");
+	});
+
 	it("preserves #1628 smart-paste behavior for non-image text", async () => {
 		const { ctx, spies } = createCtx();
 		const controller = new InputController(ctx, {

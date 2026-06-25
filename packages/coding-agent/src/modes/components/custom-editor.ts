@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
@@ -105,6 +106,20 @@ function normalizePastedPath(path: string): string {
 	const last = trimmed[trimmed.length - 1];
 	const unquoted =
 		trimmed.length > 1 && (first === '"' || first === "'") && last === first ? trimmed.slice(1, -1) : trimmed;
+	// `file://` URL → local filesystem path. Mirrors Codex's
+	// `normalize_pasted_path` (codex-rs/tui/src/clipboard_paste.rs) so a
+	// pasteboard whose text representation is a `file:///Users/…/img.png`
+	// URL — common when terminals forward the macOS pasteboard's
+	// `public.file-url` representation — loads as the file itself rather
+	// than failing in `loadImageInput` with a literal-`file://` path.
+	if (FILE_URI_REGEX.test(unquoted)) {
+		try {
+			return fileURLToPath(unquoted);
+		} catch {
+			// Malformed file URL: drop through to the shell-unescape branch
+			// so the caller can still reject it as a non-explicit path.
+		}
+	}
 	return unquoted.replace(SHELL_ESCAPED_PATH_CHAR_REGEX, "$1");
 }
 

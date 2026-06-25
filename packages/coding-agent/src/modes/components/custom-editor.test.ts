@@ -90,6 +90,22 @@ describe("CustomEditor bracketed path paste", () => {
 		]);
 	});
 
+	it("strips `file://` URLs to the local filesystem path before loading the image", () => {
+		// macOS / Ghostty / iTerm2 sometimes forward the pasteboard's
+		// `public.file-url` representation when the user does Finder→Copy
+		// then Cmd+V. Without decoding, `loadImageInput` would try to read a
+		// literal `file:///…` path and fail.
+		expect(extractBracketedImagePastePaths(bracketedPaste("file:///Users/me/Pictures/photo.png"))).toEqual([
+			"/Users/me/Pictures/photo.png",
+		]);
+	});
+
+	it("percent-decodes spaces inside `file://` URLs", () => {
+		expect(extractBracketedImagePastePaths(bracketedPaste("file:///Users/me/My%20Pictures/photo.png"))).toEqual([
+			"/Users/me/My Pictures/photo.png",
+		]);
+	});
+
 	it("extracts explicit non-image paths without classifying them as image paths", () => {
 		expect(extractBracketedPastePaths(bracketedPaste("/tmp/report.csv"))).toEqual(["/tmp/report.csv"]);
 		expect(extractBracketedImagePastePaths(bracketedPaste("/tmp/report.csv"))).toBeUndefined();
@@ -140,6 +156,10 @@ describe("extractImagePathFromText (issue #3506)", () => {
 	it("returns undefined for empty/whitespace-only input", () => {
 		expect(extractImagePathFromText("")).toBeUndefined();
 		expect(extractImagePathFromText("   ")).toBeUndefined();
+	});
+
+	it("decodes a `file://` URL to its filesystem path", () => {
+		expect(extractImagePathFromText("file:///Users/me/Pictures/photo.png")).toBe("/Users/me/Pictures/photo.png");
 	});
 });
 
