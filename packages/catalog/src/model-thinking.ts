@@ -589,7 +589,11 @@ function inferThinkingControlMode<TApi extends Api>(
 				if (semverGte(parsedModel.version, "4.6")) {
 					return "anthropic-adaptive";
 				}
-				if (semverGte(parsedModel.version, "4.5")) {
+				// Opus 4.5 supports `output_config.effort` (sent alongside
+				// `thinking.budget_tokens`); Sonnet 4.5 and Haiku 4.5 reject the
+				// field with HTTP 400 "This model does not support the effort
+				// parameter." (#3497).
+				if (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.5")) {
 					return "anthropic-budget-effort";
 				}
 			}
@@ -603,7 +607,10 @@ function inferThinkingControlMode<TApi extends Api>(
 				) {
 					return "anthropic-adaptive";
 				}
-				if (semverGte(parsedModel.version, "4.5")) {
+				// Opus 4.5 on Bedrock metadata mirrors the direct-Anthropic
+				// shape; the Bedrock provider still emits plain budget thinking
+				// on the wire for the budget-effort mode.
+				if (parsedModel.kind === "opus" && semverGte(parsedModel.version, "4.5")) {
 					return "anthropic-budget-effort";
 				}
 			}

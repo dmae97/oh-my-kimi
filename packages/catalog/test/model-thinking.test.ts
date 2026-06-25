@@ -376,7 +376,27 @@ describe("model thinking derivation", () => {
 		const minimaxM2 = createModel({ id: "MiniMax-M2.7", api: "anthropic-messages", provider: "minimax" });
 		const minimaxM3 = createModel({ id: "MiniMax-M3", api: "anthropic-messages", provider: "minimax" });
 
+		// Direct Anthropic Claude 4.5: Opus 4.5 supports `output_config.effort`
+		// (sent alongside `thinking.budget_tokens`), Sonnet 4.5 and Haiku 4.5
+		// reject the field with HTTP 400 "This model does not support the effort
+		// parameter." (#3497). Adaptive (4.6+) classification is exercised below.
 		expect(opus45.thinking?.mode).toBe("anthropic-budget-effort");
+		const opus45Bedrock = createModel({
+			id: "us.anthropic.claude-opus-4-5-20251101",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+		});
+		expect(opus45Bedrock.thinking?.mode).toBe("anthropic-budget-effort");
+		const sonnet45 = createModel({ id: "claude-sonnet-4-5", api: "anthropic-messages", provider: "anthropic" });
+		expect(sonnet45.thinking?.mode).toBe("budget");
+		const haiku45 = createModel({ id: "claude-haiku-4-5", api: "anthropic-messages", provider: "anthropic" });
+		expect(haiku45.thinking?.mode).toBe("budget");
+		const sonnet45Bedrock = createModel({
+			id: "us.anthropic.claude-sonnet-4-5-20250929",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+		});
+		expect(sonnet45Bedrock.thinking?.mode).toBe("budget");
 		expect(opus46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(sonnet46.thinking?.mode).toBe("anthropic-adaptive");
 		expect(mythosBedrock.thinking?.mode).toBe("anthropic-adaptive");
