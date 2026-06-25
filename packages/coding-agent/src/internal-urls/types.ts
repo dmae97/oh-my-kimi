@@ -5,6 +5,7 @@
  * providing access to agent outputs and server resources without exposing filesystem paths.
  */
 
+import type { Skill } from "../extensibility/skills";
 import type { LocalProtocolOptions } from "./local-protocol";
 
 /**
@@ -90,6 +91,8 @@ export interface ResolveContext {
 	 * [#1608](https://github.com/can1357/oh-my-pi/issues/1608).
 	 */
 	localProtocolOptions?: LocalProtocolOptions;
+	/** Calling session's loaded skills. Prefer this over process-global skill state. */
+	skills?: readonly Skill[];
 }
 
 /**

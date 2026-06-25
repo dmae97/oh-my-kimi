@@ -136,6 +136,27 @@ describe("SearchTool internal URL resolution", () => {
 		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "references"));
 	});
 
+	it("resolves skill:// through session skills when active skill globals are empty", async () => {
+		const skillDir = await registerSkillDirectory();
+		resetActiveSkillsForTests();
+		const session = createSession({
+			skills: [
+				{
+					name: "demo",
+					description: "demo skill",
+					filePath: path.join(skillDir, "SKILL.md"),
+					baseDir: skillDir,
+					source: "test",
+				},
+			],
+		});
+		const tool = new ReadTool(session);
+
+		const result = await tool.execute("test-call", { path: "skill://demo" });
+
+		expect(getResultText(result)).toContain("# Demo");
+		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "SKILL.md"));
+	});
 	it("walks skill:// directory subpaths for search and find", async () => {
 		await registerSkillDirectory();
 		const session = createSession({ hasEditTool: true });

@@ -579,6 +579,7 @@ async function resolveInternalSearchInputs(opts: {
 	signal?: AbortSignal;
 	archiveDisplayMap: ReadonlyMap<string, string>;
 	localProtocolOptions?: LocalProtocolOptions;
+	skills?: ResolveContext["skills"];
 }): Promise<InternalSearchInputResolution> {
 	const internalRouter = InternalUrlRouter.instance();
 	const paths = opts.resolvedPaths.slice();
@@ -592,6 +593,7 @@ async function resolveInternalSearchInputs(opts: {
 		settings: opts.settings,
 		signal: opts.signal,
 		localProtocolOptions: opts.localProtocolOptions,
+		skills: opts.skills,
 	};
 
 	for (let idx = 0; idx < paths.length; idx++) {
@@ -725,6 +727,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					signal,
 					archiveDisplayMap,
 					localProtocolOptions: this.session.localProtocolOptions,
+					skills: this.session.skills,
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
@@ -797,6 +800,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						settings: this.session.settings,
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
+						skills: this.session.skills,
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;
