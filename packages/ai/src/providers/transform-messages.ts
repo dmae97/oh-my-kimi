@@ -143,8 +143,7 @@ function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messa
 	return model.api === "anthropic-messages";
 }
 
-function isOpenAICompletionsReasoningReplayTarget(model: Model): boolean {
-	const compat = model.compat;
+function isOpenAICompletionsReasoningReplayTarget(model: Model, compat: Model["compat"]): boolean {
 	return (
 		model.api === "openai-completions" &&
 		compat !== undefined &&
@@ -195,6 +194,7 @@ export function transformMessages<TApi extends Api>(
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 	maxNormalizedToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
 	duplicateToolCallIdSuffixPrefix = "_dup",
+	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -262,7 +262,7 @@ export function transformMessages<TApi extends Api>(
 			// `reasoning && !official` case in the compat builder). Used to keep
 			// `redacted_thinking` siblings beside unsigned visible thinking on
 			// targets that won't text-demote it.
-			const isOpenAICompletionsReasoningReplay = isOpenAICompletionsReasoningReplayTarget(model);
+			const isOpenAICompletionsReasoningReplay = isOpenAICompletionsReasoningReplayTarget(model, targetCompat);
 			const replaysUnsignedAnthropicThinking = isAnthropicTarget && model.compat.replayUnsignedThinking;
 			// Thinking signatures can be untrustworthy for two distinct reasons with very
 			// different blast radii:

@@ -1629,6 +1629,7 @@ export function convertMessages(
 		id => normalizeToolCallId(id),
 		maxNormalizedToolCallIdLength,
 		duplicateToolCallIdSuffixPrefix,
+		compat,
 	);
 
 	const remappedToolCallIds = new Map<string, string[]>();
