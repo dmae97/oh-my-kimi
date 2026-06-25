@@ -1,10 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import {
+	detectTerminalId,
+	getTerminalInfo,
 	hyperlinksUserOverride,
+	ImageProtocol,
 	shouldEnableHyperlinksByDefault,
 	shouldEnableSynchronizedOutputByDefault,
 	synchronizedOutputUserOverride,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
+
+describe("detectTerminalId", () => {
+	it("recognizes Warp before the true-color fallback", () => {
+		expect(detectTerminalId({ TERM_PROGRAM: "WarpTerminal", COLORTERM: "truecolor" })).toBe("warp");
+	});
+});
 
 describe("synchronizedOutputUserOverride", () => {
 	it("returns null when the user expresses no preference", () => {
@@ -92,6 +101,38 @@ describe("shouldEnableSynchronizedOutputByDefault", () => {
 		expect(
 			shouldEnableSynchronizedOutputByDefault({ PI_FORCE_SYNC_OUTPUT: "1", SSH_CONNECTION: "1 2 3 4" }, "base"),
 		).toBe(true);
+	});
+});
+
+describe("Warp terminal capabilities", () => {
+	it("uses Kitty images on macOS/Linux and disables them on Windows", () => {
+		const mac = getTerminalInfo("warp", "darwin", {});
+		const linux = getTerminalInfo("warp", "linux", {});
+		const windows = getTerminalInfo("warp", "win32", {});
+
+		expect(mac.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(linux.imageProtocol).toBe(ImageProtocol.Kitty);
+		expect(windows.imageProtocol).toBeNull();
+		expect(linux.trueColor).toBe(true);
+		expect(linux.hyperlinks).toBe(false);
+		expect(linux.deccara).toBe(false);
+		expect(linux.textSizing).toBe(false);
+	});
+
+	it("treats WSL as the Windows host so Kitty APC garbage never reaches Warp for Windows", () => {
+		// Bun reports process.platform === "linux" inside WSL even though the
+		// renderer is the Windows Warp build, which lacks Kitty support.
+		const wslDistro = getTerminalInfo("warp", "linux", { WSL_DISTRO_NAME: "Ubuntu" });
+		const wslInterop = getTerminalInfo("warp", "linux", { WSL_INTEROP: "/run/WSL/1_interop" });
+
+		expect(wslDistro.imageProtocol).toBeNull();
+		expect(wslInterop.imageProtocol).toBeNull();
+	});
+
+	it("leaves synchronized output off by default and honors hyperlink force-on", () => {
+		expect(shouldEnableSynchronizedOutputByDefault({}, "warp")).toBe(false);
+		expect(shouldEnableHyperlinksByDefault({}, "warp")).toBe(false);
+		expect(shouldEnableHyperlinksByDefault({ PI_FORCE_HYPERLINKS: "1" }, "warp")).toBe(true);
 	});
 });
 
