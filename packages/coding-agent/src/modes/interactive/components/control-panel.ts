@@ -1,5 +1,7 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/omk-tui";
 import { type ThemeColor, theme } from "../theme/theme.ts";
+import { MIN_BANNER_WIDTH } from "./control-panel-gradient.ts";
+import { IDLE_MS, INTRO_MS, shouldAnimate } from "./control-panel-gradient-motion.ts";
 
 const CONTROL_PANEL_ASCII = [
 	"  ____   __  __ _  __",
@@ -17,21 +19,51 @@ export interface ControlPanelContent {
 	onboarding: () => string;
 }
 
+export interface ControlPanelMotionOptions {
+	requestRender: () => void;
+	isTTY: () => boolean;
+	isReducedMotion: () => boolean;
+	isIdleDriftEnabled: () => boolean;
+	isHeaderVisibleHint: () => boolean;
+	getRenderWidth?: () => number;
+	now?: () => number;
+}
+
+type BannerMotionPhase = "intro" | "idle" | "static";
+
 /**
  * Built-in startup header with ANSI-colored ASCII branding and compact/expanded
  * control-panel layouts. Content is provided as callbacks so theme changes can
  * rebuild styled strings without retaining stale ANSI sequences.
+ *
+ * When `motionOptions` is provided, the banner can animate: a one-shot intro
+ * reveal and optional idle drift. When omitted, behavior is identical to the
+ * original static implementation.
  */
 export class ControlPanelComponent implements Component {
 	private expanded = false;
 	private readonly content: ControlPanelContent;
+	private readonly motionOptions: ControlPanelMotionOptions | undefined;
 
-	constructor(content: ControlPanelContent) {
+	// BannerMotion state
+	private motionPhase: BannerMotionPhase = "static";
+	private motionStartMs = 0;
+	private motionTimerId: ReturnType<typeof setInterval> | undefined;
+	private lastRenderWidth = 0;
+
+	constructor(content: ControlPanelContent, motionOptions?: ControlPanelMotionOptions) {
 		this.content = content;
+		this.motionOptions = motionOptions;
 	}
 
 	setExpanded(expanded: boolean): void {
+		const wasExpanded = this.expanded;
 		this.expanded = expanded;
+		if (!wasExpanded && expanded) {
+			this.startMotion();
+		} else if (wasExpanded && !expanded) {
+			this.stopMotionToStatic();
+		}
 	}
 
 	invalidate(): void {
@@ -39,11 +71,136 @@ export class ControlPanelComponent implements Component {
 		// changes automatically take effect.
 	}
 
+	private currentMotionWidth(): number {
+		const width = this.motionOptions?.getRenderWidth?.() ?? this.lastRenderWidth;
+		return width > 0 ? width : MIN_BANNER_WIDTH;
+	}
+
+	/** Stop motion timer and dispose resources. Idempotent. */
+	dispose(): void {
+		if (this.motionTimerId !== undefined) {
+			clearInterval(this.motionTimerId);
+			this.motionTimerId = undefined;
+		}
+		this.motionPhase = "static";
+		this.motionStartMs = 0;
+	}
+
+	/**
+	 * Stop motion and request a final static render. Safe to call multiple times.
+	 * Public so interactive-mode can call it on first submit / busy start.
+	 */
+	stopMotion(): void {
+		const hadTimer = this.motionTimerId !== undefined;
+		this.dispose();
+		if (hadTimer) {
+			this.motionOptions?.requestRender();
+		}
+	}
+
+	private startMotion(): void {
+		const opts = this.motionOptions;
+		if (!opts) return;
+		if (this.motionTimerId !== undefined) return; // already running
+
+		const noColor = process.env.NO_COLOR !== undefined;
+		const colorMode = theme.getColorMode();
+		const width = this.currentMotionWidth();
+
+		if (
+			!shouldAnimate({
+				phase: "intro",
+				isTTY: opts.isTTY(),
+				noColor,
+				colorMode,
+				expanded: this.expanded,
+				width,
+				reducedMotion: opts.isReducedMotion(),
+				busy: false,
+				headerVisibleHint: opts.isHeaderVisibleHint(),
+				idleDriftEnabled: opts.isIdleDriftEnabled(),
+			})
+		) {
+			return;
+		}
+
+		this.motionPhase = "intro";
+		this.motionStartMs = (opts.now ?? Date.now)();
+		this.motionTimerId = setInterval(() => this.tick(), 100);
+		if (this.motionTimerId && typeof this.motionTimerId === "object" && "unref" in this.motionTimerId) {
+			this.motionTimerId.unref();
+		}
+		opts.requestRender();
+	}
+
+	private tick(): void {
+		const opts = this.motionOptions;
+		if (!opts) {
+			this.stopMotionToStatic();
+			return;
+		}
+
+		const now = (opts.now ?? Date.now)();
+		const noColor = process.env.NO_COLOR !== undefined;
+		const colorMode = theme.getColorMode();
+
+		// Gate check: if conditions are no longer favorable, stop.
+		if (
+			!shouldAnimate({
+				phase: this.motionPhase === "idle" ? "idle" : "intro",
+				isTTY: opts.isTTY(),
+				noColor,
+				colorMode,
+				expanded: this.expanded,
+				width: this.currentMotionWidth(),
+				reducedMotion: opts.isReducedMotion(),
+				busy: false,
+				headerVisibleHint: opts.isHeaderVisibleHint(),
+				idleDriftEnabled: opts.isIdleDriftEnabled(),
+			})
+		) {
+			this.stopMotionToStatic();
+			return;
+		}
+
+		if (this.motionPhase === "intro") {
+			const elapsed = now - this.motionStartMs;
+			if (elapsed >= INTRO_MS) {
+				if (opts.isIdleDriftEnabled()) {
+					this.motionPhase = "idle";
+					this.motionStartMs = now;
+				} else {
+					this.stopMotionToStatic();
+					return;
+				}
+			}
+		}
+
+		if (this.motionPhase === "idle") {
+			const idleElapsed = now - this.motionStartMs;
+			if (idleElapsed >= IDLE_MS) {
+				this.stopMotionToStatic();
+				return;
+			}
+		}
+
+		opts.requestRender();
+	}
+
+	private stopMotionToStatic(): void {
+		const hadTimer = this.motionTimerId !== undefined;
+		this.dispose();
+		if (hadTimer) {
+			this.motionOptions?.requestRender();
+		}
+	}
+
 	render(width: number): string[] {
 		if (width <= 0) {
 			return [];
 		}
 
+		this.lastRenderWidth = width;
 		return this.expanded ? this.renderExpanded(width) : this.renderCompact(width);
 	}
 

@@ -9,6 +9,7 @@ export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
+import commandSafetyGate from "./extensions/builtin/command-safety-gate.ts";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.ts";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.ts";
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.ts";
@@ -18,6 +19,14 @@ import { SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import { createSourceInfo, type SourceInfo } from "./source-info.ts";
+
+export interface ContextFile {
+	path: string;
+	content: string;
+	isGlobal?: boolean;
+	containsJailbreak?: boolean;
+	sanitized?: boolean;
+}
 
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -30,7 +39,7 @@ export interface ResourceLoader {
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
-	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	getAgentsFiles(): { agentsFiles: ContextFile[] };
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -54,7 +63,7 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
+function loadContextFileFromDir(dir: string): ContextFile | null {
 	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
@@ -72,23 +81,27 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 	return null;
 }
 
-export function loadProjectContextFiles(options: {
-	cwd: string;
-	agentDir: string;
-}): Array<{ path: string; content: string }> {
+function isGlobalContextFile(file: ContextFile, agentDir: string): boolean {
+	const resolvedAgentDir = resolvePath(agentDir);
+	const normalizedPath = resolve(file.path);
+	const parentDir = resolve(normalizedPath, "..");
+	return parentDir === resolvedAgentDir;
+}
+
+export function loadProjectContextFiles(options: { cwd: string; agentDir: string }): ContextFile[] {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
 
-	const contextFiles: Array<{ path: string; content: string }> = [];
+	const contextFiles: ContextFile[] = [];
 	const seenPaths = new Set<string>();
 
 	const globalContext = loadContextFileFromDir(resolvedAgentDir);
 	if (globalContext) {
-		contextFiles.push(globalContext);
+		contextFiles.push({ ...globalContext, isGlobal: true });
 		seenPaths.add(globalContext.path);
 	}
 
-	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
+	const ancestorContextFiles: ContextFile[] = [];
 
 	let currentDir = resolvedCwd;
 	const root = resolve("/");
@@ -96,7 +109,10 @@ export function loadProjectContextFiles(options: {
 	while (true) {
 		const contextFile = loadContextFileFromDir(currentDir);
 		if (contextFile && !seenPaths.has(contextFile.path)) {
-			ancestorContextFiles.unshift(contextFile);
+			ancestorContextFiles.unshift({
+				...contextFile,
+				isGlobal: isGlobalContextFile(contextFile, resolvedAgentDir),
+			});
 			seenPaths.add(contextFile.path);
 		}
 
@@ -142,8 +158,8 @@ export interface DefaultResourceLoaderOptions {
 		themes: Theme[];
 		diagnostics: ResourceDiagnostic[];
 	};
-	agentsFilesOverride?: (base: { agentsFiles: Array<{ path: string; content: string }> }) => {
-		agentsFiles: Array<{ path: string; content: string }>;
+	agentsFilesOverride?: (base: { agentsFiles: ContextFile[] }) => {
+		agentsFiles: ContextFile[];
 	};
 	systemPromptOverride?: (base: string | undefined) => string | undefined;
 	appendSystemPromptOverride?: (base: string[]) => string[];
@@ -180,8 +196,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		themes: Theme[];
 		diagnostics: ResourceDiagnostic[];
 	};
-	private agentsFilesOverride?: (base: { agentsFiles: Array<{ path: string; content: string }> }) => {
-		agentsFiles: Array<{ path: string; content: string }>;
+	private agentsFilesOverride?: (base: { agentsFiles: ContextFile[] }) => {
+		agentsFiles: ContextFile[];
 	};
 	private systemPromptOverride?: (base: string | undefined) => string | undefined;
 	private appendSystemPromptOverride?: (base: string[]) => string[];
@@ -195,7 +211,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private promptDiagnostics: ResourceDiagnostic[];
 	private themes: Theme[];
 	private themeDiagnostics: ResourceDiagnostic[];
-	private agentsFiles: Array<{ path: string; content: string }>;
+	private agentsFiles: ContextFile[];
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
 	private lastSkillPaths: string[];
@@ -269,7 +285,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return { themes: this.themes, diagnostics: this.themeDiagnostics };
 	}
 
-	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
+	getAgentsFiles(): { agentsFiles: ContextFile[] } {
 		return { agentsFiles: this.agentsFiles };
 	}
 
@@ -404,6 +420,18 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.disposeExtensionEventSubscriptions();
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
+		// Built-in command-safety gate runs FIRST: tool_call block short-circuits on
+		// first block and user_bash short-circuits on first truthy result, so this
+		// fail-closed gate must precede every discovered and inline extension.
+		const commandSafetyExtension = await loadExtensionFromFactory(
+			commandSafetyGate,
+			this.cwd,
+			this.eventBus,
+			extensionsResult.runtime,
+			"<builtin:command-safety>",
+		);
+		extensionsResult.extensions.unshift(commandSafetyExtension);
+
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
 		extensionsResult.extensions.push(...inlineExtensions.extensions);
 		extensionsResult.errors.push(...inlineExtensions.errors);

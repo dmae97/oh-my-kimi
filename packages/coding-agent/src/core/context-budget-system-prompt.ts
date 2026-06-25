@@ -2,9 +2,9 @@ import {
 	CONTEXT_BUDGET_POLICY_VERSION,
 	type ContextBudgetItem,
 	type ContextBudgetPlan,
-	type ContextBudgetPriority,
 	planContextBudget,
 } from "./context-budget-governor.ts";
+import { scoreContextFileRelevance, scoreSkillRelevance } from "./context-budget-relevance.ts";
 import {
 	type ContextBudgetTokenizerMode,
 	createTokenCounterForMode,
@@ -22,6 +22,10 @@ export interface SystemPromptContextBudgetOptions {
 	readonly includeSkillInventory?: boolean;
 	readonly includeFullContextFiles?: boolean;
 	readonly tokenCounter?: TokenCounterAdapter;
+	/** Maximum number of inactive (non-active) skills to include as items. Default: 15. */
+	readonly maxInactiveSkills?: number;
+	/** Current user query text for relevance-aware skill ranking. */
+	readonly queryContext?: string;
 }
 
 export interface SystemPromptBudgetedResourcesInput {
@@ -38,6 +42,10 @@ export interface SystemPromptBudgetedResources {
 }
 
 const CONTEXT_EXCERPT_CHARS = 1200;
+const MIN_EXCERPT_CHARS = 400;
+const MAX_EXCERPT_CHARS = 3000;
+const MAX_INACTIVE_SKILLS = 15;
+const CONTEXT_FULL_BUDGET_RATIO = 0.5;
 
 export function renderSystemPromptBudgetedResources(
 	input: SystemPromptBudgetedResourcesInput,
@@ -47,7 +55,7 @@ export function renderSystemPromptBudgetedResources(
 	const modelId = input.options.modelId ?? "unknown";
 	const baseTokens = tokenCounter.countText(input.basePrompt, modelId).tokens;
 	const resourceBudget = Math.max(0, input.options.maxPromptTokens - baseTokens);
-	const items = createSystemPromptBudgetItems(input);
+	const items = createSystemPromptBudgetItems(input, resourceBudget);
 	const plan = planContextBudget({
 		maxTokens: resourceBudget,
 		responseReserveTokens: input.options.responseReserveTokens ?? 0,
@@ -57,7 +65,8 @@ export function renderSystemPromptBudgetedResources(
 		tokenCounter,
 	});
 	const included = new Set(plan.includedItems.map((item) => item.id));
-	const text = items
+	const filtered = deduplicatePointerFull(items, included);
+	const text = filtered
 		.filter((item) => included.has(item.id))
 		.map((item) => item.text)
 		.join("\n")
@@ -66,16 +75,37 @@ export function renderSystemPromptBudgetedResources(
 	return { text: text ? `${text}\n${note}` : note, plan };
 }
 
-function createSystemPromptBudgetItems(input: SystemPromptBudgetedResourcesInput): ContextBudgetItem[] {
+function computeExcerptChars(resourceBudget: number, contextFullCount: number): number {
+	if (contextFullCount <= 0) {
+		return CONTEXT_EXCERPT_CHARS;
+	}
+	const allocatedTokens = Math.floor(resourceBudget * CONTEXT_FULL_BUDGET_RATIO) / contextFullCount;
+	const estimatedChars = Math.floor(allocatedTokens * 4);
+	return Math.max(MIN_EXCERPT_CHARS, Math.min(MAX_EXCERPT_CHARS, estimatedChars));
+}
+
+function createSystemPromptBudgetItems(
+	input: SystemPromptBudgetedResourcesInput,
+	resourceBudget: number,
+): ContextBudgetItem[] {
 	const items: ContextBudgetItem[] = [];
+	const contextFullCount = input.options.includeFullContextFiles !== false ? input.contextFiles.length : 0;
+	const excerptChars = computeExcerptChars(resourceBudget, contextFullCount);
+
 	for (const contextFile of input.contextFiles) {
 		const scope = contextFile.isGlobal ? "parent" : "project";
 		const tagName = contextFile.isGlobal ? "parent_instructions" : "project_instructions";
+		const queryScore = scoreContextFileRelevance(
+			{ path: contextFile.path, content: contextFile.content, isGlobal: contextFile.isGlobal ?? false },
+			input.options.queryContext,
+		);
+		const basePointer = contextFile.isGlobal ? 1 : 0.8;
+		const baseFull = contextFile.isGlobal ? 0.9 : 0.6;
 		items.push({
 			id: `context-pointer:${contextFile.path}`,
 			kind: "context-pointer",
 			priority: contextFile.isGlobal ? "hard" : "high",
-			relevance: contextFile.isGlobal ? 1 : 0.8,
+			relevance: basePointer * 0.4 + queryScore * 0.6,
 			text: renderContextPointer(contextFile, scope),
 		});
 		if (input.options.includeFullContextFiles !== false) {
@@ -83,9 +113,9 @@ function createSystemPromptBudgetItems(input: SystemPromptBudgetedResourcesInput
 				id: `context-full:${contextFile.path}`,
 				kind: "context-full",
 				priority: contextFile.isGlobal ? "high" : "medium",
-				relevance: contextFile.isGlobal ? 0.9 : 0.6,
+				relevance: baseFull * 0.4 + queryScore * 0.6,
 				redundancyKey: contextFile.path,
-				text: renderContextFull(contextFile, tagName),
+				text: renderContextFull(contextFile, tagName, excerptChars),
 			});
 		}
 	}
@@ -94,17 +124,54 @@ function createSystemPromptBudgetItems(input: SystemPromptBudgetedResourcesInput
 	if (input.includeSkills && input.options.includeSkillInventory !== false && visibleSkills.length > 0) {
 		items.push({ id: "skill-header", kind: "skill-header", priority: "hard", text: renderSkillHeader() });
 		const activeSkillNames = new Set(input.options.activeSkillNames ?? []);
-		for (const skill of visibleSkills) {
+		const maxInactive = input.options.maxInactiveSkills ?? MAX_INACTIVE_SKILLS;
+
+		// R2a: Active skills — always included at hard priority
+		const activeSkills = visibleSkills.filter((skill) => activeSkillNames.has(skill.name));
+		for (const skill of activeSkills) {
 			items.push({
 				id: `skill:${skill.name}`,
 				kind: "skill",
-				priority: skillPriority(skill.name, activeSkillNames),
-				relevance: activeSkillNames.has(skill.name) ? 1 : 0.25,
+				priority: "hard",
+				relevance: 1,
 				redundancyKey: skill.name,
 				text: renderSkillEntry(skill),
 			});
 		}
+
+		// R2b: Inactive skills — top N by query-aware relevance, rest summarized
+		const inactiveSkills = visibleSkills.filter((skill) => !activeSkillNames.has(skill.name));
+		const queryContext = input.options.queryContext;
+		const sortedInactive = [...inactiveSkills].sort(
+			(a, b) => scoreSkillRelevance(b, queryContext) - scoreSkillRelevance(a, queryContext),
+		);
+		const includedInactive = sortedInactive.slice(0, maxInactive);
+		const omittedInactiveCount = sortedInactive.length - includedInactive.length;
+
+		for (const skill of includedInactive) {
+			const relevance = Math.max(0.25, scoreSkillRelevance(skill, queryContext));
+			items.push({
+				id: `skill:${skill.name}`,
+				kind: "skill",
+				priority: "low",
+				relevance,
+				redundancyKey: skill.name,
+				text: renderSkillEntry(skill),
+			});
+		}
+
 		items.push({ id: "skill-footer", kind: "skill-header", priority: "hard", text: "</available_skills>" });
+
+		// R2c: Summary footer for omitted inactive skills
+		if (omittedInactiveCount > 0) {
+			items.push({
+				id: "skill-omitted-summary",
+				kind: "skill-header",
+				priority: "low",
+				relevance: 0.1,
+				text: renderSkillOmittedSummary(omittedInactiveCount),
+			});
+		}
 	}
 	return items;
 }
@@ -114,19 +181,29 @@ function renderContextPointer(contextFile: ContextFile, scope: string): string {
 	return `<context_file_pointer scope="${escapeXml(scope)}" path="${escapeXml(contextFile.path)}"${marker} chars="${contextFile.content.length}" />`;
 }
 
-function renderContextFull(contextFile: ContextFile, tagName: string): string {
+function renderContextFull(contextFile: ContextFile, tagName: string, excerptChars = CONTEXT_EXCERPT_CHARS): string {
 	const content =
-		contextFile.content.length > CONTEXT_EXCERPT_CHARS ? boundedExcerpt(contextFile.content) : contextFile.content;
+		contextFile.content.length > excerptChars
+			? boundedExcerpt(contextFile.content, excerptChars)
+			: contextFile.content;
 	const truncated = content.length < contextFile.content.length ? " truncated=true" : "";
 	return `<${tagName} path="${escapeXml(contextFile.path)}"${truncated}>\n${content}\n</${tagName}>`;
 }
 
-function boundedExcerpt(content: string): string {
-	const headChars = Math.floor(CONTEXT_EXCERPT_CHARS * 0.7);
-	const tailChars = CONTEXT_EXCERPT_CHARS - headChars;
-	const head = content.slice(0, headChars).trimEnd();
-	const tail = content.slice(-tailChars).trimStart();
-	return `${head}\n\n[...context-budget excerpt omitted ${content.length - CONTEXT_EXCERPT_CHARS} chars...]\n\n${tail}`;
+function boundedExcerpt(content: string, excerptChars = CONTEXT_EXCERPT_CHARS): string {
+	const headChars = Math.floor(excerptChars * 0.7);
+	const tailChars = excerptChars - headChars;
+	let head = content.slice(0, headChars);
+	const lastSpace = head.search(/\s+\S*$/);
+	if (lastSpace > headChars * 0.5) {
+		head = head.slice(0, lastSpace);
+	}
+	let tail = content.slice(-tailChars);
+	const firstSpace = tail.search(/\S+\s+/);
+	if (firstSpace > 0 && firstSpace < tailChars * 0.5) {
+		tail = tail.slice(firstSpace).trimStart();
+	}
+	return `${head}\n\n[...context-budget excerpt omitted ${content.length - excerptChars} chars...]\n\n${tail}`;
 }
 
 function renderSkillHeader(): string {
@@ -149,8 +226,8 @@ function renderSkillEntry(skill: Skill): string {
 	].join("\n");
 }
 
-function skillPriority(skillName: string, activeSkillNames: Set<string>): ContextBudgetPriority {
-	return activeSkillNames.has(skillName) ? "hard" : "low";
+function renderSkillOmittedSummary(omittedCount: number): string {
+	return `<!-- ${omittedCount} additional skills available. Use 'read' to load a specific skill file when a task matches. -->`;
 }
 
 function renderBudgetNote(plan: ContextBudgetPlan, baseTokens: number): string {
@@ -167,6 +244,33 @@ function renderBudgetNote(plan: ContextBudgetPlan, baseTokens: number): string {
 		"  <note>Some low-priority resource inventory may be represented by pointers. Use read on referenced paths when needed.</note>",
 		"</context_budget>",
 	].join("\n");
+}
+
+/**
+ * R3: When a context-full item is included, exclude the matching pointer
+ * so the same file does not consume tokens twice.
+ */
+function deduplicatePointerFull(
+	items: readonly ContextBudgetItem[],
+	included: ReadonlySet<string>,
+): readonly ContextBudgetItem[] {
+	const includedFullPaths = new Set<string>();
+	for (const item of items) {
+		if (item.kind === "context-full" && included.has(item.id)) {
+			const path = item.id.slice("context-full:".length);
+			includedFullPaths.add(path);
+		}
+	}
+	if (includedFullPaths.size === 0) {
+		return items;
+	}
+	return items.filter((item) => {
+		if (item.kind !== "context-pointer") {
+			return true;
+		}
+		const path = item.id.slice("context-pointer:".length);
+		return !includedFullPaths.has(path);
+	});
 }
 
 function escapeXml(str: string): string {

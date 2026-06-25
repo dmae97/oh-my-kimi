@@ -156,7 +156,10 @@ export function scoreContextBudgetItem(item: ContextBudgetItem, estimatedTokens:
 	const relevance = clampScore(item.relevance) * 20;
 	const recency = clampScore(item.recency) * 10;
 	const evidence = clampScore(item.evidenceValue) * 15;
-	const costPenalty = Math.log2(Math.max(estimatedTokens, 1)) * 2;
+	// G1: costPenalty 비례화 — sqrt 기반으로 대항목에 더 큰 불이익 부여.
+	// log2(t)*2는 1000토큰에서 ~19.9점으로 relevance(20점)와 동급 → 대항목 생존.
+	// sqrt(t)*0.5는 1000토큰 15.8점, 5000토큰 35.4점, 10000토큰 50점 → 비례적 증가.
+	const costPenalty = Math.sqrt(estimatedTokens) * 0.5;
 	return priorityScore + relevance + recency + evidence - costPenalty;
 }
 
@@ -176,6 +179,23 @@ function planItem(
 	};
 }
 
+const REDUNDANCY_PENALTY_FLOOR = 10;
+const REDUNDANCY_PENALTY_SCALE = 0.8;
+
+/**
+ * W4: Adaptive redundancy penalty — proportional to token count.
+ * Large duplicates waste more budget so deserve higher penalty.
+ * Formula: max(floor, sqrt(tokens) * scale)
+ * - 200 tokens → 11.3   (near floor — minimal waste)
+ * - 1000 tokens → 25.3  (moderate waste)
+ * - 5000 tokens → 56.6  (heavy waste — strongly penalized)
+ * Floor ensures small duplicates are still penalized meaningfully.
+ * Scale (0.8) tuned to score medium=50 so large duplicates go negative.
+ */
+function redundancyPenalty(estimatedTokens: number): number {
+	return Math.max(REDUNDANCY_PENALTY_FLOOR, Math.sqrt(estimatedTokens) * REDUNDANCY_PENALTY_SCALE);
+}
+
 function applyRedundancyPenalty(
 	item: ContextBudgetPlannedItem,
 	selectedRedundancyKeys: Set<string>,
@@ -183,17 +203,39 @@ function applyRedundancyPenalty(
 	if (!item.redundancyKey || !selectedRedundancyKeys.has(item.redundancyKey)) {
 		return item;
 	}
-	return { ...item, score: item.score - 20 };
+	return { ...item, score: item.score - redundancyPenalty(item.estimatedTokens) };
 }
 
 function comparePlannedItemsForSelection(a: ContextBudgetPlannedItem, b: ContextBudgetPlannedItem): number {
-	if (b.score !== a.score) {
-		return b.score - a.score;
+	// G2: 우선순위 티어 내부에서 밀도(score/tokens) 기반 정렬.
+	// 단위 토큰당 가치가 높은 항목을 우선 선택 → 예산 활용률 극대화.
+	const aTier = priorityTier(a.priority);
+	const bTier = priorityTier(b.priority);
+	if (aTier !== bTier) {
+		return aTier - bTier;
+	}
+	const aDensity = a.score > 0 ? a.score / Math.max(a.estimatedTokens, 1) : 0;
+	const bDensity = b.score > 0 ? b.score / Math.max(b.estimatedTokens, 1) : 0;
+	if (aDensity !== bDensity) {
+		return bDensity - aDensity;
 	}
 	if (a.estimatedTokens !== b.estimatedTokens) {
 		return a.estimatedTokens - b.estimatedTokens;
 	}
 	return a.id.localeCompare(b.id);
+}
+
+function priorityTier(priority: ContextBudgetPriority): number {
+	switch (priority) {
+		case "hard":
+			return 0;
+		case "high":
+			return 1;
+		case "medium":
+			return 2;
+		case "low":
+			return 3;
+	}
 }
 
 function priorityWeight(priority: ContextBudgetPriority): number {

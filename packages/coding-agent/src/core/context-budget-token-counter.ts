@@ -82,6 +82,7 @@ export function estimateTextTokens(input: string, modelId = "unknown"): TokenCou
 	let whitespace = 0;
 	let cjk = 0;
 	let hangul = 0;
+	let kana = 0;
 	let emojiOrWide = 0;
 	let punctuation = 0;
 	let other = 0;
@@ -92,7 +93,9 @@ export function estimateTextTokens(input: string, modelId = "unknown"): TokenCou
 			whitespace += 1;
 		} else if (isHangul(codePoint)) {
 			hangul += 1;
-		} else if (isCjk(codePoint)) {
+		} else if (isHiraganaOrKatakana(codePoint)) {
+			kana += 1;
+		} else if (isCjkIdeograph(codePoint)) {
 			cjk += 1;
 		} else if (isAsciiAlphaNumeric(codePoint) || char === "_") {
 			asciiWord += 1;
@@ -107,29 +110,39 @@ export function estimateTextTokens(input: string, modelId = "unknown"): TokenCou
 
 	const codeLike = looksCodeLike(input, punctuation, whitespace);
 	const jsonLike = looksJsonLike(input);
+	const nonAsciiRatio = (hangul + cjk + kana + emojiOrWide + other) / Math.max(1, input.length);
 	const base =
 		asciiWord / (codeLike ? 3.2 : 4) +
 		whitespace / 12 +
 		punctuation / 2.1 +
-		hangul / 1.35 +
+		hangul / 0.95 +
+		kana / 1.0 +
 		cjk / 1.2 +
 		emojiOrWide * 1.8 +
 		other / 2;
 	const adjusted = base * (jsonLike ? 1.12 : 1) * (codeLike ? 1.08 : 1);
 	const tokens = Math.max(1, Math.ceil(adjusted));
+	const compositionParts: string[] = [];
+	if (hangul > 0) compositionParts.push(`hangul:${hangul}`);
+	if (kana > 0) compositionParts.push(`kana:${kana}`);
+	if (cjk > 0) compositionParts.push(`cjk:${cjk}`);
+	if (asciiWord > 0) compositionParts.push(`ascii:${asciiWord}`);
+	if (emojiOrWide > 0) compositionParts.push(`emoji:${emojiOrWide}`);
 	const notes = [
 		codeLike ? "code-like" : "prose-like",
 		jsonLike ? "json-like" : "not-json-like",
-		hangul + cjk > 0 ? "cjk-or-hangul" : "latin-heavy",
+		nonAsciiRatio > 0 ? `non-ascii:${(nonAsciiRatio * 100).toFixed(0)}%` : "latin-only",
+		`composition(${compositionParts.join(",")})`,
 	];
-	const confidence: ContextBudgetTokenConfidence = hangul + cjk + emojiOrWide > input.length / 4 ? "low" : "medium";
+	const confidence: ContextBudgetTokenConfidence =
+		nonAsciiRatio > 0.4 ? "low" : nonAsciiRatio > 0.15 ? "medium" : "high";
 	return createTokenResult(tokens, "estimated", confidence, "fallback-estimator", modelId, notes);
 }
 
 export function createOpenAiJsTokenCounter(
 	loader: OptionalModuleLoader = createNodeOptionalModuleLoader(),
 ): TokenCounterAdapter {
-	const packageNames = ["js-tiktoken", "gpt-tokenizer"] as const;
+	const packageNames = ["js-tiktoken", "gpt-tokenizer", "tiktoken"] as const;
 	return {
 		id: "openai-bpe-js",
 		priority: 80,
@@ -320,19 +333,45 @@ function isAsciiPunctuation(codePoint: number): boolean {
 }
 
 function isHangul(codePoint: number): boolean {
-	return (codePoint >= 0xac00 && codePoint <= 0xd7af) || (codePoint >= 0x1100 && codePoint <= 0x11ff);
+	// Composed syllables (가-힣)
+	if (codePoint >= 0xac00 && codePoint <= 0xd7af) return true;
+	// Jamo: initial (ㄱ-ㅎ), medial (ㅏ-ㅣ)
+	if (codePoint >= 0x1100 && codePoint <= 0x11ff) return true;
+	// Compatibility jamo (ㄱ-ㅎ, ㅏ-ㅣ) and Hangul letters
+	if (codePoint >= 0x3130 && codePoint <= 0x318f) return true;
+	// Extended jamo
+	if (codePoint >= 0xa960 && codePoint <= 0xa97c) return true;
+	return false;
 }
 
-function isCjk(codePoint: number): boolean {
-	return (
-		(codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
-		(codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
-		(codePoint >= 0x3040 && codePoint <= 0x30ff)
-	);
+function isHiraganaOrKatakana(codePoint: number): boolean {
+	// Hiragana (ぁ-より)
+	if (codePoint >= 0x3040 && codePoint <= 0x309f) return true;
+	// Katakana (ァ-ヿ) + halfwidth katakana
+	if (codePoint >= 0x30a0 && codePoint <= 0x30ff) return true;
+	if (codePoint >= 0xff65 && codePoint <= 0xff9f) return true;
+	return false;
+}
+
+function isCjkIdeograph(codePoint: number): boolean {
+	// CJK Unified Ideographs (main block: 中, 国, etc.)
+	if (codePoint >= 0x4e00 && codePoint <= 0x9fff) return true;
+	// CJK Extension A (rare)
+	if (codePoint >= 0x3400 && codePoint <= 0x4dbf) return true;
+	// CJK compatibility ideographs
+	if (codePoint >= 0xf900 && codePoint <= 0xfaff) return true;
+	return false;
 }
 
 function isEmojiOrWideSymbol(codePoint: number): boolean {
-	return codePoint >= 0x1f000 || (codePoint >= 0x2600 && codePoint <= 0x27bf);
+	// Main emoji blocks
+	if (codePoint >= 0x1f000) return true;
+	// Misc symbols, dingbats
+	if (codePoint >= 0x2600 && codePoint <= 0x27bf) return true;
+	// CJK fullwidth/special forms that occupy double width
+	if (codePoint >= 0xff01 && codePoint <= 0xff60) return true;
+	if (codePoint >= 0xffe0 && codePoint <= 0xffe6) return true;
+	return false;
 }
 
 function looksJsonLike(input: string): boolean {

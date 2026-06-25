@@ -7,7 +7,9 @@ import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { AuthStorage } from "./auth-storage.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { createDomainDispatchRuntimeSession, isDomainRoutingEnabled, tryDomainDispatch } from "./domain-dispatch.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import type { LoadoutAccessPolicy } from "./loadout-access-policy.ts";
 import { convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import { findInitialModel } from "./model-resolver.ts";
@@ -17,7 +19,9 @@ import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { time } from "./timings.ts";
+import type { BashSandboxPreflight } from "./tools/bash.ts";
 import {
+	allToolNames,
 	createBashTool,
 	createCodingTools,
 	createEditTool,
@@ -80,6 +84,15 @@ export interface CreateAgentSessionOptions {
 	settingsManager?: SettingsManager;
 	/** Session start event metadata for extension runtime startup. */
 	sessionStartEvent?: SessionStartEvent;
+	/**
+	 * Optional prompt hint used only for opt-in domain routing (`OMK_DOMAIN_ROUTING=1`).
+	 * This text only selects a loadout policy and is never sent to the model.
+	 */
+	domainRoutingPrompt?: string;
+	/** Optional loadout enforcement policy for SDK-created sessions. */
+	loadoutAccessPolicy?: LoadoutAccessPolicy;
+	/** Trusted sandbox preflight used for built-in local bash execution. */
+	bashSandboxPreflight?: BashSandboxPreflight;
 }
 
 /** Result from createAgentSession */
@@ -126,6 +139,53 @@ export {
 
 function getDefaultAgentDir(): string {
 	return getAgentDir();
+}
+
+function getDomainDispatchBaseToolNames(options: CreateAgentSessionOptions): string[] {
+	if (!options.tools && (options.noTools === "all" || options.noTools === "builtin")) {
+		return [];
+	}
+	return [...allToolNames];
+}
+
+function getAllowedToolNamesForDomainDispatch(options: CreateAgentSessionOptions): string[] | undefined {
+	return options.tools ?? (options.noTools === "all" ? [] : undefined);
+}
+
+function createEffectiveLoadoutAccessPolicy(
+	options: CreateAgentSessionOptions,
+	resourceLoader: ResourceLoader,
+	cwd: string,
+	agentDir: string,
+): LoadoutAccessPolicy | undefined {
+	if (options.loadoutAccessPolicy) {
+		return options.loadoutAccessPolicy;
+	}
+	const domainRoutingPrompt = options.domainRoutingPrompt?.trim();
+	if (!domainRoutingPrompt || !isDomainRoutingEnabled(process.env)) {
+		return undefined;
+	}
+
+	try {
+		const dispatch = tryDomainDispatch({
+			role: "coder",
+			initialPrompt: domainRoutingPrompt,
+			session: createDomainDispatchRuntimeSession({
+				baseToolNames: getDomainDispatchBaseToolNames(options),
+				resourceLoader,
+				customTools: options.customTools,
+				allowedToolNames: getAllowedToolNamesForDomainDispatch(options),
+				excludedToolNames: options.excludeTools,
+			}),
+			resourceLoader,
+			cwd,
+			agentDir,
+			env: process.env,
+		});
+		return dispatch.loadoutAccessPolicy;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -182,6 +242,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		await resourceLoader.reload();
 		time("resourceLoader.reload");
 	}
+
+	// Compute effective loadout access policy from explicit option or opt-in domain routing hint.
+	// The policy is not wired into AgentSession in this lane; it is computed here so the option
+	// surface exists and downstream lanes can apply it without changing the public type again.
+	const effectiveLoadoutAccessPolicy = createEffectiveLoadoutAccessPolicy(options, resourceLoader, cwd, agentDir);
 
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
@@ -385,6 +450,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
+		loadoutAccessPolicy: effectiveLoadoutAccessPolicy,
+		bashSandboxPreflight: options.bashSandboxPreflight,
 		sessionStartEvent: options.sessionStartEvent,
 	});
 	const extensionsResult = resourceLoader.getExtensions();

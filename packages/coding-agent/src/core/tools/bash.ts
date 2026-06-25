@@ -15,7 +15,10 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
+import { classifyShellCommand } from "../command-safety.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import type { SandboxBackendStatus, SandboxPathResolver, SandboxPlatform, SandboxPolicy } from "../sandbox/policy.ts";
+import { buildSandboxedSpawnRequest } from "../sandbox/spawn.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -61,25 +64,51 @@ export interface BashOperations {
  * Create bash operations using pi's built-in local shell execution backend.
  *
  * This is useful for extensions that intercept user_bash and still want pi's
- * standard local shell behavior while wrapping or rewriting commands.
+ * standard local shell behavior while wrapping, sandboxing, or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
+export function createLocalBashOperations(options?: {
+	shellPath?: string;
+	sandboxPolicy?: BashSandboxPreflight;
+}): BashOperations {
+	const sandbox = options?.sandboxPolicy;
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const { shell, args } = getShellConfig(options?.shellPath);
+			let spawnCommand = shell;
+			let spawnArgs = [...args, command];
+			let spawnCwd = cwd;
+			let spawnEnv: NodeJS.ProcessEnv = env ?? getShellEnv();
+			if (sandbox) {
+				const backend = sandbox.backend ?? defaultBashSandboxBackend();
+				const request = buildSandboxedSpawnRequest({
+					argv: [shell, ...args, command],
+					cwd,
+					env: spawnEnv,
+					policy: sandbox.policy,
+					backend,
+					resolver: sandbox.resolver,
+				});
+				if (!request.allowed) {
+					throw new Error(`sandbox: shell denied\n[${request.rule}] ${request.reason}`);
+				}
+				spawnCommand = request.argv[0];
+				spawnArgs = [...request.argv.slice(1)];
+				spawnCwd = request.cwd;
+				spawnEnv = request.env;
+			}
 			try {
-				await fsAccess(cwd, constants.F_OK);
+				await fsAccess(spawnCwd, constants.F_OK);
 			} catch {
-				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
+				throw new Error(`Working directory does not exist: ${spawnCwd}\nCannot execute bash commands.`);
 			}
 			if (signal?.aborted) {
 				throw new Error("aborted");
 			}
 
-			const child = spawn(shell, [...args, command], {
-				cwd,
+			const child = spawn(spawnCommand, spawnArgs, {
+				cwd: spawnCwd,
 				detached: process.platform !== "win32",
-				env: env ?? getShellEnv(),
+				env: spawnEnv,
 				stdio: ["ignore", "pipe", "pipe"],
 				windowsHide: true,
 			});
@@ -125,6 +154,31 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 	};
 }
 
+/**
+ * Sandbox preflight inputs for local bash operations. When provided to
+ * {@link createLocalBashOperations}, every spawn is gated by the sandbox spawn
+ * builder: shell is denied when an OS sandbox backend is missing under enforce
+ * mode, the environment is filtered, and available backends wrap the spawned
+ * command. When omitted, local bash behavior is unchanged.
+ */
+export interface BashSandboxPreflight {
+	/** Policy that decides whether this spawn may proceed. */
+	policy: SandboxPolicy;
+	/**
+	 * Availability of an OS-level sandbox backend. Defaults to no backend, since
+	 * no OS sandbox wrapper is wired into the local spawn path yet.
+	 */
+	backend?: SandboxBackendStatus;
+	/** Optional resolver used to canonicalize the working directory before the root check. */
+	resolver?: SandboxPathResolver;
+}
+
+function defaultBashSandboxBackend(): SandboxBackendStatus {
+	const platform: SandboxPlatform =
+		process.platform === "linux" ? "linux" : process.platform === "darwin" ? "macos" : "unsupported";
+	return { platform, backendAvailable: false };
+}
+
 export interface BashSpawnContext {
 	command: string;
 	cwd: string;
@@ -145,6 +199,8 @@ export interface BashToolOptions {
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
 	shellPath?: string;
+	/** Trusted sandbox policy for local shell execution */
+	sandboxPolicy?: BashSandboxPreflight;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
 }
@@ -270,7 +326,9 @@ export function createBashToolDefinition(
 	cwd: string,
 	options?: BashToolOptions,
 ): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
-	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
+	const ops =
+		options?.operations ??
+		createLocalBashOperations({ shellPath: options?.shellPath, sandboxPolicy: options?.sandboxPolicy });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
 	return {
@@ -288,6 +346,16 @@ export function createBashToolDefinition(
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+
+			// Non-negotiable safety floor: re-classify the EFFECTIVE command after
+			// commandPrefix and spawnHook have been applied, so a destructive command
+			// injected by a prefix/hook (or issued by an SDK consumer that bypasses the
+			// extension gate) is still hard-blocked. Only block-tier verdicts stop here.
+			const effectiveVerdict = classifyShellCommand(spawnContext.command);
+			if (effectiveVerdict.risk === "block") {
+				throw new Error(`command-safety: blocked\n[${effectiveVerdict.rule}] ${effectiveVerdict.reason}`);
+			}
+
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;

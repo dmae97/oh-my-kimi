@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { basename, dirname, join, relative, resolve, sep } from "path";
@@ -78,6 +79,7 @@ export interface Skill {
 	baseDir: string;
 	sourceInfo: SourceInfo;
 	disableModelInvocation: boolean;
+	contentHash?: string;
 }
 
 export interface LoadSkillsResult {
@@ -314,6 +316,7 @@ function loadSkillFromFile(
 				baseDir: skillDir,
 				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+				contentHash: hashSkillContent(rawContent),
 			},
 			diagnostics,
 		};
@@ -369,6 +372,10 @@ function escapeXml(str: string): string {
 		.replace(/'/g, "&apos;");
 }
 
+function hashSkillContent(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
+}
+
 export interface LoadSkillsOptions {
 	/** Working directory for project-local skills. */
 	cwd: string;
@@ -409,6 +416,10 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 			const existing = skillMap.get(skill.name);
 			if (existing) {
+				realPathSet.add(realPath);
+				if (existing.contentHash && existing.contentHash === skill.contentHash) {
+					continue;
+				}
 				collisionDiagnostics.push({
 					type: "collision",
 					message: `name "${skill.name}" collision`,

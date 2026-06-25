@@ -39,6 +39,7 @@ import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+import { classifyShellCommand } from "./command-safety.ts";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -53,6 +54,11 @@ import {
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
+import {
+	buildBlockedBashResult,
+	evaluateCommandGate,
+	isCommandSafetyAssumeYesEnabled,
+} from "./extensions/builtin/command-safety-gate.ts";
 import {
 	type ContextUsage,
 	type ExtensionCommandContextActions,
@@ -80,17 +86,20 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { assertLoadoutAccess, decideLoadoutAccess, type LoadoutAccessPolicy } from "./loadout-access-policy.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { detectSandboxBackend } from "./sandbox/backend.ts";
+import type { SandboxBackendStatus } from "./sandbox/policy.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
-import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import { type BashOperations, type BashSandboxPreflight, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 
@@ -181,6 +190,10 @@ export interface AgentSessionConfig {
 	 * a definition-first registry even when callers provide plain AgentTool instances.
 	 */
 	baseToolsOverride?: Record<string, AgentTool>;
+	/** Trusted sandbox preflight used for built-in local bash execution. Never sourced from RPC command payloads. */
+	bashSandboxPreflight?: BashSandboxPreflight;
+	/** Optional immutable loadout policy used to lock active tools and scope built-in tool access. */
+	loadoutAccessPolicy?: LoadoutAccessPolicy;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
@@ -194,6 +207,14 @@ export interface ExtensionBindings {
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
 	onError?: ExtensionErrorListener;
+}
+
+interface ExecuteBashOptions {
+	excludeFromContext?: boolean;
+	operations?: BashOperations;
+	safetyGate?: "headless";
+	/** Trusted internal/test override for local bash sandboxing. */
+	sandboxPolicy?: BashSandboxPreflight;
 }
 
 /** Options for AgentSession.prompt() */
@@ -250,6 +271,32 @@ interface ToolDefinitionEntry {
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
+function normalizeToolNames(toolNames: readonly string[]): string[] {
+	return [...new Set(toolNames.map((name) => name.trim()).filter((name) => name !== ""))].sort();
+}
+
+function toolNameSetsEqual(left: readonly string[], right: readonly string[]): boolean {
+	const normalizedLeft = normalizeToolNames(left);
+	const normalizedRight = normalizeToolNames(right);
+	return (
+		normalizedLeft.length === normalizedRight.length &&
+		normalizedLeft.every((toolName, index) => toolName === normalizedRight[index])
+	);
+}
+
+function isSandboxDeniedError(error: unknown): error is Error {
+	return error instanceof Error && error.message.startsWith("sandbox: shell denied");
+}
+
+function buildSandboxDeniedBashResult(reason: string): BashResult {
+	return {
+		output: reason,
+		exitCode: 1,
+		cancelled: false,
+		truncated: false,
+	};
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -287,6 +334,8 @@ export class AgentSession {
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
+	private _configuredBashSandboxPreflight: BashSandboxPreflight | undefined = undefined;
+	private _detectedBashSandboxBackend: SandboxBackendStatus | undefined = undefined;
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -301,6 +350,7 @@ export class AgentSession {
 	private _allowedToolNames?: Set<string>;
 	private _excludedToolNames?: Set<string>;
 	private _baseToolsOverride?: Record<string, AgentTool>;
+	private _loadoutAccessPolicy?: LoadoutAccessPolicy;
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionMode: ExtensionMode = "print";
@@ -337,6 +387,8 @@ export class AgentSession {
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
+		this._loadoutAccessPolicy = config.loadoutAccessPolicy;
+		this._configuredBashSandboxPreflight = config.bashSandboxPreflight;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 
 		// Always subscribe to agent events for internal handling
@@ -353,6 +405,15 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	private _getBashSandboxPreflight(override?: BashSandboxPreflight): BashSandboxPreflight | undefined {
+		const preflight = override ?? this._configuredBashSandboxPreflight;
+		if (!preflight || preflight.policy.mode === "off" || preflight.backend) {
+			return preflight;
+		}
+		this._detectedBashSandboxBackend ??= detectSandboxBackend();
+		return { ...preflight, backend: this._detectedBashSandboxBackend };
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -403,6 +464,9 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			if (this._loadoutAccessPolicy && !this._loadoutAccessPolicy.activeTools.includes(toolCall.name)) {
+				throw new Error(`loadout: inactive tool: ${toolCall.name}`);
+			}
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -800,13 +864,24 @@ export class AgentSession {
 	 * Changes take effect on the next agent turn.
 	 */
 	setActiveToolsByName(toolNames: string[]): void {
+		const requestedToolNames = normalizeToolNames(toolNames);
+		const lockedToolNames = this._loadoutAccessPolicy?.activeTools;
+		if (lockedToolNames && !toolNameSetsEqual(requestedToolNames, lockedToolNames)) {
+			throw new Error(
+				`loadout active tools are locked: expected ${lockedToolNames.join(", ") || "(none)"}, received ${requestedToolNames.join(", ") || "(none)"}`,
+			);
+		}
+
+		const desiredToolNames = lockedToolNames ? [...lockedToolNames] : toolNames;
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		for (const name of desiredToolNames) {
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
 				validToolNames.push(name);
+			} else if (lockedToolNames?.includes(name)) {
+				throw new Error(`loadout locked tool unavailable: ${name}`);
 			}
 		}
 		this.agent.state.tools = tools;
@@ -894,6 +969,114 @@ export class AgentSession {
 		return Array.from(unique);
 	}
 
+	/**
+	 * Extract the most recent user query text from conversation messages.
+	 * Returns undefined when no user message exists or content is empty.
+	 * Handles both string content and multimodal (array) content.
+	 */
+	private _extractCurrentQuery(): string | undefined {
+		const messages = this.messages;
+		if (messages.length === 0) {
+			return undefined;
+		}
+		// Scan recent messages (last 3) for the most recent user message
+		const recent = messages.slice(-3);
+		for (let i = recent.length - 1; i >= 0; i--) {
+			const msg = recent[i]!;
+			if (!("role" in msg) || msg.role !== "user") {
+				continue;
+			}
+			const content = (msg as { content: string | (TextContent | ImageContent)[] }).content;
+			if (typeof content === "string") {
+				const trimmed = content.trim();
+				return trimmed.length > 0 ? trimmed : undefined;
+			}
+			if (Array.isArray(content)) {
+				const textParts = content
+					.filter((c): c is TextContent => "type" in c && c.type === "text")
+					.map((c) => c.text);
+				const joined = textParts.join("\n").trim();
+				return joined.length > 0 ? joined : undefined;
+			}
+		}
+		return undefined;
+	}
+
+	private _getContextBudgetOptions(): BuildSystemPromptOptions["contextBudget"] | undefined {
+		if (process.env.OMK_CONTEXT_GOVERNOR !== "1") {
+			return undefined;
+		}
+
+		const contextWindow = this.model?.contextWindow ?? 0;
+
+		// --- maxPromptTokens ---
+		// Priority 1: explicit env override (user knows best)
+		const envMaxPrompt = parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_MAX_PROMPT_TOKENS");
+		let maxPromptTokens: number;
+		let responseReserveTokens: number;
+
+		if (envMaxPrompt !== undefined) {
+			// User override — use as-is for prompt, derive response reserve normally
+			maxPromptTokens = envMaxPrompt;
+			responseReserveTokens =
+				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ??
+				this._computeResponseReserve(contextWindow);
+		} else if (contextWindow > 0) {
+			// Dynamic: derive from model contextWindow
+			const envPromptRatio = parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_PROMPT_RATIO");
+			const envResponseRatio = parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RATIO");
+
+			responseReserveTokens =
+				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ??
+				this._computeResponseReserve(contextWindow, envResponseRatio);
+
+			const safetyMargin = Math.floor(contextWindow * SAFETY_MARGIN_RATIO);
+			if (envPromptRatio !== undefined && envPromptRatio > 0 && envPromptRatio < 1) {
+				maxPromptTokens = Math.floor(contextWindow * envPromptRatio);
+			} else {
+				// Default: contextWindow minus reserves and safety margin
+				maxPromptTokens = contextWindow - responseReserveTokens - safetyMargin;
+			}
+		} else {
+			// No model info — legacy fallback
+			maxPromptTokens = LEGACY_MAX_PROMPT_TOKENS;
+			responseReserveTokens =
+				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ?? LEGACY_RESPONSE_RESERVE_TOKENS;
+		}
+
+		// Enforce floor
+		if (maxPromptTokens < MIN_PROMPT_TOKENS) {
+			maxPromptTokens = MIN_PROMPT_TOKENS;
+		}
+		// Ensure responseReserve does not exceed maxPromptTokens
+		if (responseReserveTokens >= maxPromptTokens) {
+			responseReserveTokens = Math.max(Math.floor(maxPromptTokens / 4), LEGACY_RESPONSE_RESERVE_TOKENS);
+		}
+
+		return {
+			maxPromptTokens,
+			responseReserveTokens,
+			modelId: this.model?.id ?? "unknown",
+			tokenizerMode: parseTokenizerModeEnv(process.env.OMK_CONTEXT_GOVERNOR_TOKENIZER),
+			activeSkillNames: parseCommaSeparatedEnv(process.env.OMK_CONTEXT_GOVERNOR_ACTIVE_SKILLS),
+			queryContext: this._extractCurrentQuery(),
+		};
+	}
+
+	/**
+	 * Compute responseReserveTokens from contextWindow.
+	 * Prefers the model's own maxTokens when available, otherwise uses a ratio.
+	 */
+	private _computeResponseReserve(contextWindow: number, overrideRatio?: number): number {
+		// Prefer model's maxTokens (actual output limit) if available and reasonable
+		const modelMaxTokens = this.model?.maxTokens;
+		if (modelMaxTokens !== undefined && modelMaxTokens > 0 && modelMaxTokens < contextWindow) {
+			return modelMaxTokens;
+		}
+		const ratio = overrideRatio ?? RESPONSE_RESERVE_RATIO;
+		return Math.max(Math.floor(contextWindow * ratio), LEGACY_RESPONSE_RESERVE_TOKENS);
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -926,6 +1109,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			contextBudget: this._getContextBudgetOptions(),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
@@ -2324,6 +2508,15 @@ export class AgentSession {
 				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
 			})),
 		].filter((tool) => isAllowedTool(tool.definition.name));
+		if (this._loadoutAccessPolicy) {
+			const shadowedBuiltins = normalizeToolNames(
+				allCustomTools.map((tool) => tool.definition.name).filter((name) => this._baseToolDefinitions.has(name)),
+			);
+			if (shadowedBuiltins.length > 0) {
+				throw new Error(`loadout extension tool shadows builtin: ${shadowedBuiltins.join(", ")}`);
+			}
+		}
+
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
 			Array.from(this._baseToolDefinitions.entries())
 				.filter(([name]) => isAllowedTool(name))
@@ -2375,6 +2568,17 @@ export class AgentSession {
 			toolRegistry.set(tool.name, tool);
 		}
 		this._toolRegistry = toolRegistry;
+
+		if (this._loadoutAccessPolicy) {
+			const missingLockedTools = this._loadoutAccessPolicy.activeTools.filter(
+				(toolName) => !isAllowedTool(toolName) || !this._toolRegistry.has(toolName),
+			);
+			if (missingLockedTools.length > 0) {
+				throw new Error(`loadout locked tool unavailable: ${missingLockedTools.join(", ")}`);
+			}
+			this.setActiveToolsByName([...this._loadoutAccessPolicy.activeTools]);
+			return;
+		}
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
@@ -2598,32 +2802,80 @@ export class AgentSession {
 	 * @param onChunk Optional streaming callback for output
 	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
 	 * @param options.operations Custom BashOperations for remote execution
+	 * @param options.safetyGate When "headless", pre-classify the command and deny confirm/block-tier verdicts without interactive confirmation
+	 * @param options.sandboxPolicy Trusted sandbox preflight for local bash execution (never sourced from RPC payloads)
 	 */
 	async executeBash(
 		command: string,
 		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean; operations?: BashOperations },
+		options?: ExecuteBashOptions,
 	): Promise<BashResult> {
-		this._bashAbortController = new AbortController();
-
 		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
 		const prefix = this.settingsManager.getShellCommandPrefix();
 		const shellPath = this.settingsManager.getShellPath();
 		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
+		if (this._loadoutAccessPolicy) {
+			assertLoadoutAccess(
+				(request) => decideLoadoutAccess(this._loadoutAccessPolicy as LoadoutAccessPolicy, request),
+				{ operation: "execute", toolName: "bash", command: resolvedCommand },
+			);
+		}
+
+		// Non-negotiable safety floor for headless callers (RPC bash): hard-deny
+		// block-tier commands and credential/secret file access before any shell is
+		// spawned. This mirrors the §0.1 freedom safety floor behavior in omakit.
+		if (options?.safetyGate === "headless") {
+			const floorVerdict = classifyShellCommand(command);
+			if (floorVerdict.risk === "block" || floorVerdict.rule.startsWith("secret.")) {
+				throw new Error(`OMK §0.1 safety floor blocked bash: [${floorVerdict.rule}] ${floorVerdict.reason}`);
+			}
+		}
+
+		// Command-safety parity for non-interactive callers (RPC bash). Interactive
+		// `!`/`!!` bash is gated earlier through the user_bash extension event, which
+		// keeps its prompt-based approval semantics, so it does not pass safetyGate and
+		// is never double-prompted here. confirm/block-tier verdicts deny headlessly;
+		// the EFFECTIVE command (after the shell command prefix) is classified.
+		if (options?.safetyGate === "headless") {
+			const decision = await evaluateCommandGate(resolvedCommand, {
+				hasUI: false,
+				headlessConfirmPolicy: isCommandSafetyAssumeYesEnabled() ? "allow" : "deny",
+			});
+			if (decision?.deny) {
+				const blocked = buildBlockedBashResult(decision.reason);
+				this.recordBashResult(command, blocked, options);
+				return blocked;
+			}
+		}
+
+		this._bashAbortController = new AbortController();
 
 		try {
-			const result = await executeBashWithOperations(
-				resolvedCommand,
-				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
-				{
-					onChunk,
-					signal: this._bashAbortController.signal,
-				},
-			);
+			try {
+				const result = await executeBashWithOperations(
+					resolvedCommand,
+					this.sessionManager.getCwd(),
+					options?.operations ??
+						createLocalBashOperations({
+							shellPath,
+							sandboxPolicy: this._getBashSandboxPreflight(options?.sandboxPolicy),
+						}),
+					{
+						onChunk,
+						signal: this._bashAbortController.signal,
+					},
+				);
 
-			this.recordBashResult(command, result, options);
-			return result;
+				this.recordBashResult(command, result, options);
+				return result;
+			} catch (error) {
+				if (!isSandboxDeniedError(error)) {
+					throw error;
+				}
+				const blocked = buildSandboxDeniedBashResult(error.message);
+				this.recordBashResult(command, blocked, options);
+				return blocked;
+			}
 		} finally {
 			this._bashAbortController = undefined;
 		}
@@ -3154,4 +3406,67 @@ export class AgentSession {
 	get extensionRunner(): ExtensionRunner {
 		return this._extensionRunner;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Context budget constants
+// ---------------------------------------------------------------------------
+
+/** Fraction of contextWindow reserved for model response generation. */
+const RESPONSE_RESERVE_RATIO = 0.2;
+/** Fraction of contextWindow held back as safety margin for token-count imprecision. */
+const SAFETY_MARGIN_RATIO = 0.1;
+// Default prompt budget = contextWindow - responseReserve - safetyMargin.
+// With the defaults above (0.2 + 0.1) this yields ~0.70 of contextWindow, but it
+// stays correct when responseReserve is overridden by model.maxTokens.
+/** Absolute floor for maxPromptTokens — below this the budget is meaningless. */
+const MIN_PROMPT_TOKENS = 4000;
+/** Legacy defaults when no model contextWindow is known. */
+const LEGACY_MAX_PROMPT_TOKENS = 60_000;
+const LEGACY_RESPONSE_RESERVE_TOKENS = 8_192;
+
+function parsePositiveIntegerEnv(name: string): number | undefined {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") {
+		return undefined;
+	}
+	const value = Number.parseInt(raw, 10);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function parsePositiveFloatEnv(name: string): number | undefined {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") {
+		return undefined;
+	}
+	const value = Number.parseFloat(raw);
+	return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function parseTokenizerModeEnv(
+	value: string | undefined,
+): NonNullable<BuildSystemPromptOptions["contextBudget"]>["tokenizerMode"] {
+	switch (value) {
+		case "fallback":
+		case "openai-js":
+		case "openai-wasm":
+		case "auto":
+			return value;
+		default:
+			return "fallback";
+	}
+}
+
+function parseCommaSeparatedEnv(value: string | undefined): string[] {
+	if (value === undefined || value.trim() === "") {
+		return [];
+	}
+	return Array.from(
+		new Set(
+			value
+				.split(",")
+				.map((item) => item.trim())
+				.filter((item) => item.length > 0),
+		),
+	);
 }
