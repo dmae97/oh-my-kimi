@@ -31,7 +31,6 @@ const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
 	overflowSearch: false,
-	wrapDescription: true,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -423,7 +422,7 @@ export class Editor implements Component, Focusable {
 	#autocompleteState: "regular" | "force" | null = null;
 	#autocompletePrefix: string = "";
 	#autocompleteRequestId: number = 0;
-	#autocompleteMaxVisible: number = 5;
+	#autocompleteMaxVisible: number = 10;
 	onAutocompleteUpdate?: () => void;
 
 	// Paste tracking for large pastes

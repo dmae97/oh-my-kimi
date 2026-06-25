@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Increased the default autocomplete dropdown from 5 to 10 visible items so slash command menus are less cramped.
+
 ## [16.3.8] - 2026-07-05
 
 ### Fixed
