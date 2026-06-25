@@ -143,6 +143,20 @@ function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messa
 	return model.api === "anthropic-messages";
 }
 
+function isOpenAICompletionsReasoningReplayTarget(model: Model): boolean {
+	const compat = model.compat;
+	return (
+		model.api === "openai-completions" &&
+		compat !== undefined &&
+		"requiresReasoningContentForToolCalls" in compat &&
+		compat.requiresReasoningContentForToolCalls === true
+	);
+}
+
+function isOpenAICompletionsReasoningField(signature: string | undefined): boolean {
+	return signature === "reasoning_content" || signature === "reasoning" || signature === "reasoning_text";
+}
+
 const ANTHROPIC_TOOL_CALL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 function isValidAnthropicToolCallId(id: string): boolean {
@@ -248,6 +262,7 @@ export function transformMessages<TApi extends Api>(
 			// `reasoning && !official` case in the compat builder). Used to keep
 			// `redacted_thinking` siblings beside unsigned visible thinking on
 			// targets that won't text-demote it.
+			const isOpenAICompletionsReasoningReplay = isOpenAICompletionsReasoningReplayTarget(model);
 			const replaysUnsignedAnthropicThinking = isAnthropicTarget && model.compat.replayUnsignedThinking;
 			// Thinking signatures can be untrustworthy for two distinct reasons with very
 			// different blast radii:
@@ -315,6 +330,17 @@ export function transformMessages<TApi extends Api>(
 							return [];
 						}
 						return sanitized;
+					}
+					// Cross-API OpenAI-compatible reasoning targets can replay the text
+					// through their configured reasoning field; strip unrecognized foreign
+					// signatures so the encoder falls back instead of leaking them.
+					if (isOpenAICompletionsReasoningReplay) {
+						const signature = sanitized.thinkingSignature;
+						if (!sanitized.thinking || sanitized.thinking.trim() === "") {
+							return isOpenAICompletionsReasoningField(signature) ? sanitized : [];
+						}
+						if (isOpenAICompletionsReasoningField(signature)) return sanitized;
+						return { ...sanitized, thinkingSignature: undefined };
 					}
 					// Cross-API target: keep the existing text-demotion fallback.
 					// For same model: keep thinking blocks with signatures (needed for replay)
