@@ -24,7 +24,11 @@ interface PromptOptionsLike {
 	images?: ImageContent[];
 }
 
-function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent[] }) {
+function createContext(opts: {
+	isStreaming: boolean;
+	pendingImages: ImageContent[];
+	pendingImageLinks?: (string | undefined)[];
+}) {
 	let editorText = "";
 	const editor: StubEditor = {
 		setText(text) {
@@ -35,7 +39,7 @@ function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent
 		},
 		addToHistory: vi.fn(),
 		pendingImages: opts.pendingImages,
-		pendingImageLinks: opts.pendingImages.map(() => undefined),
+		pendingImageLinks: opts.pendingImageLinks ? [...opts.pendingImageLinks] : opts.pendingImages.map(() => undefined),
 		clearDraft(text?: string) {
 			if (text !== undefined) this.addToHistory(text);
 			this.setText("");
@@ -64,10 +68,11 @@ function createContext(opts: { isStreaming: boolean; pendingImages: ImageContent
 		compactionQueuedMessages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
 		updatePendingMessagesDisplay,
+		showError: vi.fn(),
 		withLocalSubmission: async (_text: string, fn: () => unknown) => fn(),
 	} as unknown as InteractiveModeContext;
 
-	return { ctx, editor, prompt };
+	return { ctx, editor, prompt, showError: ctx.showError as ReturnType<typeof vi.fn> };
 }
 
 describe("InputController.handleFollowUp image forwarding", () => {
@@ -140,5 +145,48 @@ describe("InputController.handleFollowUp image forwarding", () => {
 		if (!call) throw new Error("expected session.prompt to be called");
 		expect(call[1]?.images).toBeUndefined();
 		expect(call[1]?.streamingBehavior).toBe("followUp");
+	});
+
+	it("restores text and pending images when streaming follow-up dispatch rejects", async () => {
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aGVsbG8=" };
+		const { ctx, editor, prompt, showError } = createContext({
+			isStreaming: true,
+			pendingImages: [image],
+			pendingImageLinks: ["local://draft.png"],
+		});
+		prompt.mockImplementationOnce(async () => {
+			throw new Error("queue rejected");
+		});
+
+		const controller = new InputController(ctx);
+		editor.setText("[Image #1] look at this");
+		await controller.handleFollowUp();
+
+		expect(showError).toHaveBeenCalledWith("queue rejected");
+		expect(editor.getText()).toBe("[Image #1] look at this");
+		expect(ctx.editor.pendingImages).toEqual([image]);
+		expect(ctx.editor.pendingImageLinks).toEqual(["local://draft.png"]);
+		expect(ctx.editor.imageLinks).toEqual(["local://draft.png"]);
+	});
+
+	it("restores image-only follow-ups when idle dispatch rejects", async () => {
+		const image: ImageContent = { type: "image", mimeType: "image/png", data: "aW1hZ2U=" };
+		const { ctx, editor, prompt, showError } = createContext({
+			isStreaming: false,
+			pendingImages: [image],
+		});
+		prompt.mockImplementationOnce(async () => {
+			throw new Error("model not configured");
+		});
+
+		const controller = new InputController(ctx);
+		editor.setText("");
+		await controller.handleFollowUp();
+
+		expect(showError).toHaveBeenCalledWith("model not configured");
+		expect(editor.getText()).toBe("");
+		expect(ctx.editor.pendingImages).toEqual([image]);
+		expect(ctx.editor.pendingImageLinks).toEqual([undefined]);
+		expect(ctx.editor.imageLinks).toEqual([undefined]);
 	});
 });

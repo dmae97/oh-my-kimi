@@ -1039,6 +1039,8 @@ export class InputController {
 	async handleFollowUp(): Promise<void> {
 		let text = this.ctx.editor.getText().trim();
 		const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+		const imageLinks =
+			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) return;
 
 		// Focused subagent session: follow-ups go to it; non-chat input is gated.
@@ -1082,13 +1084,30 @@ export class InputController {
 			return;
 		}
 
+		// Hand the message back on dispatch failure (model/API-key validation,
+		// queue rejection): restore both text AND pending images so an image-only
+		// or text+image draft can be retried, mirroring the main submit error path.
+		const restoreOnError = (error: unknown) => {
+			this.ctx.editor.setText(text);
+			if (images && images.length > 0) {
+				this.ctx.editor.pendingImages = [...images];
+				this.ctx.editor.pendingImageLinks = imageLinks ? [...imageLinks] : images.map(() => undefined);
+				this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+			}
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+		};
+
 		if (this.ctx.session.isStreaming) {
 			this.ctx.editor.clearDraft(text);
-			await this.ctx.withLocalSubmission(
-				text,
-				() => this.ctx.session.prompt(text, { streamingBehavior: "followUp", images }),
-				{ imageCount: images?.length ?? 0 },
-			);
+			try {
+				await this.ctx.withLocalSubmission(
+					text,
+					() => this.ctx.session.prompt(text, { streamingBehavior: "followUp", images }),
+					{ imageCount: images?.length ?? 0 },
+				);
+			} catch (error) {
+				restoreOnError(error);
+			}
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.ui.requestRender();
 			return;
@@ -1096,9 +1115,13 @@ export class InputController {
 
 		// Not streaming — just submit normally
 		this.ctx.editor.clearDraft(text);
-		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text, { images }), {
-			imageCount: images?.length ?? 0,
-		});
+		try {
+			await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text, { images }), {
+				imageCount: images?.length ?? 0,
+			});
+		} catch (error) {
+			restoreOnError(error);
+		}
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
