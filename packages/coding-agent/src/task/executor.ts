@@ -1991,9 +1991,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (model) {
 				providerSemaphore = getProviderSemaphore(settings, model.provider);
 				if (providerSemaphore) {
-					await awaitAbortable(providerSemaphore.acquire());
+					await providerSemaphore.acquire(abortSignal);
 					providerSemaphoreAcquired = true;
-					checkAbort();
 				}
 			}
 

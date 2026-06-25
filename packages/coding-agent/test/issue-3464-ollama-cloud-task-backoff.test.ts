@@ -17,6 +17,7 @@ import {
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { Semaphore } from "@oh-my-pi/pi-coding-agent/task/parallel";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -216,5 +217,29 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 		expect(started).toEqual(["CloudOne", "CloudTwo"]);
 		gates.get("CloudTwo")?.resolve();
 		await second;
+	});
+
+	it("frees a queued slot when its acquire waiter is aborted", async () => {
+		const semaphore = new Semaphore(1);
+		await semaphore.acquire();
+		const controller = new AbortController();
+		const aborted = semaphore.acquire(controller.signal);
+		controller.abort();
+		await aborted.then(
+			() => {
+				throw new Error("Aborted semaphore.acquire should reject");
+			},
+			() => {},
+		);
+
+		const nextStarted = deferred();
+		const next = (async () => {
+			await semaphore.acquire();
+			nextStarted.resolve();
+		})();
+		semaphore.release();
+		await nextStarted.promise;
+		semaphore.release();
+		await next;
 	});
 });
