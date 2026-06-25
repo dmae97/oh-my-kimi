@@ -136,6 +136,39 @@ describe("convertToLlm custom message mapping", () => {
 		expect(text).toContain("export const config = {};");
 	});
 
+	it("routes image-bearing file mentions through user role to satisfy Codex schema (#3443)", () => {
+		// `developer` (and `system`) Responses messages reject `input_image`
+		// with `Invalid value: 'input_image'. Supported values are: 'input_text'.`
+		// Issue #3421's earlier fix only disabled Codex Responses Lite for image
+		// turns; the role-promotion here closes the bug at the source so every
+		// Responses-family provider accepts attached images.
+		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+		const messages: AgentMessage[] = [
+			{
+				role: "fileMention",
+				files: [
+					{ path: "notes/log.txt", content: "alpha\n", lineCount: 1 },
+					{ path: "diagram.png", content: "", image },
+				],
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted).toHaveLength(1);
+		expect(converted[0]?.role).toBe("user");
+		expectAttribution(converted[0], "user");
+		if (converted[0]?.role !== "user" || !Array.isArray(converted[0].content)) {
+			throw new Error("Expected user array content");
+		}
+		const text = converted[0].content.find(content => content.type === "text")?.text ?? "";
+		expect(text).toContain('<file path="notes/log.txt">');
+		expect(text).toContain('<file path="diagram.png">');
+		const images = converted[0].content.filter(content => content.type === "image") as ImageContent[];
+		expect(images).toEqual([image]);
+	});
+
 	it("allows custom messages to opt into user attribution", () => {
 		const messages: AgentMessage[] = [
 			{

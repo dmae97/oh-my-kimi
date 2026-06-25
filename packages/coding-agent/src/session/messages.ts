@@ -513,13 +513,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						})
 						.join("\n");
 					const content: (TextContent | ImageContent)[] = [{ type: "text" as const, text: fileContents }];
+					let hasImage = false;
 					for (const file of m.files) {
 						if (file.image) {
 							content.push(file.image);
+							hasImage = true;
 						}
 					}
+					// Image-bearing mentions must ride as `user`: developer/system
+					// messages only accept text on OpenAI Responses + Codex; sending
+					// an `input_image` in a developer-role content array gets
+					// rejected with `Invalid value: 'input_image'. Supported values
+					// are: 'input_text'.` (Codex chatgpt.com backend, #3443).
 					return {
-						role: "developer",
+						role: hasImage ? "user" : "developer",
 						content,
 						attribution: "user",
 						timestamp: m.timestamp,
