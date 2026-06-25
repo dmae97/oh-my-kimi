@@ -143,6 +143,27 @@ describe("AgentSession auto-compaction progress guard", () => {
 			timestamp: Date.now(),
 		};
 	}
+	/** Build a context-overflow assistant turn (input exceeds the 200k window). */
+	function overflowAssistant() {
+		return {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "" }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "error" as const,
+			errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+			usage: {
+				input: 250000,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 250000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+	}
 
 	function collectNotices() {
 		const notices: { level: string; message: string; source?: string }[] = [];
@@ -225,5 +246,97 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
 		expect(noProgress.length).toBe(0);
+	});
+	/**
+	 * Seed several large prior turns into the session branch so `prepareCompaction`
+	 * returns a real preparation after the overflow recovery drops the failed
+	 * assistant from active context. The drop only touches agent state, and a
+	 * branch under `keepRecentTokens` (20k) has nothing to summarize, so each
+	 * turn carries enough text (~10k tokens) to push older turns past the cut.
+	 */
+	function seedPriorTurns() {
+		const bigText = "lorem ipsum ".repeat(4000); // ~10k tokens of summarizable text
+		for (let i = 0; i < 4; i++) {
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: bigText }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "stop",
+				usage: {
+					input: 1000,
+					output: 50,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1050,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			});
+			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
+		}
+	}
+
+	it("retries an overflow recovery that fits the window but stays inside the recovery band", async () => {
+		// Regression for the band-vs-fit conflation (#3412 review): the overflow
+		// retry only needs the rebuilt prompt to fit the window, NOT to drop under
+		// `COMPACTION_RECOVERY_BAND × threshold`. Residual lands at 150k on a 200k
+		// window — above the 0.8×170k≈136k recovery band, but comfortably under the
+		// usable budget — so the retry MUST proceed instead of dead-ending.
+		seedPriorTurns();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 150000, contextWindow: 200000, percent: 75 });
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = overflowAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
+	it("pauses (single warning) when an overflow recovery still does not fit the window", async () => {
+		// The genuine dead-end the retry guard must still catch: even after dropping
+		// the failed turn the rebuilt prompt is over the window, so retrying would
+		// hit the same overflow. Pause once instead of looping.
+		seedPriorTurns();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 205000, contextWindow: 200000, percent: 102.5 });
+
+		const notices = collectNotices();
+		const startCount = countCompactionStarts();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = overflowAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(startCount()).toBe(1);
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(session.isStreaming).toBe(false);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(1);
+		expect(noProgress[0].level).toBe("warning");
 	});
 });
