@@ -64,7 +64,7 @@ describe("InputController.handleCtrlZ", () => {
 		expect(showError).not.toHaveBeenCalled();
 	});
 
-	it("SIGSTOPs our own PID and registers a SIGCONT resume hook on POSIX (#3461)", () => {
+	it("SIGSTOPs the foreground process group and registers a SIGCONT resume hook on POSIX (#3461)", () => {
 		setPlatform("linux");
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		const onceSpy = vi.spyOn(process, "once");
@@ -83,7 +83,7 @@ describe("InputController.handleCtrlZ", () => {
 		expect(stopOrder).toBeLessThan(killOrder);
 
 		expect(killSpy).toHaveBeenCalledTimes(1);
-		expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGSTOP");
+		expect(killSpy).toHaveBeenCalledWith(0, "SIGSTOP");
 		expect(ui.start).not.toHaveBeenCalled();
 		expect(showError).not.toHaveBeenCalled();
 
