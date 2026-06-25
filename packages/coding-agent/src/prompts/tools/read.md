@@ -69,7 +69,7 @@ For `.sqlite`, `.sqlite3`, `.db`, `.db3`:
 
 All URI schemes take the same line selectors. `artifact://<id>` recovers full output a bash/eval/tool result spilled or truncated. `history://<agentId>` = agent transcript; bare `history://` lists agents.
 
-`ssh://host/<absolute-path>` reads a single text file on a pre-configured SSH host or `~/.ssh/config` alias (UTF-8 text only, ≤1 MiB; no binary/recursive/glob). Also writable via `write` and searchable via `search`.
+`ssh://host/<absolute-path>` reads a single text file on a pre-configured SSH host or `~/.ssh/config` alias (UTF-8 text only, ≤1 MiB; no binary/recursive/glob). Also writable via `write` and searchable via `search`. A literal `:` in the remote path must be percent-encoded as `%3A`, since a trailing `:sel` is read as a line selector.
 
 <critical>
 - Line ranges go in the selector: `path="src/foo.ts:50-200"`.

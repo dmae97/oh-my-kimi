@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { formatHashlineHeader, stripHashlinePrefixes } from "@oh-my-pi/hashline";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolTier,
+} from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { isEnoent, isRecord, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
@@ -41,7 +47,7 @@ import {
 } from "./conflict-detect";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "./output-meta";
-import { formatPathRelativeToCwd, isInternalUrlPath } from "./path-utils";
+import { formatPathRelativeToCwd, isInternalUrlPath, pathTargetsSsh, peelWriteUrlSelector } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from "./plan-mode-guard";
 import {
 	cachedRenderedString,
@@ -263,14 +269,22 @@ function parseSqliteWriteTarget(subPath: string, queryString: string): { table: 
  */
 export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails> {
 	readonly name = "write";
-	readonly approval = (args: unknown) => {
+	readonly approval = (args: unknown): ToolTier => {
 		const rawPath = (args as Partial<WriteParams>).path;
-		if (typeof rawPath !== "string" || !isInternalUrlPath(rawPath)) return "write";
+		if (typeof rawPath !== "string") return "write";
+		// Unwrap a hashline `[path#TAG]` wrapper first (parity with execute) so a
+		// wrapped `[ssh://h/x#ABCD]` can't dodge scheme detection and the tier checks below.
+		const path = unwrapHashlineHeaderPath(rawPath);
+		// Remote SSH writes open an outbound connection and run a remote shell —
+		// gate them like the exec-tier `ssh` tool, ahead of the handler-write
+		// logic. Substring match also covers selector-suffixed targets.
+		if (pathTargetsSsh(path)) return "exec";
+		if (!isInternalUrlPath(path)) return "write";
 		// Internal URLs are usually session-local artifacts (read tier), but a
-		// scheme whose handler exposes a `write` hook mutates handler-owned
-		// user data (e.g. vault:// notes, host-owned mcp:// URIs) and must take
-		// the write tier so always-ask mode actually prompts.
-		const match = /^([a-z][a-z0-9+.-]*):\/\//i.exec(rawPath.trim());
+		// scheme whose handler exposes a `write` hook mutates handler-owned user
+		// data (e.g. vault:// notes) and must take the write tier so always-ask
+		// mode actually prompts.
+		const match = /^([a-z][a-z0-9+.-]*):\/\//i.exec(path.trim());
 		const handler = match ? InternalUrlRouter.instance().getHandler(match[1]!.toLowerCase()) : undefined;
 		return handler?.write ? "write" : "read";
 	};
@@ -778,7 +792,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		// (which fails on a leading `[`) and the bridge router would send a
 		// `[local://scratch.md#ABCD]` write to the editor instead of the
 		// session-local sandbox.
-		const path = unwrapHashlineHeaderPath(rawPath);
+		// Peel a read-tool selector (`:raw`, `:1-20`, …) so the write target matches
+		// what `read` resolves for the same URL; line-range/malformed selectors throw.
+		const path = peelWriteUrlSelector(unwrapHashlineHeaderPath(rawPath));
 		return untilAborted(signal, async () => {
 			// Strip hashline display prefixes ([PATH#HASH] + LINE:) if the model copied them from read output
 			const { text: cleanContent, stripped } = stripWriteContent(this.session, content);

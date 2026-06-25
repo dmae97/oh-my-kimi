@@ -4,6 +4,20 @@ export function sanitizeHostName(name: string): string {
 }
 
 export function buildSshTarget(username: string | undefined, host: string): string {
+	// SSH treats a destination starting with "-" as an option, so a host/user of
+	// `-oProxyCommand=...` becomes local command execution. Reject before this
+	// string reaches any `ssh` argv (this is the single render chokepoint for
+	// every connection, transfer, and sshfs mount).
+	if (host.startsWith("-")) {
+		throw new Error(
+			`Invalid SSH host "${host}": an SSH destination must not begin with "-" (argument-injection guard)`,
+		);
+	}
+	if (username?.startsWith("-")) {
+		throw new Error(
+			`Invalid SSH username "${username}": an SSH username must not begin with "-" (argument-injection guard)`,
+		);
+	}
 	return username ? `${username}@${host}` : host;
 }
 

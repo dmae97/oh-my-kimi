@@ -58,10 +58,14 @@ export async function readRemoteFile(
 }
 
 /**
- * Write `content` to a remote file byte-exact. Streams stdin into a temp file
- * and atomically renames it into place so a partial transfer never clobbers the
- * destination. Throws `ptree.NonZeroExitError` when the remote path is
- * unwritable or the host is unreachable.
+ * Write `content` to a remote file byte-exact. Streams stdin into a uniquely
+ * named temp file in the destination directory, then atomically renames it into
+ * place so a partial transfer never clobbers the destination and concurrent
+ * writers cannot collide on the temp name. The rename REPLACES a symlink at the
+ * destination with a regular file rather than writing through it (resolving the
+ * link target is not portable across the macOS/Linux hosts this stack supports).
+ * Throws `ptree.NonZeroExitError` when the remote path is unwritable or the host
+ * is unreachable.
  */
 export async function writeRemoteFile(
 	target: SSHConnectionTarget,
@@ -71,7 +75,7 @@ export async function writeRemoteFile(
 ): Promise<void> {
 	await ensureConnection(target);
 	const dest = quotePosixPath(remotePath);
-	const tmp = quotePosixPath(`${remotePath}.omp-tmp`);
+	const tmp = quotePosixPath(`${remotePath}.omp-tmp.${crypto.randomUUID()}`);
 	const command = `cat > ${tmp} && mv ${tmp} ${dest}`;
 	const args = await buildRemoteCommand(target, command, { allowStdin: true });
 	using child = ptree.spawn(["ssh", ...args], {

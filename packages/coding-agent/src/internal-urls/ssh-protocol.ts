@@ -26,8 +26,6 @@ import type { InternalResource, InternalUrl, ProtocolHandler, ResolveContext, Wr
 
 /** Largest remote text file `ssh://` will materialize (mirrors the local:// cap). */
 const SSH_TEXT_MAX_BYTES = 1024 * 1024;
-/** Bytes sniffed to classify text vs binary (mirrors the local:// sniff window). */
-const SSH_TEXT_SNIFF_BYTES = 8 * 1024;
 
 /** POSIX-aware content type from the last path segment's extension. */
 function contentTypeFor(remotePath: string): InternalResource["contentType"] {
@@ -40,14 +38,13 @@ function contentTypeFor(remotePath: string): InternalResource["contentType"] {
 	return "text/plain";
 }
 
-function isUtf8Text(bytes: Uint8Array): boolean {
-	const slice = bytes.length > SSH_TEXT_SNIFF_BYTES ? bytes.subarray(0, SSH_TEXT_SNIFF_BYTES) : bytes;
-	if (slice.indexOf(0) !== -1) return false;
+/** Decode the whole buffer as UTF-8 text, or null if it holds a NUL or invalid byte. */
+function decodeUtf8Text(bytes: Uint8Array): string | null {
+	if (bytes.indexOf(0) !== -1) return null;
 	try {
-		new TextDecoder("utf-8", { fatal: true }).decode(slice);
-		return true;
+		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 	} catch {
-		return false;
+		return null;
 	}
 }
 
@@ -126,7 +123,8 @@ export class SshProtocolHandler implements ProtocolHandler {
 				`ssh://: ${remotePath} exceeds the 1 MiB limit; ssh:// supports text files up to 1 MiB — use an sshfs mount for larger files`,
 			);
 		}
-		if (!isUtf8Text(bytes)) {
+		const content = decodeUtf8Text(bytes);
+		if (content === null) {
 			throw new Error(
 				`ssh://: ${remotePath} is a binary or non-UTF-8 file; ssh:// supports UTF-8 text only — use the ssh tool or an sshfs mount`,
 			);
@@ -135,7 +133,7 @@ export class SshProtocolHandler implements ProtocolHandler {
 		// displayed/searched resource stays `ssh://…` instead of a temp path.
 		return {
 			url: url.href,
-			content: new TextDecoder().decode(bytes),
+			content,
 			contentType: contentTypeFor(remotePath),
 			size: bytes.length,
 		};

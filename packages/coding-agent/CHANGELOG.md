@@ -67,7 +67,7 @@
 - Fixed active goal runs that successfully call `yield` and then receive a trailing empty assistant `stop` skipping threshold compaction; post-yield empty-stop suppression now still anchors active-goal compaction on the yield-bearing assistant turn, so long-running tasks continue after maintenance instead of settling early.
 ### Added
 
-- Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); UTF-8 text only, up to 1 MiB.
+- Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); UTF-8 text only, up to 1 MiB. Requires the same approval as the `ssh` tool, rejects argument-injecting hosts/usernames (leading `-`), validates the entire file as UTF-8, peels read selectors so `write` targets the same file `read` does, and replaces (rather than writes through) a symlinked write destination via a uniquely named remote temp.
 
 ## [16.1.19] - 2026-06-25
 

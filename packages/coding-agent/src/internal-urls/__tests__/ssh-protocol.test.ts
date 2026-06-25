@@ -84,6 +84,17 @@ describe("SshProtocolHandler", () => {
 		await expect(handler.resolve(parseInternalUrl("ssh://icaro/bin/true"))).rejects.toThrow(/binary or non-UTF-8/);
 	});
 
+	it("rejects a file whose first invalid byte falls past the old 8 KiB sniff window", async () => {
+		mockHosts();
+		const bytes = new Uint8Array(9001);
+		bytes.fill(0x61); // 9000 'a' bytes — valid UTF-8 within the former 8 KiB window
+		bytes[9000] = 0xff; // lone invalid UTF-8 byte the old prefix sniff never inspected
+		vi.spyOn(fileTransfer, "readRemoteFile").mockResolvedValue({ bytes, truncated: false });
+		await expect(handler.resolve(parseInternalUrl("ssh://icaro/var/log/app.log"))).rejects.toThrow(
+			/binary or non-UTF-8/,
+		);
+	});
+
 	it("rejects a file that exceeds the size cap", async () => {
 		mockHosts();
 		vi.spyOn(fileTransfer, "readRemoteFile").mockResolvedValue({

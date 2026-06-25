@@ -2,7 +2,13 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader } from "@oh-my-pi/hashline";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolTier,
+} from "@oh-my-pi/pi-agent-core";
 import { type GrepMatch, GrepOutputMode, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -40,6 +46,7 @@ import {
 	isLineInRanges,
 	type LineRange,
 	parseLineRanges,
+	pathTargetsSsh,
 	type ResolvedSearchTarget,
 	resolveReadPath,
 	resolveToolSearchScope,
@@ -668,7 +675,8 @@ type SearchParams = typeof searchSchema.infer;
 
 export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
 	readonly name = "search";
-	readonly approval = "read" as const;
+	readonly approval = (args: unknown): ToolTier =>
+		toPathList((args as { paths?: string | string[] }).paths).some(pathTargetsSsh) ? "exec" : "read";
 	readonly label = "Search";
 	readonly loadMode = "discoverable";
 	readonly summary = "Search file contents using ripgrep (fast text search)";
