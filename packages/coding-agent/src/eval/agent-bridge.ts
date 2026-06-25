@@ -397,6 +397,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		parentMnemopiSessionState: options.session.getMnemopiSessionState?.(),
 		parentTelemetry: options.session.getTelemetry?.(),
 		parentAgentId: options.session.getAgentId?.() ?? MAIN_AGENT_ID,
+		// Live source of truth for `serviceTierSubagent: inherit` (null = explicit none).
+		parentServiceTier: options.session.getServiceTier ? (options.session.getServiceTier() ?? null) : undefined,
 		// Deliberately omit parentEvalSessionId: the parent's Python kernel is
 		// blocked on this bridge call, so sharing the eval session would deadlock
 		// (subagent queues behind the parent's in-flight execution, parent waits

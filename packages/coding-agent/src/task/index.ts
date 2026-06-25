@@ -1296,6 +1296,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				parentTelemetry: this.session.getTelemetry?.(),
 				parentEvalSessionId,
 				parentAgentId: this.session.getAgentId?.() ?? MAIN_AGENT_ID,
+				// Live source of truth for `serviceTierSubagent: inherit`. When the
+				// session exposes a tier accessor, pass tier-or-null (null = explicit
+				// none, e.g. /fast off); otherwise leave undefined so inherit falls
+				// back to the configured serviceTier setting.
+				parentServiceTier: this.session.getServiceTier ? (this.session.getServiceTier() ?? null) : undefined,
 			};
 
 			const runTask = async (): Promise<SingleResult> => {

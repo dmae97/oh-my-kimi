@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, Usage } from "@oh-my-pi/pi-ai";
+import type { Api, Model, ServiceTier, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
@@ -18,6 +18,7 @@ import {
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
+import { resolveSubagentServiceTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -384,6 +385,13 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/**
+	 * Parent session's live effective service tier, the source of truth for a
+	 * subagent whose `serviceTierSubagent` is `"inherit"`. `null` = the parent
+	 * explicitly has no tier (e.g. `/fast off`); omitted = no live session, so
+	 * inherit falls back to the configured `serviceTier` setting.
+	 */
+	parentServiceTier?: ServiceTier | null;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
 	localProtocolOptions?: LocalProtocolOptions;
 	/**
@@ -777,11 +785,21 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 export function createSubagentSettings(
 	baseSettings: Settings,
 	overrides?: Partial<Record<SettingPath, unknown>>,
+	inheritedServiceTier?: ServiceTier | null,
 ): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
 	}
+	// Resolve the subagent's service tier from `serviceTierSubagent` ("inherit" =
+	// match the parent's live tier when a live session supplied one, else the
+	// configured `serviceTier`). The result is stamped back onto the snapshot so
+	// createAgentSession's `settings.get("serviceTier")` read picks it up.
+	snapshot.serviceTier = resolveSubagentServiceTier(
+		baseSettings.get("serviceTierSubagent"),
+		baseSettings.get("serviceTier"),
+		inheritedServiceTier,
+	);
 	return Settings.isolated({
 		...snapshot,
 		"async.enabled": false,
@@ -1792,6 +1810,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const subagentSettings = createSubagentSettings(
 		settings,
 		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
+		options.parentServiceTier,
 	);
 	const maxRecursionDepth = settings.get("task.maxRecursionDepth") ?? 2;
 	// Tailored specialist identity for this spawn. `subagentRole` is the full

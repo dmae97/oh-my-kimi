@@ -160,6 +160,7 @@ import {
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
+import { resolveServiceTierSetting } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
@@ -1887,6 +1888,16 @@ export class AgentSession {
 		}
 		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
 
+		// Advisor service tier (`serviceTierAdvisor`): "none" (default) runs the
+		// advisor on standard processing; "inherit" tracks the session's live tier
+		// per request (like the main agent, including /fast toggles) via a resolver;
+		// a concrete value pins the advisor to that tier regardless of the session.
+		const advisorTierSetting = this.settings.get("serviceTierAdvisor");
+		const advisorServiceTier =
+			advisorTierSetting === "inherit" ? undefined : resolveServiceTierSetting(advisorTierSetting, undefined);
+		const advisorServiceTierResolver =
+			advisorTierSetting === "inherit" ? (model: Model) => this.#effectiveServiceTier(model) : undefined;
+
 		// Thread the primary's telemetry into the advisor loop so the advisor
 		// model's GenAI spans + usage/cost hooks fire like every other model call,
 		// stamped with the advisor's own identity. `conversationId` is cleared so
@@ -1916,6 +1927,8 @@ export class AgentSession {
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
 			intentTracing: false,
 			telemetry: advisorTelemetry,
+			serviceTier: advisorServiceTier,
+			serviceTierResolver: advisorServiceTierResolver,
 		});
 		advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
 
