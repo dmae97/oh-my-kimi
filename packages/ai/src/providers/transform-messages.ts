@@ -157,13 +157,29 @@ function isOpenAICompletionsModel(model: Model): model is Model<"openai-completi
  * target on the same vendor must keep reasoning as structured
  * `reasoning_content` instead of degrading it to conversation text.
  *
+ * Considers both the base compat view AND `compat.whenThinking` because the
+ * latter is the resolved compat the request actually runs against when
+ * thinking is engaged on hosts like OpenCode (`opencode-go`/`opencode-zen`),
+ * where the base compat intentionally suppresses `requiresReasoningContentForToolCalls`
+ * to dodge the thinking-off `Extra inputs are not permitted` 400 (#1071) and
+ * the `whenThinking` policy reactivates it for thinking-on requests to dodge
+ * the `thinking is enabled but reasoning_content is missing` 400 (#1484).
+ * Ignoring `whenThinking` would re-open #1484 for every cross-API switch into
+ * an OpenCode-hosted reasoning model.
+ *
  * The downstream encoder MUST then surface the preserved block on the wire
  * via `reasoningContentField` — see `openai-completions.ts` for the matching
  * branch.
  */
 function openAICompletionsReplaysUnsignedThinking(model: Model<"openai-completions">): boolean {
 	if (!model.reasoning) return false;
-	const compat = model.compat;
+	const base = model.compat;
+	if (acceptsReasoningContentReplay(base)) return true;
+	const whenThinking = base.whenThinking;
+	return whenThinking !== undefined && acceptsReasoningContentReplay(whenThinking);
+}
+
+function acceptsReasoningContentReplay(compat: Model<"openai-completions">["compat"]): boolean {
 	if (compat.requiresThinkingAsText) return false;
 	// Hosts that REQUIRE `reasoning_content` on tool-call turns already accept
 	// it elsewhere; same for Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi,

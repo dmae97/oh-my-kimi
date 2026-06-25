@@ -115,6 +115,29 @@ function deepseekReasoningTarget(): Model<"openai-completions"> {
 	} satisfies ModelSpec<"openai-completions">);
 }
 
+function opencodeGoKimiTarget(): Model<"openai-completions"> {
+	// OpenCode Go's reasoning-enabled Kimi. Base compat keeps
+	// `requiresReasoningContentForToolCalls: false` to dodge the
+	// `Extra inputs are not permitted` 400 (#1071); only the resolved
+	// `whenThinking` policy reactivates it (#1484). The predicate that
+	// gates cross-API preservation MUST consult `whenThinking`, otherwise
+	// the prior thinking is demoted to text and the next thinking-on
+	// request 400s with `thinking is enabled but reasoning_content is
+	// missing in assistant tool call message at index N`.
+	return buildModel({
+		id: "kimi-k2.6",
+		name: "Kimi K2.6",
+		api: "openai-completions",
+		provider: "opencode-go",
+		baseUrl: "https://opencode.ai/zen/go/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 256_000,
+		maxTokens: 16_384,
+	} satisfies ModelSpec<"openai-completions">);
+}
+
 function openAIGpt4oTarget(): Model<"openai-completions"> {
 	// Official OpenAI Chat Completions, non-reasoning. Thinking blocks must
 	// still demote to text — this target can't usefully emit `reasoning_content`.
@@ -216,6 +239,68 @@ describe("cross-API 3p ↔ 3p thinking-block preservation (#3434)", () => {
 		expect(typeof content).toBe("string");
 		if (typeof content !== "string") throw new Error("content not a string");
 		expect(content).toContain("Explore the repo, then patch it.");
+		expect(content).toContain("Done.");
+	});
+
+	it("preserves cross-API thinking for OpenCode reasoning targets that gate replay via compat.whenThinking", () => {
+		// OpenCode (`opencode-go`, `opencode-zen`) reasoning models keep
+		// `requiresReasoningContentForToolCalls: false` on the base compat
+		// (dodges the thinking-off `Extra inputs are not permitted` 400 — #1071)
+		// and reactivate the flag on `compat.whenThinking` for thinking-engaged
+		// requests (dodges the `thinking is enabled but reasoning_content is
+		// missing` 400 — #1484). Before this guard, the cross-API preservation
+		// predicate only read the base compat, so prior thinking was demoted
+		// to text and the next thinking-on request re-triggered #1484.
+		const target = opencodeGoKimiTarget();
+		const messages: Message[] = [
+			userMessage("Plan it."),
+			zaiAnthropicMessage("Read README and answer."),
+			userMessage("Continue on OpenCode."),
+		];
+
+		// Resolve the thinking-engaged compat the way `streamOpenAICompletions`
+		// does for a request with reasoning effort set, then hand it to
+		// `convertMessages` directly so the test exercises the same encoder
+		// configuration the live wire would.
+		const compat = target.compat.whenThinking ?? target.compat;
+		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
+
+		const wire = convertMessages(target, { messages }, compat);
+		const assistant = findAssistantMessage(wire);
+		expect(assistant).toBeDefined();
+		if (!assistant) throw new Error("assistant message missing");
+
+		expect(assistant.reasoning_content).toBe("Read README and answer.");
+	});
+
+	it("folds preserved thinking into content when the OpenCode base compat (thinking off) cannot surface reasoning_content", () => {
+		// Companion of the prior test: same OpenCode target, but the request
+		// runs against the BASE compat (thinking disabled, the path that bars
+		// `reasoning_content` per #1071). Without the encoder fallback,
+		// transform-messages would preserve the native thinking block and the
+		// encoder would silently drop it — a regression vs. the pre-#3434
+		// text-demotion behavior. The fallback folds the reasoning into the
+		// visible content so the next turn still sees the prior plan.
+		const target = opencodeGoKimiTarget();
+		const compat = target.compat;
+		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
+
+		const messages: Message[] = [
+			userMessage("Plan it."),
+			zaiAnthropicMessage("Read README and answer."),
+			userMessage("Continue with thinking off."),
+		];
+
+		const wire = convertMessages(target, { messages }, compat);
+		const assistant = findAssistantMessage(wire);
+		expect(assistant).toBeDefined();
+		if (!assistant) throw new Error("assistant message missing");
+
+		expect(assistant.reasoning_content).toBeUndefined();
+		const content = assistant.content;
+		expect(typeof content).toBe("string");
+		if (typeof content !== "string") throw new Error("content not a string");
+		expect(content).toContain("Read README and answer.");
 		expect(content).toContain("Done.");
 	});
 });

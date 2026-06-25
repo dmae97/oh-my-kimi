@@ -1804,6 +1804,23 @@ export function convertMessages(
 					// signature on cross-API replays before the block reaches us.
 					const reasoningField = compat.reasoningContentField ?? "reasoning_content";
 					assistantMsg[reasoningField] = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n");
+				} else if (nonEmptyThinkingBlocks.every(b => !b.thinkingSignature)) {
+					// Cross-API preserved thinking (signature stripped by
+					// `transform-messages`) that reached an encoder branch which can't
+					// surface `reasoning_content` for THIS request — most often an
+					// OpenCode-hosted reasoning model in thinking-disabled mode, where
+					// the resolved base compat must keep the field off to dodge the
+					// `Extra inputs are not permitted` 400 (#1071). Fold the reasoning
+					// into the visible content (same shape as `requiresThinkingAsText`)
+					// so the next turn at least sees the prior plan as conversation
+					// context, matching the pre-#3434 cross-API text-demotion behavior.
+					// Same-model replays preserve the streaming signature and never
+					// land here.
+					const thinkingText = nonEmptyThinkingBlocks.map(b => b.thinking).join("\n\n");
+					assistantMsg.content =
+						typeof assistantMsg.content === "string" && assistantMsg.content.length > 0
+							? `${thinkingText}\n\n${assistantMsg.content}`
+							: thinkingText;
 				}
 			}
 
