@@ -542,6 +542,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#agentRegistryUnsubscribe?: () => void;
+	#agentRegistrySubscriptionTarget?: AgentRegistry;
 	#mcpStatusOrder: string[] = [];
 	#mcpPendingServers = new Set<string>();
 	#mcpConnectedServers = new Set<string>();
@@ -844,13 +845,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.keybindings.getDisplayString("app.session.observe") ||
 				undefined,
 		);
-		this.#syncRunningSubagentBadge();
-		this.#agentRegistryUnsubscribe = AgentRegistry.global().onChange(() => {
-			this.#syncRunningSubagentBadge();
-			this.ui.requestRender();
-		});
+		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(() => {
-			this.#syncRunningSubagentBadge();
+			this.syncRunningSubagentBadge();
 			// Auto-checkmark todos whose matching subagent just succeeded, then
 			// re-render so the running override (the static "live" glyph when a
 			// subagent is doing the work for a still-pending todo) updates as
@@ -1445,10 +1442,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	#syncRunningSubagentBadge(): void {
-		const count = AgentRegistry.global()
-			.list()
-			.filter(ref => ref.kind === "sub" && ref.status === "running").length;
+	/** Refresh the running-subagents status badge from the active local or collab registry. */
+	syncRunningSubagentBadge(): void {
+		const registry = this.collabGuest?.agentRegistry ?? AgentRegistry.global();
+		if (this.#agentRegistrySubscriptionTarget !== registry) {
+			this.#agentRegistryUnsubscribe?.();
+			this.#agentRegistrySubscriptionTarget = registry;
+			this.#agentRegistryUnsubscribe = registry.onChange(() => {
+				this.syncRunningSubagentBadge();
+				this.ui.requestRender();
+			});
+		}
+		const count = registry.list().filter(ref => ref.kind === "sub" && ref.status === "running").length;
 		this.statusLine.setSubagentCount(count);
 		this.updateEditorTopBorder();
 	}
@@ -3161,6 +3166,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerRegistry.dispose();
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;
+		this.#agentRegistrySubscriptionTarget = undefined;
 		this.#eventController.dispose();
 		this.statusLine.dispose();
 		if (this.#resizeHandler) {
