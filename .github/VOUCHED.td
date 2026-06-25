@@ -20,6 +20,7 @@
 # Audit found 0 denounce-worthy actors; all reverts were maintainer
 # technical rollbacks, not abuse. See the PR/commit history for provenance.
 
+0ttik
 a-glapinski
 ak4153
 apoc
@@ -27,6 +28,7 @@ asafmah
 azais-corentin
 basedcorp99
 baylee4
+belchetz
 bjin
 cagedbird043
 cexll
@@ -42,29 +44,38 @@ djdembeck
 dmarsh-gusto
 elikoga
 enieuwy
+fettpl
 flare576
 foreveryoungpp
+fryuni
 gratefuldave
 h4vc
 habibpro1999
 handlecusion
 haosenwang1018
+heyitsgilbert
 hezhiyang2000
 igasmi
 infernix
 inprealpha
 itertea
 jagravnaik
+jasonw22
 jchristman
+jdavv
+jeffscottward
 jiwangyihao
 kamafozilov
 kamijotoma
+kenmege
 korri123
 kukkerem
+lance0
 ldx
 lederniermagicien
 loftiskg
 lyc-aon
+m3ridian-zero
 makomakogo
 masonc15
 maximhar
@@ -75,6 +86,7 @@ mokto
 mouyase
 muness
 nnk97
+nszceta
 ogrodev
 oldschoola
 parsifa1
@@ -110,3 +122,4 @@ wodenjay
 wolfiesch
 zakhar-kogan
 zamorakpds
+zommiommy
