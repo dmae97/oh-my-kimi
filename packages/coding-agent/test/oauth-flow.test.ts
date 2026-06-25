@@ -662,4 +662,93 @@ describe("mcp oauth flow", () => {
 			expect(flow.resource).toBe("https://api.example.com");
 		});
 	});
+
+	describe("RFC 8707 resource indicator (refresh)", () => {
+		// Regression for the review on PR #3503: the initial grant stores
+		// `resource: undefined` for the Plane case, but `MCPManager.prepareConfig`
+		// (manager.ts:1232-1233) falls back to `config.url` when the stored
+		// material has no resource, which would re-introduce the same
+		// self-referential value at refresh time. `refreshMCPOAuthToken` must
+		// apply the same filter against `tokenUrl`'s origin so initial grant
+		// and refresh stay in lock-step (RFC 8707 §2.2 requires matching
+		// indicators).
+
+		function mockArbitraryTokenEndpoint(targetUrl: string, onBody: (body: string) => void): FetchImpl {
+			return async (input, init) => {
+				const url = String(input);
+				if (url === targetUrl) {
+					onBody(String(init?.body ?? ""));
+					return new Response(
+						JSON.stringify({
+							access_token: "access-token",
+							refresh_token: "refresh-token",
+							expires_in: 3600,
+						}),
+						{ status: 200, headers: { "Content-Type": "application/json" } },
+					);
+				}
+				throw new Error(`Unexpected fetch: ${url}`);
+			};
+		}
+
+		it("strips a refresh resource that equals the token-server origin", async () => {
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://mcp.plane.so/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://mcp.plane.so",
+				{
+					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+
+		it("strips a refresh resource that equals the token-server origin with trailing slash", async () => {
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://mcp.plane.so/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://mcp.plane.so/",
+				{
+					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBeNull();
+		});
+
+		it("keeps a refresh resource that points at a different path under the token-server origin", async () => {
+			let tokenRequestBody = "";
+
+			await refreshMCPOAuthToken(
+				"https://mcp.plane.so/token",
+				"refresh-token",
+				"client-id",
+				undefined,
+				"https://mcp.plane.so/sse",
+				{
+					fetch: mockArbitraryTokenEndpoint("https://mcp.plane.so/token", body => {
+						tokenRequestBody = body;
+					}),
+				},
+			);
+			const tokenParams = new URLSearchParams(tokenRequestBody);
+
+			expect(tokenParams.get("resource")).toBe("https://mcp.plane.so/sse");
+		});
+	});
 });

@@ -169,6 +169,32 @@ function resolveResourceUri(resource: string | undefined): string | undefined {
 	return trimmed;
 }
 
+/**
+ * Drop a resource indicator that equals the origin of {@link serverUrl}.
+ *
+ * Some authorization servers (Plane is the live example, see issue #3502)
+ * reject `resource=<auth-server-origin>` with `server_error` before the
+ * consent screen. Per RFC 8707 §2 the indicator distinguishes *other*
+ * resource servers from the authorization server, so a self-referential
+ * value is never required — silently strip it to stay compatible with strict
+ * implementations.
+ *
+ * RFC 8414 puts the authorize and token endpoints on the same issuer (and
+ * MCP discovery follows that contract), so comparing against either endpoint
+ * URL's origin gives the same answer in practice — callers in the authorize
+ * leg pass `authorizationUrl`, callers in the refresh leg pass `tokenUrl`.
+ */
+function filterSelfReferentialResource(resource: string | undefined, serverUrl: string): string | undefined {
+	if (!resource) return undefined;
+	try {
+		const origin = new URL(serverUrl).origin;
+		if (resource === origin || resource === `${origin}/`) return undefined;
+	} catch {
+		// Malformed serverUrl will fail elsewhere; fall through.
+	}
+	return resource;
+}
+
 export interface MCPOAuthConfig {
 	/** Authorization endpoint URL */
 	authorizationUrl: string;
@@ -408,23 +434,12 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 
 	/**
 	 * Drop resource indicators that equal the authorization-server origin.
-	 *
-	 * Some servers (Plane is the live example, see issue #3502) reject
-	 * `resource=<auth-server-origin>` with `server_error` before the consent
-	 * screen. Per RFC 8707 §2 the indicator distinguishes *other* resource
-	 * servers from the authorization server, so a self-referential value is
-	 * never required — silently strip it to stay compatible with strict
-	 * implementations.
+	 * Delegates to {@link filterSelfReferentialResource}; the refresh-token
+	 * leg uses the same helper with `tokenUrl` so initial grant and refresh
+	 * stay in lock-step (RFC 8707 §2.2 requires matching indicators).
 	 */
 	#filterResourceIndicator(resource: string | undefined): string | undefined {
-		if (!resource) return undefined;
-		try {
-			const authOrigin = new URL(this.config.authorizationUrl).origin;
-			if (resource === authOrigin || resource === `${authOrigin}/`) return undefined;
-		} catch {
-			// Malformed authorizationUrl will fail elsewhere; fall through.
-		}
-		return resource;
+		return filterSelfReferentialResource(resource, this.config.authorizationUrl);
 	}
 
 	/**
@@ -558,7 +573,9 @@ export async function refreshMCPOAuthToken(
 		refresh_token: refreshToken,
 	});
 	if (clientId) params.set("client_id", clientId);
-	const resolvedResource = resolveResourceUri(resource);
+	// Drop self-referential indicators so refresh stays consistent with the
+	// initial grant; see {@link filterSelfReferentialResource} for context.
+	const resolvedResource = filterSelfReferentialResource(resolveResourceUri(resource), tokenUrl);
 	if (resolvedResource) params.set("resource", resolvedResource);
 	if (clientSecret) params.set("client_secret", clientSecret);
 
