@@ -17,6 +17,33 @@ describe("legacy pi compat compiled-mode subpath overrides (issue #3442)", () =>
 		expect(overrides["@oh-my-pi/pi-ai/oauth"]).toBe("omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth");
 	});
 
+	it("expands wildcard exports for concrete on-disk targets (issue #3442 follow-up)", () => {
+		// `pi-ai/oauth/anthropic` is exposed via the `./oauth/*` wildcard export;
+		// the original fix only bundled non-wildcard subpaths, so peer-only plugins
+		// importing `@(scope)/pi-ai/oauth/anthropic` (remapped via PI_SUBPATH_REMAPS
+		// from `@mariozechner/pi-ai/utils/oauth/anthropic`) still hit the bunfs
+		// fall-through. The generator now globs each wildcard's source pattern
+		// and registers every concrete `.ts` match against the virtual namespace.
+		const overrides = __buildLegacyPiPackageRootOverrides(true);
+		expect(overrides["@oh-my-pi/pi-ai/oauth/anthropic"]).toBe(
+			"omp-legacy-pi-bundled:@oh-my-pi/pi-ai/oauth/anthropic",
+		);
+		// Sanity: the wildcard expansion also reaches deeper subroots so plugins
+		// pinned to e.g. `@oh-my-pi/pi-ai/providers/openai` keep resolving.
+		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-ai/oauth/anthropic")).toBe(true);
+		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-ai/oauth/openai-codex")).toBe(true);
+	});
+
+	it("does not enumerate root catch-all wildcards (./* / ./*.js)", () => {
+		// Root `./*` / `./*.js` patterns would static-import top-level files
+		// like the package's own `cli.ts` and explode the bundle through the
+		// binary entry's transitive graph. Plugins almost never import top-level
+		// pi-* files directly, so we keep those routed via `Bun.resolveSync`.
+		// Concrete check: `@oh-my-pi/pi-coding-agent/cli` is NOT bundled.
+		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-coding-agent/cli")).toBe(false);
+		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-coding-agent/main")).toBe(false);
+	});
+
 	it("maps every bundled key (minus shimmed roots + typebox) to its virtual specifier in compiled mode", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(true);
 		const missing: string[] = [];

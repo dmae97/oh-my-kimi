@@ -104,8 +104,65 @@ function bindingForSubpath(identifier: string, subpath: string): string {
 	return `bundled${identifier}${segments.join("")}`;
 }
 
+// Skip files whose presence on disk is meaningful to the build pipeline rather
+// than something a plugin would import: editor backups (`_*`, `.*`), tests,
+// declaration files, and conventional `index` files (already covered by the
+// non-wildcard root of the same directory when one is declared).
+const SKIPPED_WILDCARD_BASENAMES = new Set(["index"]);
+
+function isSafeWildcardBasename(basename: string): boolean {
+	if (!basename || basename.startsWith(".") || basename.startsWith("_")) return false;
+	if (SKIPPED_WILDCARD_BASENAMES.has(basename)) return false;
+	if (/\.(test|spec|d|generated|bench)$/.test(basename)) return false;
+	return true;
+}
+
+interface WildcardPattern {
+	readonly exportPrefix: string;
+	readonly exportSuffix: string;
+	readonly sourcePrefix: string;
+	readonly sourceSuffix: string;
+}
+
+/**
+ * Parse a single-asterisk Node exports wildcard into its prefix/suffix halves.
+ * Returns `null` for patterns with more than one asterisk or non-relative
+ * sources — neither shows up in our packages today and the generator stays
+ * conservative rather than guessing.
+ */
+function parseWildcardPattern(exportKey: string, sourcePattern: string): WildcardPattern | null {
+	const exportStar = exportKey.indexOf("*");
+	const sourceStar = sourcePattern.indexOf("*");
+	if (exportStar === -1 || sourceStar === -1) return null;
+	if (exportKey.indexOf("*", exportStar + 1) !== -1) return null;
+	if (sourcePattern.indexOf("*", sourceStar + 1) !== -1) return null;
+	if (!sourcePattern.startsWith("./")) return null;
+	return {
+		exportPrefix: exportKey.slice(2, exportStar),
+		exportSuffix: exportKey.slice(exportStar + 1),
+		sourcePrefix: sourcePattern.slice(2, sourceStar),
+		sourceSuffix: sourcePattern.slice(sourceStar + 1),
+	};
+}
+
+function exportImportTarget(value: unknown): string | null {
+	if (typeof value === "string") return value;
+	if (value && typeof value === "object" && "import" in value) {
+		const target = (value as { import?: unknown }).import;
+		return typeof target === "string" ? target : null;
+	}
+	return null;
+}
+
 async function collectEntries(): Promise<RegistryEntry[]> {
 	const entries: RegistryEntry[] = [];
+	const seenKeys = new Set<string>();
+	function pushEntry(key: string, binding: string, importSpecifier: string): void {
+		if (seenKeys.has(key)) return;
+		seenKeys.add(key);
+		entries.push({ key, binding, importSpecifier });
+	}
+
 	for (const pkg of PACKAGES) {
 		const manifestPath = path.join(repoRoot, pkg.dir, "package.json");
 		const manifest = (await Bun.file(manifestPath).json()) as { name?: string; exports?: Record<string, unknown> };
@@ -116,20 +173,61 @@ async function collectEntries(): Promise<RegistryEntry[]> {
 		}
 		const exportsField = manifest.exports ?? {};
 		// Root: shim if one is declared, otherwise the canonical package.
-		entries.push({
-			key: pkg.name,
-			binding: `bundled${pkg.identifier}`,
-			importSpecifier: pkg.rootShim ?? pkg.name,
-		});
-		// Each non-wildcard subpath export becomes its own registry key.
+		pushEntry(pkg.name, `bundled${pkg.identifier}`, pkg.rootShim ?? pkg.name);
+		// Pass 1: every non-wildcard subpath export becomes its own registry key.
 		for (const exportKey in exportsField) {
 			if (!exportKey.startsWith("./") || exportKey === "." || exportKey.includes("*")) continue;
 			const subpath = exportKey.slice(2);
-			entries.push({
-				key: `${pkg.name}/${subpath}`,
-				binding: bindingForSubpath(pkg.identifier, subpath),
-				importSpecifier: `${pkg.name}/${subpath}`,
-			});
+			pushEntry(`${pkg.name}/${subpath}`, bindingForSubpath(pkg.identifier, subpath), `${pkg.name}/${subpath}`);
+		}
+		// Pass 2: expand wildcard exports against the source tree so plugins can
+		// import concrete subpath targets — e.g. `@(scope)/pi-ai/oauth/anthropic`
+		// remaps to `@oh-my-pi/pi-ai/oauth/anthropic`, covered by pi-ai's
+		// `./oauth/*` export pattern, which Node only resolves at runtime against
+		// a real `node_modules`. Compiled bunfs can't resolve at runtime, so we
+		// statically enumerate the concrete files now (issue #3442 follow-up).
+		// Root catch-all patterns (`./*`, `./*.js`) are skipped intentionally:
+		// the pi-coding-agent root is the binary entry's source tree, so static-
+		// importing every top-level file would drag `cli.ts`/`main.ts` through a
+		// second graph and explode the bundle for no plugin-facing benefit.
+		for (const exportKey in exportsField) {
+			if (!exportKey.startsWith("./") || exportKey === "." || !exportKey.includes("*")) continue;
+			const sourcePattern = exportImportTarget(exportsField[exportKey]);
+			if (!sourcePattern) continue;
+			const pattern = parseWildcardPattern(exportKey, sourcePattern);
+			if (!pattern) continue;
+			// Limit to JS-loadable source modules. `./prompts/*` mapping to
+			// `*.md` would emit a `import * as foo from "@(pkg)/prompts/<name>"`
+			// that Bun can't load as a JS module.
+			if (!/\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/.test(pattern.sourceSuffix)) continue;
+			// Skip root catch-alls (prefix is empty before the wildcard). See
+			// the explanatory block comment above for the bundle-explosion
+			// reasoning. Named wildcards like `./oauth/*` keep `oauth/` here.
+			if (pattern.exportPrefix === "" || pattern.exportPrefix === "/") continue;
+
+			const sourceDir = path.join(repoRoot, pkg.dir, pattern.sourcePrefix);
+			try {
+				const glob = new Bun.Glob(`*${pattern.sourceSuffix}`);
+				const matches: string[] = [];
+				for await (const match of glob.scan({ cwd: sourceDir, onlyFiles: true })) {
+					matches.push(match);
+				}
+				matches.sort();
+				for (const match of matches) {
+					if (!match.endsWith(pattern.sourceSuffix)) continue;
+					const basename = match.slice(0, match.length - pattern.sourceSuffix.length);
+					if (!isSafeWildcardBasename(basename)) continue;
+					if (basename.includes("/")) continue;
+					const subpath = `${pattern.exportPrefix}${basename}${pattern.exportSuffix}`;
+					const key = `${pkg.name}/${subpath}`;
+					pushEntry(key, bindingForSubpath(pkg.identifier, subpath), key);
+				}
+			} catch (err) {
+				// Missing source dir means the wildcard is declared in
+				// package.json but the implementation tree hasn't shipped that
+				// folder yet. Leave it to runtime resolution.
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+			}
 		}
 	}
 	entries.push({
@@ -137,16 +235,14 @@ async function collectEntries(): Promise<RegistryEntry[]> {
 		binding: "bundledTypeBoxShim",
 		importSpecifier: TYPEBOX_SHIM_IMPORT,
 	});
-	const seen = new Set<string>();
+	const seenBindings = new Set<string>();
 	for (const entry of entries) {
-		if (seen.has(entry.key)) {
-			throw new Error(`generate-legacy-pi-bundled-registry: duplicate registry key ${entry.key}`);
+		if (seenBindings.has(entry.binding)) {
+			throw new Error(
+				`generate-legacy-pi-bundled-registry: duplicate binding ${entry.binding} for key ${entry.key}`,
+			);
 		}
-		seen.add(entry.key);
-		if (seen.has(entry.binding)) {
-			throw new Error(`generate-legacy-pi-bundled-registry: duplicate binding ${entry.binding}`);
-		}
-		seen.add(entry.binding);
+		seenBindings.add(entry.binding);
 	}
 	return entries;
 }
