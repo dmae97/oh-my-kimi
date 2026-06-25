@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary } from "@oh-my-pi/pi-utils";
+import { BUNDLED_PI_REGISTRY_KEYS } from "./legacy-pi-bundled-keys";
 
 const IS_COMPILED_BINARY = isCompiledBinary();
 
@@ -344,20 +345,34 @@ export function __validateLegacyPiPackageRootOverrides(
 	);
 }
 
-const LEGACY_PI_PACKAGE_ROOT_OVERRIDES = __validateLegacyPiPackageRootOverrides({
-	[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
-	[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
-	...(IS_COMPILED_BINARY
-		? {
-				[`${CANONICAL_PI_SCOPE}/pi-agent-core`]: bundledRegistryVirtualSpecifier(
-					`${CANONICAL_PI_SCOPE}/pi-agent-core`,
-				),
-				[`${CANONICAL_PI_SCOPE}/pi-natives`]: bundledRegistryVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-natives`),
-				[`${CANONICAL_PI_SCOPE}/pi-tui`]: bundledRegistryVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-tui`),
-				[`${CANONICAL_PI_SCOPE}/pi-utils`]: bundledRegistryVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-utils`),
-			}
-		: {}),
-});
+/**
+ * Compute the override map keyed by every canonical specifier the host serves
+ * directly: the pi-ai / pi-coding-agent roots (compat shims that re-attach
+ * legacy helpers) plus, in compiled-binary mode, every other canonical pi-*
+ * package root AND every non-wildcard subpath registered in the bundled
+ * registry (see `legacy-pi-bundled-keys.ts`). Subpath coverage is what stops
+ * `@(scope)/pi-ai/oauth` and friends from falling through to the extension's
+ * own — possibly absent — peer install when bunfs filesystem walks fail
+ * (issue #3442 follow-up to #3423). Exported as a test seam so the
+ * compiled-binary branch is verifiable from dev tests.
+ */
+export function __buildLegacyPiPackageRootOverrides(isCompiled: boolean): Record<string, string> {
+	const candidates: Record<string, string> = {
+		[`${CANONICAL_PI_SCOPE}/pi-ai`]: LEGACY_PI_AI_SHIM_PATH,
+		[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
+	};
+	if (isCompiled) {
+		for (const key of BUNDLED_PI_REGISTRY_KEYS) {
+			// Shim-bearing roots above already mapped to their compat surface;
+			// the bundled typebox shim has a dedicated TYPEBOX_SHIM_PATH route.
+			if (key in candidates || key === TYPEBOX_BUNDLED_REGISTRY_KEY) continue;
+			candidates[key] = bundledRegistryVirtualSpecifier(key);
+		}
+	}
+	return __validateLegacyPiPackageRootOverrides(candidates);
+}
+
+const LEGACY_PI_PACKAGE_ROOT_OVERRIDES = __buildLegacyPiPackageRootOverrides(IS_COMPILED_BINARY);
 
 let isLegacyPiSpecifierShimInstalled = false;
 
