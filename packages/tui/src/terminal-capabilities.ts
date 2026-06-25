@@ -21,7 +21,16 @@ export enum NotifyProtocol {
 	Osc9 = "\x1b]9;",
 }
 
-export type TerminalId = "kitty" | "ghostty" | "wezterm" | "iterm2" | "vscode" | "alacritty" | "base" | "trueColor";
+export type TerminalId =
+	| "kitty"
+	| "ghostty"
+	| "wezterm"
+	| "iterm2"
+	| "vscode"
+	| "alacritty"
+	| "warp"
+	| "base"
+	| "trueColor";
 
 function hasNeedleBefore(line: string, needle: string, limit: number): boolean {
 	const index = line.indexOf(needle);
@@ -251,9 +260,9 @@ export function shouldEnableSynchronizedOutputByDefault(
 		case "vscode":
 			return true;
 		default:
-			// VTE family, GNU screen, Apple Terminal, legacy native console host
-			// (no WT_SESSION), and bare/unknown xterm profiles stay off until the
-			// DECRQM probe proves support.
+			// VTE family, GNU screen, Apple Terminal, Warp, legacy native console
+			// host (no WT_SESSION), and bare/unknown xterm profiles stay off until
+			// the DECRQM probe proves support.
 			return false;
 	}
 }
@@ -374,6 +383,12 @@ function getFallbackImageProtocol(terminalId: TerminalId): ImageProtocol | null 
 	}
 	return null;
 }
+function getWarpTerminalInfo(platform: NodeJS.Platform): TerminalInfo {
+	return platform === "win32"
+		? new TerminalInfo("warp", null, true, false, NotifyProtocol.Bell)
+		: new TerminalInfo("warp", ImageProtocol.Kitty, true, false, NotifyProtocol.Bell);
+}
+
 const KNOWN_TERMINALS = Object.freeze({
 	// Fallback terminals
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
@@ -385,9 +400,11 @@ const KNOWN_TERMINALS = Object.freeze({
 	iterm2: new TerminalInfo("iterm2", ImageProtocol.Iterm2, true, true, NotifyProtocol.Osc9),
 	vscode: new TerminalInfo("vscode", null, true, true, NotifyProtocol.Bell),
 	alacritty: new TerminalInfo("alacritty", null, true, true, NotifyProtocol.Bell),
+	warp: getWarpTerminalInfo(process.platform),
 });
 
-export const TERMINAL_ID: TerminalId = (() => {
+/** Resolve terminal identity from environment markers used by common emulators. */
+export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 	function caseEq(a: string, b: string): boolean {
 		return a.toLowerCase() === b.toLowerCase(); // For compiler to pattern match
 	}
@@ -402,7 +419,7 @@ export const TERMINAL_ID: TerminalId = (() => {
 		TERM_PROGRAM,
 		TERM,
 		COLORTERM,
-	} = Bun.env;
+	} = env;
 
 	if (KITTY_WINDOW_ID) return "kitty";
 	if (GHOSTTY_RESOURCES_DIR) return "ghostty";
@@ -418,6 +435,7 @@ export const TERMINAL_ID: TerminalId = (() => {
 		if (caseEq(TERM_PROGRAM, "iterm.app")) return "iterm2";
 		if (caseEq(TERM_PROGRAM, "vscode")) return "vscode";
 		if (caseEq(TERM_PROGRAM, "alacritty")) return "alacritty";
+		if (caseEq(TERM_PROGRAM, "WarpTerminal")) return "warp";
 	}
 
 	if (TERM?.toLowerCase().includes("ghostty")) return "ghostty";
@@ -426,7 +444,9 @@ export const TERMINAL_ID: TerminalId = (() => {
 		if (caseEq(COLORTERM, "truecolor") || caseEq(COLORTERM, "24bit")) return "trueColor";
 	}
 	return "base";
-})();
+}
+
+export const TERMINAL_ID: TerminalId = detectTerminalId(Bun.env);
 
 /**
  * The process-wide {@link TERMINAL} singleton: a {@link TerminalInfo} whose
@@ -504,8 +524,8 @@ export function setTerminalTextSizing(enabled: boolean): void {
 	TERMINAL.textSizing = enabled;
 }
 
-export function getTerminalInfo(terminalId: TerminalId): TerminalInfo {
-	return KNOWN_TERMINALS[terminalId];
+export function getTerminalInfo(terminalId: TerminalId, platform: NodeJS.Platform = process.platform): TerminalInfo {
+	return terminalId === "warp" ? getWarpTerminalInfo(platform) : KNOWN_TERMINALS[terminalId];
 }
 
 export interface CellDimensions {

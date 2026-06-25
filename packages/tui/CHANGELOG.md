@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal, enabling Kitty inline images on macOS/Linux while keeping Warp's unsafe OSC 8 hyperlinks and Windows Kitty graphics disabled ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed
