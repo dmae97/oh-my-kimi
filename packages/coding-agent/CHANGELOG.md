@@ -11,6 +11,7 @@
 - Fixed concise `history://` transcript rendering for `find` and `search` so scoped `paths` arguments are visible instead of being hidden behind JSON fallback output or omitted when a search `pattern` is present. ([#3482](https://github.com/can1357/oh-my-pi/issues/3482))
 - Fixed manual `/compact` leaving `session.isCompacting` false while active-turn abort teardown awaited, so the first steer/follow-up typed during compaction startup now routes through the compaction queue instead of being lost. ([#3485](https://github.com/can1357/oh-my-pi/issues/3485))
 - Fixed ollama-cloud task/subagent fan-out exceeding the provider's three-request concurrency cap by adding a provider-specific subagent limiter, and let configured task/smol/advisor model roles inherit the default retry fallback chain when they do not define their own chain. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
+- Fixed the per-provider subagent concurrency limiter (e.g. `providers.ollama-cloud.maxConcurrency`) being replaced with a fresh semaphore whenever the configured limit changed, which orphaned the in-flight slots on the old instance and let a runtime or mixed limit value exceed the cap. The limiter now resizes a single shared semaphore in place — raising the ceiling admits queued waiters immediately, lowering it drains in-flight holders without admitting past the new cap. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 
 ## [16.1.19] - 2026-06-25
 

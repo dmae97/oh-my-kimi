@@ -135,11 +135,33 @@ export class Semaphore {
 	}
 
 	release(): void {
-		const next = this.#queue.shift();
-		if (next) {
+		if (this.#current > 0) this.#current--;
+		// Admit the next waiter only if we are under the (possibly just-lowered) ceiling.
+		if (this.#current < this.#max) {
+			const next = this.#queue.shift();
+			if (next) {
+				this.#current++;
+				next();
+			}
+		}
+	}
+
+	/**
+	 * Adjust the maximum concurrency in place. Raising the ceiling immediately
+	 * admits queued waiters that now fit; lowering it lets in-flight holders
+	 * drain naturally (new acquires keep blocking until `#current` falls below
+	 * the new max). Resizing the single shared instance — instead of replacing
+	 * it — keeps in-flight slots counted, so a runtime or mixed limit change can
+	 * never push concurrency past the cap (issue #3464 review feedback).
+	 */
+	resize(max: number): void {
+		const normalizedMax = Number.isFinite(max) ? Math.trunc(max) : 0;
+		this.#max = normalizedMax > 0 ? normalizedMax : Number.POSITIVE_INFINITY;
+		while (this.#current < this.#max) {
+			const next = this.#queue.shift();
+			if (!next) break;
+			this.#current++;
 			next();
-		} else {
-			this.#current--;
 		}
 	}
 }

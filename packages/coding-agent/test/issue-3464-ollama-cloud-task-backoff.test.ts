@@ -242,4 +242,74 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 		semaphore.release();
 		await next;
 	});
+
+	it("raises the ceiling in place and admits queued waiters without a release", async () => {
+		const semaphore = new Semaphore(1);
+		await semaphore.acquire();
+		const admitted: number[] = [];
+		const w1 = (async () => {
+			await semaphore.acquire();
+			admitted.push(1);
+		})();
+		const w2 = (async () => {
+			await semaphore.acquire();
+			admitted.push(2);
+		})();
+		await Bun.sleep(0);
+		expect(admitted).toEqual([]);
+
+		semaphore.resize(3);
+		await Bun.sleep(0);
+		expect(admitted).toEqual([1, 2]);
+		await Promise.all([w1, w2]);
+	});
+
+	it("lowers the ceiling without admitting waiters past the new cap", async () => {
+		const semaphore = new Semaphore(3);
+		await semaphore.acquire();
+		await semaphore.acquire();
+		await semaphore.acquire();
+		let admitted = false;
+		const waiter = (async () => {
+			await semaphore.acquire();
+			admitted = true;
+		})();
+		await Bun.sleep(0);
+		expect(admitted).toBe(false);
+
+		semaphore.resize(1);
+		semaphore.release();
+		await Bun.sleep(0);
+		expect(admitted).toBe(false);
+		semaphore.release();
+		await Bun.sleep(0);
+		expect(admitted).toBe(false);
+		semaphore.release();
+		await Bun.sleep(0);
+		expect(admitted).toBe(true);
+		await waiter;
+		semaphore.release();
+	});
+
+	it("counts holders acquired while unlimited after a finite cap is re-enabled", async () => {
+		const semaphore = new Semaphore(0); // unlimited
+		await semaphore.acquire();
+		await semaphore.acquire(); // two holders counted despite being unlimited
+		let admitted = false;
+		semaphore.resize(1); // re-enable a finite cap below the in-flight count
+		const waiter = (async () => {
+			await semaphore.acquire();
+			admitted = true;
+		})();
+		await Bun.sleep(0);
+		expect(admitted).toBe(false);
+		semaphore.release();
+		await Bun.sleep(0);
+		expect(admitted).toBe(false);
+		semaphore.release();
+		await Bun.sleep(0);
+		expect(admitted).toBe(true);
+		await waiter;
+		semaphore.release();
+	});
 });

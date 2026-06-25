@@ -205,19 +205,35 @@ interface ProviderSemaphoreEntry {
 
 const providerSemaphores = new Map<string, ProviderSemaphoreEntry>();
 
-function getProviderConcurrencyLimit(settings: Settings, provider: string): number {
+/**
+ * Resolve the configured concurrency ceiling for a provider, or `undefined`
+ * when the provider has no cap concept at all. A configured value `<= 0` means
+ * "unlimited" and maps to `Infinity` — still a tracked ceiling, so every run
+ * holds a slot and a later finite resize counts work started while unlimited.
+ */
+function getProviderConcurrencyLimit(settings: Settings, provider: string): number | undefined {
 	const settingPath = PROVIDER_MAX_CONCURRENCY_SETTINGS[provider];
-	if (!settingPath) return 0;
+	if (!settingPath) return undefined;
 	const raw = settings.get(settingPath);
 	const limit = Number.isFinite(raw) ? Math.trunc(raw) : 0;
-	return limit > 0 ? limit : 0;
+	return limit > 0 ? limit : Number.POSITIVE_INFINITY;
 }
 
 function getProviderSemaphore(settings: Settings, provider: string): Semaphore | undefined {
 	const limit = getProviderConcurrencyLimit(settings, provider);
-	if (limit <= 0) return undefined;
+	if (limit === undefined) return undefined;
+	// Always hand out (and acquire on) the single shared limiter, even when
+	// unlimited (Infinity). Resizing it in place — rather than replacing it —
+	// keeps every in-flight slot counted, so a runtime or mixed limit change can
+	// never push concurrency past the cap (issue #3464 review feedback).
 	const existing = providerSemaphores.get(provider);
-	if (existing?.limit === limit) return existing.semaphore;
+	if (existing) {
+		if (existing.limit !== limit) {
+			existing.limit = limit;
+			existing.semaphore.resize(limit);
+		}
+		return existing.semaphore;
+	}
 	const semaphore = new Semaphore(limit);
 	providerSemaphores.set(provider, { limit, semaphore });
 	return semaphore;
