@@ -155,7 +155,7 @@ function openAIGpt4oTarget(): Model<"openai-completions"> {
 	} satisfies ModelSpec<"openai-completions">);
 }
 
-describe("cross-API 3p ↔ 3p thinking-block preservation (#3434)", () => {
+describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 	it("emits reasoning_content on Z.AI Anthropic → Z.AI OpenAI cross-API switch", () => {
 		const target = zaiOpenAITarget();
 		const messages: Message[] = [
@@ -273,14 +273,16 @@ describe("cross-API 3p ↔ 3p thinking-block preservation (#3434)", () => {
 		expect(assistant.reasoning_content).toBe("Read README and answer.");
 	});
 
-	it("folds preserved thinking into content when the OpenCode base compat (thinking off) cannot surface reasoning_content", () => {
+	it("demotes prior thinking to content when the OpenCode base compat (thinking off) cannot surface reasoning_content", () => {
 		// Companion of the prior test: same OpenCode target, but the request
 		// runs against the BASE compat (thinking disabled, the path that bars
-		// `reasoning_content` per #1071). Without the encoder fallback,
-		// transform-messages would preserve the native thinking block and the
-		// encoder would silently drop it — a regression vs. the pre-#3434
-		// text-demotion behavior. The fallback folds the reasoning into the
-		// visible content so the next turn still sees the prior plan.
+		// `reasoning_content` per #1071). The cross-API preservation predicate
+		// reads this resolved base compat — which neither requires
+		// `reasoning_content` nor is a Z.AI-format host — so it preserves no
+		// native thinking block the encoder couldn't surface; the cross-API path
+		// instead text-demotes the prior reasoning into visible content. The
+		// reasoning still survives as conversation context, with no
+		// `reasoning_content` on the wire and no #1071 regression.
 		const target = opencodeGoKimiTarget();
 		const compat = target.compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(false);

@@ -1224,6 +1224,75 @@ describe("kimi model detection via detectCompat", () => {
 		expect(assistant?.reasoning).toBeUndefined();
 	});
 
+	it("uses thinking-enabled compat when replaying cross-api reasoning on kimi opencode-go", async () => {
+		const model = kimiOpenCodeModel("kimi-k2.6");
+		expect(model.compat.requiresReasoningContentForToolCalls).toBe(false);
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Need to preserve cross-api reasoning.",
+					thinkingSignature: "sig_from_anthropic",
+				},
+				{
+					type: "toolCall",
+					id: "toolu_cross_api",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			],
+			api: "anthropic-messages",
+			provider: "zai",
+			model: "claude-compatible",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		const fetchMock = createMockFetch(["[DONE]"]);
+		streamOpenAICompletions(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Summarize the README", timestamp: Date.now() },
+					priorAssistant,
+					{
+						role: "toolResult",
+						toolCallId: "toolu_cross_api",
+						toolName: "read",
+						content: [{ type: "text", text: "# Hello\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				fetch: fetchMock,
+				reasoning: "high",
+				signal: createAbortedSignal(),
+				onPayload: payload => resolve(payload),
+			},
+		);
+
+		const payload = (await promise) as { messages: Array<Record<string, unknown>> };
+		const assistant = payload.messages.find(m => m.role === "assistant");
+		expect(assistant).toBeDefined();
+		expect(assistant?.content).toBe(".");
+		expect(assistant?.reasoning_content).toBe("Need to preserve cross-api reasoning.");
+		expect(assistant?.reasoning).toBeUndefined();
+		expect(assistant?.reasoning_text).toBeUndefined();
+	});
+
 	// #1071 regression guard alongside the #1484 fix: with thinking disabled the
 	// override stays off so the gateway's `Extra inputs are not permitted` error
 	// can never reappear on tool-call replays.

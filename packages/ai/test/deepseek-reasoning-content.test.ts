@@ -327,6 +327,36 @@ describe("DeepSeek reasoning_content tool-call replay", () => {
 			// Should have set reasoning_content from the thinking text via the openai path.
 			expect(assistant?.reasoning_content).toBe("some reasoning");
 		});
+		it("replays cross-api thinking with stripped signature through reasoning_content", () => {
+			const model = deepseekModel({
+				provider: "opencode-go",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+				id: "deepseek-v4-flash",
+			});
+			const compat = model.compat;
+			const msg = assistantToolCall(model, [
+				{
+					type: "thinking",
+					thinking: "Need to preserve cross-api reasoning.",
+					thinkingSignature: "sig_from_anthropic",
+				},
+				{
+					type: "toolCall",
+					id: "toolu_cross_api",
+					name: "read",
+					arguments: { path: "README.md" },
+				},
+			]);
+			msg.api = "anthropic-messages";
+			msg.provider = "zai";
+			msg.model = "claude-compatible";
+
+			const messages = convertMessages(model, { messages: [msg] }, compat);
+			const assistant = findOpenAICompletionAssistantWireMessage(messages);
+			expect(assistant).toBeDefined();
+			expect(assistant?.reasoning_content).toBe("Need to preserve cross-api reasoning.");
+			expect(assistant?.content).toBe("");
+		});
 		it("falls through to empty-string when thinking block has opaque signature and empty text", () => {
 			const model = deepseekModel({
 				provider: "opencode-go",

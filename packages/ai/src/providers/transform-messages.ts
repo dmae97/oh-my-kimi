@@ -143,47 +143,41 @@ function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messa
 	return model.api === "anthropic-messages";
 }
 
-function isOpenAICompletionsModel(model: Model): model is Model<"openai-completions"> {
-	return model.api === "openai-completions";
-}
-
 /**
- * Cross-API targets that accept a prior turn's reasoning as a native,
- * signature-stripped `thinking` block. Anthropic's same-API path
- * (`replayUnsignedThinking`) covers `anthropic-messages` targets directly;
- * this predicate is the analogue for the `openai-completions` branch of the
- * cross-API path (#3434). 3p ↔ 3p replays between an Anthropic-compatible
- * source (Z.AI Anthropic, Kimi Anthropic, …) and an OpenAI-compat reasoning
- * target on the same vendor must keep reasoning as structured
- * `reasoning_content` instead of degrading it to conversation text.
+ * Cross-API `openai-completions` targets that can replay a prior turn's
+ * reasoning as a native, signature-stripped `thinking` block on the wire.
+ * Anthropic's same-API path (`replayUnsignedThinking`) covers
+ * `anthropic-messages` targets directly; this is the analogue for the
+ * `openai-completions` branch of the cross-API path (#3433/#3434). 3p ↔ 3p
+ * replays between an Anthropic-compatible source (Z.AI Anthropic, Kimi
+ * Anthropic, …) and an OpenAI-compat reasoning target on the same vendor must
+ * keep reasoning as structured `reasoning_content` instead of degrading it to
+ * conversation text.
  *
- * Considers both the base compat view AND `compat.whenThinking` because the
- * latter is the resolved compat the request actually runs against when
- * thinking is engaged on hosts like OpenCode (`opencode-go`/`opencode-zen`),
- * where the base compat intentionally suppresses `requiresReasoningContentForToolCalls`
- * to dodge the thinking-off `Extra inputs are not permitted` 400 (#1071) and
- * the `whenThinking` policy reactivates it for thinking-on requests to dodge
- * the `thinking is enabled but reasoning_content is missing` 400 (#1484).
- * Ignoring `whenThinking` would re-open #1484 for every cross-API switch into
- * an OpenCode-hosted reasoning model.
+ * `compat` MUST be the request-time RESOLVED compat that `convertMessages`
+ * threads into `transformMessages`, not `model.compat`. OpenCode-hosted
+ * reasoning models (`opencode-go`/`opencode-zen`) keep
+ * `requiresReasoningContentForToolCalls` off on the base compat to dodge the
+ * thinking-off `Extra inputs are not permitted` 400 (#1071) and reactivate it
+ * on `compat.whenThinking` for thinking-engaged requests to dodge the
+ * `thinking is enabled but reasoning_content is missing` 400 (#1484).
+ * `resolveOpenAICompatPolicy` already swaps in `whenThinking` for thinking-on
+ * requests, so basing this decision on the resolved compat keeps the predicate
+ * and the encoder in lockstep; reading `model.compat` would re-open #1484 for
+ * every cross-API switch into an OpenCode reasoning model.
  *
- * The downstream encoder MUST then surface the preserved block on the wire
- * via `reasoningContentField` — see `openai-completions.ts` for the matching
+ * The downstream encoder MUST then surface the preserved block on the wire via
+ * `reasoningContentField` — see `openai-completions.ts` for the matching
  * branch.
  */
-function openAICompletionsReplaysUnsignedThinking(model: Model<"openai-completions">): boolean {
-	if (!model.reasoning) return false;
-	const base = model.compat;
-	if (acceptsReasoningContentReplay(base)) return true;
-	const whenThinking = base.whenThinking;
-	return whenThinking !== undefined && acceptsReasoningContentReplay(whenThinking);
-}
-
-function acceptsReasoningContentReplay(compat: Model<"openai-completions">["compat"]): boolean {
+function openAICompletionsReplaysUnsignedThinking(model: Model, compat: Model["compat"]): boolean {
+	if (model.api !== "openai-completions" || !model.reasoning) return false;
+	if (compat === undefined || !("requiresReasoningContentForToolCalls" in compat)) return false;
 	if (compat.requiresThinkingAsText) return false;
-	// Hosts that REQUIRE `reasoning_content` on tool-call turns already accept
-	// it elsewhere; same for Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi,
-	// Xiaomi MiMo), which advertise `reasoning_content` as a continuation hint.
+	// Hosts that REQUIRE `reasoning_content` on tool-call turns (DeepSeek
+	// reasoning, Kimi, OpenRouter reasoning, OpenCode thinking-on) already
+	// accept the replay; Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi native,
+	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint.
 	return compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai";
 }
 
@@ -225,6 +219,7 @@ export function transformMessages<TApi extends Api>(
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 	maxNormalizedToolCallIdLength = MAX_TOOL_CALL_ID_LENGTH,
 	duplicateToolCallIdSuffixPrefix = "_dup",
+	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -379,8 +374,8 @@ export function transformMessages<TApi extends Api>(
 					// every cross-API 3p ↔ 3p switch (Z.AI Anthropic → Z.AI OpenAI,
 					// Kimi Anthropic → Kimi OpenAI, etc.) demoted prior reasoning to
 					// conversation text and lost it as structured reasoning context
-					// (#3434).
-					if (isOpenAICompletionsModel(model) && openAICompletionsReplaysUnsignedThinking(model)) {
+					// (#3433/#3434).
+					if (openAICompletionsReplaysUnsignedThinking(model, targetCompat)) {
 						return sanitized.thinkingSignature ? { ...sanitized, thinkingSignature: undefined } : sanitized;
 					}
 					// Other cross-API targets (openai-responses encrypted blobs, google
