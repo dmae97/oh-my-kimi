@@ -557,8 +557,7 @@ function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false):
 		lines.push(`  ${phase.name}:`);
 		for (const task of phase.tasks) {
 			const checkbox = task.status === "completed" ? "[X]" : "[ ]";
-			const tag =
-				task.status === "in_progress" ? " (in progress)" : task.status === "abandoned" ? " (dropped)" : "";
+			const tag = task.status === "in_progress" ? " (in progress)" : task.status === "abandoned" ? " (dropped)" : "";
 			lines.push(`    - ${checkbox} ${task.content}${tag}`);
 		}
 	}

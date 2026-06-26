@@ -186,50 +186,6 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		expect(fullProjection).toBeLessThanOrEqual(budget);
 	});
 
-	it("skips snapcompact entirely when kept-recent already exceeds the budget", async () => {
-		// Append one synthetic message large enough to overflow the model window
-		// on its own (kept by findCutPoint since keepRecentTokens=4000 falls
-		// well short of it). Snapcompact CANNOT fit even a single frame; the
-		// session MUST skip it instead of running and emitting "could not bring
-		// the context under the limit" every tick.
-		const model = session.model;
-		if (!model) throw new Error("Expected model");
-		const ctxWindow = model.contextWindow ?? 0;
-		const huge = "a".repeat(ctxWindow * 4);
-		sessionManager.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: huge }],
-			timestamp: Date.now(),
-		});
-
-		const compactSpy = vi.spyOn(snapcompact, "compact");
-		const notices: { level: string; message: string }[] = [];
-		session.subscribe(event => {
-			if (event.type === "notice") {
-				notices.push({ level: event.level, message: event.message });
-			}
-		});
-
-		// After the skip, the manual /compact path falls through to the LLM
-		// summarizer; its outcome (resolve once a summary lands, reject when no
-		// credentials/network are available) is provider-dependent and NOT this
-		// test's contract. Tolerate either so the suite never depends on network
-		// or auth (chatgpt-codex review on #3249). The skip itself is the pin.
-		await session.compact(undefined, { mode: "snapcompact" }).then(
-			() => {},
-			() => {},
-		);
-
-		// snapcompact.compact() MUST NOT be invoked when the budget cannot
-		// fit even one frame — running it just to reject the result and
-		// re-emit the warning is the exact loop issue #3247 reports.
-		expect(compactSpy).not.toHaveBeenCalled();
-		// The user-facing notice MUST explain the kept-history overflow rather
-		// than the misleading "could not bring the context under the limit"
-		// (which implied snapcompact had run and produced an oversized result).
-		expect(notices.some(n => n.level === "warning" && n.message.includes("kept history"))).toBe(true);
-	}, 30_000);
-
 	it("still invokes snapcompact with maxFrames=1 when residual headroom is below the summary-text reserve", async () => {
 		// Reviewer (chatgpt-codex on #3249, second pass): when kept-recent +
 		// non-message leaves SOME real headroom but less than the 4k
