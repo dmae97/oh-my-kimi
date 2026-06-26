@@ -433,7 +433,8 @@ export async function discoverOAuthEndpoints(
 						// cross-host issuer metadata.
 						const requireIssuerMatch =
 							base.issuerCandidate &&
-							(path === "/.well-known/oauth-authorization-server" || path === "/.well-known/openid-configuration");
+							(path === "/.well-known/oauth-authorization-server" ||
+								path === "/.well-known/openid-configuration");
 						const issuerOk = requireIssuerMatch ? issuerMatchesBase(metadata.issuer, base.url) : true;
 						const endpoints = issuerOk ? findEndpoints(metadata) : null;
 						if (endpoints) return endpoints;
