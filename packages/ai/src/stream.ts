@@ -17,6 +17,7 @@ import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
+import { type GitLabDuoWorkflowOptions, streamGitLabDuoWorkflow } from "./providers/gitlab-duo-workflow";
 import type { GoogleOptions } from "./providers/google";
 import { getVertexAccessToken } from "./providers/google-auth";
 import type { GoogleGeminiCliOptions } from "./providers/google-gemini-cli";
@@ -260,6 +261,17 @@ function streamDispatch<TApi extends Api>(
 			...(requestOptions as SimpleStreamOptions),
 			apiKey,
 		});
+	}
+
+	if (model.api === "gitlab-duo-agent") {
+		const apiKey = (requestOptions as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
+		if (!apiKey) {
+			throw new Error(`No API key for provider: ${model.provider}`);
+		}
+		return streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
+			...(requestOptions as StreamOptions | undefined),
+			apiKey,
+		} as GitLabDuoWorkflowOptions);
 	}
 
 	// Vertex AI uses Application Default Credentials, not API keys
@@ -571,6 +583,14 @@ export function streamSimple<TApi extends Api>(
 	// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
 	if (isGitLabDuoModel(model)) {
 		return streamGitLabDuo(model, context, {
+			...requestOptions,
+			apiKey,
+		});
+	}
+
+	// GitLab Duo Workflow - IDE workflow protocol + WebSocket action bridge
+	if (model.api === "gitlab-duo-agent") {
+		return streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 			...requestOptions,
 			apiKey,
 		});
@@ -1163,6 +1183,12 @@ function mapOptionsForApi<TApi extends Api>(
 			});
 		}
 
+		case "gitlab-duo-agent":
+			return castApi<"gitlab-duo-agent">({
+				...base,
+				cwd: options?.cwd,
+				toolChoice: options?.toolChoice,
+			});
 		case "devin-agent": {
 			const devinModel = model as Model<"devin-agent">;
 			const effort =
@@ -1174,7 +1200,6 @@ function mapOptionsForApi<TApi extends Api>(
 				chatModelUid: resolveWireModelId(devinModel, effort),
 			});
 		}
-
 		default:
 			throw new Error(`Unhandled API in mapOptionsForApi: ${model.api}`);
 	}

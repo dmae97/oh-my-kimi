@@ -15,6 +15,7 @@ export type KnownApi =
 	| "google-vertex"
 	| "ollama-chat"
 	| "cursor-agent"
+	| "gitlab-duo-agent"
 	| "devin-agent";
 export type Api = KnownApi | (string & {});
 
@@ -682,6 +683,8 @@ export interface Model<TApi extends Api = Api> {
 	 * reports that native tool calling is unsupported.
 	 */
 	supportsTools?: boolean;
+	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
+	gitlabDuoWorkflowRootNamespaceId?: string;
 	cost: {
 		input: number; // $/million tokens
 		output: number; // $/million tokens

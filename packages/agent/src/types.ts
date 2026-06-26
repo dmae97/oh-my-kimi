@@ -337,6 +337,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	getServiceTier?: (model: Model) => ServiceTier | undefined;
 
 	/**
+	 * Per-call working-directory resolver, read once per LLM call. When set, its
+	 * return value overrides the static {@link SimpleStreamOptions.cwd} for the
+	 * request (falling back to that static `cwd` when it returns `undefined`).
+	 * Lets the host reflect a session move (`/move`, which updates the working
+	 * directory without reconstructing the loop config) into provider options —
+	 * e.g. GitLab Duo Agent namespace/project discovery keys off this cwd's git
+	 * remote, so a stale value would strand discovery on the original repo.
+	 */
+	getCwd?: () => string | undefined;
+
+	/**
 	 * Called after a tool call has been validated and is about to execute.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool

@@ -27,6 +27,7 @@ const BUILTIN_API_IDS = [
 	"google-vertex",
 	"ollama-chat",
 	"cursor-agent",
+	"gitlab-duo-agent",
 	"devin-agent",
 ] as const satisfies readonly KnownApi[];
 

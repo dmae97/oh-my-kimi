@@ -1225,6 +1225,9 @@ async function streamAssistantResponse(
 	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
+	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches
+	// workspace-scoped provider discovery; falls back to the static `cwd` when unset.
+	const effectiveCwd = config.getCwd?.() ?? config.cwd;
 
 	const chatStepNumber = stepCounter.count;
 	stepCounter.count += 1;
@@ -1276,6 +1279,7 @@ async function streamAssistantResponse(
 				disableReasoning: effectiveDisableReasoning,
 				temperature: effectiveTemperature,
 				serviceTier: effectiveServiceTier,
+				cwd: effectiveCwd,
 				signal: finalRequestSignal,
 				onResponse: captureOnResponse,
 			});

@@ -17,6 +17,7 @@ import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { $env } from "@oh-my-pi/pi-utils";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
+import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
 import { createModelManager } from "../src/model-manager";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
@@ -496,6 +497,20 @@ async function generateModels() {
 	// Sakana is authoritative and stale seed IDs must stay out.
 	if (!authoritativeCatalogProviders.has("sakana")) {
 		allModels.push(...SAKANA_FUGU_STATIC_MODELS);
+	}
+	// Seed the GitLab Duo Agent fallback model so a fresh install (no credentialed
+	// dynamic discovery/cache yet) still surfaces the provider's default model in the
+	// built-in catalog. The descriptor deliberately has NO `catalogDiscovery`, so it is
+	// excluded from the generator's discovery loop (`isCatalogDescriptor` filter above):
+	// generation never fetches `aiChatAvailableModels` for it. That is intentional —
+	// Duo discovery is credential- and namespace-scoped, so running it during generation
+	// would bundle one private account's pinned/selectable models (and its
+	// `gitlabDuoWorkflowRootNamespaceId`) as authoritative for every fresh install.
+	// The generic fallback is the only thing bundled; live namespace-scoped models are
+	// discovered at runtime per credential/workspace. The `authoritativeCatalogProviders`
+	// guard therefore always passes for this id, kept only to mirror the Sakana seed shape.
+	if (!authoritativeCatalogProviders.has("gitlab-duo-agent")) {
+		allModels.push(buildGitLabDuoWorkflowFallbackModel());
 	}
 	// Seed Fireworks "Fast" serving-path variants (`<id>-fast`). Fast routers are
 	// not enumerated by the serverless control-plane list, so discovery never

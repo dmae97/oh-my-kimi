@@ -18804,6 +18804,28 @@
 			}
 		}
 	},
+	"gitlab-duo-agent": {
+		"claude_sonnet_4_6_vertex": {
+			"id": "claude_sonnet_4_6_vertex",
+			"name": "Claude Sonnet 4.6 - Vertex",
+			"api": "gitlab-duo-agent",
+			"provider": "gitlab-duo-agent",
+			"baseUrl": "https://gitlab.com",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": null,
+			"supportsTools": true
+		}
+	},
 	"google": {
 		"gemini-1.5-flash": {
 			"id": "gemini-1.5-flash",
