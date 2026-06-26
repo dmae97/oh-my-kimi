@@ -44,6 +44,7 @@ import compactionSummaryPrompt from "./prompts/compaction-summary.md" with { typ
 import compactionTurnPrefixPrompt from "./prompts/compaction-turn-prefix.md" with { type: "text" };
 import compactionUpdateSummaryPrompt from "./prompts/compaction-update-summary.md" with { type: "text" };
 import handoffDocumentPrompt from "./prompts/handoff-document.md" with { type: "text" };
+import snapcompactArchiveContextPrompt from "./prompts/snapcompact-archive-context.md" with { type: "text" };
 
 import {
 	computeFileLists,
@@ -659,7 +660,7 @@ export interface SummaryOptions {
 }
 
 function formatPreviousSnapcompactArchive(archiveText: string): string {
-	return `Previous snapcompact archive source text:\n\n${archiveText}`;
+	return prompt.render(snapcompactArchiveContextPrompt, { archiveText });
 }
 
 function mergePreviousSummaryWithSnapcompactArchive(
