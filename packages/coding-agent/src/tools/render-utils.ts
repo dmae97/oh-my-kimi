@@ -698,6 +698,9 @@ export function formatScreenshot(opts: {
 		lines.push(`Format: ${opts.resized.mimeType} (${(opts.resized.buffer.length / 1024).toFixed(2)} KB)`);
 		lines.push(`Dimensions: ${opts.resized.width}x${opts.resized.height}`);
 	}
+	if (opts.resized.decodeFailed) {
+		lines.push("Resize: image decoder failed; using original image bytes");
+	}
 	const dimensionNote = formatDimensionNote(opts.resized);
 	if (dimensionNote) {
 		lines.push(dimensionNote);

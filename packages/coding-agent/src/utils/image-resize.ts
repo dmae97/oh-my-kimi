@@ -18,6 +18,7 @@ export interface ResizedImage {
 	width: number;
 	height: number;
 	wasResized: boolean;
+	decodeFailed?: boolean;
 	get data(): string;
 }
 
@@ -41,6 +42,83 @@ const DEFAULT_OPTIONS: Required<Omit<ImageResizeOptions, "excludeWebP">> = {
 	jpegQuality: 80,
 	minDimension: DEFAULT_MIN_DIMENSION,
 };
+
+interface ImageHeaderDimensions {
+	width: number;
+	height: number;
+	mimeType: string;
+}
+
+function readUint16BE(buffer: Uint8Array, offset: number): number {
+	return (buffer[offset] << 8) | buffer[offset + 1];
+}
+
+function readUint32BE(buffer: Uint8Array, offset: number): number {
+	return ((buffer[offset] << 24) | (buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3]) >>> 0;
+}
+
+function readPngHeaderDimensions(buffer: Uint8Array): ImageHeaderDimensions | undefined {
+	if (buffer.length < 24) return undefined;
+	if (
+		buffer[0] !== 0x89 ||
+		buffer[1] !== 0x50 ||
+		buffer[2] !== 0x4e ||
+		buffer[3] !== 0x47 ||
+		buffer[4] !== 0x0d ||
+		buffer[5] !== 0x0a ||
+		buffer[6] !== 0x1a ||
+		buffer[7] !== 0x0a
+	) {
+		return undefined;
+	}
+	if (readUint32BE(buffer, 8) !== 13) return undefined;
+	if (buffer[12] !== 0x49 || buffer[13] !== 0x48 || buffer[14] !== 0x44 || buffer[15] !== 0x52) return undefined;
+	const width = readUint32BE(buffer, 16);
+	const height = readUint32BE(buffer, 20);
+	if (width === 0 || height === 0) return undefined;
+	return { width, height, mimeType: "image/png" };
+}
+
+function isJpegStartOfFrame(marker: number): boolean {
+	return (
+		(marker >= 0xc0 && marker <= 0xc3) ||
+		(marker >= 0xc5 && marker <= 0xc7) ||
+		(marker >= 0xc9 && marker <= 0xcb) ||
+		(marker >= 0xcd && marker <= 0xcf)
+	);
+}
+
+function readJpegHeaderDimensions(buffer: Uint8Array): ImageHeaderDimensions | undefined {
+	if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return undefined;
+	let offset = 2;
+	while (offset + 3 < buffer.length) {
+		if (buffer[offset] !== 0xff) {
+			offset++;
+			continue;
+		}
+		while (offset < buffer.length && buffer[offset] === 0xff) offset++;
+		if (offset >= buffer.length) return undefined;
+		const marker = buffer[offset++];
+		if (marker === 0xd9 || marker === 0xda) return undefined;
+		if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+		if (offset + 1 >= buffer.length) return undefined;
+		const segmentLength = readUint16BE(buffer, offset);
+		if (segmentLength < 2) return undefined;
+		if (isJpegStartOfFrame(marker)) {
+			if (offset + 7 >= buffer.length) return undefined;
+			const height = readUint16BE(buffer, offset + 3);
+			const width = readUint16BE(buffer, offset + 5);
+			if (width === 0 || height === 0) return undefined;
+			return { width, height, mimeType: "image/jpeg" };
+		}
+		offset += segmentLength;
+	}
+	return undefined;
+}
+
+function readImageHeaderDimensions(buffer: Uint8Array): ImageHeaderDimensions | undefined {
+	return readPngHeaderDimensions(buffer) ?? readJpegHeaderDimensions(buffer);
+}
 
 /**
  * Read `OMP_NO_WEBP` per-call so runtime toggles take effect.
@@ -298,21 +376,24 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			},
 		};
 	} catch {
+		const headerDimensions = readImageHeaderDimensions(inputBuffer);
+		const fallbackMimeType = img.mimeType ?? headerDimensions?.mimeType ?? "application/octet-stream";
 		// Bun.Image rejected the input — we cannot decode/re-encode it.
-		// When the caller demanded WebP exclusion AND the original is WebP,
+		// When the caller demanded WebP exclusion AND the source might be WebP,
 		// returning the original buffer would silently violate that contract,
 		// so surface an explicit error instead.
-		if (excludeWebP && (img.mimeType === "image/webp" || !img.mimeType)) {
+		if (excludeWebP && (fallbackMimeType === "image/webp" || (!img.mimeType && !headerDimensions))) {
 			throw new Error("resizeImage: failed to decode image and cannot honor excludeWebP for a WebP source");
 		}
 		return {
 			buffer: inputBuffer,
-			mimeType: img.mimeType,
-			originalWidth: 0,
-			originalHeight: 0,
-			width: 0,
-			height: 0,
+			mimeType: fallbackMimeType,
+			originalWidth: headerDimensions?.width ?? 0,
+			originalHeight: headerDimensions?.height ?? 0,
+			width: headerDimensions?.width ?? 0,
+			height: headerDimensions?.height ?? 0,
 			wasResized: false,
+			decodeFailed: true,
 			get data() {
 				return img.data;
 			},

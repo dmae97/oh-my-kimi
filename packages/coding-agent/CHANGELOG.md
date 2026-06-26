@@ -26,6 +26,7 @@
 
 ### Fixed
 
+- Fixed browser screenshots reporting `0x0` dimensions when `Bun.Image` rejects an image whose PNG/JPEG header still exposes real dimensions. ([#3577](https://github.com/can1357/oh-my-pi/issues/3577))
 - Fixed `/resume <session-id>` in the interactive TUI only searching the active cwd's session directory; id-prefix lookup now falls back to sessions from other cwd buckets like CLI `--resume <session-id>`.
 - Fixed plan mode rejecting edits to plan artifacts when models refer to them by bare filenames
 - Fixed absolute paths to session-owned artifacts being incorrectly routed through the editor bridge

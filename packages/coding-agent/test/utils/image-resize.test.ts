@@ -128,6 +128,28 @@ describe("resizeImage defaults", () => {
 	});
 });
 
+describe("resizeImage decode fallback", () => {
+	it("reports PNG header dimensions when Bun.Image rejects after reading IHDR", async () => {
+		const png = Buffer.alloc(33);
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+		png.writeUInt32BE(13, 8);
+		png.write("IHDR", 12, "ascii");
+		png.writeUInt32BE(1900, 16);
+		png.writeUInt32BE(2474, 20);
+		png[24] = 8;
+		png[25] = 2;
+
+		const result = await resizeImage({ type: "image", data: png.toBase64(), mimeType: "image/png" });
+
+		expect(result.width).toBe(1900);
+		expect(result.height).toBe(2474);
+		expect(result.originalWidth).toBe(1900);
+		expect(result.originalHeight).toBe(2474);
+		expect(result.wasResized).toBe(false);
+		expect(result.buffer.length).toBe(png.length);
+	});
+});
+
 describe("resizeImage minimum dimension", () => {
 	it("upscales a degenerate 1x1 image up to the 200px floor", async () => {
 		// A 1x1 PNG (e.g. an empty chart render) would sail through the fast path
