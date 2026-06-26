@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `OpenAICompat.qwenPreserveThinking` — auto-enabled when the resolved `thinkingFormat` is `"qwen"` or `"qwen-chat-template"` AND `replayReasoningContent` is on (i.e. the four built-in local OpenAI-compatible providers, or a custom provider pointed at a loopback / RFC1918 / `*.local` baseUrl). Pairs with the chat-completions encoder change so the request body carries `preserve_thinking: true` (twin top-level + `chat_template_kwargs` emission), keeping Qwen3.6+ from stripping `<think>...</think>` off older assistant turns and breaking the local slot's KV cache between user messages. Non-Qwen chat templates ignore the parameter, so the flag stays a no-op outside the Qwen path; users on a cloud Qwen host (Alibaba Dashscope / Qwen Portal) can opt in with `compat.qwenPreserveThinking: true`. ([#3541](https://github.com/can1357/oh-my-pi/issues/3541))
+
 ## [16.1.22] - 2026-06-26
 
 ### Added

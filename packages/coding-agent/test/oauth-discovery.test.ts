@@ -317,6 +317,38 @@ describe("relative Mcp-Auth-Server URL", () => {
 });
 
 describe("RFC 8414 §3.3 issuer validation", () => {
+	it("accepts cross-host issuer metadata on resource-server fallback (Atlassian regression)", async () => {
+		const calls: string[] = [];
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+			calls.push(url);
+
+			if (url === "https://mcp.atlassian.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://cf.mcp.atlassian.com",
+						authorization_endpoint: "https://mcp.atlassian.com/v1/authorize",
+						token_endpoint: "https://cf.mcp.atlassian.com/v1/token",
+						registration_endpoint: "https://cf.mcp.atlassian.com/v1/register",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints("https://mcp.atlassian.com/v1/mcp", undefined, undefined, {
+			fetch: fetchImpl,
+		});
+
+		expect(oauth).toEqual({
+			authorizationUrl: "https://mcp.atlassian.com/v1/authorize",
+			tokenUrl: "https://cf.mcp.atlassian.com/v1/token",
+		});
+		expect(calls[0]).toBe("https://mcp.atlassian.com/.well-known/oauth-authorization-server");
+	});
+
 	it("rejects origin-root metadata whose issuer mismatches the path-scoped auth server (Plane regression)", async () => {
 		// Plane hosts both a root issuer (`https://mcp.plane.so/`) at the
 		// origin-root well-known *and* a path-scoped issuer

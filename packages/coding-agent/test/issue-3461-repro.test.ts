@@ -29,8 +29,8 @@ import * as path from "node:path";
  */
 describe("issue #3461 — Ctrl+Z hangs after a command has been run", () => {
 	const packageDir = path.resolve(import.meta.dir, "..");
-	const brushUnixSignal = path.resolve(packageDir, "../../crates/brush-core-vendored/src/sys/unix/signal.rs");
-	const brushProcesses = path.resolve(packageDir, "../../crates/brush-core-vendored/src/processes.rs");
+	const brushUnixSignal = path.resolve(packageDir, "../../crates/vendor/brush-core/src/sys/unix/signal.rs");
+	const brushProcesses = path.resolve(packageDir, "../../crates/vendor/brush-core/src/processes.rs");
 	const inputController = path.resolve(packageDir, "src/modes/controllers/input-controller.ts");
 	const mcpStdioTransport = path.resolve(packageDir, "src/mcp/transports/stdio.ts");
 

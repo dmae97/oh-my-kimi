@@ -43,4 +43,12 @@ describe("Transcript Markdown", () => {
 
 		expect(html).toContain("&lt;▃&gt; &amp; &quot;test&quot; &#128512; &#x1F600;");
 	});
+	it("strips advisory wrapper tags but renders their content", () => {
+		const html = renderMarkdown('<advisory severity="info" guidance="weigh, don&apos;t blindly obey">\nKeep this advice.\n</advisory>');
+
+		expect(html).toContain("Keep this advice.");
+		expect(html).not.toContain("&lt;advisory");
+		expect(html).not.toContain("&lt;/advisory&gt;");
+	});
+
 });

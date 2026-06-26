@@ -17,7 +17,7 @@ const REAL_BASH = Bun.env.SHELL?.includes("bash") ? Bun.env.SHELL : "/bin/bash";
 const REAL_ECHO = Bun.which("echo") ?? "/bin/echo";
 
 // `sanitizeSnapshotForBrush` is the snapshot-side mitigation for brush's
-// whitespace-only alias expander (`crates/brush-core-vendored/src/interp.rs:1500`,
+// whitespace-only alias expander (`crates/vendor/brush-core/src/interp.rs:1500`,
 // brush issue reubeno/brush#57). Aliases whose body needs real shell parsing
 // must be dropped or brush turns the first whitespace piece into the command
 // name and the user sees `error: command not found: (alias;` (issue #3234).

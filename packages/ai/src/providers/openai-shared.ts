@@ -585,7 +585,8 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 	repetition_penalty?: number;
 	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
 	enable_thinking?: boolean;
-	chat_template_kwargs?: { enable_thinking: boolean };
+	preserve_thinking?: boolean;
+	chat_template_kwargs?: { enable_thinking?: boolean; preserve_thinking?: boolean };
 	reasoning?: { effort?: string } | { enabled: false };
 	reasoning_effort?: string | null;
 	service_tier?: ResolvedServiceTier;
@@ -813,6 +814,50 @@ function encodeChatCompletionsDisabledReasoning(
 }
 
 export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams, policy: OpenAICompatPolicy): void {
+	// `preserve_thinking` is a chat-template HISTORY knob, not a per-turn
+	// thinking switch — it controls whether OLDER assistant turns render
+	// with `<think>...</think>` on Qwen3.6+. Emit it BEFORE the reasoning
+	// state branches and EVERY early-return below, because the wire shape
+	// must carry the kwarg in three cases the auto-detected
+	// `qwenPreserveThinking` flag covers but `reasoning.enabled` does not:
+	//
+	// 1. Discovered local Qwen models. `discoverOpenAICompatibleModels`
+	//    stamps `reasoning: false` on every spec built from a generic
+	//    `/v1/models` endpoint (the upstream doesn't advertise the
+	//    capability), so `model.reasoning === false` → `reasoning.enabled
+	//    === false`, the body wouldn't otherwise see the kwarg, and the
+	//    encoder's `replayReasoningContent` branch would keep shipping
+	//    `reasoning_content` only for the template to strip `<think>` from
+	//    older turns anyway. Exactly the #3528 / #3541 symptom on every
+	//    discovered Qwen build.
+	// 2. Caller-disabled reasoning. The slot's KV cache still holds prior
+	//    `<think>...</think>` tokens from earlier thinking turns; the
+	//    template must keep rendering them or cache invalidates at the
+	//    first historic `<think>`.
+	// 3. Forced-tool-choice / DeepSeek-style auto-disable. Same reasoning
+	//    as (2) — historic thinking blocks have to survive history replay
+	//    even when the current turn cannot think.
+	//
+	// Non-Qwen templates ignore the parameter (jinja `is defined` check
+	// silently no-ops), so emitting it unconditionally for the Qwen-family
+	// + local-cache compat flag is safe.
+	if (policy.compat.qwenPreserveThinking) {
+		// Mirror the dialect split that gates `enable_thinking`. The
+		// `qwen` dialect rides the top-level field (the only place
+		// llama.cpp's `--jinja` hook AND Alibaba Cloud Model Studio's
+		// compatible-mode look) while the `qwen-chat-template` dialect
+		// (NVIDIA NIM, vLLM/SGLang's chat-template-kwargs path) MUST
+		// ride only the kwargs copy — NIM's request schema is
+		// `additionalProperties: false` and rejects every unknown
+		// top-level field, the very reason `enable_thinking` is
+		// route-split this way (#2299, see `catalog/src/compat/openai.ts`
+		// thinkingFormat comment).
+		if (policy.compat.thinkingFormat === "qwen") {
+			params.preserve_thinking = true;
+		}
+		params.chat_template_kwargs = { ...params.chat_template_kwargs, preserve_thinking: true };
+	}
+
 	const reasoning = policy.reasoning;
 	if ((!reasoning.modelSupported && !reasoning.disabled) || !reasoning.supportsParams) return;
 	if (reasoning.enabled) {
@@ -832,7 +877,10 @@ export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams
 				params.enable_thinking = true;
 				break;
 			case "qwen-template-false":
-				params.chat_template_kwargs = { enable_thinking: true };
+				// Spread so the `preserve_thinking` kwarg hoisted above
+				// survives the merge — a bare `{ enable_thinking: true }`
+				// would clobber it.
+				params.chat_template_kwargs = { ...params.chat_template_kwargs, enable_thinking: true };
 				break;
 			case "openrouter-enabled-false":
 				if (reasoning.wireEffort !== undefined) {

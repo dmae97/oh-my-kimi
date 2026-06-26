@@ -468,6 +468,20 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		replayReasoningContent:
 			!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
 			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
+		// `preserve_thinking: true` makes the Qwen3.6+ chat template render
+		// `<think>...</think>` for older assistant turns too, instead of
+		// stripping it the moment a new user message moves them past
+		// `last_query_index`. Without it, the slot's KV cache (which holds the
+		// raw `<think>X</think>` tokens emitted during generation) diverges
+		// from the next-turn render and llama.cpp falls back to full prompt
+		// re-processing — the exact symptom reported in #3541. Auto-enabled
+		// for Qwen thinking dialects on local llama.cpp-style backends (paired
+		// with `replayReasoningContent` above). Non-Qwen templates ignore the
+		// parameter, so the flag stays a no-op outside the Qwen path.
+		qwenPreserveThinking:
+			(thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template") &&
+			!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
+			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
 		cacheControlFormat: isOpenRouter && spec.id.startsWith("anthropic/") ? "anthropic" : undefined,
 		openRouterRouting: undefined,
@@ -589,6 +603,9 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// not via a top-level `reasoning_content` field — this flag is
 		// chat-completions-only.
 		replayReasoningContent: false,
+		// Responses-only; the Qwen `preserve_thinking` template knob lives on
+		// the chat-completions wire shape, never on Responses.
+		qwenPreserveThinking: false,
 		requiresThinkingAsText: false,
 		requiresMistralToolIds: false,
 		requiresToolResultName: false,

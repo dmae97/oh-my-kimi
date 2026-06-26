@@ -21,7 +21,8 @@ thread_local! {
 }
 
 /// Syntaxes bundled in addition to syntect's defaults: syntect ships none of
-/// these, so we vendor their `.sublime-syntax` sources and fold them into the set.
+/// these, so we vendor their `.sublime-syntax` sources and fold them into the
+/// set.
 const EXTRA_SYNTAXES: &[&str] = &[
 	include_str!("syntaxes/Julia.sublime-syntax"),
 	include_str!("syntaxes/Nix.sublime-syntax"),

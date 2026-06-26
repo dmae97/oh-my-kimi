@@ -969,7 +969,7 @@ export class InputController {
 			//
 			// SIGTSTP: brush-core (the embedded shell behind every bash tool call)
 			// installs a tokio SIGTSTP listener on `Process::wait` to detect when
-			// its children have been stopped (`crates/brush-core-vendored/src/sys/
+			// its children have been stopped (`crates/vendor/brush-core/src/sys/
 			// unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::
 			// signal(SIGTSTP)`). Per tokio's documented contract, the first call
 			// for a given SignalKind permanently replaces the kernel-default
@@ -993,7 +993,7 @@ export class InputController {
 			// children that must survive the suspend (MCP stdio servers via
 			// the `detached: true` spawn in `mcp/transports/stdio.ts`, every
 			// brush external command via brush's per-child `setsid` in
-			// `crates/brush-core-vendored/src/commands.rs`) are already in
+			// `crates/vendor/brush-core/src/commands.rs`) are already in
 			// their own sessions, so pgid=0 does not reach them.
 			process.kill(0, "SIGSTOP");
 		} catch (err) {

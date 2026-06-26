@@ -22,10 +22,29 @@ import type {
 import { toJsonRpcError } from "../../mcp/types";
 import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 
-/** Subprocess argv for launching an MCP stdio server. */
+/** Subprocess argv and platform-derived spawn flags for an MCP stdio server. */
 export interface StdioSpawnCommand {
 	cmd: string[];
 	windowsHide?: boolean;
+	/**
+	 * Run the subprocess in its own session.
+	 *
+	 * POSIX: `true`. Detach → `setsid`, so the MCP process tree has no
+	 * controlling terminal and terminal job-control signals (Ctrl+Z SIGTSTP,
+	 * background-read SIGTTIN) cannot stop stdio servers such as
+	 * `chrome-devtools-mcp` and leave our read loop blocked on silent pipes.
+	 *
+	 * Windows: `false`. There is no SIGTSTP/SIGTTIN to escape, but detaching
+	 * passes `DETACHED_PROCESS` to `CreateProcess`, which strips the parent's
+	 * inherited console. A hidden `cmd.exe` wrapper whose grandchild is a
+	 * console app (`node`, `npx.cmd`, `mcp-remote`) then allocates a brand-new
+	 * visible conhost for that grandchild, and its stdout no longer routes
+	 * back through our pipe — the proxy reports it is up while OMP times out
+	 * waiting for the MCP `initialize` response (#3544). `windowsHide` only
+	 * hides the direct child's console window (#3536); without `detached:
+	 * false` the nested grandchild still pops.
+	 */
+	detached: boolean;
 }
 
 /** Inputs used to resolve platform-specific stdio spawn behavior. */
@@ -177,6 +196,7 @@ async function resolveWindowsNpmShimCommand(
 	return {
 		cmd: [nodeCommand, target, ...args],
 		windowsHide: true,
+		detached: false,
 	};
 }
 
@@ -229,7 +249,7 @@ export async function resolveStdioSpawnCommand(
 	options: ResolveStdioSpawnOptions,
 ): Promise<StdioSpawnCommand> {
 	const args = config.args ?? [];
-	if (options.platform !== "win32") return { cmd: [config.command, ...args] };
+	if (options.platform !== "win32") return { cmd: [config.command, ...args], detached: true };
 
 	const resolved = await resolveWindowsCommandPath(config.command, options.cwd, options.env);
 	const resolvedCommand = resolved ?? config.command;
@@ -239,15 +259,18 @@ export async function resolveStdioSpawnCommand(
 	// Direct-spawn only when we resolved to a concrete file AND its extension
 	// is not a batch script. Everything else (resolved .cmd/.bat, or an
 	// unresolved extensionless command) goes through cmd.exe so PATHEXT runs.
-	// Every Windows stdio server launch hides its console window; otherwise
-	// direct .exe servers pop a visible cmd window while the MCP server lives.
+	// Every Windows stdio server launch hides its console window AND stays
+	// attached: detaching on Windows breaks nested console grandchildren
+	// (see `StdioSpawnCommand.detached`).
 	const windowsHide = true;
+	const detached = false;
 	const needsCmdExe = resolved === null || isWindowsBatchCommand(resolvedCommand);
-	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide };
+	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide, detached };
 
 	return {
 		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
 		windowsHide,
+		detached,
 	};
 }
 
@@ -343,10 +366,12 @@ export class StdioTransport implements MCPTransport {
 			platform: process.platform,
 		});
 
-		// Spawn in a new session (detached → setsid) so the MCP process tree has
-		// no controlling terminal. Otherwise terminal job-control signals (Ctrl+Z
-		// SIGTSTP, background-read SIGTTIN) can stop stdio servers such as
-		// chrome-devtools-mcp and leave our read loop blocked on silent pipes.
+		// Platform-derived session and console-window handling come from
+		// `resolveStdioSpawnCommand`: POSIX detaches into its own session to
+		// escape terminal job-control signals (SIGTSTP, SIGTTIN); Windows stays
+		// attached and hidden so nested console grandchildren do not allocate a
+		// brand-new conhost that strips their stdout from our pipe. See
+		// `StdioSpawnCommand.detached`.
 		this.#process = spawn({
 			cmd: spawnCommand.cmd,
 			cwd,
@@ -355,7 +380,7 @@ export class StdioTransport implements MCPTransport {
 			stdout: "pipe",
 			stderr: "pipe",
 			windowsHide: spawnCommand.windowsHide,
-			detached: true,
+			detached: spawnCommand.detached,
 		});
 
 		this.#connected = true;

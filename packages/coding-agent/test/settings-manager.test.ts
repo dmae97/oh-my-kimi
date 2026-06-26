@@ -364,6 +364,22 @@ describe("Settings", () => {
 		});
 	});
 
+	describe("getEditVariantForModel", () => {
+		it("matches configured model variants case-insensitively", async () => {
+			await writeSettings({
+				edit: {
+					modelVariants: {
+						kimi: "hashline",
+					},
+				},
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.getEditVariantForModel("openrouter/moonshotai/Kimi-K2-Instruct")).toBe("hashline");
+		});
+	});
+
 	describe("migrations", () => {
 		it("maps removed atom edit mode settings to hashline", async () => {
 			await writeSettings({

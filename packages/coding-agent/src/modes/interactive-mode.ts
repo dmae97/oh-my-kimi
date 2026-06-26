@@ -3023,16 +3023,31 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Capture the operator's tier choice and hand it to #approvePlan, which
 				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
 				// #planModePreviousModelState (the model from before plan mode), so
-				// applying the slider choice any earlier would be silently reverted —
-				// the bug that made "continue with slow" keep executing on the default
-				// model. For compact-context approval, the plan model is kept through
-				// compaction, then a successful compaction transitions to the slider model
-				// (or restores the pre-plan model when no slider choice was made).
-				// `cycle.currentIndex` is exactly that restored model, so any chosen tier
-				// differing from it needs an explicit executionModel — this also covers
-				// leaving the slider on its `default` anchor while planning ran elsewhere.
+				// applying the slider choice any earlier would be silently reverted.
+				// Pass executionModel only when the slider was actually shown — a
+				// singleton cycle (e.g. only modelRoles.plan is configured, so
+				// getRoleModelCycle synthesizes a lone `default` entry from the
+				// currently active plan model) hides the slider, the operator made
+				// no selection, and the pre-plan model is not in the cycle. Pinning
+				// that singleton would silently switch the session back to the plan
+				// model after #exitPlanMode restored the pre-plan model.
+				// Treat the choice as implicit only when applying the selected role
+				// would land on the same end state as the restore — same model AND
+				// the same effective thinking level. A role with an explicit thinking
+				// suffix that differs from the restored thinking level must still go
+				// through applyRoleModel, otherwise approving on the same model with a
+				// different configured thinking level silently keeps the pre-plan level.
+				const restoredState = this.#planModePreviousModelState;
+				const restoredIndex =
+					cycle && restoredState
+						? cycle.models.findIndex(entry => {
+								if (!modelsAreEqual(entry.model, restoredState.model)) return false;
+								if (!entry.explicitThinkingLevel) return true;
+								return entry.thinkingLevel === restoredState.thinkingLevel;
+							})
+						: -1;
 				const executionModel =
-					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
+					slider && cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					title: details.title,

@@ -17,7 +17,7 @@ const SNAPSHOT_TIMEOUT_MS = 2_000;
 /**
  * Characters that force brush's primitive alias expander down a path it does
  * not implement. brush-core resolves aliases via `value.split_ascii_whitespace()`
- * (`crates/brush-core-vendored/src/interp.rs:1500`, tracking
+ * (`crates/vendor/brush-core/src/interp.rs:1500`, tracking
  * https://github.com/reubeno/brush/issues/57): the resulting pieces are dropped
  * into argv verbatim instead of going through the shell parser. Any alias body
  * containing subshells `(...)`, pipes `|`, redirections `<` `>`, separators
