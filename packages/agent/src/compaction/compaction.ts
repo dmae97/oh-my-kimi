@@ -1257,7 +1257,9 @@ export async function compact(
 	// text above; strip the now-stale frame archive from preserveData so it cannot
 	// re-attach to the rebuilt context. Only the legacy-frame case needs stripping —
 	// when there was no previous archive, preserveData carries no frames to drop.
-	const finalPreserveData = previousSnapcompactArchive ? snapcompact.stripPreservedArchive(preserveData) : preserveData;
+	const finalPreserveData = previousSnapcompactArchive
+		? snapcompact.stripPreservedArchive(preserveData)
+		: preserveData;
 
 	return {
 		summary,

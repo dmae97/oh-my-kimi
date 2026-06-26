@@ -318,6 +318,61 @@ describe("AgentSession handoff", () => {
 		expect(call[0].previousPreserveData).toBe(fixedPreparation.previousPreserveData);
 	});
 
+	it("obfuscates migrated snapcompact archive text but preserves opaque replay data", async () => {
+		session.settings.set("compaction.strategy", "context-full");
+		const placeholder = obfuscator.obfuscate(HANDOFF_SECRET);
+		const entries = sessionManager.getBranch();
+		const lastEntryId = entries[entries.length - 1]?.id;
+		if (!lastEntryId) throw new Error("Expected a seeded entry id");
+		const replaySlot = {
+			replacementHistory: [{ role: "user", content: `history ${HANDOFF_SECRET}` }],
+		};
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId: lastEntryId,
+			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			previousPreserveData: {
+				openaiRemoteCompaction: replaySlot,
+				[snapcompact.PRESERVE_KEY]: {
+					frames: [],
+					totalChars: 32,
+					truncatedChars: 0,
+					text: `archived ${HANDOFF_SECRET}`,
+					textHead: `head ${HANDOFF_SECRET}`,
+				},
+			},
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: compactionModule.DEFAULT_COMPACTION_SETTINGS,
+		};
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "new summary",
+			shortSummary: undefined,
+			firstKeptEntryId: lastEntryId,
+			tokensBefore: 100,
+			details: {},
+		});
+
+		await session.compact();
+
+		const call = compactSpy.mock.calls[0];
+		if (!call) throw new Error("Expected compact call");
+		const preserve = call[0].previousPreserveData;
+		if (!preserve) throw new Error("Expected previousPreserveData");
+		// The archive plaintext that compact() migrates into the summary prompt is
+		// redacted, so the raw secret never reaches the provider.
+		const archive = preserve[snapcompact.PRESERVE_KEY] as { text: string; textHead: string };
+		expect(archive.text).toBe(`archived ${placeholder}`);
+		expect(archive.textHead).toBe(`head ${placeholder}`);
+		expect(JSON.stringify(archive)).not.toContain(HANDOFF_SECRET);
+		// Opaque provider-replay state stays byte-identical (same reference) — only the
+		// snapcompact slot's text is rewritten.
+		expect(preserve.openaiRemoteCompaction).toBe(replaySlot);
+	});
+
 	it("strips hook-supplied snapcompact data when persisting context-full compaction", async () => {
 		const localTempDir = TempDir.createSync("@pi-context-full-preserve-data-");
 		const localSessionManager = SessionManager.inMemory(localTempDir.path());
