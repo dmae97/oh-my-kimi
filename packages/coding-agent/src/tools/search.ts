@@ -191,43 +191,6 @@ function parsePathSpecs(rawEntries: readonly string[]): SearchPathSpec[] {
 	return specs;
 }
 
-/**
- * Validate a search pattern against the native RE2 dialect by probing a scratch
- * byte with `grep`. Used before a pure-virtual search (where no native grep ran
- * to validate it), so an RE2-unsupported pattern (lookbehind, backreference) is
- * rejected consistently instead of silently matching via JS `RegExp`. Throws the
- * native `regex parse error`, which the caller normalizes to a `ToolError`.
- */
-async function probeRegexDialect(
-	pattern: string,
-	ignoreCase: boolean,
-	multiline: boolean,
-	signal?: AbortSignal,
-): Promise<void> {
-	const dir = await mkdtemp(path.join(tmpdir(), "omp-search-probe-"));
-	try {
-		const probeFile = path.join(dir, "probe");
-		await writeFile(probeFile, "\n");
-		await grep(
-			{
-				pattern,
-				path: probeFile,
-				ignoreCase,
-				multiline,
-				hidden: true,
-				gitignore: false,
-				maxCount: 1,
-				mode: GrepOutputMode.Content,
-				signal,
-				timeoutMs: SEARCH_GREP_TIMEOUT_MS,
-			},
-			undefined,
-		);
-	} finally {
-		await rm(dir, { recursive: true, force: true }).catch(() => {});
-	}
-}
-
 function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: readonly LineRange[]): void {
 	// Concat-without-merge is correct: `isLineInRanges` scans linearly, so
 	// duplicates/overlaps only cost a few extra comparisons per match.
@@ -395,21 +358,6 @@ function indexSearchLines(content: string): IndexedContentLines {
 	return { lines, starts };
 }
 
-function findLineIndex(starts: readonly number[], offset: number): number {
-	if (starts.length === 0) return -1;
-	let low = 0;
-	let high = starts.length - 1;
-	while (low <= high) {
-		const mid = Math.floor((low + high) / 2);
-		if (starts[mid] <= offset) {
-			low = mid + 1;
-		} else {
-			high = mid - 1;
-		}
-	}
-	return Math.max(0, high);
-}
-
 function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefined): boolean {
 	return !ranges || isLineInRanges(lineNumber, ranges);
 }
@@ -499,70 +447,7 @@ function buildVirtualMatches(
 	return matches;
 }
 
-function compileVirtualRegex(pattern: string, ignoreCase: boolean, multiline: boolean): RegExp {
-	const flags = `${ignoreCase ? "i" : ""}${multiline ? "gm" : ""}`;
-	try {
-		return new RegExp(pattern, flags);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new ToolError(`Invalid regex: ${message.replace(/^Invalid regular expression:\s*/i, "")}`);
-	}
-}
-
-function searchVirtualResourceLines(
-	resource: VirtualSearchResource,
-	regex: RegExp,
-	contextBefore: number,
-	contextAfter: number,
-	maxCount: number,
-): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
-	const lines = splitSearchLines(resource.content);
-	const matchedIndexes: number[] = [];
-
-	for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-		const lineNumber = lineIndex + 1;
-		if (!lineAllowed(lineNumber, resource.ranges)) continue;
-		regex.lastIndex = 0;
-		if (!regex.test(lines[lineIndex] ?? "")) continue;
-		matchedIndexes.push(lineIndex);
-	}
-
-	const matches = buildVirtualMatches(resource, lines, matchedIndexes, contextBefore, contextAfter, maxCount);
-	return { matches, totalMatches: matchedIndexes.length, limitReached: matchedIndexes.length > matches.length };
-}
-
-function searchVirtualResourceMultiline(
-	resource: VirtualSearchResource,
-	regex: RegExp,
-	contextBefore: number,
-	contextAfter: number,
-	maxCount: number,
-): { matches: GrepMatch[]; totalMatches: number; limitReached: boolean } {
-	const indexed = indexSearchLines(resource.content);
-	const matchedLines = new Set<number>();
-	const matchedIndexes: number[] = [];
-
-	while (true) {
-		const match = regex.exec(resource.content);
-		if (match === null) break;
-		const lineIndex = findLineIndex(indexed.starts, match.index);
-		if (lineIndex >= 0) {
-			const lineNumber = lineIndex + 1;
-			if (!matchedLines.has(lineNumber) && lineAllowed(lineNumber, resource.ranges)) {
-				matchedLines.add(lineNumber);
-				matchedIndexes.push(lineIndex);
-			}
-		}
-		if (match[0].length === 0) {
-			regex.lastIndex++;
-		}
-	}
-
-	const matches = buildVirtualMatches(resource, indexed.lines, matchedIndexes, contextBefore, contextAfter, maxCount);
-	return { matches, totalMatches: matchedIndexes.length, limitReached: matchedIndexes.length > matches.length };
-}
-
-function searchVirtualResources(
+async function searchVirtualResources(
 	resources: readonly VirtualSearchResource[],
 	pattern: string,
 	ignoreCase: boolean,
@@ -570,29 +455,69 @@ function searchVirtualResources(
 	contextBefore: number,
 	contextAfter: number,
 	maxCount: number,
-): GrepResult {
+	signal?: AbortSignal,
+): Promise<GrepResult> {
 	if (resources.length === 0) {
 		return { matches: [], totalMatches: 0, filesWithMatches: 0, filesSearched: 0, limitReached: false };
 	}
-	const regex = compileVirtualRegex(pattern, ignoreCase, multiline);
 	const matches: GrepMatch[] = [];
 	const filesWithMatches = new Set<string>();
 	let totalMatches = 0;
 	let limitReached = false;
-
-	for (const resource of resources) {
-		const remaining = Math.max(maxCount - matches.length, 0);
-		const resourceResult = multiline
-			? searchVirtualResourceMultiline(resource, regex, contextBefore, contextAfter, remaining)
-			: searchVirtualResourceLines(resource, regex, contextBefore, contextAfter, remaining);
-		if (resourceResult.totalMatches > 0) {
-			filesWithMatches.add(resource.path);
+	// Detect matched line numbers with native grep (RE2) — the SAME matcher local
+	// search uses — so a pattern valid for local grep but not JS `RegExp` (`(?i)x`,
+	// `[[:digit:]]`) behaves identically on virtual/remote resources. The JS helpers
+	// below then rebuild the exact forward-only, range-trimmed context windows the
+	// virtual-search contract requires.
+	const dir = await mkdtemp(path.join(tmpdir(), "omp-search-virtual-"));
+	try {
+		for (let idx = 0; idx < resources.length; idx++) {
+			const resource = resources[idx];
+			const remaining = Math.max(maxCount - matches.length, 0);
+			if (remaining === 0) {
+				limitReached = true;
+				break;
+			}
+			const scratch = path.resolve(dir, `${idx}`);
+			await writeFile(scratch, resource.content);
+			const probe = await grep(
+				{
+					pattern,
+					path: scratch,
+					ignoreCase,
+					multiline,
+					hidden: true,
+					gitignore: false,
+					maxCount: INTERNAL_TOTAL_CAP,
+					contextBefore: 0,
+					contextAfter: 0,
+					maxColumns: DEFAULT_MAX_COLUMN,
+					mode: GrepOutputMode.Content,
+					signal,
+					timeoutMs: SEARCH_GREP_TIMEOUT_MS,
+				},
+				undefined,
+			);
+			const matchedIndexes = [...new Set(probe.matches.map(match => match.lineNumber - 1))]
+				.filter(lineIndex => lineAllowed(lineIndex + 1, resource.ranges))
+				.sort((a, b) => a - b);
+			const lines = multiline ? indexSearchLines(resource.content).lines : splitSearchLines(resource.content);
+			const resourceMatches = buildVirtualMatches(
+				resource,
+				lines,
+				matchedIndexes,
+				contextBefore,
+				contextAfter,
+				remaining,
+			);
+			if (matchedIndexes.length > 0) filesWithMatches.add(resource.path);
+			totalMatches += matchedIndexes.length;
+			limitReached = limitReached || matchedIndexes.length > resourceMatches.length;
+			matches.push(...resourceMatches);
 		}
-		totalMatches += resourceResult.totalMatches;
-		limitReached = limitReached || resourceResult.limitReached;
-		matches.push(...resourceResult.matches);
+	} finally {
+		await rm(dir, { recursive: true, force: true }).catch(() => {});
 	}
-
 	return {
 		matches,
 		totalMatches,
@@ -1046,14 +971,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				}
 				let virtualResult: GrepResult;
 				try {
-					// A purely virtual scope skipped native grep, so the pattern was
-					// never validated against the RE2 dialect. Probe it so an
-					// RE2-unsupported regex is rejected consistently instead of
-					// silently matching through JS `RegExp`.
-					if (searchablePaths.length === 0 && virtualResources.length > 0) {
-						await probeRegexDialect(normalizedPattern, ignoreCase, effectiveMultiline, signal);
-					}
-					virtualResult = searchVirtualResources(
+					virtualResult = await searchVirtualResources(
 						virtualResources,
 						normalizedPattern,
 						ignoreCase,
@@ -1061,6 +979,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						normalizedContextBefore,
 						normalizedContextAfter,
 						INTERNAL_TOTAL_CAP,
+						signal,
 					);
 				} catch (err) {
 					if (err instanceof Error && /^regex(?: parse)? error/i.test(err.message)) {

@@ -496,6 +496,26 @@ describe("SearchTool internal URL resolution", () => {
 		expect(lineNumbers.filter(n => n === 3)).toHaveLength(1);
 	});
 
+	it("matches an RE2 inline-flag pattern on a virtual resource (native dialect, not JS RegExp)", async () => {
+		registerVirtualDocs(new Map([["doc.md", "needle here\n"]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("re2-virtual", { pattern: "(?i)NEEDLE", paths: ["virtual://doc.md"] });
+		expect(getResultText(result)).toContain("needle");
+	});
+
+	it("applies an RE2 inline-flag pattern across mixed local and virtual scopes", async () => {
+		await Bun.write(path.join(tmpDir, "local.txt"), "needle local\n");
+		registerVirtualDocs(new Map([["doc.md", "needle virtual\n"]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("re2-mixed", {
+			pattern: "(?i)NEEDLE",
+			paths: [path.join(tmpDir, "local.txt"), "virtual://doc.md"],
+		});
+		const text = getResultText(result);
+		expect(text).toContain("local");
+		expect(text).toContain("virtual");
+	});
+
 	it("reports 'No more results' instead of 'No matches found' when skip is past the end", async () => {
 		await Bun.write(path.join(tmpDir, "a.txt"), "needle in a\n");
 		await Bun.write(path.join(tmpDir, "b.txt"), "needle in b\n");
