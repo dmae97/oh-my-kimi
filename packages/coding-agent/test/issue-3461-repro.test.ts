@@ -62,6 +62,6 @@ describe("issue #3461 — Ctrl+Z hangs after a command has been run", () => {
 	it("MCP stdio servers spawn detached so terminal job-control signals cannot stop them", async () => {
 		const src = await Bun.file(mcpStdioTransport).text();
 		expect(src).toMatch(/detached:\s*true/);
-		expect(src).toContain("no controlling terminal");
+		expect(src).toMatch(/no\s+\*\s+controlling\s+terminal/);
 	});
 });
