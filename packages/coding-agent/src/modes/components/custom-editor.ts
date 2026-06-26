@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
 import type { AppKeybinding } from "../../config/keybindings";
@@ -66,6 +67,14 @@ const SHELL_ESCAPED_PATH_CHAR_REGEX = /\\([\\\s'"()[\]{}&;<>|?*!$`])/g;
 const URI_SCHEME_REGEX = /^[a-z][a-z0-9+.-]*:/i;
 const FILE_URI_REGEX = /^file:\/\//i;
 const WINDOWS_DRIVE_PATH_REGEX = /^[a-z]:[\\/]/i;
+/**
+ * Whole-string anchor for paths that are unambiguously absolute. Restricts the
+ * "treat the entire clipboard text as one path" branch of
+ * {@link extractImagePathFromText} to inputs that start with a clearly-anchored
+ * filesystem prefix, so prose containing a path-shaped fragment (e.g.
+ * "see /tmp/x.png") never hijacks the smart fallback.
+ */
+const ABSOLUTE_PATH_PREFIX_REGEX = /^(?:\/|~\/|file:\/\/|\\\\|[A-Za-z]:[\\/])/;
 
 /** Max gap (ms) between two spaces for the later one to count as OS key auto-repeat rather than a
  *  deliberate press. OS auto-repeat is fast; a deliberate tap (even a fast one) is slower. */
@@ -105,6 +114,20 @@ function normalizePastedPath(path: string): string {
 	const last = trimmed[trimmed.length - 1];
 	const unquoted =
 		trimmed.length > 1 && (first === '"' || first === "'") && last === first ? trimmed.slice(1, -1) : trimmed;
+	// `file://` URL → local filesystem path. Mirrors Codex's
+	// `normalize_pasted_path` (codex-rs/tui/src/clipboard_paste.rs) so a
+	// pasteboard whose text representation is a `file:///Users/…/img.png`
+	// URL — common when terminals forward the macOS pasteboard's
+	// `public.file-url` representation — loads as the file itself rather
+	// than failing in `loadImageInput` with a literal-`file://` path.
+	if (FILE_URI_REGEX.test(unquoted)) {
+		try {
+			return fileURLToPath(unquoted);
+		} catch {
+			// Malformed file URL: drop through to the shell-unescape branch
+			// so the caller can still reject it as a non-explicit path.
+		}
+	}
 	return unquoted.replace(SHELL_ESCAPED_PATH_CHAR_REGEX, "$1");
 }
 
@@ -161,12 +184,15 @@ function splitPastedPathSegments(payload: string): string[] | undefined {
 	return segments.length > 0 ? segments : undefined;
 }
 
-export function extractBracketedPastePaths(data: string): string[] | undefined {
-	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
-	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
-	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
-
-	const pasted = data.slice(BRACKETED_PASTE_START.length, endIndex).trim();
+/**
+ * Extract whitespace/quoted-separated path-like segments from `payload`.
+ * Shared backend of {@link extractBracketedPastePaths} and {@link extractPastePathsFromText}.
+ * Returns the segments only when EVERY segment looks like an explicit path
+ * (`/`, `\`, drive letter, or `file://`); otherwise undefined so the caller
+ * falls back to a plain text paste.
+ */
+function extractExplicitPathSegments(payload: string): string[] | undefined {
+	const pasted = payload.trim();
 	if (!pasted) return undefined;
 
 	const segments = splitPastedPathSegments(pasted);
@@ -181,6 +207,23 @@ export function extractBracketedPastePaths(data: string): string[] | undefined {
 	return paths;
 }
 
+/**
+ * Extract image-or-other file paths from plain (un-bracketed) clipboard text.
+ * Mirrors {@link extractBracketedPastePaths} for terminals/handlers that
+ * already stripped the `\x1b[200~`…`\x1b[201~` markers (e.g. clipboard text
+ * read directly via `pbpaste`/PowerShell).
+ */
+export function extractPastePathsFromText(text: string): string[] | undefined {
+	return extractExplicitPathSegments(text);
+}
+
+export function extractBracketedPastePaths(data: string): string[] | undefined {
+	if (!data.startsWith(BRACKETED_PASTE_START)) return undefined;
+	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
+	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return undefined;
+	return extractExplicitPathSegments(data.slice(BRACKETED_PASTE_START.length, endIndex));
+}
+
 export function extractBracketedImagePastePaths(data: string): string[] | undefined {
 	const paths = extractBracketedPastePaths(data);
 	return paths?.every(isImagePath) ? paths : undefined;
@@ -189,6 +232,43 @@ export function extractBracketedImagePastePaths(data: string): string[] | undefi
 export function extractBracketedImagePastePath(data: string): string | undefined {
 	const paths = extractBracketedImagePastePaths(data);
 	return paths?.length === 1 ? paths[0] : undefined;
+}
+
+/**
+ * Return a single image file path when `text` is exactly one explicit path
+ * pointing at a supported image extension (`.png`, `.jpg`/`.jpeg`, `.gif`,
+ * `.webp`). Used by the keybind-driven clipboard image paste path so a
+ * clipboard whose only payload is an image file (e.g. Finder `Cmd+C` on
+ * macOS) attaches the image instead of pasting the path as literal text.
+ *
+ * Two-stage detection:
+ *
+ * 1. Splitter pass (shared with the bracketed-paste handler) — handles
+ *    quoted paths, shell-escaped spaces, and unambiguous single tokens.
+ *    Returns the single image path when it parses cleanly; explicitly
+ *    returns `undefined` when the splitter found multiple segments (so
+ *    ambiguous multi-path clipboard text like `/tmp/a.png /tmp/b.png`
+ *    still falls through to the text fallback instead of being mis-loaded
+ *    as one giant path).
+ * 2. Whole-text-as-path pass — only reached when the splitter failed
+ *    (every segment must look like an explicit path; an unescaped space in
+ *    a real path breaks that). Restricted to inputs anchored by
+ *    {@link ABSOLUTE_PATH_PREFIX_REGEX} so prose containing a path-shaped
+ *    fragment ("see /tmp/x.png") never hijacks the smart fallback. This
+ *    is what recovers macOS screenshot filenames like
+ *    `/Users/me/Desktop/Screenshot 2026-06-25 at 1.23.45 PM.png`.
+ */
+export function extractImagePathFromText(text: string): string | undefined {
+	const paths = extractPastePathsFromText(text);
+	if (paths?.length === 1 && isImagePath(paths[0])) return paths[0];
+	if (paths !== undefined) return undefined;
+	const trimmed = text.trim();
+	if (!trimmed || /[\r\n]/.test(trimmed) || !ABSOLUTE_PATH_PREFIX_REGEX.test(trimmed)) return undefined;
+	const wholePath = normalizePastedPath(trimmed);
+	if (wholePath && isExplicitPastedPath(wholePath) && isImagePath(wholePath)) {
+		return wholePath;
+	}
+	return undefined;
 }
 
 /**
