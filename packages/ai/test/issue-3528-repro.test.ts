@@ -120,6 +120,31 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(mdns.replayReasoningContent).toBe(true);
 	});
 
+	it("leaves replayReasoningContent off for LiteLLM (local proxy, not a chat-template renderer)", () => {
+		// LiteLLM defaults to http://localhost:4000/v1 but forwards every turn
+		// to an unrelated upstream (OpenAI, Anthropic, …). Replaying
+		// reasoning_content gains no KV-cache benefit and can 400 the upstream
+		// on extra message fields, so the auto-detection MUST exclude proxy
+		// providers from both the provider allow-list and the loopback
+		// heuristic. Users running a custom proxy who do want the replay can
+		// opt in via `compat.replayReasoningContent: true`.
+		const defaults = llamaCppQwenModel({ provider: "litellm", baseUrl: "http://localhost:4000/v1" }).compat;
+		const customLoopback = llamaCppQwenModel({ provider: "litellm", baseUrl: "http://127.0.0.1:9000/v1" }).compat;
+		expect(defaults.replayReasoningContent).toBe(false);
+		expect(customLoopback.replayReasoningContent).toBe(false);
+	});
+
+	it("honors an explicit replayReasoningContent override on a proxy provider", () => {
+		// Escape hatch for a user who knows their LiteLLM deployment fronts a
+		// llama.cpp-style backend that benefits from the replay.
+		const optedIn = llamaCppQwenModel({
+			provider: "litellm",
+			baseUrl: "http://localhost:4000/v1",
+			compat: { replayReasoningContent: true },
+		}).compat;
+		expect(optedIn.replayReasoningContent).toBe(true);
+	});
+
 	it("leaves replayReasoningContent off for non-reasoning local models", () => {
 		// The flag only matters when thinking blocks could exist on prior turns.
 		const compat = llamaCppQwenModel({ reasoning: false }).compat;

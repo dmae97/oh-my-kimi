@@ -177,6 +177,18 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
  */
 const LOCAL_OPENAI_COMPAT_PROVIDERS = new Set(["llama.cpp", "lm-studio", "vllm", "ollama"]);
 
+/**
+ * Local proxy providers that share the loopback-default baseUrl but forward
+ * to an unrelated upstream (OpenAI, Anthropic, …) rather than running a
+ * chat-template renderer themselves — `replayReasoningContent` would push
+ * `reasoning_content` to the upstream, which gains no KV-cache benefit and
+ * may 400 on the extra field. Excluded from BOTH the provider check above
+ * and the loopback heuristic below; users who want the replay on a custom
+ * proxy setup can opt in via the sparse `compat.replayReasoningContent`
+ * override.
+ */
+const PROXY_OPENAI_COMPAT_PROVIDERS = new Set(["litellm"]);
+
 function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;
 	let hostname: string;
@@ -444,7 +456,9 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// they accept but don't validate the field — so the encoder needs a
 		// distinct opt-in to replay on every reasoning turn.
 		replayReasoningContent:
-			Boolean(spec.reasoning) && (LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
+			Boolean(spec.reasoning) &&
+			!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
+			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
 		cacheControlFormat: isOpenRouter && spec.id.startsWith("anthropic/") ? "anthropic" : undefined,
 		openRouterRouting: undefined,
