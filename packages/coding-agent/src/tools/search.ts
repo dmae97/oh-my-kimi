@@ -425,6 +425,86 @@ function jsMatchedLineIndexes(
 	return out;
 }
 
+/**
+ * Native-grep an oversized (>NATIVE_GREP_MAX_FILE_BYTES) line-mode virtual resource
+ * in line-boundary chunks (each <= the cap) so it keeps RE2 dialect parity instead of
+ * the JS fallback. Each chunk's matched line numbers are offset by its starting line
+ * index. A single line larger than the cap can't be native-grepped, so that one line
+ * is JS-tested. Returns sorted 0-based line indexes.
+ */
+async function nativeChunkedLineIndexes(
+	dir: string,
+	resourceIdx: number,
+	content: string,
+	pattern: string,
+	ignoreCase: boolean,
+	signal: AbortSignal | undefined,
+): Promise<number[]> {
+	const rawLines = content.split("\n");
+	if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") rawLines.pop();
+	const indexes: number[] = [];
+	let chunkStart = 0;
+	let chunkBytes = 0;
+	let chunkLines: string[] = [];
+	let chunkSeq = 0;
+	const flush = async (): Promise<void> => {
+		if (chunkLines.length === 0) return;
+		const scratch = path.resolve(dir, `${resourceIdx}-chunk-${chunkSeq++}`);
+		await writeFile(scratch, chunkLines.join("\n"));
+		const probe = await grep(
+			{
+				pattern,
+				path: scratch,
+				ignoreCase,
+				multiline: false,
+				hidden: true,
+				gitignore: false,
+				maxCount: chunkLines.length,
+				contextBefore: 0,
+				contextAfter: 0,
+				maxColumns: DEFAULT_MAX_COLUMN,
+				mode: GrepOutputMode.Content,
+				signal,
+				timeoutMs: SEARCH_GREP_TIMEOUT_MS,
+			},
+			undefined,
+		);
+		for (const match of probe.matches) indexes.push(chunkStart + match.lineNumber - 1);
+		chunkLines = [];
+		chunkBytes = 0;
+	};
+	let lineRegex: RegExp | undefined;
+	for (let i = 0; i < rawLines.length; i++) {
+		const line = rawLines[i];
+		const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+		if (lineBytes > NATIVE_GREP_MAX_FILE_BYTES) {
+			await flush();
+			if (!lineRegex) {
+				try {
+					lineRegex = new RegExp(pattern, ignoreCase ? "i" : "");
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					throw new ToolError(`Invalid regex: ${message.replace(/^Invalid regular expression:\s*/i, "")}`);
+				}
+			}
+			lineRegex.lastIndex = 0;
+			if (lineRegex.test(line)) indexes.push(i);
+			chunkStart = i + 1;
+			continue;
+		}
+		if (chunkLines.length > 0 && chunkBytes + lineBytes > NATIVE_GREP_MAX_FILE_BYTES) {
+			await flush();
+			chunkStart = i;
+		}
+		if (chunkLines.length === 0) chunkStart = i;
+		chunkLines.push(line);
+		chunkBytes += lineBytes;
+	}
+	await flush();
+	indexes.sort((a, b) => a - b);
+	return indexes;
+}
+
 function makeContextLine(lines: readonly string[], lineIndex: number): { lineNumber: number; line: string } {
 	const { text } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	return { lineNumber: lineIndex + 1, line: text };
@@ -544,11 +624,15 @@ async function searchVirtualResources(
 			const lines = multiline ? indexSearchLines(resource.content).lines : splitSearchLines(resource.content);
 			let matchedIndexes: number[];
 			if (Buffer.byteLength(resource.content, "utf8") > NATIVE_GREP_MAX_FILE_BYTES) {
-				// Native grep silently skips files above its size cap; fall back to JS for
-				// oversized virtual resources (the pre-RE2 behavior) so they are still searched.
-				matchedIndexes = jsMatchedLineIndexes(resource.content, lines, pattern, ignoreCase, multiline).filter(
-					lineIndex => lineAllowed(lineIndex + 1, resource.ranges),
-				);
+				// Native grep skips files above its 4 MiB cap. Search oversized content in
+				// line-boundary chunks so line-mode keeps RE2 parity; multiline can't be chunked
+				// without missing matches that span a chunk boundary, so it falls back to JS
+				// (dialect-as-JS only for these oversized multiline inputs).
+				matchedIndexes = (
+					multiline
+						? jsMatchedLineIndexes(resource.content, lines, pattern, ignoreCase, true)
+						: await nativeChunkedLineIndexes(dir, idx, resource.content, pattern, ignoreCase, signal)
+				).filter(lineIndex => lineAllowed(lineIndex + 1, resource.ranges));
 			} else {
 				const scratch = path.resolve(dir, `${idx}`);
 				await writeFile(scratch, resource.content);
