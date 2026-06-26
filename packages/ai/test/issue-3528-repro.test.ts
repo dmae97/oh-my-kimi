@@ -145,10 +145,17 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(optedIn.replayReasoningContent).toBe(true);
 	});
 
-	it("leaves replayReasoningContent off for non-reasoning local models", () => {
-		// The flag only matters when thinking blocks could exist on prior turns.
+	it("still auto-enables replayReasoningContent when spec.reasoning is false on local hosts", () => {
+		// Runtime discovery for llama.cpp / lm-studio / openai-models-list
+		// hardcodes `reasoning: false` because the upstream `/models` endpoints
+		// don't advertise the capability — but the stream parser still records
+		// any incoming `reasoning_content` deltas as thinking blocks. Gating
+		// the flag on `spec.reasoning` would leave every discovered local Qwen
+		// model reproducing #3528. The encoder's own
+		// `nonEmptyThinkingBlocks.length > 0` guard makes the flag a no-op on
+		// pure-text histories, so it's safe to enable unconditionally.
 		const compat = llamaCppQwenModel({ reasoning: false }).compat;
-		expect(compat.replayReasoningContent).toBe(false);
+		expect(compat.replayReasoningContent).toBe(true);
 	});
 
 	it("leaves replayReasoningContent off for cloud OpenAI-compatible providers", () => {
@@ -193,6 +200,29 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 
 		expect(assistant.content).toBe("## Review: 1 unpushed commit + 1 unstaged change");
 		expect(assistant.reasoning_content).toBe("Let me review the unpushed changes comprehensively.");
+	});
+
+	it("replays reasoning_content for discovered local models that omit spec.reasoning", () => {
+		// Mirrors the discovery setup: `discoverLlamaCppModels` builds specs
+		// with `reasoning: false` regardless of the actual model behaviour.
+		// When the model emits reasoning at runtime the stream parser still
+		// records it as a thinking block; the encoder MUST replay it as
+		// `reasoning_content` so llama.cpp's KV cache survives the next turn.
+		const target = llamaCppQwenModel({ reasoning: false });
+		const messages: Message[] = [
+			userMessage("Plan a refactor."),
+			assistantWithReasoning(
+				"Trace the call graph through service.ts and the registry.",
+				"Step 1: extract the loader. Step 2: rewire the factory.",
+			),
+			userMessage("Continue."),
+		];
+
+		const wire = convertMessages(target, { messages }, target.compat);
+		const assistant = findAssistantMessage(wire);
+		expect(assistant).toBeDefined();
+		if (!assistant) throw new Error("assistant message missing");
+		expect(assistant.reasoning_content).toBe("Trace the call graph through service.ts and the registry.");
 	});
 
 	it("honors the streamed signature when it identifies a recognized wire field", () => {

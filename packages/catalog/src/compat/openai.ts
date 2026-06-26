@@ -454,9 +454,18 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// content and forces full prompt re-processing (#3528). The
 		// `requires*ReasoningContent*` flags above stay off for these hosts —
 		// they accept but don't validate the field — so the encoder needs a
-		// distinct opt-in to replay on every reasoning turn.
+		// distinct opt-in to replay on every reasoning turn. NOT gated on
+		// `spec.reasoning`: the runtime discovery paths for `llama.cpp` /
+		// `lm-studio` / `openai-models-list` hardcode `reasoning: false`
+		// because the upstream `/models` endpoints don't advertise the
+		// capability, but the OpenAI stream parser still records incoming
+		// `reasoning_content` deltas as thinking blocks. Gating on the spec
+		// flag would leave every discovered local Qwen / DeepSeek model
+		// re-triggering #3528. The encoder only writes `reasoning_content`
+		// when a thinking block actually exists on the turn
+		// (`nonEmptyThinkingBlocks.length > 0`), so the flag is a no-op on
+		// pure-text histories.
 		replayReasoningContent:
-			Boolean(spec.reasoning) &&
 			!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
 			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
