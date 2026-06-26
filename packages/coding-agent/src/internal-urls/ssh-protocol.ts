@@ -174,6 +174,18 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	if (username === undefined && url.rawHost === `@${decodeOr(bareHost)}${port !== undefined ? `:${port}` : ""}`) {
 		throw new Error(`ssh://: empty username in "${url.href}"; drop the leading '@' or provide a username before it`);
 	}
+	// Backstop for any remaining stray/empty authority marker the explicit checks
+	// above do not name — notably an empty password (`ssh://user:@host`, `ssh://:@host`,
+	// where `url.password === ""`). `rawHost` keeps the literal marker, so it differs
+	// from the canonical decoded `[user@]host[:port]` WHATWG actually parsed. Every
+	// valid authority — including percent-encoded reserved-char aliases — reconstructs
+	// to exactly `rawHost`, so only malformed userinfo trips this.
+	const canonicalAuthority = `${url.username ? `${decodeOr(url.username)}@` : ""}${decodeOr(bareHost)}${port !== undefined ? `:${port}` : ""}`;
+	if (url.rawHost !== canonicalAuthority) {
+		throw new Error(
+			`ssh://: unsupported or malformed authority in "${url.href}"; use ssh://[user@]host[:1-65535]/<absolute-path>`,
+		);
+	}
 	const items = await loadConfiguredHosts(cwd);
 
 	// A literal user/port in the URL is an authority override. A configured alias

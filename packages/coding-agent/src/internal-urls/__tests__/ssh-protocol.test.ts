@@ -266,6 +266,10 @@ describe("SshProtocolHandler", () => {
 		await expect(handler.resolve(parseInternalUrl("ssh://:pw@prod/etc/hosts"))).rejects.toThrow(/password/);
 		await expect(handler.resolve(parseInternalUrl("ssh://@prod/etc/hosts"))).rejects.toThrow(/empty username/);
 		await expect(handler.resolve(parseInternalUrl("ssh://@prod:22/etc/hosts"))).rejects.toThrow(/empty username/);
+		await expect(handler.resolve(parseInternalUrl("ssh://user:@prod/etc/hosts"))).rejects.toThrow(
+			/malformed authority/,
+		);
+		await expect(handler.resolve(parseInternalUrl("ssh://:@prod/etc/hosts"))).rejects.toThrow(/malformed authority/);
 	});
 
 	it("matches a configured colon-suffixed alias via %3A instead of treating it as an empty port", async () => {
