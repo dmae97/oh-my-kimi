@@ -835,6 +835,46 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(defaultApply?.[0]?.explicitThinkingLevel).toBe(true);
 	});
 
+	it("falls back to the pre-plan model when only plan is configured and the slider is hidden", async () => {
+		const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		const opus = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!sonnet || !opus) throw new Error("Expected sonnet + opus to exist in registry");
+		expect(session.model?.id).toBe(sonnet.id);
+
+		// Only the plan role is configured. getRoleModelCycle synthesizes a
+		// singleton `default` entry from the active plan model (opus), so the
+		// slider is hidden — the operator made no selection and approval must
+		// fall through to the pre-plan sonnet restore instead of pinning the
+		// lone plan tier.
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nNo slider, restore default.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(opus.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		let sliderShown: HookSelectorSlider | undefined;
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				sliderShown = extra?.slider;
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		expect(sliderShown).toBeUndefined();
+		expect(session.model?.id).toBe(sonnet.id);
+	});
+
 	it("compaction runs on the plan model and restores the pre-plan model after success", async () => {
 		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
