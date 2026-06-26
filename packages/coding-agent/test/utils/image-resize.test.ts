@@ -148,6 +148,28 @@ describe("resizeImage decode fallback", () => {
 		expect(result.wasResized).toBe(false);
 		expect(result.buffer.length).toBe(png.length);
 	});
+
+	it("reports JPEG SOF dimensions when Bun.Image rejects after reading the header", async () => {
+		const jpeg = Buffer.alloc(12);
+		jpeg[0] = 0xff;
+		jpeg[1] = 0xd8;
+		jpeg[2] = 0xff;
+		jpeg[3] = 0xc0;
+		jpeg.writeUInt16BE(8, 4);
+		jpeg[6] = 8;
+		jpeg.writeUInt16BE(2474, 7);
+		jpeg.writeUInt16BE(1900, 9);
+		jpeg[11] = 3;
+
+		const result = await resizeImage({ type: "image", data: jpeg.toBase64(), mimeType: "image/jpeg" });
+
+		expect(result.width).toBe(1900);
+		expect(result.height).toBe(2474);
+		expect(result.originalWidth).toBe(1900);
+		expect(result.originalHeight).toBe(2474);
+		expect(result.wasResized).toBe(false);
+		expect(result.buffer.length).toBe(jpeg.length);
+	});
 });
 
 describe("resizeImage minimum dimension", () => {
