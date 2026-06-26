@@ -7,7 +7,7 @@ import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers"
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
+import { getServersForFile, type LspConfig, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { applyTextEditsToString, applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
@@ -2058,8 +2058,8 @@ describe("lsp regressions", () => {
 		const tempDir = TempDir.createSync("@omp-lsp-config-cache-reload-");
 		try {
 			const cwd = tempDir.path();
-			const empty = { servers: {}, idleTimeoutMs: undefined };
-			const withServer = {
+			const empty: LspConfig = { servers: {}, idleTimeoutMs: undefined };
+			const withServer: LspConfig = {
 				servers: {
 					"fake-pylsp": {
 						command: "true",
@@ -2069,7 +2069,7 @@ describe("lsp regressions", () => {
 					},
 				},
 				idleTimeoutMs: undefined,
-			} satisfies ReturnType<typeof loadConfig>;
+			};
 			const loadConfigSpy = vi
 				.spyOn(lspConfig, "loadConfig")
 				.mockImplementation(() => (loadConfigSpy.mock.calls.length === 1 ? empty : withServer));
