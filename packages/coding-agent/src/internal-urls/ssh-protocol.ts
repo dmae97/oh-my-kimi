@@ -144,6 +144,14 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	if (port === 0) {
 		throw new Error("ssh://: port 0 is not a valid SSH port; use ssh://host:<1-65535>/<path> or omit the port");
 	}
+	// An empty port (`ssh://prod:/path`, `ssh://user@host:/path`) parses cleanly
+	// (`url.port === ""`), so it slips past the malformed-authority guard and would be
+	// read as "no port" — silently using the default/configured target. The raw
+	// authority still carries the trailing `:` (a percent-encoded alias like `prod%3A`
+	// decodes to `prod:` but keeps `%3A` in `hostname`, so it won't match this).
+	if (port === undefined && url.rawHost === `${username ? `${username}@` : ""}${bareHost}:`) {
+		throw new Error(`ssh://: empty port in "${url.href}"; use ssh://host:<1-65535>/<path> or drop the colon`);
+	}
 	const items = await loadConfiguredHosts(cwd);
 
 	// A literal user/port in the URL is an authority override. A configured alias

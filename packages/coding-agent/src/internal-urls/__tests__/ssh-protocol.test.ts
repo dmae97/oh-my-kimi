@@ -237,6 +237,20 @@ describe("SshProtocolHandler", () => {
 		await expect(handler.resolve(parseInternalUrl("ssh://prod:65536/etc"))).rejects.toThrow(/invalid host or port/);
 	});
 
+	it("rejects an empty ssh:// port before connecting", async () => {
+		mockHosts();
+		await expect(handler.resolve(parseInternalUrl("ssh://prod:/etc/hosts"))).rejects.toThrow(/empty port/);
+		await expect(handler.resolve(parseInternalUrl("ssh://user@prod:/etc/hosts"))).rejects.toThrow(/empty port/);
+		await expect(handler.resolve(parseInternalUrl("ssh://[::1]:/etc/hosts"))).rejects.toThrow(/empty port/);
+	});
+
+	it("matches a configured colon-suffixed alias via %3A instead of treating it as an empty port", async () => {
+		mockHosts([{ name: "prod:", host: "prod.internal", _source: SOURCE }]);
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://prod%3A/etc/hostname"));
+		expect(spy.mock.calls[0]?.[0]?.host).toBe("prod.internal");
+	});
+
 	it("skips the remote directory listing when skipDirectoryListing is set", async () => {
 		mockHosts();
 		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
