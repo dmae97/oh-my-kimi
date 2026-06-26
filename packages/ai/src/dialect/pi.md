@@ -52,4 +52,4 @@ verbatim tool result
 - Emit parallel calls as consecutive `§…` blocks. NEVER invent call ids; results are positional.
 - Private reasoning goes in a `¤…¤` block before your calls; NEVER put calls inside it, and keep a literal `¤` out of the reasoning text.
 - Read each `‡‡…‡‡` result in call order. NEVER emit a `‡‡` block yourself.
-- After emitting your tool calls, YOU MUST EMIT THE STOP SEQUENCE AND HALT.
+- Emit the stop sequence ONLY after the call is fully written — NEVER announce a tool then stop (e.g. halting at "Let's run `cargo clippy`" with no `§` call emitted). Write the complete call, THEN the stop sequence, THEN halt.
