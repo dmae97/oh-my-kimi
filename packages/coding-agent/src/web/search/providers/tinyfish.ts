@@ -27,6 +27,7 @@ export interface TinyFishSearchParams {
 	query: string;
 	num_results?: number;
 	recency?: SearchParams["recency"];
+	page?: number;
 	signal?: AbortSignal;
 	fetch?: FetchImpl;
 }
@@ -39,6 +40,8 @@ interface TinyFishSearchResult {
 }
 
 interface TinyFishSearchResponse {
+	total_results?: number | null;
+	page?: number | null;
 	results?: TinyFishSearchResult[] | null;
 }
 
@@ -56,6 +59,9 @@ async function callTinyFishSearch(apiKey: string, params: TinyFishSearchParams):
 	url.searchParams.set("query", params.query);
 	if (params.recency) {
 		url.searchParams.set("recency_minutes", String(RECENCY_MINUTES[params.recency]));
+	}
+	if (params.page !== undefined) {
+		url.searchParams.set("page", String(params.page));
 	}
 
 	const response = await (params.fetch ?? fetch)(url, {
@@ -81,28 +87,8 @@ async function callTinyFishSearch(apiKey: string, params: TinyFishSearchParams):
 	return (await response.json()) as TinyFishSearchResponse;
 }
 
-/** Execute TinyFish web search. */
-export async function searchTinyFish(params: SearchParams): Promise<SearchResponse> {
-	const tinyFishParams: TinyFishSearchParams = {
-		query: params.query,
-		num_results: params.numSearchResults ?? params.limit,
-		recency: params.recency,
-		signal: params.signal,
-		fetch: params.fetch,
-	};
-	const keyOrResolver: ApiKey = params.authStorage.resolver("tinyfish", {
-		sessionId: params.sessionId,
-	});
-	const numResults = clampNumResults(tinyFishParams.num_results, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-
-	const data = await withAuth(keyOrResolver, key => callTinyFishSearch(key, tinyFishParams), {
-		signal: params.signal,
-		missingKeyMessage:
-			'TinyFish credentials not found. Set TINYFISH_API_KEY or configure an API key for provider "tinyfish".',
-	});
-	const sources: SearchSource[] = [];
-
-	for (const result of data.results ?? []) {
+function appendTinyFishSources(sources: SearchSource[], results: readonly TinyFishSearchResult[]): void {
+	for (const result of results) {
 		if (!result.url) continue;
 		sources.push({
 			title: result.title ?? result.site_name ?? result.url,
@@ -111,10 +97,50 @@ export async function searchTinyFish(params: SearchParams): Promise<SearchRespon
 			author: result.site_name ?? undefined,
 		});
 	}
+}
+
+/** Execute TinyFish web search. */
+export async function searchTinyFish(params: SearchParams): Promise<SearchResponse> {
+	const tinyFishParams: TinyFishSearchParams = {
+		query: params.query,
+		recency: params.recency,
+		signal: params.signal,
+		fetch: params.fetch,
+	};
+	const keyOrResolver: ApiKey = params.authStorage.resolver("tinyfish", {
+		sessionId: params.sessionId,
+	});
+	const numResults = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
+
+	const sources = await withAuth(
+		keyOrResolver,
+		async key => {
+			const collected: SearchSource[] = [];
+			const firstPage = await callTinyFishSearch(key, { ...tinyFishParams, page: 0 });
+			const firstPageResults = firstPage.results ?? [];
+			appendTinyFishSources(collected, firstPageResults);
+
+			if (
+				numResults > DEFAULT_NUM_RESULTS &&
+				collected.length < numResults &&
+				firstPageResults.length >= DEFAULT_NUM_RESULTS
+			) {
+				const secondPage = await callTinyFishSearch(key, { ...tinyFishParams, page: 1 });
+				appendTinyFishSources(collected, secondPage.results ?? []);
+			}
+
+			return collected.slice(0, numResults);
+		},
+		{
+			signal: params.signal,
+			missingKeyMessage:
+				'TinyFish credentials not found. Set TINYFISH_API_KEY or configure an API key for provider "tinyfish".',
+		},
+	);
 
 	return {
 		provider: "tinyfish",
-		sources: sources.slice(0, numResults),
+		sources,
 		authMode: "api_key",
 	};
 }

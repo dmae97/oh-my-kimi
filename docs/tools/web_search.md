@@ -39,10 +39,10 @@
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Search query, passed to providers unchanged. |
 | `recency` | `"day" \| "week" \| "month" \| "year"` | No | Time filter. Only providers that implement it use it; code maps it for Brave, Perplexity, Tavily, SearXNG, Kagi, TinyFish, and Firecrawl. xAI ignores it because the documented Agent Tools `web_search` API does not expose date controls. |
-| `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. For xAI, it is not sent upstream; it is a local post-parse cap on returned sources/citations, defaulting to `10` when omitted/invalid/zero and capped at `30`. |
+| `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. TinyFish and xAI are local-cap exceptions: TinyFish uses it only for page fetching and slicing; xAI caps parsed sources/citations locally, defaulting to `10` and max `30`. |
 | `max_tokens` | `number` | No | Passed through as provider token caps (`maxOutputTokens`, `max_tokens`, or xAI `max_output_tokens`) only by Anthropic, Gemini, xAI, and Perplexity API-key mode. Ignored by the other providers. |
 | `temperature` | `number` | No | Passed through only by Anthropic, Gemini, xAI, and Perplexity API-key mode. Ignored by the other providers. |
-| `num_search_results` | `number` | No | Requested search breadth or local result cap. Most providers send it upstream. xAI does not send it upstream; it is a local cap on returned sources/citations after parsing, takes precedence over `limit`, defaults to `10` when omitted/invalid/zero, and is capped at `30`. |
+| `num_search_results` | `number` | No | Requested search breadth or local result cap. Most providers send it upstream. TinyFish and xAI do not; TinyFish clamps to `1..20` with default `10` and uses it for paginated fetches before slicing, while xAI caps parsed sources/citations locally with default `10` and max `30`. |
 
 ## Outputs
 The tool returns a single text content block plus structured `details`.
@@ -143,8 +143,8 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - Output: synthesized `answer` from up to 3 result summaries, `sources`, `requestId`.
   - **TinyFish** — `packages/coding-agent/src/web/search/providers/tinyfish.ts`
     - Availability: `TINYFISH_API_KEY` or `agent.db` credential for `tinyfish`.
-    - Querying: GET `https://api.search.tinyfish.ai` with `X-API-Key`; `recency` maps to `recency_minutes`.
-    - `limit` / `num_search_results`: collapsed and clamped to `1..20`, default `10`; output `sources`, `authMode: "api_key"`.
+    - Querying: GET `https://api.search.tinyfish.ai` with `X-API-Key` and `query`; `recency` maps to `recency_minutes`.
+    - `limit` / `num_search_results`: collapsed as `params.numSearchResults ?? params.limit`, clamped to `1..20`, default `10`. TinyFish has no count parameter and returns at most 10 results per page; for counts above the first page, the adapter fetches documented `page` values (`0`, then `1` when needed) before slicing locally. Output `sources`, `authMode: "api_key"`.
   - **Jina** — `packages/coding-agent/src/web/search/providers/jina.ts`
     - Availability: `JINA_API_KEY` only.
     - Querying: GET-like fetch to `https://s.jina.ai/<encoded query>` with bearer auth.
@@ -218,7 +218,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 - `formatForLLM()` truncates source snippets and citation text to 240 chars (`packages/coding-agent/src/web/search/index.ts`).
 - `formatForLLM()` emits at most 3 search queries, each truncated to 120 chars (`packages/coding-agent/src/web/search/index.ts`).
 - Brave result count: default `10`, max `20` (`DEFAULT_NUM_RESULTS`, `MAX_NUM_RESULTS` in `packages/coding-agent/src/web/search/providers/brave.ts`).
-- TinyFish result count: default `10`, max `20` (`packages/coding-agent/src/web/search/providers/tinyfish.ts`).
+- TinyFish local result count: default `10`, max `20`; the API has no count parameter and returns at most 10 results per page, so the adapter fetches documented pages (`page=0`, then `page=1` when needed) and slices locally (`packages/coding-agent/src/web/search/providers/tinyfish.ts`).
 - DuckDuckGo result count: default `10`, max `20` (`packages/coding-agent/src/web/search/providers/duckduckgo.ts`).
 - Tavily result count: default `5`, max `20` (`packages/coding-agent/src/web/search/providers/tavily.ts`).
 - Firecrawl result count: default `10`, max `100` (`packages/coding-agent/src/web/search/providers/firecrawl.ts`).
@@ -247,7 +247,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 ## Notes
 - The model-facing schema does not expose `provider`, but internal callers can force one through `SearchQueryParams`.
 - `resolveProviderChain()` lazily imports provider modules and caches singleton instances. Just asking for labels via `getSearchProviderLabel()` does not trigger those imports.
-- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts; xAI applies that same precedence locally after parsing to cap returned sources/citations without sending a result-count control upstream (`10` default, `30` max).
+- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts. TinyFish uses that collapsed value only as a local cap and to decide whether to fetch page `1`; it does not serialize a count parameter. xAI applies that same precedence locally after parsing to cap returned sources/citations without sending a result-count control upstream (`10` default, `30` max).
 - `recency` is implemented by Brave, Perplexity, Tavily, SearXNG, Kagi, TinyFish, and Firecrawl; xAI ignores it because the documented Agent Tools `web_search` API does not expose date controls. The model-facing prompt does not name specific providers.
 - `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.
 - DuckDuckGo is intentionally last in the auto chain because it is always available without credentials.
