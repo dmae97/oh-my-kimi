@@ -450,6 +450,18 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	/**
+	 * Adopt a rebuilt-tail todo snapshot as the controller's tracked live
+	 * snapshot. Used by rebuild paths (settings/extensions overlay close, focus
+	 * attach, /resume) to preserve displacement continuity when a turn is still
+	 * active — without this, the next same-turn `todo` update would stack
+	 * another panel because the controller's tracker was reset before rebuild.
+	 * Drops the candidate when it is no longer a displaceable todo.
+	 */
+	inheritDisplaceableTodo(component: ToolExecutionComponent | null | undefined): void {
+		this.#displaceableTodoComponent = component?.canBeDisplacedBy("todo") ? component : undefined;
+	}
+
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
