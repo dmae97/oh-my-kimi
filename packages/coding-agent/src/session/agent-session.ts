@@ -8856,6 +8856,21 @@ export class AgentSession {
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
 
+		// Promote to a larger-context sibling before compacting, mirroring the
+		// pre-prompt (#runPrePromptCompactionIfNeeded) and post-turn threshold
+		// (#checkCompaction) paths. Without this, a long mid-turn tool loop that
+		// crosses the threshold compacts the history (and can hit the no-progress
+		// dead-end on a single oversized turn) on a model that should have just
+		// been promoted to a larger window instead.
+		if (await this.#promoteContextModel()) {
+			logger.debug("Mid-run context promotion avoided compaction", {
+				contextTokens,
+				contextWindow,
+				from: `${model?.provider}/${model?.id}`,
+			});
+			return;
+		}
+
 		const messagesBefore = activeMessages.length;
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
