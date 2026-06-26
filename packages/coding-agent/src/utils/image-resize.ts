@@ -54,10 +54,7 @@ function readUint16BE(buffer: Uint8Array, offset: number): number {
 }
 
 function readUint32BE(buffer: Uint8Array, offset: number): number {
-	return (
-		((buffer[offset] << 24) | (buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3]) >>>
-		0
-	);
+	return ((buffer[offset] << 24) | (buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3]) >>> 0;
 }
 
 function readPngHeaderDimensions(buffer: Uint8Array): ImageHeaderDimensions | undefined {
