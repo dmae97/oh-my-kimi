@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed `snapcompact` compaction silently falling back to an LLM summary when local preflight rejects the archive; manual and auto snapcompact now fail locally with the blocker instead of making provider calls. ([#3599](https://github.com/can1357/oh-my-pi/issues/3599))
+
 - Fixed garbled casing in auto-generated session titles. `normalizeGeneratedTitle` (`packages/coding-agent/src/tiny/text.ts`) used to force Title Case via a `\b\p{Ll}` regex, capitalizing function words ("for" → "For") and amplifying stray model capitals ("dAemon" → "DAemon"). It now reconciles each title token against the user's own message: tokens typed verbatim are kept; proper nouns the user cased distinctively are restored when the model flattened them ("tinyvmm" → "TinyVMM"); lowercase words carrying a stray interior capital the user never wrote are flattened ("dAemon" → "daemon"); and model-cased PascalCase proper nouns ("GitHub", "OAuth") are left untouched. Restoration is limited to distinctively cased source tokens so a message that merely starts with "For" can't force a mid-title "for" to "For". Applies to both the local tiny-model and online pi/smol title paths.
 
 ## [16.1.23] - 2026-06-26
