@@ -2665,6 +2665,7 @@ export class AgentSession {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
+			if (this.#isClassifierRefusal(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
@@ -3137,13 +3138,18 @@ export class AgentSession {
 					return;
 				}
 			}
-			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) {
 					await emitAgentEndNotification();
 					return;
 				}
+			}
+			if (this.#isClassifierRefusal(msg)) {
+				this.#removeAssistantMessageFromActiveContext(msg);
+				this.#resolveRetry();
+				await emitAgentEndNotification();
+				return;
 			}
 			this.#resolveRetry();
 
@@ -9042,7 +9048,7 @@ export class AgentSession {
 		});
 	}
 
-	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
+	#removeAssistantMessageFromActiveContext(assistantMessage: AssistantMessage): void {
 		const messages = this.agent.state.messages;
 		const lastMessage = messages[messages.length - 1];
 		if (
@@ -9051,6 +9057,10 @@ export class AgentSession {
 		) {
 			this.agent.replaceMessages(messages.slice(0, -1));
 		}
+	}
+
+	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
+		this.#removeAssistantMessageFromActiveContext(assistantMessage);
 
 		const emptyStopEntry = this.sessionManager
 			.getBranch()
@@ -11464,11 +11474,8 @@ export class AgentSession {
 			errorMessage,
 		});
 
-		// Remove error message from agent state (keep in session for history)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.replaceMessages(messages.slice(0, -1));
-		}
+		// Remove the failed assistant message from active context before retrying.
+		this.#removeAssistantMessageFromActiveContext(message);
 
 		// Wait with exponential backoff (abortable).
 		const retryAbortController = new AbortController();

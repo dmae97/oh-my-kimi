@@ -15,6 +15,8 @@
 
 ### Fixed
 
+- Fixed Anthropic classifier refusals being persisted as assistant dialogue after no fallback handled them; refusal stops are now displayed as errors but pruned from active and saved context before the next prompt. ([#3591](https://github.com/can1357/oh-my-pi/issues/3591))
+
 - Fixed `/resume <session-id>` in the interactive TUI only searching the active cwd's session directory; id-prefix lookup now falls back to sessions from other cwd buckets like CLI `--resume <session-id>`.
 - Fixed plan mode rejecting edits to plan artifacts when models refer to them by bare filenames
 - Fixed absolute paths to session-owned artifacts being incorrectly routed through the editor bridge
