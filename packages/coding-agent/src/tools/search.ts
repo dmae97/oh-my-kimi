@@ -478,6 +478,7 @@ async function searchVirtualResources(
 				limitReached = true;
 				break;
 			}
+			const lines = multiline ? indexSearchLines(resource.content).lines : splitSearchLines(resource.content);
 			const scratch = path.resolve(dir, `${idx}`);
 			await writeFile(scratch, resource.content);
 			const probe = await grep(
@@ -488,7 +489,10 @@ async function searchVirtualResources(
 					multiline,
 					hidden: true,
 					gitignore: false,
-					maxCount: INTERNAL_TOTAL_CAP,
+					// A ranged selector must see every match so the range filter below never
+					// drops in-range hits that fall after the cap; matches can't exceed the
+					// line count. Unranged search keeps the overall result cap.
+					maxCount: resource.ranges ? Math.max(lines.length, 1) : INTERNAL_TOTAL_CAP,
 					contextBefore: 0,
 					contextAfter: 0,
 					maxColumns: DEFAULT_MAX_COLUMN,
@@ -501,7 +505,6 @@ async function searchVirtualResources(
 			const matchedIndexes = [...new Set(probe.matches.map(match => match.lineNumber - 1))]
 				.filter(lineIndex => lineAllowed(lineIndex + 1, resource.ranges))
 				.sort((a, b) => a - b);
-			const lines = multiline ? indexSearchLines(resource.content).lines : splitSearchLines(resource.content);
 			const resourceMatches = buildVirtualMatches(
 				resource,
 				lines,

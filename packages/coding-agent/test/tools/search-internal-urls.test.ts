@@ -248,6 +248,16 @@ describe("SearchTool internal URL resolution", () => {
 		expect(text).not.toContain("needle outside range");
 	});
 
+	it("keeps in-range virtual matches that fall after the result cap (ranged probe)", async () => {
+		// >INTERNAL_TOTAL_CAP (2000) matching lines precede the selected range; the
+		// native probe must not stop at the cap before range filtering.
+		const content = `${Array.from({ length: 2100 }, (_, i) => `needle ${i + 1}`).join("\n")}\n`;
+		registerVirtualDocs(new Map([["big.md", content]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("ranged-cap", { pattern: "needle", paths: ["virtual://big.md:2090-2100"] });
+		expect(getResultText(result)).toContain("needle 2095");
+	});
+
 	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
 		const session = createSession();
 		const tool = new SearchTool(session);

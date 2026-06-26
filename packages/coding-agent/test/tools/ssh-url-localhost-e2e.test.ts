@@ -91,6 +91,14 @@ describe.skipIf(!SSH_OK)("ssh:// handler against a real localhost ssh", () => {
 		expect(leftovers.trim()).toBe("0");
 	});
 
+	it("creates missing remote parent directories when writing a new nested file", async () => {
+		mockEmptyHosts();
+		const dest = `${TMP}/new/sub/notes.txt`;
+		await handler.write(parseInternalUrl(`ssh://localhost${dest}`), "nested\n");
+		const back = await handler.resolve(parseInternalUrl(`ssh://localhost${dest}`));
+		expect(back.content).toBe("nested\n");
+	});
+
 	it("replaces a symlinked destination with a regular file (documented v1 limit)", async () => {
 		mockEmptyHosts();
 		await sh(`sh -c 'printf orig > ${TMP}/sym-target; ln -sf ${TMP}/sym-target ${TMP}/sym-link'`);

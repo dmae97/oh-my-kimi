@@ -116,6 +116,7 @@ export async function writeRemoteFile(
 	// replacing such a symlink rather than writing through it.
 	const command =
 		`t=${tmp}; trap 'rm -f -- "$t"' 0; ` +
+		`mkdir -p -- "$(dirname -- "$t")" && ` +
 		`cat > "$t" && { ` +
 		`if [ -d ${dest} ]; then echo 'ssh://: destination is a directory' >&2; exit 1; ` +
 		`elif [ -f ${dest} ] && [ ! -L ${dest} ]; then cat "$t" > ${dest} || exit 1; ` +
