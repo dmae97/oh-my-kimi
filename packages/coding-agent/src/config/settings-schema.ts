@@ -4630,8 +4630,6 @@ export const SETTINGS_SCHEMA = {
 		default: "unset" as const,
 	},
 
-	"gc.auto": { type: "boolean", default: false },
-
 	"gc.blobs": { type: "boolean", default: true },
 
 	"gc.archive": { type: "boolean", default: true },
@@ -4890,7 +4888,6 @@ export interface CodexResetsSettings {
 }
 
 export interface GcSettings {
-	auto: boolean;
 	blobs: boolean;
 	archive: boolean;
 	wal: boolean;

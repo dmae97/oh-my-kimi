@@ -5,14 +5,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
-import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let root: string;
 let writes: string[] = [];
 let stdoutSpy: { mockRestore(): void } | undefined;
+let settingsState: SettingsTestState | undefined;
 
 beforeEach(async () => {
+	settingsState = beginSettingsTest();
 	root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gc-"));
 	writes = [];
 	stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
@@ -24,6 +26,8 @@ beforeEach(async () => {
 afterEach(async () => {
 	stdoutSpy?.mockRestore();
 	stdoutSpy = undefined;
+	restoreSettingsTestState(settingsState);
+	settingsState = undefined;
 	await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -74,16 +78,22 @@ async function writeBlob(agentDir: string, hash: string, content: string): Promi
 	return file;
 }
 
-describe("runGcCommand blob sweep", () => {
-	test("keeps automatic gc disabled by default", () => {
-		expect(getDefault("gc.auto")).toBe(false);
-	});
+async function agePath(file: string, ageDays = 1): Promise<void> {
+	const ts = new Date(Date.now() - ageDays * 86_400_000);
+	await fs.utimes(file, ts, ts);
+}
 
+async function writeConfig(agentDir: string, body: string): Promise<void> {
+	await fs.mkdir(agentDir, { recursive: true });
+	await Bun.write(path.join(agentDir, "config.yml"), body);
+}
+
+describe("runGcCommand blob sweep", () => {
 	test("uses the active configured agent dir when --agent-dir is omitted", async () => {
 		const originalAgentDir = getAgentDir();
 		try {
 			setAgentDir(root);
-			await writeBlob(root, hashFor("orphan"), "orphan");
+			await agePath(await writeBlob(root, hashFor("orphan"), "orphan"));
 
 			const result = await runGcCommand({ flags: { blobs: true } });
 
@@ -97,6 +107,7 @@ describe("runGcCommand blob sweep", () => {
 	test("dry-run reports unreferenced blobs without deleting them", async () => {
 		const hash = hashFor("orphan");
 		const blob = await writeBlob(root, hash, "orphan");
+		await agePath(blob);
 
 		const result = await runGcCommand({ flags: { agentDir: root, blobs: true } });
 
@@ -110,6 +121,8 @@ describe("runGcCommand blob sweep", () => {
 		const referencedHash = hashFor("referenced");
 		const orphan = await writeBlob(root, orphanHash, "orphan");
 		const referenced = await writeBlob(root, referencedHash, "referenced");
+		await agePath(orphan);
+		await agePath(referenced);
 		await writeSession(root, "project", "session-1", "complete", {
 			blobRef: `blob:sha256:${referencedHash}`,
 		});
@@ -120,6 +133,56 @@ describe("runGcCommand blob sweep", () => {
 		expect(result.blobs?.deleted).toBe(1);
 		expect(await Bun.file(orphan).exists()).toBe(false);
 		expect(await Bun.file(referenced).exists()).toBe(true);
+	});
+
+	test("--apply keeps fresh unreferenced blobs out of sweep candidates", async () => {
+		const blob = await writeBlob(root, hashFor("fresh-orphan"), "fresh");
+
+		const result = await runGcCommand({ flags: { agentDir: root, blobs: true, apply: true } });
+
+		expect(result.blobs?.wouldDelete).toBe(0);
+		expect(result.blobs?.deleted).toBe(0);
+		expect(await Bun.file(blob).exists()).toBe(true);
+	});
+
+	test("uses configured gc selectors and retention defaults", async () => {
+		await agePath(await writeBlob(root, hashFor("orphan"), "orphan"));
+		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
+		await writeConfig(
+			root,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: true",
+				"  wal: false",
+				"  coldArchiveAfterDays: 7",
+				"  retainNewestGlobal: 0",
+				"  retainNewestPerCwd: 0",
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
+
+		expect(result.blobs).toBeUndefined();
+		expect(result.wal).toBeUndefined();
+		expect(result.archive?.archived).toBe(1);
+		expect(await Bun.file(path.join(root, "archive", "sessions", "project", "archive-me.jsonl.gz")).exists()).toBe(
+			true,
+		);
+	});
+
+	test("explicit selectors override disabled gc config", async () => {
+		const blob = await writeBlob(root, hashFor("orphan"), "orphan");
+		await agePath(blob);
+		await writeConfig(root, ["gc:", "  blobs: false", "  archive: false", "  wal: false", ""].join("\n"));
+
+		const result = await runGcCommand({ flags: { agentDir: root, blobs: true, apply: true } });
+
+		expect(result.blobs?.deleted).toBe(1);
+		expect(result.archive).toBeUndefined();
+		expect(result.wal).toBeUndefined();
+		expect(await Bun.file(blob).exists()).toBe(false);
 	});
 });
 
@@ -156,6 +219,7 @@ describe("runGcCommand history checkpoint", () => {
 		const result = await runGcCommand({ flags: { agentDir: root, wal: true, apply: true } });
 
 		expect(result.wal?.checkpointed).toBe(true);
+		expect(result.wal?.walBytes).toBe(0);
 		expect((await fs.stat(`${dbPath}-wal`)).size).toBe(0);
 	});
 });
@@ -254,6 +318,25 @@ describe("runGcCommand cold-session archive", () => {
 		expect(await Bun.file(session).exists()).toBe(false);
 	});
 
+	test("does not archive fresh completed sessions that may still be live", async () => {
+		const session = await writeSession(root, "project", "fresh-complete", "complete");
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 0,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		expect(result.archive?.archived).toBe(0);
+		expect(result.archive?.skippedActive).toBe(1);
+		expect(await Bun.file(session).exists()).toBe(true);
+	});
+
 	test("dry-run does not recover orphaned session backups", async () => {
 		const sessionDir = path.join(getSessionsDir(root), "project");
 		await fs.mkdir(sessionDir, { recursive: true });
@@ -275,6 +358,7 @@ describe("runGcCommand cold-session archive", () => {
 		const referencedHash = hashFor("archived-reference");
 		const referenced = await writeBlob(root, referencedHash, "referenced");
 		await writeBlob(root, hashFor("orphan"), "orphan");
+		await agePath(path.join(getBlobsDir(root), hashFor("orphan")));
 		await writeSession(root, "project", "archive-me", "complete", {
 			ageDays: 90,
 			blobRef: `blob:sha256:${referencedHash}`,

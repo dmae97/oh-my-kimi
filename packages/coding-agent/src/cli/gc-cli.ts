@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getModelDbPath, getSessionsDir } from "@oh-my-pi/pi-utils";
-import { getDefault } from "../config/settings-schema";
+import { Settings } from "../config/settings";
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { FileSessionStorage } from "../session/session-storage";
 
@@ -14,6 +14,7 @@ const JSONL_GLOB = new Bun.Glob("**/*.jsonl");
 const JSONL_GZ_GLOB = new Bun.Glob("**/*.jsonl.gz");
 const ACTIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["pending", "interrupted", "unknown"]);
 const DAY_MS = 86_400_000;
+const GC_WRITE_GRACE_MS = 5 * 60_000;
 const SESSION_SUFFIX = ".jsonl";
 const COMPRESSED_SESSION_SUFFIX = ".jsonl.gz";
 
@@ -120,18 +121,20 @@ function numberSetting(value: number | undefined, fallback: number): number {
 	return Math.max(0, Math.floor(value));
 }
 
-function resolveOptions(flags: GcCommandFlags): ResolvedGcOptions {
+async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions> {
+	const agentDir = path.resolve(flags.agentDir ?? getAgentDir());
+	const settings = await Settings.init({ agentDir });
 	const selected = flags.blobs === true || flags.archive === true || flags.wal === true;
 	return {
 		apply: flags.apply === true,
 		json: flags.json === true,
-		agentDir: path.resolve(flags.agentDir ?? getAgentDir()),
-		runBlobs: selected ? flags.blobs === true : getDefault("gc.blobs"),
-		runArchive: selected ? flags.archive === true : getDefault("gc.archive"),
-		runWal: selected ? flags.wal === true : getDefault("gc.wal"),
-		coldArchiveAfterDays: numberSetting(flags.coldArchiveAfterDays, getDefault("gc.coldArchiveAfterDays")),
-		retainNewestGlobal: numberSetting(flags.retainNewestGlobal, getDefault("gc.retainNewestGlobal")),
-		retainNewestPerCwd: numberSetting(flags.retainNewestPerCwd, getDefault("gc.retainNewestPerCwd")),
+		agentDir,
+		runBlobs: selected ? flags.blobs === true : settings.get("gc.blobs"),
+		runArchive: selected ? flags.archive === true : settings.get("gc.archive"),
+		runWal: selected ? flags.wal === true : settings.get("gc.wal"),
+		coldArchiveAfterDays: numberSetting(flags.coldArchiveAfterDays, settings.get("gc.coldArchiveAfterDays")),
+		retainNewestGlobal: numberSetting(flags.retainNewestGlobal, settings.get("gc.retainNewestGlobal")),
+		retainNewestPerCwd: numberSetting(flags.retainNewestPerCwd, settings.get("gc.retainNewestPerCwd")),
 	};
 }
 
@@ -258,8 +261,10 @@ async function runBlobGc(options: ResolvedGcOptions, archiveSessionsRoot: string
 		errors: [],
 	};
 
+	const deleteBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
 	for (const candidate of candidates) {
 		if (referenced.has(candidate.hash)) continue;
+		if (candidate.mtimeMs > deleteBeforeMs) continue;
 		result.wouldDelete += candidate.paths.length;
 		result.bytes += candidate.bytes;
 		if (!options.apply) continue;
@@ -462,9 +467,14 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 	const candidates: ArchiveCandidate[] = [];
 	let inactiveSeen = 0;
 	const inactiveSeenByCwd = new Map<string, number>();
+	const archiveBeforeMs = Date.now() - GC_WRITE_GRACE_MS;
 
 	for (const session of sessions) {
 		if (session.status && ACTIVE_STATUSES.has(session.status)) {
+			result.skippedActive += 1;
+			continue;
+		}
+		if (session.modified.getTime() > archiveBeforeMs) {
 			result.skippedActive += 1;
 			continue;
 		}
@@ -540,6 +550,12 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 		result.checkpointedFrames = sqliteNumber(row?.checkpointed);
 	} finally {
 		db.close();
+	}
+	try {
+		result.walBytes = (await fs.stat(walPath)).size;
+	} catch (error) {
+		if (codeOf(error) !== "ENOENT") throw error;
+		result.walBytes = 0;
 	}
 	return result;
 }
@@ -624,7 +640,7 @@ function renderText(result: GcResult): string {
 }
 
 export async function runGcCommand(args: GcCommandArgs): Promise<GcResult> {
-	const options = resolveOptions(args.flags);
+	const options = await resolveOptions(args.flags);
 	const archiveRoot = getArchivedSessionsDir(options.agentDir);
 	const result = await withGcLock(options.agentDir, async lockPath => {
 		const next: GcResult = { agentDir: options.agentDir, apply: options.apply, lockPath };
