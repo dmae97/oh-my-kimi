@@ -496,6 +496,7 @@ export class MCPCommandController {
 
 						try {
 							const oauthResource = oauth.resource ?? finalConfig.url;
+							const oauthResourceIsFallback = !oauth.resource;
 							const oauthResult = await this.#handleOAuthFlow(
 								oauth.authorizationUrl,
 								oauth.tokenUrl,
@@ -509,11 +510,13 @@ export class MCPCommandController {
 									prompt: finalConfig.oauth?.prompt,
 									serverUrl: finalConfig.url,
 									resource: oauthResource,
+									stripSameOriginResource: oauthResourceIsFallback,
 								},
 							);
 							finalConfig = this.#persistOAuthResult(finalConfig, oauthResult, {
 								tokenUrl: oauth.tokenUrl,
 								resource: oauthResource,
+								stripSameOriginResource: oauthResourceIsFallback,
 								clientId: oauth.clientId,
 								userClientSecret: finalConfig.oauth?.clientSecret,
 							});
@@ -583,6 +586,7 @@ export class MCPCommandController {
 			prompt?: string;
 			serverUrl?: string;
 			resource?: string;
+			stripSameOriginResource?: boolean;
 		},
 	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
@@ -624,6 +628,7 @@ export class MCPCommandController {
 					callbackPort: opts?.callbackPort,
 					callbackPath: opts?.callbackPath,
 					resource: opts?.resource,
+					stripSameOriginResource: opts?.stripSameOriginResource,
 				},
 				{
 					onAuth: (info: { url: string; instructions?: string }) => {
@@ -711,6 +716,7 @@ export class MCPCommandController {
 				clientId: flow.resolvedClientId ?? resolvedClientId,
 				clientSecret: flow.registeredClientSecret ?? resolvedClientSecret,
 				resource: flow.resource,
+				authorizationUrl: flow.authorizationUrl,
 			};
 
 			await authStorage.set(credentialId, oauthCredential);
@@ -751,10 +757,17 @@ export class MCPCommandController {
 	#persistOAuthResult(
 		config: MCPServerConfig,
 		result: OAuthFlowResult,
-		opts: { tokenUrl: string; resource?: string; clientId?: string; userClientSecret?: string },
+		opts: {
+			tokenUrl: string;
+			resource?: string;
+			stripSameOriginResource?: boolean;
+			clientId?: string;
+			userClientSecret?: string;
+		},
 	): MCPServerConfig {
 		const clientId = result.clientId ?? opts.clientId ?? config.oauth?.clientId;
-		const resource = result.resource ?? opts.resource ?? config.auth?.resource;
+		const resource =
+			result.resource ?? (opts.stripSameOriginResource ? undefined : opts.resource) ?? config.auth?.resource;
 		return {
 			...config,
 			auth: {
@@ -1558,6 +1571,7 @@ export class MCPCommandController {
 			const currentAuthResource = currentAuth?.resource ? expandEnvVarsDeep(currentAuth.resource) : undefined;
 			const oauthResource =
 				oauth.resource ?? currentAuthResource ?? ("url" in runtimeBaseConfig ? runtimeBaseConfig.url : undefined);
+			const oauthResourceIsFallback = !oauth.resource && !currentAuthResource;
 
 			const oauthResult = await this.#handleOAuthFlow(
 				oauth.authorizationUrl,
@@ -1572,6 +1586,7 @@ export class MCPCommandController {
 					prompt: found.config.oauth?.prompt,
 					serverUrl,
 					resource: oauthResource,
+					stripSameOriginResource: oauthResourceIsFallback,
 				},
 			);
 
@@ -1592,6 +1607,7 @@ export class MCPCommandController {
 					clientId: oauth.clientId,
 					userClientSecret,
 					resource: oauthResource,
+					stripSameOriginResource: oauthResourceIsFallback,
 				});
 				await updateMCPServer(found.filePath, name, updated);
 			}
