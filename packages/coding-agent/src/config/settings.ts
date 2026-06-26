@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { configureProviderMaxInFlightRequests } from "@oh-my-pi/pi-ai/stream";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -107,6 +108,33 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 		current = current[segment] as RawSettings;
 	}
 	current[segments[segments.length - 1]] = value;
+}
+
+export function normalizeProviderMaxInFlightRequests(value: unknown): Record<string, number> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const normalized: Record<string, number> = {};
+	for (const [provider, rawLimit] of Object.entries(value)) {
+		if (typeof rawLimit !== "number" || !Number.isFinite(rawLimit) || rawLimit <= 0) continue;
+		normalized[provider] = Math.max(1, Math.floor(rawLimit));
+	}
+	return normalized;
+}
+
+export function validateProviderMaxInFlightRequests(value: unknown): Record<string, number> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	const invalidProviders: string[] = [];
+	const normalized: Record<string, number> = {};
+	for (const [provider, rawLimit] of Object.entries(value)) {
+		if (typeof rawLimit !== "number" || !Number.isFinite(rawLimit) || rawLimit <= 0) {
+			invalidProviders.push(provider);
+			continue;
+		}
+		normalized[provider] = Math.max(1, Math.floor(rawLimit));
+	}
+	if (invalidProviders.length > 0) {
+		throw new Error(`Provider request limits must be positive numbers: ${invalidProviders.join(", ")}`);
+	}
+	return normalized;
 }
 
 const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
@@ -363,7 +391,7 @@ export class Settings {
 		// Trigger hook if exists
 		const hook = SETTING_HOOKS[path];
 		if (hook) {
-			hook(value, prev);
+			hook(next, prev);
 		}
 		this.#fireEffectiveSettingChanged(path, next, prev);
 	}
@@ -1318,6 +1346,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			appendOnlyModeSignal.fire(value);
 		}
 	},
+	"providers.maxInFlightRequests": value => {
+		configureProviderMaxInFlightRequests(validateProviderMaxInFlightRequests(value));
+	},
 	"hindsight.bankId": () => hindsightScopeSignal.fire(),
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
@@ -1393,6 +1424,7 @@ export function resetSettingsForTest(): void {
 	globalInstance = null;
 	globalInstancePromise = null;
 	clearBoundSettingsMethods();
+	configureProviderMaxInFlightRequests(undefined);
 }
 
 /**
