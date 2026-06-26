@@ -7,6 +7,7 @@
 - Added support for file deletion and moving within file editing operations
 - Added `providers.maxInFlightRequests` to cap concurrent LLM requests per provider across local OMP processes from settings.
 
+
 ### Changed
 
 - Renamed `search` tool to `grep`
@@ -189,7 +190,6 @@
 ### Changed
 
 - Reused shared TUI mouse-routing helpers across fullscreen overlay selectors.
-
 
 ## [16.1.16] - 2026-06-23
 
