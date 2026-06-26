@@ -54,7 +54,7 @@ impl Matcher for SingleExecMatcher {
 				Path::new(".").join(file_info.path())
 			}
 		} else {
-			file_info.path().to_path_buf()
+			file_info.display_path().to_path_buf()
 		};
 
 		for arg in &self.args {
@@ -77,6 +77,10 @@ impl Matcher for SingleExecMatcher {
 					command.current_dir(parent);
 				},
 			}
+		} else {
+			// GNU runs `-exec` in find's working directory; resolve the
+			// operand-relative `{}` against the shell cwd, not the host cwd.
+			command.current_dir(pi_uutils_ctx::cwd());
 		}
 		match command.status() {
 			Ok(status) => status.success(),
@@ -119,6 +123,11 @@ impl MultiExecMatcher {
 	fn new_command(&self) -> argmax::Command {
 		let mut command = argmax::Command::new(&self.executable);
 		command.try_args(&self.args).unwrap();
+		if !self.exec_in_parent_dir {
+			// `-exec ... +` (non-execdir) dispatches in find's working dir;
+			// resolve the operand-relative paths against the shell cwd.
+			command.current_dir(pi_uutils_ctx::cwd());
+		}
 		command
 	}
 
@@ -146,7 +155,7 @@ impl Matcher for MultiExecMatcher {
 				Path::new(".").join(file_info.path())
 			}
 		} else {
-			file_info.path().to_path_buf()
+			file_info.display_path().to_path_buf()
 		};
 		let mut command = self.command.borrow_mut();
 		let command = command.get_or_insert_with(|| self.new_command());

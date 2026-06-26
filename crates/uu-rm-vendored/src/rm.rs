@@ -995,8 +995,8 @@ fn handle_writable_directory(path: &Path, options: &Options, metadata: &Metadata
 		options.interactive,
 	) {
 		(false, _, _, InteractiveMode::PromptProtected) => true,
-		(false, false, false, InteractiveMode::Never) => true, /* Don't prompt when interactive is
-		                                                         * never */
+		(false, false, false, InteractiveMode::Never) => true, /* Don't prompt when interactive is */
+		// never
 		(_, false, false, _) => {
 			prompt_yes!("attempt removal of inaccessible directory {}?", path.quote())
 		},

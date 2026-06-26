@@ -2445,6 +2445,23 @@ mod tests {
 		assert!(!tmp.join("sub/drop.tmp").exists(), "-delete should remove the matched file");
 		assert!(tmp.join("keep.log").exists(), "-delete must not touch unmatched files");
 
+		// -exec substitutes the operand-relative path and runs in the shell cwd,
+		// so the relative `{}` resolves and the child's redirect lands in the cwd.
+		session
+			.shell
+			.run_string(
+				"find . -name keep.log -exec sh -c 'printf %s \"$1\" > ex.txt' sh {} ';'",
+				&si,
+				&params,
+			)
+			.await
+			.expect("exec");
+		assert_eq!(
+			read("ex.txt"),
+			"./keep.log",
+			"-exec {{}} should be operand-relative and run in the shell cwd"
+		);
+
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
