@@ -372,6 +372,10 @@ export class ChatTranscriptBuilder {
 			pending instanceof ToolExecutionComponent &&
 			pending.canBeDisplacedBy("todo")
 		) {
+			// Multiple `todo` results in one rebuilt assistant message land here
+			// without an intervening assistant iteration that could displace
+			// them; collapse the prior snapshot before tracking the new one.
+			this.#resolveTodoSnapshot("todo");
 			this.#todoSnapshot = pending;
 		}
 	}

@@ -10,13 +10,16 @@
  *  - EventController: a follow-up `job` call removes the tracked waiting
  *    poll from the transcript; any other tool seals it in place.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
+import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
+import { type Component, Container, type TUI } from "@oh-my-pi/pi-tui";
 
 const uiStub = { requestRender() {} } as unknown as TUI;
 
@@ -352,5 +355,92 @@ describe("EventController displaces consecutive waiting polls", () => {
 		// A poll that carried real results is kept as history.
 		expect(children).toContain(settled);
 		expect(children).toContain(next);
+	});
+});
+
+describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () => {
+	beforeAll(async () => {
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
+		await initTheme();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("removes the earlier todo snapshot when an assistant message replays two todo calls", () => {
+		const chatContainer = new Container();
+		let helpers!: UiHelpers;
+		const ctx = {
+			chatContainer,
+			pendingTools: new Map(),
+			ui: { requestRender: vi.fn() },
+			statusLine: { invalidate: vi.fn() },
+			updateEditorBorderColor: vi.fn(),
+			settings: { get: () => false },
+			addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
+			session: {
+				retryAttempt: 0,
+				getToolByName: () => undefined,
+				sessionManager: { getCwd: () => process.cwd() },
+			},
+			get viewSession() {
+				return (this as { session: unknown }).session;
+			},
+			toolOutputExpanded: false,
+			hideThinkingBlock: false,
+			lastAssistantUsage: undefined,
+			clearTransientSessionUi: () => {},
+		} as unknown as InteractiveModeContext;
+		helpers = new UiHelpers(ctx);
+
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const assistant = {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "todo-1", name: "todo", arguments: { op: "view" } },
+				{ type: "toolCall", id: "todo-2", name: "todo", arguments: { op: "view" } },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage,
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const firstResult = {
+			role: "toolResult",
+			toolCallId: "todo-1",
+			toolName: "todo",
+			content: [{ type: "text", text: "" }],
+			details: todoResult(["plan", "read"]).details,
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const secondResult = {
+			role: "toolResult",
+			toolCallId: "todo-2",
+			toolName: "todo",
+			content: [{ type: "text", text: "" }],
+			details: todoResult(["fix", "test"]).details,
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+
+		helpers.renderSessionContext({ messages: [assistant, firstResult, secondResult] } as SessionContext);
+
+		const todos = chatContainer.children.filter(
+			(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
+		);
+		// Only the latest todo snapshot survives the rebuild; the trailing one is
+		// sealed as final history by the end-of-rebuild flush.
+		expect(todos).toHaveLength(1);
+		expect(todos[0].isTranscriptBlockFinalized()).toBe(true);
 	});
 });
