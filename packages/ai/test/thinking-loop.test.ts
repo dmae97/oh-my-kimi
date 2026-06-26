@@ -54,6 +54,172 @@ function distinctReasoning(): string {
 	].join("\n\n\n");
 }
 
+/** Stream `text` through a fresh detector in small chunks, then flush — mirrors
+ *  how the guard feeds thinking deltas per turn. Returns the first loop reason. */
+function feed(text: string, step = 17): string | null {
+	const detector = new ThinkingLoopDetector();
+	let detail: string | null = null;
+	for (let i = 0; i < text.length && !detail; i += step) detail = detector.push(text.slice(i, i + step));
+	return detail ?? detector.flush();
+}
+
+/** The reported reasoning-summarizer loop: bold-titled "thoughts" that reshuffle
+ *  the same motivational filler ("just doing it, pushing ahead, maintaining
+ *  momentum") with no new vocabulary and no concrete reference. Trigrams never
+ *  match (word order keeps changing); the stall shows up only as recycled
+ *  vocabulary. The titles are summarizer formatting the detector must strip —
+ *  left in, their ever-changing wording would inflate novelty and hide the loop. */
+function progressLexiconLoop(): string {
+	const paras: [string, string][] = [
+		[
+			"Commencing Forward Movement",
+			"I'm now moving forward, proceeding with the task. I'm focusing my attention on moving ahead, and executing. I am not dwelling, but taking action and moving onward. My focus is on doing what needs to be done.",
+		],
+		[
+			"Accelerating Execution Rhythm",
+			"I'm now in a state of rapid execution, focused entirely on maintaining this rapid momentum. I'm channeling the energy to keep going, and am focused on executing this task.",
+		],
+		[
+			"Maintaining Momentum",
+			"I'm completely locked in, and focused on proceeding. I'm relentlessly pushing forward, dedicated to this task. I'm maintaining momentum, and ensuring continued rapid execution. I'm just doing it, pushing ahead and proceeding!",
+		],
+		[
+			"Executing Task Forward",
+			"I'm completely dedicated to pushing forward with this task, focused only on proceeding. I'm relentless in my focus, and driven to just do it. I am focused on the task, and just proceeding with it!",
+		],
+		[
+			"Continuing Forward Progress",
+			"I'm focused on moving this forward, and just doing it! I am relentless and driven, dedicated to doing what needs to be done. I'm proceeding, and just executing what is needed to advance. I'm moving forward now, focused on just doing it, and proceeding.",
+		],
+		[
+			"Sustaining Task Focus",
+			"I'm laser-focused on moving ahead; dedicated and driven, I am just relentlessly pushing forward. I'm maintaining momentum, and ensuring continued rapid execution, and am proceeding.",
+		],
+		[
+			"Continuing Forward Task",
+			"I'm focused on just doing it, pushing ahead relentlessly. Proceeding forward with singular focus, dedicated to execution. I'm maintaining momentum, committed to continued forward progress!",
+		],
+		[
+			"Persevering Forward Action",
+			"I'm focused entirely on moving ahead now, and just doing the task. I'm relentless in my focus, just pushing forward and proceeding. I am dedicated to executing what needs to be done. I'm moving forward, focused only on proceeding. I'm not stopping!",
+		],
+		[
+			"Advancing Through Task",
+			"I'm focused on the task at hand and dedicated to seeing it through. I'm proceeding relentlessly, and am completely dedicated to maintaining this forward momentum. I am now just doing it, pushing ahead with singular focus and just proceeding.",
+		],
+		[
+			"Executing Task Again",
+			"I'm focused on moving this forward, I'm dedicated to the task. I am relentless in my focus, and driven to just do it. I am focused on the task, and am just proceeding with it! I am just doing it, pushing ahead, and proceeding!",
+		],
+		[
+			"Commencing Further Action",
+			"I'm now fully engaged, and focused on proceeding. I'm relentless in my focus, and driven to just do it. I am focused on the task, and just proceeding with it! I am just doing it, pushing ahead, and proceeding!",
+		],
+		[
+			"Initiating Focused Execution",
+			"I'm now fully immersed in the process, relentlessly focused on proceeding with the task. The plan is to continue this trajectory and to just execute! I am now just doing it, pushing ahead, and proceeding! This is not stopping!",
+		],
+	];
+	return paras.map(([title, body]) => `**${title}**\n\n${body}`).join("\n\n\n");
+}
+
+/** A sustained stall that fixates on ONE unchanging reference: each paragraph
+ *  permutes the same fixed lexicon (near-zero novelty, low trigram overlap) and
+ *  repeats `src/memory.rs`, which after the first mention is never a NEW anchor —
+ *  so the run is not reset and the lexical path catches it. Contrast
+ *  `perFileTemplates`, where a fresh anchor per paragraph keeps the run from
+ *  building. The permuted lexicon keeps per-segment novelty at zero so the run
+ *  length is deterministic regardless of streaming chunk boundaries. */
+function fixedAnchorStall(paragraphs: number): string {
+	const lex = [
+		"just",
+		"doing",
+		"it",
+		"proceeding",
+		"pushing",
+		"ahead",
+		"forward",
+		"focused",
+		"keeping",
+		"momentum",
+		"relentless",
+		"dedicated",
+		"driven",
+		"moving",
+		"executing",
+		"onward",
+		"staying",
+		"locked",
+		"committed",
+		"grinding",
+	];
+	return Array.from({ length: paragraphs }, (_, i) => {
+		const rotated = [...lex.slice(i % lex.length), ...lex.slice(0, i % lex.length)];
+		return `Working src/memory.rs ${rotated.join(" ")} src/memory.rs and again.`;
+	}).join("\n\n\n");
+}
+
+/** A tight, near-verbatim paragraph loop (high trigram overlap): caught by the
+ *  trigram path, distinct from the reshuffled-wording lexical stall above. */
+function tightDuplicateLoop(paragraphs: number): string {
+	return Array.from(
+		{ length: paragraphs },
+		(_, i) =>
+			`Confirming the change is safe and the whole suite is green; pass number ${i} of the final review sweep.`,
+	).join("\n\n\n");
+}
+
+/** Focused single-FILE debugging: the same path appears every paragraph, but each
+ *  makes a genuinely new observation (high novelty) — must NOT trip. Guards the
+ *  new-anchor rule against flagging legitimate fixation on one file. */
+const FOCUSED_SINGLE_FILE = [
+	"Reading src/memory.rs I see the AsRawFd import was dropped during the last edit near the top of the file.",
+	"The mmap call in src/memory.rs passes MAP_PRIVATE, so the page cache stays per process rather than shared.",
+	"Down in src/memory.rs the unmap path forgets to check the length argument before calling munmap on it.",
+	"A second look at src/memory.rs shows the guard page is allocated but never released on the error branch.",
+	"The fault handler referenced from src/memory.rs assumes a tiny page, which breaks on the larger Apple platform.",
+	"Tracing ownership through src/memory.rs reveals the Arc is cloned twice but only dropped once on shutdown.",
+	"The harness around src/memory.rs maps a zero length region, which the freshly added assertion now rejects.",
+	"Finally src/memory.rs needs the volatile read restored or the optimiser elides the probe under release builds.",
+].join("\n\n\n");
+
+/** Anchor-free, single-topic deliberation: no code identifiers at all, yet each
+ *  sentence advances the argument (high novelty). Exercises the novelty gate in
+ *  isolation (no anchor to lean on) — must NOT trip. */
+const ANCHOR_FREE_DELIBERATION = [
+	"First I think about how the retry path should behave when the model returns nothing useful at all.",
+	"The summariser tends to repeat encouragement instead of describing any concrete next move it will take.",
+	"A genuine plan keeps introducing fresh nouns because each paragraph advances toward a different sub goal.",
+	"When the writer is stuck it recycles the same handful of motivational words over and over without progress.",
+	"Distinguishing the two cases matters because discarding good reasoning would waste an entire sampled turn.",
+	"The novelty measure should stay high whenever the author keeps naming new ideas rather than rephrasing one.",
+	"Conversely a stall shows up as many paragraphs that together introduce almost no words the reader had seen.",
+	"I want the guard to remain quiet during long but legitimate deliberation about a single hard design issue.",
+	"Finally the threshold has to leave a wide margin so ordinary focused thinking never trips the detector ever.",
+].join("\n\n\n");
+
+/** Realistic per-file refactor assignments: heavy boilerplate (low novelty) but
+ *  each names a distinct file + symbol — a NEW anchor every segment — so neither
+ *  the trigram cluster nor the lexical-stall run ever reaches its threshold. */
+function perFileTemplates(): string {
+	const targets: [string, string][] = [
+		["approval-mode.test.ts", "AgentSession"],
+		["gh.test.ts", "TempDir"],
+		["todo.test.ts", "renderResult"],
+		["hook-editor.test.ts", "requestRender"],
+		["mcp-client.test.ts", "McpSession"],
+		["lsp-pool.test.ts", "LspWorker"],
+		["dap-session.test.ts", "DapBridge"],
+		["stats-sync.test.ts", "SyncWorker"],
+	];
+	return targets
+		.map(
+			([file, sym], i) =>
+				`${i + 1}. Subagent Refactor${i}:\n  - target: packages/coding-agent/test/${file}\n  - assignment: Replace the ReturnType annotation in packages/coding-agent/test/${file} with the explicit type ${sym}. Verify where ${sym} is imported from, then run biome check write unsafe on the file.`,
+		)
+		.join("\n\n");
+}
+
 describe("isGeminiThinkingLoopModel", () => {
 	test("matches direct and aggregator-routed gemini ids, not lookalikes", () => {
 		const gate = (provider: string, id: string) => isGeminiThinkingLoopModel(createMockModel({ provider, id }).model);
@@ -92,14 +258,24 @@ describe("isGeminiThinkingLoopModel", () => {
 });
 
 describe("ThinkingLoopDetector", () => {
-	test("trips on near-duplicate segments fed as small streamed chunks", () => {
-		const detector = new ThinkingLoopDetector();
-		const text = nearDuplicateLoop(12);
-		let detail: string | null = null;
-		for (let i = 0; i < text.length && !detail; i += 17) {
-			detail = detector.push(text.slice(i, i + 17));
-		}
-		expect(detail).toContain("near-identical segments");
+	test("trips on a tight near-duplicate paragraph loop via the trigram path", () => {
+		// High word-trigram overlap: the cluster check claims it before the lexical
+		// path, so the reason names near-identical segments.
+		expect(feed(tightDuplicateLoop(12))).toContain("near-identical segments");
+	});
+
+	test("trips on a reworded progress-lexicon stall with varied bold titles", () => {
+		// The reported reasoning-summarizer loop. Word order keeps changing (trigrams
+		// never cluster); only the recycled vocabulary betrays the stall. The bold
+		// titles must be stripped — left in, their fresh wording would inflate
+		// novelty and hide the loop.
+		expect(feed(progressLexiconLoop())).toContain("low-information");
+	});
+
+	test("trips on a sustained stall fixated on one unchanging reference", () => {
+		// Repeating one path every paragraph is not progress: a fixed anchor is never
+		// a NEW anchor, so the run is not reset.
+		expect(feed(fixedAnchorStall(12))).toContain("low-information");
 	});
 
 	test("trips on verbatim back-to-back repetition", () => {
@@ -121,72 +297,22 @@ describe("ThinkingLoopDetector", () => {
 	});
 
 	test("does not collapse distinct per-file assignment templates into a loop", () => {
-		const detector = new ThinkingLoopDetector();
-		const text = [
-			`1. Subagent ApprovalModeTest:
-  - target: packages/coding-agent/test/tools/approval-mode.test.ts
-  - role: "Test-file refactoring specialist"
-  - assignment:
-    \`\`\`markdown
-      # Target
-      packages/coding-agent/test/tools/approval-mode.test.ts
+		// Eight near-identical templated assignments: heavy boilerplate (low novelty)
+		// but each names a distinct file + symbol — a NEW anchor every segment — so
+		// neither the trigram cluster nor the lexical-stall run reaches its threshold.
+		expect(feed(perFileTemplates(), 37)).toBeNull();
+	});
 
-      # Change
-      Replace the type annotation:
-      \`let session: Awaited<ReturnType<typeof createAgentSession>>["session"];\`
-      with \`AgentSession\`.
-      Verify where \`AgentSession\` is imported from.
-      Run \`biome check --write --unsafe\` on the file.
-    \`\`\``,
-			`2. Subagent GhTest:
-  - target: packages/coding-agent/test/tools/gh.test.ts
-  - role: "Test-file refactoring specialist"
-  - assignment:
-    \`\`\`markdown
-      # Target
-      packages/coding-agent/test/tools/gh.test.ts
+	test("does not trip on focused single-file debugging that keeps advancing", () => {
+		// The same path appears in every paragraph, but each makes a genuinely new
+		// observation, so novelty stays high and the stall run never builds.
+		expect(feed(FOCUSED_SINGLE_FILE, 23)).toBeNull();
+	});
 
-      # Change
-      Replace the type annotations:
-      \`let tempHome: Awaited<ReturnType<typeof setupTempHome>>;\`
-      with \`TempDir\`.
-      Verify where \`TempDir\` is imported from.
-      Run \`biome check --write --unsafe\` on the file.
-    \`\`\``,
-			`3. Subagent TodoTest:
-  - target: packages/coding-agent/test/tools/todo.test.ts
-  - role: "Test-file refactoring specialist"
-  - assignment:
-    \`\`\`markdown
-      # Target
-      packages/coding-agent/test/tools/todo.test.ts
-
-      # Change
-      Locate line 438 containing:
-      \`function innerLines(component: ReturnType<typeof todoToolRenderer.renderResult>): string[] {\`
-      Replace \`ReturnType<typeof todoToolRenderer.renderResult>\` with the explicit return type.
-      Run \`biome check --write --unsafe\` on the file.
-    \`\`\``,
-			`4. Subagent HookEditorTest:
-  - target: packages/coding-agent/test/hook-editor.test.ts
-  - role: "Test-file refactoring specialist"
-  - assignment:
-    \`\`\`markdown
-      # Target
-      packages/coding-agent/test/hook-editor.test.ts
-
-      # Change
-      Replace \`setFocus: ReturnType<typeof vi.fn>;\` and \`requestRender: ReturnType<typeof vi.fn>;\`
-      with Bun's explicit mock type from \`bun:test\`.
-      Run \`biome check --write --unsafe\` on the file.
-    \`\`\``,
-		].join("\n\n");
-		let detail: string | null = null;
-		for (let i = 0; i < text.length && !detail; i += 37) {
-			detail = detector.push(text.slice(i, i + 37));
-		}
-		detail ??= detector.flush();
-		expect(detail).toBeNull();
+	test("does not trip on anchor-free single-topic deliberation", () => {
+		// No code identifiers at all: the novelty gate alone must keep real,
+		// advancing reasoning from tripping.
+		expect(feed(ANCHOR_FREE_DELIBERATION, 23)).toBeNull();
 	});
 
 	test("flush() catches a final unterminated duplicate paragraph", () => {

@@ -423,6 +423,8 @@ export interface BuildSystemPromptOptions {
 	personality?: Personality;
 	/** Whether to include the workspace directory tree in the system prompt. Default: false */
 	includeWorkspaceTree?: boolean;
+	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
+	renderMermaid?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -464,6 +466,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		model,
 		personality = "default",
 		includeWorkspaceTree = false,
+		renderMermaid = true,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -682,6 +685,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		hasMemoryRoot: memoryRootEnabled,
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
+		renderMermaid,
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

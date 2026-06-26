@@ -14,6 +14,7 @@ import {
 	anthropicModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
+	coreWeaveModelManagerOptions,
 	deepseekModelManagerOptions,
 	firepassModelManagerOptions,
 	fireworksModelManagerOptions,
@@ -374,6 +375,13 @@ export const CATALOG_PROVIDERS = [
 			label: "Wafer Serverless",
 			oauthProvider: "wafer-serverless",
 		},
+	},
+	{
+		id: "coreweave",
+		defaultModel: "openai/gpt-oss-120b",
+		envVars: ["COREWEAVE_API_KEY", "WANDB_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => coreWeaveModelManagerOptions(config),
+		catalogDiscovery: { label: "CoreWeave Serverless Inference" },
 	},
 	{
 		id: "xai",

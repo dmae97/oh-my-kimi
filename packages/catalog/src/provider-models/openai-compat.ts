@@ -10,6 +10,7 @@ import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
 import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
+import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import {
 	COPILOT_API_HEADERS,
 	getGitHubCopilotBaseUrl,
@@ -470,7 +471,19 @@ function isLikelyNanoGptTextModelId(id: string): boolean {
 	return !NANO_GPT_NON_TEXT_MODEL_TOKENS.some(token => normalized.includes(token));
 }
 
-type SimpleProviderConfig = { apiKey?: string; baseUrl?: string; fetch?: FetchImpl };
+type SimpleProviderDiscoveryHeaders = Record<string, string> | (() => Record<string, string> | undefined);
+type SimpleProviderConfig = {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+	headers?: SimpleProviderDiscoveryHeaders;
+};
+
+function resolveSimpleProviderHeaders(
+	headers: SimpleProviderDiscoveryHeaders | undefined,
+): Record<string, string> | undefined {
+	return typeof headers === "function" ? headers() : headers;
+}
 
 export function createSimpleOpenAICompletionsOptions(
 	providerId: Parameters<typeof getBundledModels>[0],
@@ -489,6 +502,7 @@ export function createSimpleOpenAICompletionsOptions(
 					provider: providerId,
 					baseUrl,
 					apiKey,
+					headers: resolveSimpleProviderHeaders(config?.headers),
 					mapModel: (entry, defaults) => {
 						const reference = references.get(defaults.id);
 						return mapWithBundledReference(entry, defaults, reference);
@@ -516,6 +530,7 @@ function createSimpleOpenAIResponsesOptions(
 					provider: providerId,
 					baseUrl,
 					apiKey,
+					headers: resolveSimpleProviderHeaders(config?.headers),
 					mapModel: (entry, defaults) => {
 						const reference = references.get(defaults.id);
 						return mapWithBundledReference(entry, defaults, reference);
@@ -2481,6 +2496,25 @@ export function togetherModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 15.5 CoreWeave Serverless Inference
+// ---------------------------------------------------------------------------
+
+export interface CoreWeaveModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function coreWeaveModelManagerOptions(
+	config?: CoreWeaveModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions("coreweave", "https://api.inference.wandb.ai/v1", {
+		...config,
+		headers: () => coreWeaveProjectHeaders(Bun.env),
+	});
+}
+
+// ---------------------------------------------------------------------------
 // 16. Moonshot
 // ---------------------------------------------------------------------------
 
@@ -3653,6 +3687,19 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	openAiCompletionsDescriptor("cerebras", "cerebras", "https://api.cerebras.ai/v1"),
 	// --- Together ---
 	openAiCompletionsDescriptor("togetherai", "together", "https://api.together.xyz/v1"),
+	// --- CoreWeave Serverless Inference ---
+	openAiCompletionsDescriptor("wandb", "coreweave", "https://api.inference.wandb.ai/v1", {
+		transformModel: model => {
+			if (!model.id.startsWith("openai/gpt-oss-")) {
+				return model;
+			}
+			return {
+				...model,
+				reasoning: true,
+				thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+			};
+		},
+	}),
 	// --- NVIDIA ---
 	openAiCompletionsDescriptor("nvidia", "nvidia", "https://integrate.api.nvidia.com/v1", {
 		defaultContextWindow: 131072,

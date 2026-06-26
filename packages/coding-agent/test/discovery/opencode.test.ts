@@ -88,7 +88,8 @@ describe("OpenCode MCP discovery", () => {
 			}),
 		);
 
-		const [server] = await loadOpenCodeMcpConfig(tempDir);
+		const servers = await loadOpenCodeMcpConfig(tempDir);
+		const server = servers.find(item => item.name === "plain");
 
 		expect(server?.command).toBe("server-bin");
 		expect(server?.args).toBeUndefined();

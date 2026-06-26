@@ -495,12 +495,32 @@ async function scanSessionDir(
 	}
 }
 
+async function scanSessionDirReadOnly(
+	sessionDir: string,
+	storage: SessionStorage,
+	withStatus: boolean,
+): Promise<SessionInfo[]> {
+	try {
+		const files = storage.listFilesSync(sessionDir, "*.jsonl");
+		return await collectSessionsFromFiles(files, storage, withStatus);
+	} catch {
+		return [];
+	}
+}
+
 /**
  * List sessions in a resolved session directory (newest first), reading each
  * file's lifecycle {@link SessionStatus}.
  */
 export function listSessions(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
 	return scanSessionDir(sessionDir, storage, true);
+}
+
+/**
+ * List sessions without repairing orphaned backups or mutating the directory.
+ */
+export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
+	return scanSessionDirReadOnly(sessionDir, storage, true);
 }
 
 /** List all sessions across all project directories (newest first). */
@@ -561,12 +581,25 @@ function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): bool
 	return fileSessionId.startsWith(normalizedArg);
 }
 
+/** Controls cross-directory fallback for resumable session lookup. */
+export interface ResolveResumableSessionOptions {
+	/** Search default global session buckets after the active/custom session directory misses. */
+	allowGlobalFallback?: boolean;
+}
+
+function isSessionStorage(value: SessionStorage | ResolveResumableSessionOptions): value is SessionStorage {
+	return "listFilesSync" in value;
+}
+
 export async function resolveResumableSession(
 	sessionArg: string,
 	cwd: string,
 	sessionDir?: string,
-	storage: SessionStorage = new FileSessionStorage(),
+	storageOrOptions: SessionStorage | ResolveResumableSessionOptions = new FileSessionStorage(),
+	options: ResolveResumableSessionOptions = {},
 ): Promise<ResolvedSessionMatch | undefined> {
+	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
+	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
 	const localSessionDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
 	const localSessions = await listSessions(localSessionDir, storage);
 	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
@@ -574,7 +607,7 @@ export async function resolveResumableSession(
 		return { session: localMatch, scope: "local" };
 	}
 
-	if (sessionDir) {
+	if (sessionDir && resolvedOptions.allowGlobalFallback !== true) {
 		return undefined;
 	}
 

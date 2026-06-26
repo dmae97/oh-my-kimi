@@ -31,6 +31,7 @@ type ModelsEndpointValidation = {
 	kind: "models-endpoint";
 	provider: string;
 	modelsUrl: string;
+	headers?: Record<string, string> | (() => Record<string, string> | undefined);
 };
 
 export type ApiKeyLoginConfig = {
@@ -98,6 +99,7 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 					provider: config.validation.provider,
 					apiKey: trimmed,
 					modelsUrl: config.validation.modelsUrl,
+					headers: config.validation.headers,
 					signal: options.signal,
 					fetch: options.fetch,
 				});

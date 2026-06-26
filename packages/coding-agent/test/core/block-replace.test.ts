@@ -209,3 +209,74 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 		});
 	});
 });
+
+const MD_PLAN = [
+	"# Plan",
+	"intro",
+	"",
+	"## Context",
+	"why this matters",
+	"more context",
+	"",
+	"### Detail",
+	"deep note",
+	"",
+	"## Approach",
+	"step one",
+	"",
+].join("\n");
+
+describe("block ops on markdown headings — whole-section resolution end-to-end", () => {
+	it("DEL.BLK at a `## H2` deletes the entire section, including nested subsections", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			// Line 4 is `## Context`; its section runs through `### Detail` and
+			// the trailing blank, up to `## Approach`.
+			const { filePath, header } = await seedFile(tempDir, session, "plan.md", MD_PLAN);
+			const input = `${header}\nDEL.BLK 4`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			expect(await Bun.file(filePath).text()).toBe(
+				["# Plan", "intro", "", "## Approach", "step one", ""].join("\n"),
+			);
+			expect(text).toContain("DEL.BLK 4 → resolved lines 4-10 (7 lines)");
+		});
+	});
+
+	it("INS.BLK.POST at a `## H2` lands after the whole section, past nested subsections", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const { filePath, header } = await seedFile(tempDir, session, "plan.md", MD_PLAN);
+			const input = `${header}\nINS.BLK.POST 4:\n+## Verification\n+run the suite\n+`;
+
+			const result = await executeHashlineSingle(executeOptions(tempDir, input, session));
+			const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+
+			// The new section is inserted after the `## Context` section (line
+			// 10), before `## Approach` — not inside it after `### Detail`.
+			expect(await Bun.file(filePath).text()).toBe(
+				[
+					"# Plan",
+					"intro",
+					"",
+					"## Context",
+					"why this matters",
+					"more context",
+					"",
+					"### Detail",
+					"deep note",
+					"",
+					"## Verification",
+					"run the suite",
+					"",
+					"## Approach",
+					"step one",
+					"",
+				].join("\n"),
+			);
+			expect(text).toContain("INS.BLK.POST 4 → resolved lines 4-10 (7 lines); body lands after line 10");
+		});
+	});
+});

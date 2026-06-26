@@ -27,6 +27,7 @@ import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
+import { resolveResumableSession } from "../session/session-listing";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
@@ -1414,9 +1415,26 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "resume",
 		description: "Resume a different session",
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showSessionSelector();
+		inlineHint: "[session id]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			const sessionArg = command.args.trim();
 			runtime.ctx.editor.setText("");
+			if (!sessionArg) {
+				runtime.ctx.showSessionSelector();
+				return;
+			}
+			const match = await resolveResumableSession(
+				sessionArg,
+				runtime.ctx.sessionManager.getCwd(),
+				runtime.ctx.sessionManager.getSessionDir(),
+				{ allowGlobalFallback: true },
+			);
+			if (!match) {
+				runtime.ctx.showError(`Session "${sessionArg}" not found`);
+				return;
+			}
+			await runtime.ctx.handleResumeSession(match.session.path);
 		},
 	},
 	{

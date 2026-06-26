@@ -16,7 +16,7 @@
  * replay-unsafe and is never retried), so the turn is discarded and re-sampled
  * instead of committing the garbage transcript.
  *
- * Two failure shapes are detected:
+ * Three failure shapes are detected:
  * 1. **Verbatim tail repetition** — a short unit repeated back-to-back (e.g.
  *    "🌊 🌊 🌊 …"). Caught from a rolling 250-char tail.
  * 2. **Near-duplicate segments** — paragraphs that normalize to the same
@@ -24,6 +24,12 @@
  *    paragraphs. Thresholds were calibrated on a real loop transcript plus
  *    13.5k non-loop thinking blocks (zero false positives; hardest negative
  *    scored 3 against the trigger of 4).
+ * 3. **Progress-lexicon stall** — paragraphs that keep reshuffling the same
+ *    motivational filler ("just doing it, pushing ahead, maintaining momentum")
+ *    into fresh word order, so trigrams never match, yet introduce no new
+ *    vocabulary and name nothing concrete. Caught by a run of low-novelty,
+ *    anchor-free segments; a segment naming a path/identifier resets the run, so
+ *    genuine but vocabulary-repetitive work (per-file templates) is spared.
  *
  * Scope is narrow: guarded Gemini/DeepSeek streams before any tool call. Native
  * thinking is checked first; assistant text can also be checked for providers
@@ -62,6 +68,32 @@ const SEGMENT_SIMILARITY = 0.8;
 const SEGMENT_MIN_COUNT = 8;
 /** Near-duplicate cluster size (current + matches) that trips the loop. */
 const SEGMENT_MIN_CLUSTER = 4;
+
+/** Recent segments whose pooled unigram vocabulary is the novelty baseline for
+ *  progress-lexicon stall detection. */
+const LEX_NOVELTY_WINDOW = 8;
+/** Novelty (fraction of a segment's content words unseen across the recent
+ *  window) at/below which a segment counts as recycling earlier wording.
+ *  Calibrated against 536k real non-Gemini reasoning blocks: at 0.2 the longest
+ *  low-information run any legitimate block reached was 7. */
+const LEX_STALL_NOVELTY_FLOOR = 0.2;
+/** Consecutive low-information segments that trip a progress-lexicon stall. Set
+ *  to 8 (one above the worst legitimate run observed in the 536k-block corpus) so
+ *  the heuristic stays clear of focused reasoning that briefly recycles wording;
+ *  the real reasoning-summarizer loop sustains far longer runs (10+). */
+const LEX_STALL_MIN_RUN = 8;
+
+/** A concrete reference the model is actually reasoning about: a code span, a
+ *  file extension / dotted member, a multi-segment path, or a snake/camel/Pascal
+ *  identifier. A segment that introduces a NEW one resets the lexical-stall run —
+ *  this spares genuine per-target work (per-file templates, focused single-symbol
+ *  debugging) while still catching reworded filler that names nothing new ("just
+ *  doing it, pushing ahead") or fixates on one unchanging reference. Excludes bare
+ *  digits, abbreviations, and decimals (e.g. "Step 2", "i.e.", "1.2") so numbered
+ *  or punctuated filler is not self-anchoring. Global flag: collected with
+ *  matchAll, so never used with the stateful test(). */
+const CONCRETE_ANCHOR =
+	/`[^`]+`|\b\w{2,}\.[a-zA-Z]\w{0,4}\b|[\w-]+(?:\/[\w-]+){2,}|\b\w+_\w+\b|\b[a-z]+[A-Z]\w*\b|\b[A-Z][a-z]+[A-Z]\w*\b/g;
 
 const OPENAI_COMPAT_GUARDED_APIS: Partial<Record<Api, true>> = {
 	"openai-completions": true,
@@ -113,6 +145,15 @@ export class ThinkingLoopDetector {
 	#window: Set<string>[] = [];
 	/** Count of substantial segments seen so far (warm-up gate). */
 	#count = 0;
+	/** Unigram word sets of the most recent segments (≤ LEX_NOVELTY_WINDOW); the
+	 *  novelty baseline for progress-lexicon stall detection. */
+	#wordWindow: Set<string>[] = [];
+	/** Consecutive low-information (low-novelty, anchor-free) segments seen. */
+	#lexStallRun = 0;
+	/** Concrete anchors seen per recent segment (≤ LEX_NOVELTY_WINDOW). A stall is
+	 *  only broken by a *new* reference, so filler repeating one fixed
+	 *  path/identifier every paragraph is still caught. */
+	#anchorWindow: Set<string>[] = [];
 
 	push(delta: string): string | null {
 		if (!delta) return null;
@@ -167,22 +208,71 @@ export class ThinkingLoopDetector {
 		return null;
 	}
 
-	#consumeSegment(segment: string): string | null {
+	#consumeSegment(raw: string): string | null {
+		// Reasoning-summarizer titles ("**Maintaining Momentum**", "## Heading")
+		// are per-thought formatting, not chain-of-thought; their ever-changing
+		// wording would otherwise mask a loop by inflating novelty. Strip them
+		// before analysis (a title-only segment then falls below the length gate).
+		const segment = raw.replace(/^[ \t]*#{1,6}[ \t].*$/gm, "").replace(/^[ \t]*\*{2,3}.+?\*{2,3}[ \t]*$/gm, "");
 		const normalized = normalizeSegment(segment);
 		if (normalized.length < SEGMENT_MIN_NORM_CHARS) return null;
 
+		// (a) Near-duplicate trigram cluster: the same paragraph reused with
+		// cosmetic wording drift (high word-trigram overlap).
 		const fingerprint = trigramShingles(normalized);
 		let cluster = 1;
 		for (const prev of this.#window) {
 			if (jaccard(fingerprint, prev) >= SEGMENT_SIMILARITY) cluster++;
 		}
 
+		// (b) Progress-lexicon stall: paragraphs that recycle the recent
+		// vocabulary (low novelty) and add no *new* concrete reference — reworded
+		// filler that burns budget without advancing. The trigram check above
+		// already claims high-overlap near-duplicates; this catches the
+		// low-overlap, reshuffled-wording shape it misses. Requiring a NEW anchor
+		// (not merely any anchor) still catches filler that name-drops one fixed
+		// path/identifier every paragraph, while sparing genuine per-target work
+		// that names a fresh file/symbol each time.
+		const words = new Set<string>(normalized.split(" ").filter(Boolean));
+		const priorVocab = new Set<string>();
+		for (const set of this.#wordWindow) for (const w of set) priorVocab.add(w);
+		let unseen = 0;
+		for (const w of words) if (!priorVocab.has(w)) unseen++;
+		const novelty = priorVocab.size === 0 ? 1 : unseen / words.size;
+
+		const anchors = new Set<string>();
+		// Canonicalize so the same reference written as `Foo`, Foo, or FOO is one
+		// anchor and cannot masquerade as "new" to keep a fixed-reference stall alive.
+		for (const match of segment.matchAll(CONCRETE_ANCHOR)) anchors.add(match[0].replace(/`/g, "").toLowerCase());
+		let newAnchor = false;
+		for (const anchor of anchors) {
+			if (this.#anchorWindow.every(seen => !seen.has(anchor))) {
+				newAnchor = true;
+				break;
+			}
+		}
+
+		if (novelty <= LEX_STALL_NOVELTY_FLOOR && !newAnchor) {
+			this.#lexStallRun++;
+		} else {
+			this.#lexStallRun = 0;
+		}
+
 		this.#window.push(fingerprint);
 		if (this.#window.length > SEGMENT_WINDOW) this.#window.shift();
+		this.#wordWindow.push(words);
+		if (this.#wordWindow.length > LEX_NOVELTY_WINDOW) this.#wordWindow.shift();
+		this.#anchorWindow.push(anchors);
+		if (this.#anchorWindow.length > LEX_NOVELTY_WINDOW) this.#anchorWindow.shift();
 		this.#count++;
 
-		if (this.#count >= SEGMENT_MIN_COUNT && cluster >= SEGMENT_MIN_CLUSTER) {
-			return `${cluster} near-identical segments within the last ${SEGMENT_WINDOW}`;
+		if (this.#count >= SEGMENT_MIN_COUNT) {
+			if (cluster >= SEGMENT_MIN_CLUSTER) {
+				return `${cluster} near-identical segments within the last ${SEGMENT_WINDOW}`;
+			}
+			if (this.#lexStallRun >= LEX_STALL_MIN_RUN) {
+				return `${this.#lexStallRun} low-information segments recycling recent wording`;
+			}
 		}
 		return null;
 	}

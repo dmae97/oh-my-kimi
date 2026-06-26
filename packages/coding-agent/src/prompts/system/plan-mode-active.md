@@ -24,6 +24,15 @@ Choose a short kebab-case `<slug>` naming this task and write the plan to `local
 
 Use `{{editToolName}}` for incremental edits and `{{writeToolName}}` only to create or fully replace the file. You MUST write findings into the plan as you learn them — you NEVER batch all writing to the end.
 
+{{#if isHashlineEditMode}}
+Structure the plan as `##`/`###` markdown sections so you can revise it section-by-section: with `{{editToolName}}`, a heading anchors its WHOLE section (through every nested deeper heading, up to the next same-or-higher heading). Rely on the block ops to grow the plan without rewriting the file:
+- `SWAP.BLK N:` on a heading line — rewrite that entire section in place.
+- `DEL.BLK N` on a heading line — drop the whole section.
+- `INS.BLK.POST N:` on a heading line — add a new section AFTER that one (end the inserted body with a blank line so the next heading stays separated).
+
+Write each section together with its body — block ops need a multi-line section; a bare heading with no body falls back to plain `INS.POST`/`DEL`/`SWAP`.
+{{/if}}
+
 ## Ground every claim
 
 You eliminate unknowns by discovering facts, not by asking.

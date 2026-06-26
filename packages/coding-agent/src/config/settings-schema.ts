@@ -790,6 +790,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tui.renderMermaid": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Render Mermaid Diagrams",
+			description: "Render Mermaid fenced code blocks as ASCII diagrams",
+		},
+	},
+
 	"tui.hyperlinks": {
 		type: "enum",
 		values: ["off", "auto", "always"] as const,
@@ -1697,6 +1708,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Compaction",
 			label: "Auto-Compact",
 			description: "Automatically compact context when it gets too large",
+		},
+	},
+
+	"compaction.midTurnEnabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			group: "Compaction",
+			label: "Mid-Turn Compaction",
+			description: "Check thresholds at safe mid-turn tool-loop boundaries before the next provider request",
 		},
 	},
 
@@ -4630,6 +4652,18 @@ export const SETTINGS_SCHEMA = {
 		default: "unset" as const,
 	},
 
+	"gc.blobs": { type: "boolean", default: true },
+
+	"gc.archive": { type: "boolean", default: true },
+
+	"gc.wal": { type: "boolean", default: true },
+
+	"gc.coldArchiveAfterDays": { type: "number", default: 30 },
+
+	"gc.retainNewestGlobal": { type: "number", default: 20 },
+
+	"gc.retainNewestPerCwd": { type: "number", default: 10 },
+
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },
 
 	"thinkingBudgets.low": { type: "number", default: 2048 },
@@ -4731,6 +4765,7 @@ export interface CompactionSettings {
 	thresholdTokens: number;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	midTurnEnabled: boolean;
 	handoffSaveToDisk: boolean;
 	autoContinue: boolean;
 	remoteEnabled: boolean;
@@ -4875,6 +4910,15 @@ export interface CodexResetsSettings {
 	keepCredits: number;
 }
 
+export interface GcSettings {
+	blobs: boolean;
+	archive: boolean;
+	wal: boolean;
+	coldArchiveAfterDays: number;
+	retainNewestGlobal: number;
+	retainNewestPerCwd: number;
+}
+
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
 	compaction: CompactionSettings;
@@ -4894,6 +4938,7 @@ export interface GroupTypeMap {
 	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;
 	codexResets: CodexResetsSettings;
+	gc: GcSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;

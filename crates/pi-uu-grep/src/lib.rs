@@ -10,6 +10,8 @@
 //! is returned following the GNU convention (0 = matched, 1 = no match,
 //! 2 = error).
 
+mod rg;
+
 use std::{
 	ffi::{OsStr, OsString},
 	fs::File,
@@ -23,6 +25,7 @@ use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch};
 use ignore::WalkBuilder;
+pub use rg::run as run_rg;
 
 #[derive(Parser, Debug)]
 #[command(
