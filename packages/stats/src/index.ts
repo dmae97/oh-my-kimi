@@ -22,7 +22,6 @@ export type {
 	GainSource,
 	GainSourceTotals,
 	GainTimeSeriesPoint,
-	GainTopFilter,
 } from "./shared-types";
 export type {
 	AggregatedStats,
