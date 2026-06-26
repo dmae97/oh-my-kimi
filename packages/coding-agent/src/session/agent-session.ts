@@ -1164,6 +1164,7 @@ export class AgentSession {
 	#advisorEnabled = false;
 	/** The advisor's own agent, retained so `/dump advisor` can serialize its transcript. Undefined when no advisor is active. */
 	#advisorAgent?: Agent;
+	#advisorAdviseTool?: AdviseTool;
 	#advisorReadOnlyTools?: AgentTool[];
 	#advisorWatchdogPrompt?: string;
 	#advisorYieldQueueUnsubscribe?: () => void;
@@ -1798,6 +1799,7 @@ export class AgentSession {
 		this.#advisorAgentUnsubscribe?.();
 		this.#advisorAgentUnsubscribe = undefined;
 		this.#advisorRuntime?.reset();
+		this.#advisorAdviseTool?.resetDeliveredNotes();
 		this.#attachAdvisorRecorderFeed();
 		this.#advisorPrimaryTurnsCompleted = 0;
 		this.#advisorInterruptImmuneTurnStart = undefined;
@@ -1878,6 +1880,7 @@ export class AgentSession {
 		};
 
 		const adviseTool = new AdviseTool(enqueueAdvice);
+		this.#advisorAdviseTool = adviseTool;
 		const advisorReadOnlyTools = this.#advisorReadOnlyTools ?? [];
 
 		const appendOnlyContext = new AppendOnlyContextManager();
@@ -2004,6 +2007,7 @@ export class AgentSession {
 		if (this.#advisorAgent) {
 			this.#advisorAgent = undefined;
 		}
+		this.#advisorAdviseTool = undefined;
 		this.#advisorYieldQueueUnsubscribe?.();
 		this.#advisorYieldQueueUnsubscribe = undefined;
 	}
