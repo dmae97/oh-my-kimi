@@ -167,6 +167,7 @@ import {
 	getSymbolTheme,
 	onTerminalAppearanceChange,
 	onThemeChange,
+	setMarkdownMermaidRendering,
 	theme,
 } from "./theme/theme";
 import type {
@@ -588,6 +589,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		setTuiTight(settings.get("tui.tight"));
+		setMarkdownMermaidRendering(settings.get("tui.renderMermaid"));
 		this.ui = new TUI(new ProcessTerminal(), settings.get("showHardwareCursor"));
 		this.ui.setMaxInlineImages(settings.get("tui.maxInlineImages"));
 		// OSC 66 text-sizing is Kitty-only; resolve the setting against the terminal's

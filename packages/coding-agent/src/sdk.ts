@@ -2259,6 +2259,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				memoryRootEnabled: memoryBackend.id === "local",
 				model: settings.get("includeModelInPrompt") ? getActiveModelString() : undefined,
 				personality: agentKind === "sub" ? "none" : settings.get("personality"),
+				renderMermaid: settings.get("tui.renderMermaid"),
 			});
 
 			if (options.systemPrompt === undefined) {
