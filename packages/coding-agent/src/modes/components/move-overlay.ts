@@ -44,6 +44,17 @@ function readDirCached(dir: string): string[] {
 	}
 }
 
+function printableInput(data: string): string {
+	const withoutPasteEnvelope = data.replaceAll("\x1b[200~", "").replaceAll("\x1b[201~", "");
+	if (withoutPasteEnvelope.includes("\x1b")) return "";
+	return Array.from(withoutPasteEnvelope)
+		.filter(ch => {
+			const code = ch.codePointAt(0);
+			return code !== undefined && code >= 32 && code !== 0x7f;
+		})
+		.join("");
+}
+
 /** Resolve a user-typed path (`~`, absolute, or relative to `cwd`) to an absolute path. */
 export function resolveMovePath(input: string, cwd: string): string {
 	const trimmed = input.trim();
@@ -63,12 +74,12 @@ export function resolveExistingDirectory(input: string, cwd: string): string | n
 	}
 }
 
-function listChildDirectories(dirPath: string, max: number): DirEntry[] {
+function listChildDirectories(dirPath: string, max: number, includeHidden = false): DirEntry[] {
 	const results: DirEntry[] = [];
 	const names = readDirCached(dirPath);
 	for (const name of names) {
 		if (results.length >= max) break;
-		if (name.startsWith(".")) continue;
+		if (!includeHidden && name.startsWith(".")) continue;
 		const full = path.join(dirPath, name);
 		try {
 			if (!fs.statSync(full).isDirectory()) continue;
@@ -84,11 +95,7 @@ function listChildDirectories(dirPath: string, max: number): DirEntry[] {
 function searchDirectories(prefix: string, cwd: string, max: number): DirEntry[] {
 	if (!prefix) return listChildDirectories(cwd, max);
 
-	// If the prefix already resolves to an existing directory, list its children.
-	const resolved = resolveExistingDirectory(prefix, cwd);
-	if (resolved) return listChildDirectories(resolved, max);
-
-	// Otherwise, split into base dir + query and filter the base dir's children.
+	// Split into base dir + query so dot-prefixed segments can reveal hidden directories.
 	const norm = prefix.replace(/\\/g, "/");
 	const slashIdx = norm.lastIndexOf("/");
 	let baseDir: string;
@@ -102,12 +109,19 @@ function searchDirectories(prefix: string, cwd: string, max: number): DirEntry[]
 		baseDir = resolveMovePath(base, cwd);
 	}
 
+	const includeHidden = query.startsWith(".");
+
+	// If the prefix already resolves to an existing directory, list its children.
+	// A dot-prefixed query is treated as a filter so hidden directories become reachable.
+	const resolved = includeHidden ? null : resolveExistingDirectory(prefix, cwd);
+	if (resolved) return listChildDirectories(resolved, max);
+
 	const lower = query.toLowerCase();
 	const results: DirEntry[] = [];
 	const names = readDirCached(baseDir);
 	for (const name of names) {
 		if (results.length >= max) break;
-		if (name.startsWith(".")) continue;
+		if (!includeHidden && name.startsWith(".")) continue;
 		const full = path.join(baseDir, name);
 		try {
 			if (!fs.statSync(full).isDirectory()) continue;
@@ -195,10 +209,10 @@ export class MoveOverlay implements Component, Focusable {
 			this.#updateResults();
 			return;
 		}
-		// Printable character
-		if (data.length === 1 && data.charCodeAt(0) >= 32 && data !== "\x7f") {
-			this.#input = this.#input.slice(0, this.#cursor) + data + this.#input.slice(this.#cursor);
-			this.#cursor++;
+		const text = printableInput(data);
+		if (text.length > 0) {
+			this.#input = this.#input.slice(0, this.#cursor) + text + this.#input.slice(this.#cursor);
+			this.#cursor += text.length;
 			this.#selectedIndex = 0;
 			this.#updateResults();
 		}

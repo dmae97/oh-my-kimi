@@ -100,6 +100,24 @@ describe("MoveOverlay", () => {
 		expect(text).not.toContain("beta/");
 	});
 
+	it("shows dot directories after a dot prefix is typed", () => {
+		const overlay = new MoveOverlay(cwd, () => {});
+		overlay.handleInput(".");
+		const text = strip(overlay.render(80));
+		expect(text).toContain(".hidden/");
+	});
+
+	it("accepts bracketed paste and multi-byte input while filtering controls", () => {
+		let result: MoveOverlayResult | undefined;
+		const overlay = new MoveOverlay(cwd, r => {
+			result = r;
+		});
+		overlay.handleInput("\x1b[200~new\nø\x1b[201~");
+		overlay.handleInput("\r");
+		expect(result).toBeDefined();
+		expect(result!.directory).toBe("newø");
+	});
+
 	it("calls done with undefined on Escape", () => {
 		let result: MoveOverlayResult | undefined = "sentinel" as unknown as MoveOverlayResult;
 		const overlay = new MoveOverlay(cwd, r => {
