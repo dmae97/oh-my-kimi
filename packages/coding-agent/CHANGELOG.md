@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Windows stdio MCP servers timing out (and popping a visible terminal) when their direct child was a `cmd.exe` wrapper that itself launched a console grandchild — `node` wrappers, `npx.cmd -y mcp-remote`, similar nested shells. `StdioTransport.connect()` unconditionally passed `detached: true` to `Bun.spawn`, but Windows has no SIGTSTP/SIGTTIN to escape; `detached` only maps to `CreateProcess(DETACHED_PROCESS)`, which strips the parent's inherited console. The hidden direct `cmd.exe` lost its console, so the grandchild allocated a brand-new visible conhost whose stdout no longer routed through OMP's pipe — the proxy reported the bridge was up while OMP timed out waiting for the MCP `initialize` response. `resolveStdioSpawnCommand` now returns `detached: false` for every Windows return shape (direct `.exe`, cmd.exe-wrapped batch / unresolvable command, npm cmd-shim launched through node) and keeps `detached: true` on POSIX, where the original SIGTSTP/SIGTTIN reason still holds; `connect()` consumes the resolved flag. ([#3544](https://github.com/can1357/oh-my-pi/issues/3544))
+
 ## [16.1.22] - 2026-06-26
 
 ### Fixed
