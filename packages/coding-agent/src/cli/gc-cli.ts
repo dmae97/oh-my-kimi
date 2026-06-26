@@ -12,11 +12,13 @@ const BLOB_FILE_RE = /^([a-f0-9]{64})(?:\.[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$/;
 const BLOB_REF_RE = /\bblob:sha256:([a-f0-9]{64})\b/gi;
 const JSONL_GLOB = new Bun.Glob("**/*.jsonl");
 const JSONL_GZ_GLOB = new Bun.Glob("**/*.jsonl.gz");
+const JSONL_BACKUP_GLOB = new Bun.Glob("**/*.jsonl.*.bak");
 const ACTIVE_STATUSES: ReadonlySet<SessionStatus> = new Set(["pending", "interrupted", "unknown"]);
 const DAY_MS = 86_400_000;
 const GC_WRITE_GRACE_MS = 5 * 60_000;
 const SESSION_SUFFIX = ".jsonl";
 const COMPRESSED_SESSION_SUFFIX = ".jsonl.gz";
+const GC_LOCK_BREAKER_SUFFIX = ".break";
 
 export interface GcCommandFlags {
 	apply?: boolean;
@@ -116,6 +118,15 @@ interface WalCheckpointRow {
 	checkpointed?: number | bigint | null;
 }
 
+interface GcLockSnapshot {
+	dev: number;
+	ino: number;
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+	text: string;
+}
+
 function numberSetting(value: number | undefined, fallback: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
 	return Math.max(0, Math.floor(value));
@@ -205,10 +216,25 @@ async function collectCompressedJsonlFiles(root: string): Promise<string[]> {
 	}
 }
 
+async function collectBackupJsonlFiles(root: string): Promise<string[]> {
+	try {
+		const files = await Array.fromAsync(JSONL_BACKUP_GLOB.scan(root), name => path.join(root, name));
+		files.sort();
+		return files;
+	} catch (error) {
+		if (codeOf(error) === "ENOENT") return [];
+		throw error;
+	}
+}
+
 async function collectReferencedBlobHashes(sessionRoots: string[]): Promise<Set<string>> {
 	const hashes = new Set<string>();
 	for (const root of sessionRoots) {
-		const files = [...(await collectJsonlFiles(root)), ...(await collectCompressedJsonlFiles(root))];
+		const files = [
+			...(await collectJsonlFiles(root)),
+			...(await collectCompressedJsonlFiles(root)),
+			...(await collectBackupJsonlFiles(root)),
+		];
 		for (const file of files) {
 			const text = await readTextIfPresent(file);
 			for (const match of text.matchAll(BLOB_REF_RE)) {
@@ -360,6 +386,24 @@ function sessionIdFromSessionPath(sessionPath: string): string | undefined {
 	return undefined;
 }
 
+function sessionIdFromSessionText(text: string): string | undefined {
+	const line = text
+		.split(/\r?\n/)
+		.find(candidate => candidate.trim().length > 0)
+		?.trim();
+	if (!line) return undefined;
+	try {
+		const record = JSON.parse(line) as { type?: unknown; id?: unknown };
+		return record.type === "session" && typeof record.id === "string" && record.id.length > 0 ? record.id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function archivedSessionIdFromFile(file: string): Promise<string | undefined> {
+	return sessionIdFromSessionText(await readTextIfPresent(file)) ?? sessionIdFromSessionPath(file);
+}
+
 async function gzipSessionFile(source: string, destination: string): Promise<void> {
 	await fs.mkdir(path.dirname(destination), { recursive: true });
 	const tempPath = `${destination}.${process.pid}.${Date.now()}.tmp`;
@@ -465,7 +509,7 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 async function collectArchivedSessionIds(archiveRoot: string): Promise<string[]> {
 	const ids = new Set<string>();
 	for (const file of await collectCompressedJsonlFiles(archiveRoot)) {
-		const id = sessionIdFromSessionPath(file);
+		const id = await archivedSessionIdFromFile(file);
 		if (id) ids.add(id);
 	}
 	return [...ids].sort();
@@ -632,41 +676,135 @@ function processExists(pid: number): boolean {
 	}
 }
 
-async function shouldBreakGcLock(lockPath: string): Promise<boolean> {
+function gcLockStatSnapshot(stat: {
+	dev: number;
+	ino: number;
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+}): Omit<GcLockSnapshot, "text"> {
+	return {
+		dev: stat.dev,
+		ino: stat.ino,
+		size: stat.size,
+		mtimeMs: stat.mtimeMs,
+		ctimeMs: stat.ctimeMs,
+	};
+}
+
+function sameGcLockStat(left: Omit<GcLockSnapshot, "text">, right: Omit<GcLockSnapshot, "text">): boolean {
+	return (
+		left.dev === right.dev &&
+		left.ino === right.ino &&
+		left.size === right.size &&
+		left.mtimeMs === right.mtimeMs &&
+		left.ctimeMs === right.ctimeMs
+	);
+}
+
+async function readGcLockSnapshot(lockPath: string): Promise<GcLockSnapshot | null> {
 	const stat = await statIfPresent(lockPath);
-	if (!stat) return false;
+	if (!stat) return null;
 
 	let lockText = "";
 	try {
 		lockText = await Bun.file(lockPath).text();
 	} catch (error) {
-		if (codeOf(error) === "ENOENT") return false;
+		if (codeOf(error) === "ENOENT") return null;
 		throw error;
 	}
 
-	const pid = gcLockPid(lockText);
+	const afterStat = await statIfPresent(lockPath);
+	if (!afterStat) return null;
+	const before = gcLockStatSnapshot(stat);
+	const after = gcLockStatSnapshot(afterStat);
+	if (!sameGcLockStat(before, after)) return null;
+	return { ...after, text: lockText };
+}
+
+async function gcLockSnapshotStillCurrent(lockPath: string, snapshot: GcLockSnapshot): Promise<boolean> {
+	const stat = await statIfPresent(lockPath);
+	return stat ? sameGcLockStat(snapshot, gcLockStatSnapshot(stat)) : false;
+}
+
+function shouldBreakGcLock(snapshot: GcLockSnapshot): boolean {
+	const pid = gcLockPid(snapshot.text);
 	if (pid) return !processExists(pid);
 
-	const createdAtMs = Date.parse(lockText.split(/\r?\n/, 2)[1] ?? "");
-	const ageFromMs = Number.isFinite(createdAtMs) ? createdAtMs : stat.mtimeMs;
+	const createdAtMs = Date.parse(snapshot.text.split(/\r?\n/, 2)[1] ?? "");
+	const ageFromMs = Number.isFinite(createdAtMs) ? createdAtMs : snapshot.mtimeMs;
 	return Date.now() - ageFromMs > GC_WRITE_GRACE_MS;
 }
 
-async function openGcLock(lockPath: string): Promise<fs.FileHandle> {
+async function removeStaleGcLock(lockPath: string): Promise<boolean> {
+	const snapshot = await readGcLockSnapshot(lockPath);
+	if (!snapshot) return false;
+	if (!shouldBreakGcLock(snapshot)) return false;
+	if (!(await gcLockSnapshotStillCurrent(lockPath, snapshot))) return false;
+	try {
+		await fs.unlink(lockPath);
+		return true;
+	} catch (error) {
+		if (codeOf(error) === "ENOENT") return false;
+		throw error;
+	}
+}
+
+async function openNewGcLock(lockPath: string): Promise<fs.FileHandle | null> {
+	try {
+		return await fs.open(lockPath, "wx");
+	} catch (error) {
+		if (codeOf(error) === "EEXIST") return null;
+		throw error;
+	}
+}
+
+async function releaseGcLockFile(lockPath: string, handle: fs.FileHandle): Promise<void> {
+	try {
+		await handle.close();
+	} catch {
+		// Best effort: stale sidecar locks are recoverable by PID/timestamp.
+	}
+	try {
+		await fs.unlink(lockPath);
+	} catch (error) {
+		if (codeOf(error) === "ENOENT") return;
+	}
+}
+
+async function openGcBreakerLock(lockPath: string): Promise<{ path: string; handle: fs.FileHandle }> {
+	const breakerPath = `${lockPath}${GC_LOCK_BREAKER_SUFFIX}`;
 	for (let attempt = 0; attempt < 2; attempt += 1) {
-		try {
-			return await fs.open(lockPath, "wx");
-		} catch (error) {
-			if (codeOf(error) !== "EEXIST") throw error;
-			if (!(await shouldBreakGcLock(lockPath))) throw new Error(`GC already running: ${lockPath}`);
+		const handle = await openNewGcLock(breakerPath);
+		if (handle) {
 			try {
-				await fs.unlink(lockPath);
-			} catch (unlinkError) {
-				if (codeOf(unlinkError) !== "ENOENT") throw unlinkError;
+				await handle.writeFile(`${process.pid}\n${new Date().toISOString()}\n`);
+				return { path: breakerPath, handle };
+			} catch (error) {
+				await releaseGcLockFile(breakerPath, handle);
+				throw error;
 			}
 		}
+		if (!(await removeStaleGcLock(breakerPath))) throw new Error(`GC already running: ${lockPath}`);
 	}
 	throw new Error(`GC already running: ${lockPath}`);
+}
+
+async function openGcLock(lockPath: string): Promise<fs.FileHandle> {
+	const direct = await openNewGcLock(lockPath);
+	if (direct) return direct;
+
+	const breaker = await openGcBreakerLock(lockPath);
+	try {
+		const raced = await openNewGcLock(lockPath);
+		if (raced) return raced;
+		if (!(await removeStaleGcLock(lockPath))) throw new Error(`GC already running: ${lockPath}`);
+		const takeover = await openNewGcLock(lockPath);
+		if (takeover) return takeover;
+		throw new Error(`GC already running: ${lockPath}`);
+	} finally {
+		await releaseGcLockFile(breaker.path, breaker.handle);
+	}
 }
 
 async function withGcLock<T>(agentDir: string, fn: (lockPath: string) => Promise<T>): Promise<T> {

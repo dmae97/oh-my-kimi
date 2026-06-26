@@ -40,11 +40,11 @@ async function writeSession(
 	project: string,
 	id: string,
 	status: "complete" | "pending" | "interrupted",
-	options: { blobRef?: string; ageDays?: number } = {},
+	options: { blobRef?: string; ageDays?: number; filename?: string } = {},
 ): Promise<string> {
 	const sessionDir = path.join(getSessionsDir(agentDir), project);
 	await fs.mkdir(sessionDir, { recursive: true });
-	const file = path.join(sessionDir, `${id}.jsonl`);
+	const file = path.join(sessionDir, `${options.filename ?? id}.jsonl`);
 	const lines = [
 		JSON.stringify({ type: "session", version: 3, id, timestamp: "2026-01-01T00:00:00.000Z", cwd: "/tmp" }),
 	];
@@ -143,6 +143,29 @@ describe("runGcCommand blob sweep", () => {
 		expect(result.blobs?.wouldDelete).toBe(0);
 		expect(result.blobs?.deleted).toBe(0);
 		expect(await Bun.file(blob).exists()).toBe(true);
+	});
+
+	test("--apply scans recoverable session backups before deleting blobs", async () => {
+		const referencedHash = hashFor("backup-reference");
+		const referenced = await writeBlob(root, referencedHash, "referenced");
+		await agePath(referenced);
+		const sessionDir = path.join(getSessionsDir(root), "project");
+		await fs.mkdir(sessionDir, { recursive: true });
+		await Bun.write(
+			path.join(sessionDir, "lost.jsonl.1234567890.bak"),
+			[
+				JSON.stringify({ type: "session", version: 3, id: "lost", timestamp: "2026-01-01T00:00:00.000Z" }),
+				JSON.stringify({ type: "message", message: { role: "user", content: `blob:sha256:${referencedHash}` } }),
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: root, blobs: true, apply: true } });
+
+		expect(result.blobs?.referenced).toBe(1);
+		expect(result.blobs?.wouldDelete).toBe(0);
+		expect(result.blobs?.deleted).toBe(0);
+		expect(await Bun.file(referenced).exists()).toBe(true);
 	});
 
 	test("uses configured gc selectors and retention defaults", async () => {
@@ -293,7 +316,10 @@ describe("runGcCommand cold-session archive", () => {
 	});
 
 	test("reports history cleanup failures and retries rows for already archived sessions", async () => {
-		await writeSession(root, "project", "archive-me", "complete", { ageDays: 90 });
+		await writeSession(root, "project", "archive-me", "complete", {
+			ageDays: 90,
+			filename: "20260626_archive-me",
+		});
 		const dbPath = getHistoryDbPath(root);
 		await fs.mkdir(path.dirname(dbPath), { recursive: true });
 		await Bun.write(dbPath, "not sqlite");
@@ -308,7 +334,7 @@ describe("runGcCommand cold-session archive", () => {
 				apply: true,
 			},
 		});
-		const archived = path.join(root, "archive", "sessions", "project", "archive-me.jsonl.gz");
+		const archived = path.join(root, "archive", "sessions", "project", "20260626_archive-me.jsonl.gz");
 
 		expect(first.archive?.archived).toBe(1);
 		expect(first.archive?.errors.some(error => error.startsWith("history cleanup: "))).toBe(true);
@@ -451,5 +477,18 @@ describe("runGcCommand lock handling", () => {
 
 		expect(result.blobs?.wouldDelete).toBe(1);
 		expect(await Bun.file(lockPath).exists()).toBe(false);
+	});
+
+	test("does not break gc locks while stale-lock takeover is already in progress", async () => {
+		const lockPath = path.join(root, "gc.lock");
+		const breakerPath = `${lockPath}.break`;
+		await Bun.write(lockPath, "999999999\n2026-01-01T00:00:00.000Z\n");
+		await Bun.write(breakerPath, `${process.pid}\n${new Date().toISOString()}\n`);
+
+		await expect(runGcCommand({ flags: { agentDir: root, blobs: true } })).rejects.toThrow(
+			`GC already running: ${lockPath}`,
+		);
+		expect(await Bun.file(lockPath).exists()).toBe(true);
+		expect(await Bun.file(breakerPath).exists()).toBe(true);
 	});
 });
