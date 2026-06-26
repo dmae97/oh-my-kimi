@@ -323,20 +323,8 @@ describe("GrepTool internal URL resolution", () => {
 		});
 
 		const text = getResultText(result);
-		<<<<<<< HEAD
-		expect(text).toContain("# omp://tools/grep.md")
-	expect(text).toContain("Grep file contents with a regex across files")
-		||||||| parent of 21c61eee6 (Fix coding-agent tests
-		for grep and glob merge
-		)
-		expect(text).toContain("# omp://tools/grep.md")
-	expect(text).toContain("Greps files using regex.")
-		=======
-		expect(text).toContain("regex across files")
-	expect(text).toContain("Grep file contents")
-		>>>>>>> 21c61eee6 (Fix coding-agent tests
-		for grep and glob merge
-		)
+		expect(text).toContain("# omp://tools/grep.md");
+		expect(text).toContain("Grep file contents with a regex across files");
 	});
 
 	it("expands omp://docs to grep embedded documentation files", async () => {
