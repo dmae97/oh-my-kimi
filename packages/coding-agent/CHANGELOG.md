@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added manual `omp gc` storage maintenance with `gc.*` defaults for blob sweeping, cold-session archiving, and SQLite WAL checkpointing.
+
 ## [16.1.21] - 2026-06-26
 
 ### Fixed
