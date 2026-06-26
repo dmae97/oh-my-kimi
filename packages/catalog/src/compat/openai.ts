@@ -444,8 +444,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// they accept but don't validate the field — so the encoder needs a
 		// distinct opt-in to replay on every reasoning turn.
 		replayReasoningContent:
-			Boolean(spec.reasoning) &&
-			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
+			Boolean(spec.reasoning) && (LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
 		cacheControlFormat: isOpenRouter && spec.id.startsWith("anthropic/") ? "anthropic" : undefined,
 		openRouterRouting: undefined,

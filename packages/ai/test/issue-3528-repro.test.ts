@@ -31,14 +31,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type {
-	AssistantMessage,
-	Message,
-	Model,
-	ModelSpec,
-	ThinkingContent,
-	UserMessage,
-} from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent, UserMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -202,7 +195,11 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 			stopReason: "stop",
 			timestamp: 0,
 		};
-		const wire = convertMessages(target, { messages: [userMessage("hi"), assistant, userMessage("next")] }, target.compat);
+		const wire = convertMessages(
+			target,
+			{ messages: [userMessage("hi"), assistant, userMessage("next")] },
+			target.compat,
+		);
 		const found = findAssistantMessage(wire) as Record<string, unknown> | undefined;
 		expect(found?.reasoning).toBe("trace A");
 		expect(found?.reasoning_content).toBeUndefined();
@@ -238,7 +235,11 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 			stopReason: "stop",
 			timestamp: 0,
 		};
-		const wire = convertMessages(target, { messages: [userMessage("hi"), assistant, userMessage("next")] }, target.compat);
+		const wire = convertMessages(
+			target,
+			{ messages: [userMessage("hi"), assistant, userMessage("next")] },
+			target.compat,
+		);
 		const found = findAssistantMessage(wire) as Record<string, unknown> | undefined;
 		expect(found?.reasoning_content).toBe("trace B");
 		expect("rs_0123456789abcdef" in (found ?? {})).toBe(false);
@@ -265,7 +266,11 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 			stopReason: "stop",
 			timestamp: 0,
 		};
-		const wire = convertMessages(target, { messages: [userMessage("hi"), assistant, userMessage("next")] }, target.compat);
+		const wire = convertMessages(
+			target,
+			{ messages: [userMessage("hi"), assistant, userMessage("next")] },
+			target.compat,
+		);
 		const found = findAssistantMessage(wire) as Record<string, unknown> | undefined;
 		expect(found?.content).toBe("plain answer");
 		expect(found?.reasoning_content).toBeUndefined();

@@ -264,9 +264,7 @@ function openAICompletionsReplaysUnsignedThinking(model: Model, compat: Model["c
 	// prefix reuse — Qwen3 / DeepSeek-R1 / GLM chat templates reconstruct the
 	// prior turn's `<think>` block from `reasoning_content` (#3528).
 	return (
-		compat.requiresReasoningContentForToolCalls ||
-		compat.thinkingFormat === "zai" ||
-		compat.replayReasoningContent
+		compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai" || compat.replayReasoningContent
 	);
 }
 
