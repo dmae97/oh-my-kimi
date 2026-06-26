@@ -84,19 +84,49 @@ function getAliases(): Record<string, string> {
 	const typeboxValueEntry = require.resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
-	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
+	const findPackageJsonPath = (specifier: string): string => {
+		try {
+			return require.resolve(`${specifier}/package.json`);
+		} catch {
+			let current = __dirname;
+			while (true) {
+				const candidate = path.join(current, "node_modules", ...specifier.split("/"), "package.json");
+				if (fs.existsSync(candidate)) {
+					return candidate;
+				}
+				const parent = path.dirname(current);
+				if (parent === current) {
+					throw new Error(`Unable to resolve package.json for ${specifier}`);
+				}
+				current = parent;
+			}
+		}
+	};
+	const resolvePackageFile = (specifier: string, packageRelativePath: string): string => {
+		const packageJsonPath = findPackageJsonPath(specifier);
+		return path.join(path.dirname(packageJsonPath), packageRelativePath);
+	};
+	const resolveWorkspaceOrPackageFile = (
+		workspaceRelativePath: string,
+		specifier: string,
+		packageRelativePath: string,
+	): string => {
 		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
 		if (fs.existsSync(workspacePath)) {
 			return workspacePath;
 		}
-		return fileURLToPath(import.meta.resolve(specifier));
+		return resolvePackageFile(specifier, packageRelativePath);
 	};
 
 	const piCodingAgentEntry = packageIndex;
-	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@earendil-works/omk-agent-core");
-	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@earendil-works/omk-tui");
-	const piAiEntry = resolveWorkspaceOrImport("ai/dist/index.js", "@earendil-works/omk-ai");
-	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@earendil-works/omk-ai/oauth");
+	const piAgentCoreEntry = resolveWorkspaceOrPackageFile(
+		"agent/dist/index.js",
+		"@earendil-works/omk-agent-core",
+		"dist/index.js",
+	);
+	const piTuiEntry = resolveWorkspaceOrPackageFile("tui/dist/index.js", "@earendil-works/omk-tui", "dist/index.js");
+	const piAiEntry = resolveWorkspaceOrPackageFile("ai/dist/index.js", "@earendil-works/omk-ai", "dist/index.js");
+	const piAiOauthEntry = resolveWorkspaceOrPackageFile("ai/dist/oauth.js", "@earendil-works/omk-ai", "dist/oauth.js");
 
 	_aliases = {
 		"open-multi-agent-kit": piCodingAgentEntry,
@@ -470,8 +500,8 @@ interface OmkManifest {
 function readOmkManifest(packageJsonPath: string): OmkManifest | null {
 	try {
 		const content = fs.readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { omk?: unknown; pi?: unknown };
-		const manifest = pkg.omk ?? pkg.pi;
+		const pkg = JSON.parse(content) as { omk?: unknown };
+		const manifest = pkg.omk;
 		return manifest && typeof manifest === "object" ? (manifest as OmkManifest) : null;
 	} catch {
 		return null;
@@ -529,7 +559,7 @@ function resolveExtensionEntries(dir: string): string[] | null {
  * Discovery rules:
  * 1. Direct files: `extensions/*.ts` or `*.js` → load
  * 2. Subdirectory with index: `extensions/* /index.ts` or `index.js` → load
- * 3. Subdirectory with package.json: `extensions/* /package.json` with "pi" field → load what it declares
+ * 3. Subdirectory with package.json: `extensions/* /package.json` with OMK manifest → load what it declares
  *
  * No recursion beyond one level. Complex packages must use package.json manifest.
  */
@@ -603,7 +633,7 @@ export async function discoverAndLoadExtensions(
 	for (const p of configuredPaths) {
 		const resolved = resolvePath(p, resolvedCwd, { normalizeUnicodeSpaces: true });
 		if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-			// Check for package.json with pi manifest or index.ts
+			// Check for package.json with omk manifest or index.ts
 			const entries = resolveExtensionEntries(resolved);
 			if (entries) {
 				addPaths(entries);

@@ -1573,6 +1573,10 @@ export class InteractiveMode {
 		}
 
 		if (showDiagnostics) {
+			const diagnosticsVisibleForMode = (
+				diagnostics: readonly ResourceDiagnostic[],
+			): readonly ResourceDiagnostic[] =>
+				showListing ? diagnostics : diagnostics.filter((diagnostic) => diagnostic.type !== "collision");
 			const addDiagnosticsSection = (name: string, diagnostics: readonly ResourceDiagnostic[]): void => {
 				if (diagnostics.length === 0) {
 					return;
@@ -1585,10 +1589,10 @@ export class InteractiveMode {
 				);
 			};
 
-			const skillDiagnostics = skillsResult.diagnostics;
+			const skillDiagnostics = diagnosticsVisibleForMode(skillsResult.diagnostics);
 			addDiagnosticsSection("Skill conflicts", skillDiagnostics);
 
-			const promptDiagnostics = promptsResult.diagnostics;
+			const promptDiagnostics = diagnosticsVisibleForMode(promptsResult.diagnostics);
 			addDiagnosticsSection("Prompt conflicts", promptDiagnostics);
 
 			const extensionDiagnostics: ResourceDiagnostic[] = [];
@@ -1606,9 +1610,9 @@ export class InteractiveMode {
 			const shortcutDiagnostics = this.session.extensionRunner.getShortcutDiagnostics();
 			extensionDiagnostics.push(...shortcutDiagnostics);
 
-			addDiagnosticsSection("Extension issues", extensionDiagnostics);
+			addDiagnosticsSection("Extension issues", diagnosticsVisibleForMode(extensionDiagnostics));
 
-			const themeDiagnostics = themesResult.diagnostics;
+			const themeDiagnostics = diagnosticsVisibleForMode(themesResult.diagnostics);
 			addDiagnosticsSection("Theme conflicts", themeDiagnostics);
 		}
 	}

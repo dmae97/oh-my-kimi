@@ -9,6 +9,7 @@ const CONTROL_PANEL_ASCII = [
 	"/ /_/ // /|_/ /    < ",
 	"\\____//_/  /_/_/|_| ",
 ];
+const CONTROL_PANEL_METADATA_WIDTH = 31;
 
 export interface ControlPanelContent {
 	appName: string;
@@ -217,22 +218,46 @@ export class ControlPanelComponent implements Component {
 		const lines = [this.divider(width, "OMK//CONTROL PANEL", "accent"), this.statusLine(width)];
 
 		if (width >= 32) {
-			for (const logoLine of CONTROL_PANEL_ASCII) {
-				lines.push(this.textLine(width, theme.fg("accent", logoLine)));
-			}
+			lines.push(...this.brandLines(width));
 		}
 
 		lines.push(this.divider(width, "SYSTEM MAP", "mdHeading"));
 		for (const instruction of this.content.expandedInstructions().split("\n")) {
 			lines.push(this.textLine(width, instruction));
 		}
-		lines.push(this.divider(width, "CONTROL LINK", "success"));
+		lines.push(this.divider(width, "STARTUP LINK", "success"));
 		for (const onboardingLine of this.content.onboarding().split("\n")) {
 			lines.push(this.textLine(width, onboardingLine, "dim"));
 		}
 		lines.push(this.divider(width, "END", "borderMuted"));
 
 		return lines;
+	}
+
+	private brandLines(width: number): string[] {
+		const leftWidth = Math.max(...CONTROL_PANEL_ASCII.map((line) => visibleWidth(line)));
+		const minWideWidth = visibleWidth("| ") + leftWidth + visibleWidth(" | ") + CONTROL_PANEL_METADATA_WIDTH;
+		if (width < minWideWidth) {
+			return CONTROL_PANEL_ASCII.map((logoLine) => this.textLine(width, theme.fg("accent", logoLine)));
+		}
+
+		return CONTROL_PANEL_ASCII.map((logoLine, index) => {
+			const left = theme.fg("accent", logoLine.padEnd(leftWidth));
+			const separator = theme.fg("borderMuted", " | ");
+			const metadata = this.metadataLines()[index] ?? "";
+			return this.textLine(width, `${left}${separator}${metadata}`);
+		});
+	}
+
+	private metadataLines(): string[] {
+		const rawThemeName = theme.name ?? "live";
+		const themeName = (rawThemeName.startsWith("omk-") ? rawThemeName.slice(4) : rawThemeName).toUpperCase();
+		return [
+			`${theme.fg("mdCode", "PANEL")} ${theme.fg("success", "ONLINE")}`,
+			`${theme.fg("mdCode", "THEME")} ${theme.fg("accent", themeName)}`,
+			`${theme.fg("mdCode", "STARTUP")} ${theme.fg("warning", "ARMED")}`,
+			`${theme.fg("mdCode", "LINK")} ${theme.fg("success", "READY")}`,
+		];
 	}
 
 	private statusLine(width: number): string {

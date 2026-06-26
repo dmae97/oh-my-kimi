@@ -86,4 +86,16 @@ describe("omk-neon-control theme", () => {
 			expect(isHex(resolveThemeValue(theme, value))).toBe(true);
 		}
 	});
+
+	it("uses the neon control cyan, magenta, and green signal palette", () => {
+		const theme = readTheme("omk-neon-control.json");
+		expect(theme.vars).toMatchObject({
+			reactorCyan: "#00E5FF",
+			plasmaPink: "#FF2BD6",
+			signalGreen: "#39FF88",
+		});
+		expect(theme.colors.accent).toBe("reactorCyan");
+		expect(theme.colors.mdCode).toBe("plasmaPink");
+		expect(theme.colors.success).toBe("signalGreen");
+	});
 });

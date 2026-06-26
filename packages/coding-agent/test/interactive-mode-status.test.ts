@@ -4,6 +4,7 @@ import { type AutocompleteProvider, CombinedAutocompleteProvider } from "@earend
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, TUI } from "../../tui/src/tui.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
@@ -339,7 +340,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 		contextFiles?: Array<{ path: string; content?: string }>;
 		extensions?: ExtensionFixture[];
 		skills?: Array<{ filePath: string; name: string }>;
-		skillDiagnostics?: Array<{ type: "warning" | "error" | "collision"; message: string }>;
+		skillDiagnostics?: ResourceDiagnostic[];
 		useRealScopeGroups?: boolean;
 	}) {
 		const fakeThis: any = {
@@ -396,6 +397,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			) => (InteractiveMode as any).prototype.getCompactNonPackageExtensionLabel.call(fakeThis, p, index, allPaths),
 			getCompactExtensionLabels: (extensions: ExtensionFixture[]) =>
 				(InteractiveMode as any).prototype.getCompactExtensionLabels.call(fakeThis, extensions),
+			formatDiagnosticsSummary: (diagnostics: unknown[]) => (diagnostics.length > 0 ? "[Skill conflicts]" : ""),
 			formatDiagnostics: () => "diagnostics",
 			getBuiltInCommandConflictDiagnostics: () => [],
 		};
@@ -964,5 +966,31 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const output = renderAll(fakeThis.chatContainer);
 		expect(output).toContain("[Skill conflicts]");
 		expect(output).not.toContain("[Skills]");
+	});
+
+	test("does not show collision-only diagnostics on quiet startup", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: true,
+			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
+			skillDiagnostics: [
+				{
+					type: "collision",
+					message: "duplicate skill name",
+					collision: {
+						resourceType: "skill",
+						name: "commit",
+						winnerPath: "/tmp/skill/SKILL.md",
+						loserPath: "/tmp/legacy/SKILL.md",
+					},
+				},
+			],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+			showDiagnosticsWhenQuiet: true,
+		});
+
+		expect(fakeThis.chatContainer.children).toHaveLength(0);
 	});
 });

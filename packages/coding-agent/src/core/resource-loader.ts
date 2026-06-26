@@ -46,6 +46,18 @@ export interface ResourceLoader {
 	reload(): Promise<void>;
 }
 
+function hasLegacyPathSegment(path: string): boolean {
+	return path.split(/[\\/]+/).some((segment) => segment.includes(".legacy."));
+}
+
+function isLegacyAutoSkillResource(resource: { path: string; metadata: PathMetadata }): boolean {
+	return (
+		resource.metadata.source === "auto" &&
+		resource.metadata.origin === "top-level" &&
+		hasLegacyPathSegment(resource.path)
+	);
+}
+
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
 	if (!input) {
 		return undefined;
@@ -365,7 +377,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 			resources: Array<{ path: string; enabled: boolean; metadata: PathMetadata }>,
 		): string[] => getEnabledResources(resources).map((r) => r.path);
 		const enabledExtensions = getEnabledPaths(resolvedPaths.extensions);
-		const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
+		const enabledSkillResources = getEnabledResources(resolvedPaths.skills).filter(
+			(resource) => !isLegacyAutoSkillResource(resource),
+		);
 		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
 		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
 

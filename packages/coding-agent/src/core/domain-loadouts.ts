@@ -130,8 +130,14 @@ export const DOMAIN_PROFILES: Readonly<Record<string, DomainProfile>> = {
 			"remotion-best-practices",
 			"web-quality-audit",
 			"audit-and-fix",
+			"browser-qa",
+			"webapp-testing",
+			"e2e-testing",
+			"playwright-cli",
 			"image-to-code",
 			"visual-ralph",
+			"visual-regression",
+			"visual-diff",
 			"gstack-design-review",
 			"gstack-design-html",
 			"gstack-design-shotgun",
@@ -141,7 +147,14 @@ export const DOMAIN_PROFILES: Readonly<Record<string, DomainProfile>> = {
 			"emil-design-eng",
 		]),
 		mcp: gate("mcp", ["chrome-devtools", "playwright", "filesystem", "context7"]),
-		hooks: gate("hook", ["typecheck-after-edit", "pre-shell-guard", "protect-secrets"]),
+		hooks: gate("hook", [
+			"typecheck-after-edit",
+			"pre-shell-guard",
+			"protect-secrets",
+			"component-spec-before-build",
+			"visual-diff-after-edit",
+			"bounded-evidence",
+		]),
 		commands: commands("scoped-shell"),
 		triggers: [
 			{ kind: "keyword", pattern: "ui", weight: 3 },
@@ -164,8 +177,21 @@ export const DOMAIN_PROFILES: Readonly<Record<string, DomainProfile>> = {
 			{ kind: "keyword", pattern: "modal", weight: 2 },
 			{ kind: "keyword", pattern: "shadcn", weight: 5 },
 			{ kind: "keyword", pattern: "clone", weight: 3 },
+			{ kind: "keyword", pattern: "website clone", weight: 7 },
+			{ kind: "keyword", pattern: "clone website", weight: 7 },
+			{ kind: "keyword", pattern: "rebuild website", weight: 6 },
+			{ kind: "keyword", pattern: "recreate website", weight: 6 },
+			{ kind: "keyword", pattern: "pixel-perfect clone", weight: 8 },
+			{ kind: "keyword", pattern: "visual diff", weight: 6 },
+			{ kind: "keyword", pattern: "design tokens", weight: 5 },
+			{ kind: "keyword", pattern: "component spec", weight: 5 },
+			{ kind: "keyword", pattern: "getcomputedstyle", weight: 5 },
+			{ kind: "keyword", pattern: "reconnaissance", weight: 5 },
+			{ kind: "keyword", pattern: "클론", weight: 5 },
+			{ kind: "keyword", pattern: "스크린샷", weight: 4 },
 			{ kind: "regex", pattern: "\\b(react|vue|svelte|next\\.?js|nuxt)\\b", weight: 4 },
 			{ kind: "regex", pattern: "\\b(tailwind|css|styled|emotion|radix)\\b", weight: 4 },
+			{ kind: "regex", pattern: "\\b(visual qa|responsive sweep|interaction sweep|computed styles?)\\b", weight: 6 },
 			{ kind: "extension", pattern: ".vue", weight: 6 },
 			{ kind: "extension", pattern: ".tsx", weight: 4 },
 			{ kind: "extension", pattern: ".jsx", weight: 4 },
@@ -178,14 +204,156 @@ Prioritize visual craft, correct component composition, and accessibility.
 
 SEQUENCE:
 1. Read the target component(s)/page(s) in full before editing. Do not edit blind from search snippets.
-2. Identify the design system in use (Tailwind v4 / shadcn/ui / CSS modules / vanilla). Match it exactly; never introduce a second system.
-3. For visual work: drive iteration with the chrome-devtools or playwright MCP (navigate, screenshot, diff) — do not claim "looks good" without a captured frame.
-4. Accessibility: run the fixing-accessibility + contrast-checker + use-of-color skills. Every interactive element needs a reachable name, visible focus, and AA contrast.
-5. Motion: prefer the transitions-dev / animate / 12-principles-of-animation skills; gate heavy effects behind fix-motion-performance so animation never blocks the main thread.
-6. Prefer composition over boolean-prop sprawl (vercel-composition-patterns). Keep components small; extract when a prompt would exceed ~150 lines of spec.
-7. Before claiming done: typecheck-after-edit hook must pass, plus the web-quality-audit skill (perf/a11y/SEO/best-practices).
+2. Identify the design system in use (Tailwind v4 / shadcn/ui / CSS modules / vanilla). Match it exactly; never introduce a second system. Use context7 for current framework/library docs before changing unfamiliar APIs.
+3. Website clone / visual QA work follows the ai-website-cloner-template gate contract:
+   Reconnaissance -> Design-Token Foundation -> Component Specs -> Asset Gate -> Build Gate -> QA Gate.
+   Reconnaissance uses Chrome/Playwright: chrome-devtools first for live inspection, playwright when deterministic multi-viewport screenshots or scripted interaction sweeps are needed. Capture screenshots at responsive sizes 1440/768/390, getComputedStyle design-token samples, assets, page topology, hover/click/scroll/time-driven behavior, and responsive breakpoints.
+4. Design-Token Foundation is sequential: fonts, oklch/shadcn-compatible tokens, global CSS, page-level motion primitives, icon extraction, downloaded assets, and typed content structures. Do not dispatch component builders until the foundation exists.
+5. Component Specs are contracts: component-spec-before-build requires a spec artifact before implementation. Specs include exact getComputedStyle values, DOM structure, interaction model, all states, assets, verbatim content, and responsive behavior. Split anything whose builder prompt would exceed ~150 lines.
+6. Asset Gate: real extractable assets are downloaded, named, and referenced before build; no mock assets when source assets are available.
+7. Build Gate: one builder per section or sub-component receives the full spec inline plus screenshot path, target file, imports, breakpoint behavior, and a typecheck/build requirement. Assembly wires sections into page-level layout and behaviors.
+8. QA Gate: visual-diff-after-edit requires side-by-side visual diff artifacts against the reference at 1440/768/390. Test interactions with Chrome/Playwright; run web-quality-audit for perf/a11y/SEO/best-practices and typecheck-after-edit before done.
+9. Evidence must include screenshots, getComputedStyle captures, responsive sizes 1440/768/390, side-by-side visual diff artifacts, Chrome/Playwright command/tool results, changed files, and known discrepancies.
+10. Accessibility: run the fixing-accessibility + contrast-checker + use-of-color skills. Every interactive element needs a reachable name, visible focus, and AA contrast.
+11. Motion: prefer the transitions-dev / animate / 12-principles-of-animation skills; gate heavy effects behind fix-motion-performance so animation never blocks the main thread.
+12. Prefer composition over boolean-prop sprawl (vercel-composition-patterns). Keep components small and spec-driven.
 
-HARD RULES: no inline styles when a token/utility exists; oklch tokens for color; mobile-first responsive; real content over placeholders; pixel-match the target first, customize later.`,
+HARD RULES: no inline styles when a token/utility exists; oklch tokens for color; mobile-first responsive; real content over placeholders; pixel-match the target first, customize later; no visual claim without bounded screenshot/diff evidence.`,
+	},
+
+	"visual-qa": {
+		schemaVersion: "omk.loadout.v1",
+		id: "visual-qa",
+		name: "visual-qa",
+		label: "Visual QA & Website Cloning",
+		authority: "write-scoped",
+		tools: WRITE_TOOLS,
+		skills: gate("skill", [
+			"clone-website",
+			"browser-qa",
+			"webapp-testing",
+			"e2e-testing",
+			"playwright-cli",
+			"web-quality-audit",
+			"audit-and-fix",
+			"visual-regression",
+			"visual-diff",
+			"visual-ralph",
+			"image-to-code",
+			"frontend-ui-engineering",
+			"frontend-design",
+			"fixing-accessibility",
+			"contrast-checker",
+			"use-of-color",
+			"fix-motion-performance",
+		]),
+		mcp: gate("mcp", ["chrome-devtools", "playwright", "filesystem", "context7"]),
+		hooks: gate("hook", [
+			"component-spec-before-build",
+			"visual-diff-after-edit",
+			"typecheck-after-edit",
+			"pre-shell-guard",
+			"protect-secrets",
+			"bounded-evidence",
+			"stop-verify",
+		]),
+		commands: commands("scoped-shell"),
+		triggers: [
+			{ kind: "keyword", pattern: "visual qa", weight: 8 },
+			{ kind: "keyword", pattern: "visual diff", weight: 8 },
+			{ kind: "keyword", pattern: "screenshot diff", weight: 8 },
+			{ kind: "keyword", pattern: "website clone", weight: 8 },
+			{ kind: "keyword", pattern: "clone website", weight: 8 },
+			{ kind: "keyword", pattern: "pixel-perfect clone", weight: 9 },
+			{ kind: "keyword", pattern: "responsive sweep", weight: 7 },
+			{ kind: "keyword", pattern: "interaction sweep", weight: 7 },
+			{ kind: "keyword", pattern: "component spec", weight: 7 },
+			{ kind: "keyword", pattern: "getcomputedstyle", weight: 7 },
+			{ kind: "keyword", pattern: "design tokens", weight: 6 },
+			{ kind: "keyword", pattern: "assembly qa", weight: 6 },
+			{ kind: "keyword", pattern: "reconnaissance", weight: 6 },
+			{ kind: "keyword", pattern: "클론", weight: 6 },
+			{ kind: "keyword", pattern: "스크린샷", weight: 5 },
+			{ kind: "regex", pattern: "\\b(pixel[ -]?perfect|visual regression|viewport sweep)\\b", weight: 7 },
+			{ kind: "regex", pattern: "\\b(recreate|rebuild|reverse-engineer)\\b.*\\b(website|page|site)\\b", weight: 7 },
+		],
+		routingPrompt: `DOMAIN: Visual QA & Website Cloning. You are operating in a browser-driven UI reconstruction and verification lane.
+This domain carries the ai-website-cloner-template workflow inside OMK loadouts without copying its project scaffold.
+Pipeline: Reconnaissance -> Design-Token Foundation -> Component Specs -> Asset Gate -> Build Gate -> QA Gate.
+
+SEQUENCE:
+1. Pre-flight: browser automation is required. Prefer Chrome/Playwright: chrome-devtools for live inspection, playwright for deterministic screenshot, viewport, and interaction replay. Use context7 for current framework and Playwright docs before coding against unfamiliar APIs.
+2. Reconnaissance: capture full-page screenshots at responsive sizes 1440/768/390, getComputedStyle color/type/spacing tokens, assets, page topology, z-index/sticky overlays, scroll/click/hover/time behavior, and responsive breakpoints. Save bounded artifacts and behavior notes.
+3. Design-Token Foundation: update only the target project's existing frontend foundation: fonts, globals, tokens, icon extraction, downloaded assets, typed content structures, and page-level motion primitives. Foundation is sequential.
+4. Component Specs: component-spec-before-build requires one spec per section/sub-component before implementation. Specs include exact getComputedStyle values, DOM structure, all states, interaction model, assets, verbatim text, screenshots, and responsive behavior. Split specs that would create a builder prompt over ~150 lines.
+5. Asset Gate: real extractable assets are downloaded, named, and referenced before build; no mock assets when source assets are available.
+6. Build Gate: dispatch or implement one section/sub-component at a time from its spec; builders receive the full spec inline, not a pointer. Require typecheck-after-edit and the target project's build/smoke command before merging/assembling.
+7. QA Gate: wire sections into page layout, then visual-diff-after-edit requires side-by-side visual diff artifacts against the reference at 1440/768/390. Re-test scroll, hover, click, tab, carousel, modal, and animation behavior with Chrome/Playwright.
+8. Evidence: bounded-evidence records screenshots, getComputedStyle captures, responsive sizes 1440/768/390, side-by-side visual diff paths, Chrome/Playwright command/tool results, changed files, known discrepancies, and any remaining fidelity gaps.
+
+HARD RULES: no guessed CSS values; no builder without a spec artifact; no mock assets when real assets are extractable; no completion claim without visual diff evidence; general Playwright test failures without visual/reconstruction intent stay in qa-testing.`,
+	},
+
+	"korean-document": {
+		schemaVersion: "omk.loadout.v1",
+		id: "korean-document",
+		name: "korean-document",
+		label: "Korean Document (HWP/HWPX)",
+		authority: "write-scoped",
+		tools: WRITE_TOOLS,
+		skills: gate("skill", [
+			"rhwp",
+			"rhwp-edit",
+			"rhwp-advanced",
+			"hwp",
+			"kordoc",
+			"document-conversion",
+			"document-extraction",
+			"pdf",
+			"react-pdf",
+			"verification-loop",
+		]),
+		mcp: gate("mcp", ["filesystem", "context7", "chrome-devtools", "playwright"]),
+		hooks: gate("hook", [
+			"pre-shell-guard",
+			"protect-secrets",
+			"bounded-evidence",
+			"document-artifact-guard",
+			"stop-verify",
+		]),
+		commands: commands("scoped-shell"),
+		triggers: [
+			{ kind: "keyword", pattern: "hwp", weight: 7 },
+			{ kind: "keyword", pattern: "hwpx", weight: 8 },
+			{ kind: "keyword", pattern: "rhwp", weight: 8 },
+			{ kind: "keyword", pattern: "hancom", weight: 6 },
+			{ kind: "keyword", pattern: "hangul document", weight: 6 },
+			{ kind: "keyword", pattern: "한글 문서", weight: 7 },
+			{ kind: "keyword", pattern: "아래아한글", weight: 7 },
+			{ kind: "keyword", pattern: "한컴", weight: 6 },
+			{ kind: "keyword", pattern: "hwp to markdown", weight: 8 },
+			{ kind: "keyword", pattern: "hwp to pdf", weight: 8 },
+			{ kind: "keyword", pattern: "hwpx to pdf", weight: 8 },
+			{ kind: "keyword", pattern: "svg export", weight: 3 },
+			{ kind: "keyword", pattern: "document metadata", weight: 4 },
+			{ kind: "regex", pattern: "\\b(hwp|hwpx|rhwp|hancom)\\b", weight: 7 },
+			{ kind: "regex", pattern: "\\b(extract|render|export|metadata)\\b.*\\b(hwp|hwpx)\\b", weight: 6 },
+			{ kind: "extension", pattern: ".hwp", weight: 9 },
+			{ kind: "extension", pattern: ".hwpx", weight: 9 },
+		],
+		routingPrompt: `DOMAIN: Korean Document (HWP/HWPX). You are operating in a document extraction/rendering/export lane for Korean Hangul documents.
+Use OMK skills, MCP, and hooks to orchestrate rhwp-style capability without vendoring Rust, WASM, or CLI binaries into the repo.
+
+SEQUENCE:
+1. Detection first: identify HWP/HWPX by extension plus container sniffing. HWP is normally OLE Compound File Binary; HWPX is normally ZIP/XML package content. Never trust extension alone. Record filename, byte size, hash, detected format, and whether the file appears encrypted/protected.
+2. Load current docs with context7 before coding against @rhwp/core, rhwp APIs, pdf rendering packages, or browser automation APIs. Use project-installed tools when present; do not add or vendor rhwp Rust/WASM/CLI artifacts unless the user explicitly requests dependency work.
+3. Extraction path: produce bounded text and markdown outputs, structured metadata, section/page outline, tables, images/assets references, equations/charts notes, and warnings for unsupported controls. Keep private document content bounded: short excerpts, counts, hashes, and output paths rather than dumping whole documents.
+4. Render path: use rhwp-oriented skills for layout/page fidelity. Use chrome-devtools/playwright only to render or capture web/WASM/canvas/SVG views that already exist in the project. Capture SVG/page snapshots and PNG evidence with viewport/page labels.
+5. Export path: support text, markdown, svg, png, and pdf outputs. Prefer native/project export APIs when available; otherwise assemble via browser-rendered SVG/canvas/PDF flows. Always write artifacts to an explicit output directory and report a manifest.
+6. Metadata path: collect page count, section count, dimensions, fonts, embedded images, tables, headers/footers, footnotes/endnotes, equations/charts, fields, protection/encryption status, and conversion warnings.
+7. Evidence: bounded-evidence and document-artifact-guard require an artifact manifest containing input hash, detected format, commands/tools used, output paths, output byte sizes, page/sample counts, warnings, and at most small redacted excerpts. stop-verify must pass before done.
+
+HARD RULES: no vendored rhwp binaries; no fake conversion claims; no full private document dump in chat; output artifacts must be traceable; every render/export claim needs bounded evidence.`,
 	},
 
 	"backend-api": {

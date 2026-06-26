@@ -39,7 +39,7 @@ const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
 function isOfflineModeEnabled(): boolean {
-	const value = process.env.OMK_OFFLINE ?? process.env.PI_OFFLINE;
+	const value = process.env.OMK_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
@@ -532,8 +532,8 @@ function collectAutoThemeEntries(dir: string): string[] {
 function readOmkManifestFile(packageJsonPath: string): OmkManifest | null {
 	try {
 		const content = readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { omk?: OmkManifest; pi?: OmkManifest };
-		return pkg.omk ?? pkg.pi ?? null;
+		const pkg = JSON.parse(content) as { omk?: OmkManifest };
+		return pkg.omk ?? null;
 	} catch {
 		return null;
 	}
@@ -2176,8 +2176,8 @@ export class DefaultPackageManager implements PackageManager {
 
 		try {
 			const content = readFileSync(packageJsonPath, "utf-8");
-			const pkg = JSON.parse(content) as { omk?: OmkManifest; pi?: OmkManifest };
-			return pkg.omk ?? pkg.pi ?? null;
+			const pkg = JSON.parse(content) as { omk?: OmkManifest };
+			return pkg.omk ?? null;
 		} catch {
 			return null;
 		}

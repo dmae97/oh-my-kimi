@@ -79,6 +79,61 @@ Skill content here.`,
 			expect(diagnostics.some((d) => d.path?.endsWith("EFFICIENCY.md"))).toBe(false);
 		});
 
+		it("should skip auto-discovered legacy skill directories", async () => {
+			const originalHome = process.env.HOME;
+			process.env.HOME = tempDir;
+			try {
+				const currentSkillDir = join(tempDir, ".agents", "skills", "duplicate-skill");
+				const legacySkillDir = join(
+					tempDir,
+					".agents",
+					"skills",
+					"skill-pack.legacy.20260624095840",
+					"duplicate-skill",
+				);
+				const currentSkillPath = join(currentSkillDir, "SKILL.md");
+				const legacySkillPath = join(legacySkillDir, "SKILL.md");
+				mkdirSync(currentSkillDir, { recursive: true });
+				mkdirSync(legacySkillDir, { recursive: true });
+				writeFileSync(
+					currentSkillPath,
+					`---
+name: duplicate-skill
+description: Current skill
+---
+Current content.`,
+				);
+				writeFileSync(
+					legacySkillPath,
+					`---
+name: duplicate-skill
+description: Legacy skill
+---
+Legacy content.`,
+				);
+
+				const loader = new DefaultResourceLoader({ cwd, agentDir });
+				await loader.reload();
+
+				const { skills, diagnostics } = loader.getSkills();
+				const loadedSkillPaths = skills
+					.filter((skill) => skill.name === "duplicate-skill")
+					.map((skill) => skill.filePath);
+				expect(loadedSkillPaths).toEqual([currentSkillPath]);
+				expect(
+					diagnostics.some(
+						(diagnostic) => diagnostic.type === "collision" && diagnostic.collision?.name === "duplicate-skill",
+					),
+				).toBe(false);
+			} finally {
+				if (originalHome === undefined) {
+					delete process.env.HOME;
+				} else {
+					process.env.HOME = originalHome;
+				}
+			}
+		});
+
 		it("should discover prompts from agentDir", async () => {
 			const promptsDir = join(agentDir, "prompts");
 			mkdirSync(promptsDir, { recursive: true });
@@ -179,12 +234,15 @@ Project skill`,
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
-			expect(extensionsResult.extensions).toHaveLength(1);
+			const discoveredExtensions = extensionsResult.extensions.filter(
+				(extension) => extension.path !== "<builtin:command-safety>",
+			);
+			expect(discoveredExtensions).toHaveLength(1);
 			expect(extensionsResult.errors).toEqual([]);
 
 			// mergePaths processes project paths before user paths, so the project
 			// alias is the canonical survivor.
-			expect(extensionsResult.extensions[0].path).toBe(join(cwd, ".omk", "extensions", "shared.ts"));
+			expect(discoveredExtensions[0]?.path).toBe(join(cwd, ".omk", "extensions", "shared.ts"));
 		});
 
 		it("should keep both extensions loaded when command names collide", async () => {
@@ -225,7 +283,10 @@ Project skill`,
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
-			expect(extensionsResult.extensions).toHaveLength(2);
+			const discoveredExtensions = extensionsResult.extensions.filter(
+				(extension) => extension.path !== "<builtin:command-safety>",
+			);
+			expect(discoveredExtensions).toHaveLength(2);
 			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(false);
 
 			const sessionManager = SessionManager.inMemory();
@@ -624,7 +685,10 @@ export default function(pi: ExtensionAPI) {
 			await loader.reload();
 
 			const extensionsResult = loader.getExtensions();
-			expect(extensionsResult.extensions[0]?.path).toBe(explicitExtPath);
+			const discoveredExtensions = extensionsResult.extensions.filter(
+				(extension) => extension.path !== "<builtin:command-safety>",
+			);
+			expect(discoveredExtensions[0]?.path).toBe(explicitExtPath);
 
 			const sessionManager = SessionManager.inMemory();
 			const authStorage = AuthStorage.create(join(tempDir, "auth-explicit.json"));

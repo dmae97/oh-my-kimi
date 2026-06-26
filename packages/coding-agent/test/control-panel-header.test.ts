@@ -26,7 +26,7 @@ let previousPackageDir: string | undefined;
 beforeAll(() => {
 	previousPackageDir = process.env.OMK_PACKAGE_DIR;
 	process.env.OMK_PACKAGE_DIR = fileURLToPath(new URL("../", import.meta.url));
-	initTheme("omk-control-panel");
+	initTheme("omk-neon-control");
 });
 
 afterAll(() => {
@@ -57,9 +57,20 @@ describe("ControlPanelComponent", () => {
 
 		expect(plain).toContain("OMK//CONTROL PANEL");
 		expect(plain).toContain("____");
+		expect(plain).toContain("PANEL ONLINE");
+		expect(plain).toContain("THEME NEON-CONTROL");
 		expect(plain).toContain("SYSTEM MAP");
 		expect(plain).toContain("! to run bash");
 		expect(lines.every((line) => visibleWidth(line) <= 96)).toBe(true);
+	});
+
+	test("renders startup onboarding under the startup link section", () => {
+		const panel = createPanel();
+		panel.setExpanded(true);
+		const plain = stripAnsi(panel.render(96).join("\n"));
+
+		expect(plain).toContain("STARTUP LINK");
+		expect(plain).toContain("OMK can explain its own features");
 	});
 
 	test("re-renders compact output after expansion is disabled", () => {
