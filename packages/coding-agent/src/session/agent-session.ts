@@ -1117,6 +1117,22 @@ function toRestoredQueuedMessage(message: AgentMessage): RestoredQueuedMessage {
 	return { text: queueChipText(message), images: queuedImageContent(message) };
 }
 
+function stripSnapcompactPreserveData(
+	preserveData: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	if (!preserveData || !(snapcompact.PRESERVE_KEY in preserveData)) return preserveData;
+	const { [snapcompact.PRESERVE_KEY]: _removed, ...rest } = preserveData;
+	return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
+function mergeLlmCompactionPreserveData(
+	hookPreserveData: Record<string, unknown> | undefined,
+	resultPreserveData: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	const preserveData = { ...(hookPreserveData ?? {}), ...(resultPreserveData ?? {}) };
+	return stripSnapcompactPreserveData(Object.keys(preserveData).length > 0 ? preserveData : undefined);
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -8020,7 +8036,7 @@ export class AgentSession {
 					firstKeptEntryId = result.firstKeptEntryId;
 					tokensBefore = result.tokensBefore;
 					details = result.details;
-					preserveData = { ...(compactionPrep.preserveData ?? {}), ...(result.preserveData ?? {}) };
+					preserveData = mergeLlmCompactionPreserveData(compactionPrep.preserveData, result.preserveData);
 				} catch (err) {
 					if (err instanceof CompactionCancelledError) {
 						throw err;
@@ -10246,7 +10262,7 @@ export class AgentSession {
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
 				details = compactResult.details;
-				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(compactResult.preserveData ?? {}) };
+				preserveData = mergeLlmCompactionPreserveData(compactionPrep.preserveData, compactResult.preserveData);
 			}
 
 			if (autoCompactionSignal.aborted) {
