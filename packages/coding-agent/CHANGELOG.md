@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.22] - 2026-06-26
+
 ### Fixed
 
 - Fixed Windows stdio MCP server launches showing a separate `cmd.exe` window for direct executable servers; MCP subprocesses now set `windowsHide` on every Windows spawn path. ([#3535](https://github.com/can1357/oh-my-pi/issues/3535))
