@@ -5,10 +5,7 @@ import { expandAtImports } from "../discovery/at-imports";
 import activeRepoWatchdogTemplate from "../prompts/advisor/active-repo-watchdog.md" with { type: "text" };
 import type { ActiveRepoContext } from "../utils/active-repo-context";
 import { repo } from "../utils/git";
-
-function normalizePromptPath(value: string): string {
-	return value.replace(/\\/g, "/");
-}
+import { normalizePromptPath } from "../utils/prompt-path";
 
 export function formatActiveRepoWatchdogPrompt(activeRepoContext: ActiveRepoContext): string {
 	return prompt

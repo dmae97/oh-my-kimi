@@ -25,6 +25,7 @@ import projectPromptTemplate from "./prompts/system/project-prompt.md" with { ty
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
 import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
+import { normalizePromptPath } from "./utils/prompt-path";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 /** Bundled personality specs, keyed by the `personality` setting value. */
@@ -90,10 +91,6 @@ function firstNonEmpty(...values: (string | undefined | null)[]): string | null 
 		if (trimmed) return trimmed;
 	}
 	return null;
-}
-
-function normalizePromptPath(value: string): string {
-	return value.replace(/\\/g, "/");
 }
 
 function renderActiveRepoContextPrompt(activeRepoContext: ActiveRepoContext | null): string {
