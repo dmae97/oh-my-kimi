@@ -330,7 +330,7 @@ const TIME_RANGE_TO_CONFIG: Record<TimeRange, Omit<TimeRangeConfig, "cutoff">> =
 	},
 };
 
-function getTimeRangeConfig(range?: string | null): TimeRangeConfig {
+export function getTimeRangeConfig(range?: string | null): TimeRangeConfig {
 	const normalized = range?.trim().toLowerCase() ?? DEFAULT_TIME_RANGE;
 	const config = TIME_RANGE_TO_CONFIG[normalized as TimeRange];
 	if (config) {

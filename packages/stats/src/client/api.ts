@@ -85,8 +85,8 @@ export async function getFolderStats(range: TimeRange = "24h", signal?: AbortSig
 
 export async function getGainDashboardStats(
 	range: TimeRange = "24h",
-	signal?: AbortSignal,
 	project?: string | null,
+	signal?: AbortSignal,
 ): Promise<GainDashboardStats> {
 	const params = new URLSearchParams({ range });
 	if (project) params.set("project", project);

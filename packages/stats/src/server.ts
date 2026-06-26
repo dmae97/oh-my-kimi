@@ -16,9 +16,9 @@ import {
 	getTotalMessageCount,
 	syncAllSessions,
 } from "./aggregator";
-import { getGainDashboardStats } from "./gain-aggregator";
 import { decodeEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
+import { getGainDashboardStats } from "./gain-aggregator";
 
 const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 

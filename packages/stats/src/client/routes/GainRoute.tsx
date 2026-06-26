@@ -1,16 +1,18 @@
 import { format } from "date-fns";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import { getGainDashboardStats } from "../api";
-import {
-	buildSharedPlugins,
-	buildSharedScales,
-	CHART_THEMES,
-	lineDatasetStyle,
-} from "../components/chart-shared";
+import { buildSharedPlugins, buildSharedScales, CHART_THEMES, lineDatasetStyle } from "../components/chart-shared";
 import { formatBytes, formatCompact, formatInteger, formatPercent } from "../data/formatters";
 import { useResource } from "../data/useResource";
-import type { GainDashboardStats, GainUnparsedCommand, GainSourceTotals, GainTimeSeriesPoint, GainTopFilter, TimeRange } from "../types";
+import type {
+	GainDashboardStats,
+	GainSourceTotals,
+	GainTimeSeriesPoint,
+	GainTopFilter,
+	GainUnparsedCommand,
+	TimeRange,
+} from "../types";
 import { AsyncBoundary, DataTable, Panel } from "../ui";
 import type { DataTableColumn } from "../ui/DataTable";
 import { useSystemTheme } from "../useSystemTheme";
@@ -28,27 +30,22 @@ export function GainRoute({ active, range, refreshTrigger }: GainRouteProps) {
 		data: stats,
 		error,
 		loading,
-	} = useResource(
-		["gain", range, refreshTrigger, project],
-		signal => getGainDashboardStats(range, signal, project),
-		{ pollMs: 30_000, enabled: active },
-	);
+	} = useResource(["gain", range, refreshTrigger, project], signal => getGainDashboardStats(range, project, signal), {
+		pollMs: 30_000,
+		enabled: active,
+	});
 
 	return (
 		<div className="stats-route-container space-y-6">
 			<AsyncBoundary loading={loading} error={error} data={stats}>
 				{stats && (
 					<>
-						<GainProjectSelector
-							projects={stats.projects}
-							selected={project}
-							onChange={setProject}
-						/>
+						<GainProjectSelector projects={stats.projects} selected={project} onChange={setProject} />
 						<GainOverallPanel overall={stats.overall} />
 						<GainBySourcePanel bySource={stats.bySource} />
 						<GainTimeSeriesPanel timeSeries={stats.timeSeries} />
 						<GainTopFiltersPanel topFilters={stats.topFilters} />
-					<GainUnparsedCommandsPanel unparsedCommands={stats.unparsedCommands} />
+						<GainUnparsedCommandsPanel unparsedCommands={stats.unparsedCommands} />
 					</>
 				)}
 			</AsyncBoundary>
@@ -83,13 +80,14 @@ function GainProjectSelector({
 			>
 				<option value="">All projects</option>
 				{projects.map(p => (
-					<option key={p} value={p}>{p}</option>
+					<option key={p} value={p}>
+						{p}
+					</option>
 				))}
 			</select>
 		</div>
 	);
 }
-
 
 // ---------------------------------------------------------------------------
 // Overall metrics panel
@@ -299,9 +297,7 @@ const UNPARSED_COLUMNS: DataTableColumn<GainUnparsedCommand>[] = [
 		key: "command",
 		header: "Command (unparsed)",
 		render: item => (
-			<code style={{ fontSize: "0.8em", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>
-				{item.command}
-			</code>
+			<code style={{ fontSize: "0.8em", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>{item.command}</code>
 		),
 	},
 	{

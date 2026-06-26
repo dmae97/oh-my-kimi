@@ -10,15 +10,15 @@
  * Missing files are treated as zero records — never an error.
  */
 
-import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, getStatsDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getTimeRangeConfig } from "./aggregator";
 import type {
 	GainDashboardStats,
-	GainUnparsedCommand,
 	GainSourceTotals,
 	GainTimeSeriesPoint,
 	GainTopFilter,
+	GainUnparsedCommand,
 } from "./shared-types";
 
 const BYTES_PER_TOKEN_ESTIMATE = 4;
@@ -40,9 +40,28 @@ interface MinimizerRecord {
 	cwd: string;
 }
 
-// Structural skip filters — these mean the parser didn't attempt compression, not a coverage gap.
-const SKIP_FILTERS = new Set(["missed", "compound", "chain-noop", "unsupported"]);
+// Paths that carry no tuning signal — temp/internal locations.
+const TEMP_PATH_RE = /\/T\/|\/tmp\/|\/pi-bash-exec|\/omp-bash-exec|\/pi-bash-detach|\/var\/folders\//;
 
+// ---------------------------------------------------------------------------
+// Project-match helper
+// ---------------------------------------------------------------------------
+
+/** True when `cwd` is exactly `project` or is a sub-path of it. */
+function matchesProject(cwd: string | undefined, project: string): boolean {
+	if (!cwd) return false;
+	return cwd === project || cwd.startsWith(`${project}/`);
+}
+
+// ---------------------------------------------------------------------------
+// Minimizer JSONL — single read, three derived result sets
+// ---------------------------------------------------------------------------
+
+interface MinimizerSets {
+	records: MinimizerRecord[];
+	unparsed: MinimizerRecord[];
+	projects: Set<string>;
+}
 
 async function readMinimizerFile(): Promise<string | null> {
 	const filePath = path.join(getAgentDir(), "minimizer-gain.jsonl");
@@ -54,80 +73,69 @@ async function readMinimizerFile(): Promise<string | null> {
 	}
 }
 
-async function readMinimizerRecords(cutoff: number | null, project: string | null): Promise<MinimizerRecord[]> {
+/**
+ * Parse the minimizer JSONL exactly once and derive all three result sets in
+ * a single pass. Avoids re-reading and re-parsing the file three times per
+ * dashboard request.
+ */
+async function readMinimizerSets(cutoff: number | null, project: string | null): Promise<MinimizerSets> {
 	const text = await readMinimizerFile();
-	if (!text) return [];
-	const records: MinimizerRecord[] = [];
-	for (const line of text.split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const rec = JSON.parse(line) as MinimizerRecord;
-			if (rec.kind === "missed") continue;
-			const ts = new Date(rec.timestamp).getTime();
-			if (cutoff !== null && ts < cutoff) continue;
-			if (project !== null && !rec.cwd?.startsWith(project)) continue;
-			records.push(rec);
-		} catch { /* skip malformed */ }
-	}
-	return records;
-}
+	const sets: MinimizerSets = { records: [], unparsed: [], projects: new Set() };
+	if (!text) return sets;
 
-/** Records where NO filter matched (filter==="missed", kind==="missed"), excluding temp/internal paths. */
-async function readMinimizerUnparsedRecords(cutoff: number | null, project: string | null): Promise<MinimizerRecord[]> {
-	const text = await readMinimizerFile();
-	if (!text) return [];
-	const records: MinimizerRecord[] = [];
 	for (const line of text.split("\n")) {
 		if (!line.trim()) continue;
 		try {
 			const rec = JSON.parse(line) as MinimizerRecord;
-			// Only "no filter matched" records
-			if (rec.kind !== "missed" || rec.filter !== "missed") continue;
-			// Skip internal/temp cwds (no tuning signal)
-			if (TEMP_PATH_RE.test(rec.cwd ?? "")) continue;
+
+			// Always collect project cwds (unfiltered).
+			if (rec.cwd) sets.projects.add(rec.cwd);
+
 			const ts = new Date(rec.timestamp).getTime();
 			if (cutoff !== null && ts < cutoff) continue;
-			if (project !== null && !rec.cwd?.startsWith(project)) continue;
-			records.push(rec);
-		} catch { /* skip malformed */ }
+			if (project !== null && !matchesProject(rec.cwd, project)) continue;
+
+			if (rec.kind === "missed") {
+				// Unparsed: only "no filter matched" records from meaningful cwds.
+				if (rec.filter === "missed" && !TEMP_PATH_RE.test(rec.cwd ?? "")) {
+					sets.unparsed.push(rec);
+				}
+			} else {
+				sets.records.push(rec);
+			}
+		} catch {
+			/* skip malformed */
+		}
 	}
-	return records;
+	return sets;
 }
 
 // ---------------------------------------------------------------------------
 // Project normalization & deduplication
 // ---------------------------------------------------------------------------
 
-const TEMP_PATH_RE = /\/T\/|\/tmp\/|\/pi-bash-exec|\/omp-bash-exec|\/pi-bash-detach|\/var\/folders\//;
-
-/** Collapse worktree/ephemeral sub-paths to their logical project root. Returns null to drop. */
+/**
+ * Collapse worktree sub-paths to their logical project root.
+ *
+ * Rules are generic: omp internal wt paths are dropped; conventional worktree
+ * suffixes (`.wt/`, `-wt/`, `.worktrees/`, `-worktrees/`) are stripped. No
+ * author-specific IDE or tool paths are baked in.
+ *
+ * Returns null to drop temp/internal paths entirely.
+ */
 function normalizeProjectPath(p: string): string | null {
 	if (TEMP_PATH_RE.test(p)) return null;
-	// omp internal worktrees — not meaningful
+	// omp internal worktrees — not meaningful project roots
 	if (/\/\.omp\/wt\//.test(p)) return null;
-	// herdr worktrees → /.herdr/worktrees/<project>
-	const herdr = p.match(/(\/\.herdr\/worktrees\/[^/]+)/);
-	if (herdr) return herdr[1];
-	// <prefix>/PycharmProjects/<proj>-factory-worktrees/... → <prefix>/PycharmProjects/<proj>
-	const factory = p.match(/(\/PycharmProjects\/[^/]+)-factory-worktrees\/.*/);
-	if (factory) return p.slice(0, factory.index!) + factory[1];
-	// <prefix>/PycharmProjects/<proj>-worktrees/... → <prefix>/PycharmProjects/<proj>
-	const wt = p.match(/(\/PycharmProjects\/[^/]+)-worktrees\/.*/);
-	if (wt) return p.slice(0, wt.index!) + wt[1];
-	// <prefix>/PycharmProjects/<proj>.wt/<lane>/... → <prefix>/PycharmProjects/<proj>
-	const dotWt = p.match(/(\/PycharmProjects\/[^/]+)\.wt\/.*/);
-	if (dotWt) return p.slice(0, dotWt.index!) + dotWt[1];
-	// <prefix>/PycharmProjects/<proj>-wt/<lane>/... → <prefix>/PycharmProjects/<proj>
-	const dashWt = p.match(/(\/PycharmProjects\/[^/]+)-wt\/.*/);
-	if (dashWt) return p.slice(0, dashWt.index!) + dashWt[1];
-	// PycharmProjects/.worktrees/<proj>/<lane>/... → PycharmProjects/<proj>
-	const hiddenWt = p.match(/^(.+\/PycharmProjects)\/\.worktrees\/([^/]+)\/[^/]+.*/);
-	if (hiddenWt) return `${hiddenWt[1]}/${hiddenWt[2]}`;
-	return p;
-}
 
-function pathDepth(p: string): number {
-	return p.split("/").filter(Boolean).length;
+	// Generic worktree layouts — strip the worktree suffix/subpath.
+	// Matches: <root>/.wt/<lane>/..., <root>-wt/<lane>/...,
+	//          <root>.wt/<lane>/..., <root>/.worktrees/<lane>/...,
+	//          <root>-worktrees/<lane>/..., <root>/.herdr/worktrees/<name>/...
+	const m = p.match(/^(.+?)(?:\/\.wt\/|\/\.worktrees\/|-worktrees\/|-wt\/|\.wt\/|\/.+\/worktrees\/)[^/]+(\/.*)?$/);
+	if (m) return m[1];
+
+	return p;
 }
 
 /**
@@ -144,32 +152,16 @@ function dedupeProjects(rawPaths: Set<string>): string[] {
 	const sorted = Array.from(normalized).sort();
 	return sorted.filter(p => {
 		// Drop p if a shorter path is a proper prefix of it AND that parent is deep enough
-		// to be a meaningful scope boundary (depth ≥ 4), not a catch-all like /Users/davidandrews.
+		// to be a meaningful scope boundary (depth ≥ 4), not a catch-all like /Users/x.
 		return !sorted.some(
 			other =>
 				other !== p &&
 				other.length < p.length &&
-				p.startsWith(other.endsWith("/") ? other : other + "/") &&
-				pathDepth(other) >= 4,
+				p.startsWith(other.endsWith("/") ? other : `${other}/`) &&
+				other.split("/").filter(Boolean).length >= 4,
 		);
 	});
 }
-
-async function readMinimizerProjects(): Promise<Set<string>> {
-	const text = await readMinimizerFile();
-	const projects = new Set<string>();
-	if (!text) return projects;
-	for (const line of text.split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const rec = JSON.parse(line) as MinimizerRecord;
-			if (rec.cwd) projects.add(rec.cwd);
-		} catch { /* skip */ }
-	}
-	return projects;
-}
-
-
 
 // ---------------------------------------------------------------------------
 // Snapcompact record schema
@@ -184,8 +176,16 @@ interface SnapcompactRecord {
 	savedTokens: number;
 }
 
-async function readSnapcompactRecords(cutoff: number | null, _project: string | null): Promise<SnapcompactRecord[]> {
-	// Snapcompact records have no cwd/project field — project filter not applicable.
+/**
+ * Snapcompact records carry no cwd/project field — project filter cannot be
+ * applied. When a project is selected the snapcompact totals are omitted from
+ * project-scoped responses to avoid mixing unrelated savings into the
+ * per-project view.
+ */
+async function readSnapcompactRecords(cutoff: number | null, project: string | null): Promise<SnapcompactRecord[]> {
+	// No project field → skip entirely for project-scoped requests.
+	if (project !== null) return [];
+
 	const filePath = path.join(path.dirname(getStatsDbPath()), "snapcompact-savings.jsonl");
 	let text: string;
 	try {
@@ -206,7 +206,9 @@ async function readSnapcompactRecords(cutoff: number | null, _project: string | 
 			if (seen.has(key)) continue;
 			seen.add(key);
 			records.push(rec);
-		} catch { /* skip malformed line */ }
+		} catch {
+			/* skip malformed line */
+		}
 	}
 	return records;
 }
@@ -232,7 +234,7 @@ interface PiDistillStats {
 }
 
 async function readPiDistillRecords(cutoff: number | null, project: string | null): Promise<PiDistillSessionRecord[]> {
-	const filePath = path.join(os.homedir(), ".omp", "agent", "pi-distill", "stats.json");
+	const filePath = path.join(getAgentDir(), "pi-distill", "stats.json");
 	let raw: string;
 	try {
 		raw = await Bun.file(filePath).text();
@@ -245,7 +247,7 @@ async function readPiDistillRecords(cutoff: number | null, project: string | nul
 		const stats = JSON.parse(raw) as PiDistillStats;
 		let sessions = Object.values(stats.sessions ?? {});
 		if (cutoff !== null) sessions = sessions.filter(s => s.lastTs >= cutoff);
-		if (project !== null) sessions = sessions.filter(s => s.project?.startsWith(project));
+		if (project !== null) sessions = sessions.filter(s => matchesProject(s.project, project));
 		return sessions;
 	} catch (err) {
 		logger.debug("gain-aggregator: failed to parse pi-distill stats.json", { err: String(err) });
@@ -255,7 +257,7 @@ async function readPiDistillRecords(cutoff: number | null, project: string | nul
 
 /** Collect all distinct project values from pi-distill stats (unfiltered). */
 async function readDistillProjects(): Promise<Set<string>> {
-	const filePath = path.join(os.homedir(), ".omp", "agent", "pi-distill", "stats.json");
+	const filePath = path.join(getAgentDir(), "pi-distill", "stats.json");
 	const projects = new Set<string>();
 	try {
 		const raw = await Bun.file(filePath).text();
@@ -263,7 +265,9 @@ async function readDistillProjects(): Promise<Set<string>> {
 		for (const s of Object.values(stats.sessions ?? {})) {
 			if (s.project) projects.add(s.project);
 		}
-	} catch { /* ignore */ }
+	} catch {
+		/* ignore */
+	}
 	return projects;
 }
 
@@ -302,21 +306,17 @@ export async function getGainDashboardStats(
 	range?: string | null,
 	project?: string | null,
 ): Promise<GainDashboardStats> {
-	const normalized = range?.trim().toLowerCase() ?? "24h";
-	const RANGE_MS: Record<string, number> = { "1h": 3600_000, "24h": 86400_000, "7d": 604800_000, "30d": 2592000_000, "90d": 7776000_000 };
-	const effectiveCutoff: number | null =
-		normalized === "all" ? null : Date.now() - (RANGE_MS[normalized] ?? 86400_000);
+	const { cutoff: effectiveCutoff } = getTimeRangeConfig(range);
 	const effectiveProject: string | null = project?.trim() || null;
 
-	const [minimizerRecords, unparsedRecords, snapcompactRecords, distillRecords, minimizerProjects, distillProjects] =
-		await Promise.all([
-			readMinimizerRecords(effectiveCutoff, effectiveProject),
-			readMinimizerUnparsedRecords(effectiveCutoff, effectiveProject),
-			readSnapcompactRecords(effectiveCutoff, effectiveProject),
-			readPiDistillRecords(effectiveCutoff, effectiveProject),
-			readMinimizerProjects(),
-			readDistillProjects(),
-		]);
+	const [minimizerSets, snapcompactRecords, distillRecords, distillProjects] = await Promise.all([
+		readMinimizerSets(effectiveCutoff, effectiveProject),
+		readSnapcompactRecords(effectiveCutoff, effectiveProject),
+		readPiDistillRecords(effectiveCutoff, effectiveProject),
+		readDistillProjects(),
+	]);
+
+	const { records: minimizerRecords, unparsed: unparsedRecords, projects: minimizerProjects } = minimizerSets;
 
 	// --- Minimizer totals ---
 	const minimizerTotals = emptyTotals();
@@ -354,21 +354,22 @@ export async function getGainDashboardStats(
 	finalizeReductionPercent(minimizerTotals);
 
 	// --- Unparsed commands (no filter matched — tuning targets) ---
+	// Key on the full command string to avoid collision; truncate only at display time.
 	const cmdMap = new Map<string, GainUnparsedCommand>();
 	for (const rec of unparsedRecords) {
-		const key = (rec.command ?? "").slice(0, 120);
-		const existing = cmdMap.get(key);
+		const fullKey = rec.command ?? "";
+		const existing = cmdMap.get(fullKey);
 		if (existing) {
 			existing.hits += 1;
 			existing.inputBytes += rec.inputBytes ?? 0;
 		} else {
-			cmdMap.set(key, { command: key, hits: 1, inputBytes: rec.inputBytes ?? 0 });
+			// Store the full command; callers may truncate for display.
+			cmdMap.set(fullKey, { command: fullKey, hits: 1, inputBytes: rec.inputBytes ?? 0 });
 		}
 	}
 	const unparsedCommands: GainUnparsedCommand[] = Array.from(cmdMap.values())
 		.sort((a, b) => b.hits - a.hits)
 		.slice(0, 25);
-
 
 	// --- Snapcompact totals ---
 	const snapcompactTotals = emptyTotals();
@@ -408,6 +409,10 @@ export async function getGainDashboardStats(
 	finalizeReductionPercent(distillTotals);
 
 	// --- Overall totals ---
+	// reductionPercent is computed only from sources that have originalBytes
+	// (minimizer + distill). Snapcompact has no originalBytes, so including its
+	// savedBytes in the numerator with nothing in the denominator would overstate
+	// the ratio. The per-source cards each report their own correct ratio.
 	const overall: GainSourceTotals = {
 		savedTokens: minimizerTotals.savedTokens + snapcompactTotals.savedTokens + distillTotals.savedTokens,
 		savedBytes: minimizerTotals.savedBytes + snapcompactTotals.savedBytes + distillTotals.savedBytes,
@@ -416,8 +421,11 @@ export async function getGainDashboardStats(
 		originalBytes: minimizerTotals.originalBytes + distillTotals.originalBytes,
 		reductionPercent: null,
 	};
-	if (overall.originalBytes > 0) {
-		overall.reductionPercent = overall.savedBytes / overall.originalBytes;
+	// Use only sources with originalBytes for the ratio to avoid inflated percentages.
+	const ratioNumerator = minimizerTotals.savedBytes + distillTotals.savedBytes;
+	const ratioDenominator = overall.originalBytes;
+	if (ratioDenominator > 0) {
+		overall.reductionPercent = ratioNumerator / ratioDenominator;
 	}
 
 	// --- Time series (sorted ascending by date) ---
