@@ -258,6 +258,15 @@ describe("SearchTool internal URL resolution", () => {
 		expect(getResultText(result)).toContain("needle 2095");
 	});
 
+	it("searches a virtual resource larger than the native grep cap via the JS fallback", async () => {
+		// >4 MiB (NATIVE_GREP_MAX_FILE_BYTES): native grep skips it, so the JS fallback must match.
+		const content = `${"x".repeat(4 * 1024 * 1024 + 1024)}\nneedle here\n`;
+		registerVirtualDocs(new Map([["big.md", content]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("big-virtual", { pattern: "needle", paths: ["virtual://big.md"] });
+		expect(getResultText(result)).toContain("needle");
+	});
+
 	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
 		const session = createSession();
 		const tool = new SearchTool(session);

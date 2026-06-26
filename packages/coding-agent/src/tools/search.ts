@@ -362,6 +362,69 @@ function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefine
 	return !ranges || isLineInRanges(lineNumber, ranges);
 }
 
+/** Binary search for the index of the line containing byte `offset`. */
+function findLineIndex(starts: readonly number[], offset: number): number {
+	if (starts.length === 0) return -1;
+	let low = 0;
+	let high = starts.length - 1;
+	while (low <= high) {
+		const mid = Math.floor((low + high) / 2);
+		if (starts[mid] <= offset) {
+			low = mid + 1;
+		} else {
+			high = mid - 1;
+		}
+	}
+	return Math.max(0, high);
+}
+
+/**
+ * JS-`RegExp` fallback returning matched line indexes for a virtual resource too
+ * large for native grep (>`NATIVE_GREP_MAX_FILE_BYTES`, which native grep silently
+ * skips). Mirrors the native probe's output (sorted, deduped indexes) so
+ * `buildVirtualMatches` rebuilds context/ranges identically; only the regex dialect
+ * differs for these oversized inputs (the pre-RE2-parity behavior).
+ */
+function jsMatchedLineIndexes(
+	content: string,
+	lines: readonly string[],
+	pattern: string,
+	ignoreCase: boolean,
+	multiline: boolean,
+): number[] {
+	const flags = `${ignoreCase ? "i" : ""}${multiline ? "gm" : ""}`;
+	let regex: RegExp;
+	try {
+		regex = new RegExp(pattern, flags);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new ToolError(`Invalid regex: ${message.replace(/^Invalid regular expression:\s*/i, "")}`);
+	}
+	if (!multiline) {
+		const out: number[] = [];
+		for (let i = 0; i < lines.length; i++) {
+			regex.lastIndex = 0;
+			if (regex.test(lines[i] ?? "")) out.push(i);
+		}
+		return out;
+	}
+	const { starts } = indexSearchLines(content);
+	const seen = new Set<number>();
+	const out: number[] = [];
+	let match = regex.exec(content);
+	while (match !== null) {
+		const lineIndex = findLineIndex(starts, match.index);
+		if (lineIndex >= 0 && !seen.has(lineIndex)) {
+			seen.add(lineIndex);
+			out.push(lineIndex);
+		}
+		if (match[0].length === 0) regex.lastIndex++;
+		match = regex.exec(content);
+	}
+	out.sort((a, b) => a - b);
+	return out;
+}
+
 function makeContextLine(lines: readonly string[], lineIndex: number): { lineNumber: number; line: string } {
 	const { text } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	return { lineNumber: lineIndex + 1, line: text };
@@ -479,32 +542,41 @@ async function searchVirtualResources(
 				break;
 			}
 			const lines = multiline ? indexSearchLines(resource.content).lines : splitSearchLines(resource.content);
-			const scratch = path.resolve(dir, `${idx}`);
-			await writeFile(scratch, resource.content);
-			const probe = await grep(
-				{
-					pattern,
-					path: scratch,
-					ignoreCase,
-					multiline,
-					hidden: true,
-					gitignore: false,
-					// A ranged selector must see every match so the range filter below never
-					// drops in-range hits that fall after the cap; matches can't exceed the
-					// line count. Unranged search keeps the overall result cap.
-					maxCount: resource.ranges ? Math.max(lines.length, 1) : INTERNAL_TOTAL_CAP,
-					contextBefore: 0,
-					contextAfter: 0,
-					maxColumns: DEFAULT_MAX_COLUMN,
-					mode: GrepOutputMode.Content,
-					signal,
-					timeoutMs: SEARCH_GREP_TIMEOUT_MS,
-				},
-				undefined,
-			);
-			const matchedIndexes = [...new Set(probe.matches.map(match => match.lineNumber - 1))]
-				.filter(lineIndex => lineAllowed(lineIndex + 1, resource.ranges))
-				.sort((a, b) => a - b);
+			let matchedIndexes: number[];
+			if (Buffer.byteLength(resource.content, "utf8") > NATIVE_GREP_MAX_FILE_BYTES) {
+				// Native grep silently skips files above its size cap; fall back to JS for
+				// oversized virtual resources (the pre-RE2 behavior) so they are still searched.
+				matchedIndexes = jsMatchedLineIndexes(resource.content, lines, pattern, ignoreCase, multiline).filter(
+					lineIndex => lineAllowed(lineIndex + 1, resource.ranges),
+				);
+			} else {
+				const scratch = path.resolve(dir, `${idx}`);
+				await writeFile(scratch, resource.content);
+				const probe = await grep(
+					{
+						pattern,
+						path: scratch,
+						ignoreCase,
+						multiline,
+						hidden: true,
+						gitignore: false,
+						// A ranged selector must see every match so the range filter below never
+						// drops in-range hits that fall after the cap; matches can't exceed the
+						// line count. Unranged search keeps the overall result cap.
+						maxCount: resource.ranges ? Math.max(lines.length, 1) : INTERNAL_TOTAL_CAP,
+						contextBefore: 0,
+						contextAfter: 0,
+						maxColumns: DEFAULT_MAX_COLUMN,
+						mode: GrepOutputMode.Content,
+						signal,
+						timeoutMs: SEARCH_GREP_TIMEOUT_MS,
+					},
+					undefined,
+				);
+				matchedIndexes = [...new Set(probe.matches.map(match => match.lineNumber - 1))]
+					.filter(lineIndex => lineAllowed(lineIndex + 1, resource.ranges))
+					.sort((a, b) => a - b);
+			}
 			const resourceMatches = buildVirtualMatches(
 				resource,
 				lines,

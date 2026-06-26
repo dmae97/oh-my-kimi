@@ -102,6 +102,9 @@ export async function writeRemoteFile(
 	opts: RemoteFileWriteOptions,
 ): Promise<void> {
 	await ensurePosixRemote(target);
+	if (remotePath.endsWith("/")) {
+		throw new Error("ssh://: destination is a directory path (trailing '/'); ssh:// write requires a file path");
+	}
 	const dest = quotePosixPath(remotePath);
 	const tmp = quotePosixPath(`${remotePath}.omp-tmp.${crypto.randomUUID()}`);
 	// Stage stdin into the temp first (so the remote never blocks on an unread

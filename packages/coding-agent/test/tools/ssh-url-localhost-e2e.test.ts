@@ -99,6 +99,15 @@ describe.skipIf(!SSH_OK)("ssh:// handler against a real localhost ssh", () => {
 		expect(back.content).toBe("nested\n");
 	});
 
+	it("rejects a trailing-slash write target before staging (no directory created)", async () => {
+		mockEmptyHosts();
+		await expect(handler.write(parseInternalUrl(`ssh://localhost${TMP}/newdir/`), "x\n")).rejects.toThrow(
+			/directory path|trailing/,
+		);
+		const exists = await Bun.$`ssh -o BatchMode=yes localhost test -d ${TMP}/newdir && echo yes || echo no`.text();
+		expect(exists.trim()).toBe("no");
+	});
+
 	it("replaces a symlinked destination with a regular file (documented v1 limit)", async () => {
 		mockEmptyHosts();
 		await sh(`sh -c 'printf orig > ${TMP}/sym-target; ln -sf ${TMP}/sym-target ${TMP}/sym-link'`);
