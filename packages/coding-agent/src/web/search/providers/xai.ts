@@ -21,7 +21,10 @@ function formatUtcDate(date: Date): string {
 	return date.toISOString().slice(0, 10);
 }
 
-function buildRecencyDateBounds(recency: NonNullable<SearchParams["recency"]>, now = new Date()): {
+function buildRecencyDateBounds(
+	recency: NonNullable<SearchParams["recency"]>,
+	now = new Date(),
+): {
 	from_date: string;
 	to_date: string;
 } {
@@ -86,7 +89,11 @@ function buildRequestBody(params: SearchParams): Record<string, unknown> {
 	const requestedSearchResults = params.numSearchResults ?? params.limit;
 	const searchParameters: Record<string, unknown> = {};
 	if (requestedSearchResults !== undefined) {
-		searchParameters.max_search_results = clampNumResults(requestedSearchResults, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
+		searchParameters.max_search_results = clampNumResults(
+			requestedSearchResults,
+			DEFAULT_NUM_RESULTS,
+			MAX_NUM_RESULTS,
+		);
 	}
 	if (params.recency) {
 		Object.assign(searchParameters, buildRecencyDateBounds(params.recency));

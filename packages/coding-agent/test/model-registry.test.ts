@@ -2196,7 +2196,9 @@ describe("ModelRegistry", () => {
 		});
 
 		test("applies provider remoteCompaction to cached configured discovery models", () => {
-			expect(cachedDiscoverableRemoteCompaction.find("cached-compact-proxy", "cached-compact-model")?.remoteCompaction).toEqual({
+			expect(
+				cachedDiscoverableRemoteCompaction.find("cached-compact-proxy", "cached-compact-model")?.remoteCompaction,
+			).toEqual({
 				enabled: true,
 				api: "openai-responses",
 				endpoint: "https://compact-proxy.example.com/v1/responses/provider-compact",

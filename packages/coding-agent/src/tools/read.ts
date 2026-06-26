@@ -755,7 +755,9 @@ function isMultiRange(parsed: ParsedSelector): boolean {
 
 function selectorChunkLooksReadLike(chunk: string): boolean {
 	const lower = chunk.toLowerCase();
-	return lower === "raw" || lower === "conflicts" || /^-\d+(?:[-+]\d+)?$/.test(chunk) || parseLineRanges(chunk) !== null;
+	return (
+		lower === "raw" || lower === "conflicts" || /^-\d+(?:[-+]\d+)?$/.test(chunk) || parseLineRanges(chunk) !== null
+	);
 }
 
 function invalidSelector(sel: string): ToolError {

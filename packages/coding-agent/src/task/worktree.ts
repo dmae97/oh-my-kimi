@@ -187,7 +187,10 @@ function parseDiffGitLinePaths(line: string): string[] {
 	const quoted = rest.match(/^("(?:\\.|[^"])+"|\/dev\/null) ("(?:\\.|[^"])+"|\/dev\/null)$/);
 	const parts = quoted ? [quoted[1], quoted[2]] : rest.split(" ");
 	if (parts.length < 2) return [];
-	const paths = parts.slice(0, 2).map(unquoteGitDiffPath).filter(file => file && file !== "/dev/null");
+	const paths = parts
+		.slice(0, 2)
+		.map(unquoteGitDiffPath)
+		.filter(file => file && file !== "/dev/null");
 	return [...new Set(paths)];
 }
 

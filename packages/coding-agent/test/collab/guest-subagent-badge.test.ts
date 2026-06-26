@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { generateRoomKey, importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
 import {
-	COLLAB_PROTO,
 	type AgentSnapshot,
+	COLLAB_PROTO,
 	type CollabFrame,
 	formatCollabLink,
 	rewriteEnvelopePeer,

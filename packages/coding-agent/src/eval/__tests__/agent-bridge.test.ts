@@ -1192,7 +1192,9 @@ describe("runEvalAgent isolation", () => {
 				},
 				{ session: isolatedSession() },
 			),
-		).rejects.toThrow(/nested patch apply failed.*Some nested repository patches failed to apply.*nested-0-sub_nested\.patch/s);
+		).rejects.toThrow(
+			/nested patch apply failed.*Some nested repository patches failed to apply.*nested-0-sub_nested\.patch/s,
+		);
 	});
 
 	it("skips the merge phase when apply=false and surfaces the patch artifact instead", async () => {

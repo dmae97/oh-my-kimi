@@ -224,4 +224,3 @@ function GainTimeSeriesPanel({ timeSeries }: { timeSeries: GainTimeSeriesPoint[]
 		</Panel>
 	);
 }
-

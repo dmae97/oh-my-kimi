@@ -185,7 +185,10 @@ async function readSnapcompactRecords(cutoff: number | null, project: string | n
 			for (const sessionProject of sessionProjects) projects.add(sessionProject);
 		}
 		if (project !== null) {
-			if (!sessionProjects || !Array.from(sessionProjects).some(sessionProject => matchesProject(sessionProject, project))) {
+			if (
+				!sessionProjects ||
+				!Array.from(sessionProjects).some(sessionProject => matchesProject(sessionProject, project))
+			) {
 				continue;
 			}
 		}
@@ -219,7 +222,10 @@ function toDateBucket(epochMs: number): string {
 // Main aggregation function
 // ---------------------------------------------------------------------------
 
-export async function getGainDashboardStats(range?: string | null, project?: string | null): Promise<GainDashboardStats> {
+export async function getGainDashboardStats(
+	range?: string | null,
+	project?: string | null,
+): Promise<GainDashboardStats> {
 	const { cutoff: effectiveCutoff } = getTimeRangeConfig(range);
 	const effectiveProject: string | null = project?.trim() || null;
 

@@ -21,8 +21,8 @@ import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
-import { collabDisplayName } from "./display-name";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
+import { collabDisplayName } from "./display-name";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -101,7 +101,6 @@ const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
  * ship in a chunk of their own.
  */
 const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
-
 
 export class CollabHost {
 	#ctx: InteractiveModeContext;

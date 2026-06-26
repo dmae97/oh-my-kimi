@@ -212,16 +212,7 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		// Bare names: the server binds the model schema and matches tool calls under the
 		// exact wire name (no prefix stripping), so the registered name must equal the
 		// bare name OMP's own tool docs use.
-		expect(mcpTools.map(tool => tool.name)).toEqual([
-			"read",
-			"write",
-			"grep",
-			"glob",
-			"bash",
-			"lsp",
-			"todo",
-			"edit",
-		]);
+		expect(mcpTools.map(tool => tool.name)).toEqual(["read", "write", "grep", "glob", "bash", "lsp", "todo", "edit"]);
 		expect(mcpTools[0]).toMatchObject({
 			name: "read",
 			originalToolName: "read",

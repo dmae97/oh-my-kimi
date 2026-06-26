@@ -4,9 +4,7 @@ export interface RunningSubagentRegistrySource {
 	agentRegistry: AgentRegistry;
 }
 
-export function getRunningSubagentBadgeRegistry(
-	collabGuest: RunningSubagentRegistrySource | undefined,
-): AgentRegistry {
+export function getRunningSubagentBadgeRegistry(collabGuest: RunningSubagentRegistrySource | undefined): AgentRegistry {
 	return collabGuest?.agentRegistry ?? AgentRegistry.global();
 }
 

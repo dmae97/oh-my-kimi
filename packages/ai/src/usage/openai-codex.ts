@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { normalizeCodexBaseUrl } from "./openai-codex-base-url";
 import type {
 	CredentialRankingStrategy,
 	UsageAmount,
@@ -12,6 +11,7 @@ import type {
 	UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import { normalizeCodexBaseUrl } from "./openai-codex-base-url";
 import { listCodexResetCredits } from "./openai-codex-reset";
 import { toNumber } from "./shared";
 
@@ -200,7 +200,6 @@ function parseResetCredits(payload: unknown): UsageResetCredits | undefined {
 	if (availableCount === undefined) return undefined;
 	return { availableCount: Math.max(0, Math.trunc(availableCount)) };
 }
-
 
 function buildCodexUsageUrl(baseUrl: string): string {
 	const normalized = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;

@@ -160,7 +160,10 @@ export function mergeDiscoveredModel<TApi extends Api>(
 			baseUrl: providerOverride.baseUrl ?? model.baseUrl,
 			headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
 			...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
-			remoteCompaction: mergeProviderRemoteCompactionConfig(model.remoteCompaction, providerOverride.remoteCompaction),
+			remoteCompaction: mergeProviderRemoteCompactionConfig(
+				model.remoteCompaction,
+				providerOverride.remoteCompaction,
+			),
 			compat: model.compatConfig,
 		} as ModelSpec<TApi>);
 	}

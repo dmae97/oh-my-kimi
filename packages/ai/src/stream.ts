@@ -482,7 +482,6 @@ export const __providerInFlightForTesting = {
 			return null;
 		}
 	},
-
 };
 
 function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests">>(
