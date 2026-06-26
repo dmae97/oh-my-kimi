@@ -105,6 +105,10 @@
 - Fixed GitLab Duo Workflow remote project discovery missing the current GitLab project in linked Git worktree checkouts: a worktree's `.git` points at `.git/worktrees/<name>`, whose own `config` holds no remotes — those live in the common directory named by the gitdir's `commondir` file. Discovery now follows `commondir` to read the common `config`, so workspaces in a worktree resolve the correct namespace instead of falling back to top-level group candidates.
 - Fixed GitLab Duo Workflow remote project discovery on self-managed GitLab installed under a relative path (e.g. `https://host/gitlab`): HTTPS remotes look like `https://host/gitlab/group/project.git` but project full paths stay `group/project`, so discovery previously queried `/api/v4/projects/gitlab%2Fgroup%2Fproject` and missed the project. The parser now strips the install base path from the remote before deriving the project full path.
 
+### Added
+
+- Added model metadata for provider-native remote compaction and compaction-only model selection. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+
 ## [16.1.7] - 2026-06-20
 
 ### Fixed

@@ -68,6 +68,10 @@
 
 - Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
 
+### Fixed
+
+- Allowed configured custom OpenAI-compatible providers to use native remote compaction instead of falling back to local summarization. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+
 ## [16.1.5] - 2026-06-19
 
 ### Fixed

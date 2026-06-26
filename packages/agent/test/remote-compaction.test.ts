@@ -5,7 +5,11 @@ import {
 	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 } from "@oh-my-pi/pi-agent-core/compaction";
-import { buildOpenAiNativeHistory, requestOpenAiRemoteCompaction } from "@oh-my-pi/pi-agent-core/compaction/openai";
+import {
+	buildOpenAiNativeHistory,
+	requestOpenAiRemoteCompaction,
+	shouldUseOpenAiRemoteCompaction,
+} from "@oh-my-pi/pi-agent-core/compaction/openai";
 import * as ai from "@oh-my-pi/pi-ai";
 import type { AssistantMessage, FetchImpl, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -18,6 +22,22 @@ function makeOpenAiModel(overrides: Partial<ModelSpec<"openai-responses">> = {})
 		api: "openai-responses",
 		provider: "openai",
 		baseUrl: "https://api.openai.com/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 400000,
+		maxTokens: 128000,
+		...overrides,
+	});
+}
+
+function makeAzureModel(overrides: Partial<ModelSpec<"azure-openai-responses">> = {}): Model<"azure-openai-responses"> {
+	return buildModel({
+		id: "gpt-5",
+		name: "GPT-5 Azure",
+		api: "azure-openai-responses",
+		provider: "azure-openai",
+		baseUrl: "https://example-resource.openai.azure.com/openai/v1",
 		reasoning: true,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -229,6 +249,90 @@ describe("remote compaction input trimming", () => {
 		expect(requestInput?.some(item => item.type === "custom_tool_call")).toBe(false);
 		expect(requestInput?.some(item => item.type === "custom_tool_call_output")).toBe(false);
 	});
+});
+
+test("uses configured OpenAI-compatible compaction for custom providers", async () => {
+	const model = makeOpenAiModel({
+		provider: "cliproxy-codex",
+		baseUrl: "http://127.0.0.1:8317/v1",
+		remoteCompaction: {
+			enabled: true,
+			api: "openai-responses",
+			endpoint: "http://127.0.0.1:8317/v1/responses/compact",
+			model: "gpt-5.5",
+		},
+	});
+	let requestBody: unknown;
+	const fetchMock: FetchImpl = async (input, init) => {
+		expect(String(input)).toBe("http://127.0.0.1:8317/v1/responses/compact");
+		requestBody = JSON.parse(String(init?.body));
+		return new Response(
+			JSON.stringify({
+				output: [{ type: "compaction_summary", summary: "native compacted" }],
+			}),
+		);
+	};
+
+	expect(shouldUseOpenAiRemoteCompaction(model)).toBe(true);
+	await requestOpenAiRemoteCompaction(
+		model,
+		"test-key",
+		[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+		"instructions",
+		undefined,
+		{ fetch: fetchMock },
+	);
+	expect(requestBody).toMatchObject({ model: "gpt-5.5" });
+});
+
+test("uses Azure request shape for Azure Responses remote compaction", async () => {
+	const model = makeAzureModel({
+		headers: { "x-custom-header": "custom" },
+		remoteCompaction: {
+			enabled: true,
+			api: "azure-openai-responses",
+			model: "gpt-5-compact",
+		},
+	});
+	let requestBody: unknown;
+	let requestApiKey: string | undefined;
+	let requestAuthorization: string | undefined;
+	let requestContentType: string | undefined;
+	let requestCustomHeader: string | undefined;
+	const stringHeader = (value: string | readonly string[] | undefined): string | undefined =>
+		typeof value === "string" ? value : undefined;
+	const fetchMock: FetchImpl = async (input, init) => {
+		expect(String(input)).toBe(
+			"https://example-resource.openai.azure.com/openai/v1/responses/compact?api-version=v1",
+		);
+		if (!init?.headers || init.headers instanceof Headers || Array.isArray(init.headers)) {
+			throw new Error("Expected remote compaction to send headers as a plain object");
+		}
+		requestApiKey = stringHeader(init.headers["api-key"]);
+		requestAuthorization = stringHeader(init.headers.Authorization);
+		requestContentType = stringHeader(init.headers["content-type"]);
+		requestCustomHeader = stringHeader(init.headers["x-custom-header"]);
+		requestBody = JSON.parse(String(init.body));
+		return Response.json({
+			output: [{ type: "compaction_summary", summary: "azure compacted" }],
+		});
+	};
+
+	expect(shouldUseOpenAiRemoteCompaction(model)).toBe(true);
+	await requestOpenAiRemoteCompaction(
+		model,
+		"azure-key",
+		[{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+		"instructions",
+		undefined,
+		{ fetch: fetchMock },
+	);
+
+	expect(requestApiKey).toBe("azure-key");
+	expect(requestAuthorization).toBeUndefined();
+	expect(requestContentType).toBe("application/json");
+	expect(requestCustomHeader).toBe("custom");
+	expect(requestBody).toMatchObject({ model: "gpt-5-compact" });
 });
 
 describe("requestOpenAiRemoteCompaction abort", () => {

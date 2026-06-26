@@ -152,6 +152,35 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, "Authorization", undefined);
 	});
 
+	test("registerProvider applies remoteCompaction-only overrides to existing provider models across refresh", async () => {
+		const providerName = "anthropic";
+		const overrideEndpoint = "https://runtime.example.com/v1/compact";
+
+		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
+		registry.registerProvider(
+			providerName,
+			{ remoteCompaction: { enabled: false, endpoint: overrideEndpoint } },
+			"ext://runtime",
+		);
+
+		const expectCompaction = () => {
+			for (const model of getProviderModels(registry, providerName)) {
+				expect(model.remoteCompaction?.enabled).toBe(false);
+				expect(model.remoteCompaction?.endpoint).toBe(overrideEndpoint);
+			}
+		};
+		expectCompaction();
+		await registry.refresh("offline");
+		expectCompaction();
+		await registry.refreshProvider(providerName, "offline");
+		expectCompaction();
+
+		registry.clearSourceRegistrations("ext://runtime");
+		for (const model of getProviderModels(registry, providerName)) {
+			expect(model.remoteCompaction?.endpoint).not.toBe(overrideEndpoint);
+		}
+	});
+
 	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",

@@ -764,6 +764,12 @@ describe("ModelRegistry", () => {
 						compat: {
 							supportsImageDetailOriginal: false,
 						},
+						remoteCompaction: {
+							enabled: true,
+							api: "openai-responses",
+							endpoint: "http://127.0.0.1:8080/v1/responses/provider-compact",
+							model: "provider-compact",
+						},
 						models: [
 							{
 								id: "gpt-5.5",
@@ -772,6 +778,11 @@ describe("ModelRegistry", () => {
 								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 								contextWindow: 200_000,
 								maxTokens: 100_000,
+								compactionModel: "cc-switch/gpt-5.4",
+								remoteCompaction: {
+									endpoint: "http://127.0.0.1:8080/v1/responses/model-compact",
+									model: "gpt-5.5-compact",
+								},
 							},
 						],
 					},
@@ -830,6 +841,17 @@ describe("ModelRegistry", () => {
 			const model = customResponsesCompat.find("cc-switch", "gpt-5.5");
 			const compat = getOpenAICompat(model);
 			expect(compat?.supportsImageDetailOriginal).toBe(false);
+		});
+
+		test("custom Responses providers preserve compaction config", () => {
+			const model = customResponsesCompat.find("cc-switch", "gpt-5.5");
+			expect(model?.compactionModel).toBe("cc-switch/gpt-5.4");
+			expect(model?.remoteCompaction).toEqual({
+				enabled: true,
+				api: "openai-responses",
+				endpoint: "http://127.0.0.1:8080/v1/responses/model-compact",
+				model: "gpt-5.5-compact",
+			});
 		});
 
 		test("model-level compat overrides provider-level compat for custom models", () => {
