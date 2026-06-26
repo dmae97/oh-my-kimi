@@ -139,12 +139,17 @@ export function deriveAdvisorTelemetry(
  */
 export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "search", "find"]);
 
+function advisorNoteDedupeKey(note: string): string {
+	return note.trim().replace(/\s+/g, " ");
+}
+
 export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails> {
 	readonly name = "advise";
 	readonly label = "Advise";
 	readonly description = adviseDescription;
 	readonly parameters = adviseSchema;
 	readonly intent = "omit" as const;
+	#deliveredNoteKeys = new Set<string>();
 
 	constructor(private readonly onAdvice: (note: string, severity?: AdviseDetails["severity"]) => void) {}
 
@@ -155,6 +160,15 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		_onUpdate?: AgentToolUpdateCallback<AdviseDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<AdviseDetails>> {
+		const key = advisorNoteDedupeKey(args.note);
+		if (this.#deliveredNoteKeys.has(key)) {
+			return {
+				content: [{ type: "text", text: "Duplicate advice ignored." }],
+				details: { note: args.note, severity: args.severity },
+				useless: true,
+			};
+		}
+		this.#deliveredNoteKeys.add(key);
 		this.onAdvice(args.note, args.severity);
 		return {
 			content: [{ type: "text", text: "Recorded." }],

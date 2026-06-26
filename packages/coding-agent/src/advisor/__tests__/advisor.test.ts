@@ -199,6 +199,18 @@ describe("advisor", () => {
 			expect(result.useless).toBe(true);
 		});
 
+		it("suppresses duplicate advice notes from the same advisor session", async () => {
+			const onAdvice = vi.fn();
+			const tool = new AdviseTool(onAdvice);
+			const note = "I'll pause here and wait for the YAML revision.";
+
+			await tool.execute("tc-1", { note, severity: "nit" });
+			await tool.execute("tc-2", { note, severity: "nit" });
+
+			expect(onAdvice).toHaveBeenCalledTimes(1);
+			expect(onAdvice).toHaveBeenCalledWith(note, "nit");
+		});
+
 		it("validates parameters using ArkType", () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);
