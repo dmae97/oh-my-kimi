@@ -3289,7 +3289,7 @@ export const SETTINGS_SCHEMA = {
 		default: 1,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Search & Browser",
 			label: "Grep Context Before",
 			description: "Lines of context before each grep match",
 			options: [
@@ -3307,7 +3307,7 @@ export const SETTINGS_SCHEMA = {
 		default: 3,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Search & Browser",
 			label: "Grep Context After",
 			description: "Lines of context after each grep match",
 			options: [
