@@ -211,6 +211,20 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenCalledWith(note, "nit");
 		});
 
+		it("allows the same advice after delivered-note memory resets", async () => {
+			const onAdvice = vi.fn();
+			const tool = new AdviseTool(onAdvice);
+			const note = "Acknowledged.";
+
+			await tool.execute("tc-1", { note, severity: "nit" });
+			tool.resetDeliveredNotes();
+			await tool.execute("tc-2", { note, severity: "nit" });
+
+			expect(onAdvice).toHaveBeenCalledTimes(2);
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit");
+		});
+
 		it("validates parameters using ArkType", () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);

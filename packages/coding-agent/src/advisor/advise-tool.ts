@@ -153,6 +153,11 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 
 	constructor(private readonly onAdvice: (note: string, severity?: AdviseDetails["severity"]) => void) {}
 
+	/** Clear delivered-note memory when the advisor starts a fresh conversation. */
+	resetDeliveredNotes(): void {
+		this.#deliveredNoteKeys.clear();
+	}
+
 	async execute(
 		_toolCallId: string,
 		args: AdviseParams,
