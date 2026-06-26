@@ -3,7 +3,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getModelDbPath, getSessionsDir } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 import { Settings } from "../config/settings";
+import { getDefault } from "../config/settings-schema";
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { FileSessionStorage } from "../session/session-storage";
 
@@ -127,26 +129,71 @@ interface GcLockSnapshot {
 	text: string;
 }
 
+type RawConfig = Record<string, unknown>;
+
 function numberSetting(value: number | undefined, fallback: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
 	return Math.max(0, Math.floor(value));
 }
 
+function rawConfigValue(config: RawConfig, pathKey: string): unknown {
+	let current: unknown = config;
+	for (const segment of pathKey.split(".")) {
+		if (current === null || current === undefined || typeof current !== "object" || Array.isArray(current)) {
+			return undefined;
+		}
+		current = (current as RawConfig)[segment];
+	}
+	return current;
+}
+
+function booleanConfigValue(config: RawConfig, pathKey: string, fallback: boolean): boolean {
+	const value = rawConfigValue(config, pathKey);
+	return typeof value === "boolean" ? value : fallback;
+}
+
+function numberConfigValue(config: RawConfig, pathKey: string, fallback: number): number {
+	const value = rawConfigValue(config, pathKey);
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+async function loadConfigReadOnly(agentDir: string): Promise<RawConfig> {
+	try {
+		const parsed = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text());
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+		return parsed as RawConfig;
+	} catch {
+		return {};
+	}
+}
+
 async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions> {
 	const agentDir = path.resolve(flags.agentDir ?? getAgentDir());
-	const settings = await Settings.init({ agentDir });
 	const selected = flags.blobs === true || flags.archive === true || flags.wal === true;
+	const config = flags.apply === true ? undefined : await loadConfigReadOnly(agentDir);
+	const settings = flags.apply === true ? await Settings.init({ agentDir }) : undefined;
+	const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") =>
+		settings?.get(pathKey) ?? booleanConfigValue(config ?? {}, pathKey, getDefault(pathKey));
+	const getNumber = (pathKey: "gc.coldArchiveAfterDays" | "gc.retainNewestGlobal" | "gc.retainNewestPerCwd") =>
+		settings?.get(pathKey) ?? numberConfigValue(config ?? {}, pathKey, getDefault(pathKey));
 	return {
 		apply: flags.apply === true,
 		json: flags.json === true,
 		agentDir,
-		runBlobs: selected ? flags.blobs === true : settings.get("gc.blobs"),
-		runArchive: selected ? flags.archive === true : settings.get("gc.archive"),
-		runWal: selected ? flags.wal === true : settings.get("gc.wal"),
-		coldArchiveAfterDays: numberSetting(flags.coldArchiveAfterDays, settings.get("gc.coldArchiveAfterDays")),
-		retainNewestGlobal: numberSetting(flags.retainNewestGlobal, settings.get("gc.retainNewestGlobal")),
-		retainNewestPerCwd: numberSetting(flags.retainNewestPerCwd, settings.get("gc.retainNewestPerCwd")),
+		runBlobs: selected ? flags.blobs === true : getBoolean("gc.blobs"),
+		runArchive: selected ? flags.archive === true : getBoolean("gc.archive"),
+		runWal: selected ? flags.wal === true : getBoolean("gc.wal"),
+		coldArchiveAfterDays: numberSetting(flags.coldArchiveAfterDays, getNumber("gc.coldArchiveAfterDays")),
+		retainNewestGlobal: numberSetting(flags.retainNewestGlobal, getNumber("gc.retainNewestGlobal")),
+		retainNewestPerCwd: numberSetting(flags.retainNewestPerCwd, getNumber("gc.retainNewestPerCwd")),
 	};
+}
+
+export function collectGcErrors(result: GcResult): string[] {
+	return [
+		...(result.blobs?.errors ?? []).map(error => `blobs: ${error}`),
+		...(result.archive?.errors ?? []).map(error => `archive: ${error}`),
+	];
 }
 
 function getArchivedSessionsDir(agentDir: string): string {

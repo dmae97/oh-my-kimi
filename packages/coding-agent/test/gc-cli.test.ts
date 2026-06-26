@@ -6,19 +6,29 @@ import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { runCli } from "../src/cli";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 let root: string;
 let writes: string[] = [];
+let stderrWrites: string[] = [];
 let stdoutSpy: { mockRestore(): void } | undefined;
+let stderrSpy: { mockRestore(): void } | undefined;
 let settingsState: SettingsTestState | undefined;
+const originalExitCode = process.exitCode;
 
 beforeEach(async () => {
 	settingsState = beginSettingsTest();
 	root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gc-"));
 	writes = [];
+	stderrWrites = [];
+	process.exitCode = 0;
 	stdoutSpy = spyOn(process.stdout, "write").mockImplementation(chunk => {
 		writes.push(String(chunk));
+		return true;
+	});
+	stderrSpy = spyOn(process.stderr, "write").mockImplementation(chunk => {
+		stderrWrites.push(String(chunk));
 		return true;
 	});
 });
@@ -26,6 +36,9 @@ beforeEach(async () => {
 afterEach(async () => {
 	stdoutSpy?.mockRestore();
 	stdoutSpy = undefined;
+	stderrSpy?.mockRestore();
+	stderrSpy = undefined;
+	process.exitCode = originalExitCode;
 	restoreSettingsTestState(settingsState);
 	settingsState = undefined;
 	await fs.rm(root, { recursive: true, force: true });
@@ -207,6 +220,32 @@ describe("runGcCommand blob sweep", () => {
 		expect(result.wal).toBeUndefined();
 		expect(await Bun.file(blob).exists()).toBe(false);
 	});
+
+	test("dry-run reads gc config without initializing settings storage", async () => {
+		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
+		await writeConfig(
+			root,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: true",
+				"  wal: false",
+				"  coldArchiveAfterDays: 7",
+				"  retainNewestGlobal: 0",
+				"  retainNewestPerCwd: 0",
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: root } });
+
+		expect(result.blobs).toBeUndefined();
+		expect(result.archive?.wouldArchive).toBe(1);
+		expect(result.archive?.archived).toBe(0);
+		expect(result.wal).toBeUndefined();
+		expect(await Bun.file(path.join(root, "agent.db")).exists()).toBe(false);
+		expect(await Bun.file(path.join(root, "settings.json.bak")).exists()).toBe(false);
+	});
 });
 
 describe("runGcCommand history checkpoint", () => {
@@ -244,6 +283,17 @@ describe("runGcCommand history checkpoint", () => {
 		expect(result.wal?.checkpointed).toBe(true);
 		expect(result.wal?.walBytes).toBe(0);
 		expect((await fs.stat(`${dbPath}-wal`)).size).toBe(0);
+	});
+
+	test("--apply propagates WAL checkpoint failures and releases the gc lock", async () => {
+		const dbPath = getHistoryDbPath(root);
+		await fs.mkdir(dbPath, { recursive: true });
+
+		await expect(runGcCommand({ flags: { agentDir: root, wal: true, apply: true } })).rejects.toThrow(
+			"unable to open database file",
+		);
+
+		expect(await Bun.file(path.join(root, "gc.lock")).exists()).toBe(false);
 	});
 });
 
@@ -365,6 +415,32 @@ describe("runGcCommand cold-session archive", () => {
 		expect(second.archive?.historyRowsDeleted).toBe(1);
 		expect(second.archive?.errors).toEqual([]);
 		expect(rows).toEqual([]);
+	});
+
+	test("CLI returns nonzero status when apply records GC errors", async () => {
+		await writeSession(root, "project", "archive-me", "complete", { ageDays: 90 });
+		const dbPath = getHistoryDbPath(root);
+		await fs.mkdir(path.dirname(dbPath), { recursive: true });
+		await Bun.write(dbPath, "not sqlite");
+
+		await runCli([
+			"gc",
+			"--agent-dir",
+			root,
+			"--archive",
+			"--cold-archive-after-days",
+			"30",
+			"--retain-newest-global",
+			"0",
+			"--retain-newest-per-cwd",
+			"0",
+			"--apply",
+		]);
+
+		const stderr = stderrWrites.join("");
+		expect(process.exitCode).toBe(1);
+		expect(stderr).toContain("GC completed with 1 error:");
+		expect(stderr).toContain("archive: history cleanup:");
 	});
 
 	test("archives sessions when legacy history has no session_id column", async () => {

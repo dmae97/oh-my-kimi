@@ -2,7 +2,7 @@
  * Run on-disk storage maintenance.
  */
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
-import { type GcCommandArgs, runGcCommand } from "../cli/gc-cli";
+import { collectGcErrors, type GcCommandArgs, runGcCommand } from "../cli/gc-cli";
 
 export default class Gc extends Command {
 	static description = "Run storage garbage collection";
@@ -34,6 +34,13 @@ export default class Gc extends Command {
 				retainNewestPerCwd: flags["retain-newest-per-cwd"],
 			},
 		};
-		await runGcCommand(cmd);
+		const result = await runGcCommand(cmd);
+		const errors = collectGcErrors(result);
+		if (errors.length > 0) {
+			process.stderr.write(
+				`GC completed with ${errors.length} error${errors.length === 1 ? "" : "s"}:\n${errors.map(error => `- ${error}`).join("\n")}\n`,
+			);
+			process.exitCode = 1;
+		}
 	}
 }
