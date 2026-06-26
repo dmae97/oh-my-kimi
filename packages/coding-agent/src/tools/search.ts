@@ -125,10 +125,15 @@ interface SearchPathSpec {
 
 /**
  * Mirror of read's `parseSel` selector grammar (`read.ts`) so `search` accepts
- * exactly the internal-URL selectors `read`/`write` do: a single chunk that is a
+ * exactly the internal-URL selectors `read` accepts: a single chunk that is a
  * line range, `raw`, or `conflicts`; or a two-chunk compound of exactly one `raw`
  * plus one line range. Everything else (`:-10`, `:1-1:1-2`, `:conflicts:1-1`,
- * `:raw:conflicts`) is rejected. Keep in sync with read.parseSel.
+ * `:raw:conflicts`) is rejected.
+ *
+ * This mirrors the *accepted set* of `parseSel`; `read` rejects the same shapes
+ * caller-side at `read.ts:2088-2091` (a peeled internal-URL selector whose
+ * `parseSel(...).kind === "none"` throws `Invalid selector`), so neither tool
+ * silently widens on a malformed compound. Keep in sync with `read.parseSel`.
  */
 function isReadSelectorGrammar(sel: string): boolean {
 	if (sel.includes(":")) {

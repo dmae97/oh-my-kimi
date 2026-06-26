@@ -83,10 +83,10 @@ export class InternalUrlRouter {
 	 * Candidate completions for the host/path portion of `scheme://<query>`.
 	 * Returns `null` when the scheme is unknown or does not support completion.
 	 */
-	async complete(scheme: string, query: string, cwd?: string): Promise<UrlCompletion[] | null> {
+	async complete(scheme: string, query: string, context?: ResolveContext): Promise<UrlCompletion[] | null> {
 		const handler = this.#handlers.get(scheme.toLowerCase());
 		if (!handler?.complete) return null;
-		return handler.complete(query, cwd);
+		return handler.complete(query, context);
 	}
 
 	async resolve(input: string, context?: ResolveContext): Promise<InternalResource> {

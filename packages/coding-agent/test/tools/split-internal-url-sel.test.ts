@@ -123,6 +123,21 @@ describe("splitInternalUrlSel", () => {
 			path: "http://example.com:1-50",
 		});
 	});
+
+	it("keeps an `ssh://host:port` authority port out of selector peeling", () => {
+		expect(splitInternalUrlSel("ssh://host:2222")).toEqual({ path: "ssh://host:2222" });
+	});
+
+	it("peels a read selector after an `ssh://host:port/path`", () => {
+		expect(splitInternalUrlSel("ssh://host:2222/etc/hosts:1-5")).toEqual({
+			path: "ssh://host:2222/etc/hosts",
+			sel: "1-5",
+		});
+	});
+
+	it("still peels authority-trailing selectors for non-ssh schemes (artifact://5:1-50)", () => {
+		expect(splitInternalUrlSel("artifact://5:1-50")).toEqual({ path: "artifact://5", sel: "1-50" });
+	});
 });
 
 describe("peelWriteUrlSelector (write/read selector parity)", () => {

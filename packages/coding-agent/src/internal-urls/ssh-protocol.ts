@@ -127,6 +127,9 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	}
 	const username = url.username || undefined;
 	const port = url.port ? Number(url.port) : undefined;
+	if (port === 0) {
+		throw new Error("ssh://: port 0 is not a valid SSH port; use ssh://host:<1-65535>/<path> or omit the port");
+	}
 	const items = await loadConfiguredHosts(cwd);
 
 	// A literal user/port in the URL is an authority override. A configured alias
@@ -255,8 +258,8 @@ export class SshProtocolHandler implements ProtocolHandler {
 	}
 
 	/** Autocomplete the host segment of `ssh://` with the configured SSH hosts. */
-	async complete(_query?: string, cwd?: string): Promise<UrlCompletion[]> {
-		const hosts = await loadConfiguredHosts(cwd);
+	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {
+		const hosts = await loadConfiguredHosts(context?.cwd);
 		return hosts.map(host => ({
 			value: encodeURIComponent(host.name),
 			label: host.name,

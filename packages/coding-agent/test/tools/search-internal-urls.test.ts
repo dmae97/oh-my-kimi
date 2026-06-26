@@ -263,6 +263,20 @@ describe("SearchTool internal URL resolution", () => {
 		).rejects.toThrow(/invalid selector/i);
 	});
 
+	it("makes read reject the same malformed internal-URL selector compounds search does", async () => {
+		const session = createSession();
+		const read = new ReadTool(session);
+		// read.ts rejects a peeled internal-URL selector whose parseSel kind is "none"
+		// before resolving the resource, so artifact 5 need not exist.
+		await expect(read.execute("read-bad-neg", { path: "artifact://5:-10" })).rejects.toThrow(/invalid selector/i);
+		await expect(read.execute("read-bad-multi", { path: "artifact://5:1-1:1-2" })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		await expect(read.execute("read-bad-conflicts", { path: "artifact://5:conflicts:1-1" })).rejects.toThrow(
+			/invalid selector/i,
+		);
+	});
+
 	it("rejects an RE2-unsupported pattern on a pure-virtual search (dialect parity)", async () => {
 		registerVirtualDocs(new Map([["doc.md", "alpha line\nbeta line\n"]]));
 		const session = createSession();

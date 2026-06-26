@@ -181,7 +181,7 @@ describe("SshProtocolHandler", () => {
 			warnings: [],
 			providers: [],
 		} as CapabilityResult<SSHHost>);
-		const candidates = await handler.complete("", "/tmp/proj");
+		const candidates = await handler.complete("", { cwd: "/tmp/proj" });
 		expect(candidates.map(c => c.value).sort()).toEqual(["db", "web1"]);
 		expect(candidates.find(c => c.value === "web1")?.description).toContain("deploy@10.0.0.1");
 		expect(spy.mock.calls[0]?.[1]).toEqual({ cwd: "/tmp/proj" });
@@ -210,5 +210,10 @@ describe("SshProtocolHandler", () => {
 	it("rejects a host-less ssh:// URL that carries a path", async () => {
 		mockHosts();
 		await expect(handler.resolve(parseInternalUrl("ssh:///etc/hosts"))).rejects.toThrow(/requires a host/);
+	});
+
+	it("rejects an explicit ssh:// port 0 before connecting", async () => {
+		mockHosts();
+		await expect(handler.resolve(parseInternalUrl("ssh://icaro:0/etc/hostname"))).rejects.toThrow(/port 0/);
 	});
 });

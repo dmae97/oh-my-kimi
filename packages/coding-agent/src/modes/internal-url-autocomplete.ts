@@ -97,7 +97,11 @@ export async function getInternalUrlSuggestions(
 	const ctx = extractInternalUrlContext(textBeforeCursor);
 	if (!ctx) return null;
 
-	const candidates = await InternalUrlRouter.instance().complete(ctx.scheme, ctx.query, cwd);
+	const candidates = await InternalUrlRouter.instance().complete(
+		ctx.scheme,
+		ctx.query,
+		cwd === undefined ? undefined : { cwd },
+	);
 	if (!candidates || candidates.length === 0) return null;
 
 	const query = ctx.query.toLowerCase();
