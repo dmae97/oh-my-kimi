@@ -72,15 +72,21 @@ describe("CustomEditor empty bracketed paste (issue #3601)", () => {
 		expect(editor.getText()).toBe("");
 	});
 
-	it("invokes onPasteImage for a whitespace-only bracketed paste (matches terminals that pad the empty pasteboard read)", () => {
+	it("preserves a real whitespace-only bracketed paste (must NOT hijack indentation copies)", () => {
+		// Codex review on PR #3602: a strict-empty guard is critical. A whitespace
+		// paste carries real user content (indentation, padding); routing it to
+		// `onPasteImage` would replace the bytes the terminal already delivered
+		// with the host clipboard (often empty in SSH/headless) and silently
+		// surface a "Clipboard is empty" diagnostic where actual whitespace should
+		// have landed. The guard MUST be strict-zero-length.
 		const { editor } = createCtx();
 		const onPasteImage = vi.fn(async () => true);
 		editor.onPasteImage = onPasteImage;
 
-		editor.handleInput(`${BRACKETED_PASTE_START}   \n${BRACKETED_PASTE_END}`);
+		editor.handleInput(`${BRACKETED_PASTE_START}   ${BRACKETED_PASTE_END}`);
 
-		expect(onPasteImage).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("");
+		expect(onPasteImage).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("   ");
 	});
 
 	it("does not hijack a bracketed paste that carries real text (Ctrl+V text fallback)", () => {

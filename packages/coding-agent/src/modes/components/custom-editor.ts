@@ -235,19 +235,25 @@ export function extractBracketedImagePastePath(data: string): string | undefined
 }
 
 /**
- * `true` when `data` is exactly one complete bracketed paste whose payload is
- * empty (or whitespace-only). macOS terminals (iTerm2, Warp, Ghostty, …) ask
- * the OS pasteboard for `NSPasteboardTypeString` when the user hits `Cmd+V`;
- * an image-only clipboard (e.g. `Cmd+Shift+5` screenshot saved to clipboard,
- * Chrome image copy) returns `""`, so the terminal still emits the start/end
- * markers around an empty payload. Without a fallback the keystroke would
- * dead-end silently and force users back to `Ctrl+V`.
+ * `true` when `data` is exactly one complete bracketed paste with a
+ * strictly-zero-length payload. macOS terminals (iTerm2, Warp, Ghostty, …)
+ * ask the OS pasteboard for `NSPasteboardTypeString` when the user hits
+ * `Cmd+V`; an image-only clipboard (e.g. `Cmd+Shift+5` screenshot saved to
+ * clipboard, Chrome image copy) returns `""`, so the terminal still emits
+ * the start/end markers around an empty payload. Without a fallback the
+ * keystroke would dead-end silently and force users back to `Ctrl+V`.
+ *
+ * Strict-empty is deliberate: a legitimate whitespace-only paste (copying
+ * indentation, blank-line padding, an SSH/headless session whose clipboard
+ * helpers return empty, …) must reach the editor as literal whitespace
+ * instead of being silently replaced by a clipboard-image read whose
+ * fallback is "Clipboard is empty".
  */
 export function isEmptyBracketedPaste(data: string): boolean {
 	if (!data.startsWith(BRACKETED_PASTE_START)) return false;
 	const endIndex = data.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
 	if (endIndex === -1 || endIndex + BRACKETED_PASTE_END.length !== data.length) return false;
-	return data.slice(BRACKETED_PASTE_START.length, endIndex).trim().length === 0;
+	return endIndex === BRACKETED_PASTE_START.length;
 }
 
 /**
