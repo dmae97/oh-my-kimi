@@ -24,6 +24,7 @@ function mockHosts(hosts: SSHHost[] = []): void {
 }
 
 function mockReadBytes(text: string, truncated = false) {
+	vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("file");
 	return vi
 		.spyOn(fileTransfer, "readRemoteFile")
 		.mockResolvedValue({ bytes: new TextEncoder().encode(text), truncated });
@@ -98,6 +99,7 @@ describe("SshProtocolHandler", () => {
 
 	it("rejects a binary / non-UTF-8 file instead of returning a resource", async () => {
 		mockHosts();
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("file");
 		vi.spyOn(fileTransfer, "readRemoteFile").mockResolvedValue({
 			bytes: new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]),
 			truncated: false,
@@ -107,6 +109,7 @@ describe("SshProtocolHandler", () => {
 
 	it("rejects a file whose first invalid byte falls past the old 8 KiB sniff window", async () => {
 		mockHosts();
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("file");
 		const bytes = new Uint8Array(9001);
 		bytes.fill(0x61); // 9000 'a' bytes — valid UTF-8 within the former 8 KiB window
 		bytes[9000] = 0xff; // lone invalid UTF-8 byte the old prefix sniff never inspected
@@ -118,6 +121,7 @@ describe("SshProtocolHandler", () => {
 
 	it("rejects a file that exceeds the size cap", async () => {
 		mockHosts();
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("file");
 		vi.spyOn(fileTransfer, "readRemoteFile").mockResolvedValue({
 			bytes: new TextEncoder().encode("partial"),
 			truncated: true,
@@ -169,6 +173,16 @@ describe("SshProtocolHandler", () => {
 		);
 		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("missing");
 		await expect(handler.resolve(parseInternalUrl("ssh://icaro/nope"))).rejects.toThrow(/No such file or directory/);
+	});
+
+	it("rejects a remote special file (FIFO/device) without reading it", async () => {
+		mockHosts();
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("other");
+		const readSpy = vi
+			.spyOn(fileTransfer, "readRemoteFile")
+			.mockResolvedValue({ bytes: new Uint8Array(), truncated: false });
+		await expect(handler.resolve(parseInternalUrl("ssh://icaro/dev/zero"))).rejects.toThrow(/not a regular file/);
+		expect(readSpy).not.toHaveBeenCalled();
 	});
 
 	it("autocompletes configured hosts and threads cwd to the capability load", async () => {

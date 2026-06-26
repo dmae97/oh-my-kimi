@@ -222,26 +222,29 @@ export class SshProtocolHandler implements ProtocolHandler {
 		}
 		const target = await resolveTarget(url, context?.cwd);
 		const remotePath = remotePathFromUrl(url);
-		let fileResult: { bytes: Uint8Array; truncated: boolean };
+		// Classify before reading. A FIFO with no writer would block `head` until the
+		// timeout, and a device (e.g. /dev/zero) would stream the whole probe, so a
+		// special file must fail fast. Only a regular file is read; a directory lists.
+		// `missing`/stat-failure falls through to the read so its original remote stderr
+		// (e.g. "No such file or directory") still surfaces.
+		let kind: RemotePathKind | undefined;
 		try {
-			fileResult = await readRemoteFile(target, remotePath, {
-				maxBytes: SSH_TEXT_MAX_BYTES,
-				signal: context?.signal,
-			});
-		} catch (err) {
-			// `head` fails on a directory (and on a missing/unreadable path). Re-classify:
-			// only a real directory becomes a listing; anything else rethrows the original
-			// error, which carries the remote stderr (e.g. "No such file or directory").
-			let kind: RemotePathKind | undefined;
-			try {
-				kind = await statRemotePath(target, remotePath, { signal: context?.signal });
-			} catch {
-				// Re-stat failed too (host/connection issue) — the original read error is clearer.
-			}
-			if (kind === "directory")
-				return this.#resolveDirectory(target, remotePath, url, context?.signal, context?.skipDirectoryListing);
-			throw err;
+			kind = await statRemotePath(target, remotePath, { signal: context?.signal });
+		} catch {
+			// stat failed (host/connection issue) — fall through; the read gives a clearer error.
 		}
+		if (kind === "directory") {
+			return this.#resolveDirectory(target, remotePath, url, context?.signal, context?.skipDirectoryListing);
+		}
+		if (kind === "other") {
+			throw new Error(
+				`ssh://: ${remotePath} is not a regular file (FIFO, socket, or device); ssh:// reads UTF-8 text files only — use the ssh tool for special files`,
+			);
+		}
+		const fileResult = await readRemoteFile(target, remotePath, {
+			maxBytes: SSH_TEXT_MAX_BYTES,
+			signal: context?.signal,
+		});
 		if (fileResult.truncated) {
 			throw new Error(
 				`ssh://: ${remotePath} exceeds the 1 MiB limit; ssh:// supports text files up to 1 MiB — use an sshfs mount for larger files`,
