@@ -264,7 +264,11 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		const wire = convertMessages(
 			target,
 			{
-				messages: [userMessage("Plan the migration."), anthropicSourceTurn, userMessage("Continue on the local box.")],
+				messages: [
+					userMessage("Plan the migration."),
+					anthropicSourceTurn,
+					userMessage("Continue on the local box."),
+				],
 			},
 			target.compat,
 		);
