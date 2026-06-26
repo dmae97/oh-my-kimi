@@ -146,8 +146,8 @@ export function mergeDiscoveredModel<TApi extends Api>(
 			baseUrl: providerOverride?.baseUrl ?? model.baseUrl ?? existing.baseUrl,
 			headers: existing.headers ? { ...existing.headers, ...model.headers } : model.headers,
 			transport: providerOverride?.transport ?? existing.transport ?? model.transport,
-			remoteCompaction: mergeRemoteCompactionConfig(
-				existing.remoteCompaction ?? model.remoteCompaction,
+			remoteCompaction: mergeProviderRemoteCompactionConfig(
+				mergeRemoteCompactionConfig(existing.remoteCompaction, model.remoteCompaction),
 				providerOverride?.remoteCompaction,
 			),
 			...(supportsTools !== undefined ? { supportsTools } : {}),
@@ -160,7 +160,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 			baseUrl: providerOverride.baseUrl ?? model.baseUrl,
 			headers: providerOverride.headers ? { ...model.headers, ...providerOverride.headers } : model.headers,
 			...(providerOverride.transport !== undefined ? { transport: providerOverride.transport } : {}),
-			remoteCompaction: mergeRemoteCompactionConfig(model.remoteCompaction, providerOverride.remoteCompaction),
+			remoteCompaction: mergeProviderRemoteCompactionConfig(model.remoteCompaction, providerOverride.remoteCompaction),
 			compat: model.compatConfig,
 		} as ModelSpec<TApi>);
 	}
@@ -375,6 +375,13 @@ function mergeRemoteCompactionConfig(
 	if (!baseConfig) return overrideConfig;
 	if (!overrideConfig) return baseConfig;
 	return { ...baseConfig, ...overrideConfig };
+}
+
+function mergeProviderRemoteCompactionConfig(
+	modelConfig: RemoteCompactionConfig<Api> | undefined,
+	providerConfig: RemoteCompactionConfig<Api> | undefined,
+): RemoteCompactionConfig<Api> | undefined {
+	return mergeRemoteCompactionConfig(providerConfig, modelConfig);
 }
 
 /**
@@ -1111,12 +1118,25 @@ export class ModelRegistry {
 					)
 				: models;
 
+		const withRemoteCompaction = providerConfig.remoteCompaction
+			? withDecoderMetadata.map(model =>
+					buildModel({
+						...model,
+						remoteCompaction: mergeProviderRemoteCompactionConfig(
+							model.remoteCompaction,
+							providerConfig.remoteCompaction,
+						),
+						compat: model.compatConfig,
+					} as ModelSpec<Api>),
+				)
+			: withDecoderMetadata;
+
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
-			return withDecoderMetadata;
+			return withRemoteCompaction;
 		}
 
 		const contextLengthOverride = getOllamaContextLengthOverride();
-		return withDecoderMetadata.map(model => {
+		return withRemoteCompaction.map(model => {
 			const normalized =
 				model.api === "openai-completions"
 					? buildModel({
@@ -1249,6 +1269,7 @@ export class ModelRegistry {
 					baseUrl: providerConfig.baseUrl,
 					headers: resolvedProviderHeaders,
 					compat: mergeCompat(providerConfig.compat, disableStrictCompat),
+					remoteCompaction: providerConfig.remoteCompaction,
 					discovery: providerConfig.discovery,
 					optional: false,
 				});
@@ -1664,7 +1685,7 @@ export class ModelRegistry {
 			// Preserve the model's existing transport when the override omits one;
 			// providers without a `transport` field keep the default per-API dispatch.
 			...(override.transport !== undefined ? { transport: override.transport } : {}),
-			remoteCompaction: mergeRemoteCompactionConfig(entry.remoteCompaction, override.remoteCompaction),
+			remoteCompaction: mergeProviderRemoteCompactionConfig(entry.remoteCompaction, override.remoteCompaction),
 		};
 	}
 	#applyRuntimeProviderOverrides(models: Model<Api>[]): Model<Api>[] {

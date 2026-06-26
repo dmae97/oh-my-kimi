@@ -181,6 +181,47 @@ describe("ModelRegistry runtime provider registration", () => {
 		}
 	});
 
+	test("refreshRuntimeProviders preserves model-level remoteCompaction over provider defaults", async () => {
+		const providerName = "dynamic-compact-provider";
+		const providerEndpoint = "https://runtime.example.com/v1/responses/provider-compact";
+		const modelEndpoint = "https://runtime.example.com/v1/responses/model-compact";
+
+		registry.registerProvider(
+			providerName,
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-responses",
+				remoteCompaction: {
+					enabled: true,
+					api: "openai-responses",
+					endpoint: providerEndpoint,
+					model: "provider-compact",
+				},
+				fetchDynamicModels: async () => [
+					{
+						...baseModel,
+						id: "dynamic-compact-model",
+						remoteCompaction: {
+							endpoint: modelEndpoint,
+							model: "model-compact",
+						},
+					},
+				],
+			},
+			"ext://runtime",
+		);
+
+		await registry.refreshRuntimeProviders("online");
+		const model = registry.find(providerName, "dynamic-compact-model");
+		expect(model?.remoteCompaction).toEqual({
+			enabled: true,
+			api: "openai-responses",
+			endpoint: modelEndpoint,
+			model: "model-compact",
+		});
+	});
+
 	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",

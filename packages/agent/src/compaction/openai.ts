@@ -13,7 +13,7 @@
  */
 
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/errors";
-import { parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { parseAzureDeploymentNameMap, parseTextSignature } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { Api, AssistantMessage, FetchImpl, Message, Model } from "@oh-my-pi/pi-ai/types";
 import {
@@ -142,6 +142,14 @@ function appendAzureApiVersion(endpoint: string): string {
 	if (/[?&]api-version=/.test(endpoint)) return endpoint;
 	const separator = endpoint.includes("?") ? "&" : "?";
 	return `${endpoint}${separator}api-version=${encodeURIComponent($env.AZURE_OPENAI_API_VERSION || DEFAULT_AZURE_API_VERSION)}`;
+}
+
+function resolveOpenAiCompactModel(model: Model): string {
+	const requestModel = model.remoteCompaction?.model ?? model.requestModelId ?? model.id;
+	const compactionApi = model.remoteCompaction?.api ?? model.api;
+	if (compactionApi !== "azure-openai-responses") return requestModel;
+	const mappedDeployment = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(requestModel);
+	return mappedDeployment ?? requestModel;
 }
 
 function resolveOpenAiCodexCompactEndpoint(baseUrl: string | undefined): string {
@@ -495,7 +503,7 @@ export async function requestOpenAiRemoteCompaction(
 	opts?: { fetch?: FetchImpl; timeoutMs?: number },
 ): Promise<OpenAiRemoteCompactionResponse> {
 	const endpoint = resolveOpenAiCompactEndpoint(model);
-	const requestModel = model.remoteCompaction?.model ?? model.requestModelId ?? model.id;
+	const requestModel = resolveOpenAiCompactModel(model);
 	const request: OpenAiRemoteCompactionRequest = {
 		model: requestModel,
 		input: trimOpenAiCompactInput(compactInput, model.contextWindow ?? Number.POSITIVE_INFINITY, instructions),

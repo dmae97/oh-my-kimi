@@ -286,6 +286,8 @@ test("uses configured OpenAI-compatible compaction for custom providers", async 
 });
 
 test("uses Azure request shape for Azure Responses remote compaction", async () => {
+	const previousDeploymentMap = Bun.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
+	Bun.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = "gpt-5-compact=azure-gpt-5-compact";
 	const model = makeAzureModel({
 		headers: { "x-custom-header": "custom" },
 		remoteCompaction: {
@@ -332,7 +334,12 @@ test("uses Azure request shape for Azure Responses remote compaction", async () 
 	expect(requestAuthorization).toBeUndefined();
 	expect(requestContentType).toBe("application/json");
 	expect(requestCustomHeader).toBe("custom");
-	expect(requestBody).toMatchObject({ model: "gpt-5-compact" });
+	expect(requestBody).toMatchObject({ model: "azure-gpt-5-compact" });
+	if (previousDeploymentMap === undefined) {
+		delete Bun.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
+	} else {
+		Bun.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = previousDeploymentMap;
+	}
 });
 
 describe("requestOpenAiRemoteCompaction abort", () => {
