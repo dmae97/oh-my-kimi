@@ -328,6 +328,7 @@ import * as bundledPiCodingAgentConfigModelsConfig from "@oh-my-pi/pi-coding-age
 import * as bundledPiCodingAgentConfigModelsConfigSchema from "@oh-my-pi/pi-coding-agent/config/models-config-schema";
 import * as bundledPiCodingAgentConfigPromptTemplates from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import * as bundledPiCodingAgentConfigResolveConfigValue from "@oh-my-pi/pi-coding-agent/config/resolve-config-value";
+import * as bundledPiCodingAgentConfigServiceTier from "@oh-my-pi/pi-coding-agent/config/service-tier";
 import * as bundledPiCodingAgentConfigSettings from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as bundledPiCodingAgentConfigSettingsSchema from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import * as bundledPiCodingAgentDap from "@oh-my-pi/pi-coding-agent/dap";
@@ -385,7 +386,6 @@ import * as bundledPiCodingAgentEvalJsContextManager from "@oh-my-pi/pi-coding-a
 import * as bundledPiCodingAgentEvalJsExecutor from "@oh-my-pi/pi-coding-agent/eval/js/executor";
 import * as bundledPiCodingAgentEvalJsToolBridge from "@oh-my-pi/pi-coding-agent/eval/js/tool-bridge";
 import * as bundledPiCodingAgentEvalJsWorkerCore from "@oh-my-pi/pi-coding-agent/eval/js/worker-core";
-import * as bundledPiCodingAgentEvalJsWorkerEntry from "@oh-my-pi/pi-coding-agent/eval/js/worker-entry";
 import * as bundledPiCodingAgentEvalJsWorkerProtocol from "@oh-my-pi/pi-coding-agent/eval/js/worker-protocol";
 import * as bundledPiCodingAgentEvalPyDisplay from "@oh-my-pi/pi-coding-agent/eval/py/display";
 import * as bundledPiCodingAgentEvalPyExecutor from "@oh-my-pi/pi-coding-agent/eval/py/executor";
@@ -1802,6 +1802,9 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		bundledPiCodingAgentConfigPromptTemplates as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/config/resolve-config-value":
 		bundledPiCodingAgentConfigResolveConfigValue as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/config/service-tier": bundledPiCodingAgentConfigServiceTier as unknown as Readonly<
+		Record<string, unknown>
+	>,
 	"@oh-my-pi/pi-coding-agent/config/settings-schema": bundledPiCodingAgentConfigSettingsSchema as unknown as Readonly<
 		Record<string, unknown>
 	>,
@@ -2098,9 +2101,6 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/eval/js/worker-core": bundledPiCodingAgentEvalJsWorkerCore as unknown as Readonly<
-		Record<string, unknown>
-	>,
-	"@oh-my-pi/pi-coding-agent/eval/js/worker-entry": bundledPiCodingAgentEvalJsWorkerEntry as unknown as Readonly<
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/eval/js/worker-protocol": bundledPiCodingAgentEvalJsWorkerProtocol as unknown as Readonly<

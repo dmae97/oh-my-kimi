@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isCompiledBinary } from "@oh-my-pi/pi-utils";
@@ -456,10 +457,11 @@ const TYPEBOX_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'
 
 /**
  * Rewrite the extension-owned specifiers OMP must host-resolve — legacy
- * `@(scope)/pi-*`, bare TypeBox packages, and package `imports` aliases like
- * `#src/*` — to absolute `file://` URLs. Every other specifier (relative
- * siblings and third-party dependencies) is left untouched so Bun resolves it
- * natively from the extension's real on-disk location.
+ * `@(scope)/pi-*`, bare TypeBox packages, package `imports` aliases like
+ * `#src/*`, and extension-local bare dependencies — to absolute `file://` URLs
+ * or compiled-mode virtual specifiers. Relative siblings and built-in modules
+ * are left untouched so Bun resolves them from the extension's real on-disk
+ * location.
  */
 async function rewriteLegacyExtensionSource(source: string, importerPath: string): Promise<string> {
 	const withPi = rewriteLegacyPiImports(source);
@@ -474,7 +476,12 @@ async function rewriteLegacyExtensionSource(source: string, importerPath: string
 					`${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`,
 			)
 		: withPi;
-	return rewriteExtensionPackageImports(withTypeBox, importerPath);
+	return rewriteExtensionBareImports(await rewriteExtensionPackageImports(withTypeBox, importerPath), importerPath);
+}
+
+/** Test seam for compiled-binary legacy extension source rewriting. */
+export async function __rewriteLegacyExtensionSourceForTests(source: string, importerPath: string): Promise<string> {
+	return rewriteLegacyExtensionSource(source, importerPath);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -675,6 +682,183 @@ async function rewriteExtensionPackageImports(source: string, importerPath: stri
 		if (!prefix || !specifier || !suffix) continue;
 
 		const resolved = await resolvePackageImportSpecifier(specifier, importerPath);
+		if (!resolved) continue;
+
+		rewritten += source.slice(lastIndex, matchIndex);
+		rewritten += `${prefix}${toImportSpecifier(resolved)}${suffix}`;
+		lastIndex = matchIndex + fullMatch.length;
+	}
+
+	if (lastIndex === 0) {
+		return source;
+	}
+	return `${rewritten}${source.slice(lastIndex)}`;
+}
+
+const BARE_EXTENSION_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])([^"'()\s]+)(["'])/g;
+
+function isBareExtensionDependencySpecifier(specifier: string): boolean {
+	if (
+		specifier.startsWith(".") ||
+		specifier.startsWith("/") ||
+		specifier.startsWith("#") ||
+		specifier.startsWith("node:") ||
+		specifier.startsWith("bun:") ||
+		/^[a-z][a-z0-9+.-]*:/i.test(specifier)
+	) {
+		return false;
+	}
+	const packageName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
+	return Boolean(packageName && !isBuiltin(packageName));
+}
+
+interface BarePackageSpecifier {
+	readonly name: string;
+	readonly subpath: string | null;
+}
+
+function splitBarePackageSpecifier(specifier: string): BarePackageSpecifier | null {
+	const parts = specifier.split("/");
+	if (specifier.startsWith("@")) {
+		const [scope, name, ...rest] = parts;
+		if (!scope || !name) return null;
+		return { name: `${scope}/${name}`, subpath: rest.length > 0 ? rest.join("/") : null };
+	}
+	const [name, ...rest] = parts;
+	if (!name) return null;
+	return { name, subpath: rest.length > 0 ? rest.join("/") : null };
+}
+
+async function findNodePackageRoot(packageName: string, importerPath: string): Promise<string | null> {
+	let dir = path.dirname(importerPath);
+	while (true) {
+		const candidate = path.join(dir, "node_modules", packageName);
+		if (await pathExists(path.join(candidate, "package.json"))) {
+			return candidate;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			return null;
+		}
+		dir = parent;
+	}
+}
+
+async function readPackageManifest(packageRoot: string): Promise<Record<string, unknown> | null> {
+	try {
+		const manifest = await Bun.file(path.join(packageRoot, "package.json")).json();
+		return isRecord(manifest) ? manifest : null;
+	} catch {
+		return null;
+	}
+}
+
+async function resolvePackageExportTarget(
+	packageRoot: string,
+	target: string,
+	wildcard: string | null,
+): Promise<string | null> {
+	if (!target.startsWith("./")) {
+		return null;
+	}
+	const substituted = wildcard === null ? target : target.replaceAll("*", wildcard);
+	return resolveSourceModuleFile(path.resolve(packageRoot, substituted));
+}
+
+async function resolveNodePackageExport(
+	packageRoot: string,
+	subpath: string | null,
+	manifest: Record<string, unknown>,
+): Promise<string | null> {
+	const exportsField = manifest.exports;
+	if (!isRecord(exportsField)) {
+		return null;
+	}
+
+	const exactKey = subpath === null ? "." : `./${subpath}`;
+	const exactTarget = selectPackageImportTarget(exportsField[exactKey]);
+	if (exactTarget !== null && exactTarget !== PACKAGE_IMPORT_EXCLUDED) {
+		return resolvePackageExportTarget(packageRoot, exactTarget, null);
+	}
+
+	for (const [key, entry] of Object.entries(exportsField)) {
+		const starIndex = key.indexOf("*");
+		if (starIndex === -1 || subpath === null) continue;
+		const prefix = key.slice(2, starIndex);
+		const suffix = key.slice(starIndex + 1);
+		if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) {
+			continue;
+		}
+		const target = selectPackageImportTarget(entry);
+		if (target === null || target === PACKAGE_IMPORT_EXCLUDED) {
+			continue;
+		}
+		return resolvePackageExportTarget(
+			packageRoot,
+			target,
+			subpath.slice(prefix.length, subpath.length - suffix.length),
+		);
+	}
+	return null;
+}
+
+async function resolveNodePackageFallback(
+	packageRoot: string,
+	subpath: string | null,
+	manifest: Record<string, unknown>,
+): Promise<string | null> {
+	if (subpath !== null) {
+		return resolveSourceModuleFile(path.join(packageRoot, subpath));
+	}
+	for (const field of ["module", "main"]) {
+		const target = manifest[field];
+		if (typeof target === "string") {
+			const resolved = await resolveSourceModuleFile(path.resolve(packageRoot, target));
+			if (resolved) return resolved;
+		}
+	}
+	return resolveSourceModuleFile(path.join(packageRoot, "index"));
+}
+
+async function resolveNodePackageDependency(specifier: string, importerPath: string): Promise<string | null> {
+	const parsed = splitBarePackageSpecifier(specifier);
+	if (!parsed) return null;
+	const packageRoot = await findNodePackageRoot(parsed.name, importerPath);
+	if (!packageRoot) return null;
+	const manifest = await readPackageManifest(packageRoot);
+	if (!manifest) return null;
+	return (
+		(await resolveNodePackageExport(packageRoot, parsed.subpath, manifest)) ??
+		(await resolveNodePackageFallback(packageRoot, parsed.subpath, manifest))
+	);
+}
+
+async function resolveExtensionBareDependency(specifier: string, importerPath: string): Promise<string | null> {
+	if (!isBareExtensionDependencySpecifier(specifier)) {
+		return null;
+	}
+	try {
+		const resolved = Bun.resolveSync(specifier, path.dirname(importerPath));
+		if (resolved && resolved !== specifier && !resolved.startsWith("node:") && !resolved.startsWith("bun:")) {
+			return resolved;
+		}
+	} catch {
+		// Compiled binaries do not reliably resolve runtime extension node_modules.
+	}
+	return resolveNodePackageDependency(specifier, importerPath);
+}
+
+async function rewriteExtensionBareImports(source: string, importerPath: string): Promise<string> {
+	let rewritten = "";
+	let lastIndex = 0;
+	for (const match of source.matchAll(BARE_EXTENSION_IMPORT_SPECIFIER_REGEX)) {
+		const matchIndex = match.index;
+		if (matchIndex === undefined) continue;
+
+		const [fullMatch, prefix, specifier, suffix] = match;
+		if (!prefix || !specifier || !suffix) continue;
+
+		const resolved = await resolveExtensionBareDependency(specifier, importerPath);
 		if (!resolved) continue;
 
 		rewritten += source.slice(lastIndex, matchIndex);

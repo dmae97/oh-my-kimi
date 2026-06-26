@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { loadLegacyPiModule } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
+import {
+	__rewriteLegacyExtensionSourceForTests,
+	loadLegacyPiModule,
+} from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 
 // Issue #1674: legacy Pi extensions load browser-UI assets (HTML/CSS) at module
 // init via `readFileSync(join(__dirname, "ui.html"))`. The compat layer must run
@@ -101,6 +104,32 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		// bundled Zod-backed shim.
 		expect(mod.depValue).toBe("cjs-native");
 		expect(mod.hasZod).toBe(true);
+	});
+
+	it("rewrites extension bare deps to file URLs for compiled-binary loading", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "compiled-dep-ext", version: "1.0.0" }),
+			"node_modules/esmdep/package.json": JSON.stringify({
+				name: "esmdep",
+				version: "1.0.0",
+				type: "module",
+				exports: { "./value": "./value.js" },
+			}),
+			"node_modules/esmdep/value.js": "export const value = 1;",
+			"index.ts": "",
+		});
+		const importer = path.join(dir, "index.ts");
+		const rewritten = await __rewriteLegacyExtensionSourceForTests(
+			[
+				'import * as path from "node:path";',
+				'import { value } from "esmdep/value";',
+				"export const loaded = value;",
+			].join("\n"),
+			importer,
+		);
+
+		expect(rewritten).toContain(url.pathToFileURL(path.join(dir, "node_modules/esmdep/value.js")).href);
+		expect(rewritten).toContain('from "node:path"');
 	});
 
 	it("remaps legacy pi-ai utils/oauth subpaths to registry OAuth exports", async () => {

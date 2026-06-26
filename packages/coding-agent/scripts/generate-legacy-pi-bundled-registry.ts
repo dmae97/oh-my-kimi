@@ -117,6 +117,15 @@ function isSafeWildcardBasename(basename: string): boolean {
 	return true;
 }
 
+// Worker entry modules intentionally throw when imported outside a Worker. The
+// bundled registry loads on the main thread during legacy extension validation,
+// so these exported subpaths must stay out of the static registry.
+const MAIN_THREAD_UNSAFE_WILDCARD_BASENAMES = new Set(["worker-entry"]);
+
+function isMainThreadSafeWildcardBasename(basename: string): boolean {
+	return !MAIN_THREAD_UNSAFE_WILDCARD_BASENAMES.has(basename);
+}
+
 interface WildcardPattern {
 	readonly exportPrefix: string;
 	readonly exportSuffix: string;
@@ -217,6 +226,7 @@ async function collectEntries(): Promise<RegistryEntry[]> {
 					if (!match.endsWith(pattern.sourceSuffix)) continue;
 					const basename = match.slice(0, match.length - pattern.sourceSuffix.length);
 					if (!isSafeWildcardBasename(basename)) continue;
+					if (!isMainThreadSafeWildcardBasename(basename)) continue;
 					if (basename.includes("/")) continue;
 					const subpath = `${pattern.exportPrefix}${basename}${pattern.exportSuffix}`;
 					const key = `${pkg.name}/${subpath}`;

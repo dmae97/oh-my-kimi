@@ -44,6 +44,14 @@ describe("legacy pi compat compiled-mode subpath overrides (issue #3442)", () =>
 		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-coding-agent/main")).toBe(false);
 	});
 
+	it("does not bundle main-thread-unsafe worker entrypoints", () => {
+		// Worker entry modules throw at top level unless `parentPort` exists.
+		// The compiled legacy registry is imported on the main thread while
+		// validating plugin extensions, so enumerating these files recreates the
+		// `js worker-entry: missing parentPort` failure from #3508.
+		expect(BUNDLED_PI_REGISTRY_KEYS.has("@oh-my-pi/pi-coding-agent/eval/js/worker-entry")).toBe(false);
+	});
+
 	it("maps every bundled key (minus shimmed roots + typebox) to its virtual specifier in compiled mode", () => {
 		const overrides = __buildLegacyPiPackageRootOverrides(true);
 		const missing: string[] = [];
