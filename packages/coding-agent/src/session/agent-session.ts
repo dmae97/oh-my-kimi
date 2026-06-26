@@ -2665,6 +2665,7 @@ export class AgentSession {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
+			if (this.#isClassifierRefusal(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
@@ -3137,13 +3138,20 @@ export class AgentSession {
 					return;
 				}
 			}
-			// Check for retryable errors first (overloaded, rate limit, server errors)
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) {
 					await emitAgentEndNotification();
 					return;
 				}
+			}
+			// Classifier refusals are persisted-skipped above; also prune the trailing
+			// stub from active context so the next turn's prompt does not replay it.
+			// Fall through to the standard error tail so `session_stop` hooks (block,
+			// continue, telemetry) still fire — matching the pre-fix flow for
+			// `stopReason === "error"`.
+			if (this.#isClassifierRefusal(msg)) {
+				this.#removeAssistantMessageFromActiveContext(msg);
 			}
 			this.#resolveRetry();
 
@@ -3178,7 +3186,7 @@ export class AgentSession {
 					return;
 				}
 			}
-			await this.#emitSessionStopEvent(settledMessages);
+			await this.#emitSessionStopEvent(settledMessages, msg);
 			await emitAgentEndNotification();
 		}
 	};
@@ -4169,13 +4177,16 @@ export class AgentSession {
 		await this.#extensionRunner?.emit({ type: "agent_end", messages });
 	}
 
-	async #emitSessionStopEvent(messages: AgentMessage[]): Promise<void> {
+	async #emitSessionStopEvent(
+		messages: AgentMessage[],
+		lastAssistantMessage = this.getLastAssistantMessage(),
+	): Promise<void> {
 		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
 		const generation = this.#promptGeneration;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
 			turn_id: Math.max(0, this.#turnIndex - 1),
-			last_assistant_message: this.getLastAssistantMessage(),
+			last_assistant_message: lastAssistantMessage,
 			session_id: this.sessionId,
 			session_file: this.sessionFile,
 			stop_hook_active: this.#sessionStopHookActive,
@@ -9048,7 +9059,7 @@ export class AgentSession {
 		});
 	}
 
-	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
+	#removeAssistantMessageFromActiveContext(assistantMessage: AssistantMessage): void {
 		const messages = this.agent.state.messages;
 		const lastMessage = messages[messages.length - 1];
 		if (
@@ -9057,6 +9068,10 @@ export class AgentSession {
 		) {
 			this.agent.replaceMessages(messages.slice(0, -1));
 		}
+	}
+
+	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
+		this.#removeAssistantMessageFromActiveContext(assistantMessage);
 
 		const emptyStopEntry = this.sessionManager
 			.getBranch()
@@ -11468,11 +11483,8 @@ export class AgentSession {
 			errorMessage,
 		});
 
-		// Remove error message from agent state (keep in session for history)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.replaceMessages(messages.slice(0, -1));
-		}
+		// Remove the failed assistant message from active context before retrying.
+		this.#removeAssistantMessageFromActiveContext(message);
 
 		// Wait with exponential backoff (abortable).
 		const retryAbortController = new AbortController();
