@@ -860,6 +860,8 @@ interface SubagentRunMonitor {
 	/** Whether the (attempted) abort counts as a cancelled run rather than an internal failure. */
 	isAbortedRun(): boolean;
 	requestAbort(reason: AbortReason): void;
+	abortActiveSession(): Promise<void>;
+	waitForActiveSessionAbort(): Promise<void>;
 	resolveSignalAbortReason(): string;
 	resolveAbortReasonText(): string;
 	setActiveSession(session: AgentSession | null): void;
@@ -929,6 +931,22 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	let budgetSteerSent = false;
 	let budgetLimitExceeded = false;
 	let lastAssistantSalvageText: string | undefined;
+	let activeSessionAbortPromise: Promise<void> | undefined;
+
+	const abortActiveSession = (): Promise<void> => {
+		const session = activeSession;
+		if (!session) return Promise.resolve();
+		activeSessionAbortPromise ??= session.abort().catch(error => {
+			logger.debug("Subagent session abort cleanup failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+		return activeSessionAbortPromise;
+	};
+
+	const waitForActiveSessionAbort = async (): Promise<void> => {
+		if (activeSessionAbortPromise) await activeSessionAbortPromise;
+	};
 
 	const requestAbort = (reason: AbortReason) => {
 		if (reason === "timeout") {
@@ -947,9 +965,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		abortSent = true;
 		abortReason = reason;
 		abortController.abort();
-		if (activeSession) {
-			void activeSession.abort();
-		}
+		void abortActiveSession();
 	};
 
 	// Handle abort signal
@@ -1429,6 +1445,8 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		isAbortedRun: () =>
 			abortReason === "signal" || runtimeLimitExceeded || budgetLimitExceeded || abortReason === undefined,
 		requestAbort,
+		abortActiveSession,
+		waitForActiveSessionAbort,
 		resolveSignalAbortReason,
 		resolveAbortReasonText,
 		setActiveSession: session => {
@@ -2270,7 +2288,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			abortSignal.addEventListener(
 				"abort",
 				() => {
-					void session.abort();
+					void monitor.abortActiveSession();
 				},
 				{ once: true, signal: sessionAbortController.signal },
 			);
@@ -2278,7 +2296,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// the awaited setup above, the listener registration races the dispatch
 			// and may not observe the already-fired abort event. Mirror it manually.
 			if (abortSignal.aborted) {
-				void session.abort();
+				void monitor.abortActiveSession();
 			}
 
 			const pendingExtensionMessages: Array<Promise<unknown>> = [];
@@ -2384,6 +2402,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				providerSemaphoreAcquired = false;
 			}
 			sessionAbortController.abort();
+			try {
+				await untilAborted(AbortSignal.timeout(5000), () => monitor.waitForActiveSessionAbort());
+			} catch {
+				// Ignore abort cleanup timeouts/errors; terminal disposal below is still best-effort.
+			}
 			if (unsubscribe) {
 				try {
 					unsubscribe();
