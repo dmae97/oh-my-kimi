@@ -71,6 +71,7 @@ import {
 	discoverModelsByProviderType,
 	getImplicitOllamaBaseUrl,
 	getOllamaContextLengthOverride,
+	normalizeLiteLLMDiscoveryBaseUrl,
 } from "./model-discovery";
 import { ModelsConfigFile, type ProviderValidationModel, validateProviderConfiguration } from "./models-config";
 import type { ModelOverride, ModelsConfig, ProviderAuthMode } from "./models-config-schema";
@@ -1187,7 +1188,10 @@ export class ModelRegistry {
 			) {
 				const disableStrictCompat = providerConfig.disableStrictTools ? { disableStrictTools: true } : undefined;
 				overrides.set(providerName, {
-					baseUrl: providerConfig.baseUrl,
+					baseUrl:
+						providerConfig.discovery?.type === "litellm"
+							? normalizeLiteLLMDiscoveryBaseUrl(providerConfig.baseUrl)
+							: providerConfig.baseUrl,
 					headers: resolvedProviderHeaders,
 					apiKey: providerConfig.apiKey,
 					authHeader: providerConfig.authHeader,
@@ -1301,6 +1305,9 @@ export class ModelRegistry {
 	#configuredDiscoveryCacheProviderId(providerConfig: DiscoveryProviderConfig): string {
 		if (providerConfig.discovery.type === "openai-models-list") {
 			return `${providerConfig.provider}:openai-models-list-context-v2`;
+		}
+		if (providerConfig.discovery.type === "litellm") {
+			return `${providerConfig.provider}:litellm-rich-v1`;
 		}
 		return providerConfig.provider;
 	}

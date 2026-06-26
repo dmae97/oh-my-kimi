@@ -198,7 +198,7 @@ export const ModelOverrideSchema = type({
 export type ModelOverride = typeof ModelOverrideSchema.infer;
 
 export const ProviderDiscoverySchema = type({
-	type: '"ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy"',
+	type: '"ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm"',
 });
 
 export const ProviderAuthSchema = type('"apiKey" | "none" | "oauth"');

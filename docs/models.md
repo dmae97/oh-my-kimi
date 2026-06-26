@@ -104,7 +104,7 @@ providers:
 ### Allowed auth/discovery values
 
 - `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
-- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, or `proxy`
+- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, or `litellm`
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 
 ## Validation rules (current)
@@ -299,7 +299,7 @@ When `litellm` is active (for example through `LITELLM_API_KEY` or stored auth),
 - base URL: explicit provider `baseUrl` / `models.yml` config, otherwise `LITELLM_BASE_URL`, otherwise `http://localhost:4000/v1`
 - auth mode: `LITELLM_API_KEY` or stored LiteLLM auth when the proxy requires a key
 
-Runtime discovery fetches models (`GET /models`) from the proxy and enriches bare LiteLLM model ids against bundled reference metadata when available.
+Runtime discovery probes LiteLLM management metadata first: `GET /model_group/info`, then `GET /v2/model/info`, then falls back to the OpenAI-compatible `GET /models` list. Rich metadata maps `max_input_tokens`, `max_output_tokens`, `supports_vision`, and `supports_reasoning`; bare fallback ids are enriched against bundled reference metadata when available.
 
 ### Explicit provider discovery
 
@@ -321,6 +321,20 @@ providers:
     discovery:
       type: llama.cpp
 ```
+
+Custom LiteLLM gateways can use the same rich discovery path:
+
+```yaml
+providers:
+  litellm-gateway:
+    baseUrl: http://gateway.example:4000/v1
+    apiKey: LITELLM_API_KEY
+    api: openai-completions
+    discovery:
+      type: litellm
+```
+
+LiteLLM metadata endpoints use the configured base URL with a trailing `/v1` stripped for discovery only, preserving any preceding proxy path. Runtime model calls keep the configured OpenAI-compatible `/v1` base URL.
 
 ### Proxy discovery (`discovery.type: proxy`)
 
