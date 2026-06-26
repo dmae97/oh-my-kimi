@@ -57,6 +57,7 @@ describe("formatScreenshot", () => {
 			wasResized: boolean;
 			buffer: Uint8Array;
 			mimeType: string;
+			decodeFailed: boolean;
 		}>,
 	): {
 		buffer: Uint8Array;
@@ -66,6 +67,7 @@ describe("formatScreenshot", () => {
 		width: number;
 		height: number;
 		wasResized: boolean;
+		decodeFailed?: boolean;
 		get data(): string;
 	} {
 		const buf = overrides?.buffer ?? new Uint8Array(2048);
@@ -77,6 +79,7 @@ describe("formatScreenshot", () => {
 			width: overrides?.width ?? 800,
 			height: overrides?.height ?? 600,
 			wasResized: overrides?.wasResized ?? false,
+			decodeFailed: overrides?.decodeFailed,
 			get data() {
 				return Buffer.from(buf).toString("base64");
 			},
@@ -144,6 +147,20 @@ describe("formatScreenshot", () => {
 				resized,
 			}),
 		).toEqual(["Screenshot captured", "Format: image/webp (3.00 KB)", "Dimensions: 800x600"]);
+	});
+
+	it("surfaces screenshots that could not be resized", () => {
+		const resized = fakeResized({ decodeFailed: true, mimeType: "image/png", buffer: new Uint8Array(4096) });
+
+		expect(
+			formatScreenshot({
+				saveFullRes: false,
+				savedMimeType: "image/png",
+				savedByteLength: 4096,
+				dest: path.join(os.tmpdir(), "omp-sshots-123.png"),
+				resized,
+			}),
+		).toContain("Resize: image decoder failed; using original image bytes");
 	});
 
 	it("appends dimension note when image was resized", () => {
