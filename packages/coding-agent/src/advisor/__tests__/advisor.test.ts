@@ -225,6 +225,24 @@ describe("advisor", () => {
 			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "nit");
 		});
 
+		it("forwards escalations of an already-delivered note and suppresses downgrades", async () => {
+			const onAdvice = vi.fn();
+			const tool = new AdviseTool(onAdvice);
+			const note = "Rename collides with the existing helper.";
+
+			await tool.execute("tc-1", { note, severity: "nit" });
+			await tool.execute("tc-2", { note, severity: "concern" });
+			await tool.execute("tc-3", { note, severity: "blocker" });
+			// De-escalation back to nit or concern is treated as a duplicate.
+			await tool.execute("tc-4", { note, severity: "concern" });
+			await tool.execute("tc-5", { note, severity: "nit" });
+
+			expect(onAdvice).toHaveBeenCalledTimes(3);
+			expect(onAdvice).toHaveBeenNthCalledWith(1, note, "nit");
+			expect(onAdvice).toHaveBeenNthCalledWith(2, note, "concern");
+			expect(onAdvice).toHaveBeenNthCalledWith(3, note, "blocker");
+		});
+
 		it("validates parameters using ArkType", () => {
 			const onAdvice = vi.fn();
 			const tool = new AdviseTool(onAdvice);

@@ -143,19 +143,31 @@ function advisorNoteDedupeKey(note: string): string {
 	return note.trim().replace(/\s+/g, " ");
 }
 
+/** Rank advisor severities so the dedupe state can detect a real escalation
+ *  (nit → concern → blocker) versus a verbatim repeat. `undefined` defers to
+ *  `nit` because the schema treats an omitted severity as a plain nit. */
+const ADVISOR_SEVERITY_RANK: Record<AdvisorSeverity, number> = { nit: 1, concern: 2, blocker: 3 };
+function advisorSeverityRank(severity: AdvisorSeverity | undefined): number {
+	return ADVISOR_SEVERITY_RANK[severity ?? "nit"];
+}
+
 export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails> {
 	readonly name = "advise";
 	readonly label = "Advise";
 	readonly description = adviseDescription;
 	readonly parameters = adviseSchema;
 	readonly intent = "omit" as const;
-	#deliveredNoteKeys = new Set<string>();
+	/** Highest delivered severity rank per normalized note. A new call passes
+	 *  through only when its rank strictly exceeds the recorded one (a real
+	 *  escalation: nit → concern → blocker), so an advisor cannot bypass dedupe
+	 *  by retagging the same text at a lower or equal severity. */
+	#deliveredNoteSeverities = new Map<string, number>();
 
 	constructor(private readonly onAdvice: (note: string, severity?: AdviseDetails["severity"]) => void) {}
 
 	/** Clear delivered-note memory when the advisor starts a fresh conversation. */
 	resetDeliveredNotes(): void {
-		this.#deliveredNoteKeys.clear();
+		this.#deliveredNoteSeverities.clear();
 	}
 
 	async execute(
@@ -166,14 +178,16 @@ export class AdviseTool implements AgentTool<typeof adviseSchema, AdviseDetails>
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<AdviseDetails>> {
 		const key = advisorNoteDedupeKey(args.note);
-		if (this.#deliveredNoteKeys.has(key)) {
+		const rank = advisorSeverityRank(args.severity);
+		const previousRank = this.#deliveredNoteSeverities.get(key) ?? 0;
+		if (rank <= previousRank) {
 			return {
 				content: [{ type: "text", text: "Duplicate advice ignored." }],
 				details: { note: args.note, severity: args.severity },
 				useless: true,
 			};
 		}
-		this.#deliveredNoteKeys.add(key);
+		this.#deliveredNoteSeverities.set(key, rank);
 		this.onAdvice(args.note, args.severity);
 		return {
 			content: [{ type: "text", text: "Recorded." }],
