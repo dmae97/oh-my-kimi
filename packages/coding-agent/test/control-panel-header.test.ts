@@ -49,6 +49,19 @@ describe("ControlPanelComponent", () => {
 		expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
 	});
 
+	test("renders the wide OMK control deck with a pinned sidebar", () => {
+		const panel = createPanel();
+		const lines = panel.render(160);
+		const plain = stripAnsi(lines.join("\n"));
+
+		expect(plain).toContain("OMK://CONTROL");
+		expect(plain).toContain("CYBERPUNK OPS CORE");
+		expect(plain).toContain("MODEL / CTX");
+		expect(plain).toContain("RUNTIME / MCP / SKILLS");
+		expect(plain).toContain("OMK//CONTROL READ");
+		expect(lines.every((line) => visibleWidth(line) <= 160)).toBe(true);
+	});
+
 	test("renders expanded ASCII branding and command map", () => {
 		const panel = createPanel();
 		panel.setExpanded(true);

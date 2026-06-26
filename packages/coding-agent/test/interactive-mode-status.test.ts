@@ -531,6 +531,33 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).not.toContain("resource-list");
 	});
 
+	test("hides collision-only diagnostics from default startup listing", () => {
+		const fakeThis = createShowLoadedResourcesThis({
+			quietStartup: false,
+			skills: [{ filePath: "/tmp/skill/SKILL.md", name: "commit" }],
+			skillDiagnostics: [
+				{
+					type: "collision",
+					message: "duplicate skill name",
+					collision: {
+						resourceType: "skill",
+						name: "commit",
+						winnerPath: "/tmp/skill/SKILL.md",
+						loserPath: "/tmp/legacy/SKILL.md",
+					},
+				},
+			],
+		});
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, {
+			force: false,
+		});
+
+		const output = renderAll(fakeThis.chatContainer);
+		expect(output).toContain("[Skills]");
+		expect(output).not.toContain("[Skill conflicts]");
+	});
+
 	test("shows full resource listing when expanded", () => {
 		const fakeThis = createShowLoadedResourcesThis({
 			quietStartup: false,

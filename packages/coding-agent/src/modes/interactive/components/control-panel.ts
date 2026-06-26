@@ -4,12 +4,15 @@ import { MIN_BANNER_WIDTH } from "./control-panel-gradient.ts";
 import { IDLE_MS, INTRO_MS, shouldAnimate } from "./control-panel-gradient-motion.ts";
 
 const CONTROL_PANEL_ASCII = [
-	"  ____   __  __ _  __",
-	" / __ \\ /  |/  / |/ /",
-	"/ /_/ // /|_/ /    < ",
-	"\\____//_/  /_/_/|_| ",
+	"   ____   __  __  __ __",
+	"  / __ \\ /  |/ / / //_/",
+	" / /_/ // /|_/ / / ,<   ",
+	" \\____//_/  /_/ /_/|_|  ",
 ];
 const CONTROL_PANEL_METADATA_WIDTH = 31;
+const CONTROL_DECK_MIN_WIDTH = 112;
+const CONTROL_DECK_SIDEBAR_WIDTH = 38;
+const CONTROL_DECK_GAP_WIDTH = 2;
 
 export interface ControlPanelContent {
 	appName: string;
@@ -206,12 +209,141 @@ export class ControlPanelComponent implements Component {
 	}
 
 	private renderCompact(width: number): string[] {
+		if (width >= CONTROL_DECK_MIN_WIDTH) {
+			return this.renderControlDeck(width);
+		}
+
 		return [
 			this.divider(width, "OMK//CONTROL PANEL", "accent"),
 			this.statusLine(width),
 			this.textLine(width, this.content.compactInstructions()),
 			this.textLine(width, this.content.compactOnboarding(), "dim"),
 		];
+	}
+
+	private renderControlDeck(width: number): string[] {
+		const sidebarWidth = Math.min(CONTROL_DECK_SIDEBAR_WIDTH, Math.max(34, Math.floor(width * 0.28)));
+		const leftWidth = width - CONTROL_DECK_GAP_WIDTH - sidebarWidth;
+		if (leftWidth < 72) {
+			return [
+				this.divider(width, "OMK//CONTROL PANEL", "accent"),
+				this.statusLine(width),
+				this.textLine(width, this.content.compactInstructions()),
+				this.textLine(width, this.content.compactOnboarding(), "dim"),
+			];
+		}
+
+		const left = this.heroPanel(leftWidth);
+		const right = this.sidebarPanel(sidebarWidth);
+		const lines = this.composeColumns(left, leftWidth, right, sidebarWidth, width);
+		lines.push(this.controlStripLine(width));
+		lines.push(this.centerLine(width, this.content.compactOnboarding(), "dim"));
+		return lines;
+	}
+
+	private heroPanel(width: number): string[] {
+		const rawThemeName = theme.name ?? "live";
+		const themeName = (rawThemeName.startsWith("omk-") ? rawThemeName.slice(4) : rawThemeName).toUpperCase();
+		const modelLabel = "deepseek-v4-pro:max";
+		const routeLabel = "route · verify · loop · control";
+
+		const lines = [
+			this.boxTop(width, `omk v${this.content.version} · OMK//CONTROL`),
+			this.boxCenteredLine(width, theme.bold(theme.fg("accent", "OMK"))),
+			this.boxCenteredLine(width, theme.fg("muted", routeLabel)),
+			this.boxBlankLine(width),
+			...CONTROL_PANEL_ASCII.map((line, index) => {
+				const color: ThemeColor =
+					index === 0 ? "accent" : index === 1 ? "warning" : index === 2 ? "success" : "mdCode";
+				return this.boxCenteredLine(width, theme.fg(color, line));
+			}),
+			this.boxBlankLine(width),
+			this.boxCenteredLine(
+				width,
+				`${theme.fg("warning", "*")} ${theme.bold("OMK")}  / ${theme.fg("success", modelLabel)}`,
+			),
+			this.boxCenteredLine(
+				width,
+				`${theme.fg("mdCode", "<>")} omk-control · ${theme.fg("accent", "route")} · ${theme.fg("warning", "verify")} · ${theme.fg("success", "loop")} · ${theme.fg("mdCode", themeName)}`,
+			),
+			this.boxBottom(width),
+		];
+		return lines;
+	}
+
+	private sidebarPanel(width: number): string[] {
+		return [
+			this.sidebarTabs(width),
+			this.boxCenteredLine(width, theme.bold(theme.fg("accent", "OMK://CONTROL"))),
+			this.boxCenteredLine(width, theme.bold(theme.fg("warning", "CYBERPUNK OPS CORE"))),
+			this.boxCenteredLine(
+				width,
+				`${theme.fg("accent", "MATRIX RAIN")} // ${theme.fg("success", "NEON GRID ONLINE")}`,
+			),
+			this.boxCenteredLine(width, theme.fg("mdCode", "NIGHT-CITY-MATRIX-V3")),
+			this.sidebarRule(width, "STATUS"),
+			this.boxTextLine(width, `${theme.fg("muted", "state:")} ${theme.fg("success", "* ready")}`),
+			this.boxTextLine(width, `${theme.fg("muted", "route:")} route · evidence · loop · control`),
+			this.sidebarRule(width, "TODO"),
+			this.boxTextLine(width, `${theme.fg("muted", "next:")} add branch TODOs with /todos`),
+			this.sidebarRule(width, "MODEL / CTX"),
+			this.boxTextLine(width, `${theme.fg("muted", "model:")} deepseek/deepseek-v4-pro`),
+			this.boxTextLine(width, `${theme.fg("muted", "think:")} max`),
+			this.boxTextLine(width, `${theme.fg("muted", "ctx:")} ${theme.fg("success", "0.0%/1.0M")}`),
+			this.sidebarRule(width, "RUNTIME / MCP / SKILLS"),
+			this.boxTextLine(width, `${theme.fg("muted", "headroom:")} 0.22.4`),
+			this.boxTextLine(width, `${theme.fg("muted", "omk:")} DAG:omk-parallel-orchestrator`),
+			this.boxTextLine(width, `${theme.fg("muted", "tui:")} full_screen:on sidebar:pinned`),
+			this.sidebarRule(width, "CONTROL"),
+			this.boxTextLine(width, `${theme.fg("muted", "route:")} ${theme.fg("success", "armed")}`),
+			this.boxTextLine(width, `${theme.fg("muted", "verify:")} ${theme.fg("success", "evidence gated")}`),
+			this.boxBottom(width),
+		];
+	}
+
+	private composeColumns(
+		leftLines: string[],
+		leftWidth: number,
+		rightLines: string[],
+		rightWidth: number,
+		width: number,
+	): string[] {
+		const rows = Math.max(leftLines.length, rightLines.length);
+		const gap = " ".repeat(CONTROL_DECK_GAP_WIDTH);
+		const lines: string[] = [];
+		for (let index = 0; index < rows; index++) {
+			const left = this.fitLine(leftLines[index] ?? "", leftWidth);
+			const right = this.fitLine(rightLines[index] ?? "", rightWidth);
+			lines.push(this.clipLine(`${left}${gap}${right}`, width));
+		}
+		return lines;
+	}
+
+	private sidebarTabs(width: number): string {
+		const bodyWidth = Math.max(0, width - 4);
+		const control = theme.bold(theme.fg("accent", "1:CONTROL"));
+		const history = theme.fg("muted", "2:HISTORY");
+		return this.boxTextLine(width, this.fitLine(`${control}    ${history}`, bodyWidth));
+	}
+
+	private sidebarRule(width: number, label: string): string {
+		const bodyWidth = Math.max(0, width - 2);
+		const labelText = ` ${label} `;
+		const fill = Math.max(0, bodyWidth - visibleWidth(labelText));
+		const left = Math.floor(fill / 2);
+		const right = fill - left;
+		return this.clipLine(
+			`${theme.fg("border", "|")}${theme.fg("borderMuted", "-".repeat(left))}${theme.bold(theme.fg("accent", labelText))}${theme.fg("borderMuted", "-".repeat(right))}${theme.fg("border", "|")}`,
+			width,
+		);
+	}
+
+	private controlStripLine(width: number): string {
+		const label = theme.bold(theme.fg("accent", "OMK//CONTROL READ"));
+		return this.centerLine(
+			width,
+			`${label} ${theme.fg("accent", "route/verify/loop/control")} · ${this.content.compactInstructions()}`,
+		);
 	}
 
 	private renderExpanded(width: number): string[] {
@@ -232,6 +364,56 @@ export class ControlPanelComponent implements Component {
 		lines.push(this.divider(width, "END", "borderMuted"));
 
 		return lines;
+	}
+
+	private boxTop(width: number, label: string): string {
+		const text = ` ${label} `;
+		const prefix = "+";
+		const suffix = "+";
+		const fillWidth = Math.max(0, width - visibleWidth(prefix) - visibleWidth(text) - visibleWidth(suffix));
+		return this.clipLine(
+			`${theme.fg("border", prefix)}${theme.bold(theme.fg("accent", text))}${theme.fg("border", "-".repeat(fillWidth))}${theme.fg("border", suffix)}`,
+			width,
+		);
+	}
+
+	private boxBottom(width: number): string {
+		return this.clipLine(theme.fg("border", `+${"-".repeat(Math.max(0, width - 2))}+`), width);
+	}
+
+	private boxBlankLine(width: number): string {
+		return this.boxTextLine(width, "");
+	}
+
+	private boxCenteredLine(width: number, text: string, color?: ThemeColor): string {
+		return this.boxTextLine(width, this.centerText(Math.max(0, width - 4), color ? theme.fg(color, text) : text));
+	}
+
+	private boxTextLine(width: number, text: string, color?: ThemeColor): string {
+		const bodyWidth = Math.max(0, width - 4);
+		const body = color ? theme.fg(color, text) : text;
+		return this.clipLine(
+			`${theme.fg("border", "| ")}${this.fitLine(body, bodyWidth)}${theme.fg("border", " |")}`,
+			width,
+		);
+	}
+
+	private centerLine(width: number, text: string, color?: ThemeColor): string {
+		return this.clipLine(this.centerText(width, color ? theme.fg(color, text) : text), width);
+	}
+
+	private centerText(width: number, text: string): string {
+		const fitted = truncateToWidth(text, width, "");
+		const remaining = Math.max(0, width - visibleWidth(fitted));
+		const left = Math.floor(remaining / 2);
+		const right = remaining - left;
+		return `${" ".repeat(left)}${fitted}${" ".repeat(right)}`;
+	}
+
+	private fitLine(line: string, width: number): string {
+		const clipped = truncateToWidth(line, width, "");
+		const padding = Math.max(0, width - visibleWidth(clipped));
+		return `${clipped}${" ".repeat(padding)}`;
 	}
 
 	private brandLines(width: number): string[] {

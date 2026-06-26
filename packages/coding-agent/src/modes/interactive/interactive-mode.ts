@@ -1573,10 +1573,13 @@ export class InteractiveMode {
 		}
 
 		if (showDiagnostics) {
+			const showCollisionDiagnostics = options?.force === true || this.options.verbose;
 			const diagnosticsVisibleForMode = (
 				diagnostics: readonly ResourceDiagnostic[],
 			): readonly ResourceDiagnostic[] =>
-				showListing ? diagnostics : diagnostics.filter((diagnostic) => diagnostic.type !== "collision");
+				showCollisionDiagnostics
+					? diagnostics
+					: diagnostics.filter((diagnostic) => diagnostic.type !== "collision");
 			const addDiagnosticsSection = (name: string, diagnostics: readonly ResourceDiagnostic[]): void => {
 				if (diagnostics.length === 0) {
 					return;
