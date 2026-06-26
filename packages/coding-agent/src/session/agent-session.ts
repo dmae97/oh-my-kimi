@@ -10750,14 +10750,19 @@ export class AgentSession {
 				} else {
 					noProgressDeadEnd = true;
 				}
-			} else if (reason !== "idle" && shouldAutoContinue) {
+			} else if (reason !== "idle") {
 				// Mirror the shake recovery-band check: only auto-continue when compaction
 				// landed residual context under `COMPACTION_RECOVERY_BAND × threshold`.
 				// Re-firing on a history that still sits just over the line is the
-				// snapcompact thrash, so require genuine headroom, not a bare fit.
+				// snapcompact thrash, so require genuine headroom, not a bare fit. Even
+				// when auto-continue is disabled, a no-headroom threshold pass must still
+				// block later automatic continuations (todo reminders/session_stop hooks)
+				// from re-entering the same oversized context.
 				if (this.#compactionCreatedHeadroom()) {
-					this.#scheduleAutoContinuePrompt(generation);
-					continuationScheduled = true;
+					if (shouldAutoContinue) {
+						this.#scheduleAutoContinuePrompt(generation);
+						continuationScheduled = true;
+					}
 				} else {
 					noProgressDeadEnd = true;
 				}
