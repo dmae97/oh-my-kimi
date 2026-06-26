@@ -655,15 +655,31 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		// `provisionalPendingPreview` describes only the PENDING call preview
 		// (`renderCall`, before any result): the result render may re-anchor it
 		// wholesale, so its rows must never commit. Once a (streaming partial)
-		// result exists the result renderer is the live shape — its body is
-		// top-anchored and grows append-only, and `deriveLiveCommitState` gates
-		// per-row durability — so the block is commit-stable like any settled
-		// stream. Gating the flag on the pending phase is what keeps a collapsed
-		// streaming eval/bash/ssh whose box outgrows the viewport from stranding
-		// its head: while commit-unstable its scrolled-off top committed nowhere
-		// and repainted nowhere, so it read as truncated until ctrl+o (expanded)
-		// flipped it stable.
-		if (this.#result !== undefined) return true;
+		// result exists the result renderer is usually the live shape — its body
+		// is top-anchored and grows append-only, and `deriveLiveCommitState`
+		// gates per-row durability — so the block is commit-stable like any
+		// settled stream. Gating the flag on the pending phase is what keeps a
+		// collapsed streaming eval/bash/ssh whose box outgrows the viewport from
+		// stranding its head: while commit-unstable its scrolled-off top
+		// committed nowhere and repainted nowhere, so it read as truncated until
+		// ctrl+o (expanded) flipped it stable.
+		//
+		// Renderers whose partial-result chrome (header glyph, frame state)
+		// differs from the final result render set `provisionalPartialResult`
+		// to opt out of stream-commit while `isPartial` holds: the ratchet
+		// would otherwise promote the stable partial chrome to native scrollback
+		// after `STABLE_PREFIX_COMMIT_FRAMES` and leave it stranded above the
+		// final frame once the chrome flips. Once the result settles
+		// (`isPartial === false`) the block is commit-stable again.
+		if (this.#result !== undefined) {
+			if (this.#isPartial) {
+				const tool = this.#tool as { provisionalPartialResult?: boolean } | undefined;
+				const provisionalPartialResult =
+					tool?.provisionalPartialResult ?? toolRenderers[this.#toolName]?.provisionalPartialResult;
+				if (provisionalPartialResult) return false;
+			}
+			return true;
+		}
 		const tool = this.#tool as { provisionalPendingPreview?: boolean | "collapsed" } | undefined;
 		const provisionalPendingPreview =
 			tool?.provisionalPendingPreview ?? toolRenderers[this.#toolName]?.provisionalPendingPreview;
