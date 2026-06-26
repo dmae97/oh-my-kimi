@@ -33,6 +33,7 @@ describe("resolveStdioSpawnCommand", () => {
 				`""${shim}" "serve" "--mcp""`,
 			]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -62,6 +63,7 @@ describe("resolveStdioSpawnCommand", () => {
 
 			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${localShim}" "serve""`]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(projectDir, { recursive: true, force: true });
 			await fs.rm(globalDir, { recursive: true, force: true });
@@ -112,6 +114,7 @@ describe("resolveStdioSpawnCommand", () => {
 
 			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -154,6 +157,7 @@ describe("resolveStdioSpawnCommand", () => {
 
 			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "serve""`]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -186,6 +190,7 @@ describe("resolveStdioSpawnCommand", () => {
 				`""${shim}" "serve" "--header" "Authorization=^%TOKEN^%""`,
 			]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -218,6 +223,7 @@ describe("resolveStdioSpawnCommand", () => {
 				`""${shim}" "--config" "{^"a^":^"b&c|d^"}""`,
 			]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -258,6 +264,7 @@ describe("resolveStdioSpawnCommand", () => {
 				`""${shim}" "serve" "--mcp""`,
 			]);
 			expect(result.windowsHide).toBe(true);
+			expect(result.detached).toBe(false);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
@@ -285,6 +292,7 @@ describe("resolveStdioSpawnCommand", () => {
 			`""codegraph.cmd" "serve" "--mcp""`,
 		]);
 		expect(result.windowsHide).toBe(true);
+		expect(result.detached).toBe(false);
 	});
 
 	it("routes unresolvable bare Windows commands through cmd.exe so PATHEXT can find a .cmd shim (#3250)", async () => {
@@ -317,6 +325,7 @@ describe("resolveStdioSpawnCommand", () => {
 			`""npx" "-y" "cloakbrowser-mcp@latest""`,
 		]);
 		expect(result.windowsHide).toBe(true);
+		expect(result.detached).toBe(false);
 	});
 
 	it("leaves non-Windows commands untouched", async () => {
@@ -327,6 +336,36 @@ describe("resolveStdioSpawnCommand", () => {
 
 		expect(result.cmd).toEqual(["codegraph", "serve", "--mcp"]);
 		expect(result.windowsHide).toBeUndefined();
+		expect(result.detached).toBe(true);
+	});
+
+	it("never detaches Windows stdio launches so nested cmd.exe wrappers keep stdout routed back to the parent pipe (#3544)", async () => {
+		// The reporter's failing shape is `cmd.exe` → `node wrapper` →
+		// `cmd.exe /C npx.cmd -y mcp-remote`. Detaching the direct hidden
+		// `cmd.exe` strips its inherited console; the nested console
+		// grandchildren (`node`, `npx.cmd`, `mcp-remote`) then allocate a
+		// brand-new visible conhost whose stdout no longer routes back through
+		// our pipe — the proxy reports the bridge is up while OMP times out on
+		// the MCP `initialize` response. `windowsHide` only hides the direct
+		// child's window (#3536); the only fix that keeps the grandchild
+		// attached to the same console session is `detached: false`. Pin every
+		// Windows return shape here so the contract cannot regress for the
+		// direct-`cmd.exe` launcher the reporter used.
+		const result = await resolveStdioSpawnCommand(
+			{ type: "stdio", command: "cmd.exe", args: ["/C", "node .codex\\mcp-wrapper.js"] },
+			{
+				cwd: "C:\\project",
+				env: {
+					COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+					PATH: "",
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+				platform: "win32",
+			},
+		);
+
+		expect(result.detached).toBe(false);
+		expect(result.windowsHide).toBe(true);
 	});
 });
 
