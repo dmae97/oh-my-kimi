@@ -29,6 +29,10 @@
 
 - Added an interactive `/move` overlay: typing `/move` with no argument opens a path autocomplete picker (type to filter, ↑↓ to navigate, Tab to accept, Enter to confirm). `/move <path>` still works for direct invocation. The command now starts a fresh empty session in the target directory instead of relocating the current session file, leaving the previous session resumable via `/resume`. If the target directory does not exist, a confirmation prompt offers to create it. Empty move sessions (no user/assistant messages) are automatically cleaned up on shutdown so they don't accumulate.
 
+### Added
+
+- Added Tab completion for `/move` destination directories. Typing `/move <path>` now offers directory suggestions relative to the current working directory, including support for `~`, absolute, and relative paths.
+
 ### Fixed
 
 - Fixed `snapcompact` compaction silently falling back to an LLM summary when local preflight rejects the archive; manual and auto snapcompact now fail locally with the blocker instead of making provider calls. ([#3599](https://github.com/can1357/oh-my-pi/issues/3599))
