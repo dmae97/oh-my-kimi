@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getLogsDir, isBunTestRuntime } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, getLogsDir, isBunTestRuntime } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
 import { isCopilotTransientModelError } from "./retry.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
@@ -23,6 +23,23 @@ export type CapturedHttpErrorResponse = {
 
 const SENSITIVE_HEADERS = ["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "proxy-authorization"];
 
+/**
+ * Build the JSON persisted for a rejected request. Request fields stay at the
+ * top level (so existing dump parsers still read `body`); the provider's error
+ * is added under `errorResponse` so a failed request is diagnosable from the
+ * dump file rather than the request alone.
+ */
+export function buildHttp400DumpPayload(
+	dump: RawHttpRequestDump,
+	error: unknown,
+	message: string,
+): RawHttpRequestDump & { errorResponse: { status: number | undefined; message: string } } {
+	return {
+		...sanitizeDump(dump),
+		errorResponse: { status: extractHttpStatusFromError(error), message },
+	};
+}
+
 export async function appendRawHttpRequestDumpFor400(
 	message: string,
 	error: unknown,
@@ -33,12 +50,12 @@ export async function appendRawHttpRequestDumpFor400(
 		return message;
 	}
 
-	const sanitizedDump = sanitizeDump(dump);
-	const fileName = `${Date.now()}-${Bun.hash(JSON.stringify(sanitizedDump)).toString(36)}.json`;
+	const payload = buildHttp400DumpPayload(dump, error, message);
+	const fileName = `${Date.now()}-${Bun.hash(JSON.stringify(payload)).toString(36)}.json`;
 	const filePath = path.join(getLogsDir(), "http-400-requests", fileName);
 
 	try {
-		await Bun.write(filePath, `${JSON.stringify(sanitizedDump, null, 2)}\n`);
+		await Bun.write(filePath, `${JSON.stringify(payload, null, 2)}\n`);
 		return `${message}\nraw-http-request=${filePath}`;
 	} catch (writeError) {
 		const writeMessage = writeError instanceof Error ? writeError.message : String(writeError);
