@@ -26,9 +26,12 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
+import { markMoveSession } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { resolveResumableSession } from "../session/session-listing";
+import { SessionManager } from "../session/session-manager";
 import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import { resolveToCwd } from "../tools/path-utils";
 import { urlHyperlinkAlways } from "../tui";
 import { getChangelogPath, parseChangelog } from "../utils/changelog";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
@@ -1590,24 +1593,31 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "move",
-		description: "Move session to a different working directory",
-		acpDescription: "Move the current session file",
-		inlineHint: "<path>",
+		description: "Switch to a fresh session in a different directory",
+		acpDescription: "Start a fresh session in a different directory",
+		inlineHint: "[<path>]",
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
 			if (!command.args) return usage("Usage: /move <path>", runtime);
-			const resolvedPath = path.resolve(runtime.cwd, command.args);
-			let isDirectory: boolean;
+			const resolvedPath = resolveToCwd(command.args, runtime.cwd);
 			try {
-				isDirectory = (await fs.stat(resolvedPath)).isDirectory();
+				const stat = await fs.stat(resolvedPath);
+				if (!stat.isDirectory()) {
+					return usage(`Not a directory: ${resolvedPath}`, runtime);
+				}
 			} catch {
-				return usage(`Directory does not exist or is not a directory: ${resolvedPath}`, runtime);
+				// Directory doesn't exist — create it (no interactive confirm in ACP).
+				try {
+					await fs.mkdir(resolvedPath, { recursive: true });
+				} catch (err) {
+					return usage(`Failed to create directory: ${errorMessage(err)}`, runtime);
+				}
 			}
-			if (!isDirectory) return usage(`Directory does not exist or is not a directory: ${resolvedPath}`, runtime);
 			try {
-				await runtime.sessionManager.flush();
-				await runtime.sessionManager.moveTo(resolvedPath);
+				const newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
+				await runtime.session.switchSession(newSessionFile);
+				markMoveSession(newSessionFile);
 			} catch (err) {
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
@@ -1616,18 +1626,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			// capabilities scoped to the new cwd.
 			await runtime.reloadPlugins();
 			await runtime.notifyTitleChanged?.();
-			await runtime.output(`Session moved to ${runtime.sessionManager.getCwd()}.`);
+			await runtime.output(`Moved to ${runtime.sessionManager.getCwd()}.`);
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
-			const targetPath = command.args;
-			if (!targetPath) {
-				runtime.ctx.showError("Usage: /move <path>");
-				runtime.ctx.editor.setText("");
-				return;
-			}
+			runtime.ctx.editor.addToHistory(command.text);
 			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleMoveCommand(targetPath);
+			await runtime.ctx.handleMoveCommand(command.args || undefined);
 		},
 	},
 	{

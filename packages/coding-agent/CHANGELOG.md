@@ -24,6 +24,10 @@
 
 - Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); POSIX remotes only (Linux/macOS/BSD; Windows hosts are rejected — use the `ssh` tool), UTF-8 text only, up to 1 MiB. Requires the same approval as the `ssh` tool, rejects argument-injecting hosts/usernames (leading `-`), validates the entire file as UTF-8, peels read selectors so `write` targets the same file `read` does, and replaces (rather than writes through) a non-directory symlinked write destination via a uniquely named remote temp. `read` also lists an `ssh://` directory one level deep (dotfiles included, directories first; `ssh://host/` lists the remote root), while `search` refuses an `ssh://` directory and `write` refuses to overwrite one. Bare `ssh://` lists the configured hosts, which are also offered as autocompletions after typing `ssh://`.
 
+### Added
+
+- Added an interactive `/move` overlay: typing `/move` with no argument opens a path autocomplete picker (type to filter, ↑↓ to navigate, Tab to accept, Enter to confirm). `/move <path>` still works for direct invocation. The command now starts a fresh empty session in the target directory instead of relocating the current session file, leaving the previous session resumable via `/resume`. If the target directory does not exist, a confirmation prompt offers to create it. Empty move sessions (no user/assistant messages) are automatically cleaned up on shutdown so they don't accumulate.
+
 ### Fixed
 
 - Fixed `snapcompact` compaction silently falling back to an LLM summary when local preflight rejects the archive; manual and auto snapcompact now fail locally with the blocker instead of making provider calls. ([#3599](https://github.com/can1357/oh-my-pi/issues/3599))

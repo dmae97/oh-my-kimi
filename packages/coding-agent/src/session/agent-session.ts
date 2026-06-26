@@ -4714,6 +4714,8 @@ export class AgentSession {
 		await disposeJuliaKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
+		// Clean up empty sessions created by /move so they don't accumulate.
+		await cleanupEmptyMoveSession(this.sessionManager);
 		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
@@ -13899,4 +13901,56 @@ export class AgentSession {
 	get extensionRunner(): ExtensionRunner | undefined {
 		return this.#extensionRunner;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Empty move-session cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Session files created by `/move` that should be cleaned up on shutdown if
+ * they never received any real user/assistant messages. This prevents empty
+ * session files from accumulating when the user moves to a directory and quits
+ * without chatting.
+ */
+const moveSessionFiles = new Set<string>();
+
+/** Mark a session file as created by `/move` so it can be cleaned up on exit. */
+export function markMoveSession(sessionFile: string): void {
+	moveSessionFiles.add(path.resolve(sessionFile));
+}
+
+/** Remove a session file from the move-session cleanup tracking. */
+export function unmarkMoveSession(sessionFile: string): void {
+	moveSessionFiles.delete(path.resolve(sessionFile));
+}
+
+/** Check whether a session file was created by `/move` and is still tracked. */
+export function isMoveSession(sessionFile: string): boolean {
+	return moveSessionFiles.has(path.resolve(sessionFile));
+}
+
+/**
+ * If the current session was created by `/move` and contains no real
+ * user/assistant messages, delete it so empty move sessions don't accumulate.
+ * Called during `dispose()`.
+ */
+async function cleanupEmptyMoveSession(sessionManager: SessionManager): Promise<void> {
+	const sessionFile = sessionManager.getSessionFile();
+	if (!sessionFile || !moveSessionFiles.has(path.resolve(sessionFile))) return;
+	const entries = sessionManager.getEntries();
+	const hasRealMessages = entries.some(
+		e => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
+	);
+	if (hasRealMessages) {
+		// The session has real content — keep it and stop tracking it as a move session.
+		moveSessionFiles.delete(path.resolve(sessionFile));
+		return;
+	}
+	try {
+		await sessionManager.dropSession(sessionFile);
+	} catch (err) {
+		logger.warn("Failed to clean up empty move session", { sessionFile, error: String(err) });
+	}
+	moveSessionFiles.delete(path.resolve(sessionFile));
 }

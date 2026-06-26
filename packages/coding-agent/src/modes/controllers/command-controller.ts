@@ -31,6 +31,7 @@ import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
 import { EvalExecutionComponent } from "../../modes/components/eval-execution";
+import { MoveOverlay, type MoveOverlayResult } from "../../modes/components/move-overlay";
 import { TranscriptBlock } from "../../modes/components/transcript-container";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
@@ -38,9 +39,11 @@ import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/c
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
+import { markMoveSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
+import { SessionManager } from "../../session/session-manager";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
 import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { outputMeta } from "../../tools/output-meta";
@@ -911,13 +914,34 @@ export class CommandController {
 		]);
 	}
 
-	async handleMoveCommand(targetPath: string): Promise<void> {
+	/**
+	 * `/move` — switch to a fresh empty session in a different directory.
+	 *
+	 * With no `targetPath` (TUI only), opens an autocomplete overlay so the user
+	 * can pick or type a directory. With a `targetPath`, resolves it directly.
+	 * If the target directory does not exist, the user is asked whether to create
+	 * it. A brand-new empty session is then started in the target directory and
+	 * the current session is left behind (resumable via `/resume`).
+	 */
+	async handleMoveCommand(targetPath?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
 			this.ctx.showWarning("Wait for the current response to finish or abort it before moving.");
 			return;
 		}
 
-		const unquoted = stripOuterDoubleQuotes(targetPath);
+		let input: string | undefined = targetPath?.trim() || undefined;
+
+		// No argument in TUI mode: open the path autocomplete overlay.
+		if (!input) {
+			const result = await this.ctx.showHookCustom<MoveOverlayResult | undefined>(
+				(_tui, _theme, _keybindings, done) => new MoveOverlay(this.ctx.sessionManager.getCwd(), done),
+				{ overlay: true },
+			);
+			if (!result) return; // cancelled
+			input = result.directory;
+		}
+
+		const unquoted = stripOuterDoubleQuotes(input);
 		if (!unquoted) {
 			this.ctx.showError("Usage: /move <path>");
 			return;
@@ -926,25 +950,64 @@ export class CommandController {
 		const cwd = this.ctx.sessionManager.getCwd();
 		const resolvedPath = resolveToCwd(unquoted, cwd);
 
+		// If the directory doesn't exist, offer to create it.
+		let isDirectory: boolean;
 		try {
-			const stat = await fs.stat(resolvedPath);
-			if (!stat.isDirectory()) {
-				this.ctx.showError(`Not a directory: ${resolvedPath}`);
+			isDirectory = (await fs.stat(resolvedPath)).isDirectory();
+		} catch {
+			isDirectory = false;
+		}
+
+		if (!isDirectory) {
+			const parentDir = path.dirname(resolvedPath);
+			let parentExists = false;
+			try {
+				parentExists = (await fs.stat(parentDir)).isDirectory();
+			} catch {
+				parentExists = false;
+			}
+			if (!parentExists) {
+				this.ctx.showError(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`);
 				return;
 			}
-		} catch {
-			this.ctx.showError(`Directory does not exist: ${resolvedPath}`);
-			return;
+			const confirmed = await this.ctx.showHookConfirm(
+				"Create directory?",
+				`"${path.basename(resolvedPath)}" does not exist. Create it?`,
+			);
+			if (!confirmed) return;
+			try {
+				await fs.mkdir(resolvedPath, { recursive: true });
+			} catch (err) {
+				this.ctx.showError(`Failed to create directory: ${err instanceof Error ? err.message : String(err)}`);
+				return;
+			}
 		}
 
 		try {
-			await this.ctx.sessionManager.flush();
-			await this.ctx.sessionManager.moveTo(resolvedPath);
+			// Create a fresh empty session file in the target directory's session
+			// folder, then switch to it. The current session is left behind and
+			// remains resumable via /resume.
+			const newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
+			await this.ctx.session.switchSession(newSessionFile);
+			markMoveSession(newSessionFile);
 			await this.ctx.applyCwdChange(resolvedPath);
+
+			this.ctx.chatContainer.clear();
+			this.ctx.pendingMessagesContainer.clear();
+			this.ctx.compactionQueuedMessages = [];
+			this.ctx.streamingComponent = undefined;
+			this.ctx.streamingMessage = undefined;
+			this.ctx.pendingTools.clear();
+			this.ctx.statusLine.invalidate();
+			this.ctx.statusLine.setSessionStartTime(Date.now());
+			this.ctx.updateEditorTopBorder();
+			this.ctx.updateEditorBorderColor();
+			await this.ctx.reloadTodos();
+			this.ctx.ui.requestRender(true, { clearScrollback: true });
 
 			this.ctx.present([
 				new Spacer(1),
-				new Text(`${theme.fg("accent", `${theme.status.success} Session moved to ${resolvedPath}`)}`, 1, 1),
+				new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
 			]);
 		} catch (err) {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);

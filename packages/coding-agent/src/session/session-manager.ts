@@ -1524,6 +1524,29 @@ export class SessionManager {
 	}
 
 	/**
+	 * Create a fresh empty session file in the default session directory for
+	 * `cwd`, writing only the session header. The returned path can be passed to
+	 * `setSessionFile` / `AgentSession.switchSession` to start a new empty
+	 * session in that directory. Used by `/move` to switch projects without
+	 * dragging the current conversation along.
+	 */
+	static createEmptySessionFile(cwd: string, storage: SessionStorage = new FileSessionStorage()): string {
+		const sessionDir = SessionManager.getDefaultSessionDir(cwd, undefined, storage);
+		const id = mintSessionId();
+		const timestamp = nowIso();
+		const header: SessionHeader = {
+			type: "session",
+			version: CURRENT_SESSION_VERSION,
+			id,
+			timestamp,
+			cwd: path.resolve(cwd),
+		};
+		const file = path.join(sessionDir, `${fileSafeTimestamp(timestamp)}_${id}.jsonl`);
+		storage.writeTextSync(file, `${JSON.stringify(header)}\n`);
+		return file;
+	}
+
+	/**
 	 * Fork a session into the current project directory: copy history from another
 	 * session file while creating a fresh session file in this sessionDir.
 	 *
