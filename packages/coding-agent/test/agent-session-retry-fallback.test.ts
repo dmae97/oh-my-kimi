@@ -380,12 +380,14 @@ describe("AgentSession retry fallback", () => {
 		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
 
 		const sessionStopCalls: number[] = [];
+		const sessionStopLastAssistantMessages: Array<AssistantMessage | undefined> = [];
 		const extensionRunner = {
 			emit: vi.fn().mockResolvedValue(undefined),
 			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
 			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
-			emitSessionStop: vi.fn(() => {
+			emitSessionStop: vi.fn((event: { last_assistant_message?: AssistantMessage }) => {
 				sessionStopCalls.push(mock.calls.length);
+				sessionStopLastAssistantMessages.push(event.last_assistant_message);
 				return Promise.resolve(undefined);
 			}),
 		} as unknown as ExtensionRunner;
@@ -416,6 +418,12 @@ describe("AgentSession retry fallback", () => {
 		// refusal turn (regression: prior to PR #3594's review fix, the refusal
 		// branch short-circuited before `#emitSessionStopEvent`).
 		expect(sessionStopCalls).toEqual([1, 2]);
+		expect(sessionStopLastAssistantMessages[0]?.stopReason).toBe("error");
+		expect(sessionStopLastAssistantMessages[0]?.stopDetails).toEqual({
+			type: "refusal",
+			category: "bio",
+			explanation: "Classifier declined this turn.",
+		});
 	});
 
 	it("does not exceed retry.maxRetries for classifier fallback chains", async () => {

@@ -3186,7 +3186,7 @@ export class AgentSession {
 					return;
 				}
 			}
-			await this.#emitSessionStopEvent(settledMessages);
+			await this.#emitSessionStopEvent(settledMessages, msg);
 			await emitAgentEndNotification();
 		}
 	};
@@ -4177,13 +4177,16 @@ export class AgentSession {
 		await this.#extensionRunner?.emit({ type: "agent_end", messages });
 	}
 
-	async #emitSessionStopEvent(messages: AgentMessage[]): Promise<void> {
+	async #emitSessionStopEvent(
+		messages: AgentMessage[],
+		lastAssistantMessage = this.getLastAssistantMessage(),
+	): Promise<void> {
 		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
 		const generation = this.#promptGeneration;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
 			turn_id: Math.max(0, this.#turnIndex - 1),
-			last_assistant_message: this.getLastAssistantMessage(),
+			last_assistant_message: lastAssistantMessage,
 			session_id: this.sessionId,
 			session_file: this.sessionFile,
 			stop_hook_active: this.#sessionStopHookActive,
