@@ -87,6 +87,10 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 	type: "text",
 };
 import { AgentRegistry } from "../registry/agent-registry";
+import {
+	countRunningSubagentBadgeAgents,
+	getRunningSubagentBadgeRegistry,
+} from "./running-subagent-badge";
 import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";
@@ -1460,7 +1464,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Refresh the running-subagents status badge from the active local or collab registry. */
 	syncRunningSubagentBadge(): void {
-		const registry = this.collabGuest?.agentRegistry ?? AgentRegistry.global();
+		const registry = getRunningSubagentBadgeRegistry(this.collabGuest);
 		if (this.#agentRegistrySubscriptionTarget !== registry) {
 			this.#agentRegistryUnsubscribe?.();
 			this.#agentRegistrySubscriptionTarget = registry;
@@ -1469,7 +1473,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			});
 		}
-		const count = registry.list().filter(ref => ref.kind === "sub" && ref.status === "running").length;
+		const count = countRunningSubagentBadgeAgents(registry);
 		this.statusLine.setSubagentCount(count);
 		this.updateEditorTopBorder();
 	}

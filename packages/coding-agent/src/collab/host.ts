@@ -11,7 +11,6 @@
 
 import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { BusChannel, AgentEvent as WireAgentEvent, SessionEntry as WireSessionEntry } from "@oh-my-pi/pi-wire";
@@ -21,7 +20,8 @@ import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import type { SessionEntry as StoredSessionEntry } from "../session/session-entries";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
+import { collabDisplayName } from "./display-name";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import {
 	type AgentSnapshot,
@@ -102,16 +102,6 @@ const TRANSCRIPT_READ_CAP = 4 * 1024 * 1024;
  */
 const SNAPSHOT_CHUNK_BYTES = 512 * 1024;
 
-/** Display name for this process's user in collab sessions. */
-export function collabDisplayName(ctx: InteractiveModeContext): string {
-	const configured = (ctx.settings.get("collab.displayName") ?? "").trim();
-	if (configured) return configured;
-	try {
-		return os.userInfo().username;
-	} catch {
-		return "anonymous";
-	}
-}
 
 export class CollabHost {
 	#ctx: InteractiveModeContext;

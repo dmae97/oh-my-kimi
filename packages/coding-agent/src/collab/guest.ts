@@ -24,7 +24,7 @@ import type { SessionEntry } from "../session/session-entries";
 import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
 import { setSessionTerminalTitle } from "../utils/title-generator";
 import { importRoomKey } from "./crypto";
-import { collabDisplayName } from "./host";
+import { collabDisplayName } from "./display-name";
 import {
 	type AgentSnapshot,
 	COLLAB_PROTO,
