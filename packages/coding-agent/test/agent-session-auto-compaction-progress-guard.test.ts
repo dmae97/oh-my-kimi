@@ -344,6 +344,115 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress.length).toBe(0);
 	});
 
+	/**
+	 * Seed a single large `useless` tool result (plus tiny follow-up turns that
+	 * keep its suffix inside the cache-warm window) so the per-turn maintenance
+	 * passes free ~40k tokens before compaction runs — the same shape as the
+	 * #3174 pruning regression. This drives `postMaintenanceContextTokens` (the
+	 * trigger handed to the headroom guard) well below the recovery band.
+	 */
+	function seedPrunableMaintenance(now: number) {
+		sessionManager.appendMessage({ role: "user", content: "Investigate everything.", timestamp: now - 200 });
+		const bigCallId = "call-big-useless";
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: bigCallId, name: "search", arguments: { pattern: "TODO" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "toolUse",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			timestamp: now - 180,
+		});
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: bigCallId,
+			toolName: "search",
+			content: [{ type: "text", text: "match line\n".repeat(20000) }], // ~40k+ tokens
+			isError: false,
+			useless: true,
+			timestamp: now - 170,
+		});
+		for (let i = 0; i < 4; i++) {
+			const smallId = `call-small-${i}`;
+			const ts = now - 160 + i * 2;
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "toolCall", id: smallId, name: "read", arguments: { path: `note-${i}.md` } }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "toolUse",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				timestamp: ts,
+			});
+			sessionManager.appendMessage({
+				role: "toolResult",
+				toolCallId: smallId,
+				toolName: "read",
+				content: [{ type: "text", text: `tiny note ${i}` }],
+				isError: false,
+				timestamp: ts + 1,
+			});
+		}
+		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+	}
+
+	it("auto-continues when residual sits at the recovery band but the trigger was already sub-band", async () => {
+		// Regression for the #3412 review: when stale/tool-output pruning already
+		// dropped context under the recovery band BEFORE this pass, the trigger
+		// (postMaintenanceContextTokens) is itself sub-band. The old guard returned
+		// `residual < trigger`, so a residual that merely held the line at/under the
+		// band — not strictly smaller than the already-safe trigger — was reported
+		// as no-progress and the auto-continue was suppressed with a false warning,
+		// even though the next turn could no longer re-trip threshold compaction.
+		const now = Date.now();
+		// Pin the threshold so the recovery band is exact: floor(76384 * 0.8) = 61107.
+		session.settings.set("compaction.thresholdTokens", 76384);
+		session.settings.set("compaction.thresholdPercent", -1);
+		session.settings.set("compaction.strategy", "context-full");
+		session.settings.set("compaction.dropUseless", true);
+		session.settings.set("compaction.supersedeReads", true);
+		session.settings.set("compaction.keepRecentTokens", 10000);
+		session.settings.set("compaction.reserveTokens", 16384);
+		seedPrunableMaintenance(now);
+
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		// Residual lands AT the band (61000 <= 61107). Maintenance pruning already
+		// drove the trigger below this, so the old strict-less guard would have
+		// suppressed; the band check proves headroom and continues.
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 61000, contextWindow: 200000, percent: 30.5 });
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		// Final turn billed above the 76384 threshold so threshold compaction fires.
+		const finalAssistant = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "continuing." }],
+			api: "anthropic-messages" as const,
+			provider: "anthropic" as const,
+			model: "claude-sonnet-4-5",
+			stopReason: "stop" as const,
+			usage: { input: 5000, output: 1000, cacheRead: 85000, cacheWrite: 0, totalTokens: 91000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			timestamp: now,
+		};
+		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [finalAssistant] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
 	it("pauses (single warning) when an overflow recovery still does not fit the window", async () => {
 		// The genuine dead-end the retry guard must still catch: even after dropping
 		// the failed turn the rebuilt prompt is over the window, so retrying would

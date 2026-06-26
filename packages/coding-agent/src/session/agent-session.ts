@@ -10138,12 +10138,14 @@ export class AgentSession {
 	 * blows the threshold cannot be reduced by compaction (findCutPoint keeps that
 	 * turn verbatim), so re-firing on the next agent_end just thrashes. We only
 	 * report progress when residual context lands at or below
-	 * `COMPACTION_RECOVERY_BAND × threshold`.
+	 * `COMPACTION_RECOVERY_BAND × threshold` — a band that sits strictly under the
+	 * compaction threshold, so reaching it guarantees the next turn cannot
+	 * re-trip threshold compaction.
 	 *
 	 * When the model/window is unknown we cannot evaluate the band, so we
 	 * optimistically allow the continuation (preserving prior behavior).
 	 */
-	#compactionCreatedHeadroom(triggerContextTokens?: number): boolean {
+	#compactionCreatedHeadroom(): boolean {
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return true;
 		const compactionSettings = this.settings.getGroup("compaction");
@@ -10153,19 +10155,15 @@ export class AgentSession {
 		);
 		const thresholdTokens = resolveThresholdTokens(contextWindow, compactionSettings);
 		const recoveryBand = Math.floor(thresholdTokens * COMPACTION_RECOVERY_BAND);
-		// A genuine reduction past the band always counts as progress. The
-		// triggerContextTokens comparison is a secondary guard: if residual context
-		// is not meaningfully smaller than what triggered this pass, treat it as a
-		// no-op even when it nominally sits under the band.
-		if (residualTokens > recoveryBand) return false;
-		if (
-			typeof triggerContextTokens === "number" &&
-			Number.isFinite(triggerContextTokens) &&
-			triggerContextTokens > 0
-		) {
-			return residualTokens < triggerContextTokens;
-		}
-		return true;
+		// Residual at/below the band is authoritative headroom: the band sits
+		// strictly under the compaction threshold, so the next turn cannot
+		// re-trip threshold compaction regardless of how little this pass shaved.
+		// Don't add a secondary "smaller than the trigger" guard — when stale/
+		// tool-output pruning already dropped context under the band before this
+		// pass, the trigger is itself sub-band, and requiring a strict reduction
+		// would suppress a valid continuation and emit a false no-progress warning
+		// even though compaction left the session safe.
+		return residualTokens <= recoveryBand;
 	}
 
 	/**
@@ -10736,7 +10734,7 @@ export class AgentSession {
 				// landed residual context under `COMPACTION_RECOVERY_BAND × threshold`.
 				// Re-firing on a history that still sits just over the line is the
 				// snapcompact thrash, so require genuine headroom, not a bare fit.
-				if (this.#compactionCreatedHeadroom(options.triggerContextTokens)) {
+				if (this.#compactionCreatedHeadroom()) {
 					this.#scheduleAutoContinuePrompt(generation);
 					continuationScheduled = true;
 				} else {
