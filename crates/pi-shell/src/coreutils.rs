@@ -22,7 +22,7 @@ use brush_core::{
 	builtins::{BoxFuture, ContentOptions, ContentType, Registration},
 	commands::{CommandArg, ExecutionContext},
 	extensions::ShellExtensions,
-	openfiles::OpenFiles,
+	openfiles::{OpenFile, OpenFiles},
 	results::ExecutionResult,
 };
 
@@ -66,6 +66,9 @@ async fn run_uutil<SE: ShellExtensions>(
 	};
 	#[cfg(not(unix))]
 	let stdin_fd: Option<i32> = None;
+	let stdin_is_search_input = stdin
+		.as_ref()
+		.is_some_and(|file| matches!(file, OpenFile::PipeReader(_) | OpenFile::Stream(_)));
 
 	let cancel_flag = Arc::new(AtomicBool::new(false));
 	let scope_flag = Arc::clone(&cancel_flag);
@@ -93,7 +96,16 @@ async fn run_uutil<SE: ShellExtensions>(
 			None => Box::new(io::sink()),
 		};
 		pi_uutils_ctx::scope(
-			pi_uutils_ctx::ScopeIo { stdin, stdin_fd, stdout, stderr, cwd, env, cancel: scope_flag },
+			pi_uutils_ctx::ScopeIo {
+				stdin,
+				stdin_fd,
+				stdin_is_search_input,
+				stdout,
+				stderr,
+				cwd,
+				env,
+				cancel: scope_flag,
+			},
 			|| run(argv),
 		)
 	});
@@ -171,6 +183,7 @@ uutil_builtin!(pub fn tail_builtin => uu_tail::run);
 uutil_builtin!(pub fn ls_builtin => uu_ls::run);
 uutil_builtin!(pub fn find_builtin => uu_find::run);
 uutil_builtin!(pub fn grep_builtin => pi_uu_grep::run);
+uutil_builtin!(pub fn rg_builtin => pi_uu_grep::run_rg);
 uutil_builtin!(pub fn rm_builtin => uu_rm::run);
 uutil_builtin!(pub fn mv_builtin => uu_mv::run);
 uutil_builtin!(pub fn cat_builtin => uu_cat::run);
