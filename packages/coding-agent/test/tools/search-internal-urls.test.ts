@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as capability from "@oh-my-pi/pi-coding-agent/capability";
+import type { CapabilityResult } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetActiveSkillsForTests, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import {
@@ -12,6 +14,7 @@ import {
 	type ProtocolHandler,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import * as sshFileTransfer from "@oh-my-pi/pi-coding-agent/ssh/file-transfer";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -92,6 +95,7 @@ describe("SearchTool internal URL resolution", () => {
 		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();
 		resetActiveSkillsForTests();
+		vi.restoreAllMocks();
 	});
 
 	function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -525,5 +529,22 @@ describe("SearchTool internal URL resolution", () => {
 		await expect(tool.execute("dir-search", { pattern: "x", paths: ["dirstub://host/dir"] })).rejects.toThrow(
 			/directory listing|cannot recurse/,
 		);
+	});
+
+	it("rejects an ssh:// directory in search without draining a remote listing", async () => {
+		vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<unknown>);
+		vi.spyOn(sshFileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
+		vi.spyOn(sshFileTransfer, "statRemotePath").mockResolvedValue("directory");
+		const listSpy = vi.spyOn(sshFileTransfer, "listRemoteDir").mockResolvedValue([]);
+		const tool = new SearchTool(createSession());
+		await expect(tool.execute("ssh-dir-search", { pattern: "x", paths: ["ssh://h/etc"] })).rejects.toThrow(
+			/directory listing|cannot recurse/,
+		);
+		expect(listSpy).not.toHaveBeenCalled();
 	});
 });

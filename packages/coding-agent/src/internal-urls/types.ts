@@ -100,6 +100,13 @@ export interface ResolveContext {
 	localProtocolOptions?: LocalProtocolOptions;
 	/** Calling session's loaded skills. Prefer this over process-global skill state. */
 	skills?: readonly Skill[];
+	/**
+	 * When set, handlers that would otherwise materialize an expensive directory
+	 * listing (e.g. the ssh:// handler draining a full remote `ls`) instead return
+	 * the directory shape (`isDirectory: true`) with empty content. `search`/`find`
+	 * reject directory resources, so they never need the listing.
+	 */
+	skipDirectoryListing?: boolean;
 }
 
 /**

@@ -79,6 +79,7 @@
 - `ssh://` `search` now rejects a malformed or multi-range line selector (e.g. `:-10`, `:1-1:1-2`) instead of silently searching the whole remote file, matching `read`'s selector grammar, and validates the pattern against the native RE2 dialect for remote/virtual-only searches so unsupported regexes fail consistently with local search.
 - `ssh://` host names containing URL-reserved characters (e.g. `prod:2222`, `alice@prod`) are now percent-encoded in the host index and autocomplete and matched against the decoded authority, so configured aliases resolve correctly (a literal `user@`/`:port` in the URL is still rejected as an override on a configured host).
 - `ssh://` `read`/`search`/`write` now reject an explicit `:0` port (e.g. `ssh://host:0/path`) before connecting, instead of silently dropping it and connecting on the default SSH port; a path-less `ssh://host:2222` also no longer mistakes its authority port for a read selector.
+- `ssh://` now strips IPv6 URL brackets before invoking OpenSSH (so `ssh://[::1]/path` targets `::1` instead of failing to resolve), rejects a malformed or out-of-range port (`ssh://host:abc`, `ssh://host:65536`) before connecting instead of treating the bad authority as an opaque default-port host, and `search` no longer drains a remote directory listing only to reject it (it requests directory metadata via `skipDirectoryListing`).
 
 ## [16.1.19] - 2026-06-25
 

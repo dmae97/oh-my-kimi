@@ -120,11 +120,25 @@ function formatHostIndex(hosts: readonly SSHHost[]): string {
  * an opaque OpenSSH destination so plain `~/.ssh/config` aliases work.
  */
 async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnectionTarget> {
+	// `parseInternalUrl` falls back to a lenient regex parse when WHATWG `new URL`
+	// rejects the input. For ssh:// that only happens on a malformed authority — an
+	// invalid or out-of-range port (`prod:abc`, `host:65536`) or a bad IPv6 literal —
+	// which would otherwise be mis-read as an opaque host and silently connect to the
+	// default port. Reject it before resolving.
+	if (!URL.canParse(url.href)) {
+		throw new Error(`ssh://: invalid host or port in "${url.href}"; use ssh://host[:1-65535]/<absolute-path>`);
+	}
+	// WHATWG `hostname` is bracketed only for a *valid* IPv6 literal, so a bracketed
+	// host is unambiguously IPv6 — hand OpenSSH the bare address. Percent-encoded
+	// bracketed aliases (e.g. `%5Bprod%3A2222%5D`) keep their literal brackets in the
+	// decoded `rawHost`, so they are matched and forwarded verbatim, never stripped.
 	const bareHost = url.hostname;
 	const rawAuthority = url.rawHost || bareHost;
 	if (!bareHost && !rawAuthority) {
 		throw new Error("ssh:// requires a host: ssh://<host>/<absolute-path>");
 	}
+	const isIpv6Literal = bareHost.startsWith("[") && bareHost.endsWith("]");
+	const sshHost = isIpv6Literal ? bareHost.slice(1, -1) : bareHost;
 	const username = url.username || undefined;
 	const port = url.port ? Number(url.port) : undefined;
 	if (port === 0) {
@@ -142,7 +156,7 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 			);
 		}
 		const name = `${username ? `${username}@` : ""}${bareHost}${port !== undefined ? `:${port}` : ""}`;
-		return { name, host: bareHost, username, port };
+		return { name, host: sshHost, username, port };
 	}
 
 	// No explicit user/port: match the full decoded authority against a
@@ -159,7 +173,7 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 		};
 	}
 	// Opaque OpenSSH destination (plain ~/.ssh/config alias, or any resolvable host).
-	return { name: rawAuthority, host: rawAuthority };
+	return { name: rawAuthority, host: isIpv6Literal ? sshHost : rawAuthority };
 }
 
 /** Format a one-level remote directory listing — mirrors buildDirectoryResource's plain `name/` lines. */
@@ -203,7 +217,8 @@ export class SshProtocolHandler implements ProtocolHandler {
 			} catch {
 				// Re-stat failed too (host/connection issue) — the original read error is clearer.
 			}
-			if (kind === "directory") return this.#resolveDirectory(target, remotePath, url, context?.signal);
+			if (kind === "directory")
+				return this.#resolveDirectory(target, remotePath, url, context?.signal, context?.skipDirectoryListing);
 			throw err;
 		}
 		if (fileResult.truncated) {
@@ -233,8 +248,11 @@ export class SshProtocolHandler implements ProtocolHandler {
 		remotePath: string,
 		url: InternalUrl,
 		signal?: AbortSignal,
+		skipListing?: boolean,
 	): Promise<InternalResource> {
-		const content = formatDirListing(await listRemoteDir(target, remotePath, { signal }));
+		// `search`/`find` reject an ssh:// directory outright, so they pass `skipListing`
+		// to avoid draining a full remote `ls` we would only discard.
+		const content = skipListing ? "" : formatDirListing(await listRemoteDir(target, remotePath, { signal }));
 		return {
 			url: url.href,
 			content,

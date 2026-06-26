@@ -216,4 +216,38 @@ describe("SshProtocolHandler", () => {
 		mockHosts();
 		await expect(handler.resolve(parseInternalUrl("ssh://icaro:0/etc/hostname"))).rejects.toThrow(/port 0/);
 	});
+
+	it("strips IPv6 URL brackets before building the ssh target", async () => {
+		mockHosts();
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://[::1]/etc/hostname"));
+		expect(spy.mock.calls[0]?.[0]?.host).toBe("::1");
+	});
+
+	it("matches a configured bracketed-colon alias instead of stripping it as IPv6", async () => {
+		mockHosts([{ name: "[prod:2222]", host: "prod.internal", _source: SOURCE }]);
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://%5Bprod%3A2222%5D/etc/hostname"));
+		expect(spy.mock.calls[0]?.[0]?.host).toBe("prod.internal");
+	});
+
+	it("rejects a malformed or out-of-range ssh:// port before connecting", async () => {
+		mockHosts();
+		await expect(handler.resolve(parseInternalUrl("ssh://prod:abc/etc"))).rejects.toThrow(/invalid host or port/);
+		await expect(handler.resolve(parseInternalUrl("ssh://prod:65536/etc"))).rejects.toThrow(/invalid host or port/);
+	});
+
+	it("skips the remote directory listing when skipDirectoryListing is set", async () => {
+		mockHosts();
+		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
+		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("directory");
+		const listSpy = vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([]);
+
+		const res = await handler.resolve(parseInternalUrl("ssh://h/etc"), { skipDirectoryListing: true });
+		expect(res.isDirectory).toBe(true);
+		expect(listSpy).not.toHaveBeenCalled();
+
+		await handler.resolve(parseInternalUrl("ssh://h/etc"));
+		expect(listSpy).toHaveBeenCalledTimes(1);
+	});
 });
