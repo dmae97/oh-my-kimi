@@ -239,12 +239,15 @@ export async function resolveStdioSpawnCommand(
 	// Direct-spawn only when we resolved to a concrete file AND its extension
 	// is not a batch script. Everything else (resolved .cmd/.bat, or an
 	// unresolved extensionless command) goes through cmd.exe so PATHEXT runs.
+	// Every Windows stdio server launch hides its console window; otherwise
+	// direct .exe servers pop a visible cmd window while the MCP server lives.
+	const windowsHide = true;
 	const needsCmdExe = resolved === null || isWindowsBatchCommand(resolvedCommand);
-	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args] };
+	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide };
 
 	return {
 		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
-		windowsHide: true,
+		windowsHide,
 	};
 }
 

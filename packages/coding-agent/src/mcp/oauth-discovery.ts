@@ -251,6 +251,45 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 }
 
 /**
+ * Normalize an OAuth issuer URL for RFC 8414 §3.3 comparison: lowercase
+ * scheme/host (URL parser already does this), drop fragment/query, strip a
+ * trailing slash on the path. The path is otherwise case-sensitive.
+ */
+function normalizeIssuerUrl(value: string): string | undefined {
+	try {
+		const u = new URL(value);
+		const path = u.pathname.replace(/\/+$/, "");
+		return `${u.protocol}//${u.host}${path}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * RFC 8414 §3.3: an authorization-server metadata document's `issuer` MUST
+ * equal the URL the client used to construct the metadata URL. When a server
+ * hosts metadata for several issuers under one origin (Plane serves a root
+ * issuer `https://mcp.plane.so/` at `/.well-known/oauth-authorization-server`
+ * *and* a path-scoped issuer `https://mcp.plane.so/http` at the path-prefixed
+ * well-known URL), accepting the first hit silently routes the grant to the
+ * wrong `/authorize` endpoint and produces opaque `server_error` redirects.
+ *
+ * Returns true when the metadata is safe to use:
+ *   - the document has no `issuer` field (nonstandard / legacy servers — keep
+ *     today's permissive behavior), or
+ *   - the issuer matches `baseUrl` after trailing-slash normalization.
+ */
+function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
+	if (typeof metadataIssuer !== "string" || !metadataIssuer.trim()) {
+		return true;
+	}
+	const normalizedIssuer = normalizeIssuerUrl(metadataIssuer);
+	const normalizedBase = normalizeIssuerUrl(baseUrl);
+	if (!normalizedIssuer || !normalizedBase) return true;
+	return normalizedIssuer === normalizedBase;
+}
+
+/**
  * Try to discover OAuth endpoints by querying the server's well-known endpoints.
  * This is a fallback when error responses don't include OAuth metadata.
  */
@@ -389,7 +428,15 @@ export async function discoverOAuthEndpoints(
 
 					if (response.ok) {
 						const metadata = (await response.json()) as Record<string, unknown>;
-						const endpoints = findEndpoints(metadata);
+						// Authorization-server / OpenID Connect metadata documents carry an
+						// `issuer` field that MUST equal the queried base URL (RFC 8414 §3.3,
+						// OIDC Discovery §4.3). Protected-resource and nonstandard paths use a
+						// different schema, so the issuer check only gates the two official
+						// auth-server documents.
+						const requireIssuerMatch =
+							path === "/.well-known/oauth-authorization-server" || path === "/.well-known/openid-configuration";
+						const issuerOk = requireIssuerMatch ? issuerMatchesBase(metadata.issuer, baseUrl) : true;
+						const endpoints = issuerOk ? findEndpoints(metadata) : null;
 						if (endpoints) return endpoints;
 
 						if (path === "/.well-known/oauth-protected-resource") {
