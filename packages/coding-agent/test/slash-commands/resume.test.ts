@@ -91,6 +91,20 @@ describe("/resume slash command", () => {
 		expect(harness.handleResumeSession).toHaveBeenCalledWith(sessionPath);
 	});
 
+	it("checks the active session directory before global cwd buckets", async () => {
+		const currentCwd = path.join(tempDir, "current");
+		const customSessionDir = path.join(tempDir, "custom-sessions");
+		await fs.mkdir(currentCwd, { recursive: true });
+		const sessionPath = await writeSession("019ed699-02fb-7000-8dac-396e2f84d484", currentCwd, customSessionDir);
+		const harness = createRuntime(currentCwd, customSessionDir);
+
+		const handled = await executeBuiltinSlashCommand("/resume 019ed699", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.showError).not.toHaveBeenCalled();
+		expect(harness.handleResumeSession).toHaveBeenCalledWith(sessionPath);
+	});
+
 	it("resumes a matching session id prefix from another cwd", async () => {
 		const currentCwd = path.join(tempDir, "current");
 		const otherCwd = path.join(tempDir, "other");

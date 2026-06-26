@@ -574,9 +574,6 @@ export async function resolveResumableSession(
 		return { session: localMatch, scope: "local" };
 	}
 
-	if (sessionDir) {
-		return undefined;
-	}
 
 	const globalSessions = await listAllSessions(storage);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
