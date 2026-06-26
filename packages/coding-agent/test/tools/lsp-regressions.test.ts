@@ -7,7 +7,7 @@ import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers"
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { getServersForFile, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
+import { getServersForFile, type LspConfig, loadConfig } from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { applyTextEditsToString, applyWorkspaceEdit } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type {
@@ -2012,6 +2012,56 @@ describe("lsp regressions", () => {
 				.map(block => block.text)
 				.join("\n");
 			expect(output).toContain("Renamed");
+		} finally {
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("workspace reload rediscovers LSP servers after an empty config was cached", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-reload-redetect-");
+		try {
+			const server: ServerConfig = {
+				command: "test-lsp",
+				fileTypes: [".ts"],
+				rootMarkers: ["package.json"],
+			};
+			const configs: LspConfig[] = [
+				{ servers: {}, idleTimeoutMs: undefined },
+				{ servers: { "test-lsp": server }, idleTimeoutMs: undefined },
+				{ servers: { "test-lsp": server }, idleTimeoutMs: undefined },
+			];
+			const loadConfigSpy = vi
+				.spyOn(lspConfig, "loadConfig")
+				.mockImplementation(() => configs.shift() ?? configs[0]);
+			const client = { proc: { kill: vi.fn() } } as unknown as LspClient;
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue(null);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const initial = await tool.execute("reload-redetect-status", { action: "status" });
+			const initialOutput = initial.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+			expect(initialOutput).toContain("No language servers configured for this project");
+
+			const starResult = await tool.execute("reload-redetect-star", { action: "reload", file: "*" });
+			const starOutput = starResult.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+
+			const omittedResult = await tool.execute("reload-redetect-omitted", { action: "reload" });
+			const omittedOutput = omittedResult.content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n");
+
+			expect(loadConfigSpy).toHaveBeenCalledTimes(3);
+			expect(starOutput).toContain("Reloaded test-lsp");
+			expect(omittedOutput).toContain("Reloaded test-lsp");
+			expect(lspClient.getOrCreateClient).toHaveBeenCalledWith(server, tempDir.path());
 		} finally {
 			vi.restoreAllMocks();
 			tempDir.removeSync();

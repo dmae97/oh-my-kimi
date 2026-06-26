@@ -263,6 +263,13 @@ function getConfig(cwd: string): LspConfig {
 	return config;
 }
 
+function reloadConfig(cwd: string): LspConfig {
+	const config = loadConfig(cwd);
+	setIdleTimeout(config.idleTimeoutMs);
+	configCache.set(cwd, config);
+	return config;
+}
+
 function isCustomLinter(serverConfig: ServerConfig): boolean {
 	return Boolean(serverConfig.createClient);
 }
@@ -1333,7 +1340,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
 		throwIfAborted(signal);
 
-		const config = getConfig(this.session.cwd);
+		let config = getConfig(this.session.cwd);
 
 		// Status action doesn't need a file
 		if (action === "status") {
@@ -2054,6 +2061,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		}
 
 		if (action === "reload" && (isWorkspace || !resolvedFile)) {
+			config = reloadConfig(this.session.cwd);
 			const servers = getLspServers(config);
 			if (servers.length === 0) {
 				return {
