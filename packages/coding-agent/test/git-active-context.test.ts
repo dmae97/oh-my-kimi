@@ -9,6 +9,8 @@ import {
 	resolveActiveRepoContextSync,
 } from "@oh-my-pi/pi-coding-agent/utils/active-repo-context";
 
+const itWithSymlinkPrivilege = process.platform === "win32" ? it.skip : it;
+
 function createGitDirectory(repoRoot: string): void {
 	const gitDir = path.join(repoRoot, ".git");
 	fs.mkdirSync(gitDir, { recursive: true });
@@ -74,7 +76,7 @@ describe("resolveActiveRepoContext", () => {
 		await expectResolvers(cwd, expected);
 	});
 
-	it("treats a direct child symlink to a repository directory as that child", async () => {
+	itWithSymlinkPrivilege("treats a direct child symlink to a repository directory as that child", async () => {
 		const cwd = path.join(tempRoot, "workspace");
 		const targetRoot = path.join(tempRoot, "target-repo");
 		const repoRoot = path.join(cwd, "linked-repo");
