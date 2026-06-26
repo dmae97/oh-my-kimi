@@ -257,6 +257,118 @@ describe("xAI web search provider", () => {
 		});
 	});
 
+	it("caps parsed sources and citations locally without changing Agent Tools request shape", async () => {
+		const capture = captureFetch({
+			id: "resp_local_cap",
+			model: "grok-4.3",
+			output_text: "Capped xAI answer",
+			annotations: [
+				{
+					type: "url_citation",
+					url: "https://example.com/annotation-1",
+					title: "Annotation 1",
+					text: "Annotation 1 text",
+				},
+			],
+			output: [
+				{
+					annotations: [
+						{
+							type: "url_citation",
+							url: "https://example.com/annotation-2",
+							title: "Annotation 2",
+							cited_text: "Annotation 2 text",
+						},
+					],
+					content: [
+						{
+							type: "output_text",
+							text: "Ignored because output_text wins",
+							annotations: [
+								{
+									type: "url_citation",
+									url: "https://example.com/annotation-3",
+									title: "Annotation 3",
+									cited_text: "Annotation 3 text",
+								},
+							],
+						},
+					],
+				},
+			],
+			citations: ["https://example.com/top-level-4", "https://example.com/top-level-5"],
+		});
+
+		const response = await searchXAI({
+			...makeParams(capture.fetchMock),
+			limit: 4,
+		});
+
+		expect(response.sources).toHaveLength(4);
+		expect(response.citations).toHaveLength(4);
+		expect(response.sources.map(source => source.url)).toEqual([
+			"https://example.com/annotation-1",
+			"https://example.com/annotation-2",
+			"https://example.com/annotation-3",
+			"https://example.com/top-level-4",
+		]);
+		expect(response.citations?.map(citation => citation.url)).toEqual([
+			"https://example.com/annotation-1",
+			"https://example.com/annotation-2",
+			"https://example.com/annotation-3",
+			"https://example.com/top-level-4",
+		]);
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
+	});
+
+	it("uses numSearchResults before limit for the local xAI output cap", async () => {
+		const capture = captureFetch({
+			id: "resp_num_search_results_cap",
+			model: "grok-4.3",
+			output_text: "numSearchResults capped xAI answer",
+			annotations: [
+				{
+					type: "url_citation",
+					url: "https://example.com/precedence-1",
+					title: "Precedence 1",
+				},
+			],
+			citations: [
+				"https://example.com/precedence-2",
+				"https://example.com/precedence-3",
+				"https://example.com/precedence-4",
+			],
+		});
+
+		const response = await searchXAI({
+			...makeParams(capture.fetchMock),
+			limit: 1,
+			numSearchResults: 3,
+		});
+		expect(response.sources).toHaveLength(3);
+		expect(response.citations).toHaveLength(3);
+
+		expect(response.sources.map(source => source.url)).toEqual([
+			"https://example.com/precedence-1",
+			"https://example.com/precedence-2",
+			"https://example.com/precedence-3",
+		]);
+		expect(response.citations?.map(citation => citation.url)).toEqual([
+			"https://example.com/precedence-1",
+			"https://example.com/precedence-2",
+			"https://example.com/precedence-3",
+		]);
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
+	});
+
 	it("falls back to output content parts when output_text is absent", async () => {
 		const capture = captureFetch({
 			id: "resp_content_parts",

@@ -39,10 +39,10 @@
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Search query, passed to providers unchanged. |
 | `recency` | `"day" \| "week" \| "month" \| "year"` | No | Time filter. Only providers that implement it use it; code maps it for Brave, Perplexity, Tavily, SearXNG, Kagi, TinyFish, and Firecrawl. xAI ignores it because the documented Agent Tools `web_search` API does not expose date controls. |
-| `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. xAI ignores it because the documented Agent Tools `web_search` API does not expose result-count controls. |
+| `limit` | `number` | No | Max results to return. Usually becomes the provider request's result-count parameter when `num_search_results` is absent. xAI does not send it upstream; it caps returned sources/citations after parsing unless `num_search_results` is provided. |
 | `max_tokens` | `number` | No | Passed through as provider token caps (`maxOutputTokens`, `max_tokens`, or xAI `max_output_tokens`) only by Anthropic, Gemini, xAI, and Perplexity API-key mode. Ignored by the other providers. |
 | `temperature` | `number` | No | Passed through only by Anthropic, Gemini, xAI, and Perplexity API-key mode. Ignored by the other providers. |
-| `num_search_results` | `number` | No | Requested upstream search breadth. Most providers use this as returned source count. Perplexity keeps it distinct from `limit`; xAI ignores it because the documented Agent Tools `web_search` API does not expose result-count controls. |
+| `num_search_results` | `number` | No | Requested search breadth or local result cap. Most providers send it upstream. xAI does not send it upstream; it caps returned sources/citations after parsing and takes precedence over `limit`. |
 
 ## Outputs
 The tool returns a single text content block plus structured `details`.
@@ -128,7 +128,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
   - **xAI** — `packages/coding-agent/src/web/search/providers/xai.ts`
     - Availability: `XAI_API_KEY` or `agent.db` credential for `xai`.
     - Querying: POST `https://api.x.ai/v1/responses` with model `grok-4.3` and `tools: [{ type: "web_search" }]` using the `/v1/responses` Agent Tools API.
-    - `max_tokens` and `temperature` pass through. `limit`, `num_search_results`, and `recency` are ignored because the documented Agent Tools `web_search` API does not expose equivalent result-count or date controls.
+    - `max_tokens` and `temperature` pass through. `recency` is ignored because the documented Agent Tools `web_search` API does not expose date controls. `limit` and `num_search_results` are not sent upstream; because xAI citations may include every encountered URL, the adapter locally caps returned `sources` and `citations` after parsing (`numSearchResults ?? limit`). Missing cap returns all sources/citations.
     - Output may include `answer`, `sources`, `citations`, `usage`, `model`, `requestId`, `authMode: "api_key"`.
   - **Z.AI** — `packages/coding-agent/src/web/search/providers/zai.ts`
     - Availability: env or `agent.db` credential for `zai`.
@@ -246,7 +246,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
 ## Notes
 - The model-facing schema does not expose `provider`, but internal callers can force one through `SearchQueryParams`.
 - `resolveProviderChain()` lazily imports provider modules and caches singleton instances. Just asking for labels via `getSearchProviderLabel()` does not trigger those imports.
-- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts; xAI ignores both because the documented Agent Tools `web_search` API does not expose result-count controls.
+- Most providers treat `limit` and `num_search_results` as the same number because adapters pass `params.numSearchResults ?? params.limit`. Perplexity preserves both concepts; xAI applies that same precedence locally after parsing to cap returned sources/citations without sending a result-count control upstream.
 - `recency` is implemented by Brave, Perplexity, Tavily, SearXNG, Kagi, TinyFish, and Firecrawl; xAI ignores it because the documented Agent Tools `web_search` API does not expose date controls. The model-facing prompt does not name specific providers.
 - `packages/coding-agent/src/config/settings-schema.ts` uses the shared `SEARCH_PROVIDER_PREFERENCES` / `SEARCH_PROVIDER_OPTIONS` metadata, so the settings selector and setup wizard expose `auto` plus every provider in the auto chain.
 - DuckDuckGo is intentionally last in the auto chain because it is always available without credentials.

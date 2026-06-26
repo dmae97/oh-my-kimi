@@ -178,7 +178,20 @@ function parseUsage(usage: XAIResponsesUsage | null | undefined): SearchUsage | 
 	return Object.keys(parsed).length > 0 ? parsed : undefined;
 }
 
-function parseResponse(response: XAIResponsesResponse): SearchResponse {
+function applyResultCap(
+	sources: SearchSource[],
+	citations: SearchCitation[],
+	requestedCap: number | undefined,
+): { sources: SearchSource[]; citations: SearchCitation[] } {
+	if (requestedCap === undefined) return { sources, citations };
+
+	return {
+		sources: sources.slice(0, requestedCap),
+		citations: citations.slice(0, requestedCap),
+	};
+}
+
+function parseResponse(response: XAIResponsesResponse, requestedCap?: number): SearchResponse {
 	const sources: SearchSource[] = [];
 	const citations: SearchCitation[] = [];
 	const seenUrls = new Set<string>();
@@ -193,12 +206,13 @@ function parseResponse(response: XAIResponsesResponse): SearchResponse {
 	for (const url of response.citations ?? []) {
 		addCitationSource(sources, citations, seenUrls, url);
 	}
+	const limited = applyResultCap(sources, citations, requestedCap);
 
 	return {
 		provider: "xai",
 		answer: parseAnswer(response),
-		sources,
-		citations: citations.length > 0 ? citations : undefined,
+		sources: limited.sources,
+		citations: limited.citations.length > 0 ? limited.citations : undefined,
 		usage: parseUsage(response.usage),
 		model: response.model,
 		requestId: response.id,
@@ -216,7 +230,7 @@ export async function searchXAI(params: SearchParams): Promise<SearchResponse> {
 		signal: params.signal,
 		missingKeyMessage: 'xAI credentials not found. Set XAI_API_KEY or configure an API key for provider "xai".',
 	});
-	return parseResponse(response);
+	return parseResponse(response, params.numSearchResults ?? params.limit);
 }
 
 /** Search provider for xAI web search. */
