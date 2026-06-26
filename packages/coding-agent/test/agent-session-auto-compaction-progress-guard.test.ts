@@ -184,6 +184,11 @@ describe("AgentSession auto-compaction progress guard", () => {
 	}
 
 	it("pauses (no continuation, single warning) when compaction creates no headroom", async () => {
+		session.setTodoPhases([{ name: "Work", tasks: [{ content: "Finish task", status: "in_progress" }] }]);
+		const todoReminders: unknown[] = [];
+		session.subscribe(event => {
+			if (event.type === "todo_reminder") todoReminders.push(event);
+		});
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		// Auto-continue runs through agent.prompt (#promptWithMessage), not
 		// agent.continue — spy both so "no continuation" is actually proven.
@@ -212,6 +217,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(startCount()).toBe(1);
 		expect(promptSpy).not.toHaveBeenCalled();
 		expect(continueSpy).not.toHaveBeenCalled();
+		expect(todoReminders.length).toBe(0);
 		expect(session.isStreaming).toBe(false);
 
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
@@ -324,6 +330,60 @@ describe("AgentSession auto-compaction progress guard", () => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
 		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 150000, contextWindow: 200000, percent: 75 });
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = overflowAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
+	it("retries a small-window overflow when the default reserve exceeds the model window", async () => {
+		// Bundled 4k/8k models can be smaller than the default absolute reserve
+		// (16,384). Retry fit must clamp that reserve; otherwise the budget goes
+		// negative and a prompt that fits the actual model window dead-ends.
+		session.settings.set("compaction.keepRecentTokens", 100);
+		const smallText = "lorem ipsum ".repeat(100);
+		for (let i = 0; i < 4; i++) {
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: smallText }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "stop",
+				usage: {
+					input: 100,
+					output: 10,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 110,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			});
+			sessionManager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
+		}
+		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+		const currentModel = session.agent.state.model;
+		session.agent.setModel({ ...currentModel, contextWindow: 4096, maxTokens: 1024 });
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("compaction.reserveTokens", 16384);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 4096, percent: 24.4 });
 
 		const notices = collectNotices();
 
