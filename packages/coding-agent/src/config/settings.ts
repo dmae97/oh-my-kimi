@@ -136,11 +136,17 @@ function stringArrayFromUnknown(value: unknown): string[] {
 	return [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function shallowStringRecord(value: unknown): Record<string, string> {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	if (!isRecord(value)) return {};
 
 	const result: Record<string, string> = {};
-	for (const [key, item] of Object.entries(value)) {
+	for (const key in value) {
+		if (!Object.hasOwn(value, key)) continue;
+		const item = value[key];
 		if (typeof item === "string") {
 			result[key] = item;
 		}
@@ -481,10 +487,10 @@ export class Settings {
 	 */
 	getEditVariantForModel(model: string | undefined): EditMode | null {
 		if (!model) return null;
-		const variants = (this.#merged.edit as { modelVariants?: Record<string, string> })?.modelVariants;
-		if (!variants) return null;
+		const variants = shallowStringRecord(getByPath(this.#merged, ["edit", "modelVariants"]));
+		const modelLower = model.toLowerCase();
 		for (const pattern in variants) {
-			if (model.includes(pattern)) {
+			if (modelLower.includes(pattern.toLowerCase())) {
 				const value = normalizeEditMode(variants[pattern]);
 				if (value) {
 					return value;
