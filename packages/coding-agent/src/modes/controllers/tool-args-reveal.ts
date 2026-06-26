@@ -1,4 +1,4 @@
-import { parseStreamingJson } from "@oh-my-pi/pi-ai/utils/json-parse";
+import { parseStreamingJson } from "@oh-my-pi/pi-utils";
 import { nextStep, STREAMING_REVEAL_FRAME_MS } from "./streaming-reveal";
 
 /** Minimal component surface the reveal pushes frames into. */

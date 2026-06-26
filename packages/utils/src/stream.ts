@@ -1,6 +1,7 @@
 const trailingEvents = new WeakSet<ServerSentEvent>();
 
 import { abortableSource } from "./abortable";
+import { parseStreamingJson } from "./json-parse";
 
 const LF = 0x0a;
 type JsonlChunkResult = {
@@ -212,250 +213,16 @@ function notifySseEventObserver(observer: SseEventObserver | undefined, event: S
 	}
 }
 
-interface JsonLevel {
-	type: "object" | "array";
-	state?: "expect_key" | "expect_colon" | "expect_value" | "expect_comma_or_close";
-}
-
-interface ScanResult {
-	stack: JsonLevel[];
-	inString: boolean;
-	escaped: boolean;
-}
-
-function scanJsonState(trimmed: string): ScanResult | null {
-	const stack: JsonLevel[] = [];
-	let inString = false;
-	let escaped = false;
-
-	for (let i = 0; i < trimmed.length; i++) {
-		const char = trimmed[i];
-		if (escaped) {
-			escaped = false;
-			continue;
-		}
-		if (char === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (char === '"') {
-			inString = !inString;
-			if (stack.length > 0) {
-				const top = stack[stack.length - 1];
-				if (inString) {
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				} else {
-					if (top.type === "object" && top.state === "expect_key") {
-						top.state = "expect_colon";
-					}
-				}
-			}
-			continue;
-		}
-		if (!inString) {
-			if (char === "{") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-				stack.push({ type: "object", state: "expect_key" });
-			} else if (char === "[") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-				stack.push({ type: "array", state: "expect_value" });
-			} else if (char === "}") {
-				if (stack.length === 0 || stack[stack.length - 1].type !== "object") {
-					return null;
-				}
-				stack.pop();
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-			} else if (char === "]") {
-				if (stack.length === 0 || stack[stack.length - 1].type !== "array") {
-					return null;
-				}
-				stack.pop();
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-			} else if (char === ":") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.type === "object" && top.state === "expect_colon") {
-						top.state = "expect_value";
-					} else {
-						return null;
-					}
-				} else {
-					return null;
-				}
-			} else if (char === ",") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_comma_or_close") {
-						top.state = top.type === "object" ? "expect_key" : "expect_value";
-					} else {
-						return null;
-					}
-				} else {
-					return null;
-				}
-			} else if (char !== " " && char !== "\t" && char !== "\n" && char !== "\r") {
-				if (stack.length > 0) {
-					const top = stack[stack.length - 1];
-					if (top.state === "expect_value") {
-						top.state = "expect_comma_or_close";
-					}
-				}
-			}
-		}
-	}
-
-	if (inString) {
-		if (stack.length > 0) {
-			const top = stack[stack.length - 1];
-			if (top.type === "object") {
-				if (top.state === "expect_key") {
-					top.state = "expect_colon";
-				} else if (top.state === "expect_value") {
-					top.state = "expect_comma_or_close";
-				}
-			}
-		}
-	}
-
-	return { stack, inString, escaped };
-}
-
-function hasValidPredecessorForComma(trimmed: string): boolean {
-	if (!trimmed.endsWith(",")) return false;
-	const beforeComma = trimmed.slice(0, -1).trim();
-	const scan = scanJsonState(beforeComma);
-	if (!scan || scan.stack.length === 0 || scan.inString) return false;
-	return scan.stack[scan.stack.length - 1].state === "expect_comma_or_close";
-}
-
-function getClosingSuffix(data: string): string | null {
-	let trimmed = data.trim();
-	if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
-		return null;
-	}
-
-	if (hasValidPredecessorForComma(trimmed)) {
-		trimmed = trimmed.slice(0, -1).trim();
-	}
-
-	const scan = scanJsonState(trimmed);
-	if (!scan) return null;
-
-	const { stack, inString, escaped } = scan;
-	let suffix = "";
-
-	if (inString) {
-		if (escaped) {
-			suffix += "\\";
-		} else {
-			const match = trimmed.match(/(\\+)u([0-9a-fA-F]{0,3})$/);
-			if (match) {
-				const backslashes = match[1].length;
-				if (backslashes % 2 === 1) {
-					const digits = match[2].length;
-					suffix += "0".repeat(4 - digits);
-				}
-			}
-		}
-		suffix += '"';
-	}
-
-	let literalCompletion = "";
-	if (!inString) {
-		const match = trimmed.match(/(t|tr|tru|f|fa|fal|fals|n|nu|nul)$/i);
-		if (match) {
-			const partial = match[0].toLowerCase();
-			const completions: Record<string, string> = {
-				t: "rue",
-				tr: "ue",
-				tru: "e",
-				f: "alse",
-				fa: "lse",
-				fal: "se",
-				fals: "e",
-				n: "ull",
-				nu: "ll",
-				nul: "l",
-			};
-			literalCompletion = completions[partial] ?? "";
-		}
-	}
-
-	suffix += literalCompletion;
-
-	for (let i = stack.length - 1; i >= 0; i--) {
-		const level = stack[i];
-		if (level.type === "array") {
-			suffix += "]";
-		} else {
-			let state = level.state;
-			if (state === "expect_value") {
-				const lower = trimmed.toLowerCase();
-				if (
-					literalCompletion !== "" ||
-					lower.endsWith("true") ||
-					lower.endsWith("false") ||
-					lower.endsWith("null") ||
-					/\d$/.test(trimmed) ||
-					trimmed.endsWith('"') ||
-					trimmed.endsWith("}") ||
-					trimmed.endsWith("]")
-				) {
-					state = "expect_comma_or_close";
-				}
-			}
-
-			if (state === "expect_key") {
-				suffix += "}";
-			} else if (state === "expect_colon") {
-				suffix += ":null}";
-			} else if (state === "expect_value") {
-				suffix += "null}";
-			} else if (state === "expect_comma_or_close") {
-				suffix += "}";
-			}
-		}
-	}
-
-	return suffix;
-}
-
-function isJsonTruncated(data: string): boolean {
-	let trimmed = data.trim();
-	if (hasValidPredecessorForComma(trimmed)) {
-		trimmed = trimmed.slice(0, -1).trim();
-	}
-	const suffix = getClosingSuffix(data);
-	if (suffix === null || suffix === "") return false;
-
-	try {
-		JSON.parse(trimmed + suffix);
-		return true;
-	} catch {
-		return false;
-	}
+function isRecoverableTrailingJson(data: string): boolean {
+	const first = data.trimStart()[0];
+	if (first !== "{" && first !== "[") return false;
+	// Best-effort relaxed recovery via the shared streaming JSON parser: a
+	// container-shaped final event that fails strict `JSON.parse` is treated as a
+	// cut-off (or lightly malformed) stream tail and ends iteration cleanly instead
+	// of throwing. Non-container final events (plain-text errors, bare scalars) are
+	// not recoverable and still surface as a SyntaxError.
+	const recovered = parseStreamingJson<unknown>(data);
+	return typeof recovered === "object" && recovered !== null;
 }
 
 export async function* readSseJson<T>(
@@ -474,7 +241,7 @@ export async function* readSseJson<T>(
 		try {
 			yield JSON.parse(data) as T;
 		} catch (err) {
-			if (err instanceof SyntaxError && isTrailing && isJsonTruncated(data)) {
+			if (err instanceof SyntaxError && isTrailing && isRecoverableTrailingJson(data)) {
 				return;
 			}
 			throw err;

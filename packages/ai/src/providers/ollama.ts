@@ -1,4 +1,4 @@
-import { extractHttpStatusFromError, fetchWithRetry } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, fetchWithRetry, parseStreamingJson } from "@oh-my-pi/pi-utils";
 import { ProviderHttpError } from "../errors";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -22,7 +22,6 @@ import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 } from "../utils/idle-iterator";
-import { parseStreamingJson } from "../utils/json-parse";
 import { toolWireSchema } from "../utils/schema/wire";
 import {
 	getStreamMarkupHealingPattern,

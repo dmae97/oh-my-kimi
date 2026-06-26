@@ -107,7 +107,6 @@ export const BUNDLED_PI_REGISTRY_KEYS: ReadonlySet<string> = new Set([
 	"@oh-my-pi/pi-ai/utils/google-validation",
 	"@oh-my-pi/pi-ai/utils/http-inspector",
 	"@oh-my-pi/pi-ai/utils/idle-iterator",
-	"@oh-my-pi/pi-ai/utils/json-parse",
 	"@oh-my-pi/pi-ai/utils/openai-http",
 	"@oh-my-pi/pi-ai/utils/openrouter-headers",
 	"@oh-my-pi/pi-ai/utils/overflow",

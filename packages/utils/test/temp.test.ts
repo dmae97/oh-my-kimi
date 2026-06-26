@@ -31,7 +31,8 @@ test("removeSyncWithRetries outlasts a transient 1.5s Windows EBUSY lock", async
 
 	try {
 		// Dynamic import is required so the node:fs mock is installed before temp.ts binds it.
-		const { removeSyncWithRetries } = await import("../src/temp?ebusy-window-test");
+		const tempModulePath = "../src/temp?ebusy-window-test";
+		const { removeSyncWithRetries } = (await import(tempModulePath)) as typeof import("../src/temp");
 		removeSyncWithRetries("/tmp/pr3348");
 		expect(calls).toBe(31);
 		expect(elapsedMs).toBe(1500);

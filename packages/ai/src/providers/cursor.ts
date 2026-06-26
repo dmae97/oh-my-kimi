@@ -102,7 +102,13 @@ import {
 	WriteSuccessSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { $env, extractHttpStatusFromError, sanitizeText } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	extractHttpStatusFromError,
+	parseJsonWithRepair,
+	parseStreamingJson,
+	sanitizeText,
+} from "@oh-my-pi/pi-utils";
 import type {
 	Api,
 	AssistantMessage,
@@ -126,7 +132,6 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";

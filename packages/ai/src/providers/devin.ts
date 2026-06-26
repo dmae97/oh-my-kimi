@@ -28,7 +28,7 @@ import {
 	StopReason,
 } from "@oh-my-pi/pi-catalog/discovery/devin-gen/exa/codeium_common_pb/codeium_common_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { extractHttpStatusFromError, logger } from "@oh-my-pi/pi-utils";
+import { extractHttpStatusFromError, logger, parseStreamingJson } from "@oh-my-pi/pi-utils";
 import type {
 	Api,
 	AssistantMessage,
@@ -44,7 +44,6 @@ import type {
 } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { parseStreamingJson } from "../utils/json-parse";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
 

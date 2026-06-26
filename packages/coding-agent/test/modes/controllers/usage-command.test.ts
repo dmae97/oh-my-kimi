@@ -9,12 +9,7 @@ interface RenderableBlock {
 }
 
 function isRenderableBlock(value: unknown): value is RenderableBlock {
-	return (
-		value !== null &&
-		typeof value === "object" &&
-		"render" in value &&
-		typeof value.render === "function"
-	);
+	return value !== null && typeof value === "object" && "render" in value && typeof value.render === "function";
 }
 
 function renderPresentedBlocks(value: unknown): string {

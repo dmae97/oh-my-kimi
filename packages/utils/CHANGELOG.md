@@ -1,9 +1,15 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a relaxed JSON parser that supports single-quoted strings, unquoted keys, and comments
+- Added `parseStreamingJson` for robust parsing of truncated or malformed streaming JSON
+- Added `parseStreamingJsonThrottled` for efficient processing of incremental streaming updates
 
 ### Changed
 
+- Improved streaming SSE JSON processing to gracefully handle common malformed tail events
 - Increased the EBUSY retry delay from 25ms to 50ms (40 retries × 50ms = 2s total window, up from 1s). Windows can hold file locks on SQLite databases for up to ~1.5s after `close()`, and the previous 1-second window was too short for some test cleanup scenarios — `settings-manager.test.ts` and `sdk-credential-disabled-bridge.test.ts` still failed with EBUSY even when using `removeSyncWithRetries`.
 
 ## [16.1.8] - 2026-06-20
