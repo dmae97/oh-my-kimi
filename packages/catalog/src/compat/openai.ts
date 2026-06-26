@@ -167,6 +167,41 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 }
 
 /**
+ * Local OpenAI-compatible inference servers whose chat templates re-tokenize
+ * the entire prompt every request — llama.cpp prefix-KV-cache reuse only
+ * survives when the rendered tokens stay byte-identical across turns. The
+ * runtime auto-enables {@link OpenAICompat.replayReasoningContent} for these
+ * providers (and for any provider pointed at a loopback / RFC1918 baseUrl) so
+ * Qwen3 / DeepSeek-R1 / GLM templates can reconstruct the prior assistant
+ * turn's `<think>` block from `reasoning_content` (#3528).
+ */
+const LOCAL_OPENAI_COMPAT_PROVIDERS = new Set(["llama.cpp", "lm-studio", "vllm", "ollama"]);
+
+function hasLocalLoopbackBaseUrl(baseUrl: string | undefined): boolean {
+	if (!baseUrl) return false;
+	let hostname: string;
+	try {
+		hostname = new URL(baseUrl).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	if (
+		hostname === "localhost" ||
+		hostname === "127.0.0.1" ||
+		hostname === "0.0.0.0" ||
+		hostname === "::1" ||
+		hostname === "[::1]"
+	) {
+		return true;
+	}
+	if (/^10\./.test(hostname)) return true;
+	if (/^192\.168\./.test(hostname)) return true;
+	if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(hostname)) return true;
+	if (hostname.endsWith(".local")) return true;
+	return false;
+}
+
+/**
  * Build the resolved chat-completions compat record for a model spec.
  * Provider takes precedence over URL-based detection since it's explicitly configured.
  */
@@ -400,6 +435,17 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// DeepSeek V4 and Xiaomi MiMo reject synthetic reasoning_content placeholders (".") on tool-call turns.
 		// Kimi and OpenRouter accept them when actual reasoning is unavailable.
 		allowsSyntheticReasoningContentForToolCalls: (!isDeepseekFamily || !spec.reasoning) && !isXiaomiMimo,
+		// Local llama.cpp-style servers re-tokenize the entire chat-template
+		// prompt each request; Qwen3 / DeepSeek-R1 / GLM templates reconstruct
+		// the prior assistant turn's `<think>` block from `reasoning_content`,
+		// so dropping the field re-renders the assistant turn without thinking
+		// content and forces full prompt re-processing (#3528). The
+		// `requires*ReasoningContent*` flags above stay off for these hosts —
+		// they accept but don't validate the field — so the encoder needs a
+		// distinct opt-in to replay on every reasoning turn.
+		replayReasoningContent:
+			Boolean(spec.reasoning) &&
+			(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl)),
 		requiresAssistantContentForToolCalls: isKimiModel || isDirectDeepseekReasoning,
 		cacheControlFormat: isOpenRouter && spec.id.startsWith("anthropic/") ? "anthropic" : undefined,
 		openRouterRouting: undefined,
@@ -517,6 +563,10 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 			reasoningCapable,
 		requiresReasoningContentForAllAssistantTurns: isDeepseekFamily && reasoningCapable && !isOpenRouter,
 		allowsSyntheticReasoningContentForToolCalls: !isDeepseekFamily || !reasoningCapable,
+		// The Responses API replays reasoning through encrypted `summary` items,
+		// not via a top-level `reasoning_content` field — this flag is
+		// chat-completions-only.
+		replayReasoningContent: false,
 		requiresThinkingAsText: false,
 		requiresMistralToolIds: false,
 		requiresToolResultName: false,

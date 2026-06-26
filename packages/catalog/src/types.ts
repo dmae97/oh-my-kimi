@@ -222,6 +222,20 @@ export interface OpenAICompat {
 	requiresReasoningContentForAllAssistantTurns?: boolean;
 	/** Whether the provider accepts a synthetic placeholder (e.g. ".") for missing reasoning_content on tool-call turns. Default: true. Set to false for providers like DeepSeek that validate the exact reasoning_content value. */
 	allowsSyntheticReasoningContentForToolCalls?: boolean;
+	/**
+	 * Replay preserved thinking blocks as `reasoning_content` (or the configured
+	 * `reasoningContentField`) on EVERY assistant turn that carried reasoning,
+	 * regardless of whether the upstream provider validates the field. Local
+	 * llama.cpp-style servers (llama.cpp, LM Studio, vLLM, sglang, Ollama in
+	 * openai-completions mode) re-tokenize the full chat-template prompt every
+	 * request; Qwen3 / DeepSeek-R1 / GLM templates reconstruct the `<think>`
+	 * block from `reasoning_content`. Dropping the field re-renders the
+	 * assistant turn without `<think>`, diverging from the slot's KV cache state
+	 * and forcing full prompt re-processing (#3528). Default: auto-detected
+	 * (loopback/private baseUrl or local provider id with thinking-enabled
+	 * models).
+	 */
+	replayReasoningContent?: boolean;
 	/** Whether assistant tool-call messages must include non-empty content. Default: false. */
 	requiresAssistantContentForToolCalls?: boolean;
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
@@ -433,6 +447,7 @@ export interface ResolvedOpenAISharedCompat {
 	requiresReasoningContentForToolCalls: boolean;
 	requiresReasoningContentForAllAssistantTurns: boolean;
 	allowsSyntheticReasoningContentForToolCalls: boolean;
+	replayReasoningContent: boolean;
 	requiresThinkingAsText: boolean;
 	requiresMistralToolIds: boolean;
 	requiresToolResultName: boolean;
@@ -482,6 +497,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "requiresReasoningContentForToolCalls"
 			| "requiresReasoningContentForAllAssistantTurns"
 			| "allowsSyntheticReasoningContentForToolCalls"
+			| "replayReasoningContent"
 			| "requiresThinkingAsText"
 			| "requiresMistralToolIds"
 			| "requiresToolResultName"

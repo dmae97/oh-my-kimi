@@ -259,8 +259,15 @@ function openAICompletionsReplaysUnsignedThinking(model: Model, compat: Model["c
 	// Hosts that REQUIRE `reasoning_content` on tool-call turns (DeepSeek
 	// reasoning, Kimi, OpenRouter reasoning, OpenCode thinking-on) already
 	// accept the replay; Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi native,
-	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint.
-	return compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai";
+	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint. Local
+	// llama.cpp-style servers (`replayReasoningContent`) need it for KV-cache
+	// prefix reuse — Qwen3 / DeepSeek-R1 / GLM chat templates reconstruct the
+	// prior turn's `<think>` block from `reasoning_content` (#3528).
+	return (
+		compat.requiresReasoningContentForToolCalls ||
+		compat.thinkingFormat === "zai" ||
+		compat.replayReasoningContent
+	);
 }
 
 const ANTHROPIC_TOOL_CALL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
