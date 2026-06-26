@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Agent, AgentBusyError } from "@oh-my-pi/pi-agent-core";
+import { Agent, AgentBusyError, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -783,6 +783,56 @@ describe("InteractiveMode plan review rendering", () => {
 		});
 
 		expect(session.model?.id).toBe(planModel.id);
+	});
+
+	it("treats matching-model slider tier as explicit when its thinking differs from the pre-plan thinking", async () => {
+		const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		const opus = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!sonnet || !opus) throw new Error("Expected sonnet + opus to exist in registry");
+
+		// default tier explicitly turns thinking off on sonnet; the session enters
+		// plan mode with thinking already bumped to high. A model-only match check
+		// treats the slider's "stay on default" pick as implicit, so #exitPlanMode
+		// restores thinking=high instead of the configured off override. The fix
+		// must compare thinking levels too and pass the default entry through
+		// applyRoleModel.
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5:off");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+		session.setThinkingLevel(ThinkingLevel.High);
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nDifferent thinking on the same model.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(opus.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+		const applyRoleSpy = vi.spyOn(session, "applyRoleModel");
+
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				const slider = extra?.slider;
+				expect(slider).toBeDefined();
+				const defaultIndex = slider!.segments.findIndex(segment => segment.label === "default");
+				expect(defaultIndex).toBeGreaterThanOrEqual(0);
+				slider!.onChange?.(defaultIndex);
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+
+		const defaultApply = applyRoleSpy.mock.calls.find(call => call[0]?.role === "default");
+		expect(defaultApply).toBeDefined();
+		expect(defaultApply?.[0]?.model.id).toBe(sonnet.id);
+		expect(defaultApply?.[0]?.thinkingLevel).toBe(ThinkingLevel.Off);
+		expect(defaultApply?.[0]?.explicitThinkingLevel).toBe(true);
 	});
 
 	it("compaction runs on the plan model and restores the pre-plan model after success", async () => {

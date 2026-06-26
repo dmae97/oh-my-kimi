@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed plan approval applying the wrong execution model when the model-tier slider stayed on the active plan model; the selection is now compared against the pre-plan model that exit would restore, so choosing the planning tier is retained. ([#3554](https://github.com/can1357/oh-my-pi/issues/3554))
+- Fixed plan approval applying the wrong execution model when the model-tier slider sat on the model that exit would restore. The match check now compares the selected role's effective thinking level against the pre-plan thinking level, so picking the active planning tier is retained and picking a same-model tier with an explicit thinking suffix (e.g. `default = sonnet:off` while plan-mode raised thinking to `high`) goes through `applyRoleModel` instead of silently restoring the pre-plan level. ([#3554](https://github.com/can1357/oh-my-pi/issues/3554))
 
 - Fixed the `eval` Julia kernel showing only runner-internal backtrace frames (`at top-level scope (./none:N)`, `at main (…runner-…jl:635)`) with no exception type or message, making cell errors undebuggable. The host renderer (`packages/coding-agent/src/eval/kernel-base.ts`) displays a non-empty `traceback` verbatim and only falls back to `ename: evalue` when it is empty; the Python and Ruby runners embed the rendered error in `traceback`, but the Julia runner (`packages/coding-agent/src/eval/jl/runner.jl`) built `traceback` from stack frames only, so the message was dropped. `emit_error` now seeds `traceback` with the `showerror` output (matching the REPL's `ERROR:` text) ahead of the frames.
 

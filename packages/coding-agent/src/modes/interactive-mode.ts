@@ -3022,13 +3022,20 @@ export class InteractiveMode implements InteractiveModeContext {
 				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
 				// #planModePreviousModelState (the model from before plan mode), so
 				// applying the slider choice any earlier would be silently reverted.
-				// Treat the choice as implicit only when it matches that restored model;
-				// comparing against cycle.currentIndex is wrong while plan review is
-				// still running on the plan model.
-				const restoredModel = this.#planModePreviousModelState?.model;
+				// Treat the choice as implicit only when applying the selected role
+				// would land on the same end state as the restore — same model AND
+				// the same effective thinking level. A role with an explicit thinking
+				// suffix that differs from the restored thinking level must still go
+				// through applyRoleModel, otherwise approving on the same model with a
+				// different configured thinking level silently keeps the pre-plan level.
+				const restoredState = this.#planModePreviousModelState;
 				const restoredIndex =
-					cycle && restoredModel
-						? cycle.models.findIndex(entry => modelsAreEqual(entry.model, restoredModel))
+					cycle && restoredState
+						? cycle.models.findIndex(entry => {
+								if (!modelsAreEqual(entry.model, restoredState.model)) return false;
+								if (!entry.explicitThinkingLevel) return true;
+								return entry.thinkingLevel === restoredState.thinkingLevel;
+							})
 						: -1;
 				const executionModel =
 					cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
