@@ -680,14 +680,6 @@ function createSnapcompactArchiveMigrationMessage(archiveText: string): Message 
 	};
 }
 
-function stripSnapcompactPreserveData(
-	preserveData: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-	if (!preserveData || !(snapcompact.PRESERVE_KEY in preserveData)) return preserveData;
-	const { [snapcompact.PRESERVE_KEY]: _removed, ...rest } = preserveData;
-	return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
 export async function generateSummary(
 	currentMessages: AgentMessage[],
 	model: Model,
@@ -1261,7 +1253,11 @@ export async function compact(
 		throw new Error("First kept entry has no ID - session may need migration");
 	}
 
-	const finalPreserveData = previousSnapcompactArchive ? stripSnapcompactPreserveData(preserveData) : preserveData;
+	// This LLM-summary path migrated any prior snapcompact frames into the summary
+	// text above; strip the now-stale frame archive from preserveData so it cannot
+	// re-attach to the rebuilt context. Only the legacy-frame case needs stripping —
+	// when there was no previous archive, preserveData carries no frames to drop.
+	const finalPreserveData = previousSnapcompactArchive ? snapcompact.stripPreservedArchive(preserveData) : preserveData;
 
 	return {
 		summary,

@@ -926,6 +926,25 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: archive })).toEqual(archive);
 	});
 
+	it("stripPreservedArchive drops the frame archive and collapses to undefined when empty", () => {
+		expect(snapcompact.stripPreservedArchive(undefined)).toBeUndefined();
+		// No archive key: pass through unchanged.
+		expect(snapcompact.stripPreservedArchive({ other: "keep-me" })).toEqual({ other: "keep-me" });
+		// Archive key alongside unrelated state: strip only the archive.
+		expect(
+			snapcompact.stripPreservedArchive({
+				other: "keep-me",
+				[snapcompact.PRESERVE_KEY]: { frames: [], totalChars: 0, truncatedChars: 0 },
+			}),
+		).toEqual({ other: "keep-me" });
+		// Archive key was the only state: collapse to undefined, never persist `{}`.
+		expect(
+			snapcompact.stripPreservedArchive({
+				[snapcompact.PRESERVE_KEY]: { frames: [], totalChars: 0, truncatedChars: 0 },
+			}),
+		).toBeUndefined();
+	});
+
 	it("historyBlocks orders text head, imaged middle, then text tail", () => {
 		const archive: snapcompact.Archive = {
 			frames: [{ data: btoa("middle"), mimeType: "image/png", cols: 8, rows: 8, chars: 4 }],

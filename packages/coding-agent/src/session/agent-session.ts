@@ -1117,20 +1117,12 @@ function toRestoredQueuedMessage(message: AgentMessage): RestoredQueuedMessage {
 	return { text: queueChipText(message), images: queuedImageContent(message) };
 }
 
-function stripSnapcompactPreserveData(
-	preserveData: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-	if (!preserveData || !(snapcompact.PRESERVE_KEY in preserveData)) return preserveData;
-	const { [snapcompact.PRESERVE_KEY]: _removed, ...rest } = preserveData;
-	return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
 function mergeLlmCompactionPreserveData(
 	hookPreserveData: Record<string, unknown> | undefined,
 	resultPreserveData: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
 	const preserveData = { ...(hookPreserveData ?? {}), ...(resultPreserveData ?? {}) };
-	return stripSnapcompactPreserveData(Object.keys(preserveData).length > 0 ? preserveData : undefined);
+	return snapcompact.stripPreservedArchive(Object.keys(preserveData).length > 0 ? preserveData : undefined);
 }
 
 export class AgentSession {

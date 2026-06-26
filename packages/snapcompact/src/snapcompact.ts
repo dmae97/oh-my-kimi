@@ -1290,6 +1290,19 @@ export function getPreservedArchive(preserveData: Record<string, unknown> | unde
 	};
 }
 
+/** Drop the persisted frame archive ({@link PRESERVE_KEY}) from `preserveData`,
+ *  returning the remaining state — or `undefined` when nothing else remains, so
+ *  an empty `{}` is never persisted. Callers strip the archive once its frames
+ *  have been migrated into a new compaction's text, preventing the stale frames
+ *  from leaking back into the rebuilt context. */
+export function stripPreservedArchive(
+	preserveData: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	if (!preserveData || !(PRESERVE_KEY in preserveData)) return preserveData;
+	const { [PRESERVE_KEY]: _removed, ...rest } = preserveData;
+	return Object.keys(rest).length > 0 ? rest : undefined;
+}
+
 /** Extract persisted archive source text as plain text for LLM summarization. */
 export function archiveSourceText(archive: Archive): string | undefined {
 	const text =
