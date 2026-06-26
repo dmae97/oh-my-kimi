@@ -1711,6 +1711,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"compaction.midTurnEnabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "context",
+			group: "Compaction",
+			label: "Mid-Turn Compaction",
+			description: "Check thresholds at safe mid-turn tool-loop boundaries before the next provider request",
+		},
+	},
+
 	"compaction.strategy": {
 		type: "enum",
 		values: ["context-full", "handoff", "shake", "snapcompact", "off"] as const,
@@ -4754,6 +4765,7 @@ export interface CompactionSettings {
 	thresholdTokens: number;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	midTurnEnabled: boolean;
 	handoffSaveToDisk: boolean;
 	autoContinue: boolean;
 	remoteEnabled: boolean;

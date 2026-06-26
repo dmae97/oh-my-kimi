@@ -62,6 +62,7 @@ import type {
 	AgentMessage,
 	AgentTool,
 	AgentToolResult,
+	AgentTurnEndContext,
 	AsideMessage,
 	StreamFn,
 } from "./types";
@@ -406,12 +407,13 @@ async function emitTurnEnd(
 	toolResults: ToolResultMessage[],
 	config: AgentLoopConfig,
 	signal?: AbortSignal,
+	context?: Omit<AgentTurnEndContext, "message" | "toolResults">,
 ): Promise<void> {
 	stream.push({ type: "turn_end", message, toolResults });
 	const isAbortedOrError =
 		message.role === "assistant" && (message.stopReason === "aborted" || message.stopReason === "error");
 	if (signal?.aborted || isAbortedOrError) return;
-	await config.onTurnEnd?.(currentContext.messages, signal);
+	await config.onTurnEnd?.(currentContext.messages, signal, { message, toolResults, willContinue: false, ...context });
 }
 
 /**
@@ -903,7 +905,7 @@ async function runLoopBody(
 							status: message.stopReason === "aborted" ? "aborted" : "error",
 						});
 					}
-					await emitTurnEnd(stream, currentContext, message, toolResults, config, signal);
+					await emitTurnEnd(stream, currentContext, message, toolResults, config, signal, { willContinue: false });
 
 					stream.push(buildAgentEndEvent(newMessages, telemetry, stepCounter.count));
 					stream.end(newMessages);
@@ -1032,7 +1034,9 @@ async function runLoopBody(
 					hasMoreToolCalls = true;
 				}
 
-				await emitTurnEnd(stream, currentContext, message, toolResults, config, signal);
+				await emitTurnEnd(stream, currentContext, message, toolResults, config, signal, {
+					willContinue: hasMoreToolCalls && !isDeadlineExceeded(config.deadline),
+				});
 
 				if (isDeadlineExceeded(config.deadline)) {
 					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
