@@ -6,6 +6,10 @@ license = "MIT"
 
 [lib]
 path = "src/lib.rs"
+# Vendored upstream unit tests depend on a checked-in `test_data/` fixture tree
+# (and mutate it at runtime). We patch this crate but don't carry those fixtures,
+# so the crate builds as a dependency without running the upstream unit suite.
+test = false
 
 [dependencies]
 chrono = "0.4.40"
