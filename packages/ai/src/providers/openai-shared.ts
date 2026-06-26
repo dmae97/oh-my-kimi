@@ -585,7 +585,8 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 	repetition_penalty?: number;
 	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
 	enable_thinking?: boolean;
-	chat_template_kwargs?: { enable_thinking: boolean };
+	preserve_thinking?: boolean;
+	chat_template_kwargs?: { enable_thinking?: boolean; preserve_thinking?: boolean };
 	reasoning?: { effort?: string } | { enabled: false };
 	reasoning_effort?: string | null;
 	service_tier?: ResolvedServiceTier;
@@ -830,9 +831,26 @@ export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams
 				break;
 			case "qwen-enable-thinking-false":
 				params.enable_thinking = true;
+				if (policy.compat.qwenPreserveThinking) {
+					// Twin top-level + chat_template_kwargs emission: llama.cpp's
+					// chat_template hook binds the kwargs into the jinja namespace,
+					// vLLM/SGLang only see fields under chat_template_kwargs, and
+					// Alibaba Cloud Model Studio's compatible-mode reads the
+					// top-level field instead. Setting both covers every host that
+					// renders the Qwen3.6+ template without sniffing per-host
+					// shapes — the parameter is silently ignored elsewhere.
+					params.preserve_thinking = true;
+					params.chat_template_kwargs = {
+						...params.chat_template_kwargs,
+						preserve_thinking: true,
+					};
+				}
 				break;
 			case "qwen-template-false":
 				params.chat_template_kwargs = { enable_thinking: true };
+				if (policy.compat.qwenPreserveThinking) {
+					params.chat_template_kwargs.preserve_thinking = true;
+				}
 				break;
 			case "openrouter-enabled-false":
 				if (reasoning.wireEffort !== undefined) {

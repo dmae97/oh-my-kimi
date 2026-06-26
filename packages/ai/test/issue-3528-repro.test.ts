@@ -22,15 +22,29 @@
  * `<think>…</think>`, diverging from the slot's existing KV cache and forcing
  * full re-prefill.
  *
- * The fix is the new `compat.replayReasoningContent` flag — auto-enabled for
- * the four built-in local OpenAI-compatible providers and for any provider
- * pointed at a loopback / RFC1918 baseUrl — plus a fourth branch in the
- * `openai-completions` assistant encoder that surfaces preserved thinking as
- * `reasoning_content` on every reasoning-engaged turn (not just tool-call
- * turns). This file pins the wire output across the relevant axes.
+ * Two layered fixes ship under this file:
+ *   1. `replayReasoningContent` (#3528) — auto-enabled for the four built-in
+ *      local OpenAI-compatible providers and any provider pointed at a
+ *      loopback / RFC1918 baseUrl, paired with a fourth branch in the
+ *      `openai-completions` assistant encoder that surfaces preserved thinking
+ *      as `reasoning_content` on every reasoning-engaged turn.
+ *   2. `qwenPreserveThinking` (#3541) — pairs `enable_thinking: true` with
+ *      `preserve_thinking: true` (both top-level AND under
+ *      `chat_template_kwargs`) so the Qwen3.6+ chat template renders
+ *      `<think>...</think>` for older assistant turns too. Without that flag
+ *      the template strips think the moment a new user message (e.g. the
+ *      auto-learn nudge) shifts prior assistants past `last_query_index`,
+ *      and the next-turn re-render diverges from the slot's cached
+ *      generation tokens — the exact symptom logged in #3541.
+ *
+ * This file pins the wire output across the relevant axes.
  */
 import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import {
+	applyChatCompletionsReasoningParams,
+	type OpenAICompletionsParams,
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import type { AssistantMessage, Message, Model, ModelSpec, ThinkingContent, UserMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -385,5 +399,113 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(found?.content).toBe("plain answer");
 		expect(found?.reasoning_content).toBeUndefined();
 		expect(found?.reasoning).toBeUndefined();
+	});
+
+	it("auto-enables qwenPreserveThinking for llama.cpp + Qwen", () => {
+		// Pair to `replayReasoningContent`: without it the Qwen3.6+ template
+		// strips `<think>...</think>` from older assistant turns the moment a
+		// new user message (or auto-learn nudge) shifts them past
+		// `last_query_index`, and the re-render diverges from the slot's KV
+		// cache state.
+		const compat = llamaCppQwenModel().compat;
+		expect(compat.qwenPreserveThinking).toBe(true);
+	});
+
+	it("auto-enables qwenPreserveThinking for the other built-in local providers + Qwen", () => {
+		const lmStudio = llamaCppQwenModel({ provider: "lm-studio", baseUrl: "http://127.0.0.1:1234/v1" }).compat;
+		const vllm = llamaCppQwenModel({ provider: "vllm", baseUrl: "http://127.0.0.1:8000/v1" }).compat;
+		const ollama = llamaCppQwenModel({ provider: "ollama", baseUrl: "http://localhost:11434/v1" }).compat;
+		expect(lmStudio.qwenPreserveThinking).toBe(true);
+		expect(vllm.qwenPreserveThinking).toBe(true);
+		expect(ollama.qwenPreserveThinking).toBe(true);
+	});
+
+	it("auto-enables qwenPreserveThinking for custom providers on loopback baseUrls + Qwen", () => {
+		const loopback = llamaCppQwenModel({ provider: "custom", baseUrl: "http://localhost:9000/v1" }).compat;
+		const rfc1918 = llamaCppQwenModel({ provider: "custom", baseUrl: "http://10.0.0.42:8080/v1" }).compat;
+		expect(loopback.qwenPreserveThinking).toBe(true);
+		expect(rfc1918.qwenPreserveThinking).toBe(true);
+	});
+
+	it("leaves qwenPreserveThinking off for non-Qwen models on local llama.cpp", () => {
+		// Non-Qwen templates ignore the param either way, but auto-detection
+		// gates on the Qwen thinking dialect so the wire body stays minimal.
+		const deepseek = llamaCppQwenModel({ id: "deepseek-r1-32b", name: "DeepSeek R1 32B" }).compat;
+		expect(deepseek.qwenPreserveThinking).toBe(false);
+	});
+
+	it("leaves qwenPreserveThinking off for cloud Qwen hosts", () => {
+		// Alibaba's Dashscope and Qwen Portal own the slot lifecycle on the
+		// cloud side; OMP isn't responsible for KV-cache invalidation there,
+		// and `preserve_thinking` is opt-in per the Alibaba docs. Stay
+		// minimal on the wire unless the user opts in via `compat`.
+		const dashscope = llamaCppQwenModel({
+			provider: "alibaba",
+			baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		}).compat;
+		expect(dashscope.qwenPreserveThinking).toBe(false);
+	});
+
+	it("emits preserve_thinking on the wire for local Qwen + thinking", () => {
+		// End-to-end pin for the user's reported setup (#3541):
+		// `enable_thinking: true` + `preserve_thinking: true` (twin top-level
+		// + chat_template_kwargs) must both ride the body so the chat template
+		// preserves `<think>...</think>` for older assistants. The twin
+		// emission covers llama.cpp / vLLM / SGLang / Alibaba shapes without
+		// per-host sniffing.
+		const model = llamaCppQwenModel();
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
+		expect(params.enable_thinking).toBe(true);
+		expect(params.preserve_thinking).toBe(true);
+		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
+	});
+
+	it("does NOT emit preserve_thinking for cloud Qwen + thinking", () => {
+		const model = llamaCppQwenModel({
+			provider: "alibaba",
+			baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		});
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
+		expect(params.enable_thinking).toBe(true);
+		expect(params.preserve_thinking).toBeUndefined();
+		// `chat_template_kwargs` stays unset — Alibaba's qwen dialect rides
+		// only the top-level `enable_thinking`.
+		expect(params.chat_template_kwargs).toBeUndefined();
+	});
+
+	it("does NOT emit preserve_thinking when reasoning is disabled on local Qwen", () => {
+		const model = llamaCppQwenModel();
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { disableReasoning: true });
+		// `enable_thinking: false` is the Qwen "disable" encoding; the
+		// preserve knob is moot on a non-thinking turn and must stay off so
+		// stale `<think>` markup isn't reintroduced into the prompt.
+		expect(params.enable_thinking).toBe(false);
+		expect(params.preserve_thinking).toBeUndefined();
+	});
+
+	it("honors an explicit qwenPreserveThinking override on cloud Qwen", () => {
+		// Escape hatch for power users who run a cloud-fronted llama.cpp /
+		// vLLM and know the template benefits from the replay.
+		const model = llamaCppQwenModel({
+			provider: "alibaba",
+			baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+			compat: { qwenPreserveThinking: true },
+		});
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
+		expect(params.preserve_thinking).toBe(true);
+		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
+	});
+
+	it("honors an explicit qwenPreserveThinking opt-out on local Qwen", () => {
+		const model = llamaCppQwenModel({ compat: { qwenPreserveThinking: false } });
+		expect(model.compat.qwenPreserveThinking).toBe(false);
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
+		expect(params.enable_thinking).toBe(true);
+		expect(params.preserve_thinking).toBeUndefined();
 	});
 });

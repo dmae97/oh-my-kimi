@@ -236,6 +236,28 @@ export interface OpenAICompat {
 	 * models).
 	 */
 	replayReasoningContent?: boolean;
+	/**
+	 * Send `preserve_thinking: true` so the Qwen3.6+ chat template renders
+	 * `<think>...</think>` markup for EVERY assistant turn (not just turns
+	 * after the last user message). Without it, the template strips the think
+	 * block from older assistant turns:
+	 *
+	 * ```jinja
+	 * {%- if (preserve_thinking is defined and preserve_thinking is true)
+	 *        or (loop.index0 > ns.last_query_index) %}
+	 *   <|im_start|>assistant\n<think>\n{rc}\n</think>\n\n{content}
+	 * {%- else %}
+	 *   <|im_start|>assistant\n{content}
+	 * ```
+	 *
+	 * The cache from the original generation has `<think>...</think>` tokens,
+	 * so once a new user message arrives the prior assistant turns become
+	 * "older" and the stripped re-render diverges — full prompt re-processing
+	 * on SWA models (#3541). Default: auto-detected (Qwen thinking format on
+	 * a local llama.cpp-style backend, paired with `replayReasoningContent`).
+	 * Non-Qwen templates ignore the flag, so the auto-detection is safe.
+	 */
+	qwenPreserveThinking?: boolean;
 	/** Whether assistant tool-call messages must include non-empty content. Default: false. */
 	requiresAssistantContentForToolCalls?: boolean;
 	/** Whether the provider supports the `tool_choice` parameter. Default: true. */
@@ -448,6 +470,7 @@ export interface ResolvedOpenAISharedCompat {
 	requiresReasoningContentForAllAssistantTurns: boolean;
 	allowsSyntheticReasoningContentForToolCalls: boolean;
 	replayReasoningContent: boolean;
+	qwenPreserveThinking: boolean;
 	requiresThinkingAsText: boolean;
 	requiresMistralToolIds: boolean;
 	requiresToolResultName: boolean;
@@ -498,6 +521,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "requiresReasoningContentForAllAssistantTurns"
 			| "allowsSyntheticReasoningContentForToolCalls"
 			| "replayReasoningContent"
+			| "qwenPreserveThinking"
 			| "requiresThinkingAsText"
 			| "requiresMistralToolIds"
 			| "requiresToolResultName"
