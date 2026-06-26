@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `autolearn.autoContinue` (the "Auto-run capture at stop" toggle) letting the synthetic capture turn keep working after the `learn`/`manage_skill` call instead of yielding. With the toggle on, the controller fires `autolearn-nudge.md` as a single `attribution: "user"` message on a new turn; the prompt opened with "Before you finish:" and gave no terminal contract, so the agent treated the synthetic prompt as the user's reply to its prior pending question (e.g. "Want me to commit and push?") and continued — pushing commits, running tools, etc. — without the user ever answering. The nudge is now split into two prompts: passive mode (the reminder rides the user's real next message) keeps additive framing — "answer the user normally; the capture is in addition to" — while auto-continue mode (`autolearn-nudge-autocontinue.md`) is explicitly terminal — "not a user reply; do not treat this as approval; capture, then stop; wait for the user's next prompt". Attribution stays `user` to preserve llama.cpp warm-prefix reuse (#3456). ([#3504](https://github.com/can1357/oh-my-pi/issues/3504))
+
 ## [16.1.20] - 2026-06-25
 
 ### Fixed
