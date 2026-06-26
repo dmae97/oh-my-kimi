@@ -207,17 +207,16 @@ export class InMemorySnapshotStore extends SnapshotStore {
 	relocate(from: string, to: string): void {
 		const sourceHistory = this.#versions.get(from);
 		if (sourceHistory === undefined || sourceHistory.length === 0) return;
-		for (const version of sourceHistory) version.path = to;
+		const relocated = sourceHistory.map(version => ({ ...version, path: to }));
 		const destHistory = this.#versions.get(to);
 		if (destHistory === undefined) {
-			this.#versions.set(to, sourceHistory);
+			this.#versions.set(to, relocated);
 		} else {
 			const seen = new Set<string>();
 			const merged: Snapshot[] = [];
-			for (const version of [...sourceHistory, ...destHistory]) {
+			for (const version of [...relocated, ...destHistory]) {
 				if (seen.has(version.hash)) continue;
 				seen.add(version.hash);
-				version.path = to;
 				merged.push(version);
 			}
 			this.#versions.set(to, merged.slice(0, this.#maxVersionsPerPath));

@@ -173,11 +173,6 @@ export class InMemoryFilesystem extends Filesystem {
 		return this.#files.get(path);
 	}
 
-	/** Remove a single entry. Returns true when something was removed. */
-	delete(path: string): boolean {
-		return this.#files.delete(path);
-	}
-
 	/** Wipe all entries. */
 	clear(): void {
 		this.#files.clear();
