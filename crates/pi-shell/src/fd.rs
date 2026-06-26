@@ -745,7 +745,7 @@ fn matches_type_filter(filter: &TypeFilter, entry: &DirEntry, metadata: Option<&
 			(filter.regular && file_type.is_file())
 				|| (filter.directory && file_type.is_dir())
 				|| (filter.symlink && is_symlink)
-				|| matches_unix_file_type(filter, &file_type)
+				|| matches_unix_file_type(filter, file_type)
 		})
 	} else {
 		true
@@ -763,7 +763,7 @@ fn matches_type_filter(filter: &TypeFilter, entry: &DirEntry, metadata: Option<&
 }
 
 #[cfg(unix)]
-fn matches_unix_file_type(filter: &TypeFilter, file_type: &fs::FileType) -> bool {
+fn matches_unix_file_type(filter: &TypeFilter, file_type: fs::FileType) -> bool {
 	use std::os::unix::fs::FileTypeExt;
 	(filter.socket && file_type.is_socket())
 		|| (filter.pipe && file_type.is_fifo())
@@ -772,7 +772,7 @@ fn matches_unix_file_type(filter: &TypeFilter, file_type: &fs::FileType) -> bool
 }
 
 #[cfg(not(unix))]
-fn matches_unix_file_type(_filter: &TypeFilter, _file_type: &fs::FileType) -> bool {
+fn matches_unix_file_type(_filter: &TypeFilter, _file_type: fs::FileType) -> bool {
 	false
 }
 
@@ -1109,7 +1109,7 @@ fn parse_utc_datetime(value: &str) -> io::Result<SystemTime> {
 	let (date, time) = value
 		.trim()
 		.split_once(' ')
-		.unwrap_or((value.trim(), "00:00:00"));
+		.unwrap_or_else(|| (value.trim(), "00:00:00"));
 	let mut date_parts = date.split('-');
 	let year = parse_i32_part(date_parts.next(), "year")?;
 	let month = parse_u32_part(date_parts.next(), "month")?;
