@@ -74,6 +74,35 @@ describe("InputController thinking visibility", () => {
 		expect(resetDisplay).not.toHaveBeenCalled();
 		expect(showStatus).toHaveBeenCalledWith("Thinking is off — enable thinking to show blocks");
 	});
+
+	it("refuses to toggle when the focused view session has thinking off", () => {
+		const assistant = new AssistantMessageComponent();
+		const setHideThinkingBlock = vi.spyOn(assistant, "setHideThinkingBlock");
+		const set = vi.fn();
+		const showStatus = vi.fn();
+		const resetDisplay = vi.fn();
+		const ctx = {
+			hideThinkingBlock: false,
+			effectiveHideThinkingBlock: true,
+			settings: { set },
+			session: { agent: { hideThinkingSummary: false }, thinkingLevel: "high" },
+			viewSession: { thinkingLevel: "off" },
+			chatContainer: { children: [assistant], clear: vi.fn(), addChild: vi.fn() },
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			showStatus,
+			ui: { resetDisplay },
+		} as unknown as InteractiveModeContext;
+
+		new InputController(ctx).toggleThinkingBlockVisibility();
+
+		expect(ctx.hideThinkingBlock).toBe(false);
+		expect(set).not.toHaveBeenCalled();
+		expect(setHideThinkingBlock).not.toHaveBeenCalled();
+		expect(resetDisplay).not.toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith("Thinking is off — enable thinking to show blocks");
+	});
+
 	it("refuses to toggle when thinking is off even if hideThinkingBlock is already true", () => {
 		// The persisted preference may already be true from a prior session
 		// where thinking was on. With thinking off, effectiveHideThinkingBlock

@@ -1690,7 +1690,7 @@ export class InputController {
 		// that state — inform the user instead of silently flipping the
 		// persisted value. When thinking is on, the toggle works normally
 		// even if blocks are already hidden (user may want to show them).
-		const thinkingOff = (this.ctx.session?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		const thinkingOff = ((this.ctx.viewSession ?? this.ctx.session)?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
 		if (thinkingOff) {
 			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
 			return;
