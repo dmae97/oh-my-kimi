@@ -173,6 +173,30 @@ describe("provider in-flight request limits", () => {
 		await expect(stream.result()).rejects.toThrow("cancel saturated waiter");
 	});
 
+	test("does not signal waiters when acquiring a slot", async () => {
+		registerMockApi();
+		const providerDir = limiterDir("tests");
+		const firstStarted = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			provider: "tests",
+			handler: async () => {
+				firstStarted.resolve();
+				await releaseFirst.promise;
+				return { content: ["reply"] };
+			},
+		});
+
+		const stream = streamSimple(mock.model, context(), { maxInFlightRequests: { tests: 1 } });
+		await firstStarted.promise;
+
+		expect(await Bun.file(path.join(providerDir, ".wakeup")).exists()).toBe(false);
+
+		releaseFirst.resolve();
+		const result = await stream.result();
+		expect(result.content).toEqual([{ type: "text", text: "reply" }]);
+	});
+
 	test("does not reap a live lock just because its timestamp is old", async () => {
 		registerMockApi();
 		const lockDir = __providerInFlightForTesting.lockDir("tests");
@@ -239,6 +263,25 @@ describe("provider in-flight request limits", () => {
 		);
 
 		await staleRelease?.();
+
+		const remaining = JSON.parse(await Bun.file(path.join(lockDir, "info.json")).text()) as { token: string };
+		expect(remaining.token).toBe("fresh-lock");
+	});
+
+	test("does not delete a fresh lock after a write-failure cleanup observes an old lock", async () => {
+		const lockDir = __providerInFlightForTesting.lockDir("tests");
+		await fs.mkdir(lockDir, { recursive: true });
+		const staleCleanup = await __providerInFlightForTesting.captureLockDirRelease("tests");
+		expect(staleCleanup).not.toBeNull();
+
+		await fs.rm(lockDir, { recursive: true, force: true });
+		await fs.mkdir(lockDir, { recursive: true });
+		await Bun.write(
+			path.join(lockDir, "info.json"),
+			JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "fresh-lock" }),
+		);
+
+		await staleCleanup?.();
 
 		const remaining = JSON.parse(await Bun.file(path.join(lockDir, "info.json")).text()) as { token: string };
 		expect(remaining.token).toBe("fresh-lock");

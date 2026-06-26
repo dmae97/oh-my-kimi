@@ -93,6 +93,7 @@ type ProviderInFlightLeaseInfo = {
 	token: string;
 };
 type ProviderInFlightStaleLock = { token: string } | { mtimeMs: number };
+type ProviderInFlightLockIdentity = { dev: number; ino: number; birthtimeMs: number };
 
 const PROVIDER_INFLIGHT_LOCK_STALE_MS = 10_000;
 const PROVIDER_INFLIGHT_LEASE_STALE_MS = 30_000;
@@ -212,6 +213,20 @@ async function readProviderInFlightStaleLock(lockDir: string): Promise<ProviderI
 	}
 }
 
+async function readProviderInFlightLockIdentity(lockDir: string): Promise<ProviderInFlightLockIdentity> {
+	const stat = await fs.stat(lockDir);
+	return { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs };
+}
+
+function isSameProviderInFlightLock(
+	current: ProviderInFlightLockIdentity,
+	expected: ProviderInFlightLockIdentity,
+): boolean {
+	if (current.dev !== expected.dev) return false;
+	if (current.ino !== 0 || expected.ino !== 0) return current.ino === expected.ino;
+	return current.birthtimeMs === expected.birthtimeMs;
+}
+
 async function releaseProviderInFlightStaleLock(lockDir: string, stale: ProviderInFlightStaleLock): Promise<void> {
 	if ("token" in stale) {
 		await releaseProviderInFlightLock(lockDir, stale.token);
@@ -227,14 +242,24 @@ async function releaseProviderInFlightStaleLock(lockDir: string, stale: Provider
 	} catch {}
 }
 
-// Best-effort token-checked release. Untokened calls are used only after stale
-// detection concludes the owner is dead or its heartbeat expired.
-async function releaseProviderInFlightLock(lockDir: string, token?: string): Promise<void> {
+// Best-effort token-checked release. A token mismatch means another process has
+// already replaced the lock, so the fresh lock must be left intact.
+async function releaseProviderInFlightLock(lockDir: string, token: string): Promise<void> {
 	try {
-		if (token !== undefined) {
-			const info = await readProviderInFlightInfo(path.join(lockDir, "info.json"));
-			if (!info || info.token !== token) return;
-		}
+		const info = await readProviderInFlightInfo(path.join(lockDir, "info.json"));
+		if (!info || info.token !== token) return;
+		await fs.rm(lockDir, { recursive: true, force: true });
+	} catch {}
+}
+
+async function releaseProviderInFlightLockDirIfSame(
+	lockDir: string,
+	identity: ProviderInFlightLockIdentity,
+): Promise<void> {
+	try {
+		if (await readProviderInFlightInfo(path.join(lockDir, "info.json"))) return;
+		const current = await readProviderInFlightLockIdentity(lockDir);
+		if (!isSameProviderInFlightLock(current, identity)) return;
 		await fs.rm(lockDir, { recursive: true, force: true });
 	} catch {}
 }
@@ -247,11 +272,12 @@ async function acquireProviderInFlightLock(provider: string, signal?: AbortSigna
 		if (signal?.aborted) throw signal.reason ?? new Error("Provider request aborted before dispatch");
 		try {
 			await fs.mkdir(lockDir);
+			const lockIdentity = await readProviderInFlightLockIdentity(lockDir);
 			const token = crypto.randomUUID();
 			try {
 				await writeProviderInFlightInfo(lockDir, token);
 			} catch (error) {
-				await releaseProviderInFlightLock(lockDir);
+				await releaseProviderInFlightLockDirIfSame(lockDir, lockIdentity);
 				throw error;
 			}
 			return async () => {
@@ -307,7 +333,6 @@ async function tryAcquireProviderInFlightLease(
 	signal?: AbortSignal,
 ): Promise<ProviderInFlightLease | null> {
 	const releaseLock = await acquireProviderInFlightLock(provider, signal);
-	let leaseCreated = false;
 	try {
 		const dir = providerInFlightDir(provider);
 		await fs.mkdir(dir, { recursive: true });
@@ -319,7 +344,6 @@ async function tryAcquireProviderInFlightLease(
 		try {
 			await fs.mkdir(leaseDir);
 			await writeProviderInFlightInfo(leaseDir, token);
-			leaseCreated = true;
 		} catch (error) {
 			await removeProviderInFlightLeaseDir(leaseDir).catch(() => {});
 			throw error;
@@ -338,7 +362,6 @@ async function tryAcquireProviderInFlightLease(
 		return { path: leaseDir, heartbeat, flushHeartbeat: () => heartbeatFlush };
 	} finally {
 		await releaseLock();
-		if (leaseCreated) await signalProviderInFlightWaiters(provider);
 	}
 }
 
@@ -450,6 +473,16 @@ export const __providerInFlightForTesting = {
 		if (!stale) return null;
 		return () => releaseProviderInFlightStaleLock(lockDir, stale);
 	},
+	async captureLockDirRelease(provider: string): Promise<(() => Promise<void>) | null> {
+		const lockDir = providerInFlightLockDir(provider);
+		try {
+			const identity = await readProviderInFlightLockIdentity(lockDir);
+			return () => releaseProviderInFlightLockDirIfSame(lockDir, identity);
+		} catch {
+			return null;
+		}
+	},
+
 };
 
 function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests">>(
