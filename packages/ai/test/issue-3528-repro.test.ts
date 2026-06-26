@@ -475,15 +475,83 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(params.chat_template_kwargs).toBeUndefined();
 	});
 
-	it("does NOT emit preserve_thinking when reasoning is disabled on local Qwen", () => {
+	it("emits preserve_thinking even when reasoning is disabled on local Qwen (history-only knob)", () => {
+		// `preserve_thinking` controls how PRIOR assistant turns render in
+		// the template, not whether THIS turn thinks. When the caller
+		// disables reasoning (e.g. `/think off`), the slot still holds
+		// `<think>...</think>` tokens from earlier thinking turns; strip
+		// them in re-render and llama.cpp invalidates at the first
+		// historic `<think>`. Keep the kwarg on for every Qwen + local
+		// request the compat flag covers.
 		const model = llamaCppQwenModel();
 		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
 		applyChatCompletionsReasoningParams(params, model, model.compat, { disableReasoning: true });
-		// `enable_thinking: false` is the Qwen "disable" encoding; the
-		// preserve knob is moot on a non-thinking turn and must stay off so
-		// stale `<think>` markup isn't reintroduced into the prompt.
 		expect(params.enable_thinking).toBe(false);
-		expect(params.preserve_thinking).toBeUndefined();
+		expect(params.preserve_thinking).toBe(true);
+		// Disable encoding rides the top-level `enable_thinking: false`
+		// field for the `qwen` dialect; `chat_template_kwargs` only
+		// carries the hoisted `preserve_thinking` mirror.
+		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
+	});
+
+	it("emits preserve_thinking for discovered local Qwen with spec.reasoning=false", () => {
+		// `discoverOpenAICompatibleModels` stamps `reasoning: false` on
+		// every model from a generic `/v1/models` endpoint, but Qwen3.6+
+		// servers still emit `reasoning_content` deltas at runtime — captured
+		// by the encoder's `replayReasoningContent` branch. Without
+		// `preserve_thinking: true` on the request, the template strips
+		// `<think>...</think>` from older assistants the moment a new user
+		// message lands, and the local slot's KV cache invalidates on every
+		// turn for the discovered-model variant. The emission must NOT be
+		// gated on `reasoning.enabled` (which requires `model.reasoning`)
+		// — same gotcha that #3532 fixed for `replayReasoningContent`.
+		const compat = llamaCppQwenModel({ reasoning: false }).compat;
+		expect(compat.qwenPreserveThinking).toBe(true);
+
+		const model = llamaCppQwenModel({ reasoning: false });
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		// No `reasoning` option — mirrors a default request against a
+		// discovered model whose spec hardcodes `reasoning: false`.
+		applyChatCompletionsReasoningParams(params, model, model.compat, undefined);
+		// Qwen's `enable_thinking` is unset here (model.reasoning false
+		// short-circuits the reasoning encoder), so the server falls back
+		// to its template default. `preserve_thinking` still rides so
+		// HISTORY rendering keeps the `<think>` blocks intact.
+		expect(params.enable_thinking).toBeUndefined();
+		expect(params.preserve_thinking).toBe(true);
+		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
+	});
+
+	it("emits preserve_thinking for discovered local Qwen even when caller passes disableReasoning", () => {
+		// Same discovered-model case, but the caller also asks to disable
+		// thinking. Neither branch of `resolveOpenAICompatPolicy` would
+		// fire the reasoning encoder (model.reasoning false → both `enabled`
+		// and `disabled` resolve false), yet `preserve_thinking` must still
+		// ship so the local slot keeps reusing the prefix from prior
+		// thinking-on turns.
+		const model = llamaCppQwenModel({ reasoning: false });
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { disableReasoning: true });
+		expect(params.preserve_thinking).toBe(true);
+		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
+	});
+
+	it("emits preserve_thinking via chat_template_kwargs for NVIDIA NIM Qwen on loopback", () => {
+		// NVIDIA NIM serves Qwen with the `qwen-chat-template` dialect:
+		// `enable_thinking` lives under `chat_template_kwargs`, not top
+		// level. The merge-with-spread fix has to keep `preserve_thinking`
+		// alongside `enable_thinking` rather than clobbering it.
+		const model = llamaCppQwenModel({
+			provider: "nvidia",
+			baseUrl: "http://localhost:8000/v1",
+		});
+		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
+		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
+		expect(params.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: true });
+		// NVIDIA NIM's `qwen-chat-template` dialect rides under
+		// chat_template_kwargs; the top-level mirror is still set for
+		// llama.cpp / Alibaba parity.
+		expect(params.preserve_thinking).toBe(true);
 	});
 
 	it("honors an explicit qwenPreserveThinking override on cloud Qwen", () => {
