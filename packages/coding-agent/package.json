@@ -374,6 +374,14 @@
 			"types": "./src/lsp/clients/*.ts",
 			"import": "./src/lsp/clients/*.ts"
 		},
+		"./markit": {
+			"types": "./src/markit/index.ts",
+			"import": "./src/markit/index.ts"
+		},
+		"./markit/*": {
+			"types": "./src/markit/*.ts",
+			"import": "./src/markit/*.ts"
+		},
 		"./mcp": {
 			"types": "./src/mcp/index.ts",
 			"import": "./src/mcp/index.ts"

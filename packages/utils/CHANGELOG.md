@@ -12,6 +12,10 @@
 - Reworked streaming SSE JSON (`readSseJson`) to recover a truncated or lightly malformed final event through the shared streaming JSON parser (relocated here from `@oh-my-pi/pi-ai`), ending the stream cleanly on a cut-off tail instead of throwing. Non-container final events (provider error text, bare scalars) still surface as a `SyntaxError`.
 - Increased the EBUSY retry delay from 25ms to 50ms (40 retries × 50ms = 2s total window, up from 1s). Windows can hold file locks on SQLite databases for up to ~1.5s after `close()`, and the previous 1-second window was too short for some test cleanup scenarios — `settings-manager.test.ts` and `sdk-credential-disabled-bridge.test.ts` still failed with EBUSY even when using `removeSyncWithRetries`.
 
+### Added
+
+- Added an XDG-aware document conversion cache directory helper for coding-agent document reads.
+
 ## [16.1.8] - 2026-06-20
 
 ### Added

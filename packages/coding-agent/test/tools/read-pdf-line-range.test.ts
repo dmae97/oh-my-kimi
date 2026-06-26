@@ -9,10 +9,19 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as markit from "@oh-my-pi/pi-coding-agent/utils/markit";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { __resetProfileSnapshotForTests, refreshDirsFromEnv, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+	} else {
+		process.env[key] = value;
+	}
+}
 
 function makeSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -99,5 +108,43 @@ describe("read PDF with a line-range selector", () => {
 
 		expect(text).toContain("pdf line 1");
 		expect(text).toContain("pdf line 3");
+	});
+
+	it("reuses cached converted markdown across full and selector reads of an unchanged PDF", async () => {
+		const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalOmpProfile = process.env.OMP_PROFILE;
+		const originalPiProfile = process.env.PI_PROFILE;
+		setAgentDir(path.join(testDir, "agent"));
+		try {
+			const convert = vi
+				.spyOn(Markit.prototype, "convert")
+				.mockResolvedValue({ markdown: "pdf line 1\npdf line 2\npdf line 3\n" });
+
+			const tool = new ReadTool(makeSession(testDir));
+
+			const full = await tool.execute("full", { path: pdfPath });
+			const fullText = full.content
+				.filter(c => c.type === "text")
+				.map(c => c.text)
+				.join("\n");
+			expect(fullText).toContain("pdf line 1");
+			expect(fullText).toContain("pdf line 3");
+
+			const selector = await tool.execute("selector", { path: `${pdfPath}:2-3` });
+			const selectorText = selector.content
+				.filter(c => c.type === "text")
+				.map(c => c.text)
+				.join("\n");
+			expect(selectorText).toContain("pdf line 2");
+			expect(selectorText).toContain("pdf line 3");
+
+			expect(convert).toHaveBeenCalledTimes(1);
+		} finally {
+			restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+			restoreEnv("OMP_PROFILE", originalOmpProfile);
+			restoreEnv("PI_PROFILE", originalPiProfile);
+			__resetProfileSnapshotForTests();
+			refreshDirsFromEnv();
+		}
 	});
 });
