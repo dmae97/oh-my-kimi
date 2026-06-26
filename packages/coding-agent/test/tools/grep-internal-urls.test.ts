@@ -318,16 +318,8 @@ describe("GrepTool internal URL resolution", () => {
 		const tool = new GrepTool(session);
 
 		const result = await tool.execute("test-call", {
-<<<<<<< HEAD
 			pattern: "Grep file contents with a regex across files",
 			paths: ["omp://"],
-||||||| parent of 21c61eee6 (Fix coding-agent tests for grep and glob merge)
-			pattern: "Greps files using regex.",
-			paths: ["omp://"],
-=======
-			pattern: "Grep file contents",
-			paths: ["omp://tools/grep.md"],
->>>>>>> 21c61eee6 (Fix coding-agent tests for grep and glob merge)
 	});
 
 	const text = getResultText(result);
