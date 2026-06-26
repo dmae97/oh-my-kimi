@@ -196,4 +196,28 @@ describe("status line path segment", () => {
 			fs.rmSync(parentDir, { recursive: true, force: true });
 		}
 	});
+
+	it("keeps the active nested repo suffix visible when the parent path is truncated", () => {
+		const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-status-line-parent-"));
+		const repoDir = path.join(parentDir, "pr-workspace");
+		fs.mkdirSync(repoDir);
+		try {
+			setProjectDir(parentDir);
+			const ctx = createPathContext();
+			ctx.options.path = { abbreviate: false, maxLength: 4, stripWorkPrefix: true };
+			ctx.activeRepo = {
+				cwd: parentDir,
+				repoRoot: repoDir,
+				relativeRepoRoot: "pr-workspace",
+				source: "single-direct-child-repo",
+			};
+
+			const rendered = renderSegment("path", ctx);
+			expect(rendered.visible).toBe(true);
+			expect(rendered.content).toContain("↳ pr-workspace");
+		} finally {
+			setProjectDir(originalProjectDir);
+			fs.rmSync(parentDir, { recursive: true, force: true });
+		}
+	});
 });
