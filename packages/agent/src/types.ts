@@ -37,6 +37,11 @@ export type StreamFn = (
  */
 export type AsideMessage = AgentMessage | (() => AgentMessage | null);
 
+export interface AgentTurnEndContext {
+	/** True when the loop has already decided another provider request will follow this boundary. */
+	willContinue: boolean;
+}
+
 /**
  * A soft tool requirement: the host wants `toolName` called before the loop
  * runs other tools or yields, but WITHOUT paying the forced-`toolChoice` cost
@@ -346,11 +351,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
 	/**
 	 * Called after a turn ends and before the loop polls steering/asides for the
-	 * next iteration. Use this for awaited per-turn bookkeeping that must be
-	 * visible before the next model request (e.g. synchronizing an advisor's
-	 * backlog so advice produced during the wait is injected as an aside).
+	 * next iteration. `context.willContinue` is true only when the loop has already
+	 * decided another provider request will follow this boundary.
 	 */
-	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<void> | void;
+	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
 
 	/**
 	 * Called once an assistant message is finalized from the model stream, before

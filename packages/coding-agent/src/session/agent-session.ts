@@ -1622,7 +1622,7 @@ export class AgentSession {
 				};
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
-		this.agent.setOnTurnEnd(async (messages, signal) => {
+		this.agent.setOnTurnEnd(async (messages, signal, context) => {
 			if (signal?.aborted) return;
 			const rewindReport = this.#extractRewindReport(messages);
 			if (rewindReport) {
@@ -1638,7 +1638,7 @@ export class AgentSession {
 					await this.#advisorRuntime.waitForCatchup(30000, threshold, signal);
 				}
 			}
-			await this.#maintainContextMidRun(messages, signal);
+			await this.#maintainContextMidRun(messages, signal, context?.willContinue === true);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -8453,16 +8453,25 @@ export class AgentSession {
 	 * model call. Run maintenance here and splice the compacted state back into
 	 * that array, mirroring [`AgentSession.#applyRewind`].
 	 */
-	async #maintainContextMidRun(activeMessages: AgentMessage[], signal?: AbortSignal): Promise<void> {
-		if (signal?.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) return;
-		if (!(this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active")) return;
+	async #maintainContextMidRun(
+		activeMessages: AgentMessage[],
+		signal: AbortSignal | undefined,
+		willContinue: boolean,
+	): Promise<void> {
+		if (signal?.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff || !willContinue) return;
 
 		const model = this.model;
 		const contextWindow = model?.contextWindow ?? 0;
 		if (contextWindow <= 0) return;
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (!compactionSettings.enabled || compactionSettings.strategy === "off") return;
+		if (
+			!compactionSettings.enabled ||
+			compactionSettings.strategy === "off" ||
+			compactionSettings.midTurnEnabled === false
+		) {
+			return;
+		}
 
 		const lastAssistant = [...activeMessages]
 			.reverse()
@@ -8478,6 +8487,7 @@ export class AgentSession {
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			suppressContinuation: true,
+			suppressHandoff: true,
 			triggerContextTokens: contextTokens,
 		});
 
@@ -8486,10 +8496,11 @@ export class AgentSession {
 		if (compactedMessages !== activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...compactedMessages);
 		}
-		logger.debug("Mid-run goal compaction ran between tool-call turns", {
+		logger.debug("Mid-run compaction ran between provider calls", {
 			contextTokens,
 			contextWindow,
 			strategy: compactionSettings.strategy,
+			goalActive: this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active",
 			messagesBefore,
 			messagesAfter: activeMessages.length,
 		});
@@ -9884,7 +9895,12 @@ export class AgentSession {
 		willRetry: boolean,
 		deferred = false,
 		allowDefer = true,
-		options: { autoContinue?: boolean; triggerContextTokens?: number; suppressContinuation?: boolean } = {},
+		options: {
+			autoContinue?: boolean;
+			triggerContextTokens?: number;
+			suppressContinuation?: boolean;
+			suppressHandoff?: boolean;
+		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
@@ -9893,6 +9909,7 @@ export class AgentSession {
 		const suppressContinuation = options.suppressContinuation === true;
 		const shouldAutoContinue =
 			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
+		const suppressHandoff = options.suppressHandoff === true;
 		// Shake runs inline (cheap, no remote LLM). On overflow recovery, if shake
 		// reclaims nothing we fall through to the summary-compaction body below so
 		// the oversized input still gets resolved.
@@ -9911,6 +9928,7 @@ export class AgentSession {
 		// paths the caller wants resolved before scheduling the next turn. "idle" is
 		// triggered by the idle loop and does its own scheduling.
 		if (
+			!suppressHandoff &&
 			!deferred &&
 			allowDefer &&
 			reason !== "overflow" &&
@@ -9935,7 +9953,9 @@ export class AgentSession {
 		// safe for every reason (it makes no LLM call at all) but requires a vision
 		// model to be worth anything — fall back to context-full otherwise.
 		let action: "context-full" | "handoff" | "snapcompact" =
-			compactionSettings.strategy === "handoff" && reason !== "overflow" ? "handoff" : "context-full";
+			compactionSettings.strategy === "handoff" && reason !== "overflow" && !suppressHandoff
+				? "handoff"
+				: "context-full";
 		if (compactionSettings.strategy === "snapcompact") {
 			if (this.model?.input.includes("image")) {
 				action = "snapcompact";
@@ -9962,7 +9982,7 @@ export class AgentSession {
 			// a message typed as the compaction loader appears must land in the compaction
 			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
 			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
-			if (compactionSettings.strategy === "handoff" && reason !== "overflow") {
+			if (action === "handoff") {
 				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
 				const handoffResult = await this.handoff(handoffFocus, {
 					autoTriggered: true,

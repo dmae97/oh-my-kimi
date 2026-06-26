@@ -42,7 +42,7 @@ function highUsage(input: number) {
 	};
 }
 
-describe("AgentSession mid-run goal compaction", () => {
+describe("AgentSession mid-run threshold compaction", () => {
 	let tempDir: TempDir;
 	const cleanups: Array<() => Promise<void>> = [];
 
@@ -73,8 +73,10 @@ describe("AgentSession mid-run goal compaction", () => {
 			"compaction.enabled": true,
 			"compaction.strategy": "context-full",
 			"compaction.autoContinue": true,
+			"compaction.midTurnEnabled": true,
 			"compaction.thresholdTokens": 1000,
 			"compaction.thresholdPercent": -1,
+			"contextPromotion.enabled": false,
 			"todo.enabled": false,
 			"todo.reminders": false,
 			...settingsOverride,
@@ -103,7 +105,7 @@ describe("AgentSession mid-run goal compaction", () => {
 					? {
 							role: "assistant" as const,
 							content: [
-								{ type: "toolCall" as const, id: `tc-${index}`, name: "bash", arguments: { cmd: "ls" } },
+								{ type: "toolCall" as const, id: `tc-${index}`, name: "bash", arguments: { cmd: "pwd" } },
 							],
 							api: "anthropic-messages" as const,
 							provider: "anthropic" as const,
@@ -145,17 +147,19 @@ describe("AgentSession mid-run goal compaction", () => {
 		return { session, observedContexts };
 	}
 
-	it("compacts in place between tool-call turns during an active goal run", async () => {
-		const { session, observedContexts } = await createHarness();
-		session.setGoalModeState(activeGoalState());
-
-		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
-			summary: "MID-RUN-COMPACTED",
+	function mockCompaction(summary: string) {
+		return vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary,
 			shortSummary: undefined,
 			firstKeptEntryId: preparation.firstKeptEntryId,
 			tokensBefore: preparation.tokensBefore,
 			details: {},
 		}));
+	}
+
+	it("compacts in place between tool-call turns outside goal mode", async () => {
+		const { session, observedContexts } = await createHarness();
+		const compactSpy = mockCompaction("MID-RUN-COMPACTED");
 
 		await session.prompt("work on the release");
 
@@ -164,15 +168,45 @@ describe("AgentSession mid-run goal compaction", () => {
 		expect(observedContexts[1].join("\n")).toContain("MID-RUN-COMPACTED");
 	});
 
-	it("does not compact mid-run when no goal is active", async () => {
-		const { session } = await createHarness();
-		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
-			summary: "SHOULD-NOT-RUN",
-			shortSummary: undefined,
-			firstKeptEntryId: preparation.firstKeptEntryId,
-			tokensBefore: preparation.tokensBefore,
-			details: {},
-		}));
+	it("compacts in place between tool-call turns during an active goal run", async () => {
+		const { session, observedContexts } = await createHarness();
+		session.setGoalModeState(activeGoalState());
+		const compactSpy = mockCompaction("ACTIVE-GOAL-MID-RUN-COMPACTED");
+
+		await session.prompt("work on the release");
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
+		expect(observedContexts[1].join("\n")).toContain("ACTIVE-GOAL-MID-RUN-COMPACTED");
+	});
+
+	it("falls back to in-place compaction for mid-run handoff strategy", async () => {
+		const { session, observedContexts } = await createHarness({ "compaction.strategy": "handoff" });
+		const handoffSpy = vi.spyOn(session, "handoff").mockImplementation(async () => {
+			throw new Error("mid-run compaction must not reset the session through handoff");
+		});
+		const compactSpy = mockCompaction("HANDOFF-MID-RUN-COMPACTED-IN-PLACE");
+
+		await session.prompt("work on the release");
+
+		expect(handoffSpy).not.toHaveBeenCalled();
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(observedContexts[1].join("\n")).toContain("HANDOFF-MID-RUN-COMPACTED-IN-PLACE");
+	});
+
+	it("does not compact mid-run outside goal mode when disabled", async () => {
+		const { session } = await createHarness({ "compaction.midTurnEnabled": false });
+		const compactSpy = mockCompaction("SHOULD-NOT-RUN");
+
+		await session.prompt("work on the release");
+
+		expect(compactSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not compact mid-run during active goal mode when disabled", async () => {
+		const { session } = await createHarness({ "compaction.midTurnEnabled": false });
+		session.setGoalModeState(activeGoalState());
+		const compactSpy = mockCompaction("SHOULD-NOT-RUN");
 
 		await session.prompt("work on the release");
 
