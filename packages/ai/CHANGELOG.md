@@ -9,6 +9,10 @@
 
 - Redesigned the OAuth callback page (`oauth.html`) to match the oh-my-pi web brand language: OKLCH purple-tinted dark neutrals, magenta→iris→cyan brand gradient on the wordmark, frosted-glass card over an ascii grid backdrop, and a colored status halo around the success/error icon. All assets are inlined; the `__OAUTH_STATE__` injection contract and success/error JS logic are unchanged.
 
+### Fixed
+
+- Fixed `omp usage` silently omitting Ollama and Ollama Cloud accounts by registering placeholder usage providers for both until an upstream quota endpoint is available. ([#3555](https://github.com/can1357/oh-my-pi/issues/3555))
+
 ## [16.1.22] - 2026-06-26
 
 ### Fixed

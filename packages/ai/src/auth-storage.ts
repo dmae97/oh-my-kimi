@@ -39,6 +39,7 @@ import { googleGeminiCliUsageProvider } from "./usage/gemini";
 import { githubCopilotUsageProvider } from "./usage/github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./usage/google-antigravity";
 import { kimiUsageProvider } from "./usage/kimi";
+import { ollamaCloudUsageProvider, ollamaUsageProvider } from "./usage/ollama";
 import { codexRankingStrategy, openaiCodexUsageProvider } from "./usage/openai-codex";
 import {
 	type CodexResetConsumeCode,
@@ -496,6 +497,8 @@ const DEFAULT_USAGE_PROVIDERS: UsageProvider[] = [
 	kimiUsageProvider,
 	antigravityUsageProvider,
 	googleGeminiCliUsageProvider,
+	ollamaUsageProvider,
+	ollamaCloudUsageProvider,
 	claudeUsageProvider,
 	zaiUsageProvider,
 	opencodeGoUsageProvider,
