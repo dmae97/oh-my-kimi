@@ -90,6 +90,13 @@ export abstract class SnapshotStore {
 	/** Drop the version history for a single path. */
 	abstract invalidate(path: string): void;
 
+	/**
+	 * Move retained version history (and read provenance) from `from` to `to`.
+	 * No-op when `from` has no history. Used by file moves so tags minted from
+	 * reads of the source path stay valid at the destination.
+	 */
+	abstract relocate(from: string, to: string): void;
+
 	/** Drop every version history. */
 	abstract clear(): void;
 }
@@ -195,6 +202,27 @@ export class InMemorySnapshotStore extends SnapshotStore {
 
 	invalidate(path: string): void {
 		this.#versions.delete(path);
+	}
+
+	relocate(from: string, to: string): void {
+		const sourceHistory = this.#versions.get(from);
+		if (sourceHistory === undefined || sourceHistory.length === 0) return;
+		for (const version of sourceHistory) version.path = to;
+		const destHistory = this.#versions.get(to);
+		if (destHistory === undefined) {
+			this.#versions.set(to, sourceHistory);
+		} else {
+			const seen = new Set<string>();
+			const merged: Snapshot[] = [];
+			for (const version of [...sourceHistory, ...destHistory]) {
+				if (seen.has(version.hash)) continue;
+				seen.add(version.hash);
+				version.path = to;
+				merged.push(version);
+			}
+			this.#versions.set(to, merged.slice(0, this.#maxVersionsPerPath));
+		}
+		this.#versions.delete(from);
 	}
 
 	clear(): void {

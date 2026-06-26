@@ -86,6 +86,17 @@ describe("InMemorySnapshotStore", () => {
 		expect(store.byHash(OTHER, tagB)).toBeNull();
 	});
 
+	it("relocate moves version history and read provenance to a new path", () => {
+		const store = new InMemorySnapshotStore();
+		const dest = "/tmp/__hashline-dest__.ts";
+		const tag = store.record(PATH, "A\n", [1]);
+		store.relocate(PATH, dest);
+		expect(store.byHash(PATH, tag)).toBeNull();
+		expect(store.byHash(dest, tag)?.text).toBe("A\n");
+		expect(store.byHash(dest, tag)?.seenLines).toEqual(new Set([1]));
+		expect(store.head(dest)?.hash).toBe(tag);
+	});
+
 	it("findByHash returns every retained version with that tag across paths", () => {
 		const store = new InMemorySnapshotStore();
 		const text = "shared\n";

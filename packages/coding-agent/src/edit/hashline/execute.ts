@@ -107,6 +107,23 @@ function formatBlockResolution(resolution: BlockResolution): string {
 }
 
 function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsResult | undefined): RenderedSection {
+	if (result.op === "delete") {
+		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
+			content: [{ type: "text", text: `Deleted ${result.path}` }],
+			details: {
+				diff: "",
+				op: "delete",
+				path: result.path,
+				oldText: result.before,
+				meta: outputMeta().get(),
+			},
+		};
+		return {
+			toolResult,
+			perFileResult: { path: result.path, diff: "", op: "delete", oldText: result.before },
+		};
+	}
+
 	if (result.op === "noop") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
 			content: [{ type: "text", text: noChangeDiagnostic(result.path) }],
@@ -130,24 +147,37 @@ function renderSection(result: PatchSectionResult, diagnostics: FileDiagnosticsR
 		result.blockResolutions && result.blockResolutions.length > 0
 			? `\n${result.blockResolutions.map(formatBlockResolution).join("\n")}`
 			: "";
+	const moveBlock = result.moveDest ? `\nMoved to ${result.moveDest}` : "";
 	const firstChangedLine = result.firstChangedLine ?? diff.firstChangedLine;
 	return {
 		toolResult: {
-			content: [{ type: "text", text: `${result.header}${blockBlock}${previewBlock}${warningsBlock}` }],
+			content: [
+				{
+					type: "text",
+					text: `${result.header}${blockBlock}${moveBlock}${previewBlock}${warningsBlock}`,
+				},
+			],
 			details: {
 				diff: diff.diff,
 				firstChangedLine,
 				diagnostics,
 				op: result.op,
+				move: result.moveDest,
+				path: result.moveDest ?? result.path,
+				oldText: result.before,
+				newText: result.after,
 				meta,
 			},
 		},
 		perFileResult: {
-			path: result.path,
+			path: result.moveDest ?? result.path,
 			diff: diff.diff,
 			firstChangedLine,
 			diagnostics,
 			op: result.op,
+			move: result.moveDest,
+			oldText: result.before,
+			newText: result.after,
 		},
 	};
 }

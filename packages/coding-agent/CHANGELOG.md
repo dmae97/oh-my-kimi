@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added support for file deletion and moving within file editing operations
 
 ### Changed
 

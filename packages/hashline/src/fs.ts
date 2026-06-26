@@ -8,6 +8,7 @@
  * {@link Filesystem.readText} and {@link Filesystem.writeText}; the FS deals
  * only in raw text strings.
  */
+import * as fs from "node:fs/promises";
 import * as pathModule from "node:path";
 
 /**
@@ -18,6 +19,13 @@ import * as pathModule from "node:path";
 export interface WriteResult {
 	/** Final text that was persisted. May differ from the input if the FS transformed it. */
 	text: string;
+}
+
+import type { FileOp } from "./types";
+
+/** Optional hints for {@link Filesystem.preflightWrite}. */
+export interface PreflightWriteOptions {
+	fileOp?: FileOp;
 }
 
 /**
@@ -58,10 +66,24 @@ export abstract class Filesystem {
 	abstract readText(path: string): Promise<string>;
 
 	/** Validate that `path` is writable before a prepared batch starts committing. */
-	async preflightWrite(_path: string): Promise<void> {}
+	async preflightWrite(_path: string, _options?: PreflightWriteOptions): Promise<void> {}
 
 	/** Persist `content` at `path`. Returns the actual final text that was written. */
 	abstract writeText(path: string, content: string): Promise<WriteResult>;
+
+	/** Delete the file at `path`. Default: not supported. */
+	async delete(path: string): Promise<void> {
+		throw new Error(`Filesystem does not support delete: ${path}`);
+	}
+
+	/**
+	 * Move/rename `from` to `to`. When `content` is provided the destination
+	 * receives that text; otherwise implementations may preserve the source bytes.
+	 */
+	async move(from: string, to: string, content?: string): Promise<void> {
+		void content;
+		throw new Error(`Filesystem does not support move: ${from} -> ${to}`);
+	}
 
 	/** Return true when the path exists and can be read. Default: probe via {@link readText}. */
 	async exists(path: string): Promise<boolean> {
@@ -125,6 +147,18 @@ export class InMemoryFilesystem extends Filesystem {
 		return { text: content };
 	}
 
+	async delete(path: string): Promise<void> {
+		if (!this.#files.delete(path)) throw new NotFoundError(path);
+	}
+
+	async move(from: string, to: string, content?: string): Promise<void> {
+		const existing = this.#files.get(from);
+		if (existing === undefined) throw new NotFoundError(from);
+		const finalContent = content ?? existing;
+		this.#files.set(to, finalContent);
+		this.#files.delete(from);
+	}
+
 	async exists(path: string): Promise<boolean> {
 		return this.#files.has(path);
 	}
@@ -170,6 +204,29 @@ export class NodeFilesystem extends Filesystem {
 	async writeText(path: string, content: string): Promise<WriteResult> {
 		await Bun.write(path, content);
 		return { text: content };
+	}
+
+	async delete(path: string): Promise<void> {
+		try {
+			await fs.rm(path);
+		} catch (error) {
+			if (isNotFound(error)) throw new NotFoundError(path, error);
+			throw error;
+		}
+	}
+
+	async move(from: string, to: string, content?: string): Promise<void> {
+		if (content !== undefined) {
+			await Bun.write(to, content);
+			await this.delete(from);
+			return;
+		}
+		try {
+			await fs.rename(from, to);
+		} catch (error) {
+			if (isNotFound(error)) throw new NotFoundError(from, error);
+			throw error;
+		}
 	}
 
 	canonicalPath(path: string): string {

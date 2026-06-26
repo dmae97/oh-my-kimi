@@ -39,7 +39,7 @@ import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
 import type { SnapshotStore } from "./snapshots";
-import type { ApplyResult, BlockResolution, BlockResolver, Edit } from "./types";
+import type { ApplyResult, BlockResolution, BlockResolver, Edit, FileOp } from "./types";
 
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
@@ -60,8 +60,8 @@ export interface PatchSectionResult {
 	path: string;
 	/** Filesystem-canonical key for this section (e.g. absolute path). */
 	canonicalPath: string;
-	/** `"noop"` when the apply produced no change; otherwise `"create"` / `"update"`. */
-	op: "create" | "update" | "noop";
+	/** `"noop"` when the apply produced no change; `"delete"` removes the file; otherwise `"create"` / `"update"`. */
+	op: "create" | "update" | "delete" | "noop";
 	/** Pre-edit text (LF-normalized, BOM-stripped). */
 	before: string;
 	/** Post-edit text (LF-normalized, BOM-stripped). For `"noop"` equals `before`. */
@@ -78,6 +78,8 @@ export interface PatchSectionResult {
 	firstChangedLine?: number;
 	/** Warnings collected by the parser, applier, and (optionally) recovery. */
 	warnings: string[];
+	/** Destination path when this section includes `MV DEST`. */
+	moveDest?: string;
 	/**
 	 * Resolved spans for any `replace_block`/`delete_block` ops, present when the
 	 * apply matched the tagged content. Undefined for patches with no block ops
@@ -107,11 +109,12 @@ export class PreparedSection {
 		readonly normalized: string,
 		readonly applyResult: ApplyResult,
 		readonly parseWarnings: readonly string[],
+		readonly fileOp: FileOp | undefined,
 	) {}
 
-	/** Convenience: returns true when the apply produced no change. */
+	/** Convenience: returns true when the apply produced no change and no file op. */
 	get isNoop(): boolean {
-		return this.applyResult.text === this.normalized;
+		return this.fileOp === undefined && this.applyResult.text === this.normalized;
 	}
 }
 
@@ -251,7 +254,9 @@ export class Patcher {
 	 * tag mismatch ({@link MismatchError}).
 	 */
 	async prepare(section: PatchSection): Promise<PreparedSection> {
-		const parseWarnings = [...section.parse().warnings];
+		const parsed = section.parse();
+		const parseWarnings = [...parsed.warnings];
+		const fileOp = parsed.fileOp;
 		assertSectionHashPresent(section.path, section.fileHash);
 
 		let target = section;
@@ -280,23 +285,36 @@ export class Patcher {
 		// Gate the final (possibly recovered) target before any write work, so
 		// an unrecoverable read-only target (e.g. a plan-mode working-tree path)
 		// fails with the write guard rather than a misleading "file not found".
-		await this.fs.preflightWrite(target.path);
+		await this.fs.preflightWrite(target.path, { fileOp });
 
 		if (!read.exists) {
 			throw new Error(`File not found: ${target.path}. Use the write tool to create new files.`);
+		}
+
+		if (fileOp?.kind === "move" && this.fs.canonicalPath(fileOp.dest) === canonicalPath) {
+			throw new Error(`MV destination is the same as ${target.path}.`);
 		}
 
 		const { bom, text } = stripBom(read.rawContent);
 		const lineEnding = detectLineEnding(text);
 		const normalized = normalizeToLF(text);
 
-		const applyResult = this.#applyWithRecovery({
-			section: target,
-			canonicalPath,
-			exists: read.exists,
-			normalized,
-			edits: target.parse().edits,
-		});
+		const applyResult =
+			fileOp?.kind === "rem"
+				? this.#applyWithRecovery({
+						section: target,
+						canonicalPath,
+						exists: read.exists,
+						normalized,
+						edits: [],
+					})
+				: this.#applyWithRecovery({
+						section: target,
+						canonicalPath,
+						exists: read.exists,
+						normalized,
+						edits: parsed.edits,
+					});
 
 		return new PreparedSection(
 			target,
@@ -308,6 +326,7 @@ export class Patcher {
 			normalized,
 			applyResult,
 			parseWarnings,
+			fileOp,
 		);
 	}
 
@@ -350,11 +369,31 @@ export class Patcher {
 	 * filesystem-canonical path.
 	 */
 	async commit(prepared: PreparedSection): Promise<PatchSectionResult> {
-		const { section, normalized, bom, lineEnding, parseWarnings, exists, applyResult, canonicalPath } = prepared;
+		const { section, normalized, bom, lineEnding, parseWarnings, exists, applyResult, canonicalPath, fileOp } =
+			prepared;
 		const after = applyResult.text;
 		const warnings = mergeWarnings(parseWarnings, applyResult.warnings);
+		const moveDest = fileOp?.kind === "move" ? fileOp.dest : undefined;
+		const resultPath = moveDest ?? section.path;
 
-		if (after === normalized) {
+		if (fileOp?.kind === "rem") {
+			await this.fs.delete(section.path);
+			this.snapshots.invalidate(canonicalPath);
+			return {
+				path: section.path,
+				canonicalPath,
+				op: "delete",
+				before: normalized,
+				after: normalized,
+				persisted: prepared.rawContent,
+				written: prepared.rawContent,
+				fileHash: computeFileHash(normalized),
+				header: formatHashlineHeader(section.path, computeFileHash(normalized)),
+				warnings,
+			};
+		}
+
+		if (after === normalized && moveDest === undefined) {
 			const hash = this.#recordFullSnapshot(canonicalPath, normalized);
 			return {
 				path: section.path,
@@ -371,6 +410,29 @@ export class Patcher {
 		}
 
 		const persisted = bom + restoreLineEndings(after, lineEnding);
+
+		if (moveDest !== undefined) {
+			const destCanonical = this.fs.canonicalPath(moveDest);
+			this.snapshots.relocate(canonicalPath, destCanonical);
+			await this.fs.move(section.path, moveDest, persisted);
+			const fileHash = this.#recordFullSnapshot(destCanonical, after);
+			return {
+				path: resultPath,
+				canonicalPath: destCanonical,
+				op: "update",
+				before: normalized,
+				after,
+				persisted,
+				written: persisted,
+				fileHash,
+				header: formatHashlineHeader(moveDest, fileHash),
+				firstChangedLine: applyResult.firstChangedLine,
+				blockResolutions: applyResult.blockResolutions,
+				moveDest,
+				warnings,
+			};
+		}
+
 		const write: WriteResult = await this.fs.writeText(section.path, persisted);
 		const fileHash = this.#recordFullSnapshot(canonicalPath, after);
 		const op = exists ? "update" : "create";

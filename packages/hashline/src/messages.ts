@@ -119,6 +119,14 @@ export const UNRESOLVED_BLOCK_INTERNAL =
 /** Delete hunk received a body row. */
 export const DELETE_TAKES_NO_BODY = `\`DEL N${HL_RANGE_SEP}M\` does not take body rows. Remove the body, or use \`SWAP N${HL_RANGE_SEP}M:\`.`;
 
+/** `REM` received a body row or coexists with line edits. */
+export const REM_TAKES_NO_BODY =
+	"`REM` deletes the whole file and takes no body rows or line ops. Issue it alone under the header.";
+
+/** `MV` received a body row. */
+export const MOVE_TAKES_NO_BODY =
+	"`MV DEST` does not take body rows. Put line edits above the `MV` row; the destination path follows `MV` on the same line.";
+
 /** `delete_block N` hunk received a body row. */
 export const DELETE_BLOCK_TAKES_NO_BODY = "`DEL.BLK N` does not take body rows. Remove the body, or use `SWAP.BLK N:`.";
 
