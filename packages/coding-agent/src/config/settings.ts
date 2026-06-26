@@ -1001,8 +1001,8 @@ export class Settings {
 		// 1. Nested settings: find -> glob, search -> grep (per-property merge to avoid clobbering)
 		const ensureRawObject = (key: "glob" | "grep"): Record<string, unknown> => {
 			const current = raw[key];
-			if (current && typeof current === "object" && !Array.isArray(current)) {
-				return current as Record<string, unknown>;
+			if (isRecord(current)) {
+				return current;
 			}
 			const created: Record<string, unknown> = {};
 			raw[key] = created;
@@ -1011,9 +1011,10 @@ export class Settings {
 
 		if ("find" in raw) {
 			const findObj = raw.find;
-			if (findObj && typeof findObj === "object" && !Array.isArray(findObj)) {
+			if (isRecord(findObj)) {
 				const globObj = ensureRawObject("glob");
-				for (const key of ["enabled"]) {
+				const findKeys: Array<"enabled"> = ["enabled"];
+				for (const key of findKeys) {
 					if (key in findObj && !(key in globObj)) {
 						globObj[key] = findObj[key];
 					}
@@ -1024,9 +1025,14 @@ export class Settings {
 
 		if ("search" in raw) {
 			const searchObj = raw.search;
-			if (searchObj && typeof searchObj === "object" && !Array.isArray(searchObj)) {
+			if (isRecord(searchObj)) {
 				const grepObj = ensureRawObject("grep");
-				for (const key of ["enabled", "contextBefore", "contextAfter"]) {
+				const searchKeys: Array<"enabled" | "contextBefore" | "contextAfter"> = [
+					"enabled",
+					"contextBefore",
+					"contextAfter",
+				];
+				for (const key of searchKeys) {
 					if (key in searchObj && !(key in grepObj)) {
 						grepObj[key] = searchObj[key];
 					}
