@@ -9,7 +9,7 @@ import {
 	RemoteAuthCredentialStore,
 	startAuthBroker,
 } from "@oh-my-pi/pi-ai/auth-broker";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 // MCP OAuth credentials extend the base OAuthCredential with refresh material
 // (tokenUrl/clientId/clientSecret/resource) embedded so token refresh works for

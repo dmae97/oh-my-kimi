@@ -8,7 +8,7 @@ import type { AssistantMessage, FetchImpl, Model, ModelSpec } from "@oh-my-pi/pi
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { wrapFetchForRequestDebug } from "@oh-my-pi/pi-ai/utils/request-debug";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 const enc = new TextEncoder();
 

@@ -16,7 +16,7 @@ import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/registry/oauth/types";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 const HOUR_MS = 60 * 60 * 1000;
 

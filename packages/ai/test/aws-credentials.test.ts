@@ -7,7 +7,7 @@ import {
 	resolveAwsCredentials,
 	tokenizeCredentialProcessCommand,
 } from "@oh-my-pi/pi-ai/providers/aws-credentials";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 // `credential_process` integration coverage. Drives a real `Bun.spawn`
 // against a fixture script so the JSON envelope contract, exit-code

@@ -9,7 +9,8 @@ import { complete, getEnvApiKey, stream } from "@oh-my-pi/pi-ai/stream";
 import type { Api, Context, ImageContent, Model, OptionsForApi, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { $which, removeWithRetries } from "@oh-my-pi/pi-utils";
+import { $which } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 import { type } from "arktype";
 import { e2eApiKey, resolveApiKey } from "./oauth";
 

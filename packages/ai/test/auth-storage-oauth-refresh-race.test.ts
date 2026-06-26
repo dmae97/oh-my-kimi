@@ -9,7 +9,7 @@ import {
 	SqliteAuthCredentialStore,
 } from "@oh-my-pi/pi-ai/auth-storage";
 import * as oauthUtils from "@oh-my-pi/pi-ai/registry/oauth";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 import { withEnv } from "./helpers";
 
 const SUPPRESS_ANTHROPIC_ENV = {

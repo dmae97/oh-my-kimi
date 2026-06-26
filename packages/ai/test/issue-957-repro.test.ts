@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import * as kimiOauth from "@oh-my-pi/pi-ai/registry/oauth/kimi";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 afterEach(() => {
 	vi.restoreAllMocks();

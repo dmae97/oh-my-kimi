@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { readModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
