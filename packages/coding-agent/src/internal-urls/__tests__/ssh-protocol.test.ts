@@ -242,6 +242,8 @@ describe("SshProtocolHandler", () => {
 		await expect(handler.resolve(parseInternalUrl("ssh://prod:/etc/hosts"))).rejects.toThrow(/empty port/);
 		await expect(handler.resolve(parseInternalUrl("ssh://user@prod:/etc/hosts"))).rejects.toThrow(/empty port/);
 		await expect(handler.resolve(parseInternalUrl("ssh://[::1]:/etc/hosts"))).rejects.toThrow(/empty port/);
+		await expect(handler.resolve(parseInternalUrl("ssh://prod%2Dblue:/etc/hosts"))).rejects.toThrow(/empty port/);
+		await expect(handler.resolve(parseInternalUrl("ssh://u%2Dname@prod:/etc/hosts"))).rejects.toThrow(/empty port/);
 	});
 
 	it("matches a configured colon-suffixed alias via %3A instead of treating it as an empty port", async () => {

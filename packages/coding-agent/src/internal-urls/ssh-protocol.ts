@@ -144,12 +144,22 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	if (port === 0) {
 		throw new Error("ssh://: port 0 is not a valid SSH port; use ssh://host:<1-65535>/<path> or omit the port");
 	}
-	// An empty port (`ssh://prod:/path`, `ssh://user@host:/path`) parses cleanly
-	// (`url.port === ""`), so it slips past the malformed-authority guard and would be
-	// read as "no port" — silently using the default/configured target. The raw
-	// authority still carries the trailing `:` (a percent-encoded alias like `prod%3A`
-	// decodes to `prod:` but keeps `%3A` in `hostname`, so it won't match this).
-	if (port === undefined && url.rawHost === `${username ? `${username}@` : ""}${bareHost}:`) {
+	// An empty port (`ssh://prod:/path`, `ssh://user@host:/path`, including
+	// percent-encoded authority parts) parses cleanly with `url.port === ""`, so it
+	// slips past the malformed-authority guard and would be read as "no port" —
+	// silently using the default/configured target. `url.rawHost` is the decoded
+	// authority and uniquely retains the trailing `:`; comparing it to the decoded
+	// host (+ user) catches the empty port, while a percent-encoded alias like
+	// `prod%3A` (whose decoded host already ends in `:`) reconstructs to `prod::`
+	// and is left alone.
+	const decodeOr = (s: string): string => {
+		try {
+			return decodeURIComponent(s);
+		} catch {
+			return s;
+		}
+	};
+	if (port === undefined && url.rawHost === `${username ? `${decodeOr(username)}@` : ""}${decodeOr(bareHost)}:`) {
 		throw new Error(`ssh://: empty port in "${url.href}"; use ssh://host:<1-65535>/<path> or drop the colon`);
 	}
 	const items = await loadConfiguredHosts(cwd);
