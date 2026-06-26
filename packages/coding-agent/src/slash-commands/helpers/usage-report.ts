@@ -27,9 +27,14 @@ function formatUsageAmount(limit: UsageLimit): string {
 function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index: number): string {
 	const email = report.metadata?.email;
 	if (typeof email === "string" && email) return email;
-	const accountId = report.metadata?.accountId ?? limit.scope.accountId;
+	// Guard metadata values for truthiness before using, then fall back to scope.
+	// ?? won't help here: empty string is not null/undefined, so it would suppress
+	// a valid scoped fallback (e.g. metadata.accountId="" hides limit.scope.accountId).
+	const metaAccountId = report.metadata?.accountId;
+	const accountId = typeof metaAccountId === "string" && metaAccountId ? metaAccountId : limit.scope.accountId;
 	if (typeof accountId === "string" && accountId) return accountId;
-	const projectId = report.metadata?.projectId ?? limit.scope.projectId;
+	const metaProjectId = report.metadata?.projectId;
+	const projectId = typeof metaProjectId === "string" && metaProjectId ? metaProjectId : limit.scope.projectId;
 	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;
 }
