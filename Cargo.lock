@@ -3040,6 +3040,8 @@ dependencies = [
  "brush-parser 0.3.0",
  "bytes",
  "clap",
+ "globset",
+ "ignore",
  "libc",
  "os_pipe",
  "pi-uutils-ctx",
