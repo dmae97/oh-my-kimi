@@ -15,7 +15,7 @@ path = "src/tail.rs"
 clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
 memchr = "2.7.2"
 uucore = { version = "0.8.0", features = ["fs", "parser-size", "signals"] }
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 libc = "0.2.172"

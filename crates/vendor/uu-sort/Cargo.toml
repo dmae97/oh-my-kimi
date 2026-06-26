@@ -36,7 +36,7 @@ uucore = { version = "0.8.0", features = [
   "i18n-collator",
   "i18n-datetime",
 ] }
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.2", default-features = false, features = ["resource"] }

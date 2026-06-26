@@ -4,7 +4,7 @@
  * Branch: `fix/brush-detach-when-embedded`
  * Target commit: b0950f7ed
  *
- * The fix lives in `crates/brush-core-vendored/src/commands.rs` and is
+ * The fix lives in `crates/vendor/brush-core/src/commands.rs` and is
  * verified at the unit level by `pi-natives::shell::tests::child_session_action`
  * (truth-table) and `embedded_external_command_runs_in_its_own_session` (real
  * brush spawn). This test pulls the fix end-to-end through the OMP coding

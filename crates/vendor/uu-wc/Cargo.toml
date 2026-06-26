@@ -23,7 +23,7 @@ uucore = { version = "0.8.0", features = [
   "quoting-style",
 ] }
 unicode-width = "0.2.0"
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.172"

@@ -33,7 +33,7 @@ uucore = { version = "0.8.0", features = [
   "version-cmp",
 ] }
 uutils_term_grid = "0.8"
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 # hostname crate does not support WASI (no OS-level hostname API)
 [target.'cfg(not(target_os = "wasi"))'.dependencies]

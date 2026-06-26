@@ -16,4 +16,4 @@ clap = { version = "4.5", features = ["wrap_help", "cargo", "color"] }
 memchr = "2.7.2"
 thiserror = "2.0.3"
 uucore = { version = "0.8.0", features = ["parser-size", "ringbuffer", "lines", "fs"] }
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }

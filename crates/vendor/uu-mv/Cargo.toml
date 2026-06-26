@@ -25,7 +25,7 @@ uucore = { version = "0.8.0", features = [
   "fsxattr",
   "update-control",
 ] }
-pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.0", default-features = false, features = [
