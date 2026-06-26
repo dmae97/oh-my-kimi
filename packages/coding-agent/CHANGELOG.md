@@ -164,6 +164,9 @@
 - Fixed GitLab Duo Agent namespace/project discovery reading the original repo's git remote after a `/move`. The session's working directory is now resolved live (per LLM call) from the `SessionManager` instead of being captured when the agent was constructed, so moving the session re-scopes Duo workspace discovery to the new repository.
 - Fixed `omp auth-broker login gitlab-duo-agent` (and `--via`) hanging until timeout: the provider uses GitLab's fixed `vscode://` OAuth redirect, which never reaches the broker's local callback server, and `runLocalLogin` supplied no `onManualCodeInput` fallback. The broker login now offers the same paste-the-redirect-URL prompt the interactive sign-in uses, so credentials can be saved.
 
+### Changed
+
+- Reused shared TUI mouse-routing helpers across fullscreen overlay selectors.
 
 ## [16.1.16] - 2026-06-23
 

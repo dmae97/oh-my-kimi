@@ -15,7 +15,7 @@
  */
 import * as fs from "node:fs";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { type Component, Editor, matchesKey, parseSgrMouse, ScrollView, type TUI } from "@oh-my-pi/pi-tui";
+import { type Component, Editor, matchesKey, routeSgrMouseInput, ScrollView, type TUI } from "@oh-my-pi/pi-tui";
 import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import type { KeyId } from "../../config/keybindings";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
@@ -413,12 +413,14 @@ export class AgentTranscriptViewer implements Component {
 
 	handleInput(data: string): void {
 		if (data.startsWith("\x1b[<")) {
-			const event = parseSgrMouse(data);
-			if (event?.wheel != null) {
-				this.#scrollView.scroll(event.wheel * 3);
-				this.#syncFollow();
-				this.deps.requestRender();
-			}
+			routeSgrMouseInput(data, event => {
+				if (event.wheel !== null) {
+					this.#scrollView.scroll(event.wheel * 3);
+					this.#syncFollow();
+					this.deps.requestRender();
+				}
+				return true;
+			});
 			return;
 		}
 

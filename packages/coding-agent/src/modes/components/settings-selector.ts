@@ -10,8 +10,9 @@ import {
 	type ImageBudget,
 	Input,
 	matchesKey,
-	parseSgrMouse,
 	replaceTabs,
+	routeSelectListMouse,
+	routeSgrMouseInput,
 	type SelectItem,
 	SelectList,
 	type SettingItem,
@@ -105,7 +106,6 @@ class SelectSubmenu extends Container {
 	#previewText: Text | null = null;
 	#previewUpdateRequestId: number = 0;
 	#selectListLineOffset = 0;
-	#selectListLineCount = 0;
 
 	constructor(
 		title: string,
@@ -203,7 +203,6 @@ class SelectSubmenu extends Container {
 			const childLines = child.render(Math.max(1, width));
 			if (child === this.#selectList) {
 				this.#selectListLineOffset = lines.length;
-				this.#selectListLineCount = childLines.length;
 			}
 			lines.push(...childLines);
 		}
@@ -212,20 +211,7 @@ class SelectSubmenu extends Container {
 
 	/** Mouse routed from the host: wheel steps, hover lights, click confirms. */
 	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
-		if (event.wheel !== null) {
-			this.#selectList.handleWheel(event.wheel);
-			return;
-		}
-		const listLine = line - this.#selectListLineOffset;
-		const within = listLine >= 0 && listLine < this.#selectListLineCount;
-		const index = within ? this.#selectList.hitTest(listLine) : undefined;
-		if (event.motion) {
-			this.#selectList.setHoverIndex(index ?? null);
-			return;
-		}
-		if (event.leftClick && index !== undefined) {
-			this.#selectList.clickItem(index);
-		}
+		routeSelectListMouse(this.#selectList, event, line - this.#selectListLineOffset);
 	}
 
 	handleInput(data: string): void {
@@ -583,12 +569,14 @@ export class SettingsSelectorComponent implements Component {
 	 * activates it (toggle / open submenu).
 	 */
 	#handleMouse(data: string): boolean {
-		const event = parseSgrMouse(data);
-		if (!event) return false;
+		return routeSgrMouseInput(data, event => this.#routeMouseEvent(event));
+	}
 
+	#routeMouseEvent(event: SgrMouseEvent): boolean {
 		const list = this.#searchList ?? this.#currentList;
-		// row() insets content by two columns (border + space).
-		const innerCol = event.col - 2;
+		// row() insets content by the border column plus a space.
+		const contentColInset = 2;
+		const innerCol = event.col - contentColInset;
 		const contentLine = event.row - this.#contentRowStart;
 
 		// An open submenu owns the pointer: wheel, hover, and clicks route into
