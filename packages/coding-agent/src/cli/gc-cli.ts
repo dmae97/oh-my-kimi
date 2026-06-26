@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getModelDbPath, getSessionsDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
+import { getDefault } from "../config/settings-schema";
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { FileSessionStorage } from "../session/session-storage";
 
@@ -127,16 +128,21 @@ interface GcLockSnapshot {
 	text: string;
 }
 
-function numberSetting(value: number | undefined, fallback: number): number {
-	if (value === undefined || !Number.isFinite(value)) return fallback;
+function normalizeNumberSetting(value: unknown, defaultValue: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return defaultValue;
 	return Math.max(0, Math.floor(value));
+}
+
+function numberSetting(value: number | undefined, fallback: unknown, defaultValue: number): number {
+	if (value !== undefined && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+	return normalizeNumberSetting(fallback, defaultValue);
 }
 
 async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions> {
 	const agentDir = path.resolve(flags.agentDir ?? getAgentDir());
 	const selected = flags.blobs === true || flags.archive === true || flags.wal === true;
 	const settings =
-		flags.apply === true ? await Settings.init({ agentDir }) : await Settings.loadReadOnly({ agentDir });
+		flags.apply === true ? await Settings.loadIsolated({ agentDir }) : await Settings.loadReadOnly({ agentDir });
 	const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") => settings.get(pathKey);
 	const getNumber = (pathKey: "gc.coldArchiveAfterDays" | "gc.retainNewestGlobal" | "gc.retainNewestPerCwd") =>
 		settings.get(pathKey);
@@ -147,9 +153,21 @@ async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions>
 		runBlobs: selected ? flags.blobs === true : getBoolean("gc.blobs"),
 		runArchive: selected ? flags.archive === true : getBoolean("gc.archive"),
 		runWal: selected ? flags.wal === true : getBoolean("gc.wal"),
-		coldArchiveAfterDays: numberSetting(flags.coldArchiveAfterDays, getNumber("gc.coldArchiveAfterDays")),
-		retainNewestGlobal: numberSetting(flags.retainNewestGlobal, getNumber("gc.retainNewestGlobal")),
-		retainNewestPerCwd: numberSetting(flags.retainNewestPerCwd, getNumber("gc.retainNewestPerCwd")),
+		coldArchiveAfterDays: numberSetting(
+			flags.coldArchiveAfterDays,
+			getNumber("gc.coldArchiveAfterDays"),
+			getDefault("gc.coldArchiveAfterDays"),
+		),
+		retainNewestGlobal: numberSetting(
+			flags.retainNewestGlobal,
+			getNumber("gc.retainNewestGlobal"),
+			getDefault("gc.retainNewestGlobal"),
+		),
+		retainNewestPerCwd: numberSetting(
+			flags.retainNewestPerCwd,
+			getNumber("gc.retainNewestPerCwd"),
+			getDefault("gc.retainNewestPerCwd"),
+		),
 	};
 }
 
@@ -335,6 +353,24 @@ async function listActiveSessions(sessionsRoot: string): Promise<SessionInfo[]> 
 	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
+}
+
+async function listNestedSessionsReadOnly(artifactsRoot: string): Promise<SessionInfo[]> {
+	const files = await collectJsonlFiles(artifactsRoot);
+	const dirs = [...new Set(files.map(file => path.dirname(file)))].sort();
+	const storage = new FileSessionStorage();
+	const sessions: SessionInfo[] = [];
+	for (const dir of dirs) sessions.push(...(await listSessionsReadOnly(dir, storage)));
+	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+	return sessions;
+}
+
+async function hasLiveNestedSessions(session: SessionInfo, archiveBeforeMs: number): Promise<boolean> {
+	for (const nested of await listNestedSessionsReadOnly(sessionArtifactsPath(session.path))) {
+		if (nested.status && ACTIVE_STATUSES.has(nested.status)) return true;
+		if (nested.modified.getTime() > archiveBeforeMs) return true;
+	}
+	return false;
 }
 
 function archiveDestination(
@@ -577,6 +613,10 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 			continue;
 		}
 		if (session.modified.getTime() > archiveBeforeMs) {
+			result.skippedActive += 1;
+			continue;
+		}
+		if (await hasLiveNestedSessions(session, archiveBeforeMs)) {
 			result.skippedActive += 1;
 			continue;
 		}

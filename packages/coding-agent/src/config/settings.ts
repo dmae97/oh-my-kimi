@@ -282,6 +282,14 @@ export class Settings {
 	}
 
 	/**
+	 * Load a persisted settings instance without touching the global singleton.
+	 */
+	static loadIsolated(options: SettingsOptions = {}): Promise<Settings> {
+		const instance = new Settings(options);
+		return instance.#load();
+	}
+
+	/**
 	 * Create an isolated instance for testing.
 	 * Does not affect the global singleton.
 	 */

@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	getAgentDir,
 	getBlobsDir,
@@ -221,6 +222,85 @@ describe("runGcCommand blob sweep", () => {
 		);
 	});
 
+	test("--apply loads gc config from each requested agent dir", async () => {
+		const initializedAgentDir = path.join(root, "initialized-agent");
+		const targetAgentDir = path.join(root, "target-agent");
+		await writeConfig(
+			initializedAgentDir,
+			["gc:", "  blobs: false", "  archive: false", "  wal: false", ""].join("\n"),
+		);
+		await Settings.init({ agentDir: initializedAgentDir });
+		await writeSession(targetAgentDir, "project", "archive-me", "complete", { ageDays: 10 });
+		await writeConfig(
+			targetAgentDir,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: true",
+				"  wal: false",
+				"  coldArchiveAfterDays: 7",
+				"  retainNewestGlobal: 0",
+				"  retainNewestPerCwd: 0",
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: targetAgentDir, apply: true } });
+
+		expect(result.blobs).toBeUndefined();
+		expect(result.wal).toBeUndefined();
+		expect(result.archive?.archived).toBe(1);
+		expect(
+			await Bun.file(path.join(targetAgentDir, "archive", "sessions", "project", "archive-me.jsonl.gz")).exists(),
+		).toBe(true);
+	});
+
+	test("invalid configured archive age falls back to schema default", async () => {
+		const session = await writeSession(root, "project", "too-new", "complete", { ageDays: 1 });
+		await writeConfig(
+			root,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: true",
+				"  wal: false",
+				"  coldArchiveAfterDays: nope",
+				"  retainNewestGlobal: 0",
+				"  retainNewestPerCwd: 0",
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
+
+		expect(result.archive?.wouldArchive).toBe(0);
+		expect(result.archive?.archived).toBe(0);
+		expect(await Bun.file(session).exists()).toBe(true);
+	});
+
+	test("invalid configured retention counts fall back to schema defaults", async () => {
+		const session = await writeSession(root, "project", "kept-by-default", "complete", { ageDays: 90 });
+		await writeConfig(
+			root,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: true",
+				"  wal: false",
+				"  coldArchiveAfterDays: 0",
+				"  retainNewestGlobal: nope",
+				"  retainNewestPerCwd: nope",
+				"",
+			].join("\n"),
+		);
+
+		const result = await runGcCommand({ flags: { agentDir: root, apply: true } });
+
+		expect(result.archive?.keptNewestGlobal).toBe(1);
+		expect(result.archive?.archived).toBe(0);
+		expect(await Bun.file(session).exists()).toBe(true);
+	});
+
 	test("explicit selectors override disabled gc config", async () => {
 		const blob = await writeBlob(root, hashFor("orphan"), "orphan");
 		await agePath(blob);
@@ -412,6 +492,39 @@ describe("runGcCommand cold-session archive", () => {
 		expect(await Bun.file(keepRecent).exists()).toBe(true);
 		expect(await Bun.file(pending).exists()).toBe(true);
 		expect(await Bun.file(interrupted).exists()).toBe(true);
+	});
+
+	test("skips archiving parent sessions with live nested sessions", async () => {
+		const parent = await writeSession(root, "project", "parent", "complete", { ageDays: 90 });
+		const artifactsDir = parent.slice(0, -".jsonl".length);
+		const nested = path.join(artifactsDir, "Tan-nested.jsonl");
+		await fs.mkdir(artifactsDir, { recursive: true });
+		await Bun.write(
+			nested,
+			[
+				JSON.stringify({ type: "session", version: 3, id: "Tan-nested", timestamp: "2026-01-01T00:00:00.000Z" }),
+				JSON.stringify({ type: "message", message: { role: "user", content: "waiting" } }),
+				"",
+			].join("\n"),
+		);
+		await agePath(nested, 90);
+
+		const result = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 30,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		expect(result.archive?.skippedActive).toBe(1);
+		expect(result.archive?.archived).toBe(0);
+		expect(await Bun.file(parent).exists()).toBe(true);
+		expect(await Bun.file(nested).exists()).toBe(true);
+		expect(await Bun.file(path.join(root, "archive", "sessions", "project", "parent.jsonl.gz")).exists()).toBe(false);
 	});
 
 	test("removes archived session rows from history and rebuilds FTS", async () => {
