@@ -347,6 +347,19 @@ function sessionArtifactsPath(sessionPath: string): string {
 	return sessionPath.slice(0, -SESSION_SUFFIX.length);
 }
 
+function sessionIdFromSessionPath(sessionPath: string): string | undefined {
+	const basename = path.basename(sessionPath);
+	if (basename.endsWith(COMPRESSED_SESSION_SUFFIX)) {
+		const id = basename.slice(0, -COMPRESSED_SESSION_SUFFIX.length);
+		return id || undefined;
+	}
+	if (basename.endsWith(SESSION_SUFFIX)) {
+		const id = basename.slice(0, -SESSION_SUFFIX.length);
+		return id || undefined;
+	}
+	return undefined;
+}
+
 async function gzipSessionFile(source: string, destination: string): Promise<void> {
 	await fs.mkdir(path.dirname(destination), { recursive: true });
 	const tempPath = `${destination}.${process.pid}.${Date.now()}.tmp`;
@@ -449,6 +462,40 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 	}
 }
 
+async function collectArchivedSessionIds(archiveRoot: string): Promise<string[]> {
+	const ids = new Set<string>();
+	for (const file of await collectCompressedJsonlFiles(archiveRoot)) {
+		const id = sessionIdFromSessionPath(file);
+		if (id) ids.add(id);
+	}
+	return [...ids].sort();
+}
+
+async function cleanupHistoryRowsForArchivedSessions(
+	options: ResolvedGcOptions,
+	archiveRoot: string,
+	archivedSessionIds: string[],
+	result: ArchiveGcResult,
+): Promise<void> {
+	const dbPath = getHistoryDbPath(options.agentDir);
+	if (!(await pathExists(dbPath))) return;
+
+	const cleanupIds = new Set(archivedSessionIds);
+	try {
+		for (const id of await collectArchivedSessionIds(archiveRoot)) cleanupIds.add(id);
+	} catch (error) {
+		result.errors.push(`history cleanup scan: ${errorMessage(error)}`);
+	}
+
+	try {
+		const cleanup = deleteHistoryRowsForSessions(dbPath, [...cleanupIds]);
+		result.historyRowsDeleted = cleanup.deleted;
+		result.ftsRebuilt = cleanup.ftsRebuilt;
+	} catch (error) {
+		result.errors.push(`history cleanup: ${errorMessage(error)}`);
+	}
+}
+
 async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Promise<ArchiveGcResult> {
 	const sessionsRoot = getSessionsDir(options.agentDir);
 	const sessions = await listActiveSessions(sessionsRoot);
@@ -512,12 +559,7 @@ async function runArchiveGc(options: ResolvedGcOptions, archiveRoot: string): Pr
 		}
 	}
 
-	const dbPath = getHistoryDbPath(options.agentDir);
-	if (archivedSessionIds.length > 0 && (await pathExists(dbPath))) {
-		const cleanup = deleteHistoryRowsForSessions(dbPath, archivedSessionIds);
-		result.historyRowsDeleted = cleanup.deleted;
-		result.ftsRebuilt = cleanup.ftsRebuilt;
-	}
+	await cleanupHistoryRowsForArchivedSessions(options, archiveRoot, archivedSessionIds, result);
 	return result;
 }
 
@@ -574,16 +616,63 @@ async function runWalGc(options: ResolvedGcOptions): Promise<WalGcResult> {
 	};
 }
 
+function gcLockPid(lockText: string): number | undefined {
+	const pid = Number.parseInt(lockText.split(/\r?\n/, 1)[0] ?? "", 10);
+	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function processExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		const code = codeOf(error);
+		if (code === "ESRCH" || code === "EINVAL") return false;
+		return true;
+	}
+}
+
+async function shouldBreakGcLock(lockPath: string): Promise<boolean> {
+	const stat = await statIfPresent(lockPath);
+	if (!stat) return false;
+
+	let lockText = "";
+	try {
+		lockText = await Bun.file(lockPath).text();
+	} catch (error) {
+		if (codeOf(error) === "ENOENT") return false;
+		throw error;
+	}
+
+	const pid = gcLockPid(lockText);
+	if (pid) return !processExists(pid);
+
+	const createdAtMs = Date.parse(lockText.split(/\r?\n/, 2)[1] ?? "");
+	const ageFromMs = Number.isFinite(createdAtMs) ? createdAtMs : stat.mtimeMs;
+	return Date.now() - ageFromMs > GC_WRITE_GRACE_MS;
+}
+
+async function openGcLock(lockPath: string): Promise<fs.FileHandle> {
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			return await fs.open(lockPath, "wx");
+		} catch (error) {
+			if (codeOf(error) !== "EEXIST") throw error;
+			if (!(await shouldBreakGcLock(lockPath))) throw new Error(`GC already running: ${lockPath}`);
+			try {
+				await fs.unlink(lockPath);
+			} catch (unlinkError) {
+				if (codeOf(unlinkError) !== "ENOENT") throw unlinkError;
+			}
+		}
+	}
+	throw new Error(`GC already running: ${lockPath}`);
+}
+
 async function withGcLock<T>(agentDir: string, fn: (lockPath: string) => Promise<T>): Promise<T> {
 	const lockPath = path.join(agentDir, "gc.lock");
 	await fs.mkdir(agentDir, { recursive: true });
-	let handle: fs.FileHandle;
-	try {
-		handle = await fs.open(lockPath, "wx");
-	} catch (error) {
-		if (codeOf(error) === "EEXIST") throw new Error(`GC already running: ${lockPath}`);
-		throw error;
-	}
+	const handle = await openGcLock(lockPath);
 	let result: T | undefined;
 	let runError: unknown;
 	try {

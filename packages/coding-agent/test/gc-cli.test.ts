@@ -292,6 +292,55 @@ describe("runGcCommand cold-session archive", () => {
 		expect(ftsRows.map(row => row.session_id)).toEqual(["keep-me"]);
 	});
 
+	test("reports history cleanup failures and retries rows for already archived sessions", async () => {
+		await writeSession(root, "project", "archive-me", "complete", { ageDays: 90 });
+		const dbPath = getHistoryDbPath(root);
+		await fs.mkdir(path.dirname(dbPath), { recursive: true });
+		await Bun.write(dbPath, "not sqlite");
+
+		const first = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 30,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+		const archived = path.join(root, "archive", "sessions", "project", "archive-me.jsonl.gz");
+
+		expect(first.archive?.archived).toBe(1);
+		expect(first.archive?.errors.some(error => error.startsWith("history cleanup: "))).toBe(true);
+		expect(await Bun.file(archived).exists()).toBe(true);
+
+		await fs.rm(dbPath, { force: true });
+		const db = new Database(dbPath);
+		db.run("CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, prompt TEXT NOT NULL, session_id TEXT)");
+		db.run("INSERT INTO history (prompt, session_id) VALUES ('old prompt', 'archive-me')");
+		db.close();
+
+		const second = await runGcCommand({
+			flags: {
+				agentDir: root,
+				archive: true,
+				coldArchiveAfterDays: 30,
+				retainNewestGlobal: 0,
+				retainNewestPerCwd: 0,
+				apply: true,
+			},
+		});
+
+		const check = new Database(dbPath);
+		const rows = check.prepare("SELECT session_id FROM history ORDER BY id").all();
+		check.close();
+
+		expect(second.archive?.archived).toBe(0);
+		expect(second.archive?.historyRowsDeleted).toBe(1);
+		expect(second.archive?.errors).toEqual([]);
+		expect(rows).toEqual([]);
+	});
+
 	test("archives sessions when legacy history has no session_id column", async () => {
 		const session = await writeSession(root, "project", "legacy-history", "complete", { ageDays: 90 });
 		const dbPath = getHistoryDbPath(root);
@@ -378,5 +427,29 @@ describe("runGcCommand cold-session archive", () => {
 
 		expect(result.blobs?.wouldDelete).toBe(1);
 		expect(await Bun.file(referenced).exists()).toBe(true);
+	});
+});
+
+describe("runGcCommand lock handling", () => {
+	test("refuses an active gc lock", async () => {
+		const lockPath = path.join(root, "gc.lock");
+		await Bun.write(lockPath, `${process.pid}\n${new Date().toISOString()}\n`);
+
+		await expect(runGcCommand({ flags: { agentDir: root, blobs: true } })).rejects.toThrow(
+			`GC already running: ${lockPath}`,
+		);
+		expect(await Bun.file(lockPath).exists()).toBe(true);
+	});
+
+	test("breaks stale gc locks before running", async () => {
+		const lockPath = path.join(root, "gc.lock");
+		await Bun.write(lockPath, "999999999\n2026-01-01T00:00:00.000Z\n");
+		const blob = await writeBlob(root, hashFor("orphan"), "orphan");
+		await agePath(blob);
+
+		const result = await runGcCommand({ flags: { agentDir: root, blobs: true } });
+
+		expect(result.blobs?.wouldDelete).toBe(1);
+		expect(await Bun.file(lockPath).exists()).toBe(false);
 	});
 });
