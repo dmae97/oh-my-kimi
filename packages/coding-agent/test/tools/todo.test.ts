@@ -15,6 +15,7 @@ import {
 	todoToolRenderer,
 } from "@oh-my-pi/pi-coding-agent/tools";
 import type { Component } from "@oh-my-pi/pi-tui";
+import { type } from "arktype";
 
 function createSession(initialPhases: TodoPhase[] = []): ToolSession {
 	let phases = initialPhases;
@@ -281,6 +282,29 @@ describe("TodoTool lenient init shapes", () => {
 		const summary = result.content.find(part => part.type === "text");
 		if (summary?.type !== "text") throw new Error("Expected text summary");
 		expect(summary.text).toContain("Missing list for init operation");
+	});
+});
+
+describe("TodoTool empty items tolerance", () => {
+	// Regression: a stray `items: []` on an op that ignores items (here `view`)
+	// must not be a hard schema rejection. The top-level `items` array dropped
+	// its `atLeastLength(1)` so callers don't get "items must be tasks to append"
+	// for an irrelevant empty array; length is enforced per-op at runtime.
+	it("accepts op:view with an empty items array at the schema boundary", () => {
+		const schema = new TodoTool(createSession()).parameters;
+		expect(schema({ op: "view", items: [] }) instanceof type.errors).toBe(false);
+	});
+
+	it("defers empty append items to an op-specific runtime error", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["First"] }] });
+
+		const result = await tool.execute("call-2", { op: "append", phase: "Work", items: [] });
+
+		expect(result.isError).toBe(true);
+		const summary = result.content.find(part => part.type === "text");
+		if (summary?.type !== "text") throw new Error("Expected text summary");
+		expect(summary.text).toContain("Missing items for append operation");
 	});
 });
 
