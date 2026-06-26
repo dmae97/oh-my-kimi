@@ -26,7 +26,6 @@ import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import { theme } from "../modes/theme/theme";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession, FreshSessionResult } from "../session/agent-session";
-import { markMoveSession } from "../session/agent-session";
 import { COMPACT_MODES, parseCompactArgs } from "../session/compact-modes";
 import { resolveResumableSession } from "../session/session-listing";
 import { SessionManager } from "../session/session-manager";
@@ -1607,20 +1606,30 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 					return usage(`Not a directory: ${resolvedPath}`, runtime);
 				}
 			} catch {
-				// Directory doesn't exist — create it (no interactive confirm in ACP).
-				try {
-					await fs.mkdir(resolvedPath, { recursive: true });
-				} catch (err) {
-					return usage(`Failed to create directory: ${errorMessage(err)}`, runtime);
-				}
+				return usage(`Directory does not exist: ${resolvedPath}`, runtime);
 			}
+			let newSessionFile: string | undefined;
 			try {
-				const newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
-				await runtime.session.switchSession(newSessionFile);
-				markMoveSession(newSessionFile);
+				newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
+				const switched = await runtime.session.switchSession(newSessionFile);
+				if (!switched) {
+					await runtime.sessionManager.dropSession(newSessionFile);
+					return usage("Move cancelled.", runtime);
+				}
 			} catch (err) {
+				if (newSessionFile) {
+					try {
+						await runtime.sessionManager.dropSession(newSessionFile);
+					} catch (dropErr) {
+						return usage(
+							`Move failed: ${errorMessage(err)}; failed to remove empty session: ${errorMessage(dropErr)}`,
+							runtime,
+						);
+					}
+				}
 				return usage(`Move failed: ${errorMessage(err)}`, runtime);
 			}
+			runtime.session.markMovedFromEmptySessionFile(newSessionFile!);
 			setProjectDir(resolvedPath);
 			// Reload plugin/capability caches so the next prompt sees commands and
 			// capabilities scoped to the new cwd.

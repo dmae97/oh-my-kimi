@@ -321,7 +321,7 @@ import { formatSessionDumpText } from "./session-dump-format";
 import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions } from "./session-entries";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
-import type { SessionManager } from "./session-manager";
+import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
@@ -1235,6 +1235,8 @@ export class AgentSession {
 	#allowAcpAgentInitiatedTurns = false;
 	/** Per-session memory of allow_always / reject_always decisions for gated tools. */
 	#acpPermissionDecisions: Map<string, "allow_always" | "reject_always"> = new Map();
+	/** Session file created by this session's `/move`; removed on dispose if it stayed empty. */
+	#movedFromEmptySessionFile?: string;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -4641,6 +4643,10 @@ export class AgentSession {
 		return this.#isDisposed;
 	}
 
+	markMovedFromEmptySessionFile(sessionFile: string): void {
+		this.#movedFromEmptySessionFile = path.resolve(sessionFile);
+	}
+
 	/**
 	 * Synchronously mark the session as disposing so new work is rejected
 	 * immediately: eval starts throw, queued asides are dropped, and the
@@ -4714,8 +4720,9 @@ export class AgentSession {
 		await disposeJuliaKernelSessionsByOwner(this.#evalKernelOwnerId);
 		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
-		// Clean up empty sessions created by /move so they don't accumulate.
-		await cleanupEmptyMoveSession(this.sessionManager);
+		// Clean up an empty session created by this session's /move so it doesn't accumulate.
+		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
+		this.#movedFromEmptySessionFile = undefined;
 		await this.sessionManager.close();
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
@@ -13903,54 +13910,3 @@ export class AgentSession {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Empty move-session cleanup
-// ---------------------------------------------------------------------------
-
-/**
- * Session files created by `/move` that should be cleaned up on shutdown if
- * they never received any real user/assistant messages. This prevents empty
- * session files from accumulating when the user moves to a directory and quits
- * without chatting.
- */
-const moveSessionFiles = new Set<string>();
-
-/** Mark a session file as created by `/move` so it can be cleaned up on exit. */
-export function markMoveSession(sessionFile: string): void {
-	moveSessionFiles.add(path.resolve(sessionFile));
-}
-
-/** Remove a session file from the move-session cleanup tracking. */
-export function unmarkMoveSession(sessionFile: string): void {
-	moveSessionFiles.delete(path.resolve(sessionFile));
-}
-
-/** Check whether a session file was created by `/move` and is still tracked. */
-export function isMoveSession(sessionFile: string): boolean {
-	return moveSessionFiles.has(path.resolve(sessionFile));
-}
-
-/**
- * If the current session was created by `/move` and contains no real
- * user/assistant messages, delete it so empty move sessions don't accumulate.
- * Called during `dispose()`.
- */
-async function cleanupEmptyMoveSession(sessionManager: SessionManager): Promise<void> {
-	const sessionFile = sessionManager.getSessionFile();
-	if (!sessionFile || !moveSessionFiles.has(path.resolve(sessionFile))) return;
-	const entries = sessionManager.getEntries();
-	const hasRealMessages = entries.some(
-		e => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"),
-	);
-	if (hasRealMessages) {
-		// The session has real content — keep it and stop tracking it as a move session.
-		moveSessionFiles.delete(path.resolve(sessionFile));
-		return;
-	}
-	try {
-		await sessionManager.dropSession(sessionFile);
-	} catch (err) {
-		logger.warn("Failed to clean up empty move session", { sessionFile, error: String(err) });
-	}
-	moveSessionFiles.delete(path.resolve(sessionFile));
-}

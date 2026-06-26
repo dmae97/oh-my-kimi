@@ -39,7 +39,6 @@ import { computeContextBreakdown, renderContextUsage } from "../../modes/utils/c
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../../modes/utils/tools-markdown";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
-import { markMoveSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
@@ -983,35 +982,52 @@ export class CommandController {
 			}
 		}
 
+		let newSessionFile: string | undefined;
 		try {
 			// Create a fresh empty session file in the target directory's session
 			// folder, then switch to it. The current session is left behind and
 			// remains resumable via /resume.
-			const newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
-			await this.ctx.session.switchSession(newSessionFile);
-			markMoveSession(newSessionFile);
-			await this.ctx.applyCwdChange(resolvedPath);
-
-			this.ctx.chatContainer.clear();
-			this.ctx.pendingMessagesContainer.clear();
-			this.ctx.compactionQueuedMessages = [];
-			this.ctx.streamingComponent = undefined;
-			this.ctx.streamingMessage = undefined;
-			this.ctx.pendingTools.clear();
-			this.ctx.statusLine.invalidate();
-			this.ctx.statusLine.setSessionStartTime(Date.now());
-			this.ctx.updateEditorTopBorder();
-			this.ctx.updateEditorBorderColor();
-			await this.ctx.reloadTodos();
-			this.ctx.ui.requestRender(true, { clearScrollback: true });
-
-			this.ctx.present([
-				new Spacer(1),
-				new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
-			]);
+			newSessionFile = SessionManager.createEmptySessionFile(resolvedPath);
+			const switched = await this.ctx.session.switchSession(newSessionFile);
+			if (!switched) {
+				await this.ctx.sessionManager.dropSession(newSessionFile);
+				return;
+			}
 		} catch (err) {
+			if (newSessionFile) {
+				try {
+					await this.ctx.sessionManager.dropSession(newSessionFile);
+				} catch (dropErr) {
+					this.ctx.showError(
+						`Move failed: ${err instanceof Error ? err.message : String(err)}; failed to remove empty session: ${dropErr instanceof Error ? dropErr.message : String(dropErr)}`,
+					);
+					return;
+				}
+			}
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
+			return;
 		}
+
+		this.ctx.session.markMovedFromEmptySessionFile(newSessionFile!);
+		await this.ctx.applyCwdChange(resolvedPath);
+
+		this.ctx.chatContainer.clear();
+		this.ctx.pendingMessagesContainer.clear();
+		this.ctx.compactionQueuedMessages = [];
+		this.ctx.streamingComponent = undefined;
+		this.ctx.streamingMessage = undefined;
+		this.ctx.pendingTools.clear();
+		this.ctx.statusLine.invalidate();
+		this.ctx.statusLine.setSessionStartTime(Date.now());
+		this.ctx.updateEditorTopBorder();
+		this.ctx.updateEditorBorderColor();
+		await this.ctx.reloadTodos();
+		this.ctx.ui.requestRender(true, { clearScrollback: true });
+
+		this.ctx.present([
+			new Spacer(1),
+			new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
+		]);
 	}
 
 	async handleRenameCommand(title: string): Promise<void> {
