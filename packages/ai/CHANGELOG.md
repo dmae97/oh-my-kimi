@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `@oh-my-pi/pi-ai/utils/json-parse` module. The JSON repair/parse helpers (`repairJson`, `parseJsonWithRepair`, `parseStreamingJson`, `parseStreamingJsonThrottled`) now live in `@oh-my-pi/pi-utils` so the SSE reader and other utilities can share one parser; import them from `@oh-my-pi/pi-utils`.
+
 ### Fixed
 
 - Fixed llama.cpp OpenAI-compatible capture follow-ups sending named forced `tool_choice` as an object; the chat-completions encoder now downgrades that shape to string `"required"` for llama.cpp so its parser no longer falls back with `type must be string, but is object`. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
