@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed API-level provider refusals being replayed as assistant dialogue on later requests, which could anchor repeated refusals after a single blocked turn. ([#3592](https://github.com/can1357/oh-my-pi/issues/3592))
+
 ## [16.1.23] - 2026-06-26
 
 ### Changed

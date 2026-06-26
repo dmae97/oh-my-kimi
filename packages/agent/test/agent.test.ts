@@ -112,6 +112,33 @@ describe("Agent", () => {
 		expect(agent.state.messages[agent.state.messages.length - 1].role).toBe("assistant");
 	});
 
+	it("keeps Anthropic refusal errors out of the next provider context", async () => {
+		const mock = createMockModel({
+			responses: [
+				{
+					content: ["I can't assist with that request."],
+					stopReason: "error",
+					stopDetails: { type: "refusal", category: "bio", explanation: "policy refusal" },
+					errorMessage: "Refusal (bio): policy refusal",
+				},
+				{ content: ["recovered"] },
+			],
+		});
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: mock.stream,
+		});
+
+		await agent.prompt("trigger refusal");
+		await agent.prompt("next request");
+
+		expect(mock.calls).toHaveLength(2);
+		const replayedMessages = mock.calls[1].context.messages;
+		expect(replayedMessages.map(message => message.role)).toEqual(["user", "user"]);
+		expect(JSON.stringify(replayedMessages)).not.toContain("Refusal (bio)");
+		expect(JSON.stringify(replayedMessages)).not.toContain("I can't assist");
+	});
+
 	it("prompt() emits assistant error lifecycle for Anthropic output-blocked stream errors before assistant start", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "Output blocked by content filtering policy";
