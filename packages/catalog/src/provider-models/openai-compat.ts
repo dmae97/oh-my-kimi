@@ -3688,7 +3688,18 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	// --- Together ---
 	openAiCompletionsDescriptor("togetherai", "together", "https://api.together.xyz/v1"),
 	// --- CoreWeave Serverless Inference ---
-	openAiCompletionsDescriptor("wandb", "coreweave", "https://api.inference.wandb.ai/v1"),
+	openAiCompletionsDescriptor("wandb", "coreweave", "https://api.inference.wandb.ai/v1", {
+		transformModel: model => {
+			if (!model.id.startsWith("openai/gpt-oss-")) {
+				return model;
+			}
+			return {
+				...model,
+				reasoning: true,
+				thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+			};
+		},
+	}),
 	// --- NVIDIA ---
 	openAiCompletionsDescriptor("nvidia", "nvidia", "https://integrate.api.nvidia.com/v1", {
 		defaultContextWindow: 131072,

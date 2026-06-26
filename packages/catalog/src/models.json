@@ -13936,7 +13936,7 @@
 			"api": "openai-completions",
 			"provider": "coreweave",
 			"baseUrl": "https://api.inference.wandb.ai/v1",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
 				"text"
 			],
@@ -13947,7 +13947,15 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 131072
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			}
 		},
 		"openai/gpt-oss-20b": {
 			"id": "openai/gpt-oss-20b",
@@ -13955,7 +13963,7 @@
 			"api": "openai-completions",
 			"provider": "coreweave",
 			"baseUrl": "https://api.inference.wandb.ai/v1",
-			"reasoning": false,
+			"reasoning": true,
 			"input": [
 				"text"
 			],
@@ -13966,7 +13974,15 @@
 				"cacheWrite": 0
 			},
 			"contextWindow": 131072,
-			"maxTokens": 131072
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"low",
+					"medium",
+					"high"
+				]
+			}
 		},
 		"OpenPipe/Qwen3-14B-Instruct": {
 			"id": "OpenPipe/Qwen3-14B-Instruct",
