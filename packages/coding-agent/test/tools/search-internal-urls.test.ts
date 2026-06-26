@@ -547,4 +547,21 @@ describe("SearchTool internal URL resolution", () => {
 		);
 		expect(listSpy).not.toHaveBeenCalled();
 	});
+
+	it("searches an IPv6 ssh:// file instead of rejecting the brackets as a glob", async () => {
+		vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<unknown>);
+		vi.spyOn(sshFileTransfer, "statRemotePath").mockResolvedValue("file");
+		vi.spyOn(sshFileTransfer, "readRemoteFile").mockResolvedValue({
+			bytes: new TextEncoder().encode("needle here\n"),
+			truncated: false,
+		});
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("ssh-ipv6", { pattern: "needle", paths: ["ssh://[::1]/etc/hosts"] });
+		expect(getResultText(result)).toContain("needle");
+	});
 });

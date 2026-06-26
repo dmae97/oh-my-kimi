@@ -675,7 +675,11 @@ async function resolveInternalSearchInputs(opts: {
 		if (!rawPath || opts.archiveDisplayMap.has(rawPath) || !internalRouter.canHandle(rawPath)) {
 			continue;
 		}
-		if (hasGlobPathChars(rawPath)) {
+		// `ssh://[::1]/path` carries `[`/`]` in the IPv6 authority — glob metacharacters
+		// — so check only the path portion for ssh:// (the SSH handler reads a single
+		// remote file; there is no glob expansion). A glob in the remote path still trips.
+		const globTarget = /^ssh:\/\//i.test(rawPath) ? rawPath.replace(/^ssh:\/\/[^/]*/i, "") : rawPath;
+		if (hasGlobPathChars(globTarget)) {
 			throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPath}`);
 		}
 		const resource = await internalRouter.resolve(rawPath, context);
