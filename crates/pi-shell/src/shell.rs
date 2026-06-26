@@ -2319,6 +2319,65 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// `grep -q` must suppress all stdout and drive the exit status (0 on match,
+	/// 1 otherwise) so shell conditionals work; `-x` must anchor whole lines.
+	/// Mirrors busybox applet probing: `grep -qx "$applet" <(strings bin)`.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn grep_quiet_and_line_regexp() {
+		let tmp = std::env::temp_dir().join(format!("pi-grepq-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("data.txt"), "foo\nbar\nbaz\n").expect("data");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// -q: no stdout even on a match.
+		session
+			.shell
+			.run_string("grep -q ba data.txt > qout.txt", &si, &params)
+			.await
+			.expect("grep -q");
+		assert_eq!(read("qout.txt"), "", "-q must not print matches");
+		// -q exit code drives `&&` (match) and `||` (no match).
+		session
+			.shell
+			.run_string("grep -q ba data.txt && echo HIT > hit.txt", &si, &params)
+			.await
+			.expect("grep -q hit");
+		assert_eq!(read("hit.txt"), "HIT\n", "-q match must exit 0");
+		session
+			.shell
+			.run_string("grep -q zzz data.txt || echo MISS > miss.txt", &si, &params)
+			.await
+			.expect("grep -q miss");
+		assert_eq!(read("miss.txt"), "MISS\n", "-q no-match must exit 1");
+		// -qx: whole-line match succeeds on an exact line ...
+		session
+			.shell
+			.run_string("grep -qx bar data.txt && echo XHIT > xhit.txt", &si, &params)
+			.await
+			.expect("grep -qx hit");
+		assert_eq!(read("xhit.txt"), "XHIT\n", "-x must match a whole line");
+		// ... and fails on a substring that is not a whole line.
+		session
+			.shell
+			.run_string("grep -qx ba data.txt || echo XMISS > xmiss.txt", &si, &params)
+			.await
+			.expect("grep -qx miss");
+		assert_eq!(read("xmiss.txt"), "XMISS\n", "-x must reject a partial-line match");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
 	/// The destructive uutils builtins (`rm`, `mv`) must operate on paths
 	/// resolved against the shell working directory, not the host process cwd.
 	#[tokio::test(flavor = "multi_thread")]
