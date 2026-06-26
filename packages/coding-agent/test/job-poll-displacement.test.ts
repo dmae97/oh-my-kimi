@@ -39,6 +39,24 @@ function pollResult(statuses: JobStatus[], extra: { cancelled?: boolean; isError
 	};
 }
 
+function todoResult(items = ["investigate", "fix"]) {
+	return {
+		content: [{ type: "text" as const, text: "" }],
+		details: {
+			phases: [
+				{
+					name: "Workflow",
+					tasks: items.map((content, index) => ({
+						content,
+						status: index === 0 ? ("in_progress" as const) : ("pending" as const),
+					})),
+				},
+			],
+			storage: "memory" as const,
+		},
+	};
+}
+
 function trackComponent(components: ToolExecutionComponent[], component: ToolExecutionComponent) {
 	components.push(component);
 	return component;
@@ -96,7 +114,22 @@ describe("job waiting-poll block lifecycle", () => {
 		expect(errored.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("never marks non-job tools displaceable", () => {
+	it("keeps successful todo snapshots live for replacement", () => {
+		const component = trackComponent(
+			created,
+			new ToolExecutionComponent("todo", { op: "view" }, {}, undefined, uiStub),
+		);
+		component.updateResult(todoResult(), false);
+
+		expect(component.isDisplaceableBlock()).toBe(true);
+		expect(component.isTranscriptBlockFinalized()).toBe(false);
+
+		component.seal();
+		expect(component.isDisplaceableBlock()).toBe(false);
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("never marks ordinary non-refresh tools displaceable", () => {
 		const component = trackComponent(
 			created,
 			new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub),
@@ -144,6 +177,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 			session: { getToolByName: () => undefined },
 			viewSession: { getToolByName: () => undefined },
 			sessionManager: { getCwd: () => process.cwd() },
+			setTodos: vi.fn(),
 		} as unknown as InteractiveModeContext;
 		return { controller: new EventController(ctx), children };
 	}
@@ -162,6 +196,25 @@ describe("EventController displaces consecutive waiting polls", () => {
 			toolCallId,
 			toolName: "job",
 			result: pollResult(["running", "running"]),
+			isError: false,
+		});
+		return component;
+	}
+
+	async function runTodo(controller: EventController, children: Component[], toolCallId: string, items?: string[]) {
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "todo",
+			args: { op: "view" },
+		});
+		const component = children[children.length - 1] as ToolExecutionComponent;
+		trackComponent(created, component);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId,
+			toolName: "todo",
+			result: todoResult(items),
 			isError: false,
 		});
 		return component;
@@ -200,6 +253,31 @@ describe("EventController displaces consecutive waiting polls", () => {
 		expect(children).toContain(poll);
 		expect(poll.isTranscriptBlockFinalized()).toBe(true);
 		expect(poll.isDisplaceableBlock()).toBe(false);
+	});
+
+	it("removes the previous todo snapshot when a later todo update lands in the same turn", async () => {
+		const { controller, children } = createFixture();
+
+		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
+		expect(children).toContain(first);
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "bash-1",
+			toolName: "bash",
+			args: { command: "true" },
+		});
+		const bash = trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
+		expect(children).toContain(first);
+		expect(children).toContain(bash);
+
+		const second = await runTodo(controller, children, "todo-2", ["fix", "test"]);
+
+		expect(children).not.toContain(first);
+		expect(children).toContain(bash);
+		expect(children).toContain(second);
+		expect(first.isTranscriptBlockFinalized()).toBe(true);
 	});
 
 	it("does not displace a poll that observed completions", async () => {

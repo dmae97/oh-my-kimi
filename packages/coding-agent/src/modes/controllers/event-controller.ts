@@ -77,6 +77,10 @@ export class EventController {
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
 	// and sealed in place the moment anything else lands below it.
 	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
+	// Most recent successful `todo` snapshot in the active turn. It stays live
+	// across intervening tool output so a later `todo` update can replace the
+	// old full list; the turn boundary seals the final snapshot as history.
+	#displaceableTodoComponent: ToolExecutionComponent | undefined = undefined;
 	// Most recent TTSR notification block. A new ttsr_triggered event merges its
 	// rules into this block while it is still the (live-region) transcript tail.
 	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
@@ -226,6 +230,7 @@ export class EventController {
 		this.#ircExpiryTimers.clear();
 		this.#liveIrcCards.clear();
 		this.#displaceablePollComponent = undefined;
+		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
@@ -248,6 +253,7 @@ export class EventController {
 		this.#readToolCallArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#resetReadGroup();
+		this.#resolveDisplaceableTodo();
 		this.#lastAssistantComponent = undefined;
 		// Restore the previous turn's inline error in the transcript before dropping
 		// the banner, so the error stays in history once the banner is gone.
@@ -296,6 +302,7 @@ export class EventController {
 
 			this.#resetReadGroup();
 			this.#resolveDisplaceablePoll();
+			this.#resolveDisplaceableTodo();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const matchedLocalSubmission = this.ctx.locallySubmittedUserSignatures.delete(signature);
 			const replacesOptimistic =
@@ -423,6 +430,26 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	#resolveDisplaceableTodo(nextToolName?: string): void {
+		const previous = this.#displaceableTodoComponent;
+		if (!previous) return;
+		if (!previous.isDisplaceableBlock()) {
+			this.#displaceableTodoComponent = undefined;
+			return;
+		}
+		if (previous.canBeDisplacedBy(nextToolName)) {
+			this.#displaceableTodoComponent = undefined;
+			this.ctx.chatContainer.removeChild(previous);
+			previous.seal();
+			this.ctx.ui.requestRender();
+			return;
+		}
+		if (nextToolName !== undefined) return;
+		this.#displaceableTodoComponent = undefined;
+		previous.seal();
+		this.ctx.ui.requestRender();
+	}
+
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
@@ -512,6 +539,7 @@ export class EventController {
 					}
 					if (!readArgsTargetInternalUrl(content.arguments)) {
 						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
+						this.#resolveDisplaceableTodo(content.name);
 						this.#trackReadToolCall(content.id, content.arguments);
 						const component = this.ctx.pendingTools.get(content.id);
 						if (component) {
@@ -547,6 +575,7 @@ export class EventController {
 				}
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
+					this.#resolveDisplaceableTodo(content.name);
 					this.#resetReadGroup();
 					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
@@ -701,6 +730,7 @@ export class EventController {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
 			this.#resolveDisplaceablePoll(event.toolName);
+			this.#resolveDisplaceableTodo(event.toolName);
 			if (event.toolName === "read" && readArgsHaveTarget(event.args) && !readArgsTargetInternalUrl(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);
@@ -830,13 +860,15 @@ export class EventController {
 					this.ctx.pendingTools.delete(event.toolCallId);
 					this.#backgroundToolCallIds.delete(event.toolCallId);
 				}
-				if (
-					event.toolName === "job" &&
-					component instanceof ToolExecutionComponent &&
-					component.isDisplaceableBlock()
-				) {
-					// Remember the waiting poll so the next `job` call can displace it.
-					this.#displaceablePollComponent = component;
+				if (component instanceof ToolExecutionComponent && component.isDisplaceableBlock()) {
+					if (event.toolName === "job" && component.canBeDisplacedBy("job")) {
+						// Remember the waiting poll so the next `job` call can displace it.
+						this.#displaceablePollComponent = component;
+					} else if (event.toolName === "todo" && component.canBeDisplacedBy("todo")) {
+						// Keep the latest todo snapshot live until another todo update
+						// replaces it or the turn ends.
+						this.#displaceableTodoComponent = component;
+					}
 				}
 				this.ctx.ui.requestRender();
 			}
@@ -918,6 +950,7 @@ export class EventController {
 		// The turn is over: nothing else lands this turn, so the waiting poll is
 		// final history — seal it instead of letting its spinner tick while idle.
 		this.#resolveDisplaceablePoll();
+		this.#resolveDisplaceableTodo();
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
