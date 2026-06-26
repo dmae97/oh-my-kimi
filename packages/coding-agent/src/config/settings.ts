@@ -22,6 +22,7 @@ import {
 	isEnoent,
 	logger,
 	procmgr,
+	setWorktreesDir,
 } from "@oh-my-pi/pi-utils";
 import { JSONC, YAML } from "bun";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
@@ -1201,6 +1202,17 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 	"hindsight.bankId": () => hindsightScopeSignal.fire(),
 	"hindsight.bankIdPrefix": () => hindsightScopeSignal.fire(),
 	"hindsight.scoping": () => hindsightScopeSignal.fire(),
+	"worktree.base": value => {
+		const dir = typeof value === "string" && value.trim() ? value : undefined;
+		// Always call so an unset/empty value clears a previously-applied override.
+		// setWorktreesDir expands `~`, rejects relative paths, and returns the
+		// applied absolute path (or undefined when cleared/rejected).
+		if (dir && !setWorktreesDir(dir)) {
+			logger.warn("Settings: worktree.base must be an absolute or ~-relative path; ignoring", { value: dir });
+		} else if (!dir) {
+			setWorktreesDir(undefined);
+		}
+	},
 };
 /** Fires when `provider.appendOnlyContext` changes at runtime. */
 const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.appendOnlyContext");

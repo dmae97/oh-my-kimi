@@ -540,9 +540,55 @@ export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
 }
 
-/** Get the agent-managed worktrees directory (~/.omp/wt). */
+/**
+ * Expand a leading `~` and require an absolute result. Returns `undefined` for
+ * empty/whitespace input or a path that is still relative after expansion.
+ *
+ * A worktree base is process-global and consumed by both creation
+ * (PR checkout, task isolation) and cleanup (`omp worktree`). A relative value
+ * would resolve against whatever cwd happened to launch `omp`, so checkout and
+ * cleanup could disagree — we refuse it rather than silently bind it to cwd.
+ */
+function resolveWorktreeBase(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	let p = trimmed;
+	if (p === "~") p = os.homedir();
+	else if (p.startsWith("~/") || p.startsWith("~\\")) p = os.homedir() + p.slice(1);
+	return path.isAbsolute(p) ? path.normalize(p) : undefined;
+}
+
+let worktreesDirOverride: string | undefined;
+
+/**
+ * Relocate the base directory for agent-managed worktrees (PR checkouts, task
+ * isolation, and `omp worktree` cleanup all read the same base). Driven by the
+ * `worktree.base` setting in coding-agent; pass `undefined`/empty to clear and
+ * fall back to `OMP_WORKTREE_DIR` or the `~/.omp/wt` default.
+ *
+ * `~` is expanded and a relative path is rejected (see {@link resolveWorktreeBase}).
+ * Returns the absolute path that took effect, or `undefined` if the input was
+ * cleared or rejected — callers can warn on a non-empty input that returns
+ * `undefined`.
+ */
+export function setWorktreesDir(dir: string | undefined): string | undefined {
+	worktreesDirOverride = resolveWorktreeBase(dir);
+	return worktreesDirOverride;
+}
+
+/**
+ * Get the agent-managed worktrees directory. Resolution order: the
+ * `OMP_WORKTREE_DIR` env var, then the {@link setWorktreesDir} override (the
+ * `worktree.base` setting), then the `~/.omp/wt` default. The env var and the
+ * override are both `~`-expanded and must be absolute; a relative value is
+ * ignored and resolution falls through.
+ */
 export function getWorktreesDir(): string {
-	return dirs.rootSubdir("wt", "data");
+	return (
+		resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ??
+		worktreesDirOverride ??
+		dirs.rootSubdir("wt", "data")
+	);
 }
 
 /** Get the SSH control socket directory (~/.omp/ssh-control). */
