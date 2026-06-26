@@ -1604,6 +1604,23 @@ export function renderUsageReports(
 			resetAccountLines.push(
 				`    • ${label}: ${count} saved reset${count === 1 ? "" : "s"}${isActive ? " (active)" : ""}`,
 			);
+			const credits = report.resetCredits?.credits;
+			if (credits) {
+				for (const credit of credits) {
+					if (credit.expiresAt) {
+						const expiryMs = Date.parse(credit.expiresAt);
+						if (!Number.isNaN(expiryMs)) {
+							const remaining = expiryMs - nowMs;
+							const expiryDate = credit.expiresAt.slice(0, 10);
+							if (remaining > 0) {
+								resetAccountLines.push(`        expires in ${formatDuration(remaining)} (${expiryDate})`);
+							} else {
+								resetAccountLines.push(`        expired (${expiryDate})`);
+							}
+						}
+					}
+				}
+			}
 		}
 		if (resetAccountLines.length > 0) {
 			lines.push(

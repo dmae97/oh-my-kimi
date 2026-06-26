@@ -116,6 +116,10 @@
 - Changed the GitLab Duo Agent `goal` transcript to render replayed tool calls as past-tense `<ran NAME>{args}</ran>` records and tool results as `<ran:result>` / `<ran:result status=error>`, replacing the prior `<tool_call>{"name":…,"arguments":…}</tool_call>` / `<tool_response name=…>` markers. The model was mimicking the old `{name,arguments}` shape as its own emittable text instead of using the structured tool-use channel, because the historical-record markers were byte-identical to a plausible live-call grammar. The new form reads as a past record (a call that already ran), drops the `{name,arguments}` wrapper (the tool name moves onto the tag, args ride the body), and omits the tool name from the result header (call→result pair by adjacency). This also trims ~48 bytes per call/result pair in the worked example.
 - Changed the GitLab Duo Agent inline flow's system prompt to append a short history-note whenever the `goal` is a multi-turn ChatML transcript, telling the model the transcript's `<|im_start|>`/`<ran …>`/`<ran:result>` markers are a past record of already-executed turns and tool calls — not a syntax to emit — and to call tools only through its structured tool-use channel. Reframing the markers to past tense reduced but did not eliminate the model copying them as its own output; the explicit instruction closes the remaining gap. The note rides the system slot (not the goal), is appended only for multi-turn transcripts (a lone bare-text prompt has no markers), and lives in a static `.md` file imported as text.
 
+### Added
+
+- Added `credits` field (array of `UsageResetCreditDetail` with `grantedAt`, `expiresAt`, `status`) to `UsageResetCredits`, so display layers can show when banked rate-limit resets expire. The OpenAI Codex usage provider now calls `listCodexResetCredits` to populate individual credit details when `availableCount > 0` ([#3339](https://github.com/can1357/oh-my-pi/issues/3339)).
+
 ## [16.1.16] - 2026-06-23
 
 ### Fixed

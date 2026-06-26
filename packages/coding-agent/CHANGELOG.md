@@ -16,6 +16,10 @@
 - Changed the `inlineToolDescriptors` setting ("Inline Tool Descriptors") from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto`. `auto` inlines tool descriptors into the system prompt (and strips them from provider tool schemas) only for Gemini models, leaving them in the schemas otherwise; `on`/`off` force the behavior regardless of model. Existing `true`/`false` configs migrate to `on`/`off`.
 - Replaced `as string | undefined` inline casts with `typeof` guards in the TUI usage renderer's account identity resolution (`formatAccountLabel`, `formatUnlimitedReportLabel`, reset-credits label, and unlimited-plan tier), so empty-string metadata values fall through to the next fallback instead of being displayed
 
+### Added
+
+- The `/usage` display (TUI, ACP text, and `omp usage` CLI) now shows expiry dates for banked Codex rate-limit resets, so users can plan when to redeem them before they expire ([#3339](https://github.com/can1357/oh-my-pi/issues/3339)).
+
 ### Fixed
 
 - Fixed `snapcompact` compaction silently falling back to an LLM summary when local preflight rejects the archive; manual and auto snapcompact now fail locally with the blocker instead of making provider calls. ([#3599](https://github.com/can1357/oh-my-pi/issues/3599))
@@ -155,6 +159,7 @@
 - Fixed snapcompact rasterizing transcript frames into requests bound for GitHub Copilot business and enterprise endpoints, which then rejected the session permanently with `400 vision is not supported`. The snapcompact vision gate now also short-circuits whenever `model.provider === "github-copilot"` and the resolved `baseUrl` is not the canonical personal-Copilot host, protecting cached/stale Model specs that still advertise `["text","image"]` on a non-personal endpoint. ([#3387](https://github.com/can1357/oh-my-pi/issues/3387))
 - Fixed GitLab Duo Agent namespace/project discovery reading the original repo's git remote after a `/move`. The session's working directory is now resolved live (per LLM call) from the `SessionManager` instead of being captured when the agent was constructed, so moving the session re-scopes Duo workspace discovery to the new repository.
 - Fixed `omp auth-broker login gitlab-duo-agent` (and `--via`) hanging until timeout: the provider uses GitLab's fixed `vscode://` OAuth redirect, which never reaches the broker's local callback server, and `runLocalLogin` supplied no `onManualCodeInput` fallback. The broker login now offers the same paste-the-redirect-URL prompt the interactive sign-in uses, so credentials can be saved.
+
 
 ## [16.1.16] - 2026-06-23
 

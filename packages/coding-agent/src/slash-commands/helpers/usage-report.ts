@@ -75,6 +75,22 @@ function renderUsageReports(
 				lines.push(
 					`- ${resetLabel}: ${savedResets} saved rate-limit reset${savedResets === 1 ? "" : "s"} available — /usage reset to spend`,
 				);
+				const credits = report.resetCredits?.credits;
+				if (credits) {
+					for (const credit of credits) {
+						if (credit.expiresAt) {
+							const expiryMs = Date.parse(credit.expiresAt);
+							if (!Number.isNaN(expiryMs)) {
+								const remaining = expiryMs - nowMs;
+								if (remaining > 0) {
+									lines.push(`  expires in ${formatDuration(remaining)} (${credit.expiresAt.slice(0, 10)})`);
+								} else {
+									lines.push(`  expired (${credit.expiresAt.slice(0, 10)})`);
+								}
+							}
+						}
+					}
+				}
 			}
 			if (report.limits.length === 0) {
 				const email = typeof report.metadata?.email === "string" ? report.metadata.email : "account";
