@@ -137,6 +137,11 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	if (!bareHost && !rawAuthority) {
 		throw new Error("ssh:// requires a host: ssh://<host>/<absolute-path>");
 	}
+	if (url.password) {
+		throw new Error(
+			"ssh://: password authentication is not supported; ssh:// uses key/agent auth — drop the ':<password>' from the URL",
+		);
+	}
 	const isIpv6Literal = bareHost.startsWith("[") && bareHost.endsWith("]");
 	const sshHost = isIpv6Literal ? bareHost.slice(1, -1) : bareHost;
 	const username = url.username || undefined;
@@ -161,6 +166,13 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	};
 	if (port === undefined && url.rawHost === `${username ? `${decodeOr(username)}@` : ""}${decodeOr(bareHost)}:`) {
 		throw new Error(`ssh://: empty port in "${url.href}"; use ssh://host:<1-65535>/<path> or drop the colon`);
+	}
+	// A literal but empty userinfo (`ssh://@host`) sets username to "" — WHATWG drops
+	// the `@` from hostname, but rawHost keeps the leading `@`. A percent-encoded
+	// alias like `%40prod` decodes to `@prod` in rawHost too, but its hostname keeps
+	// `%40`, so the reconstruction is `@@prod` and is left alone.
+	if (username === undefined && url.rawHost === `@${decodeOr(bareHost)}${port !== undefined ? `:${port}` : ""}`) {
+		throw new Error(`ssh://: empty username in "${url.href}"; drop the leading '@' or provide a username before it`);
 	}
 	const items = await loadConfiguredHosts(cwd);
 

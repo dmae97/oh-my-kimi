@@ -260,6 +260,14 @@ describe("SshProtocolHandler", () => {
 		await expect(handler.resolve(parseInternalUrl("ssh://u%2Dname@prod:/etc/hosts"))).rejects.toThrow(/empty port/);
 	});
 
+	it("rejects ssh:// password and empty-username userinfo before matching a host", async () => {
+		mockHosts([{ name: "prod", host: "10.0.0.5", _source: SOURCE }]);
+		await expect(handler.resolve(parseInternalUrl("ssh://user:pass@prod/etc/hosts"))).rejects.toThrow(/password/);
+		await expect(handler.resolve(parseInternalUrl("ssh://:pw@prod/etc/hosts"))).rejects.toThrow(/password/);
+		await expect(handler.resolve(parseInternalUrl("ssh://@prod/etc/hosts"))).rejects.toThrow(/empty username/);
+		await expect(handler.resolve(parseInternalUrl("ssh://@prod:22/etc/hosts"))).rejects.toThrow(/empty username/);
+	});
+
 	it("matches a configured colon-suffixed alias via %3A instead of treating it as an empty port", async () => {
 		mockHosts([{ name: "prod:", host: "prod.internal", _source: SOURCE }]);
 		const spy = mockReadBytes("ok\n");
