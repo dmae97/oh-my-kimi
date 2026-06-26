@@ -66,7 +66,7 @@ const editTool: Tool = {
 	parameters: z.object({ input: z.string() }),
 };
 
-const nativeTools: Tool[] = ["read", "write", "search", "find", "bash", "lsp", "todo"].map(name => ({
+const nativeTools: Tool[] = ["read", "write", "grep", "glob", "bash", "lsp", "todo"].map(name => ({
 	name,
 	description: `${name} native bridge`,
 	parameters: z.object({}),
@@ -215,8 +215,8 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(mcpTools.map(tool => tool.name)).toEqual([
 			"read",
 			"write",
-			"search",
-			"find",
+			"grep",
+			"glob",
 			"bash",
 			"lsp",
 			"todo",
@@ -250,8 +250,8 @@ describe("GitLab Duo Workflow provider protocol", () => {
 		expect(payload.mcpTools.map(tool => tool.name)).toEqual([
 			"read",
 			"write",
-			"search",
-			"find",
+			"grep",
+			"glob",
 			"bash",
 			"lsp",
 			"todo",
