@@ -59,7 +59,7 @@ const md = new Marked({
 	renderer: {
 		// Raw HTML tokens (block + inline both arrive here) are escaped, never emitted.
 		html({ text }) {
-			const cleaned = text.replace(/<\/?(?:span|text)\b(?:\s[^>]*)?\s*\/?>/gi, "");
+			const cleaned = text.replace(/<\/?(?:advisory|span|text)\b(?:\s[^>]*)?\s*\/?>/gi, "");
 			if (cleaned === "") return "";
 			return escapeHtml(unescapeHtml(cleaned));
 		},
