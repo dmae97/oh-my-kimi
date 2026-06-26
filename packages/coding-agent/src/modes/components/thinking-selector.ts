@@ -3,6 +3,7 @@ import { Container, type SelectItem, SelectList, type SgrMouseEvent } from "@oh-
 import { getSelectListTheme } from "../../modes/theme/theme";
 import { getThinkingLevelMetadata } from "../../thinking";
 import { DynamicBorder } from "./dynamic-border";
+import { routeSelectListMouseWithTopBorder } from "./select-list-mouse-routing";
 
 /**
  * Component that renders a thinking level selector with borders
@@ -51,7 +52,6 @@ export class ThinkingSelectorComponent extends Container {
 	}
 
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
-		const topBorderRows = 1;
-		this.#selectList.routeMouse(event, line - topBorderRows, col);
+		routeSelectListMouseWithTopBorder(this.#selectList, event, line, col);
 	}
 }
