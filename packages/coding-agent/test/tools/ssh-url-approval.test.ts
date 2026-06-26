@@ -3,7 +3,7 @@ import * as os from "node:os";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 
 // Minimal ToolSession stub (block-images.test.ts shape). Approval functions are
@@ -39,8 +39,8 @@ describe("ssh:// tools require exec-tier approval", () => {
 		expect(callApproval(tool, {})).toBe("read");
 	});
 
-	it("search: an ssh:// entry flattened into a delimited path still trips exec", () => {
-		const tool = new SearchTool(createTestToolSession(os.tmpdir()));
+	it("grep: an ssh:// entry flattened into a delimited path still trips exec", () => {
+		const tool = new GrepTool(createTestToolSession(os.tmpdir()));
 		// The delimited string is one entry at approval time (expansion happens
 		// later), so an anchored check would miss it — the substring scan must not.
 		expect(callApproval(tool, { paths: "src,ssh://icaro/etc/hosts" })).toBe("exec");

@@ -9,7 +9,7 @@ import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/route
 import { SshProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/ssh-protocol";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/search";
+import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 
 // Live integration against `ssh localhost`. Skips automatically where key-based
@@ -168,7 +168,7 @@ describe.skipIf(!SSH_OK)("ssh:// handler against a real localhost ssh", () => {
 	);
 });
 
-describe.skipIf(!SSH_OK)("ssh:// through the real read/search/write tools (localhost)", () => {
+describe.skipIf(!SSH_OK)("ssh:// through the real read/grep/write tools (localhost)", () => {
 	const TMP = `/tmp/omp-ssh-tools-e2e-${process.pid}`;
 
 	function createSession(): ToolSession {
@@ -177,7 +177,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/search/write tools (local
 			hasUI: false,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
-			settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
+			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
 		};
 	}
 
@@ -218,9 +218,9 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/search/write tools (local
 		expect(range).not.toContain("OMEGALINE");
 	});
 
-	it("SearchTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
+	it("GrepTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
 		mockEmptyHosts();
-		const tool = new SearchTool(createSession());
+		const tool = new GrepTool(createSession());
 		const result = await tool.execute("s", { pattern: "beta", paths: [`ssh://localhost${TMP}/read.txt`] });
 		const out = textOf(result);
 		expect(out).toContain("beta");

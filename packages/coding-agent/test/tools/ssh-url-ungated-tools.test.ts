@@ -3,7 +3,7 @@ import * as os from "node:os";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
+import { GlobTool } from "@oh-my-pi/pi-coding-agent/tools/glob";
 import { resolveToolSearchScope } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 
 // Minimal ToolSession stub (ssh-url-approval.test.ts shape). The ssh:// guard
@@ -19,8 +19,8 @@ function createTestToolSession(cwd: string): ToolSession {
 	};
 }
 
-// `find`, `ast_grep`, and `ast_edit` resolve internal URLs at read/write tier and
-// do NOT share the exec-tier approval `read`/`search`/`write` got for ssh://. They
+// `glob`, `ast_grep`, and `ast_edit` resolve internal URLs at read/write tier and
+// do NOT share the exec-tier approval `read`/`grep`/`write` got for ssh://. They
 // also can never produce a backing file for ssh://, so they must reject it BEFORE
 // `InternalUrlRouter.resolve` — which is the point that opens the outbound SSH
 // connection. The security contract these tests defend: a read/write-tier tool
@@ -48,11 +48,11 @@ describe("ssh:// is rejected before any connection in read/write-tier tools", ()
 		expect(spy).not.toHaveBeenCalled();
 	});
 
-	it("find throws on ssh:// without resolving", async () => {
+	it("glob throws on ssh:// without resolving", async () => {
 		const spy = vi
 			.spyOn(InternalUrlRouter.instance(), "resolve")
 			.mockRejectedValue(new Error("resolve must not run for ssh://"));
-		const tool = new FindTool(createTestToolSession(os.tmpdir()));
+		const tool = new GlobTool(createTestToolSession(os.tmpdir()));
 		await expect(tool.execute("f", { paths: ["ssh://h/x"] })).rejects.toThrow(/ssh:\/\//);
 		expect(spy).not.toHaveBeenCalled();
 	});

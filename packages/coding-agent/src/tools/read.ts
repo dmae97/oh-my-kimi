@@ -753,11 +753,25 @@ function isMultiRange(parsed: ParsedSelector): boolean {
 	return parsed.kind === "lines" && parsed.ranges.length > 1;
 }
 
+function selectorChunkLooksReadLike(chunk: string): boolean {
+	const lower = chunk.toLowerCase();
+	return lower === "raw" || lower === "conflicts" || /^-\d+(?:[-+]\d+)?$/.test(chunk) || parseLineRanges(chunk) !== null;
+}
+
+function invalidSelector(sel: string): ToolError {
+	return new ToolError(
+		`Invalid selector ':${sel}'. Use :N, :N-M, :N+K, :N- (open-ended), a comma-separated list of ranges, :raw, or a range combined with raw (e.g. :raw:50-100).`,
+	);
+}
+
 function parseSel(sel: string | undefined): ParsedSelector {
 	if (!sel || sel.length === 0) return { kind: "none" };
 
 	// Compound selector: `1-50:raw` or `raw:1-50`. Split into chunks and accept
-	// any combination of one line range (possibly multi) and the literal `raw`.
+	// exactly one line range (possibly multi) plus the literal `raw`. Selector-like
+	// compounds that are not in that accepted set are invalid rather than "none";
+	// otherwise `read` can silently widen a malformed selector like
+	// `artifact://5:conflicts:1-1` while `grep` rejects it.
 	if (sel.includes(":")) {
 		const chunks = sel.split(":");
 		if (chunks.length === 2) {
@@ -773,6 +787,7 @@ function parseSel(sel: string | undefined): ParsedSelector {
 				}
 			}
 		}
+		if (chunks.every(selectorChunkLooksReadLike)) throw invalidSelector(sel);
 		// Unrecognized compound — fall through (sqlite/archive/url consume their own colon syntax).
 		return { kind: "none" };
 	}
