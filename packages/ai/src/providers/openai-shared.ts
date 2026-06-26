@@ -842,13 +842,19 @@ export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams
 	// silently no-ops), so emitting it unconditionally for the Qwen-family
 	// + local-cache compat flag is safe.
 	if (policy.compat.qwenPreserveThinking) {
-		// Twin top-level + `chat_template_kwargs` emission: llama.cpp's
-		// `--jinja` hook binds the kwargs into the template namespace,
-		// vLLM/SGLang only see fields under `chat_template_kwargs`, and
-		// Alibaba Cloud Model Studio's compatible-mode reads the
-		// top-level field instead. Setting both covers every host that
-		// renders the Qwen3.6+ template without sniffing per-host shapes.
-		params.preserve_thinking = true;
+		// Mirror the dialect split that gates `enable_thinking`. The
+		// `qwen` dialect rides the top-level field (the only place
+		// llama.cpp's `--jinja` hook AND Alibaba Cloud Model Studio's
+		// compatible-mode look) while the `qwen-chat-template` dialect
+		// (NVIDIA NIM, vLLM/SGLang's chat-template-kwargs path) MUST
+		// ride only the kwargs copy — NIM's request schema is
+		// `additionalProperties: false` and rejects every unknown
+		// top-level field, the very reason `enable_thinking` is
+		// route-split this way (#2299, see `catalog/src/compat/openai.ts`
+		// thinkingFormat comment).
+		if (policy.compat.thinkingFormat === "qwen") {
+			params.preserve_thinking = true;
+		}
 		params.chat_template_kwargs = { ...params.chat_template_kwargs, preserve_thinking: true };
 	}
 

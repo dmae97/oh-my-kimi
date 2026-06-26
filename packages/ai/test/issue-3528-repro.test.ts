@@ -536,11 +536,15 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(params.chat_template_kwargs).toEqual({ preserve_thinking: true });
 	});
 
-	it("emits preserve_thinking via chat_template_kwargs for NVIDIA NIM Qwen on loopback", () => {
+	it("omits top-level preserve_thinking for NVIDIA NIM Qwen (qwen-chat-template dialect)", () => {
 		// NVIDIA NIM serves Qwen with the `qwen-chat-template` dialect:
-		// `enable_thinking` lives under `chat_template_kwargs`, not top
-		// level. The merge-with-spread fix has to keep `preserve_thinking`
-		// alongside `enable_thinking` rather than clobbering it.
+		// `enable_thinking` and `preserve_thinking` both live under
+		// `chat_template_kwargs` because NIM's request schema is
+		// `additionalProperties: false` and rejects every unknown
+		// top-level field (#2299 — same reason the catalog already
+		// route-splits `enable_thinking` for this dialect). The
+		// spread-merge in the encoder still has to keep both kwargs
+		// alongside one another rather than clobbering `preserve_thinking`.
 		const model = llamaCppQwenModel({
 			provider: "nvidia",
 			baseUrl: "http://localhost:8000/v1",
@@ -548,10 +552,9 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		const params: OpenAICompletionsParams = { model: model.id, messages: [], stream: true };
 		applyChatCompletionsReasoningParams(params, model, model.compat, { reasoning: "medium" });
 		expect(params.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: true });
-		// NVIDIA NIM's `qwen-chat-template` dialect rides under
-		// chat_template_kwargs; the top-level mirror is still set for
-		// llama.cpp / Alibaba parity.
-		expect(params.preserve_thinking).toBe(true);
+		// Top-level field MUST stay unset or NIM rejects the whole request.
+		expect(params.preserve_thinking).toBeUndefined();
+		expect(params.enable_thinking).toBeUndefined();
 	});
 
 	it("honors an explicit qwenPreserveThinking override on cloud Qwen", () => {
