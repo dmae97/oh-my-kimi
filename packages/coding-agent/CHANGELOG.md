@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `grep -q`/`--quiet`/`--silent` and `-x`/`--line-regexp` to the in-process `grep` builtin used by the bash tool. `-q` suppresses all stdout and exits 0 on the first match (short-circuiting, with match status taking precedence over read errors per GNU); `-x` anchors each pattern to whole lines. Unblocks shell conditionals such as `grep -qx "$applet" <(strings bin)`.
