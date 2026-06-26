@@ -303,6 +303,7 @@ export class MarketplaceManager {
 			version = await this.#resolvePluginVersion(pluginEntry, sourcePath);
 			cachePath = await cachePlugin(sourcePath, this.#opts.pluginsCacheDir, marketplace, name, version);
 			await this.#writeEmbeddedLspConfig(pluginEntry, cachePath);
+			await this.#writeEmbeddedDapConfig(pluginEntry, cachePath);
 		} finally {
 			// Clean up temp clone dirs created by resolvePluginSource; leave user-supplied local dirs alone
 			if (tempCloneRoot) {
@@ -381,6 +382,27 @@ export class MarketplaceManager {
 		}
 
 		await Bun.write(targetPath, `${JSON.stringify({ servers: lspServers }, null, 2)}\n`);
+	}
+
+	async #writeEmbeddedDapConfig(entry: MarketplacePluginEntry, cachePath: string): Promise<void> {
+		const dapAdapters = entry.dapAdapters;
+		if (!dapAdapters) return;
+
+		if (typeof dapAdapters === "string") {
+			const sourcePath = path.resolve(cachePath, dapAdapters);
+			if (!pathIsWithin(cachePath, sourcePath)) {
+				throw new Error(`Plugin "${entry.name}" dapAdapters path escapes the plugin directory`);
+			}
+			const extension = path.extname(sourcePath).toLowerCase();
+			const targetFilename = extension === ".yaml" || extension === ".yml" ? `.dap${extension}` : ".dap.json";
+			const targetPath = path.join(cachePath, targetFilename);
+			const content = await Bun.file(sourcePath).text();
+			await Bun.write(targetPath, content);
+			return;
+		}
+
+		const targetPath = path.join(cachePath, ".dap.json");
+		await Bun.write(targetPath, `${JSON.stringify({ adapters: dapAdapters }, null, 2)}\n`);
 	}
 
 	/**

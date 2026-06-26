@@ -391,6 +391,9 @@
 
 - Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
 - Added support for compound duration formats in `/loop` (e.g., `1h30m`)
+### Added
+
+- Added project/user/plugin `dap.json` and `dap.yaml` support for defining or overriding debugger adapters used by the `debug` tool. ([#2999](https://github.com/can1357/oh-my-pi/issues/2999))
 
 ## [16.1.5] - 2026-06-19
 
