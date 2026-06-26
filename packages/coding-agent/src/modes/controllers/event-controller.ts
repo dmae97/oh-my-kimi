@@ -728,9 +728,9 @@ export class EventController {
 
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		this.#updateWorkingMessageFromIntent(event.intent);
+		this.#resolveDisplaceablePoll(event.toolName);
+		this.#resolveDisplaceableTodo(event.toolName);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
-			this.#resolveDisplaceablePoll(event.toolName);
-			this.#resolveDisplaceableTodo(event.toolName);
 			if (event.toolName === "read" && readArgsHaveTarget(event.args) && !readArgsTargetInternalUrl(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
 				const component = this.ctx.pendingTools.get(event.toolCallId);

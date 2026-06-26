@@ -156,6 +156,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 
 	function createFixture() {
 		const children: Component[] = [];
+		const pendingTools = new Map();
 		const ctx = {
 			isInitialized: true,
 			init: vi.fn(async () => {}),
@@ -163,7 +164,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 			statusLine: { invalidate: vi.fn() },
 			updateEditorTopBorder: vi.fn(),
 			toolOutputExpanded: false,
-			pendingTools: new Map(),
+			pendingTools,
 			chatContainer: {
 				children,
 				addChild: (component: Component) => {
@@ -179,7 +180,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 			sessionManager: { getCwd: () => process.cwd() },
 			setTodos: vi.fn(),
 		} as unknown as InteractiveModeContext;
-		return { controller: new EventController(ctx), children };
+		return { controller: new EventController(ctx), children, pendingTools };
 	}
 
 	async function runPoll(controller: EventController, children: Component[], toolCallId: string) {
@@ -277,6 +278,54 @@ describe("EventController displaces consecutive waiting polls", () => {
 		expect(children).not.toContain(first);
 		expect(children).toContain(bash);
 		expect(children).toContain(second);
+		expect(first.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("removes a todo snapshot when the next todo call was pre-created while args streamed", async () => {
+		const { controller, children, pendingTools } = createFixture();
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "todo-1",
+			toolName: "todo",
+			args: { op: "view" },
+		});
+		const first = trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
+
+		const second = trackComponent(created, new ToolExecutionComponent("todo", { op: "view" }, {}, undefined, uiStub));
+		children.push(second);
+		pendingTools.set("todo-2", second);
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "todo-1",
+			toolName: "todo",
+			result: todoResult(["plan", "read"]),
+			isError: false,
+		});
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "bash-1",
+			toolName: "bash",
+			args: { command: "true" },
+		});
+		const bash = trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
+		expect(children).toContain(first);
+		expect(children).toContain(second);
+		expect(children).toContain(bash);
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "todo-2",
+			toolName: "todo",
+			args: { op: "view" },
+		});
+
+		expect(children).not.toContain(first);
+		expect(children).toContain(second);
+		expect(children).toContain(bash);
 		expect(first.isTranscriptBlockFinalized()).toBe(true);
 	});
 
