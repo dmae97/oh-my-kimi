@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `OpenAICompat.supportsNamedToolChoice` so string-only OpenAI-compatible chat servers can keep forced tool use without emitting the named function-object `tool_choice` shape. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
+
 ## [16.1.23] - 2026-06-26
 
 ### Added

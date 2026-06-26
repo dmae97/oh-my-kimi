@@ -269,6 +269,14 @@ export interface OpenAICompat {
 	 */
 	supportsForcedToolChoice?: boolean;
 	/**
+	 * Whether the chat-completions endpoint accepts the object form that pins one
+	 * named function (`{ type: "function", function: { name } }`). Some
+	 * OpenAI-compatible hosts such as llama.cpp only accept string
+	 * `tool_choice` values; request builders downgrade a named force to
+	 * `"required"` when this is false. Default: true.
+	 */
+	supportsNamedToolChoice?: boolean;
+	/**
 	 * Drop reasoning fields (`reasoning_effort`, OpenRouter `reasoning`) for
 	 * the request when `tool_choice` forces a tool call. Mirrors the Anthropic
 	 * `disableThinkingIfToolChoiceForced` rule for backends like Kimi that
@@ -465,6 +473,7 @@ export interface ResolvedOpenAISharedCompat {
 	disableReasoningOnToolChoice: boolean;
 	supportsToolChoice: boolean;
 	supportsForcedToolChoice: boolean;
+	supportsNamedToolChoice: boolean;
 	reasoningContentField?: OpenAICompat["reasoningContentField"];
 	requiresReasoningContentForToolCalls: boolean;
 	requiresReasoningContentForAllAssistantTurns: boolean;
@@ -516,6 +525,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "disableReasoningOnToolChoice"
 			| "supportsToolChoice"
 			| "supportsForcedToolChoice"
+			| "supportsNamedToolChoice"
 			| "reasoningContentField"
 			| "requiresReasoningContentForToolCalls"
 			| "requiresReasoningContentForAllAssistantTurns"
