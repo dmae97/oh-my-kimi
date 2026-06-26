@@ -193,7 +193,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(os.tmpdir());
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(parentDir, { recursive: true, force: true });
+			removeSyncWithRetries(parentDir);
 		}
 	});
 
@@ -217,7 +217,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).toContain("↳ pr-workspace");
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(parentDir, { recursive: true, force: true });
+			removeSyncWithRetries(parentDir);
 		}
 	});
 });
