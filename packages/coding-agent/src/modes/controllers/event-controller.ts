@@ -539,7 +539,6 @@ export class EventController {
 					}
 					if (!readArgsTargetInternalUrl(content.arguments)) {
 						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
-						this.#resolveDisplaceableTodo(content.name);
 						this.#trackReadToolCall(content.id, content.arguments);
 						const component = this.ctx.pendingTools.get(content.id);
 						if (component) {
@@ -575,7 +574,6 @@ export class EventController {
 				}
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
-					this.#resolveDisplaceableTodo(content.name);
 					this.#resetReadGroup();
 					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
@@ -729,7 +727,6 @@ export class EventController {
 	async #handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): Promise<void> {
 		this.#updateWorkingMessageFromIntent(event.intent);
 		this.#resolveDisplaceablePoll(event.toolName);
-		this.#resolveDisplaceableTodo(event.toolName);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
 			if (event.toolName === "read" && readArgsHaveTarget(event.args) && !readArgsTargetInternalUrl(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
@@ -865,8 +862,15 @@ export class EventController {
 						// Remember the waiting poll so the next `job` call can displace it.
 						this.#displaceablePollComponent = component;
 					} else if (event.toolName === "todo" && component.canBeDisplacedBy("todo")) {
-						// Keep the latest todo snapshot live until another todo update
-						// replaces it or the turn ends.
+						// Successful todo update supersedes the prior live snapshot. A failed
+						// follow-up never reaches this branch (canBeDisplacedBy("todo") returns
+						// false for errored results), so the last-good panel stays on screen.
+						const previous = this.#displaceableTodoComponent;
+						if (previous && previous !== component && previous.isDisplaceableBlock()) {
+							this.#displaceableTodoComponent = undefined;
+							this.ctx.chatContainer.removeChild(previous);
+							previous.seal();
+						}
 						this.#displaceableTodoComponent = component;
 					}
 				}

@@ -376,7 +376,6 @@ export class UiHelpers {
 						continue;
 					}
 					resolveWaitingPoll(content.name);
-					resolveTodoSnapshot(content.name);
 
 					if (
 						content.name === "read" &&
@@ -501,9 +500,9 @@ export class UiHelpers {
 						component instanceof ToolExecutionComponent &&
 						component.canBeDisplacedBy("todo")
 					) {
-						// Multiple `todo` results in one rebuilt assistant message land here
-						// without an intervening assistant iteration that could displace
-						// them; collapse the prior snapshot before tracking the new one.
+						// A successful todo result supersedes the prior live snapshot. Failed
+						// follow-ups return false from canBeDisplacedBy("todo"), so the
+						// last-good panel stays on screen.
 						resolveTodoSnapshot("todo");
 						todoSnapshot = component;
 					}

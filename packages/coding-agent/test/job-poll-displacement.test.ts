@@ -179,6 +179,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 				},
 			},
 			session: { getToolByName: () => undefined },
+			showWarning: vi.fn(),
 			viewSession: { getToolByName: () => undefined },
 			sessionManager: { getCwd: () => process.cwd() },
 			setTodos: vi.fn(),
@@ -284,7 +285,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 		expect(first.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("removes a todo snapshot when the next todo call was pre-created while args streamed", async () => {
+	it("displaces a prior todo snapshot when a streamed second todo lands a successful result", async () => {
 		const { controller, children, pendingTools } = createFixture();
 
 		await controller.handleEvent({
@@ -326,10 +327,51 @@ describe("EventController displaces consecutive waiting polls", () => {
 			args: { op: "view" },
 		});
 
+		// Start alone is no longer enough — the prior snapshot stays so a failed
+		// follow-up cannot strand the user without a current todo panel.
+		expect(children).toContain(first);
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "todo-2",
+			toolName: "todo",
+			result: todoResult(["fix", "test"]),
+			isError: false,
+		});
+
 		expect(children).not.toContain(first);
 		expect(children).toContain(second);
 		expect(children).toContain(bash);
 		expect(first.isTranscriptBlockFinalized()).toBe(true);
+	});
+
+	it("keeps the prior todo snapshot when a follow-up todo errors", async () => {
+		const { controller, children } = createFixture();
+
+		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
+		expect(children).toContain(first);
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "todo-2",
+			toolName: "todo",
+			args: { op: "view" },
+		});
+		const errored = trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "todo-2",
+			toolName: "todo",
+			result: { content: [{ type: "text", text: "Phase missing" }], details: undefined, isError: true },
+			isError: true,
+		});
+
+		expect(children).toContain(first);
+		expect(children).toContain(errored);
+		expect(first.isTranscriptBlockFinalized()).toBe(false);
 	});
 
 	it("does not displace a poll that observed completions", async () => {
