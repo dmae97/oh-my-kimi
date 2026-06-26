@@ -7,6 +7,7 @@ import { type ExecuteHashlineSingleOptions, executeHashlineSingle } from "@oh-my
 import { canonicalSnapshotKey, getFileSnapshotStore } from "@oh-my-pi/pi-coding-agent/edit/file-snapshot-store";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { GrepTool } from "../../src/tools/grep";
 
 function createSession(cwd: string): ToolSession {
@@ -78,7 +79,7 @@ describe("read → edit seen-line guard", () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "seen-line-guard-"));
 	});
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("records the displayed range as seen and excludes far lines", async () => {
@@ -180,7 +181,7 @@ describe("search → edit seen-line guard", () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "seen-line-search-"));
 	});
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	function searchSession(cwd: string): ToolSession {

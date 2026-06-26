@@ -11,6 +11,7 @@ import {
 	splitDelimitedPathEntry,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import type { Component } from "@oh-my-pi/pi-tui";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { globToolRenderer } from "../../src/tools/glob";
 
 let uiTheme: Theme;
@@ -45,7 +46,7 @@ describe("delimited path expansion", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	});
 
 	it("splits comma, semicolon, and space delimited entries when parts resolve", async () => {

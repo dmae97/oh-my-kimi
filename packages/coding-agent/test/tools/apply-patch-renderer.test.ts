@@ -7,6 +7,7 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { toolRenderers } from "@oh-my-pi/pi-coding-agent/tools/renderers";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function getUiTheme() {
 	await themeModule.initTheme(false, undefined, undefined, "dark", "light");
@@ -148,7 +149,7 @@ describe("apply_patch rendering", () => {
 			expect(after).toContain("(preview)");
 			expect(after).toContain("const value = 2;");
 		} finally {
-			await fs.rm(tmpDir, { recursive: true, force: true });
+			await removeWithRetries(tmpDir);
 		}
 	});
 
@@ -176,7 +177,7 @@ describe("apply_patch rendering", () => {
 			expect(setTimeoutSpy).not.toHaveBeenCalled();
 		} finally {
 			setTimeoutSpy.mockRestore();
-			await fs.rm(tmpDir, { recursive: true, force: true });
+			await removeWithRetries(tmpDir);
 		}
 	});
 

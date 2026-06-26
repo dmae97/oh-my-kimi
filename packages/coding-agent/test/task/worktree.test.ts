@@ -14,6 +14,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as jj from "@oh-my-pi/pi-coding-agent/utils/jj";
 import * as natives from "@oh-my-pi/pi-natives";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const tempDirs: string[] = [];
 
@@ -54,7 +55,7 @@ async function createGitRepo(): Promise<{ baseBranch: string; repo: string }> {
 afterEach(async () => {
 	vi.restoreAllMocks();
 	jj.repo.clearRootCache();
-	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+	await Promise.all(tempDirs.splice(0).map(dir => removeWithRetries(dir)));
 });
 describe("worktree isolation helpers", () => {
 	it("returns platform-specific null path for git --no-index diffs", () => {
@@ -113,7 +114,7 @@ describe("worktree isolation helpers", () => {
 		});
 
 		afterAll(async () => {
-			await fs.rm(repo, { recursive: true, force: true });
+			await removeWithRetries(repo);
 		});
 
 		afterEach(() => {
@@ -307,7 +308,7 @@ describe("applyNestedPatches", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(parentRepo, { recursive: true, force: true });
+		await removeWithRetries(parentRepo);
 	});
 
 	it("does not fold pre-existing dirty nested-repo state into the agent commit", async () => {

@@ -13,7 +13,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { queueResolveHandler, ResolveTool } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { buildNamedToolChoice } from "@oh-my-pi/pi-coding-agent/utils/tool-choice";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession resolve reminder", () => {
 	let session: AgentSession;
@@ -65,7 +65,7 @@ describe("AgentSession resolve reminder", () => {
 		authStorage?.close();
 		authStorage = undefined;
 		if (fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

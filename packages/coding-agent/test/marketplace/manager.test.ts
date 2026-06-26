@@ -8,6 +8,7 @@ import {
 	MarketplaceManager,
 	readInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
 // what these tests assert — one plugin entry plus a plugin.json for the version-fallback path —
@@ -99,7 +100,7 @@ describe("MarketplaceManager", () => {
 	});
 
 	afterAll(() => {
-		fs.rmSync(FIXTURE_DIR, { recursive: true, force: true });
+		removeSyncWithRetries(FIXTURE_DIR);
 	});
 
 	beforeEach(() => {
@@ -107,7 +108,7 @@ describe("MarketplaceManager", () => {
 	});
 
 	afterEach(() => {
-		fs.rmSync(ctx.tmpDir, { recursive: true, force: true });
+		removeSyncWithRetries(ctx.tmpDir);
 	});
 
 	// ── Marketplace lifecycle ──────────────────────────────────────────────
@@ -570,7 +571,7 @@ describe("MarketplaceManager", () => {
 				noProjectManager.installPlugin("hello-plugin", "test-marketplace", { scope: "project" }),
 			).rejects.toThrow(/project directory/);
 		} finally {
-			fs.rmSync(tmp, { recursive: true, force: true });
+			removeSyncWithRetries(tmp);
 		}
 	});
 

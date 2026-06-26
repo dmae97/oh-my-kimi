@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -26,7 +27,7 @@ describe("search tool invalid regex handling", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(cwd, { recursive: true, force: true });
+		await removeWithRetries(cwd);
 	});
 
 	it("wraps invalid regex pattern errors in a ToolError", async () => {

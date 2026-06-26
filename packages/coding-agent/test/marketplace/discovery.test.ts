@@ -26,6 +26,7 @@ import {
 	readInstalledPluginsRegistry,
 	writeInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // ── Inline validator ───────────────────────────────────────────────────────────
 //
@@ -79,7 +80,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	fs.rmSync(tmpHome, { recursive: true, force: true });
+	removeSyncWithRetries(tmpHome);
 });
 
 // ── Path contract ─────────────────────────────────────────────────────────────

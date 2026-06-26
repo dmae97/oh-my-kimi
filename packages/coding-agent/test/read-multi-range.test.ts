@@ -8,6 +8,7 @@ import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-brid
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ReadToolDetails } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function textOutput(result: AgentToolResult<ReadToolDetails>): string {
 	return result.content
@@ -45,7 +46,7 @@ describe("read tool multi-range selector", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("uses only the filename in hashline headers for nested files", async () => {

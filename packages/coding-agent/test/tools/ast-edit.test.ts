@@ -6,6 +6,7 @@ import { adaptSchemaForStrict, toolWireSchema } from "@oh-my-pi/pi-ai/utils/sche
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 type InvokedToolResult = {
 	content: Array<{ type: string; text?: string }>;
@@ -85,7 +86,7 @@ describe("ast_edit tool schema", () => {
 			expect(addedLine).toMatch(/^\+\d+:/);
 			expect(removedLine?.split(":", 1)[0].length).toBe(addedLine?.split(":", 1)[0].length);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -129,7 +130,7 @@ describe("ast_edit tool schema", () => {
 			const updated = await Bun.file(filePath).text();
 			expect(updated).toContain("modernWrap(x, value)");
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -172,7 +173,7 @@ describe("ast_edit tool schema", () => {
 			).toBe(0);
 			expect(await Bun.file(filePath).text()).toBe(mutatedContent);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -235,7 +236,7 @@ describe("ast_edit tool schema", () => {
 				"legacyWrap(outsideValue, outsideArg)",
 			);
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 
@@ -271,7 +272,7 @@ describe("ast_edit tool schema", () => {
 			await invoker({ action: "apply", reason: "apply tlaplus AST edit" });
 			expect(await Bun.file(filePath).text()).toContain("Start == x = 0");
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 });

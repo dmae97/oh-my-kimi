@@ -32,7 +32,7 @@ import {
 	clearOmpExtensionCliRoots,
 	injectOmpExtensionCliRoots,
 } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
-import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 const PROVIDER_ID = "omp-plugins";
 
@@ -108,7 +108,7 @@ afterEach(() => {
 		setAgentDir(fallbackAgentDir);
 		delete process.env.PI_CODING_AGENT_DIR;
 	}
-	fs.rmSync(tempDir, { recursive: true, force: true });
+	removeSyncWithRetries(tempDir);
 });
 
 function ctx(): LoadContext {

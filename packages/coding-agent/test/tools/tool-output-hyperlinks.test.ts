@@ -10,6 +10,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { astGrepToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/ast-grep";
 import { ReadTool, readToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool, writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { grepToolRenderer } from "../../src/tools/grep";
 
 // 1x1 PNG so the read tool takes its image branch.
@@ -81,7 +82,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 			expect(extractLinkUris(textRender)).toContain(url.pathToFileURL(path.resolve(textPath)).href);
 			expect(extractLinkUris(imgRender)).toContain(url.pathToFileURL(path.resolve(imgPath)).href);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			removeSyncWithRetries(dir);
 		}
 	});
 
@@ -104,7 +105,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 				.join("\n");
 			expect(extractLinkUris(rendered)).toContain(url.pathToFileURL(path.resolve(filePath)).href);
 		} finally {
-			fs.rmSync(dir, { recursive: true, force: true });
+			removeSyncWithRetries(dir);
 		}
 	});
 

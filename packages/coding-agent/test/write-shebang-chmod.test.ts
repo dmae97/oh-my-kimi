@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -42,7 +43,7 @@ describe("write tool shebang chmod", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("marks files starting with #! as executable and flags the result", async () => {

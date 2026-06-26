@@ -12,7 +12,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@oh-my-pi/pi-coding-agent/tool-discovery/mode";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
 function createMcpCustomTool(name: string, serverName: string, mcpToolName: string): CustomTool {
@@ -67,7 +67,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 	afterAll(() => {
 		authStorage.close();
 		if (registryDir && fs.existsSync(registryDir)) {
-			fs.rmSync(registryDir, { recursive: true, force: true });
+			removeSyncWithRetries(registryDir);
 		}
 	});
 
@@ -78,7 +78,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 	afterEach(() => {
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

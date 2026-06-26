@@ -10,13 +10,14 @@ import {
 	VaultProtocolHandler,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import * as vaultProtocol from "@oh-my-pi/pi-coding-agent/internal-urls/vault-protocol";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vault-protocol-"));
 	try {
 		return await fn(dir);
 	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
+		await removeWithRetries(dir);
 	}
 }
 

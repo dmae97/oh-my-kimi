@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveExplicitSearchPaths } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const isWindows = process.platform === "win32";
 
@@ -53,7 +54,7 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(cwd, { recursive: true, force: true });
+		await removeWithRetries(cwd);
 	});
 
 	it("defaults to the workspace root when paths is omitted", async () => {
@@ -103,11 +104,7 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 	});
 
 	afterEach(async () => {
-		await Promise.all([
-			fs.rm(dirA, { recursive: true, force: true }),
-			fs.rm(dirB, { recursive: true, force: true }),
-			fs.rm(cwd, { recursive: true, force: true }),
-		]);
+		await Promise.all([removeWithRetries(dirA), removeWithRetries(dirB), removeWithRetries(cwd)]);
 	});
 
 	it("returns matches from both trees without rooting the scan at /", async () => {
@@ -151,7 +148,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor"
 	});
 
 	afterEach(async () => {
-		await fs.rm(parent, { recursive: true, force: true });
+		await removeWithRetries(parent);
 	});
 
 	it("fans out per-path targets instead of walking the unrequested ancestor", async () => {
@@ -198,7 +195,7 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 	});
 
 	afterEach(async () => {
-		await fs.rm(repo, { recursive: true, force: true });
+		await removeWithRetries(repo);
 	});
 
 	it("matches inside an explicit .git/config target alongside a directory scope", async () => {

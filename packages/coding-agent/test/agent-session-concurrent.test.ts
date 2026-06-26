@@ -22,7 +22,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -62,7 +62,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			authStorage.close();
 		}
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			removeSyncWithRetries(tempDir);
 		}
 		vi.restoreAllMocks();
 		AsyncJobManager.resetForTests();
@@ -982,7 +982,7 @@ describe("AgentSession TTSR resume gate", () => {
 			authStorage.close();
 		}
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			removeSyncWithRetries(tempDir);
 		}
 		vi.restoreAllMocks();
 	});

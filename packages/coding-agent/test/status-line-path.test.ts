@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
 import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, removeSyncWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 const originalProjectDir = getProjectDir();
 beforeAll(async () => {
@@ -97,8 +97,8 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(`${path.sep}Projects${path.sep}`);
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(aliasRoot, { recursive: true, force: true });
-			fs.rmSync(realProjectDir, { recursive: true, force: true });
+			removeSyncWithRetries(aliasRoot);
+			removeSyncWithRetries(realProjectDir);
 		}
 	});
 
@@ -116,7 +116,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(os.tmpdir());
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(scratchDir, { recursive: true, force: true });
+			removeSyncWithRetries(scratchDir);
 		}
 	});
 
@@ -134,7 +134,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(os.tmpdir());
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(scratchDir, { recursive: true, force: true });
+			removeSyncWithRetries(scratchDir);
 		}
 	});
 
@@ -151,7 +151,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(scratchDir, { recursive: true, force: true });
+			removeSyncWithRetries(scratchDir);
 		}
 	});
 
@@ -168,7 +168,7 @@ describe("status line path segment", () => {
 			expect(rendered.content).not.toContain(theme.icon.scratchFolder);
 		} finally {
 			setProjectDir(originalProjectDir);
-			fs.rmSync(realProjectDir, { recursive: true, force: true });
+			removeSyncWithRetries(realProjectDir);
 		}
 	});
 

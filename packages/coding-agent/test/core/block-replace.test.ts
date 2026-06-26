@@ -10,6 +10,7 @@ import {
 	getFileSnapshotStore,
 } from "@oh-my-pi/pi-coding-agent/edit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -21,7 +22,7 @@ async function withTempDir(fn: (tempDir: string) => Promise<void>): Promise<void
 	try {
 		await fn(tempDir);
 	} finally {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	}
 }
 

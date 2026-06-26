@@ -15,6 +15,7 @@ import {
 	truncateTail,
 	truncateTailBytes,
 } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const createdTempDirs: string[] = [];
 const originalForceProtocol = Bun.env.PI_FORCE_IMAGE_PROTOCOL;
@@ -32,7 +33,7 @@ function byteLength(text: string): number {
 
 afterEach(async () => {
 	for (const dir of createdTempDirs.splice(0)) {
-		await fs.rm(dir, { recursive: true, force: true });
+		await removeWithRetries(dir);
 	}
 	if (originalForceProtocol === undefined) delete Bun.env.PI_FORCE_IMAGE_PROTOCOL;
 	else Bun.env.PI_FORCE_IMAGE_PROTOCOL = originalForceProtocol;

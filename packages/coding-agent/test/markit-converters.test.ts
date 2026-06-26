@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { convertBufferWithMarkit, convertFileWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { zip } from "@oh-my-pi/pi-coding-agent/utils/zip";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -124,7 +125,7 @@ describe("markit converters", () => {
 			expect(written).toHaveLength(1);
 			expect(result.content).toContain(`](${path.join(imageDir, written[0]!)})`);
 		} finally {
-			await fs.rm(dir, { recursive: true, force: true });
+			await removeWithRetries(dir);
 		}
 	});
 

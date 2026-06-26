@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 function stdoutCommand(value: string): string {
 	return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(`process.stdout.write(${JSON.stringify(value)})`)}`;
@@ -26,7 +26,7 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		authStorage.close();
 		if (!tempDir || !fs.existsSync(tempDir)) return;
 		try {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
 		}

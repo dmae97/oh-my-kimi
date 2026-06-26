@@ -7,7 +7,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
 /**
@@ -38,7 +38,7 @@ describe("issue #1022 — path-scoped enabledModels respected by default fallbac
 
 	afterEach(() => {
 		resetSettingsForTest();
-		if (fs.existsSync(testDir)) fs.rmSync(testDir, { recursive: true, force: true });
+		if (fs.existsSync(testDir)) removeSyncWithRetries(testDir);
 	});
 
 	test("does not pick a disallowed provider when enabledModels excludes it", async () => {

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as mcpClient from "@oh-my-pi/pi-coding-agent/mcp/client";
 import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getConfigRootDir, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getProjectDir, removeWithRetries, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
 
 const originalProjectDir = getProjectDir();
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -52,8 +52,8 @@ describe("issue #956: interactive /mcp test", () => {
 			setAgentDir(fallbackAgentDir);
 			delete process.env.PI_CODING_AGENT_DIR;
 		}
-		await fs.rm(projectDir, { recursive: true, force: true });
-		await fs.rm(agentDir, { recursive: true, force: true });
+		await removeWithRetries(projectDir);
+		await removeWithRetries(agentDir);
 	});
 
 	it("tests a connected server discovered from standalone .mcp.json", async () => {

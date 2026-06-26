@@ -16,6 +16,7 @@ import type { AgentDefinition, TaskParams } from "@oh-my-pi/pi-coding-agent/task
 import type { IsolationHandle, WorktreeBaseline } from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
@@ -262,7 +263,7 @@ describe("subagent LSP availability", () => {
 			expect(getOptions()?.cwd).toBe("/tmp/isolated-subagent");
 			expect(sessionManager?.getCwd?.()).toBe("/tmp/isolated-subagent");
 		} finally {
-			await fs.rm(tempDir, { recursive: true, force: true });
+			await removeWithRetries(tempDir);
 		}
 	});
 

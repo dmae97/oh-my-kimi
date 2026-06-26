@@ -1,3 +1,4 @@
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 /**
  * Large-paste menu: when a paste reaches the configured `paste.largeMenuThreshold` line count,
  * the editor's `onLargePaste` hook routes through `InputController.handleLargePaste`, which offers
@@ -121,7 +122,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 	let dir: string | undefined;
 
 	afterEach(async () => {
-		if (dir) await fs.rm(dir, { recursive: true, force: true });
+		if (dir) await removeWithRetries(dir);
 		dir = undefined;
 	});
 

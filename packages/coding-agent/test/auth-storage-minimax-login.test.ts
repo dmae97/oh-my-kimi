@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 describe("AuthStorage MiniMax login", () => {
 	let tempDir: string;
@@ -37,7 +37,7 @@ describe("AuthStorage MiniMax login", () => {
 		vi.restoreAllMocks();
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

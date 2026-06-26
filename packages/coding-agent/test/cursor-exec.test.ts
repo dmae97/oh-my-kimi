@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
 import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -33,7 +34,7 @@ describe("CursorExecHandlers.grep bridge", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(cwd, { recursive: true, force: true });
+		await removeWithRetries(cwd);
 	});
 
 	it("maps caseInsensitive parameter correctly through the grep bridge", async () => {

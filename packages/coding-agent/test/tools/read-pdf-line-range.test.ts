@@ -13,7 +13,7 @@ import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as markit from "@oh-my-pi/pi-coding-agent/utils/markit";
-import { __resetDirsFromEnvForTests, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, removeSyncWithRetries, setAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 
 function restoreEnv(key: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -52,7 +52,7 @@ describe("read PDF with a line-range selector", () => {
 	});
 	afterEach(() => {
 		vi.restoreAllMocks();
-		fs.rmSync(testDir, { recursive: true, force: true });
+		removeSyncWithRetries(testDir);
 	});
 
 	it("honours `:N-M` against the converted markdown body", async () => {

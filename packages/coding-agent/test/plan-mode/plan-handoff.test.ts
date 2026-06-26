@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { loadOverallPlanReference } from "@oh-my-pi/pi-coding-agent/plan-mode/plan-handoff";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("loadOverallPlanReference", () => {
 	let tmpDir: string;
@@ -21,7 +22,7 @@ describe("loadOverallPlanReference", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tmpDir, { recursive: true, force: true });
+		await removeWithRetries(tmpDir);
 	});
 
 	it("returns the plan path and full contents when the reference file exists", async () => {

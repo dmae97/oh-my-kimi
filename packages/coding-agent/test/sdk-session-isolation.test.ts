@@ -11,7 +11,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { getSessionsDir, Snowflake } from "@oh-my-pi/pi-utils";
+import { getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 function createTtsrRule(name: string): Rule {
 	return {
@@ -78,7 +78,7 @@ describe("createAgentSession session storage isolation", () => {
 
 	afterEach(async () => {
 		for (const tempDir of tempDirs.splice(0)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

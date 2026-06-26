@@ -9,7 +9,14 @@ import * as oauthFlow from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { getConfigRootDir, getMCPConfigPath, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import {
+	getConfigRootDir,
+	getMCPConfigPath,
+	getProjectDir,
+	removeWithRetries,
+	setAgentDir,
+	setProjectDir,
+} from "@oh-my-pi/pi-utils";
 
 const RAW_SERVER_URL = `https://\${MCP_HOST}/mcp`;
 const EXPANDED_SERVER_URL = "https://mcp.example.com/mcp";
@@ -126,8 +133,8 @@ describe("/mcp auth commands", () => {
 			setAgentDir(fallbackAgentDir);
 			delete process.env.PI_CODING_AGENT_DIR;
 		}
-		await fs.rm(projectDir, { recursive: true, force: true });
-		await fs.rm(agentDir, { recursive: true, force: true });
+		await removeWithRetries(projectDir);
+		await removeWithRetries(agentDir);
 	});
 
 	test("stores definition-only OAuth credentials under the expanded URL key", async () => {

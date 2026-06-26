@@ -12,6 +12,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/edit";
 import { writethroughNoop } from "@oh-my-pi/pi-coding-agent/lsp";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 // ─── Minimal ToolSession stub ────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	resetSettingsForTest();
-	await fs.rm(tempDir, { recursive: true, force: true });
+	await removeWithRetries(tempDir);
 });
 
 // ─── executePatchSingle ───────────────────────────────────────────────────────

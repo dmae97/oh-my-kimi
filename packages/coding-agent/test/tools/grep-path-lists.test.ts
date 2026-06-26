@@ -20,6 +20,7 @@ import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/se
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { Text } from "@oh-my-pi/pi-tui";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { grepToolRenderer } from "../../src/tools/grep";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -137,7 +138,7 @@ describe("tool path arrays", () => {
 	});
 
 	afterAll(async () => {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 		resetSettingsForTest();
 	});
 
@@ -279,7 +280,7 @@ describe("tool path arrays", () => {
 			paths: ["apps/[id]"],
 		});
 		expect(getText(dir)).toContain("bracket-needle");
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 
 	it("grep pending renderer accepts a single string path", () => {
@@ -373,7 +374,7 @@ describe("tool path arrays", () => {
 		// single-string `paths` arg shows up as the "in <paths>" scope meta on the
 		// pending call line (a completed result merges the call line away).
 		expect(rendered).toContain("in folder with spaces/");
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 
 	it("tree selector renders a single-string grep path summary", () => {
@@ -500,7 +501,7 @@ describe("tool path arrays", () => {
 		expect(text).toContain("Successfully wrote 8 bytes to written.txt");
 		expect(text).not.toContain(tmp);
 		expect(await Bun.file(absoluteTarget).text()).toBe("written\n");
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 
 	it("read expands comma-delimited paths", async () => {
@@ -648,7 +649,7 @@ describe("tool path arrays", () => {
 		);
 		expect(await Bun.file(path.join(tmp, "phases", "ast.ts")).text()).toContain("modernWrap(phasesValue, phasesArg)");
 		expect(await Bun.file(path.join(tmp, "other", "ast.ts")).text()).toContain("legacyWrap(otherValue, otherArg)");
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 
 	it("find accepts explicit path arrays", async () => {
@@ -787,7 +788,7 @@ describe("tool path arrays", () => {
 			expect(details?.files).toEqual([expectedPath]);
 			expect(details?.scopePath).toBe(outsideDir.replace(/\\/g, "/"));
 		} finally {
-			await fs.rm(outsideDir, { recursive: true, force: true });
+			await removeWithRetries(outsideDir);
 		}
 	});
 
@@ -839,7 +840,7 @@ describe("tool path arrays", () => {
 		expect(text).not.toContain("nested");
 		expect(details?.fileCount).toBe(2);
 		expect(details?.scopePath).toBe("alpha.txt, beta.txt");
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 
 	it("grep renders only file headings that have child lines", async () => {
@@ -888,6 +889,6 @@ describe("tool path arrays", () => {
 		expect(text).toMatch(/ 1:#if FLAG/);
 		expect(text).toMatch(/\*2:needle/);
 		expect(text).toMatch(/ 3:#endif/);
-		await fs.rm(tmp, { recursive: true, force: true });
+		await removeWithRetries(tmp);
 	});
 });

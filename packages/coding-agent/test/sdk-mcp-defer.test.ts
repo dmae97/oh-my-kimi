@@ -8,7 +8,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 // Contract for B1 (interactive MCP deferral): when `hasUI` is true, MCP
 // discovery is deferred off the first-paint path, so an explicitly requested
@@ -55,7 +55,7 @@ describe("createAgentSession MCP deferral (B1)", () => {
 	afterAll(() => {
 		authStorage.close();
 		if (registryDir && fs.existsSync(registryDir)) {
-			fs.rmSync(registryDir, { recursive: true, force: true });
+			removeSyncWithRetries(registryDir);
 		}
 	});
 
@@ -66,7 +66,7 @@ describe("createAgentSession MCP deferral (B1)", () => {
 
 	afterEach(() => {
 		if (tempDir && fs.existsSync(tempDir)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 	});
 

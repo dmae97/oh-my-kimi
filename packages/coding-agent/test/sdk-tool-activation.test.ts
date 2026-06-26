@@ -12,7 +12,7 @@ import {
 	type ExtensionFactory,
 } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
 const toolActivationExtension: ExtensionFactory = pi => {
@@ -88,14 +88,14 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 	afterEach(() => {
 		for (const tempDir of tempDirs.splice(0)) {
-			fs.rmSync(tempDir, { recursive: true, force: true });
+			removeSyncWithRetries(tempDir);
 		}
 
 		vi.restoreAllMocks();
 	});
 
 	afterAll(() => {
-		fs.rmSync(registryAuthDir, { recursive: true, force: true });
+		removeSyncWithRetries(registryAuthDir);
 	});
 
 	it("excludes defaultInactive extension tools from the initial active set unless explicitly requested", async () => {

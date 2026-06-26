@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 function getTextOutput(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -52,7 +52,7 @@ describe("plain-file and directory reads ignore an already-aborted signal", () =
 	});
 
 	afterEach(() => {
-		fs.rmSync(testDir, { recursive: true, force: true });
+		removeSyncWithRetries(testDir);
 	});
 
 	it("returns a plain-file line range with an aborted signal", async () => {
