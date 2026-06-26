@@ -88,6 +88,7 @@ export class EventController {
 	#toolArgsReveal: ToolArgsRevealController;
 	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
+	#terminalProgressActive = false;
 
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
@@ -155,6 +156,7 @@ export class EventController {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
+		this.#setTerminalProgress(false);
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -269,6 +271,18 @@ export class EventController {
 		await run(event);
 	}
 
+	#setTerminalProgress(active: boolean): void {
+		if (active) {
+			if (this.#terminalProgressActive || this.ctx.settings?.get("terminal.showProgress") !== true) return;
+			this.ctx.ui.terminal.setProgress(true);
+			this.#terminalProgressActive = true;
+			return;
+		}
+		if (!this.#terminalProgressActive) return;
+		this.ctx.ui.terminal.setProgress(false);
+		this.#terminalProgressActive = false;
+	}
+
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#lastIntent = undefined;
 		this.#readToolCallArgs.clear();
@@ -287,6 +301,7 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		this.#cancelIdleCompaction();
+		this.#setTerminalProgress(true);
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.ui.requestRender();
 	}
@@ -954,6 +969,7 @@ export class EventController {
 	}
 
 	async #finishAgentEnd(): Promise<void> {
+		this.#setTerminalProgress(false);
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.flushAll();
 		if (this.ctx.loadingAnimation) {
@@ -1040,6 +1056,7 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#setTerminalProgress(true);
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
 		const reasonText =
@@ -1071,6 +1088,7 @@ export class EventController {
 
 	async #handleAutoCompactionEnd(event: Extract<AgentSessionEvent, { type: "auto_compaction_end" }>): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#setTerminalProgress(false);
 		if (this.ctx.autoCompactionLoader) {
 			this.ctx.autoCompactionLoader.stop();
 			this.ctx.autoCompactionLoader = undefined;
