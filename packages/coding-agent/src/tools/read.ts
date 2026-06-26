@@ -170,6 +170,10 @@ interface HashlineHeaderContext {
 	fullText?: string;
 }
 
+function formatReadHashlineHeader(displayPath: string, tag: string): string {
+	return formatHashlineHeader(path.basename(displayPath), tag);
+}
+
 function recordFullHashlineContext(
 	session: ToolSession,
 	absolutePath: string | undefined,
@@ -180,7 +184,7 @@ function recordFullHashlineContext(
 	const normalized = normalizeToLF(fullText);
 	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return {
-		header: formatHashlineHeader(displayPath, tag),
+		header: formatReadHashlineHeader(displayPath, tag),
 		tag,
 		fullText: normalized,
 	};
@@ -203,7 +207,7 @@ async function readHashlineHeaderContext(
 }
 
 function hashlineHeaderContext(displayPath: string, tag: string): HashlineHeaderContext {
-	return { header: formatHashlineHeader(displayPath, tag), tag };
+	return { header: formatReadHashlineHeader(displayPath, tag), tag };
 }
 
 function prependHashlineHeader(text: string, context: HashlineHeaderContext | undefined): string {
@@ -1598,7 +1602,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const tag = await recordFileSnapshot(this.session, absolutePath);
 			if (tag) {
 				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText);
-				outputText = `${formatHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
+				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		}
 		if (notices.length > 0) {

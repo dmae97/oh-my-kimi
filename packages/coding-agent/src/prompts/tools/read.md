@@ -25,7 +25,7 @@ Read files, directories, archives, SQLite, images, documents, internal resources
 
 - Directory → depth-limited dirent listing.
 {{#if IS_HL_MODE}}
-- File + selector → snapshot tag header + numbered lines: `[src/foo.ts#1A2B]` then `41:def alpha():`. Copy `[PATH#TAG]` for anchored edits; ops use bare line numbers. NEVER fabricate the tag.
+- File + selector → filename-only snapshot header + numbered lines: `[foo.ts#1A2B]` then `41:def alpha():`. Copy `[FILENAME#TAG]` for anchored edits; ops use bare line numbers. NEVER fabricate the tag.
 {{else}}
 {{#if IS_LINE_NUMBER_MODE}}
 - File + selector → numbered lines: `41|def alpha():`.

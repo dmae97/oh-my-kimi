@@ -62,7 +62,8 @@ describe("read summary", () => {
 	});
 
 	it("summarizes parseable TypeScript files without an explicit selector", async () => {
-		const fixture = path.join(tmpDir, "fixture.ts");
+		const fixture = path.join(tmpDir, "src", "fixture.ts");
+		await fs.mkdir(path.dirname(fixture), { recursive: true });
 		await fs.writeFile(
 			fixture,
 			"export function alpha(value: string): string {\n\tconst clean = value.trim();\n\tconst label = clean || 'alpha';\n\treturn label.toUpperCase();\n}\n\nexport function beta(): number {\n\tconst one = 1;\n\tconst two = 2;\n\treturn one + two;\n}\n",
@@ -71,6 +72,8 @@ describe("read summary", () => {
 		const tool = new ReadTool(createSession(tmpDir));
 		const result = await tool.execute("read-summary-ts", { path: fixture });
 		const text = textOutput(result);
+		const firstLine = text.split("\n")[0];
+		expect(firstLine).toMatch(/^\[fixture\.ts#[0-9A-F]{4}\]$/);
 
 		expect(text).toContain("export function alpha(value: string): string { … }");
 		expect(text).toContain("export function beta(): number { … }");
