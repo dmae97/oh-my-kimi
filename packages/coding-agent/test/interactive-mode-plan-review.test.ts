@@ -743,6 +743,48 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(session.model?.id).toBe(slow.id);
 	});
 
+	it("retains the plan model when the slider selection matches the active plan tier", async () => {
+		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
+		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!planModel || !prePlanModel) throw new Error("Expected sonnet + opus to exist in registry");
+
+		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
+		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
+
+		const planFilePath = "local://PLAN.md";
+		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
+			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
+			getSessionId: () => session.sessionManager.getSessionId(),
+		});
+		await Bun.write(resolvedPlanPath, "# Plan\n\nKeep executing on the planning tier.");
+
+		await mode.handlePlanModeCommand();
+		expect(session.model?.id).toBe(planModel.id);
+
+		vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+
+		vi.spyOn(mode, "showPlanReview").mockImplementation(
+			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
+				const slider = extra?.slider;
+				expect(slider).toBeDefined();
+				const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
+				expect(slowIndex).toBeGreaterThanOrEqual(0);
+				slider!.onChange?.(slowIndex);
+				return "Approve and keep context";
+			},
+		);
+
+		await mode.handlePlanApproval({
+			planFilePath,
+			planExists: true,
+			title: "PLAN",
+		});
+
+		expect(session.model?.id).toBe(planModel.id);
+	});
+
 	it("compaction runs on the plan model and restores the pre-plan model after success", async () => {
 		const planModel = session.modelRegistry.find("anthropic", "claude-opus-4-5");
 		const prePlanModel = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
@@ -825,10 +867,8 @@ describe("InteractiveMode plan review rendering", () => {
 		if (!planModel || !execModel) throw new Error("Expected sonnet + opus to exist in registry");
 
 		// Plan model (opus) differs from the execution tier the operator slides to
-		// (default = sonnet) so the assertions distinguish the new defer-restore +
-		// success-gated transition from the old "restore pre-plan before compaction"
-		// path: under the old behavior compaction would have run on sonnet and the
-		// restore (not applyRoleModel) would have produced the final model.
+		// (default = sonnet). Successful compaction must keep running on opus, then
+		// end on the slider-selected default tier.
 		session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 		session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
 		session.settings.setModelRole("plan", "anthropic/claude-opus-4-5");
@@ -851,7 +891,6 @@ describe("InteractiveMode plan review rendering", () => {
 			compactModelId = session.model?.id;
 			return "ok";
 		});
-		const applyRoleSpy = vi.spyOn(session, "applyRoleModel");
 
 		vi.spyOn(mode, "showPlanReview").mockImplementation(
 			async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
@@ -871,12 +910,9 @@ describe("InteractiveMode plan review rendering", () => {
 			title: "PLAN",
 		});
 
-		// Compaction ran on the plan model (defer-restore kept it warm) …
+		// Compaction ran on the plan model (defer-restore kept it warm), then the
+		// successful transition ended on the slider-selected default tier.
 		expect(compactModelId).toBe(planModel.id);
-		// … and the slider-selected execution tier was applied via applyRoleModel
-		// (the executionModel branch, not the pre-plan restore which goes through
-		// setModelTemporary), only after the successful compaction.
-		expect(applyRoleSpy.mock.calls.some(call => call[0]?.model?.id === execModel.id)).toBe(true);
 		expect(session.model?.id).toBe(execModel.id);
 	});
 

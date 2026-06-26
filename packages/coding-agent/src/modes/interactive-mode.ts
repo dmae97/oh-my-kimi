@@ -3021,16 +3021,17 @@ export class InteractiveMode implements InteractiveModeContext {
 				// Capture the operator's tier choice and hand it to #approvePlan, which
 				// applies it AFTER #exitPlanMode. #exitPlanMode normally restores
 				// #planModePreviousModelState (the model from before plan mode), so
-				// applying the slider choice any earlier would be silently reverted —
-				// the bug that made "continue with slow" keep executing on the default
-				// model. For compact-context approval, the plan model is kept through
-				// compaction, then a successful compaction transitions to the slider model
-				// (or restores the pre-plan model when no slider choice was made).
-				// `cycle.currentIndex` is exactly that restored model, so any chosen tier
-				// differing from it needs an explicit executionModel — this also covers
-				// leaving the slider on its `default` anchor while planning ran elsewhere.
+				// applying the slider choice any earlier would be silently reverted.
+				// Treat the choice as implicit only when it matches that restored model;
+				// comparing against cycle.currentIndex is wrong while plan review is
+				// still running on the plan model.
+				const restoredModel = this.#planModePreviousModelState?.model;
+				const restoredIndex =
+					cycle && restoredModel
+						? cycle.models.findIndex(entry => modelsAreEqual(entry.model, restoredModel))
+						: -1;
 				const executionModel =
-					cycle && selectedTierIndex !== cycle.currentIndex ? cycle.models[selectedTierIndex] : undefined;
+					cycle && selectedTierIndex !== restoredIndex ? cycle.models[selectedTierIndex] : undefined;
 				await this.#approvePlan(latestPlanContent, {
 					planFilePath,
 					title: details.title,
