@@ -361,7 +361,14 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 			stopReason: "toolUse",
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
 			timestamp: now - 180,
 		});
 		sessionManager.appendMessage({
@@ -383,7 +390,14 @@ describe("AgentSession auto-compaction progress guard", () => {
 				provider: "anthropic",
 				model: "claude-sonnet-4-5",
 				stopReason: "toolUse",
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
 				timestamp: ts,
 			});
 			sessionManager.appendMessage({
@@ -439,7 +453,14 @@ describe("AgentSession auto-compaction progress guard", () => {
 			provider: "anthropic" as const,
 			model: "claude-sonnet-4-5",
 			stopReason: "stop" as const,
-			usage: { input: 5000, output: 1000, cacheRead: 85000, cacheWrite: 0, totalTokens: 91000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			usage: {
+				input: 5000,
+				output: 1000,
+				cacheRead: 85000,
+				cacheWrite: 0,
+				totalTokens: 91000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
 			timestamp: now,
 		};
 		session.agent.emitExternalEvent({ type: "message_end", message: finalAssistant });
