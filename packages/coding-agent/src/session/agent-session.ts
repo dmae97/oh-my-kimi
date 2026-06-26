@@ -3145,11 +3145,13 @@ export class AgentSession {
 					return;
 				}
 			}
+			// Classifier refusals are persisted-skipped above; also prune the trailing
+			// stub from active context so the next turn's prompt does not replay it.
+			// Fall through to the standard error tail so `session_stop` hooks (block,
+			// continue, telemetry) still fire — matching the pre-fix flow for
+			// `stopReason === "error"`.
 			if (this.#isClassifierRefusal(msg)) {
 				this.#removeAssistantMessageFromActiveContext(msg);
-				this.#resolveRetry();
-				await emitAgentEndNotification();
-				return;
 			}
 			this.#resolveRetry();
 

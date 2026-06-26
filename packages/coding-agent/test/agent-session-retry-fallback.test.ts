@@ -10,6 +10,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -378,11 +379,23 @@ describe("AgentSession retry fallback", () => {
 		});
 		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
 
+		const sessionStopCalls: number[] = [];
+		const extensionRunner = {
+			emit: vi.fn().mockResolvedValue(undefined),
+			emitBeforeAgentStart: vi.fn().mockResolvedValue(undefined),
+			hasHandlers: vi.fn((eventType: string) => eventType === "session_stop"),
+			emitSessionStop: vi.fn(() => {
+				sessionStopCalls.push(mock.calls.length);
+				return Promise.resolve(undefined);
+			}),
+		} as unknown as ExtensionRunner;
+
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry,
+			extensionRunner,
 		});
 
 		await session.prompt("Trigger classifier refusal");
@@ -399,6 +412,10 @@ describe("AgentSession retry fallback", () => {
 			.join("\n");
 		expect(replayedAssistantText).not.toContain("Classifier declined this turn.");
 		expect(getLastAssistantMessage(session).content).toEqual([{ type: "text", text: "clean" }]);
+		// session_stop hooks must fire after each settled turn — including the
+		// refusal turn (regression: prior to PR #3594's review fix, the refusal
+		// branch short-circuited before `#emitSessionStopEvent`).
+		expect(sessionStopCalls).toEqual([1, 2]);
 	});
 
 	it("does not exceed retry.maxRetries for classifier fallback chains", async () => {
