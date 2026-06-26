@@ -253,6 +253,16 @@ describe("SshProtocolHandler", () => {
 		expect(spy.mock.calls[0]?.[0]?.host).toBe("prod.internal");
 	});
 
+	it("decodes the percent-encoded username and host of an override target", async () => {
+		mockHosts();
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://user%40corp@prod%2Dblue/etc/hostname"));
+		const target = spy.mock.calls[0]?.[0];
+		expect(target?.username).toBe("user@corp");
+		expect(target?.host).toBe("prod-blue");
+		expect(target?.name).toBe("user@corp@prod-blue");
+	});
+
 	it("skips the remote directory listing when skipDirectoryListing is set", async () => {
 		mockHosts();
 		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));

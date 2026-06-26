@@ -173,8 +173,10 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 				`ssh://: user/port overrides are not allowed for the configured host "${bareHost}"; use ssh://${bareHost}/<path> or an unconfigured hostname`,
 			);
 		}
-		const name = `${username ? `${username}@` : ""}${bareHost}${port !== undefined ? `:${port}` : ""}`;
-		return { name, host: sshHost, username, port };
+		const sshUser = username ? decodeOr(username) : undefined;
+		const sshTargetHost = decodeOr(sshHost);
+		const name = `${sshUser ? `${sshUser}@` : ""}${sshTargetHost}${port !== undefined ? `:${port}` : ""}`;
+		return { name, host: sshTargetHost, username: sshUser, port };
 	}
 
 	// No explicit user/port: match the full decoded authority against a
