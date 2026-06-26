@@ -58,6 +58,10 @@ function captureFetch(responseBody: Record<string, unknown> | string, status = 2
 	};
 }
 
+function citationUrls(prefix: string, count: number): string[] {
+	return Array.from({ length: count }, (_, index) => `https://example.com/${prefix}-${index + 1}`);
+}
+
 describe("xAI web search provider", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -255,6 +259,55 @@ describe("xAI web search provider", () => {
 				},
 			],
 		});
+	});
+
+	it("defaults xAI local cap to 10 sources and citations when no count is requested", async () => {
+		const urls = citationUrls("default-cap", 12);
+		const capture = captureFetch({
+			id: "resp_default_cap",
+			model: "grok-4.3",
+			output_text: "Default capped xAI answer",
+			citations: urls,
+		});
+
+		const response = await searchXAI(makeParams(capture.fetchMock));
+		const expectedUrls = urls.slice(0, 10);
+
+		expect(response.sources).toHaveLength(10);
+		expect(response.citations).toHaveLength(10);
+		expect(response.sources.map(source => source.url)).toEqual(expectedUrls);
+		expect(response.citations?.map(citation => citation.url)).toEqual(expectedUrls);
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
+	});
+
+	it("clamps oversized xAI local cap requests to 30 sources and citations", async () => {
+		const urls = citationUrls("max-cap", 35);
+		const capture = captureFetch({
+			id: "resp_max_cap",
+			model: "grok-4.3",
+			output_text: "Max capped xAI answer",
+			citations: urls,
+		});
+
+		const response = await searchXAI({
+			...makeParams(capture.fetchMock),
+			numSearchResults: 99,
+		});
+		const expectedUrls = urls.slice(0, 30);
+
+		expect(response.sources).toHaveLength(30);
+		expect(response.citations).toHaveLength(30);
+		expect(response.sources.map(source => source.url)).toEqual(expectedUrls);
+		expect(response.citations?.map(citation => citation.url)).toEqual(expectedUrls);
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
 	});
 
 	it("caps parsed sources and citations locally without changing Agent Tools request shape", async () => {

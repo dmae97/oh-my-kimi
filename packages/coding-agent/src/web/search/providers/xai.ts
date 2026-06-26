@@ -1,12 +1,15 @@
 import { type ApiKey, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
 import type { SearchCitation, SearchResponse, SearchSource, SearchUsage } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
+import { clampNumResults } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const XAI_WEB_SEARCH_MODEL = "grok-4.3";
+const DEFAULT_NUM_RESULTS = 10;
+const MAX_NUM_RESULTS = 30;
 
 interface XAIUrlCitationAnnotation {
 	type?: string;
@@ -181,17 +184,15 @@ function parseUsage(usage: XAIResponsesUsage | null | undefined): SearchUsage | 
 function applyResultCap(
 	sources: SearchSource[],
 	citations: SearchCitation[],
-	requestedCap: number | undefined,
+	resultCap: number,
 ): { sources: SearchSource[]; citations: SearchCitation[] } {
-	if (requestedCap === undefined) return { sources, citations };
-
 	return {
-		sources: sources.slice(0, requestedCap),
-		citations: citations.slice(0, requestedCap),
+		sources: sources.slice(0, resultCap),
+		citations: citations.slice(0, resultCap),
 	};
 }
 
-function parseResponse(response: XAIResponsesResponse, requestedCap?: number): SearchResponse {
+function parseResponse(response: XAIResponsesResponse, resultCap: number): SearchResponse {
 	const sources: SearchSource[] = [];
 	const citations: SearchCitation[] = [];
 	const seenUrls = new Set<string>();
@@ -206,7 +207,7 @@ function parseResponse(response: XAIResponsesResponse, requestedCap?: number): S
 	for (const url of response.citations ?? []) {
 		addCitationSource(sources, citations, seenUrls, url);
 	}
-	const limited = applyResultCap(sources, citations, requestedCap);
+	const limited = applyResultCap(sources, citations, resultCap);
 
 	return {
 		provider: "xai",
@@ -226,11 +227,12 @@ export async function searchXAI(params: SearchParams): Promise<SearchResponse> {
 		sessionId: params.sessionId,
 	});
 
+	const resultCap = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
 	const response = await withAuth(keyOrResolver, (key: string) => callXAIResponses(key, params), {
 		signal: params.signal,
 		missingKeyMessage: 'xAI credentials not found. Set XAI_API_KEY or configure an API key for provider "xai".',
 	});
-	return parseResponse(response, params.numSearchResults ?? params.limit);
+	return parseResponse(response, resultCap);
 }
 
 /** Search provider for xAI web search. */
