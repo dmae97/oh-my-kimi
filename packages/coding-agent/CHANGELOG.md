@@ -5,6 +5,7 @@
 
 - Added Loop Guard "Tool-Call Reminder" to automatically interrupt Gemini reasoning loops that generate excessive planning headers without acting
 - Added support for file deletion and moving within file editing operations
+- Added `providers.maxInFlightRequests` to cap concurrent LLM requests per provider across local OMP processes from settings.
 
 ### Changed
 
@@ -265,9 +266,6 @@
 - Fixed secret obfuscation corrupting Codex image reads (and other provider requests) with `Invalid 'input[N].content[].image_url'. Expected a base64-encoded data URL ... but got an invalid base64-encoded value`. The obfuscator deep-walked every string in the outbound request — including inline image base64 and opaque provider replay/signature fields — so a configured secret that happened to be a substring of the base64 (or of an ordinary word like `response`) injected `#HASH#` placeholders mid-payload. Obfuscation is now opt-in and fully typed: only user messages, tool-result messages, and user-attributed developer messages (`@file` mentions) are redacted; system prompts and tool schemas pass through untouched; image bytes and signature/encrypted-reasoning fields are never rewritten; and tool-call arguments are the only JSON walked. Configured plain secrets and regex matches shorter than 8 characters are now ignored to stop false matches on short words.
 - Fixed RPC/ACP startup clobbering explicit caller/project/global configuration for `task.isolation.{mode,merge,commits}`, `task.eager`, `task.batch`, `task.maxConcurrency`, `task.maxRecursionDepth`, `task.disabledAgents`, `task.agentModelOverrides`, `memory.backend`, `memories.enabled`, `advisor.{enabled,subagents,syncBacklog,immuneTurns}`, plus the RPC-only `async.{enabled,maxJobs}` and `bash.autoBackground.{enabled,thresholdMs}`. `applyDefaultSettingOverrides` re-asserted the schema default as a runtime override after settings load, regressing the `isConfigured()` guard added for #2598 and ignoring every explicit value the embedder, project, `--config` overlay, or global config had set. The guard is restored, so the host default now only fills holes ([#3207](https://github.com/can1357/oh-my-pi/issues/3207)).
 
-### Added
-
-- Added `providers.maxInFlightRequests` to cap concurrent LLM requests per provider across local OMP processes from settings.
 
 ## [16.1.11] - 2026-06-21
 
