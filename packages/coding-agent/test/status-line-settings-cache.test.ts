@@ -156,6 +156,17 @@ describe("StatusLineComponent effective settings cache", () => {
 		expect(customComponent.getTopBorder(120)).toEqual({ content: "", width: 0 });
 	});
 
+	it("surfaces active subagents even when custom segments omit subagents", () => {
+		const component = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
+
+		component.setSubagentCount(2);
+		component.setSubagentHubHint("Alt+A");
+
+		const content = stripVTControlCharacters(component.getTopBorder(120).content);
+		expect(content).toContain("2 agents running");
+		expect(content).toContain("Alt+A hub");
+	});
+
 	it("keeps plan and hook state dynamic without settings invalidation", () => {
 		const component = makeComponent({ preset: "custom", leftSegments: ["mode"], rightSegments: [] });
 		const effective = component.getEffectiveSettingsForTest();

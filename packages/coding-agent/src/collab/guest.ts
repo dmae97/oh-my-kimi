@@ -276,6 +276,7 @@ export class CollabGuestLink {
 		}
 
 		this.#ctx.collabGuest = this;
+		this.#ctx.syncRunningSubagentBadge();
 	}
 
 	/** User-initiated leave (or post-disconnect cleanup): restore the previous session. */
@@ -357,6 +358,7 @@ export class CollabGuestLink {
 		this.#applyHostState(pending.state);
 		this.#ctx.resetObserverRegistry();
 		this.#applyAgentSnapshots(pending.agents);
+		this.#ctx.syncRunningSubagentBadge();
 		this.#assistantStreamSynced = false;
 		setSessionTerminalTitle(pending.state.sessionName ?? pending.header.title, pending.state.cwd);
 		this.#ctx.chatContainer.clear();
@@ -440,6 +442,7 @@ export class CollabGuestLink {
 				break;
 			case "agents":
 				this.#applyAgentSnapshots(frame.agents);
+				this.#ctx.syncRunningSubagentBadge();
 				break;
 			case "transcript": {
 				const resolve = this.#pendingTranscripts.get(frame.reqId);
@@ -573,6 +576,7 @@ export class CollabGuestLink {
 		this.#ctx.statusLine.setCollabStatus(null);
 		this.#flushPendingTranscripts();
 		this.#clearAgentMirror();
+		this.#ctx.syncRunningSubagentBadge();
 		this.#ctx.resetObserverRegistry();
 		this.#clearTransientUi();
 		// Replica file stays on disk: it is a valid session file outside the

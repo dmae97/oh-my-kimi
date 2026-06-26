@@ -86,6 +86,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
+import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession, AgentSessionEvent, ResolvedRoleModel } from "../session/agent-session";
 import type { CompactMode } from "../session/compact-modes";
 import { HistoryStorage } from "../session/history-storage";
@@ -555,6 +556,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
+	#agentRegistryUnsubscribe?: () => void;
+	#agentRegistrySubscriptionTarget?: AgentRegistry;
 	#mcpStatusOrder: string[] = [];
 	#mcpPendingServers = new Set<string>();
 	#mcpConnectedServers = new Set<string>();
@@ -853,8 +856,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerRegistry.subscribeToEventBus(this.#eventBus);
 		}
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
+		this.statusLine.setSubagentHubHint(
+			this.keybindings.getDisplayString("app.agents.hub") ||
+				this.keybindings.getDisplayString("app.session.observe") ||
+				undefined,
+		);
+		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(() => {
-			this.statusLine.setSubagentCount(this.#observerRegistry.getActiveSubagentCount());
+			this.syncRunningSubagentBadge();
 			// Auto-checkmark todos whose matching subagent just succeeded, then
 			// re-render so the running override (the static "live" glyph when a
 			// subagent is doing the work for a still-pending todo) updates as
@@ -1447,6 +1456,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
+	}
+
+	/** Refresh the running-subagents status badge from the active local or collab registry. */
+	syncRunningSubagentBadge(): void {
+		const registry = this.collabGuest?.agentRegistry ?? AgentRegistry.global();
+		if (this.#agentRegistrySubscriptionTarget !== registry) {
+			this.#agentRegistryUnsubscribe?.();
+			this.#agentRegistrySubscriptionTarget = registry;
+			this.#agentRegistryUnsubscribe = registry.onChange(() => {
+				this.syncRunningSubagentBadge();
+				this.ui.requestRender();
+			});
+		}
+		const count = registry.list().filter(ref => ref.kind === "sub" && ref.status === "running").length;
+		this.statusLine.setSubagentCount(count);
+		this.updateEditorTopBorder();
 	}
 
 	updateEditorTopBorder(): void {
@@ -3185,6 +3210,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#eventBusUnsubscribers = [];
 		this.#observerRegistry.dispose();
+		this.#agentRegistryUnsubscribe?.();
+		this.#agentRegistryUnsubscribe = undefined;
+		this.#agentRegistrySubscriptionTarget = undefined;
 		this.#eventController.dispose();
 		this.statusLine.dispose();
 		if (this.#resizeHandler) {
