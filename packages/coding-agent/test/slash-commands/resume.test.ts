@@ -3,28 +3,45 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/session-paths";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 
 let tempDir: string;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
+const storage = new FileSessionStorage();
 
 beforeEach(async () => {
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-resume-command-"));
+	setAgentDir(path.join(tempDir, "agent"));
 });
 
 afterEach(async () => {
+	if (originalAgentDir) {
+		setAgentDir(originalAgentDir);
+	} else {
+		setAgentDir(fallbackAgentDir);
+		delete process.env.PI_CODING_AGENT_DIR;
+	}
 	await fs.rm(tempDir, { recursive: true, force: true });
 });
 
-async function writeSession(id: string): Promise<string> {
-	const sessionPath = path.join(tempDir, `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+async function writeSession(
+	id: string,
+	cwd = tempDir,
+	sessionDir = computeDefaultSessionDir(cwd, storage),
+): Promise<string> {
+	const sessionPath = path.join(sessionDir, `2026-01-01T00-00-00-000Z_${id}.jsonl`);
 	await Bun.write(
 		sessionPath,
-		`${JSON.stringify({ type: "session", id, timestamp: "2026-01-01T00:00:00.000Z", cwd: tempDir })}\n`,
+		`${JSON.stringify({ type: "session", id, timestamp: "2026-01-01T00:00:00.000Z", cwd })}\n`,
 	);
 	return sessionPath;
 }
 
-function createRuntime() {
+function createRuntime(cwd = tempDir, sessionDir = tempDir) {
 	const showSessionSelector = vi.fn();
 	const handleResumeSession = vi.fn(async () => {});
 	const showError = vi.fn();
@@ -41,8 +58,8 @@ function createRuntime() {
 				handleResumeSession,
 				showError,
 				sessionManager: {
-					getCwd: () => tempDir,
-					getSessionDir: () => tempDir,
+					getCwd: () => cwd,
+					getSessionDir: () => sessionDir,
 				},
 			} as unknown as InteractiveModeContext,
 		},
@@ -70,6 +87,23 @@ describe("/resume slash command", () => {
 		expect(handled).toBe(true);
 		expect(harness.setText).toHaveBeenCalledWith("");
 		expect(harness.showSessionSelector).not.toHaveBeenCalled();
+		expect(harness.showError).not.toHaveBeenCalled();
+		expect(harness.handleResumeSession).toHaveBeenCalledWith(sessionPath);
+	});
+
+	it("resumes a matching session id prefix from another cwd", async () => {
+		const currentCwd = path.join(tempDir, "current");
+		const otherCwd = path.join(tempDir, "other");
+		await fs.mkdir(currentCwd, { recursive: true });
+		await fs.mkdir(otherCwd, { recursive: true });
+		const currentSessionDir = computeDefaultSessionDir(currentCwd, storage);
+		const otherSessionDir = computeDefaultSessionDir(otherCwd, storage);
+		const sessionPath = await writeSession("019ed777-02fb-7000-8dac-396e2f84d484", otherCwd, otherSessionDir);
+		const harness = createRuntime(currentCwd, currentSessionDir);
+
+		const handled = await executeBuiltinSlashCommand("/resume 019ed777", harness.runtime);
+
+		expect(handled).toBe(true);
 		expect(harness.showError).not.toHaveBeenCalled();
 		expect(harness.handleResumeSession).toHaveBeenCalledWith(sessionPath);
 	});

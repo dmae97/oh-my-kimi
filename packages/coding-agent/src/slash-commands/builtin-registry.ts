@@ -1424,11 +1424,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.showSessionSelector();
 				return;
 			}
-			const match = await resolveResumableSession(
-				sessionArg,
-				runtime.ctx.sessionManager.getCwd(),
-				runtime.ctx.sessionManager.getSessionDir(),
-			);
+			const match = await resolveResumableSession(sessionArg, runtime.ctx.sessionManager.getCwd());
 			if (!match) {
 				runtime.ctx.showError(`Session "${sessionArg}" not found`);
 				return;
