@@ -38,6 +38,10 @@ export type StreamFn = (
 export type AsideMessage = AgentMessage | (() => AgentMessage | null);
 
 export interface AgentTurnEndContext {
+	/** Assistant/user message that just completed this turn boundary. */
+	message: AgentMessage;
+	/** Tool results produced by this turn, already paired with `message` in the live context. */
+	toolResults: ToolResultMessage[];
 	/** True when the current tool-loop batch is continuing without yielding to post-turn steering. */
 	willContinue: boolean;
 }
@@ -351,8 +355,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	) => Promise<BeforeToolCallResult | undefined> | BeforeToolCallResult | undefined;
 	/**
 	 * Called after a turn ends and before the loop polls steering/asides for the
-	 * next iteration. `context.willContinue` is true when the current tool-loop
-	 * batch is continuing without yielding to post-turn steering.
+	 * next iteration. `context` carries the just-finished turn; `context.willContinue`
+	 * is true when the current tool-loop batch is continuing without yielding to
+	 * post-turn steering.
 	 */
 	onTurnEnd?: (messages: AgentMessage[], signal?: AbortSignal, context?: AgentTurnEndContext) => Promise<void> | void;
 

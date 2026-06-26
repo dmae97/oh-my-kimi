@@ -407,13 +407,13 @@ async function emitTurnEnd(
 	toolResults: ToolResultMessage[],
 	config: AgentLoopConfig,
 	signal?: AbortSignal,
-	context: AgentTurnEndContext = { willContinue: false },
+	context?: Omit<AgentTurnEndContext, "message" | "toolResults">,
 ): Promise<void> {
 	stream.push({ type: "turn_end", message, toolResults });
 	const isAbortedOrError =
 		message.role === "assistant" && (message.stopReason === "aborted" || message.stopReason === "error");
 	if (signal?.aborted || isAbortedOrError) return;
-	await config.onTurnEnd?.(currentContext.messages, signal, context);
+	await config.onTurnEnd?.(currentContext.messages, signal, { message, toolResults, willContinue: false, ...context });
 }
 
 /**

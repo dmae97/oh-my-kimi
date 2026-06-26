@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -58,7 +59,10 @@ describe("AgentSession mid-run threshold compaction", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function createHarness(settingsOverride: Record<string, unknown> = {}): Promise<{
+	async function createHarness(
+		settingsOverride: Record<string, unknown> = {},
+		options: { extensionRunner?: ExtensionRunner } = {},
+	): Promise<{
 		session: AgentSession;
 		observedContexts: string[][];
 	}> {
@@ -138,6 +142,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			settings,
 			modelRegistry,
 			toolRegistry: new Map([[mockBashTool.name, mockBashTool]]),
+			extensionRunner: options.extensionRunner,
 		});
 
 		cleanups.push(async () => {
@@ -192,6 +197,38 @@ describe("AgentSession mid-run threshold compaction", () => {
 		expect(handoffSpy).not.toHaveBeenCalled();
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(observedContexts[1].join("\n")).toContain("HANDOFF-MID-RUN-COMPACTED-IN-PLACE");
+	});
+
+	it("preserves the just-finished tool turn when message_end hooks are still pending", async () => {
+		const releaseMessageEnd = Promise.withResolvers<void>();
+		const messageEndEntered = Promise.withResolvers<void>();
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
+			emitBeforeAgentStart: vi.fn(async () => undefined),
+			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
+				if (
+					event.type === "message_end" &&
+					event.message?.role === "assistant" &&
+					event.message.stopReason === "toolUse"
+				) {
+					messageEndEntered.resolve();
+					await releaseMessageEnd.promise;
+				}
+			}),
+		} as unknown as ExtensionRunner;
+		const { session, observedContexts } = await createHarness({}, { extensionRunner });
+		const compactSpy = mockCompaction("MID-RUN-COMPACTED-WITH-PENDING-HOOK");
+
+		const prompt = session.prompt("work on the release");
+		await messageEndEntered.promise;
+		await prompt;
+		releaseMessageEnd.resolve();
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
+		const nextProviderContext = observedContexts[1].join("\n");
+		expect(nextProviderContext).toContain("MID-RUN-COMPACTED-WITH-PENDING-HOOK");
+		expect(nextProviderContext).toContain("tool output");
 	});
 
 	it("does not compact mid-run outside goal mode when disabled", async () => {

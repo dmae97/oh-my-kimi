@@ -29,6 +29,7 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
 	type CompactionSummaryMessage,
@@ -1638,7 +1639,7 @@ export class AgentSession {
 					await this.#advisorRuntime.waitForCatchup(30000, threshold, signal);
 				}
 			}
-			await this.#maintainContextMidRun(messages, signal, context?.willContinue === true);
+			await this.#maintainContextMidRun(messages, signal, context);
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,
@@ -2509,6 +2510,47 @@ export class AgentSession {
 		}
 	};
 
+	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
+		return this.sessionManager.getBranch().some(entry => entry.type === "message" && entry.message === message);
+	}
+
+	#persistSessionMessageIfMissing(message: AgentMessage): void {
+		if (
+			message.role !== "user" &&
+			message.role !== "developer" &&
+			message.role !== "assistant" &&
+			message.role !== "toolResult" &&
+			message.role !== "fileMention"
+		) {
+			return;
+		}
+		if (this.#sessionMessageAlreadyPersisted(message)) return;
+		if (message.role === "assistant") {
+			const assistantMsg = message as AssistantMessage;
+			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
+				assistantMsg.contextSnapshot = {
+					promptTokens: calculatePromptTokens(assistantMsg.usage),
+					nonMessageTokens: this.#pendingContextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this),
+				};
+			}
+		}
+		const skipPersistedRewindResult =
+			message.role === "toolResult" &&
+			message.toolName === "rewind" &&
+			this.#rewoundToolResultIds.delete(message.toolCallId);
+		if (!skipPersistedRewindResult) {
+			this.sessionManager.appendMessage(message);
+		}
+	}
+
+	#persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): void {
+		if (!context) return;
+		this.#persistSessionMessageIfMissing(context.message);
+		for (const toolResult of context.toolResults) {
+			this.#persistSessionMessageIfMissing(toolResult);
+		}
+	}
+
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// Plan-mode internal transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
@@ -2654,30 +2696,8 @@ export class AgentSession {
 				if (event.message.role === "custom" && event.message.customType === "ttsr-injection") {
 					this.#markTtsrInjected(this.#extractTtsrRuleNames(event.message.details));
 				}
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "developer" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult" ||
-				event.message.role === "fileMention"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				if (event.message.role === "assistant") {
-					const assistantMsg = event.message as AssistantMessage;
-					if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-						assistantMsg.contextSnapshot = {
-							promptTokens: calculatePromptTokens(assistantMsg.usage),
-							nonMessageTokens: this.#pendingContextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this),
-						};
-					}
-				}
-				const skipPersistedRewindResult =
-					event.message.role === "toolResult" &&
-					event.message.toolName === "rewind" &&
-					this.#rewoundToolResultIds.delete(event.message.toolCallId);
-				if (!skipPersistedRewindResult) {
-					this.sessionManager.appendMessage(event.message);
-				}
+			} else {
+				this.#persistSessionMessageIfMissing(event.message);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -8447,18 +8467,25 @@ export class AgentSession {
 	 *
 	 * `onTurnEnd` is the safe boundary: tool results for the just-finished turn
 	 * are already paired in `activeMessages`, the live array the agent loop reads
-	 * before its next model call. The caller passes `willContinue` so this path
-	 * only runs when the loop is already continuing without yielding to post-turn
-	 * maintenance. Mid-run handoff is suppressed because resetting the session
+	 * before its next model call. Before compacting, the just-finished turn is
+	 * synchronously persisted if async message hooks have not reached the normal
+	 * append path yet. Mid-run handoff is suppressed because resetting the session
 	 * while the loop owns `activeMessages` would race the next request; handoff
 	 * strategy falls back to in-place context-full compaction here.
 	 */
 	async #maintainContextMidRun(
 		activeMessages: AgentMessage[],
 		signal: AbortSignal | undefined,
-		willContinue: boolean,
+		context: AgentTurnEndContext | undefined,
 	): Promise<void> {
-		if (signal?.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff || !willContinue) return;
+		if (
+			signal?.aborted ||
+			this.#isDisposed ||
+			this.isCompacting ||
+			this.isGeneratingHandoff ||
+			!context?.willContinue
+		)
+			return;
 
 		const model = this.model;
 		const contextWindow = model?.contextWindow ?? 0;
@@ -8477,6 +8504,8 @@ export class AgentSession {
 			.reverse()
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
+
+		this.#persistTurnMessagesForMidRunCompaction(context);
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
