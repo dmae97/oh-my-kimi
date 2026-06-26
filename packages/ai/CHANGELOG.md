@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed llama.cpp OpenAI-compatible capture follow-ups sending named forced `tool_choice` as an object; the chat-completions encoder now downgrades that shape to string `"required"` for llama.cpp so its parser no longer falls back with `type must be string, but is object`. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
+
 ## [16.1.23] - 2026-06-26
 
 ### Added
