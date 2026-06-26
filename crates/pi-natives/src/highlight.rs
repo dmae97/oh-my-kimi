@@ -20,9 +20,12 @@ thread_local! {
 	static SCOPE_COLOR_CACHE: RefCell<HashMap<Scope, usize>> = RefCell::new(HashMap::with_capacity(256));
 }
 
-/// Syntaxes bundled in addition to syntect's defaults: syntect ships neither,
-/// so we vendor their `.sublime-syntax` sources and fold them into the set.
-const EXTRA_SYNTAXES: &[&str] = &[include_str!("syntaxes/Julia.sublime-syntax")];
+/// Syntaxes bundled in addition to syntect's defaults: syntect ships none of
+/// these, so we vendor their `.sublime-syntax` sources and fold them into the set.
+const EXTRA_SYNTAXES: &[&str] = &[
+	include_str!("syntaxes/Julia.sublime-syntax"),
+	include_str!("syntaxes/Nix.sublime-syntax"),
+];
 
 fn get_syntax_set() -> &'static SyntaxSet {
 	SYNTAX_SET.get_or_init(build_syntax_set)
@@ -175,6 +178,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["py", "python"], "Python"),
 	(&["rb", "ruby"], "Ruby"),
 	(&["jl", "julia"], "Julia"),
+	(&["nix"], "Nix"),
 	(&["rs", "rust"], "Rust"),
 	(&["go", "golang"], "Go"),
 	(&["java"], "Java"),

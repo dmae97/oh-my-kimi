@@ -226,6 +226,31 @@ describe("pi-natives", () => {
 			expect(out).toContain("<n>1");
 			expect(out).toContain("<c> add");
 		});
+
+		it("highlights Nix via the vendored syntax", () => {
+			expect(getSupportedLanguages()).toContain("Nix");
+			expect(supportsLanguage("nix")).toBe(true);
+
+			const colors = {
+				comment: "<c>",
+				keyword: "<k>",
+				function: "<f>",
+				variable: "<v>",
+				string: "<s>",
+				number: "<n>",
+				type: "<t>",
+				operator: "<o>",
+				punctuation: "<p>",
+			};
+			const out = highlightCode(
+				'{ pkgs ? import <nixpkgs> {} }:\nlet message = "hello"; in pkgs.writeText "msg" message # greeting\n',
+				"nix",
+				colors,
+			);
+			expect(out).toContain("<k>let");
+			expect(out).toContain("<s>hello");
+			expect(out).toContain("<c># greeting");
+		});
 	});
 
 	describe("keys", () => {
