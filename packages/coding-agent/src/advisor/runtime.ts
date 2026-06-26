@@ -30,6 +30,13 @@ export interface AdvisorRuntimeHost {
 	 * the primary's next compaction triggers {@link AdvisorRuntime.reset}).
 	 */
 	maintainContext?(incomingTokens: number): Promise<boolean>;
+	/**
+	 * Called immediately before each `agent.prompt(batch)` cycle. Lets the host
+	 * clear per-update advisor state — currently the one-advise-per-update gate
+	 * in {@link AdvisorEmissionGuard}, which the host owns because it is the
+	 * one that routes `advise()` results back to the primary.
+	 */
+	beginAdvisorUpdate?(): void;
 }
 
 interface PendingDelta {
@@ -275,6 +282,10 @@ export class AdvisorRuntime {
 
 				let success = false;
 				try {
+					// Reset the host's per-update advisor state (one-advise-per-update
+					// gate) before each model cycle, so the new batch starts with a
+					// fresh budget. Dedupe history persists across cycles.
+					this.host.beginAdvisorUpdate?.();
 					await this.agent.prompt(batch);
 					success = true;
 					this.#consecutiveFailures = 0;

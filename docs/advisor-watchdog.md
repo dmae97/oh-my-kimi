@@ -8,6 +8,7 @@ The advisor is not a second executor. It cannot edit files, run commands, approv
 
 - [`src/advisor/runtime.ts`](../packages/coding-agent/src/advisor/runtime.ts)
 - [`src/advisor/advise-tool.ts`](../packages/coding-agent/src/advisor/advise-tool.ts)
+- [`src/advisor/emission-guard.ts`](../packages/coding-agent/src/advisor/emission-guard.ts)
 - [`src/advisor/watchdog.ts`](../packages/coding-agent/src/advisor/watchdog.ts)
 - [`src/advisor/transcript-recorder.ts`](../packages/coding-agent/src/advisor/transcript-recorder.ts)
 - [`src/prompts/advisor/system.md`](../packages/coding-agent/src/prompts/advisor/system.md)
@@ -99,6 +100,19 @@ note text
 When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.
 
 `advisor.immuneTurns` limits interruption frequency. After the advisor successfully delivers a `concern` or `blocker` through the steering channel, later concerns/blockers are routed as non-interrupting asides until the configured number of primary turns has completed. The default is `3`. `nit` notes are unchanged, and advice raised while user-interrupt auto-resume suppression is active is still preserved instead of restarting a stopped run.
+
+### Emission guard
+
+`AdvisorEmissionGuard` (in `src/advisor/emission-guard.ts`) sits on the `enqueueAdvice` boundary in `AgentSession` and enforces — in code — the advisor system prompt's "at most one `advise` per update" and "NEVER send the same advice twice" rules. Each call to the advisor's `advise` tool runs through the guard before it routes to the YieldQueue / steer channel:
+
+1. **Normalization.** Lowercase, NFKC, collapse every run of non-alphanumeric characters to a single space, trim. `"Stop."`, `"*Stop*"`, and `"  stop  "` all key to `stop`.
+2. **Content-free phrase filter.** A small allowlist of normalized phrases the advisor occasionally emits but that carry no concrete reason — `stop`, `done`, `complete`, `no issue continue`, `lgtm`, `nothing to add`, `no further input`, and similar — is suppressed silently. Silence is the correct expression of "no concerns".
+3. **Exact-text dedupe.** Any normalized note already accepted in this session is dropped. The dedupe history is bounded by a FIFO ring (default 4096 entries).
+4. **Per-update rate limit.** At most one note per advisor model `prompt()` cycle is accepted; the runtime calls `host.beginAdvisorUpdate?.()` before each cycle to reset the gate. Suppressed calls never consume the budget — a noise call doesn't displace a real concern that follows in the same update.
+
+Suppression is invisible to the advisor model: `AdviseTool` still returns `Recorded.` for a dropped call. Surfacing "suppressed" back into advisor context risks the model rephrasing the same useless note to bypass the dedupe.
+
+The guard's full state — dedupe history and per-update gate — clears on every advisor reset (compaction, session switch, `/new`), so a re-primed reviewer can re-raise issues it already raised against the rewritten transcript.
 
 ## Bounded catch-up with `advisor.syncBacklog`
 

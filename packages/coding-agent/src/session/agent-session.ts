@@ -129,6 +129,7 @@ import * as snapcompact from "@oh-my-pi/snapcompact";
 import {
 	AdviseTool,
 	type AdvisorAgent,
+	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
 	AdvisorRuntime,
@@ -1157,6 +1158,11 @@ export class AgentSession {
 	#advisorAutoResumeSuppressed = false;
 	#advisorPrimaryTurnsCompleted = 0;
 	#advisorInterruptImmuneTurnStart: number | undefined;
+	/** Dedupe + per-update rate-limit + content-free-phrase filter applied to
+	 *  every accepted advisor `advise()` call. Owned by the session because the
+	 *  session is what routes accepted notes back to the primary transcript.
+	 *  Reset on advisor reset (compaction, session switch, `/new`). */
+	readonly #advisorEmissionGuard = new AdvisorEmissionGuard();
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
@@ -1798,6 +1804,7 @@ export class AgentSession {
 		this.#advisorAgentUnsubscribe?.();
 		this.#advisorAgentUnsubscribe = undefined;
 		this.#advisorRuntime?.reset();
+		this.#advisorEmissionGuard.reset();
 		this.#attachAdvisorRecorderFeed();
 		this.#advisorPrimaryTurnsCompleted = 0;
 		this.#advisorInterruptImmuneTurnStart = undefined;
@@ -1837,7 +1844,17 @@ export class AgentSession {
 		// since steering an active run auto-resumes nothing; parking it there would
 		// strand the advice and dump the backlog as one burst at the next prompt. A
 		// plain nit always rides the non-interrupting YieldQueue aside.
+		// Apply the per-session emission policy (one-advise-per-update gate,
+		// exact-text dedupe, content-free phrase filter) before any routing.
+		// Suppression here means the advisor model called `advise()` but the call
+		// is dropped silently — the model still sees `Recorded.` from the tool, so
+		// telling it "suppressed" doesn't tempt it into rephrasing the same useless
+		// note to bypass the dedupe.
 		const enqueueAdvice = (note: string, severity?: AdvisorSeverity) => {
+			if (!this.#advisorEmissionGuard.accept(note)) {
+				logger.debug("advisor advice suppressed by emission guard", { severity });
+				return;
+			}
 			const interrupting = isInterruptingSeverity(severity);
 			const channel = resolveAdvisorDeliveryChannel({
 				severity,
@@ -1960,6 +1977,7 @@ export class AgentSession {
 			enqueueAdvice,
 			maintainContext: incomingTokens => this.#maintainAdvisorContext(incomingTokens),
 			obfuscator: this.#obfuscator,
+			beginAdvisorUpdate: () => this.#advisorEmissionGuard.beginUpdate(),
 		});
 		if (seedToCurrent) {
 			this.#advisorRuntime.seedTo(this.agent.state.messages.length);
