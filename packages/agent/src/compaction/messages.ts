@@ -7,7 +7,6 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { isProviderRefusalMessage } from "../replay-policy";
 import type { AgentMessage } from "../types";
 import branchSummaryContextPrompt from "./prompts/branch-summary-context.md" with { type: "text" };
 import compactionSummaryContextPrompt from "./prompts/compaction-summary-context.md" with { type: "text" };
@@ -214,7 +213,7 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 		case "developer":
 			return { ...message, attribution: message.attribution ?? "agent" };
 		case "assistant":
-			return isProviderRefusalMessage(message) ? undefined : message;
+			return message;
 		case "toolResult":
 			return {
 				...message,

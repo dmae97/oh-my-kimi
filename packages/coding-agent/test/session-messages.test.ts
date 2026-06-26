@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, filterProviderReplayMessages } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
 import { inferCopilotInitiator } from "@oh-my-pi/pi-ai/providers/github-copilot-headers";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -54,8 +54,8 @@ describe("convertToLlm compaction summary", () => {
 	});
 });
 
-describe("convertToLlm assistant replay policy", () => {
-	it("drops API-level Anthropic refusals from provider replay", () => {
+describe("assistant refusal replay policy", () => {
+	it("preserves API-level Anthropic refusals for summaries but drops them from provider replay", () => {
 		const messages: AgentMessage[] = [
 			{ role: "user", content: [{ type: "text", text: "trigger" }], timestamp: 1 },
 			{
@@ -82,8 +82,12 @@ describe("convertToLlm assistant replay policy", () => {
 
 		const converted = convertToLlm(messages);
 
-		expect(converted.map(message => message.role)).toEqual(["user", "user"]);
-		expect(JSON.stringify(converted)).not.toContain("Refusal (bio)");
+		expect(converted.map(message => message.role)).toEqual(["user", "assistant", "user"]);
+		expect(JSON.stringify(converted)).toContain("Refusal (bio)");
+
+		const replayed = filterProviderReplayMessages(converted);
+		expect(replayed.map(message => message.role)).toEqual(["user", "user"]);
+		expect(JSON.stringify(replayed)).not.toContain("Refusal (bio)");
 	});
 });
 
