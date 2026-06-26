@@ -957,7 +957,9 @@ import * as bundledPiCodingAgentWebSearchProvidersAnthropic from "@oh-my-pi/pi-c
 import * as bundledPiCodingAgentWebSearchProvidersBase from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
 import * as bundledPiCodingAgentWebSearchProvidersBrave from "@oh-my-pi/pi-coding-agent/web/search/providers/brave";
 import * as bundledPiCodingAgentWebSearchProvidersCodex from "@oh-my-pi/pi-coding-agent/web/search/providers/codex";
+import * as bundledPiCodingAgentWebSearchProvidersDuckduckgo from "@oh-my-pi/pi-coding-agent/web/search/providers/duckduckgo";
 import * as bundledPiCodingAgentWebSearchProvidersExa from "@oh-my-pi/pi-coding-agent/web/search/providers/exa";
+import * as bundledPiCodingAgentWebSearchProvidersFirecrawl from "@oh-my-pi/pi-coding-agent/web/search/providers/firecrawl";
 import * as bundledPiCodingAgentWebSearchProvidersGemini from "@oh-my-pi/pi-coding-agent/web/search/providers/gemini";
 import * as bundledPiCodingAgentWebSearchProvidersJina from "@oh-my-pi/pi-coding-agent/web/search/providers/jina";
 import * as bundledPiCodingAgentWebSearchProvidersKagi from "@oh-my-pi/pi-coding-agent/web/search/providers/kagi";
@@ -968,7 +970,9 @@ import * as bundledPiCodingAgentWebSearchProvidersPerplexityAuth from "@oh-my-pi
 import * as bundledPiCodingAgentWebSearchProvidersSearxng from "@oh-my-pi/pi-coding-agent/web/search/providers/searxng";
 import * as bundledPiCodingAgentWebSearchProvidersSynthetic from "@oh-my-pi/pi-coding-agent/web/search/providers/synthetic";
 import * as bundledPiCodingAgentWebSearchProvidersTavily from "@oh-my-pi/pi-coding-agent/web/search/providers/tavily";
+import * as bundledPiCodingAgentWebSearchProvidersTinyfish from "@oh-my-pi/pi-coding-agent/web/search/providers/tinyfish";
 import * as bundledPiCodingAgentWebSearchProvidersUtils from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
+import * as bundledPiCodingAgentWebSearchProvidersXai from "@oh-my-pi/pi-coding-agent/web/search/providers/xai";
 import * as bundledPiCodingAgentWebSearchProvidersZai from "@oh-my-pi/pi-coding-agent/web/search/providers/zai";
 import * as bundledPiCodingAgentWebSearchRender from "@oh-my-pi/pi-coding-agent/web/search/render";
 import * as bundledPiCodingAgentWebSearchTypes from "@oh-my-pi/pi-coding-agent/web/search/types";
@@ -3299,8 +3303,12 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		bundledPiCodingAgentWebSearchProvidersBrave as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/codex":
 		bundledPiCodingAgentWebSearchProvidersCodex as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/web/search/providers/duckduckgo":
+		bundledPiCodingAgentWebSearchProvidersDuckduckgo as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/exa":
 		bundledPiCodingAgentWebSearchProvidersExa as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/web/search/providers/firecrawl":
+		bundledPiCodingAgentWebSearchProvidersFirecrawl as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/gemini":
 		bundledPiCodingAgentWebSearchProvidersGemini as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/jina":
@@ -3321,8 +3329,12 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		bundledPiCodingAgentWebSearchProvidersSynthetic as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/tavily":
 		bundledPiCodingAgentWebSearchProvidersTavily as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/web/search/providers/tinyfish":
+		bundledPiCodingAgentWebSearchProvidersTinyfish as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/utils":
 		bundledPiCodingAgentWebSearchProvidersUtils as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/web/search/providers/xai":
+		bundledPiCodingAgentWebSearchProvidersXai as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/web/search/providers/zai":
 		bundledPiCodingAgentWebSearchProvidersZai as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-natives": bundledPiNatives as unknown as Readonly<Record<string, unknown>>,
