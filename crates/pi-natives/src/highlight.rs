@@ -494,3 +494,58 @@ pub fn get_supported_languages() -> Vec<String> {
 	let ss = get_syntax_set();
 	ss.syntaxes().iter().map(|s| s.name.clone()).collect()
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn test_colors() -> HighlightColors {
+		HighlightColors {
+			comment:     "<c>".to_string(),
+			keyword:     "<k>".to_string(),
+			function:    "<f>".to_string(),
+			variable:    "<v>".to_string(),
+			string:      "<s>".to_string(),
+			number:      "<n>".to_string(),
+			r#type:      "<t>".to_string(),
+			operator:    "<o>".to_string(),
+			punctuation: "<p>".to_string(),
+			inserted:    None,
+			deleted:     None,
+		}
+	}
+
+	#[test]
+	fn highlights_nix_vendored_syntax() {
+		assert!(get_supported_languages().contains(&"Nix".to_string()));
+		assert!(supports_language("nix".to_string()));
+
+		let out = highlight_code(
+			"{ pkgs ? import <nixpkgs> {} }:\nlet message = \"hello\"; in pkgs.writeText \"msg\" \
+			 message # greeting\n"
+				.to_string(),
+			Some("nix".to_string()),
+			test_colors(),
+		);
+		assert!(out.contains("<k>let"));
+		assert!(out.contains("<s>hello"));
+		assert!(out.contains("<c># greeting"));
+	}
+
+	#[test]
+	fn highlights_mermaid_vendored_syntax() {
+		assert!(get_supported_languages().contains(&"Mermaid".to_string()));
+		assert!(supports_language("mermaid".to_string()));
+		assert!(supports_language("mmd".to_string()));
+
+		let out = highlight_code(
+			"graph TD\n  A[\"Start\"] --> B\n  %% note\n".to_string(),
+			Some("mermaid".to_string()),
+			test_colors(),
+		);
+		assert!(out.contains("<k>graph"));
+		assert!(out.contains("<s>Start"));
+		assert!(out.contains("<k>-->"));
+		assert!(out.contains("<c> note"));
+	}
+}
