@@ -122,6 +122,13 @@ export class TerminalInfo {
 			process.stdout.write(`${wrapTmuxPassthrough(formatted)}\x07`);
 			return;
 		}
+		// Zellij drops OSC 9/99 and has no DCS passthrough envelope, but raises its
+		// `[!]` bell flag on a bare BEL — the same backgrounded-pane signal tmux
+		// users get. So follow the (Zellij-swallowed) OSC with a plain BEL.
+		if (this.notifyProtocol !== NotifyProtocol.Bell && isInsideZellij()) {
+			process.stdout.write(`${formatted}\x07`);
+			return;
+		}
 		process.stdout.write(formatted);
 		// VTE-family terminals (Ptyxis, GNOME Terminal, Tilix, …) plus Alacritty
 		// and bare xterm-on-Wayland have no in-band escape that surfaces an
@@ -154,6 +161,15 @@ export function isInsideTerminalMultiplexer(env: NodeJS.ProcessEnv = Bun.env): b
 	if (env.CMUX_WORKSPACE_ID || env.CMUX_SURFACE_ID) return true;
 	const term = env.TERM?.toLowerCase() ?? "";
 	return term.startsWith("tmux") || term.startsWith("screen");
+}
+
+/**
+ * Whether the agent process is running inside a Zellij session. Read fresh on
+ * each call (like {@link isInsideTmux}) so a session attached/detached mid-run
+ * is observed and tests can toggle `Bun.env.ZELLIJ` per case.
+ */
+export function isInsideZellij(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	return Boolean(env.ZELLIJ);
 }
 
 /**
