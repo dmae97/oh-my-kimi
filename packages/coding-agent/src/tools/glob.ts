@@ -20,6 +20,7 @@ import {
 	expandDelimitedPathEntries,
 	formatPathRelativeToCwd,
 	hasGlobPathChars,
+	isSshUrl,
 	normalizePathLikeInput,
 	parseFindPattern,
 	partitionExistingPaths,
@@ -157,6 +158,11 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				if (!internalRouter.canHandle(rawPattern)) {
 					normalizedPatterns.push(rawPattern);
 					continue;
+				}
+				if (isSshUrl(rawPattern)) {
+					throw new ToolError(
+						`find cannot operate on a remote ssh:// path: ${rawPattern}. ssh:// has no local file to glob; use \`read ${rawPattern}\` to list or inspect the remote path.`,
+					);
 				}
 				if (hasGlobPathChars(rawPattern)) {
 					throw new ToolError(`Glob patterns are not supported for internal URLs: ${rawPattern}`);

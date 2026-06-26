@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatHashlineHeader, formatNumberedLine, formatNumberedLines } from "@oh-my-pi/hashline";
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	ToolTier,
+} from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { glob, type SummaryResult, summarizeCode } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -83,6 +89,7 @@ import {
 	formatPathRelativeToCwd,
 	type LineRange,
 	parseLineRanges,
+	pathTargetsSsh,
 	resolveReadPath,
 	splitDelimitedPathEntry,
 	splitInternalUrlSel,
@@ -818,7 +825,8 @@ type SuffixMatchCache = Map<string, { absolutePath: string; displayPath: string 
  */
 export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly name = "read";
-	readonly approval = "read" as const;
+	readonly approval = (args: unknown): ToolTier =>
+		pathTargetsSsh(String((args as { path?: unknown }).path ?? "")) ? "exec" : "read";
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	readonly description: string;

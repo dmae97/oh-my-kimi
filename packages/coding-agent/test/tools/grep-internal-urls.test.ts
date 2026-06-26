@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as capability from "@oh-my-pi/pi-coding-agent/capability";
+import type { CapabilityResult } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetActiveSkillsForTests, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import {
@@ -12,6 +14,7 @@ import {
 	type ProtocolHandler,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import * as sshFileTransfer from "@oh-my-pi/pi-coding-agent/ssh/file-transfer";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { GlobTool } from "../../src/tools/glob";
@@ -92,6 +95,7 @@ describe("GrepTool internal URL resolution", () => {
 		LocalProtocolHandler.resetOverrideForTests();
 		InternalUrlRouter.resetForTests();
 		resetActiveSkillsForTests();
+		vi.restoreAllMocks();
 	});
 
 	function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -242,6 +246,70 @@ describe("GrepTool internal URL resolution", () => {
 		const text = getResultText(result);
 		expect(text).toContain("needle inside range");
 		expect(text).not.toContain("needle outside range");
+	});
+
+	it("keeps in-range virtual matches that fall after the result cap (ranged probe)", async () => {
+		// >INTERNAL_TOTAL_CAP (2000) matching lines precede the selected range; the
+		// native probe must not stop at the cap before range filtering.
+		const content = `${Array.from({ length: 2100 }, (_, i) => `needle ${i + 1}`).join("\n")}\n`;
+		registerVirtualDocs(new Map([["big.md", content]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("ranged-cap", { pattern: "needle", paths: ["virtual://big.md:2090-2100"] });
+		expect(getResultText(result)).toContain("needle 2095");
+	});
+
+	it("searches a virtual resource larger than the native grep cap with chunked native RE2 (line mode)", async () => {
+		// >4 MiB of normal-sized lines: native grep skips the whole file, so search chunks it
+		// at line boundaries. An RE2 inline-flag pattern must still match — JS `RegExp` rejects `(?i)`.
+		const content = `${"filler line\n".repeat(380_000)}needle here\n`;
+		registerVirtualDocs(new Map([["big.md", content]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("big-virtual", { pattern: "(?i)NEEDLE", paths: ["virtual://big.md"] });
+		expect(getResultText(result)).toContain("needle");
+	});
+
+	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
+		const session = createSession();
+		const tool = new SearchTool(session);
+		await expect(tool.execute("bad-sel", { pattern: "needle", paths: ["artifact://5:-10"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		await expect(tool.execute("bad-mixed", { pattern: "needle", paths: ["artifact://5:1-1:-10"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		// Multi-range colon compounds are rejected by read's parseSel; search must match.
+		await expect(tool.execute("bad-multi", { pattern: "needle", paths: ["artifact://5:1-1:1-2"] })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		// A `conflicts` display chunk is not valid in a range compound (only `raw` is).
+		await expect(
+			tool.execute("bad-conflicts", { pattern: "needle", paths: ["artifact://5:conflicts:1-1"] }),
+		).rejects.toThrow(/invalid selector/i);
+	});
+
+	it("makes read reject the same malformed internal-URL selector compounds search does", async () => {
+		const session = createSession();
+		const read = new ReadTool(session);
+		// read.ts rejects a peeled internal-URL selector whose parseSel kind is "none"
+		// before resolving the resource, so artifact 5 need not exist.
+		await expect(read.execute("read-bad-neg", { path: "artifact://5:-10" })).rejects.toThrow(/invalid selector/i);
+		await expect(read.execute("read-bad-multi", { path: "artifact://5:1-1:1-2" })).rejects.toThrow(
+			/invalid selector/i,
+		);
+		await expect(read.execute("read-bad-conflicts", { path: "artifact://5:conflicts:1-1" })).rejects.toThrow(
+			/invalid selector/i,
+		);
+	});
+
+	it("rejects an RE2-unsupported pattern on a pure-virtual search (dialect parity)", async () => {
+		registerVirtualDocs(new Map([["doc.md", "alpha line\nbeta line\n"]]));
+		const session = createSession();
+		const tool = new SearchTool(session);
+		// Lookbehind is valid JS RegExp but unsupported by the native RE2 dialect;
+		// the pure-virtual probe must reject it consistently with native search.
+		await expect(tool.execute("re2", { pattern: "(?<=alpha)line", paths: ["virtual://doc.md"] })).rejects.toThrow(
+			/Invalid regex/i,
+		);
 	});
 
 	it("expands omp:// root to grep embedded documentation files", async () => {
@@ -448,6 +516,26 @@ describe("GrepTool internal URL resolution", () => {
 		expect(lineNumbers.filter(n => n === 3)).toHaveLength(1);
 	});
 
+	it("matches an RE2 inline-flag pattern on a virtual resource (native dialect, not JS RegExp)", async () => {
+		registerVirtualDocs(new Map([["doc.md", "needle here\n"]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("re2-virtual", { pattern: "(?i)NEEDLE", paths: ["virtual://doc.md"] });
+		expect(getResultText(result)).toContain("needle");
+	});
+
+	it("applies an RE2 inline-flag pattern across mixed local and virtual scopes", async () => {
+		await Bun.write(path.join(tmpDir, "local.txt"), "needle local\n");
+		registerVirtualDocs(new Map([["doc.md", "needle virtual\n"]]));
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("re2-mixed", {
+			pattern: "(?i)NEEDLE",
+			paths: [path.join(tmpDir, "local.txt"), "virtual://doc.md"],
+		});
+		const text = getResultText(result);
+		expect(text).toContain("local");
+		expect(text).toContain("virtual");
+	});
+
 	it("reports 'No more results' instead of 'No matches found' when skip is past the end", async () => {
 		await Bun.write(path.join(tmpDir, "a.txt"), "needle in a\n");
 		await Bun.write(path.join(tmpDir, "b.txt"), "needle in b\n");
@@ -465,5 +553,55 @@ describe("GrepTool internal URL resolution", () => {
 		expect(text).toContain("No more results");
 		expect(text).toContain("2 files total");
 		expect(text).not.toContain("No matches found");
+	});
+
+	it("refuses to search a directory listing that has no backing local path", async () => {
+		// A directory resource with no sourcePath (e.g. a remote ssh:// listing) must
+		// not be virtual-grepped — its listing text is not the directory's contents.
+		InternalUrlRouter.instance().register({
+			scheme: "dirstub",
+			immutable: true,
+			async resolve(url: InternalUrl): Promise<InternalResource> {
+				return { url: url.href, content: "sub/\nfile.txt", contentType: "text/plain", isDirectory: true };
+			},
+		});
+		const tool = new SearchTool(createSession());
+		await expect(tool.execute("dir-search", { pattern: "x", paths: ["dirstub://host/dir"] })).rejects.toThrow(
+			/directory listing|cannot recurse/,
+		);
+	});
+
+	it("rejects an ssh:// directory in search without draining a remote listing", async () => {
+		vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<unknown>);
+		vi.spyOn(sshFileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
+		vi.spyOn(sshFileTransfer, "statRemotePath").mockResolvedValue("directory");
+		const listSpy = vi.spyOn(sshFileTransfer, "listRemoteDir").mockResolvedValue([]);
+		const tool = new SearchTool(createSession());
+		await expect(tool.execute("ssh-dir-search", { pattern: "x", paths: ["ssh://h/etc"] })).rejects.toThrow(
+			/directory listing|cannot recurse/,
+		);
+		expect(listSpy).not.toHaveBeenCalled();
+	});
+
+	it("searches an IPv6 ssh:// file instead of rejecting the brackets as a glob", async () => {
+		vi.spyOn(capability, "loadCapability").mockResolvedValue({
+			items: [],
+			all: [],
+			warnings: [],
+			providers: [],
+		} as CapabilityResult<unknown>);
+		vi.spyOn(sshFileTransfer, "statRemotePath").mockResolvedValue("file");
+		vi.spyOn(sshFileTransfer, "readRemoteFile").mockResolvedValue({
+			bytes: new TextEncoder().encode("needle here\n"),
+			truncated: false,
+		});
+		const tool = new SearchTool(createSession());
+		const result = await tool.execute("ssh-ipv6", { pattern: "needle", paths: ["ssh://[::1]/etc/hosts"] });
+		expect(getResultText(result)).toContain("needle");
 	});
 });
