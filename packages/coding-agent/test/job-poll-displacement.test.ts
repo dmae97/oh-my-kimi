@@ -485,4 +485,75 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		expect(todos).toHaveLength(1);
 		expect(todos[0].isTranscriptBlockFinalized()).toBe(true);
 	});
+
+	it("hands the trailing todo snapshot to the controller during mid-turn rebuild", () => {
+		const chatContainer = new Container();
+		const inheritDisplaceableTodo = vi.fn();
+		let helpers!: UiHelpers;
+		const ctx = {
+			chatContainer,
+			pendingTools: new Map(),
+			ui: { requestRender: vi.fn() },
+			statusLine: { invalidate: vi.fn() },
+			updateEditorBorderColor: vi.fn(),
+			settings: { get: () => false },
+			addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
+			session: {
+				retryAttempt: 0,
+				getToolByName: () => undefined,
+				sessionManager: { getCwd: () => process.cwd() },
+				isStreaming: true,
+			},
+			get viewSession() {
+				return (this as { session: unknown }).session;
+			},
+			eventController: { inheritDisplaceableTodo },
+			toolOutputExpanded: false,
+			hideThinkingBlock: false,
+			lastAssistantUsage: undefined,
+			clearTransientSessionUi: () => {},
+		} as unknown as InteractiveModeContext;
+		helpers = new UiHelpers(ctx);
+
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const assistant = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "todo-1", name: "todo", arguments: { op: "view" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage,
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const result = {
+			role: "toolResult",
+			toolCallId: "todo-1",
+			toolName: "todo",
+			content: [{ type: "text", text: "" }],
+			details: todoResult(["plan", "read"]).details,
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+
+		helpers.renderSessionContext({ messages: [assistant, result] } as SessionContext);
+
+		const todos = chatContainer.children.filter(
+			(child): child is ToolExecutionComponent => child instanceof ToolExecutionComponent,
+		);
+		expect(todos).toHaveLength(1);
+		// Mid-turn rebuild hands the live tail back to the controller — the
+		// snapshot stays displaceable so a follow-up `todo` event replaces it
+		// instead of stacking another panel.
+		expect(inheritDisplaceableTodo).toHaveBeenCalledTimes(1);
+		expect(inheritDisplaceableTodo).toHaveBeenCalledWith(todos[0]);
+		expect(todos[0].canBeDisplacedBy("todo")).toBe(true);
+		expect(todos[0].isTranscriptBlockFinalized()).toBe(false);
+	});
 });
