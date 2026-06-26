@@ -47,10 +47,18 @@ const TEMP_PATH_RE = /\/T\/|\/tmp\/|\/pi-bash-exec|\/omp-bash-exec|\/pi-bash-det
 // Project-match helper
 // ---------------------------------------------------------------------------
 
-/** True when `cwd` is exactly `project` or is a sub-path of it. */
+/**
+ * True when `cwd` (or its normalized project root) exactly equals `project`
+ * or is a direct sub-path of it.
+ *
+ * Normalization is applied so that a cwd of `/repo-worktrees/lane/src` matches
+ * a project root of `/repo` — the selector shows normalized roots, so the
+ * filter must compare apples-to-apples.
+ */
 function matchesProject(cwd: string | undefined, project: string): boolean {
 	if (!cwd) return false;
-	return cwd === project || cwd.startsWith(`${project}/`);
+	const normalized = normalizeProjectPath(cwd) ?? cwd;
+	return normalized === project || normalized.startsWith(`${project}/`);
 }
 
 // ---------------------------------------------------------------------------
