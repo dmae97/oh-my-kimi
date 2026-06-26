@@ -522,7 +522,13 @@ function emit_error(rid, err, bt)
     end
     err_str = String(take!(io))
     
-    tb = String[]
+    # Seed the traceback with the rendered exception text so the array is a
+    # self-contained error display, matching the Python and Ruby runners. The
+    # host shows `traceback` verbatim when present and only falls back to
+    # `ename: evalue` when it is empty, so a frames-only traceback would hide
+    # the real error. Julia's `showerror` output already embeds the exception
+    # type for nearly every error and mirrors what the REPL prints after `ERROR: `.
+    tb = isempty(err_str) ? String[] : String[err_str]
     for frame in stacktrace(bt)
         file = string(frame.file)
         line = frame.line

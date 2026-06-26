@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the `eval` Julia kernel showing only runner-internal backtrace frames (`at top-level scope (./none:N)`, `at main (…runner-…jl:635)`) with no exception type or message, making cell errors undebuggable. The host renderer (`packages/coding-agent/src/eval/kernel-base.ts`) displays a non-empty `traceback` verbatim and only falls back to `ename: evalue` when it is empty; the Python and Ruby runners embed the rendered error in `traceback`, but the Julia runner (`packages/coding-agent/src/eval/jl/runner.jl`) built `traceback` from stack frames only, so the message was dropped. `emit_error` now seeds `traceback` with the `showerror` output (matching the REPL's `ERROR:` text) ahead of the frames.
+
 ## [16.1.22] - 2026-06-26
 
 ### Fixed
