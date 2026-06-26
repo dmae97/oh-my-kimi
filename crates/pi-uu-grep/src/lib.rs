@@ -89,6 +89,10 @@ struct Cli {
 	#[arg(short = 'w', long = "word-regexp")]
 	word: bool,
 
+	/// Match only whole lines (anchor each pattern to line boundaries).
+	#[arg(short = 'x', long = "line-regexp")]
+	line_regexp: bool,
+
 	/// Print only the matched (non-empty) parts of a matching line.
 	#[arg(short = 'o', long = "only-matching")]
 	only_matching: bool,
@@ -109,6 +113,11 @@ struct Cli {
 	#[arg(short = 's', long = "no-messages")]
 	no_messages: bool,
 
+	/// Quiet; suppress all normal output. Exit with zero status on the first
+	/// match (even if an error was detected later).
+	#[arg(short = 'q', long = "quiet", visible_alias = "silent")]
+	quiet: bool,
+
 	/// Print a help message.
 	#[allow(dead_code)]
 	#[arg(long = "help", action = clap::ArgAction::Help)]
@@ -128,6 +137,7 @@ struct Options {
 	before:             usize,
 	after:              usize,
 	no_messages:        bool,
+	quiet:              bool,
 }
 
 /// Escape regular-expression meta-characters so a pattern is matched literally,
@@ -151,6 +161,9 @@ fn build_matcher(patterns: &[String], cli: &Cli) -> Result<RegexMatcher, grep_re
 	builder.case_insensitive(cli.ignore_case);
 	if cli.word {
 		builder.word(true);
+	}
+	if cli.line_regexp {
+		builder.whole_line(true);
 	}
 	if cli.fixed {
 		let escaped: Vec<String> = patterns.iter().map(|p| escape_literal(p)).collect();
@@ -220,8 +233,8 @@ impl<W: Write> Sink for GrepSink<'_, W> {
 
 	fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, io::Error> {
 		self.any_match = true;
-		// -l: a single match is enough; stop scanning this source.
-		if self.opts.files_with_matches {
+		// -l / -q: a single match is enough; stop scanning this source.
+		if self.opts.files_with_matches || self.opts.quiet {
 			return Ok(false);
 		}
 		self.match_count += 1;
@@ -256,6 +269,9 @@ impl<W: Write> Sink for GrepSink<'_, W> {
 	}
 
 	fn finish(&mut self, _searcher: &Searcher, _: &SinkFinish) -> Result<(), io::Error> {
+		if self.opts.quiet {
+			return Ok(());
+		}
 		if self.opts.files_with_matches {
 			if self.any_match
 				&& let Some(name) = self.display
@@ -311,6 +327,10 @@ fn search_dir<W: Write>(
 	builder.follow_links(follow_links);
 
 	for result in builder.build() {
+		// -q: a single match anywhere in the tree is enough.
+		if opts.quiet && any {
+			break;
+		}
 		let entry = match result {
 			Ok(e) => e,
 			Err(err) => {
@@ -464,7 +484,7 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 		recursive || files.len() > 1
 	};
 
-	let (before, after) = if cli.count || cli.files_with_matches {
+	let (before, after) = if cli.count || cli.files_with_matches || cli.quiet {
 		(0, 0)
 	} else {
 		let c = cli.context.unwrap_or(0);
@@ -479,6 +499,7 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 		before,
 		after,
 		no_messages: cli.no_messages,
+		quiet: cli.quiet,
 	};
 
 	let mut searcher = SearcherBuilder::new()
@@ -493,6 +514,11 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 	let mut had_error = false;
 
 	for f in &files {
+		// -q: once something matched, exit immediately; the status is settled
+		// below. Checked at the top so the stdin `continue` path stops too.
+		if opts.quiet && any_match {
+			break;
+		}
 		// stdin
 		if f.as_os_str() == OsStr::new("-") {
 			let name: Option<&[u8]> = if show_names {
@@ -580,7 +606,16 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 
 	let _ = out.flush();
 
-	if had_error {
+	if opts.quiet {
+		// -q reports success on any match even when an error was detected.
+		if any_match {
+			0
+		} else if had_error {
+			2
+		} else {
+			1
+		}
+	} else if had_error {
 		2
 	} else if any_match {
 		0
