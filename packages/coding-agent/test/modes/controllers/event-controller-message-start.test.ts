@@ -62,6 +62,7 @@ function createContext(options: {
 		clearOptimisticUserMessage,
 		replaceOptimisticUserMessage,
 		pendingTools: new Map(),
+		viewSession: { isStreaming: false },
 	} as unknown as InteractiveModeContext;
 	return {
 		ctx,

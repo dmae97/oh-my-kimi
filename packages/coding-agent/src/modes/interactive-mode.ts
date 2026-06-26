@@ -3450,8 +3450,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				getSymbolTheme().spinnerFrames,
 			);
 			this.statusContainer.addChild(this.loadingAnimation);
+		} else if (!this.statusContainer.children.includes(this.loadingAnimation)) {
+			this.statusContainer.clear();
+			this.statusContainer.addChild(this.loadingAnimation);
 		}
-
 		this.applyPendingWorkingMessage();
 	}
 

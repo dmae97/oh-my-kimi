@@ -25,6 +25,7 @@ function createContext() {
 		ensureLoadingAnimation,
 		ui: { requestRender: vi.fn() },
 		session,
+		viewSession: session,
 	} as unknown as InteractiveModeContext;
 	return { ctx, pendingTools, setWorkingMessage, session };
 }
