@@ -8137,27 +8137,32 @@ export class AgentSession {
 			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, hookCompaction);
 
 			// Strategy honored on manual /compact too. Custom instructions imply a
-			// directed LLM summary; a text-only model cannot read the frames back —
-			// both take the summarizer path (the latter loudly).
+			// directed LLM summary; a text-only model cannot read snapcompact frames.
+			// When snapcompact itself was requested, fail locally instead of silently
+			// converting the "no LLM call" path into a provider-backed summary.
 			const wantsSnapcompact =
 				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
-			let snapcompactReady = wantsSnapcompact && this.model.input.includes("image");
-			if (wantsSnapcompact && !snapcompactReady) {
+			const snapcompactReady = wantsSnapcompact;
+			if (wantsSnapcompact && !this.model.input.includes("image")) {
 				this.emitNotice(
 					"warning",
-					`snapcompact needs a vision-capable model (${this.model.id} is text-only) — using an LLM summary instead`,
+					`snapcompact needs a vision-capable model (${this.model.id} is text-only)`,
 					"compaction",
 				);
+				throw new Error(`snapcompact cannot run locally: ${this.model.id} is text-only.`);
 			} else if (snapcompactReady) {
 				const text = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
 				const renderScan = snapcompact.scanRenderability(text);
 				if (!renderScan.isSafe) {
+					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					this.emitNotice(
 						"warning",
-						`snapcompact disabled: high non-ASCII rate detected (${(renderScan.unrenderableRatio * 100).toFixed(1)}%). Falling back to an LLM summary to prevent data loss.`,
+						`snapcompact disabled: high non-ASCII rate detected (${percent}%). No LLM fallback was attempted.`,
 						"compaction",
 					);
-					snapcompactReady = false;
+					throw new Error(
+						`snapcompact cannot render this conversation locally: high non-ASCII rate detected (${percent}%).`,
+					);
 				}
 			}
 
@@ -8169,8 +8174,8 @@ export class AgentSession {
 
 			// Snapcompact runs locally first. The frame cap is sized from the live
 			// model window via #computeSnapcompactMaxFrames so the post-render context
-			// fits without the warning loop (issue #3247). Zero-frame budget → skip
-			// snapcompact and take the summarizer path immediately.
+			// fits without the warning loop (issue #3247). Zero-frame budget now fails
+			// the snapcompact request locally rather than falling back to an LLM call.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (snapcompactReady) {
 				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, effectiveSettings);
@@ -8180,9 +8185,10 @@ export class AgentSession {
 					});
 					this.emitNotice(
 						"warning",
-						"snapcompact: kept history alone exceeds the context budget — using an LLM summary instead",
+						"snapcompact: kept history alone exceeds the context budget. No LLM fallback was attempted.",
 						"compaction",
 					);
+					throw new Error("snapcompact cannot run locally: kept history alone exceeds the context budget.");
 				} else {
 					snapcompactResult = await snapcompact.compact(preparation, {
 						convertToLlm,
@@ -8196,15 +8202,15 @@ export class AgentSession {
 							? ctxWindow - effectiveReserveTokens(ctxWindow, effectiveSettings)
 							: Number.POSITIVE_INFINITY;
 					if (this.#projectSnapcompactContextTokens(preparation, snapcompactResult) > budget) {
-						logger.warn("Snapcompact still overflows the window after frame-budget sizing; falling back", {
+						logger.warn("Snapcompact still overflows the window after frame-budget sizing", {
 							model: this.model?.id,
 						});
 						this.emitNotice(
 							"warning",
-							"snapcompact could not bring the context under the limit — using an LLM summary instead",
+							"snapcompact could not bring the context under the limit. No LLM fallback was attempted.",
 							"compaction",
 						);
-						snapcompactResult = undefined;
+						throw new Error("snapcompact could not bring the context under the limit locally.");
 					}
 				}
 			}
@@ -10146,26 +10152,14 @@ export class AgentSession {
 		// "overflow" forces context-full because the input itself is broken — a handoff
 		// LLM call would hit the same overflow. "incomplete" is an output-side problem,
 		// so a handoff request on the existing context is still viable. Snapcompact is
-		// safe for every reason (it makes no LLM call at all) but requires a vision
-		// model to be worth anything — fall back to context-full otherwise.
+		// a local-only strategy: if it cannot run, report the local blocker instead of
+		// silently swapping in a provider-backed summary.
 		let action: "context-full" | "handoff" | "snapcompact" =
-			compactionSettings.strategy === "handoff" && reason !== "overflow" && !suppressHandoff
-				? "handoff"
-				: "context-full";
-		if (compactionSettings.strategy === "snapcompact") {
-			if (this.model?.input.includes("image")) {
-				action = "snapcompact";
-			} else {
-				logger.warn("Snapcompact compaction requires a vision-capable model; falling back to context-full", {
-					model: this.model?.id,
-				});
-				this.emitNotice(
-					"warning",
-					`snapcompact needs a vision-capable model (${this.model?.id ?? "unknown"} is text-only) — using an LLM summary instead`,
-					"compaction",
-				);
-			}
-		}
+			compactionSettings.strategy === "snapcompact"
+				? "snapcompact"
+				: compactionSettings.strategy === "handoff" && reason !== "overflow" && !suppressHandoff
+					? "handoff"
+					: "context-full";
 		// Abort any older auto-compaction before installing this run's controller.
 		this.#autoCompactionAbortController?.abort();
 		const autoCompactionAbortController = new AbortController();
@@ -10306,48 +10300,59 @@ export class AgentSession {
 			// Snapcompact runs locally first. The post-compaction context = kept-recent
 			// + a summary message carrying the imaged archive at FRAME_TOKEN_ESTIMATE
 			// per frame; #computeSnapcompactMaxFrames sizes the frame cap from the
-			// live window so we don't run snapcompact just to overflow and fall back
-			// every threshold tick. Kept-recent already over budget → skip snapcompact
-			// outright (a single frame won't fit). Otherwise the projection below is
-			// only a defensive guard for summary-text drift.
+			// live window so we don't run snapcompact just to overflow every threshold
+			// tick. Any local blocker fails the snapcompact maintenance pass rather
+			// than falling back to a provider-backed LLM summary.
 			let snapcompactResult: snapcompact.CompactionResult | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
+				if (!this.model?.input.includes("image")) {
+					logger.warn("Snapcompact compaction requires a vision-capable model", {
+						model: this.model?.id,
+					});
+					this.emitNotice(
+						"warning",
+						`snapcompact needs a vision-capable model (${this.model?.id ?? "unknown"} is text-only). No LLM fallback was attempted.`,
+						"compaction",
+					);
+					throw new Error(`snapcompact cannot run locally: ${this.model?.id ?? "unknown"} is text-only.`);
+				}
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 				);
 				const renderScan = snapcompact.scanRenderability(text);
 				if (!renderScan.isSafe) {
-					logger.warn("Snapcompact disabled: high non-ASCII rate detected; falling back to an LLM summary", {
+					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
+					logger.warn("Snapcompact disabled: high non-ASCII rate detected", {
 						model: this.model?.id,
 						unrenderableRatio: renderScan.unrenderableRatio,
 					});
 					this.emitNotice(
 						"warning",
-						`snapcompact disabled: high non-ASCII rate detected (${(renderScan.unrenderableRatio * 100).toFixed(1)}%). Falling back to an LLM summary to prevent data loss.`,
+						`snapcompact disabled: high non-ASCII rate detected (${percent}%). No LLM fallback was attempted.`,
 						"compaction",
 					);
-					action = "context-full";
-				} else {
-					const maxFrames = this.#computeSnapcompactMaxFrames(preparation, compactionSettings);
-					if (maxFrames < 1) {
-						logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
-							model: this.model?.id,
-						});
-						this.emitNotice(
-							"warning",
-							"snapcompact: kept history alone exceeds the context budget — using an LLM summary instead",
-							"compaction",
-						);
-						action = "context-full";
-					} else {
-						snapcompactResult = await snapcompact.compact(preparation, {
-							convertToLlm,
-							model: this.model,
-							shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
-							maxFrames,
-						});
-					}
+					throw new Error(
+						`snapcompact cannot render this conversation locally: high non-ASCII rate detected (${percent}%).`,
+					);
 				}
+				const maxFrames = this.#computeSnapcompactMaxFrames(preparation, compactionSettings);
+				if (maxFrames < 1) {
+					logger.warn("Snapcompact skipped: kept history alone exceeds the context budget", {
+						model: this.model?.id,
+					});
+					this.emitNotice(
+						"warning",
+						"snapcompact: kept history alone exceeds the context budget. No LLM fallback was attempted.",
+						"compaction",
+					);
+					throw new Error("snapcompact cannot run locally: kept history alone exceeds the context budget.");
+				}
+				snapcompactResult = await snapcompact.compact(preparation, {
+					convertToLlm,
+					model: this.model,
+					shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+					maxFrames,
+				});
 
 				if (snapcompactResult) {
 					const ctxWindow = this.model?.contextWindow ?? 0;
@@ -10357,18 +10362,17 @@ export class AgentSession {
 							: Number.POSITIVE_INFINITY;
 					const projected = this.#projectSnapcompactContextTokens(preparation, snapcompactResult);
 					if (projected > budget) {
-						logger.warn("Snapcompact still overflows the window after frame-budget sizing; falling back", {
+						logger.warn("Snapcompact still overflows the window after frame-budget sizing", {
 							model: this.model?.id,
 							projected,
 							budget,
 						});
 						this.emitNotice(
 							"warning",
-							"snapcompact could not bring the context under the limit — using an LLM summary instead",
+							"snapcompact could not bring the context under the limit. No LLM fallback was attempted.",
 							"compaction",
 						);
-						action = "context-full";
-						snapcompactResult = undefined;
+						throw new Error("snapcompact could not bring the context under the limit locally.");
 					}
 				}
 			}
