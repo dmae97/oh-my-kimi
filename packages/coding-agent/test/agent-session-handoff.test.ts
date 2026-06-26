@@ -13,6 +13,7 @@ import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 
@@ -315,6 +316,147 @@ describe("AgentSession handoff", () => {
 		// Opaque provider-replay state (encrypted_content / replacementHistory) must pass through
 		// byte-identical — rewriting it would corrupt OpenAI remote-compaction replay.
 		expect(call[0].previousPreserveData).toBe(fixedPreparation.previousPreserveData);
+	});
+
+	it("strips hook-supplied snapcompact data when persisting context-full compaction", async () => {
+		const localTempDir = TempDir.createSync("@pi-context-full-preserve-data-");
+		const localSessionManager = SessionManager.inMemory(localTempDir.path());
+		const firstKeptEntryId = localSessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "kept" }],
+			timestamp: Date.now(),
+		});
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId,
+			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { ...compactionModule.DEFAULT_COMPACTION_SETTINGS, strategy: "context-full" },
+		};
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "session.compacting"),
+			emit: vi.fn(async (event: { type: string }) =>
+				event.type === "session.compacting"
+					? {
+							preserveData: {
+								otherState: "keep-me",
+								[snapcompact.PRESERVE_KEY]: { frames: [], totalChars: 0, truncatedChars: 0 },
+							},
+						}
+					: undefined,
+			),
+		} as unknown as ExtensionRunner;
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+		vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "context-full summary",
+			shortSummary: undefined,
+			firstKeptEntryId,
+			tokensBefore: 100,
+			details: {},
+			preserveData: { resultState: "keep-result" },
+		});
+		const localAgent = new Agent({
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+		});
+		const localSession = new AgentSession({
+			agent: localAgent,
+			sessionManager: localSessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+				"compaction.strategy": "context-full",
+			}),
+			modelRegistry,
+			extensionRunner,
+		});
+
+		try {
+			await localSession.compact();
+			const compactionEntry = localSessionManager.getEntries().find(entry => entry.type === "compaction");
+			if (compactionEntry?.type !== "compaction") throw new Error("Expected persisted compaction entry");
+			expect(compactionEntry.preserveData).toEqual({
+				otherState: "keep-me",
+				resultState: "keep-result",
+			});
+			expect(compactionEntry.preserveData).not.toHaveProperty(snapcompact.PRESERVE_KEY);
+		} finally {
+			await localSession.dispose();
+			await localTempDir.remove();
+		}
+	});
+
+	it("strips hook-supplied snapcompact data when persisting auto context-full compaction", async () => {
+		const localTempDir = TempDir.createSync("@pi-auto-context-full-preserve-data-");
+		const localSessionManager = SessionManager.inMemory(localTempDir.path());
+		const firstKeptEntryId = localSessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "kept" }],
+			timestamp: Date.now(),
+		});
+		const fixedPreparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId,
+			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "old" }], timestamp: 1 }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { ...compactionModule.DEFAULT_COMPACTION_SETTINGS, strategy: "context-full" },
+		};
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "session.compacting"),
+			emit: vi.fn(async (event: { type: string }) =>
+				event.type === "session.compacting"
+					? {
+							preserveData: {
+								otherState: "keep-me",
+								[snapcompact.PRESERVE_KEY]: { frames: [], totalChars: 0, truncatedChars: 0 },
+							},
+						}
+					: undefined,
+			),
+		} as unknown as ExtensionRunner;
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "auto context-full summary",
+			shortSummary: undefined,
+			firstKeptEntryId,
+			tokensBefore: 100,
+			details: {},
+			preserveData: { resultState: "keep-result" },
+		});
+		const localAgent = new Agent({
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+		});
+		const localSession = new AgentSession({
+			agent: localAgent,
+			sessionManager: localSessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+				"compaction.strategy": "context-full",
+			}),
+			modelRegistry,
+			extensionRunner,
+		});
+
+		try {
+			await localSession.runIdleCompaction();
+			expect(compactSpy).toHaveBeenCalledTimes(1);
+			const compactionEntry = localSessionManager.getEntries().find(entry => entry.type === "compaction");
+			if (compactionEntry?.type !== "compaction") throw new Error("Expected persisted compaction entry");
+			expect(compactionEntry.preserveData).toEqual({
+				otherState: "keep-me",
+				resultState: "keep-result",
+			});
+			expect(compactionEntry.preserveData).not.toHaveProperty(snapcompact.PRESERVE_KEY);
+		} finally {
+			await localSession.dispose();
+			await localTempDir.remove();
+		}
 	});
 
 	it("runs context maintenance before sending an oversized pending prompt", async () => {
