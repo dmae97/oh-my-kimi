@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
+import { normalizeCodexBaseUrl } from "./openai-codex-base-url";
 import type {
 	CredentialRankingStrategy,
 	UsageAmount,
@@ -201,19 +201,6 @@ function parseResetCredits(payload: unknown): UsageResetCredits | undefined {
 	return { availableCount: Math.max(0, Math.trunc(availableCount)) };
 }
 
-export function normalizeCodexBaseUrl(baseUrl?: string): string {
-	const fallback = CODEX_BASE_URL;
-	const trimmed = baseUrl?.trim() ? baseUrl.trim() : fallback;
-	const base = trimmed.replace(/\/+$/, "");
-	const lower = base.toLowerCase();
-	if (
-		(lower.startsWith("https://chatgpt.com") || lower.startsWith("https://chat.openai.com")) &&
-		!lower.includes("/backend-api")
-	) {
-		return `${base}/backend-api`;
-	}
-	return base;
-}
 
 function buildCodexUsageUrl(baseUrl: string): string {
 	const normalized = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;

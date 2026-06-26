@@ -330,16 +330,19 @@ function formatAccountHeader(
 		header += chalk.cyan(` · ✦ ${savedResets} saved reset${savedResets === 1 ? "" : "s"}`);
 		const credits = report.resetCredits?.credits;
 		if (credits) {
-			const upcoming = credits
+			const expiries = credits
 				.filter(c => c.expiresAt)
 				.map(c => ({ date: c.expiresAt!, ms: Date.parse(c.expiresAt!) }))
 				.filter(c => !Number.isNaN(c.ms))
-				.sort((a, b) => a.ms - b.ms)
-				.find(c => c.ms > nowMs);
+				.sort((a, b) => a.ms - b.ms);
+			const upcoming = expiries.find(c => c.ms > nowMs);
 			if (upcoming) {
 				header += chalk.dim(
 					` · soonest expires in ${formatDuration(upcoming.ms - nowMs)} (${upcoming.date.slice(0, 10)})`,
 				);
+			} else {
+				const lastExpired = expiries.at(-1);
+				if (lastExpired) header += chalk.dim(` · expired (${lastExpired.date.slice(0, 10)})`);
 			}
 		}
 	}

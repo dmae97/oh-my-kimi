@@ -65,4 +65,47 @@ describe("CommandController /usage", () => {
 		expect(output).toContain("█");
 		expect(output).not.toContain("··········");
 	});
+
+	it("renders saved reset expiry lines for future and expired credits", async () => {
+		const present = vi.fn();
+		const ctx = {
+			session: {},
+			ui: { terminal: { columns: 100 } },
+			present,
+			showWarning: vi.fn(),
+			showError: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new CommandController(ctx);
+		const now = Date.now();
+		const dayMs = 24 * 60 * 60 * 1000;
+		const futureIso = new Date(now + 2 * dayMs).toISOString();
+		const expiredIso = new Date(now - 2 * dayMs).toISOString();
+		const reports: UsageReport[] = [
+			{
+				provider: "openai-codex",
+				fetchedAt: now,
+				limits: [],
+				metadata: { email: "user@example.com" },
+				resetCredits: {
+					availableCount: 2,
+					credits: [
+						{ id: "future-reset", expiresAt: futureIso },
+						{ id: "expired-reset", expiresAt: expiredIso },
+					],
+				},
+			},
+		];
+
+		await controller.handleUsageCommand(reports);
+
+		expect(present).toHaveBeenCalledTimes(1);
+		const firstCall = present.mock.calls[0];
+		expect(firstCall).toBeDefined();
+		const output = renderPresentedBlocks(firstCall?.[0]);
+		expect(output).toContain("Saved rate-limit resets");
+		expect(output).toContain("user@example.com: 2 saved resets");
+		expect(output).toContain(`expires in`);
+		expect(output).toContain(`(${futureIso.slice(0, 10)})`);
+		expect(output).toContain(`expired (${expiredIso.slice(0, 10)})`);
+	});
 });

@@ -213,6 +213,38 @@ describe("formatUsageBreakdown", () => {
 		expect(disclaimerIdx).toBeLessThan(firstLimitIdx);
 	});
 
+	it("renders saved reset expiry state for future and expired credits", () => {
+		const now = Date.parse("2026-01-01T00:00:00.000Z");
+		const reports: UsageReport[] = [
+			{
+				provider: "openai-codex",
+				fetchedAt: now,
+				limits: [],
+				metadata: { email: "future@example.test" },
+				resetCredits: {
+					availableCount: 1,
+					credits: [{ id: "future-reset", expiresAt: "2026-01-03T00:00:00.000Z" }],
+				},
+			},
+			{
+				provider: "openai-codex",
+				fetchedAt: now,
+				limits: [],
+				metadata: { email: "expired@example.test" },
+				resetCredits: {
+					availableCount: 1,
+					credits: [{ id: "expired-reset", expiresAt: "2025-12-30T00:00:00.000Z" }],
+				},
+			},
+		];
+
+		const text = stripVTControlCharacters(formatUsageBreakdown(reports, [], now));
+		expect(text).toContain("future@example.test");
+		expect(text).toContain("soonest expires in 2d (2026-01-03)");
+		expect(text).toContain("expired@example.test");
+		expect(text).toContain("expired (2025-12-30)");
+	});
+
 	it("deduplicates identical per-limit notes across accounts sharing a window", () => {
 		const note = "Overage requests: 5";
 		const reports = [
