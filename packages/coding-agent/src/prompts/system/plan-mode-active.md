@@ -29,6 +29,8 @@ Structure the plan as `##`/`###` markdown sections so you can revise it section-
 - `SWAP.BLK N:` on a heading line — rewrite that entire section in place.
 - `DEL.BLK N` on a heading line — drop the whole section.
 - `INS.BLK.POST N:` on a heading line — add a new section AFTER that one (end the inserted body with a blank line so the next heading stays separated).
+
+Write each section together with its body — block ops need a multi-line section; a bare heading with no body falls back to plain `INS.POST`/`DEL`/`SWAP`.
 {{/if}}
 
 ## Ground every claim
