@@ -168,9 +168,10 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	// is addressed only by its (percent-encoded) name, never with a separate
 	// user/port — so reject an override on a configured bare name, else opaque.
 	if (username || port !== undefined) {
-		if (items.some(entry => entry.name === bareHost)) {
+		const decodedBareHost = decodeOr(bareHost);
+		if (items.some(entry => entry.name === bareHost || entry.name === decodedBareHost)) {
 			throw new Error(
-				`ssh://: user/port overrides are not allowed for the configured host "${bareHost}"; use ssh://${bareHost}/<path> or an unconfigured hostname`,
+				`ssh://: user/port overrides are not allowed for the configured host "${decodedBareHost}"; use ssh://${bareHost}/<path> or an unconfigured hostname`,
 			);
 		}
 		const sshUser = username ? decodeOr(username) : undefined;

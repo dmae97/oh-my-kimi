@@ -263,6 +263,16 @@ describe("SshProtocolHandler", () => {
 		expect(target?.name).toBe("user@corp@prod-blue");
 	});
 
+	it("rejects a user/port override on an encoded configured alias", async () => {
+		mockHosts([{ name: "alice@prod", host: "alice.prod.internal", _source: SOURCE }]);
+		await expect(handler.resolve(parseInternalUrl("ssh://bob@alice%40prod/tmp/x"))).rejects.toThrow(
+			/user\/port overrides/,
+		);
+		await expect(handler.resolve(parseInternalUrl("ssh://alice%40prod:22/tmp/x"))).rejects.toThrow(
+			/user\/port overrides/,
+		);
+	});
+
 	it("skips the remote directory listing when skipDirectoryListing is set", async () => {
 		mockHosts();
 		vi.spyOn(fileTransfer, "readRemoteFile").mockRejectedValue(new Error("Is a directory"));
