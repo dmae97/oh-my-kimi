@@ -190,6 +190,7 @@
 
 - Reused shared TUI mouse-routing helpers across fullscreen overlay selectors.
 
+
 ## [16.1.16] - 2026-06-23
 
 ### Breaking Changes

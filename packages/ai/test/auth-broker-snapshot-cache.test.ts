@@ -7,6 +7,7 @@ import {
 	type SnapshotResponse,
 	writeAuthBrokerSnapshotCache,
 } from "@oh-my-pi/pi-ai/auth-broker";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const TOKEN = "broker-cache-token";
 const URL = "http://127.0.0.1:8765";
@@ -39,7 +40,7 @@ async function withCachePath(run: (cachePath: string) => Promise<void>): Promise
 	try {
 		await run(path.join(tempDir, "snapshot.enc"));
 	} finally {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeWithRetries(tempDir);
 	}
 }
 

@@ -86,7 +86,7 @@ const kRemoveRetryDelayMs = 50;
 const kRetryableRemoveErrorCodes = new Set(["EBUSY", "EPERM", "ENOTEMPTY"]);
 const kSleepBuffer = new Int32Array(new SharedArrayBuffer(4));
 
-async function removeWithRetries(target: string): Promise<void> {
+export async function removeWithRetries(target: string): Promise<void> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			await fsPromises.rm(target, kRemoveOptions);

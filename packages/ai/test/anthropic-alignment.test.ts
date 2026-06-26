@@ -32,6 +32,7 @@ import type {
 	Tool,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { type as arkType } from "arktype";
 import { withEnv } from "./helpers";
 
@@ -1797,7 +1798,7 @@ describe("Anthropic request fingerprint alignment", () => {
 				},
 			);
 		} finally {
-			fs.rmSync(tmpDir, { recursive: true, force: true });
+			removeSyncWithRetries(tmpDir);
 		}
 	});
 
