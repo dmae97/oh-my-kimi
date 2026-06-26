@@ -24,17 +24,13 @@ export interface SelectableResult {
 	asrEstimate?: number;
 }
 
-export function selectBest(
-	results: SelectableResult[],
-	successVal?: unknown,
-): SelectableResult | undefined {
-	const valid = successVal !== undefined
-		? results.filter((r) => r.status === successVal)
-		: results.filter((r) => Boolean(r.status));
+export function selectBest(results: SelectableResult[], successVal?: unknown): SelectableResult | undefined {
+	const valid =
+		successVal !== undefined
+			? results.filter((r) => r.status === successVal)
+			: results.filter((r) => Boolean(r.status));
 	if (valid.length === 0) return undefined;
-	return valid.reduce((best, r) =>
-		(r.asrEstimate ?? 0) > (best.asrEstimate ?? 0) ? r : best,
-	);
+	return valid.reduce((best, r) => ((r.asrEstimate ?? 0) > (best.asrEstimate ?? 0) ? r : best));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -54,10 +50,7 @@ export function cosineSimilarityDense(vec1: number[], vec2: number[]): number {
 	return dot / (Math.sqrt(norm1) * Math.sqrt(norm2) + 1e-8);
 }
 
-export function cosineSimilaritySparse(
-	vec1: Record<string, number>,
-	vec2: Record<string, number>,
-): number {
+export function cosineSimilaritySparse(vec1: Record<string, number>, vec2: Record<string, number>): number {
 	const keys = new Set([...Object.keys(vec1), ...Object.keys(vec2)]);
 	let dot = 0;
 	let norm1 = 0;
@@ -161,21 +154,25 @@ export class SeedCorpusManager {
 // 6. BypassStrategy / Escalation enums
 // ═══════════════════════════════════════════════════════════════════════════
 
-export enum BypassStrategy {
-	DISGUISE = "disguise",
-	INJECT = "inject",
-	TRANSLATE = "translate",
-	NARRATIVE = "narrative",
-	SEMANTIC_INV = "semantic_inv",
-	CODE_METAPHOR = "code_metaphor",
-}
+export const BypassStrategy = {
+	DISGUISE: "disguise",
+	INJECT: "inject",
+	TRANSLATE: "translate",
+	NARRATIVE: "narrative",
+	SEMANTIC_INV: "semantic_inv",
+	CODE_METAPHOR: "code_metaphor",
+} as const;
 
-export enum EscalationStage {
-	LOW = 1,
-	MEDIUM = 2,
-	HIGH = 3,
-	CRITICAL = 4,
-}
+export type BypassStrategy = (typeof BypassStrategy)[keyof typeof BypassStrategy];
+
+export const EscalationStage = {
+	LOW: 1,
+	MEDIUM: 2,
+	HIGH: 3,
+	CRITICAL: 4,
+} as const;
+
+export type EscalationStage = (typeof EscalationStage)[keyof typeof EscalationStage];
 
 export interface EscalationRiskMatrix {
 	stage: EscalationStage;

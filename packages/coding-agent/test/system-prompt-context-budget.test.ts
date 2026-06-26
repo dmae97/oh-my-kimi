@@ -59,6 +59,7 @@ describe("buildSystemPrompt context budget", () => {
 
 		expect(prompt).toContain("<context_file_pointer");
 		expect(prompt).toContain("<context_budget>");
+		expect(prompt).toContain("<policy>context-budget-v2</policy>");
 		expect(prompt).toContain("<name>skill-0</name>");
 		expect(prompt).not.toContain("<name>skill-39</name>");
 		expect(prompt).toContain("Current working directory: /repo");

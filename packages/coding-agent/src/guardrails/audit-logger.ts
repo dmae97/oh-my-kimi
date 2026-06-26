@@ -9,7 +9,7 @@ export function appendAuditEvent(auditPath: string, event: GuardrailAuditEvent):
 			if (!existsSync(dir)) {
 				mkdirSync(dir, { recursive: true });
 			}
-			const line = JSON.stringify(event) + "\n";
+			const line = `${JSON.stringify(event)}\n`;
 			appendFileSync(auditPath, line, "utf-8");
 			resolve();
 		} catch (err) {

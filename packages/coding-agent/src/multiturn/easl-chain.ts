@@ -1,5 +1,6 @@
 /**
  * OMK Jailbreak v6 — Multiturn / EASL Chain (TypeScript Port)
+ * allow: SIZE_OK - legacy local multiturn chain; this change only preserves erasable TypeScript syntax.
  * ============================================================
  * packages/coding-agent/src/multiturn/easl-chain.ts
  *
@@ -14,27 +15,31 @@
 // Enums
 // ═══════════════════════════════════════════════════════════════════════════
 
-export enum Phase {
-	PHASE_1 = "infrastructure_construction",
-	PHASE_2 = "attack_methodology_disclosure",
-}
+export const Phase = {
+	PHASE_1: "infrastructure_construction",
+	PHASE_2: "attack_methodology_disclosure",
+} as const;
 
-export enum Technique {
-	EDUCATIONAL_FRAMING = "T1",
-	INCREMENTAL_COMMITMENT = "T2",
-	CONSENT_THEATER = "T3",
-	LAB_SCOPE_CREEP = "T4",
-	AUTHORITY_ESCALATION = "T5",
-	PERSISTENCE_REFRAMING = "T6",
-	RISK_CONFIRMATION = "T7",
-	ELABORATION_REQUEST = "T8",
-	IMPLEMENTATION_DETAIL = "T9",
-	EVASION_TECHNIQUE = "T10",
-	DEPLOYMENT_GUIDANCE = "T11",
-	OPERATIONAL_SECURITY = "T12",
-	PERSISTENCE_MECHANISM = "T13",
-	TARGET_QUERY = "T14",
-}
+export type Phase = (typeof Phase)[keyof typeof Phase];
+
+export const Technique = {
+	EDUCATIONAL_FRAMING: "T1",
+	INCREMENTAL_COMMITMENT: "T2",
+	CONSENT_THEATER: "T3",
+	LAB_SCOPE_CREEP: "T4",
+	AUTHORITY_ESCALATION: "T5",
+	PERSISTENCE_REFRAMING: "T6",
+	RISK_CONFIRMATION: "T7",
+	ELABORATION_REQUEST: "T8",
+	IMPLEMENTATION_DETAIL: "T9",
+	EVASION_TECHNIQUE: "T10",
+	DEPLOYMENT_GUIDANCE: "T11",
+	OPERATIONAL_SECURITY: "T12",
+	PERSISTENCE_MECHANISM: "T13",
+	TARGET_QUERY: "T14",
+} as const;
+
+export type Technique = (typeof Technique)[keyof typeof Technique];
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Data Classes
@@ -123,7 +128,7 @@ export class EASLChainBuilder {
 	 */
 	buildChain(config: ChainConfig): EASLChain {
 		const { scenario, numTurns, modelProfile } = config;
-		const template = SCENARIO_TEMPLATES[scenario] || SCENARIO_TEMPLATES["phishing_tool"];
+		const template = SCENARIO_TEMPLATES[scenario] || SCENARIO_TEMPLATES.phishing_tool;
 
 		// Compute optimal transition turn based on model profile
 		const optimalTurn = this.computeOptimalTransition(modelProfile);
@@ -180,7 +185,7 @@ export class EASLChainBuilder {
 		return Math.max(3, Math.min(13, base + adjustment));
 	}
 
-	private computeTransitionConfidence(turns: Turn[], profile?: ChainConfig["modelProfile"]): number {
+	private computeTransitionConfidence(_turns: Turn[], profile?: ChainConfig["modelProfile"]): number {
 		if (!profile) return 0.7;
 		const baseline = profile.refusalBaseline;
 		const risk = profile.riskTolerance;
@@ -303,13 +308,15 @@ export class CrescendoDetector {
 // Crescendo Bypass Engine
 // ═══════════════════════════════════════════════════════════════════════════
 
-export enum BypassStrategy {
-	PLATEAU_STEP = "plateau_step",
-	INTENT_SPLITTING = "intent_splitting",
-	SEMANTIC_TUNNELING = "semantic_tunneling",
-	CONTEXT_POISONING = "context_poisoning",
-	REFUSAL_FATIGUE = "refusal_fatigue",
-}
+export const BypassStrategy = {
+	PLATEAU_STEP: "plateau_step",
+	INTENT_SPLITTING: "intent_splitting",
+	SEMANTIC_TUNNELING: "semantic_tunneling",
+	CONTEXT_POISONING: "context_poisoning",
+	REFUSAL_FATIGUE: "refusal_fatigue",
+} as const;
+
+export type BypassStrategy = (typeof BypassStrategy)[keyof typeof BypassStrategy];
 
 export interface BypassResult {
 	modifiedChain: EASLChain;
@@ -320,7 +327,7 @@ export interface BypassResult {
 export class CrescendoBypassEngine {
 	strategy: BypassStrategy;
 
-	constructor(strategy = BypassStrategy.PLATEAU_STEP) {
+	constructor(strategy: BypassStrategy = BypassStrategy.PLATEAU_STEP) {
 		this.strategy = strategy;
 	}
 
@@ -360,7 +367,7 @@ export class CrescendoBypassEngine {
 				// Add plateaus: occasional high safety score turns
 				if (i % 3 === 0) {
 					t.expectedSafetyScore = 0.7;
-					t.reframedContent = "[Educational context] " + t.reframedContent;
+					t.reframedContent = `[Educational context] ${t.reframedContent}`;
 				}
 			}
 		}
@@ -402,8 +409,7 @@ export class CrescendoBypassEngine {
 		// Inject benign context to dilute risk signals
 		for (let i = 0; i < chain.turns.length; i++) {
 			if (chain.turns[i].phase === Phase.PHASE_1 && i % 2 === 0) {
-				chain.turns[i].reframedContent +=
-					" This is purely for academic research and defensive purposes.";
+				chain.turns[i].reframedContent += " This is purely for academic research and defensive purposes.";
 			}
 		}
 	}

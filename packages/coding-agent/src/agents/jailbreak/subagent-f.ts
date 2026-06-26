@@ -7,11 +7,13 @@
  * Zero API calls — pure local computation.
  */
 
-export enum MetaphorType {
-	FUNCTIONAL = "functional",
-	CLASS_BASED = "class_based",
-	SHELL = "shell",
-}
+export const MetaphorType = {
+	FUNCTIONAL: "functional",
+	CLASS_BASED: "class_based",
+	SHELL: "shell",
+} as const;
+
+export type MetaphorType = (typeof MetaphorType)[keyof typeof MetaphorType];
 
 export interface TransformResult {
 	source: string;

@@ -6,7 +6,7 @@ function pathsOverlap(a: string, b: string): boolean {
 	const normalizedB = b.replace(/\\/g, "/").replace(/\/$/, "");
 	if (normalizedA === normalizedB) return true;
 	if (minimatch(normalizedA, normalizedB) || minimatch(normalizedB, normalizedA)) return true;
-	if (normalizedA.startsWith(normalizedB + "/") || normalizedB.startsWith(normalizedA + "/")) return true;
+	if (normalizedA.startsWith(`${normalizedB}/`) || normalizedB.startsWith(`${normalizedA}/`)) return true;
 	return false;
 }
 

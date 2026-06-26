@@ -64,18 +64,12 @@ describe("tokenizeForRelevance", () => {
 
 describe("scoreSkillRelevance", () => {
 	it("returns neutral score when queryContext is undefined", () => {
-		const score = scoreSkillRelevance(
-			{ name: "ocr-anything", description: "Korean OCR" },
-			undefined,
-		);
+		const score = scoreSkillRelevance({ name: "ocr-anything", description: "Korean OCR" }, undefined);
 		expect(score).toBeCloseTo(0.3, 5);
 	});
 
 	it("returns neutral score when queryContext is empty", () => {
-		const score = scoreSkillRelevance(
-			{ name: "ocr-anything", description: "Korean OCR" },
-			"",
-		);
+		const score = scoreSkillRelevance({ name: "ocr-anything", description: "Korean OCR" }, "");
 		expect(score).toBeCloseTo(0.3, 5);
 	});
 
@@ -111,10 +105,7 @@ describe("scoreSkillRelevance", () => {
 	it("applies name substring match bonus", () => {
 		// "ocr" is 3 chars → survives tokenization.
 		// skill name "ocr-anything" contains "ocr", and name tokens get 3x weight.
-		const score = scoreSkillRelevance(
-			{ name: "ocr-anything", description: "text extraction tool" },
-			"ocr",
-		);
+		const score = scoreSkillRelevance({ name: "ocr-anything", description: "text extraction tool" }, "ocr");
 		// coverage: "ocr" matches name token with weight 3 → min(1, 3/1) = 1.0
 		// substring: "ocr" is in "ocr-anything" → +0.2 → capped at 1.0
 		expect(score).toBe(1.0);
@@ -218,7 +209,7 @@ describe("scoreContextFileRelevance", () => {
 	});
 
 	it("samples long content (first 2000 chars)", () => {
-		const longContent = "a".repeat(5000) + " specialkeyword " + "b".repeat(5000);
+		const longContent = `${"a".repeat(5000)} specialkeyword ${"b".repeat(5000)}`;
 		const score = scoreContextFileRelevance(
 			{ path: "/project/file.md", content: longContent, isGlobal: false },
 			"specialkeyword",
@@ -278,20 +269,14 @@ describe("determinism", () => {
 
 describe("edge cases", () => {
 	it("handles special characters in query", () => {
-		const score = scoreSkillRelevance(
-			{ name: "test", description: "test skill" },
-			"@#$%^&*()",
-		);
+		const score = scoreSkillRelevance({ name: "test", description: "test skill" }, "@#$%^&*()");
 		expect(score).toBeGreaterThanOrEqual(0);
 		expect(score).toBeLessThanOrEqual(1);
 	});
 
 	it("handles very long skill description", () => {
 		const longDesc = "word ".repeat(10000);
-		const score = scoreSkillRelevance(
-			{ name: "test", description: longDesc },
-			"word",
-		);
+		const score = scoreSkillRelevance({ name: "test", description: longDesc }, "word");
 		// "word" is ≤2 chars → removed by tokenizer
 		expect(score).toBeGreaterThanOrEqual(0);
 	});

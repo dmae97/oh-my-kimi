@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/omk-tui";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ControlPanelComponent } from "../src/modes/interactive/components/control-panel.ts";
+import {
+	ControlPanelComponent,
+	type ControlPanelStatusSnapshot,
+} from "../src/modes/interactive/components/control-panel.ts";
 import {
 	getAvailableThemes,
 	getThemeByName,
@@ -10,7 +13,7 @@ import {
 } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
-function createPanel(): ControlPanelComponent {
+function createPanel(statusSnapshot?: () => ControlPanelStatusSnapshot): ControlPanelComponent {
 	return new ControlPanelComponent({
 		appName: "omk",
 		version: "0.80.5",
@@ -18,6 +21,7 @@ function createPanel(): ControlPanelComponent {
 		expandedInstructions: () => "Ctrl+C to interrupt\n/ for commands\n! to run bash",
 		compactOnboarding: () => "Press Ctrl+O to show full startup help and loaded resources.",
 		onboarding: () => "OMK can explain its own features and look up its docs.",
+		statusSnapshot,
 	});
 }
 
@@ -60,6 +64,28 @@ describe("ControlPanelComponent", () => {
 		expect(plain).toContain("RUNTIME / MCP / SKILLS");
 		expect(plain).toContain("OMK//CONTROL READ");
 		expect(lines.every((line) => visibleWidth(line) <= 160)).toBe(true);
+	});
+
+	test("renders live model, CTX, and HeadRoom status from the snapshot", () => {
+		const panel = createPanel(() => ({
+			modelProvider: "openrouter",
+			modelId: "omk-test-model",
+			thinkingLevel: "high",
+			contextPercent: 42.5,
+			contextWindowTokens: 128_000,
+			headroomStatus: "context-budget-v2",
+			skillCount: 96,
+			mcpCount: 12,
+		}));
+		const plain = stripAnsi(panel.render(160).join("\n"));
+
+		expect(plain).toContain("model: openrouter/omk-test-model");
+		expect(plain).toContain("think: high");
+		expect(plain).toContain("ctx: 42.5%/128k");
+		expect(plain).toContain("headroom: context-budget-v2");
+		expect(plain).toContain("res: MCP:12 skills:96");
+		expect(plain).not.toContain("deepseek/deepseek-v4-pro");
+		expect(plain).not.toContain("ctx: 0.0%/1.0M");
 	});
 
 	test("renders expanded ASCII branding and command map", () => {

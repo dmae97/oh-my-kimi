@@ -3,15 +3,14 @@
  * packages/coding-agent/src/modules/index.ts
  */
 
+export type { LRLBypassTechnique as LRLBypassTechniqueType, SubAgentE as SubAgentEType } from "./lrl-bypass.ts";
+
+export { type LRLBypassResult, LRLBypassTechnique, SubAgentE } from "./lrl-bypass.ts";
 export {
-	LRLTranslator,
-	LRLRTCC,
-	LRLModelMapper,
-	LRLEncoder,
 	type LanguageInfo,
+	LRLEncoder,
+	LRLModelMapper,
+	LRLRTCC,
+	LRLTranslator,
 	type RTCCResult,
 } from "./lrl-deps.ts";
-
-export { LRLBypassTechnique, SubAgentE, type LRLBypassResult } from "./lrl-bypass.ts";
-
-export type { LRLBypassTechnique as LRLBypassTechniqueType, SubAgentE as SubAgentEType } from "./lrl-bypass.ts";

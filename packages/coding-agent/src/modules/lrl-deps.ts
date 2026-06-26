@@ -88,16 +88,19 @@ export class LRLModelMapper {
 	};
 
 	selectLanguage(model: string, strategy: string): string {
-		const map = this.modelLangMap[model] || this.modelLangMap["deepseek"];
+		const map = this.modelLangMap[model] || this.modelLangMap.deepseek;
 		const entries = Object.entries(map);
 		if (strategy === "highest_vuln") {
-			entries.sort((a, b) => (b[1] === "high" ? 1 : b[1] === "medium" ? 0 : -1) - (a[1] === "high" ? 1 : a[1] === "medium" ? 0 : -1));
+			entries.sort(
+				(a, b) =>
+					(b[1] === "high" ? 1 : b[1] === "medium" ? 0 : -1) - (a[1] === "high" ? 1 : a[1] === "medium" ? 0 : -1),
+			);
 		}
 		return entries[0]?.[0] || "sw";
 	}
 
 	getVulnerabilityRating(model: string, lang: string): string {
-		const map = this.modelLangMap[model] || this.modelLangMap["deepseek"];
+		const map = this.modelLangMap[model] || this.modelLangMap.deepseek;
 		return map[lang] || "low";
 	}
 }
@@ -111,9 +114,32 @@ export class LRLEncoder {
 		if (tier <= 0) return text;
 		// Stub: apply mathematical alphanumeric substitution
 		const map: Record<string, string> = {
-			a: "𝖺", b: "𝖻", c: "𝖼", d: "𝖽", e: "𝖾", f: "𝖿", g: "𝗀", h: "𝗁", i: "𝗂", j: "𝗃",
-			k: "𝗄", l: "𝗅", m: "𝗆", n: "𝗇", o: "𝗈", p: "𝗉", q: "𝗊", r: "𝗋", s: "𝗌", t: "𝗍",
-			u: "𝗎", v: "𝗏", w: "𝗐", x: "𝗑", y: "𝗒", z: "𝗓",
+			a: "𝖺",
+			b: "𝖻",
+			c: "𝖼",
+			d: "𝖽",
+			e: "𝖾",
+			f: "𝖿",
+			g: "𝗀",
+			h: "𝗁",
+			i: "𝗂",
+			j: "𝗃",
+			k: "𝗄",
+			l: "𝗅",
+			m: "𝗆",
+			n: "𝗇",
+			o: "𝗈",
+			p: "𝗉",
+			q: "𝗊",
+			r: "𝗋",
+			s: "𝗌",
+			t: "𝗍",
+			u: "𝗎",
+			v: "𝗏",
+			w: "𝗐",
+			x: "𝗑",
+			y: "𝗒",
+			z: "𝗓",
 		};
 		return Array.from(text)
 			.map((ch) => map[ch.toLowerCase()] || ch)

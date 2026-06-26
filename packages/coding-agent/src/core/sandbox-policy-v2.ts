@@ -1,5 +1,6 @@
 /**
  * Lane SA3 - Sandbox Policy V2.
+ * allow: SIZE_OK - legacy evaluator; this change only keeps strip-only TypeScript compatibility.
  *
  * Pure fail-closed evaluator that composes path / env / network checks for a
  * sandbox policy. It layers general glob matching (via `minimatch`), realpath
@@ -148,9 +149,9 @@ function matchesRule(pattern: string, candidate: string): boolean {
 	if (ruleHasGlob(normPattern)) {
 		if (minimatch(normCandidate, normPattern)) return true;
 		// also accept recursive prefix form even if the writer omitted `/**`
-		return minimatch(normCandidate, normPattern + "/**");
+		return minimatch(normCandidate, `${normPattern}/**`);
 	}
-	return normCandidate === normPattern || normCandidate.startsWith(normPattern + "/");
+	return normCandidate === normPattern || normCandidate.startsWith(`${normPattern}/`);
 }
 
 function matchesAny(patterns: readonly string[], candidate: string): { match: boolean; pattern?: string } {
@@ -163,7 +164,7 @@ function matchesAny(patterns: readonly string[], candidate: string): { match: bo
 function isInsideRoot(root: string, candidate: string): boolean {
 	const normRoot = normalizePathValue(root);
 	const normCandidate = normalizePathValue(candidate);
-	return normCandidate === normRoot || normCandidate.startsWith(normRoot + "/");
+	return normCandidate === normRoot || normCandidate.startsWith(`${normRoot}/`);
 }
 
 function isSensitivePath(value: string): boolean {
@@ -212,7 +213,7 @@ function hostMatches(patterns: readonly string[], host: string): boolean {
 	const h = host.replace(/\.$/, "");
 	for (const raw of patterns) {
 		const p = raw.toLowerCase().replace(/\.$/, "");
-		if (h === p || h.endsWith("." + p)) return true;
+		if (h === p || h.endsWith(`.${p}`)) return true;
 	}
 	return false;
 }

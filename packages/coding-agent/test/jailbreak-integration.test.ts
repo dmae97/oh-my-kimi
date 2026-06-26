@@ -5,7 +5,6 @@ import {
 	isValidTarget,
 	type JailbreakMode,
 	parseJailbreakArgs,
-	printJailbreakHelp,
 } from "../src/cli/jailbreak-args.ts";
 import {
 	formatOutput,

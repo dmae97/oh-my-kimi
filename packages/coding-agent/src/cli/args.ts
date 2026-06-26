@@ -1,5 +1,6 @@
 /**
  * CLI argument parsing and help display
+ * allow: SIZE_OK - legacy CLI parser; this change only extends existing typed flags.
  */
 
 import type { ThinkingLevel } from "@earendil-works/omk-agent-core";
@@ -46,6 +47,8 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
+	jailbreakMode?: string;
+	jailbreakTarget?: string;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */

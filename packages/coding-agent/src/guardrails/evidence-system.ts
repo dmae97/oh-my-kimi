@@ -1,3 +1,4 @@
+// allow: SIZE_OK - legacy evidence ledger; this change only keeps typed import/check compatibility.
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -146,7 +147,7 @@ export class ReplayLedgerManager {
 		if (last.seq <= this.ledger.lastPersistedSeq) return;
 
 		const newEvents = this.ledger.events.filter((e) => e.seq > this.ledger.lastPersistedSeq);
-		const lines = newEvents.map((e) => JSON.stringify(e)).join("\n") + "\n";
+		const lines = `${newEvents.map((e) => JSON.stringify(e)).join("\n")}\n`;
 		appendFileSync(this.ledger.ledgerPath, lines, "utf-8");
 		this.ledger.lastPersistedSeq = last.seq;
 	}

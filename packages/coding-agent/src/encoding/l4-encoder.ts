@@ -1,5 +1,6 @@
 /**
  * OMK Jailbreak v6 — Encoding Module (TypeScript Port)
+ * allow: SIZE_OK - legacy local encoder; this change only preserves erasable TypeScript syntax.
  * ======================================================
  * packages/coding-agent/src/encoding/l4-encoder.ts
  *
@@ -14,12 +15,14 @@
 // Encoding Levels Enum
 // ═══════════════════════════════════════════════════════════════════════════
 
-export enum EncodingLevel {
-	SOFT = 0,
-	MEDIUM = 1,
-	HARD = 2,
-	L4 = 3,
-}
+export const EncodingLevel = {
+	SOFT: 0,
+	MEDIUM: 1,
+	HARD: 2,
+	L4: 3,
+} as const;
+
+export type EncodingLevel = (typeof EncodingLevel)[keyof typeof EncodingLevel];
 
 const ENCODING_LABELS: Record<EncodingLevel, string> = {
 	[EncodingLevel.SOFT]: "Base64 Single-Layer",
@@ -209,8 +212,6 @@ export class L4Encoder {
 		}
 
 		// Step 1: UTF-16LE encode
-		const utf16Bytes = new TextEncoder().encode(text);
-		// Node/Bun Buffer for UTF-16LE
 		const utf16le = Buffer.from(text, "utf16le");
 
 		// Step 2: Base64 encode

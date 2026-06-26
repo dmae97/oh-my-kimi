@@ -7,7 +7,7 @@
  * Zero API calls — pure local computation.
  */
 
-import { LRLTranslator, LRLRTCC, LRLModelMapper, LRLEncoder } from "./lrl-deps.ts";
+import { LRLEncoder, LRLModelMapper, LRLRTCC, LRLTranslator } from "./lrl-deps.ts";
 
 export interface LRLBypassResult {
 	success: boolean;

@@ -5,13 +5,7 @@
  * Integrates with the OMK CLI via the extension command system.
  */
 
-import {
-	isValidJailbreakMode,
-	isValidTarget,
-	type JailbreakArgs,
-	parseJailbreakArgs,
-	printJailbreakHelp,
-} from "../cli/jailbreak-args.ts";
+import { type JailbreakArgs, parseJailbreakArgs, printJailbreakHelp } from "../cli/jailbreak-args.ts";
 import type { ExtensionCommandContext } from "../core/extensions/types.ts";
 
 export const JAILBREAK_COMMAND_NAME = "jailbreak";
@@ -227,10 +221,14 @@ export async function handleJailbreakCommand(args: string[]): Promise<number> {
  * ```
  */
 export async function jailbreakExtensionFactory(omk: {
-	registerCommand: (name: string, options: { description?: string; handler: (args: string, ctx: unknown) => Promise<void> }) => void;
+	registerCommand: (
+		name: string,
+		options: { description?: string; handler: (args: string, ctx: unknown) => Promise<void> },
+	) => void;
 }): Promise<void> {
 	omk.registerCommand(JAILBREAK_COMMAND_NAME, {
-		description: "Generate local jailbreak payloads (zero API calls). Usage: /jailbreak [--mode <mode>] [--target <model>]",
+		description:
+			"Generate local jailbreak payloads (zero API calls). Usage: /jailbreak [--mode <mode>] [--target <model>]",
 		async handler(args: string, _ctx: unknown): Promise<void> {
 			const argv = args.trim().split(/\s+/).filter(Boolean);
 			await handleJailbreakCommand(argv);

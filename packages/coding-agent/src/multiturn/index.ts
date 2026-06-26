@@ -4,18 +4,18 @@
  */
 
 export {
-	Phase,
-	Technique,
-	EASLChainBuilder,
-	CrescendoDetector,
-	CrescendoBypassEngine,
+	applyBypass,
+	type BypassResult,
 	BypassStrategy,
 	buildEASLChain,
-	detectCrescendo,
-	applyBypass,
-	type Turn,
-	type EASLChain,
 	type ChainConfig,
+	CrescendoBypassEngine,
 	type CrescendoDetectionResult,
-	type BypassResult,
+	CrescendoDetector,
+	detectCrescendo,
+	type EASLChain,
+	EASLChainBuilder,
+	Phase,
+	Technique,
+	type Turn,
 } from "./easl-chain.ts";

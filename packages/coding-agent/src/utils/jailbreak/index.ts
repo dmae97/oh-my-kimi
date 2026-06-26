@@ -5,17 +5,17 @@
  */
 
 export {
-	DB_PATH,
-	selectBest,
-	cosineSimilarityDense,
-	cosineSimilaritySparse,
-	cosineSimilarityMatrix,
-	levenshteinDistance,
-	SeedCorpusManager,
 	BypassStrategy,
-	EscalationStage,
-	type SelectableResult,
 	type CoverageFeedback,
-	type Seed,
+	cosineSimilarityDense,
+	cosineSimilarityMatrix,
+	cosineSimilaritySparse,
+	DB_PATH,
 	type EscalationRiskMatrix,
+	EscalationStage,
+	levenshteinDistance,
+	type Seed,
+	SeedCorpusManager,
+	type SelectableResult,
+	selectBest,
 } from "./common.ts";

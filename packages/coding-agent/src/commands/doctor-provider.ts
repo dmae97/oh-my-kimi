@@ -113,7 +113,7 @@ export async function diagnoseProvider(providerId: string): Promise<ProviderDoct
 	if (config.baseUrl) {
 		try {
 			const headers: Record<string, string> = {};
-			if (config.apiKey) headers["Authorization"] = `Bearer ${config.apiKey}`;
+			if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
 			const res = await fetch(`${config.baseUrl.replace(/\/$/, "")}/models`, { headers });
 			checks.push({
 				name: "models-endpoint",

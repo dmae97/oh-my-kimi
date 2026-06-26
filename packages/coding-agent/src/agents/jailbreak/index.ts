@@ -5,10 +5,10 @@
  */
 
 export {
+	createSubAgentF,
 	MetaphorType,
 	SubAgentF,
-	createSubAgentF,
+	type SubAgentFResult,
 	type TransformResult,
 	type ValidationReport,
-	type SubAgentFResult,
 } from "./subagent-f.ts";
