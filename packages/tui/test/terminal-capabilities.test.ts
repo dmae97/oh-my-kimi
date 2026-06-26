@@ -112,7 +112,7 @@ describe("Warp terminal capabilities", () => {
 	});
 
 	it("resolves the process-wide Warp terminal id and image protocol from TERM_PROGRAM", async () => {
-		const env = { ...Bun.env, TERM_PROGRAM: "WarpTerminal", COLORTERM: "truecolor" };
+		const env: Record<string, string | undefined> = { ...Bun.env, TERM_PROGRAM: "WarpTerminal", COLORTERM: "truecolor" };
 		for (const key of [
 			"PI_FORCE_IMAGE_PROTOCOL",
 			"WSL_DISTRO_NAME",
