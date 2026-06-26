@@ -408,6 +408,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
+	/**
+	 * Effective thinking-block visibility: hidden when the user's setting is on
+	 * OR the session thinking level is "off". Some providers (MiniMax, GLM,
+	 * DeepSeek) return thinking blocks even with reasoning disabled; this
+	 * respects the user's intent when they set thinking to "off" (#626).
+	 */
+	get effectiveHideThinkingBlock(): boolean {
+		return this.hideThinkingBlock || (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+	}
 	proseOnlyThinking = true;
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
 	pendingTools = new Map<string, ToolExecutionHandle>();

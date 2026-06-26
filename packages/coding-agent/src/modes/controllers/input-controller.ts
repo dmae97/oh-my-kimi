@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -1684,6 +1685,16 @@ export class InputController {
 	}
 
 	toggleThinkingBlockVisibility(): void {
+		// When thinking is "off", thinking blocks are always hidden (some
+		// providers return them regardless). The toggle is meaningless in
+		// that state — inform the user instead of silently flipping the
+		// persisted value. When thinking is on, the toggle works normally
+		// even if blocks are already hidden (user may want to show them).
+		const thinkingOff = (this.ctx.session?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		if (thinkingOff) {
+			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
+			return;
+		}
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		this.ctx.settings.set("hideThinkingBlock", this.ctx.hideThinkingBlock);
 

@@ -270,6 +270,23 @@ export class StreamingRevealController {
 		this.#unitCounter.reset();
 	}
 
+	/**
+	 * Re-read cached visibility flags (hideThinkingBlock, proseOnlyThinking)
+	 * and re-render the current target. Called when the thinking level changes
+	 * mid-stream so the reveal controller doesn't keep rendering with stale values.
+	 */
+	resyncVisibility(): void {
+		if (!this.#target || !this.#component) return;
+		this.#hideThinkingBlock = this.#getHideThinkingBlock();
+		this.#proseOnlyThinking = this.#getProseOnlyThinking();
+		// Recalculate visible units — hiding thinking blocks may reduce the total,
+		// and the reveal position may now exceed it.
+		const total = this.#visibleUnits(this.#target);
+		this.#revealed = Math.min(this.#revealed, total);
+		this.#renderCurrent();
+		this.#syncTimer(total);
+	}
+
 	/** Total reveal units of `message`, memoized per block across ticks. */
 	#visibleUnits(message: AssistantMessage): number {
 		let total = 0;

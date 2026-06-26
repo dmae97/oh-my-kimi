@@ -5,7 +5,7 @@ import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { getFileSnapshotStore } from "../../edit/file-snapshot-store";
-import type { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
 import {
 	ReadToolGroupComponent,
@@ -86,12 +86,13 @@ export class EventController {
 	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
 	#toolArgsReveal: ToolArgsRevealController;
+	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 
 	constructor(private ctx: InteractiveModeContext) {
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => this.ctx.settings.get("display.smoothStreaming"),
-			getHideThinkingBlock: () => this.ctx.hideThinkingBlock,
+			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: () => this.ctx.ui.requestRender(),
 		});
@@ -124,7 +125,27 @@ export class EventController {
 			thinking_level_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
-				this.ctx.ui.requestRender();
+				const hideThinking = this.ctx.effectiveHideThinkingBlock;
+				// Only do the expensive full resetDisplay when the effective
+				// visibility actually changed. Auto-classification (e.g. high→medium)
+				// emits thinking_level_changed without changing visibility — a full
+				// terminal replay for those would be disruptive.
+				if (hideThinking === this.#prevHideThinking) {
+					this.ctx.ui.requestRender();
+					return;
+				}
+				this.#prevHideThinking = hideThinking;
+				// Propagate visibility to existing rendered messages.
+				for (const child of this.ctx.chatContainer.children) {
+					if (child instanceof AssistantMessageComponent) {
+						child.setHideThinkingBlock(hideThinking);
+					}
+				}
+				if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
+					this.ctx.streamingComponent.setHideThinkingBlock(hideThinking);
+					this.#streamingReveal.resyncVisibility();
+				}
+				this.ctx.ui.resetDisplay();
 			},
 			goal_updated: async () => {},
 		} satisfies AgentSessionEventHandlers;

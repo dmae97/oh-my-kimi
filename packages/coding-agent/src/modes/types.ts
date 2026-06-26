@@ -159,6 +159,12 @@ export interface InteractiveModeContext {
 	loopLimit?: LoopLimitRuntime;
 	planModePlanFilePath?: string;
 	hideThinkingBlock: boolean;
+	/**
+	 * Effective thinking-block visibility: true when hidden by user setting OR
+	 * thinking level is "off". Read this in render paths instead of
+	 * {@link hideThinkingBlock} so blocks are auto-hidden when thinking is off.
+	 */
+	readonly effectiveHideThinkingBlock: boolean;
 	proseOnlyThinking: boolean;
 	compactionQueuedMessages: CompactionQueuedMessage[];
 	pendingTools: Map<string, ToolExecutionHandle>;

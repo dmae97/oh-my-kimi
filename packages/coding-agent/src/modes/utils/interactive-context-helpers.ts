@@ -18,7 +18,7 @@ export function createAssistantMessageComponent(
 ): AssistantMessageComponent {
 	return new AssistantMessageComponent(
 		message,
-		ctx.hideThinkingBlock,
+		ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
 		ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 		ctx.ui.imageBudget,
