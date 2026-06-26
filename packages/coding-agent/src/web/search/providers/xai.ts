@@ -10,6 +10,29 @@ const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const XAI_WEB_SEARCH_MODEL = "grok-4.3";
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 30;
+const RECENCY_DAYS: Record<NonNullable<SearchParams["recency"]>, number> = {
+	day: 1,
+	week: 7,
+	month: 30,
+	year: 365,
+};
+
+function formatUtcDate(date: Date): string {
+	return date.toISOString().slice(0, 10);
+}
+
+function buildRecencyDateBounds(recency: NonNullable<SearchParams["recency"]>, now = new Date()): {
+	from_date: string;
+	to_date: string;
+} {
+	const toDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+	const fromDate = new Date(toDate);
+	fromDate.setUTCDate(fromDate.getUTCDate() - RECENCY_DAYS[recency]);
+	return {
+		from_date: formatUtcDate(fromDate),
+		to_date: formatUtcDate(toDate),
+	};
+}
 
 interface XAIUrlCitationAnnotation {
 	type?: string;
@@ -59,6 +82,18 @@ function buildRequestBody(params: SearchParams): Record<string, unknown> {
 		],
 		tools: [{ type: "web_search" }],
 	};
+
+	const requestedSearchResults = params.numSearchResults ?? params.limit;
+	const searchParameters: Record<string, unknown> = {};
+	if (requestedSearchResults !== undefined) {
+		searchParameters.max_search_results = clampNumResults(requestedSearchResults, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
+	}
+	if (params.recency) {
+		Object.assign(searchParameters, buildRecencyDateBounds(params.recency));
+	}
+	if (Object.keys(searchParameters).length > 0) {
+		body.search_parameters = searchParameters;
+	}
 
 	if (params.maxOutputTokens !== undefined) {
 		body.max_output_tokens = params.maxOutputTokens;

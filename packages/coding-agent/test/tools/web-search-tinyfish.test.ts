@@ -4,7 +4,6 @@ import { searchTinyFish } from "@oh-my-pi/pi-coding-agent/web/search/providers/t
 import { SearchProviderError } from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 const TEST_KEY = "test-tinyfish-key";
-const UNSUPPORTED_TINYFISH_COUNT_PARAMS = ["limit", "num_results", "count", "size", "max_results"] as const;
 
 function makeAuthStorage(apiKey: string | undefined): AuthStorage {
 	return {
@@ -61,15 +60,12 @@ function tinyFishPage(results: TinyFishMockResult[], page = 0, totalResults = re
 	return { results, total_results: totalResults, page };
 }
 
-function expectOnlyDocumentedTinyFishParams(url: URL, expectedParams: readonly string[]): void {
+function expectTinyFishParams(url: URL, expectedParams: readonly string[]): void {
 	expect([...url.searchParams.keys()].sort()).toEqual([...expectedParams].sort());
-	for (const unsupportedParam of UNSUPPORTED_TINYFISH_COUNT_PARAMS) {
-		expect(url.searchParams.has(unsupportedParam)).toBe(false);
-	}
 }
 
 describe("TinyFish web search provider", () => {
-	it("documents TinyFish's absent result-count parameter and applies numSearchResults across pages", async () => {
+	it("passes TinyFish num_results and applies numSearchResults across pages", async () => {
 		const captured: { url: URL; init?: RequestInit }[] = [];
 		const pages = new Map([
 			["0", tinyFishResults("tinyfish", 10)],
@@ -102,13 +98,14 @@ describe("TinyFish web search provider", () => {
 		expect(firstRequest.url.searchParams.get("query")).toBe("fresh fish");
 		expect(firstRequest.url.searchParams.get("recency_minutes")).toBe("10080");
 		expect(firstRequest.url.searchParams.get("page")).toBe("0");
+		expect(firstRequest.url.searchParams.get("num_results")).toBe("10");
 		expect(secondRequest.url.searchParams.get("query")).toBe("fresh fish");
 		expect(secondRequest.url.searchParams.get("recency_minutes")).toBe("10080");
 		expect(secondRequest.url.searchParams.get("page")).toBe("1");
+		expect(secondRequest.url.searchParams.get("num_results")).toBe("10");
 
-		// TinyFish Search docs expose no result-count parameter; unified counts are applied after paginated responses.
-		expectOnlyDocumentedTinyFishParams(firstRequest.url, ["query", "recency_minutes", "page"]);
-		expectOnlyDocumentedTinyFishParams(secondRequest.url, ["query", "recency_minutes", "page"]);
+		expectTinyFishParams(firstRequest.url, ["query", "recency_minutes", "num_results", "page"]);
+		expectTinyFishParams(secondRequest.url, ["query", "recency_minutes", "num_results", "page"]);
 
 		expect(response.provider).toBe("tinyfish");
 		expect(response.authMode).toBe("api_key");
@@ -128,7 +125,7 @@ describe("TinyFish web search provider", () => {
 		expect(response.sources.some(source => source.url === "https://example.com/tinyfish-12")).toBe(false);
 	});
 
-	it("requests two documented TinyFish pages for limit 20 without unsupported count-like params", async () => {
+	it("requests two TinyFish pages for limit 20 with num_results", async () => {
 		const captured: URL[] = [];
 		const pages = new Map([
 			["0", tinyFishResults("limit", 10)],
@@ -157,7 +154,8 @@ describe("TinyFish web search provider", () => {
 		for (const url of captured) {
 			expect(url.searchParams.get("query")).toBe("limit fish");
 			expect(url.searchParams.get("recency_minutes")).toBe("1440");
-			expectOnlyDocumentedTinyFishParams(url, ["query", "recency_minutes", "page"]);
+			expect(url.searchParams.get("num_results")).toBe("10");
+			expectTinyFishParams(url, ["query", "recency_minutes", "num_results", "page"]);
 		}
 
 		expect(response.sources).toHaveLength(20);
@@ -186,6 +184,7 @@ describe("TinyFish web search provider", () => {
 		const response = await searchTinyFish({ ...makeParams("raw page fish"), limit: 11, fetch: fetchMock });
 
 		expect(captured.map(url => url.searchParams.get("page"))).toEqual(["0", "1"]);
+		expect(captured.map(url => url.searchParams.get("num_results"))).toEqual(["10", "10"]);
 		expect(response.sources).toHaveLength(11);
 		expect(response.sources[0]?.url).toBe("https://example.com/raw-page-1");
 		expect(response.sources.at(-1)?.url).toBe("https://example.com/raw-page-11");
@@ -205,6 +204,7 @@ describe("TinyFish web search provider", () => {
 		const response = await searchTinyFish({ ...makeParams("short page fish"), limit: 20, fetch: fetchMock });
 
 		expect(captured.map(url => url.searchParams.get("page"))).toEqual(["0"]);
+		expect(captured[0].searchParams.get("num_results")).toBe("10");
 		expect(response.sources).toHaveLength(9);
 		expect(response.sources.at(-1)?.url).toBe("https://example.com/short-page-8");
 	});
@@ -225,7 +225,8 @@ describe("TinyFish web search provider", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured[0].searchParams.get("query")).toBe("default fish");
 		expect(captured[0].searchParams.get("page")).toBe("0");
-		expectOnlyDocumentedTinyFishParams(captured[0], ["query", "page"]);
+		expect(captured[0].searchParams.get("num_results")).toBe("10");
+		expectTinyFishParams(captured[0], ["query", "num_results", "page"]);
 		expect(response.sources).toHaveLength(10);
 	});
 
@@ -245,7 +246,8 @@ describe("TinyFish web search provider", () => {
 		expect(captured).toHaveLength(1);
 		expect(captured[0].searchParams.get("query")).toBe("small limit fish");
 		expect(captured[0].searchParams.get("page")).toBe("0");
-		expectOnlyDocumentedTinyFishParams(captured[0], ["query", "page"]);
+		expect(captured[0].searchParams.get("num_results")).toBe("7");
+		expectTinyFishParams(captured[0], ["query", "num_results", "page"]);
 		expect(response.sources).toHaveLength(7);
 		expect(response.sources.at(-1)?.url).toBe("https://example.com/small-limit-6");
 	});

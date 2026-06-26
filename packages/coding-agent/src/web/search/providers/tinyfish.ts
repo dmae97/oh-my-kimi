@@ -15,6 +15,7 @@ import { classifyProviderHttpError, withHardTimeout } from "./utils";
 const TINYFISH_SEARCH_URL = "https://api.search.tinyfish.ai";
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 20;
+const MAX_PAGE = 10;
 
 const RECENCY_MINUTES: Record<NonNullable<SearchParams["recency"]>, number> = {
 	day: 1440,
@@ -60,6 +61,9 @@ async function callTinyFishSearch(apiKey: string, params: TinyFishSearchParams):
 	if (params.recency) {
 		url.searchParams.set("recency_minutes", String(RECENCY_MINUTES[params.recency]));
 	}
+	if (params.num_results !== undefined) {
+		url.searchParams.set("num_results", String(params.num_results));
+	}
 	if (params.page !== undefined) {
 		url.searchParams.set("page", String(params.page));
 	}
@@ -101,8 +105,11 @@ function appendTinyFishSources(sources: SearchSource[], results: readonly TinyFi
 
 /** Execute TinyFish web search. */
 export async function searchTinyFish(params: SearchParams): Promise<SearchResponse> {
+	const numResults = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
+	const pageSize = Math.min(numResults, DEFAULT_NUM_RESULTS);
 	const tinyFishParams: TinyFishSearchParams = {
 		query: params.query,
+		num_results: pageSize,
 		recency: params.recency,
 		signal: params.signal,
 		fetch: params.fetch,
@@ -110,23 +117,15 @@ export async function searchTinyFish(params: SearchParams): Promise<SearchRespon
 	const keyOrResolver: ApiKey = params.authStorage.resolver("tinyfish", {
 		sessionId: params.sessionId,
 	});
-	const numResults = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-
 	const sources = await withAuth(
 		keyOrResolver,
 		async key => {
 			const collected: SearchSource[] = [];
-			const firstPage = await callTinyFishSearch(key, { ...tinyFishParams, page: 0 });
-			const firstPageResults = firstPage.results ?? [];
-			appendTinyFishSources(collected, firstPageResults);
-
-			if (
-				numResults > DEFAULT_NUM_RESULTS &&
-				collected.length < numResults &&
-				firstPageResults.length >= DEFAULT_NUM_RESULTS
-			) {
-				const secondPage = await callTinyFishSearch(key, { ...tinyFishParams, page: 1 });
-				appendTinyFishSources(collected, secondPage.results ?? []);
+			for (let page = 0; page <= MAX_PAGE && collected.length < numResults; page += 1) {
+				const searchPage = await callTinyFishSearch(key, { ...tinyFishParams, page });
+				const results = searchPage.results ?? [];
+				appendTinyFishSources(collected, results);
+				if (results.length < pageSize) break;
 			}
 
 			return collected.slice(0, numResults);
