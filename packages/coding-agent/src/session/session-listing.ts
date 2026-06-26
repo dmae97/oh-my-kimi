@@ -581,12 +581,25 @@ function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): bool
 	return fileSessionId.startsWith(normalizedArg);
 }
 
+/** Controls cross-directory fallback for resumable session lookup. */
+export interface ResolveResumableSessionOptions {
+	/** Search default global session buckets after the active/custom session directory misses. */
+	allowGlobalFallback?: boolean;
+}
+
+function isSessionStorage(value: SessionStorage | ResolveResumableSessionOptions): value is SessionStorage {
+	return "listFilesSync" in value;
+}
+
 export async function resolveResumableSession(
 	sessionArg: string,
 	cwd: string,
 	sessionDir?: string,
-	storage: SessionStorage = new FileSessionStorage(),
+	storageOrOptions: SessionStorage | ResolveResumableSessionOptions = new FileSessionStorage(),
+	options: ResolveResumableSessionOptions = {},
 ): Promise<ResolvedSessionMatch | undefined> {
+	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
+	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
 	const localSessionDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
 	const localSessions = await listSessions(localSessionDir, storage);
 	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
@@ -594,6 +607,9 @@ export async function resolveResumableSession(
 		return { session: localMatch, scope: "local" };
 	}
 
+	if (sessionDir && resolvedOptions.allowGlobalFallback !== true) {
+		return undefined;
+	}
 
 	const globalSessions = await listAllSessions(storage);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));

@@ -263,7 +263,6 @@ function getConfig(cwd: string): LspConfig {
 	return config;
 }
 
-
 function isCustomLinter(serverConfig: ServerConfig): boolean {
 	return Boolean(serverConfig.createClient);
 }
@@ -1334,7 +1333,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
 		throwIfAborted(signal);
 
-		let config = getConfig(this.session.cwd);
+		const config = getConfig(this.session.cwd);
 
 		// Status action doesn't need a file
 		if (action === "status") {

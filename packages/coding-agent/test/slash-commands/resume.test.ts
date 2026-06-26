@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { resolveResumableSession } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { computeDefaultSessionDir } from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -120,6 +121,25 @@ describe("/resume slash command", () => {
 		expect(handled).toBe(true);
 		expect(harness.showError).not.toHaveBeenCalled();
 		expect(harness.handleResumeSession).toHaveBeenCalledWith(sessionPath);
+	});
+
+	it("keeps explicit session directories scoped unless global fallback is enabled", async () => {
+		const currentCwd = path.join(tempDir, "current");
+		const otherCwd = path.join(tempDir, "other");
+		const customSessionDir = path.join(tempDir, "custom-sessions");
+		await fs.mkdir(currentCwd, { recursive: true });
+		await fs.mkdir(otherCwd, { recursive: true });
+		const otherSessionDir = computeDefaultSessionDir(otherCwd, storage);
+		const sessionPath = await writeSession("019ed888-02fb-7000-8dac-396e2f84d484", otherCwd, otherSessionDir);
+
+		const scoped = await resolveResumableSession("019ed888", currentCwd, customSessionDir);
+		const fallback = await resolveResumableSession("019ed888", currentCwd, customSessionDir, {
+			allowGlobalFallback: true,
+		});
+
+		expect(scoped).toBeUndefined();
+		expect(fallback?.scope).toBe("global");
+		expect(fallback?.session.path).toBe(sessionPath);
 	});
 
 	it("shows an error when no session id matches", async () => {
