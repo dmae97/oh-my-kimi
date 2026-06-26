@@ -465,7 +465,10 @@ describe("runGcCommand history checkpoint", () => {
 describe("runGcCommand cold-session archive", () => {
 	test("archives old completed sessions while honoring keep-count and active-status skips", async () => {
 		const archiveMe = await writeSession(root, "project", "archive-me", "complete", { ageDays: 90 });
-		const keepRecent = await writeSession(root, "project", "keep-recent", "complete", { ageDays: 90 });
+		// 60d keeps keep-recent cold-eligible (>30d cutoff) yet unambiguously newer than
+		// archive-me's 90d, so retainNewestGlobal:1 deterministically protects it regardless
+		// of readdir order when two sessions would otherwise share an mtime millisecond.
+		const keepRecent = await writeSession(root, "project", "keep-recent", "complete", { ageDays: 60 });
 		const pending = await writeSession(root, "project", "pending", "pending", { ageDays: 90 });
 		const interrupted = await writeSession(root, "project", "interrupted", "interrupted", { ageDays: 90 });
 		await fs.mkdir(archiveMe.slice(0, -".jsonl".length), { recursive: true });
