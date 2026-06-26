@@ -66,6 +66,10 @@
 - Fixed repeated todo updates in one TUI turn stacking full todo panels; superseded todo snapshots now stay live until the next todo update replaces them or the turn ends. ([#3516](https://github.com/can1357/oh-my-pi/issues/3516))
 - Fixed MCP OAuth authorization failing with `Authorization failed: An unexpected error occurred` against authorization servers (Plane is the live example) that reject redundant fallback `resource` indicators. OMP now drops same-origin resources only when it synthesized them from the server URL fallback (e.g. `https://mcp.plane.so/http/mcp`). Provider-advertised resources from OAuth/protected-resource discovery or an embedded authorization-URL `resource` query parameter are preserved even when they are same-origin or origin-only, so gateway-hosted MCP services can still request the audience they advertised. The refresh-token path uses the same policy, filtered against the authorization-server origin persisted on the credential as `authorizationUrl`, with `tokenUrl`'s origin as the legacy fallback when that field is absent. ([#3502](https://github.com/can1357/oh-my-pi/issues/3502))
 
+### Fixed
+
+- Fixed the advisor entering a spam loop in which it emitted hundreds of repeated `Stop.`, `Done.`, and `No issue; continue.` `<advisory severity="blocker">` injections, polluting the primary transcript and destabilizing the watched agent after the task was already complete. The advisor system prompt's rules ("at most one `advise` per update", "NEVER send the same advice twice") are now enforced in code by a new `AdvisorEmissionGuard` on the `enqueueAdvice` boundary in `AgentSession`: it normalizes each note (case-insensitive, punctuation-folded), drops content-free self-talk filler (`stop`/`done`/`no issue continue`/`lgtm`/etc.), dedupes by exact normalized text across the session (bounded FIFO history), and rate-limits to one accepted note per advisor model prompt cycle. Reset on advisor reset (compaction, session switch, `/new`) so a re-primed reviewer can re-raise old issues. ([#3520](https://github.com/can1357/oh-my-pi/issues/3520))
+
 ## [16.1.20] - 2026-06-25
 
 ### Fixed
