@@ -8443,15 +8443,15 @@ export class AgentSession {
 	}
 
 	/**
-	 * Compact active `/goal` runs that never settle to `agent_end`.
+	 * Compact continuing tool-loop runs before the next provider request.
 	 *
-	 * Long autonomous goals can keep producing tool calls inside one agent run.
-	 * The post-turn `agent_end` threshold check never fires in that shape, so
-	 * context can grow until provider overflow. `onTurnEnd` is the safe boundary:
-	 * tool results for the just-finished turn are already paired in
-	 * `activeMessages`, the live array the agent loop reads before its next
-	 * model call. Run maintenance here and splice the compacted state back into
-	 * that array, mirroring [`AgentSession.#applyRewind`].
+	 * `onTurnEnd` is the safe boundary: tool results for the just-finished turn
+	 * are already paired in `activeMessages`, the live array the agent loop reads
+	 * before its next model call. The caller passes `willContinue` so this path
+	 * only runs when the loop is already continuing without yielding to post-turn
+	 * maintenance. Mid-run handoff is suppressed because resetting the session
+	 * while the loop owns `activeMessages` would race the next request; handoff
+	 * strategy falls back to in-place context-full compaction here.
 	 */
 	async #maintainContextMidRun(
 		activeMessages: AgentMessage[],
