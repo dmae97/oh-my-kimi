@@ -5,8 +5,12 @@ import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
+	GEMINI_HEADER_RUNAWAY_THRESHOLD,
+	GeminiHeaderRunDetector,
 	isGeminiThinkingLoopModel,
+	isGeminiThinkingModel,
 	isLoopGuardedModel,
+	isReasoningSummaryHeader,
 	THINKING_LOOP_ERROR_MARKER,
 	ThinkingLoopDetector,
 	withGeminiThinkingLoopGuard,
@@ -553,5 +557,100 @@ describe("loop guard assistant prose/text loops", () => {
 
 		const result = await guarded.result();
 		expect(result.stopReason).toBe("stop");
+	});
+});
+
+/** Stream `text` through a fresh header detector in small chunks; returns true if
+ *  the consecutive-header run tripped the runaway threshold. */
+function feedHeaders(text: string, step = 13): boolean {
+	const detector = new GeminiHeaderRunDetector();
+	for (let i = 0; i < text.length; i += step) {
+		if (detector.push(text.slice(i, i + step))) return true;
+	}
+	return false;
+}
+
+/** A genuinely-distinct planning runaway: each thought summary introduces a new
+ *  title + a paragraph naming fresh code anchors, so it never trips the
+ *  similarity/lexicon loop guard — only the header-count guard catches it. */
+function distinctPlanningRunaway(headers: number): string {
+	const out: string[] = [];
+	for (let i = 0; i < headers; i++) {
+		out.push(
+			`**Refining Stage ${i}**\n\nI am now reworking module_${i} so that handler_${i} routes Stage${i}Result through render_${i}.`,
+		);
+	}
+	return out.join("\n\n");
+}
+
+describe("isReasoningSummaryHeader", () => {
+	test("matches markdown and whole-line bold titles", () => {
+		expect(isReasoningSummaryHeader("## Examining Result Handling")).toBe(true);
+		expect(isReasoningSummaryHeader("### Refining Grammar Expansion")).toBe(true);
+		expect(isReasoningSummaryHeader("**Defining ApplyResult Details**")).toBe(true);
+		expect(isReasoningSummaryHeader("***Adapting Renderer***")).toBe(true);
+	});
+
+	test("rejects prose, inline emphasis, and bare markers", () => {
+		expect(isReasoningSummaryHeader("I'm now incorporating **targetPath** into the result.")).toBe(false);
+		expect(isReasoningSummaryHeader("**bold start** but the rest is prose")).toBe(false);
+		expect(isReasoningSummaryHeader("*single asterisk italic*")).toBe(false);
+		expect(isReasoningSummaryHeader("#hashtag-not-a-heading")).toBe(false);
+		expect(isReasoningSummaryHeader("plain reasoning line")).toBe(false);
+	});
+});
+
+describe("GeminiHeaderRunDetector", () => {
+	test("trips on a distinct planning runaway the loop guard misses", () => {
+		const runaway = distinctPlanningRunaway(GEMINI_HEADER_RUNAWAY_THRESHOLD + 2);
+		// The existing similarity/lexicon guard does NOT fire on distinct progress...
+		expect(feed(runaway)).toBeNull();
+		// ...but the header-count guard does.
+		expect(feedHeaders(runaway)).toBe(true);
+	});
+
+	test("counts headers across intervening paragraphs (one summary = one header)", () => {
+		const detector = new GeminiHeaderRunDetector();
+		let tripped = false;
+		for (let i = 0; i < GEMINI_HEADER_RUNAWAY_THRESHOLD; i++) {
+			tripped = detector.push(`**Summary ${i}**\n`) || detector.push("Some distinct reasoning paragraph here.\n\n");
+			if (tripped) break;
+		}
+		expect(tripped).toBe(true);
+		expect(detector.count).toBe(GEMINI_HEADER_RUNAWAY_THRESHOLD);
+	});
+
+	test("does not trip below the threshold", () => {
+		expect(feedHeaders(distinctPlanningRunaway(GEMINI_HEADER_RUNAWAY_THRESHOLD - 1))).toBe(false);
+	});
+
+	test("does not count plain reasoning paragraphs as headers", () => {
+		expect(feedHeaders(distinctReasoning())).toBe(false);
+	});
+
+	test("fires once per run then stays quiet until reset re-arms it", () => {
+		const detector = new GeminiHeaderRunDetector();
+		const runaway = distinctPlanningRunaway(GEMINI_HEADER_RUNAWAY_THRESHOLD);
+		expect(detector.push(runaway)).toBe(true);
+		// Latched: more headers on the same run do not re-fire.
+		expect(detector.push("**Another Header**\n")).toBe(false);
+		// A new reasoning block re-arms the detector.
+		detector.reset();
+		expect(detector.count).toBe(0);
+		expect(detector.push(runaway)).toBe(true);
+	});
+});
+
+describe("isGeminiThinkingModel", () => {
+	test("is true for Gemini and false for DeepSeek / other guarded peers", () => {
+		const gemini = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" }).model;
+		const deepseek = createMockModel({ provider: "openrouter", id: "deepseek/deepseek-r1" }).model;
+		const claude = createMockModel({ provider: "anthropic", id: "claude-sonnet-4" }).model;
+		expect(isGeminiThinkingModel(gemini)).toBe(true);
+		expect(isGeminiThinkingModel(deepseek)).toBe(false);
+		expect(isGeminiThinkingModel(claude)).toBe(false);
+		// DeepSeek is still loop-guarded for the similarity guard, just not the header guard.
+		expect(isLoopGuardedModel(deepseek)).toBe(true);
+		expect(isLoopGuardedModel(gemini)).toBe(true);
 	});
 });

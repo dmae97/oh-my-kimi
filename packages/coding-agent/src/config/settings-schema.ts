@@ -961,6 +961,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"model.loopGuard.toolCallReminder": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Thinking",
+			label: "Loop Guard Tool-Call Reminder",
+			description:
+				"When a Gemini reasoning stream emits many consecutive planning headers without calling a tool, interrupt it and inject a reminder to issue a tool call (requires Loop Guard)",
+		},
+	},
+
 	inlineToolDescriptors: {
 		type: "enum",
 		values: ["auto", "on", "off"] as const,

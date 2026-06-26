@@ -79,6 +79,7 @@ import {
 import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/tool-protection";
 import type {
 	AssistantMessage,
+	AssistantMessageEvent,
 	ImageContent,
 	Message,
 	MessageAttribution,
@@ -108,7 +109,11 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
+import {
+	GeminiHeaderRunDetector,
+	isGeminiThinkingModel,
+	THINKING_LOOP_ERROR_MARKER,
+} from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -230,6 +235,7 @@ import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type:
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
+import geminiToolReminderTemplate from "../prompts/system/gemini-tool-call-reminder.md" with { type: "text" };
 import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -322,6 +328,12 @@ import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-
 import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
+
+/** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
+ *  discarded assistant turn only; never reaches the model. */
+const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
+/** `customType` for the hidden tool-call reminder injected after the interrupt. */
+const GEMINI_TOOL_REMINDER_TYPE = "gemini-tool-call-reminder";
 
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
@@ -1378,6 +1390,12 @@ export class AgentSession {
 	#streamingEditPrecheckedToolCallIds = new Set<string>();
 
 	#streamingEditFileCache = new Map<string, string>();
+
+	/** Active Gemini reasoning-header runaway detector for the current block.
+	 *  (Re)created on each `thinking_start` when the guard applies (see
+	 *  `#geminiHeaderGuardActive`); undefined for non-Gemini models or when the
+	 *  guard is off. Fed thinking deltas in the assistant-message interceptor. */
+	#geminiHeaderDetector: GeminiHeaderRunDetector | undefined;
 	#promptInFlightCount = 0;
 	#abortInProgress = false;
 	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
@@ -1742,6 +1760,7 @@ export class AgentSession {
 			};
 			this.#preCacheStreamingEditFile(event);
 			this.#maybeAbortStreamingEdit(event);
+			this.#maybeInterruptGeminiHeaderRunaway(message, assistantMessageEvent);
 		});
 		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
 		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
@@ -3902,6 +3921,100 @@ export class AgentSession {
 		this.#streamingEditCheckedLineCounts.clear();
 		this.#streamingEditPrecheckedToolCallIds.clear();
 		this.#streamingEditFileCache.clear();
+	}
+
+	/**
+	 * Whether the Gemini header-runaway guard applies to the current model: the loop
+	 * guard is on (settings + `PI_NO_THINKING_LOOP_GUARD`), the tool-call reminder is
+	 * enabled, and the active model is a Gemini thinking model.
+	 */
+	#geminiHeaderGuardActive(): boolean {
+		const model = this.model;
+		return (
+			process.env.PI_NO_THINKING_LOOP_GUARD !== "1" &&
+			this.settings.get("model.loopGuard.enabled") === true &&
+			this.settings.get("model.loopGuard.toolCallReminder") === true &&
+			model !== undefined &&
+			isGeminiThinkingModel(model)
+		);
+	}
+
+	/**
+	 * Feed streamed assistant events to the Gemini header-runaway detector. Each
+	 * reasoning block (`thinking_start`) re-arms a fresh detector when the guard
+	 * applies; thinking deltas accumulate thought-summary headers; assistant prose
+	 * or a tool call ends the run. On the threshold hit, interrupts the stream (see
+	 * {@link #interruptGeminiHeaderRunaway}). Runs synchronously inside the
+	 * assistant-message interceptor so the abort lands before more budget burns.
+	 * Armed on `thinking_start` (not `turn_start`, which the agent loop skips for the
+	 * first turn) so the very first reasoning block is guarded too.
+	 */
+	#maybeInterruptGeminiHeaderRunaway(message: AssistantMessage, event: AssistantMessageEvent): void {
+		if (event.type === "thinking_start") {
+			this.#geminiHeaderDetector = this.#geminiHeaderGuardActive() ? new GeminiHeaderRunDetector() : undefined;
+			return;
+		}
+		const detector = this.#geminiHeaderDetector;
+		if (!detector) return;
+		if (event.type === "thinking_delta") {
+			if (detector.push(event.delta)) this.#interruptGeminiHeaderRunaway(detector.count, message.timestamp);
+			return;
+		}
+		// Leaving the reasoning channel ends the run: the consecutive-header count
+		// only matters within one uninterrupted stretch of reasoning.
+		if (event.type === "text_start" || event.type === "toolcall_start") {
+			detector.reset();
+		}
+	}
+
+	/**
+	 * Interrupt a Gemini reasoning stream that has emitted too many consecutive
+	 * planning headers without calling a tool. Aborts the live turn, discards the
+	 * stalled reasoning-only turn (so its partial, loop-fueling thinking is neither
+	 * replayed nor reloaded), injects a hidden tool-call reminder, and continues.
+	 * `targetTimestamp` identifies the turn being aborted so the post-prompt task
+	 * can drop exactly it.
+	 */
+	#interruptGeminiHeaderRunaway(headerCount: number, targetTimestamp: number): void {
+		logger.warn("Gemini reasoning-header runaway; interrupting to require a tool call", {
+			model: this.model?.id,
+			provider: this.model?.provider,
+			headers: headerCount,
+		});
+		this.emitNotice(
+			"warning",
+			`Interrupted ${headerCount} planning headers with no tool call; reminded the model to issue one.`,
+			"loop-guard",
+		);
+		this.agent.abort(GEMINI_HEADER_INTERRUPT_REASON);
+		const generation = this.#promptGeneration;
+		this.#schedulePostPromptTask(async signal => {
+			if (signal.aborted || this.#isDisposed || this.#promptGeneration !== generation) return;
+			// Let the aborted stream finish unwinding so continue() doesn't race it.
+			await this.agent.waitForIdle();
+			if (signal.aborted || this.#isDisposed || this.#promptGeneration !== generation) return;
+			const aborted = this.agent.state.messages.findLast(
+				(m): m is AssistantMessage => m.role === "assistant" && m.timestamp === targetTimestamp,
+			);
+			if (aborted) this.#discardAssistantTurn(aborted);
+			const content = prompt.render(geminiToolReminderTemplate, { count: headerCount });
+			const details = { headers: headerCount };
+			this.agent.appendMessage({
+				role: "custom",
+				customType: GEMINI_TOOL_REMINDER_TYPE,
+				content,
+				display: false,
+				details,
+				attribution: "agent",
+				timestamp: Date.now(),
+			});
+			this.sessionManager.appendCustomMessageEntry(GEMINI_TOOL_REMINDER_TYPE, content, false, details, "agent");
+			try {
+				await this.agent.continue();
+			} catch (err) {
+				logger.warn("gemini tool-call reminder continue failed", { error: String(err) });
+			}
+		});
 	}
 
 	#getStreamingEditToolCall(event: AgentEvent):
@@ -9008,11 +9121,11 @@ export class AgentSession {
 			// Tool-use orphans corrupt Anthropic message history (tool_result without
 			// matching tool_use). Always remove them even when the retry cap is hit.
 			if (assistantMessage.stopReason === "toolUse") {
-				this.#removeEmptyStopFromActiveContext(assistantMessage);
+				this.#discardAssistantTurn(assistantMessage);
 			}
 			return false;
 		}
-		this.#removeEmptyStopFromActiveContext(assistantMessage);
+		this.#discardAssistantTurn(assistantMessage);
 		this.agent.appendMessage({
 			role: "developer",
 			content: [{ type: "text", text: this.#emptyStopRetryReminder() }],
@@ -9130,10 +9243,17 @@ export class AgentSession {
 		}
 	}
 
-	#removeEmptyStopFromActiveContext(assistantMessage: AssistantMessage): void {
+	/**
+	 * Drop an assistant turn from BOTH the live agent context and the persisted
+	 * session branch (reparenting the leaf to the turn's parent), so a discarded
+	 * turn does not resurface on reload. Used for empty/reasoning-only stops and
+	 * the Gemini header-runaway interrupt, which must not replay a partial,
+	 * loop-fueling thinking block.
+	 */
+	#discardAssistantTurn(assistantMessage: AssistantMessage): void {
 		this.#removeAssistantMessageFromActiveContext(assistantMessage);
 
-		const emptyStopEntry = this.sessionManager
+		const branchEntry = this.sessionManager
 			.getBranch()
 			.slice()
 			.reverse()
@@ -9143,13 +9263,13 @@ export class AgentSession {
 					entry.message.role === "assistant" &&
 					this.#isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
 			);
-		if (!emptyStopEntry) {
+		if (!branchEntry) {
 			return;
 		}
-		if (emptyStopEntry.parentId === null) {
+		if (branchEntry.parentId === null) {
 			this.sessionManager.resetLeaf();
 		} else {
-			this.sessionManager.branch(emptyStopEntry.parentId);
+			this.sessionManager.branch(branchEntry.parentId);
 		}
 	}
 
