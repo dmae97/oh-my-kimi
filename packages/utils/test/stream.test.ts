@@ -239,6 +239,188 @@ describe("readSseJson", () => {
 		const output = await collectAsync(readSseJson(stream));
 		expect(output).toEqual([{ a: 1 }]);
 	});
+
+	it("completes cleanly when the final data chunk is truncated JSON", async () => {
+		const testCases = [
+			'data: {"b":2',
+			'data: {"id":"x", "na',
+			'data: {"id":"x", "name"',
+			'data: {"id":"x", "name":',
+			'data: {"id":"x", "name": "y',
+			'data: {"id":"x",',
+			"data: [1,2,",
+			'data: {"s":"n',
+			'data: {"n',
+			'data: {"s":"abc\\',
+			'data: {"s":"\\u12',
+		];
+		for (const dataChunk of testCases) {
+			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			});
+
+			const output = await collectAsync(readSseJson(stream));
+			expect(output).toEqual([{ a: 1 }]);
+		}
+	});
+
+	it("completes cleanly when the final data chunk is cut inside a JSON literal at EOF", async () => {
+		const testCases = ['data: {"finish_reason":nul', 'data: {"ok":tru', "data: [fal"];
+		for (const dataChunk of testCases) {
+			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			});
+
+			const output = await collectAsync(readSseJson(stream));
+			expect(output).toEqual([{ a: 1 }]);
+		}
+	});
+
+	it("throws SyntaxError when a middle data chunk is malformed JSON", async () => {
+		const chunks = [encoder.encode('data: {"a":1\n\n'), encoder.encode('data: {"b":2}\n\n')];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event is complete but malformed JSON", async () => {
+		const testCases = [
+			'data: {"b":2,}', // balanced but malformed trailing comma
+			'data: {"b":,', // invalid predecessor before comma
+			"data: [,,", // invalid predecessor before comma
+			'data: {"b",', // invalid predecessor after key
+			'data: {"s":"\\u12,', // comma inside unterminated string
+		];
+		for (const dataChunk of testCases) {
+			const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode(dataChunk)];
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					for (const chunk of chunks) controller.enqueue(chunk);
+					controller.close();
+				},
+			});
+
+			await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+		}
+	});
+
+	it("throws SyntaxError when a final event is plain text", async () => {
+		const chunks = [
+			encoder.encode('data: {"a":1}\n\n'),
+			encoder.encode("data: Internal Server Error"), // plain text (not JSON)
+		];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event is malformed with missing colons but balanced braces", async () => {
+		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode('data: {"b" 2}')];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event is malformed with mismatched brackets/braces", async () => {
+		const chunks = [
+			encoder.encode('data: {"a":1}\n\n'),
+			encoder.encode("data: [{]"), // mismatched closer
+		];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event is malformed with syntax errors after values", async () => {
+		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode('data: {"b": true garbage')];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event has invalid characters", async () => {
+		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode('data: {"b": @')];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event has mismatched closers", async () => {
+		const chunks = [
+			encoder.encode('data: {"a":1}\n\n'),
+			encoder.encode('data: {"b": ]'), // mismatched closer
+		];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event has unbalanced braces but internal syntax errors", async () => {
+		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode('data: {"b":1 "c":2')];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
+
+	it("throws SyntaxError when a final event has unbalanced braces but has complete invalid text inside", async () => {
+		const chunks = [encoder.encode('data: {"a":1}\n\n'), encoder.encode("data: {unterminated}")];
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (const chunk of chunks) controller.enqueue(chunk);
+				controller.close();
+			},
+		});
+
+		await expect(collectAsync(readSseJson(stream))).rejects.toThrow(SyntaxError);
+	});
 });
 
 function bytesStreamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
