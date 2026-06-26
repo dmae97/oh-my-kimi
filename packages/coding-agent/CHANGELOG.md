@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added TinyFish, DuckDuckGo, xAI, and Firecrawl web_search providers.
+
 ### Fixed
 
 - Fixed Kimi-family models defaulting to hashline edit mode; they now fall back to `replace` unless `edit.modelVariants`, `PI_EDIT_VARIANT`, or `PI_STRICT_EDIT_MODE` explicitly opts into hashline.
