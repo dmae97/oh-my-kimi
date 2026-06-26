@@ -40,7 +40,6 @@ const ONE_PX_PNG = Buffer.from(
 
 function createCtx() {
 	const editor = new CustomEditor(getEditorTheme());
-	const pasteText = vi.fn();
 	const requestRender = vi.fn();
 	const showStatus = vi.fn();
 	const ctx = {
@@ -52,10 +51,11 @@ function createCtx() {
 		} as unknown as InteractiveModeContext["sessionManager"],
 		showStatus,
 	} as unknown as InteractiveModeContext;
-	// `editor.pasteText` is consulted by the smart fallback; spy after construction so the
-	// CustomEditor still owns its real pasteText implementation everywhere else.
-	editor.pasteText = pasteText;
-	return { ctx, editor, spies: { pasteText, requestRender, showStatus } };
+	// Leave `editor.pasteText` intact — the post-fix CustomEditor routes
+	// real text through it, so the `getText()` assertions below depend on
+	// the base editor actually writing into its buffer. Tests that need to
+	// observe the call install a local spy after construction.
+	return { ctx, editor, spies: { requestRender, showStatus } };
 }
 
 describe("CustomEditor empty bracketed paste (issue #3601)", () => {
@@ -122,6 +122,59 @@ describe("CustomEditor empty bracketed paste (issue #3601)", () => {
 		editor.handleInput(`${BRACKETED_PASTE_START}${BRACKETED_PASTE_END}`);
 
 		expect(editor.getText()).toBe("");
+	});
+
+	it("invokes onPasteImage when the empty bracketed paste is split across stdin chunks (Codex PR #3602 review)", () => {
+		// Some terminals (Windows Terminal under load, certain SSH muxes, …)
+		// fragment a bracketed paste so the start marker, payload, and end
+		// marker land in separate `handleInput` calls. The pre-fix guard saw
+		// each fragment in isolation, matched neither, and let the inherited
+		// handler buffer the run as a zero-length text paste — the same
+		// silent-drop symptom #3601 already documents for the single-chunk
+		// case. The post-fix `CustomEditor` runs its own bracketed-paste
+		// assembler, so the assembled empty payload still routes to the
+		// smart clipboard reader.
+		const { editor } = createCtx();
+		const onPasteImage = vi.fn(async () => true);
+		editor.onPasteImage = onPasteImage;
+
+		editor.handleInput(BRACKETED_PASTE_START);
+		expect(onPasteImage).not.toHaveBeenCalled();
+		editor.handleInput(BRACKETED_PASTE_END);
+
+		expect(onPasteImage).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("");
+	});
+
+	it("routes an image-file path that arrives split across stdin chunks to onPasteImagePath", () => {
+		// Same chunking hazard as the empty-paste case, but for an explicit
+		// image-file path (#3506). The assembled router re-runs the path
+		// detection over the joined payload so the image still attaches.
+		const { editor } = createCtx();
+		const onPasteImagePath = vi.fn();
+		editor.onPasteImagePath = onPasteImagePath;
+
+		editor.handleInput(`${BRACKETED_PASTE_START}/tmp/sc`);
+		editor.handleInput(`reenshot.png${BRACKETED_PASTE_END}`);
+
+		expect(onPasteImagePath).toHaveBeenCalledWith("/tmp/screenshot.png");
+	});
+
+	it("forwards a split text paste to the underlying editor exactly once (no double-insertion)", () => {
+		// Sanity check: when the CustomEditor consumes the bracketed paste
+		// markers ahead of `super.handleInput`, it must hand the assembled
+		// payload off via the public `pasteText` API so the base editor's
+		// undo / autocomplete / `[Paste #N]` machinery still runs — and only
+		// once, with the actual content.
+		const { editor } = createCtx();
+		const pasteText = vi.fn();
+		editor.pasteText = pasteText;
+
+		editor.handleInput(`${BRACKETED_PASTE_START}hello `);
+		editor.handleInput(`world${BRACKETED_PASTE_END}`);
+
+		expect(pasteText).toHaveBeenCalledTimes(1);
+		expect(pasteText).toHaveBeenCalledWith("hello world");
 	});
 });
 
