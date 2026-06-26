@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.23] - 2026-06-26
+
 ### Fixed
 
 - Hid advisory wrapper tags in collab transcript Markdown while preserving their content. ([#3559](https://github.com/can1357/oh-my-pi/issues/3559))

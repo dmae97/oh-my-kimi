@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.23] - 2026-06-26
+
 ### Added
 
 - Added a third streaming thinking-loop detection heuristic to catch "progress-lexicon stalls" where models endlessly reshuffle motivational filler without introducing new vocabulary or concrete technical references

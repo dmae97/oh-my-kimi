@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.23] - 2026-06-26
+
 ### Changed
 
 - Changed `AgentLoopConfig.onTurnEnd` and `Agent.setOnTurnEnd` callbacks to receive whether the loop will continue with another provider request.

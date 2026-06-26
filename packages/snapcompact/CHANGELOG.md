@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.23] - 2026-06-26
+
 ### Added
 
 - Added `archiveSourceText(archive)` to extract a persisted frame archive's source text as plain text for LLM summarization. ([#3561](https://github.com/can1357/oh-my-pi/pull/3561) by [@serverinspector](https://github.com/serverinspector))

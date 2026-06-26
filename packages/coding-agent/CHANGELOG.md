@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.1.23] - 2026-06-26
+
 ### Added
 
 - Added `compaction.midTurnEnabled` for mid-turn threshold auto-compaction before the next tool-loop provider request. ([#3525](https://github.com/can1357/oh-my-pi/issues/3525))
