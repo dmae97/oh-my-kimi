@@ -148,7 +148,7 @@ describe("filterInitialToolsForDiscoveryAll", () => {
 		read: "essential",
 		edit: "essential",
 		todo: "discoverable",
-		search: "discoverable",
+		grep: "discoverable",
 	};
 	const base = {
 		loadModeOf: (name: string): BuiltinToolLoadMode | undefined => loadModes[name],

@@ -422,8 +422,8 @@ describe("tool path arrays", () => {
 
 		const rendered = renderTree([root], toolResult.entry.id);
 
-		expect(rendered).toContain("[search: /space-needle/ in folder with spaces/]");
-		expect(rendered).not.toContain("[search: /space-needle/ in .]");
+		expect(rendered).toContain("[grep: /space-needle/ in folder with spaces/]");
+		expect(rendered).not.toContain("[grep: /space-needle/ in .]");
 	});
 
 	it("search keeps a single path that contains spaces", async () => {

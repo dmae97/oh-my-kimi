@@ -226,7 +226,7 @@ describe("renderSearchToolBm25Description", () => {
 
 		// Built-in names are present verbatim, alphabetically ordered, on their own line.
 		expect(lineWith(rendered, "Discoverable built-in tools:")).toBe(
-			"Discoverable built-in tools: find, search, write.",
+			"Discoverable built-in tools: glob, grep, write.",
 		);
 
 		// Built-in names must not bleed into the MCP server-summary line.
@@ -236,7 +236,7 @@ describe("renderSearchToolBm25Description", () => {
 		expect(mcpLine).not.toContain("glob");
 		expect(rendered).toContain(
 			"Discoverable MCP servers in this session: github (1 tool), slack (1 tool).\n" +
-				"Discoverable built-in tools: find, search, write.\n" +
+				"Discoverable built-in tools: glob, grep, write.\n" +
 				"Total discoverable tools available: 5.",
 		);
 	});

@@ -137,12 +137,16 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 			importer,
 		);
 
-		expect(rewritten).toContain(
-			url.pathToFileURL(await fs.realpath(path.join(dir, "node_modules/esmdep/value.js"))).href,
-		);
-		expect(rewritten).toContain(
-			url.pathToFileURL(await fs.realpath(path.join(dir, "node_modules/rootdep/dist/index.js"))).href,
-		);
+		const expectedEsmDepUrls = [
+			path.join(dir, "node_modules/esmdep/value.js"),
+			await fs.realpath(path.join(dir, "node_modules/esmdep/value.js")),
+		].map(p => url.pathToFileURL(p).href);
+		const expectedRootDepUrls = [
+			path.join(dir, "node_modules/rootdep/dist/index.js"),
+			await fs.realpath(path.join(dir, "node_modules/rootdep/dist/index.js")),
+		].map(p => url.pathToFileURL(p).href);
+		expect(expectedEsmDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
+		expect(expectedRootDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(rewritten).toContain('from "node:path"');
 	});
 

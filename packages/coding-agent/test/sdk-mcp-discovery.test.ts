@@ -311,15 +311,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableLsp: false,
 		});
 
-		expect(await session.activateDiscoveredTools(["search"])).toEqual(["search"]);
-		expect(session.getSelectedDiscoveredToolNames()).toContain("search");
+		expect(await session.activateDiscoveredTools(["grep"])).toEqual(["grep"]);
+		expect(session.getSelectedDiscoveredToolNames()).toContain("grep");
 
 		await session.setActiveToolsByName(["read", "search_tool_bm25"]);
 
-		expect(session.getActiveToolNames()).not.toContain("search");
-		expect(session.getSelectedDiscoveredToolNames()).not.toContain("search");
-		expect(await session.activateDiscoveredTools(["search"])).toEqual(["search"]);
-		expect(session.getActiveToolNames()).toContain("search");
+		expect(session.getActiveToolNames()).not.toContain("grep");
+		expect(session.getSelectedDiscoveredToolNames()).not.toContain("grep");
+		expect(await session.activateDiscoveredTools(["grep"])).toEqual(["grep"]);
+		expect(session.getActiveToolNames()).toContain("grep");
 	});
 	it("restores explicit MCP, thinking, and service-tier entries when resuming without rewriting the session file", async () => {
 		const firstManager = SessionManager.create(tempDir, tempDir);
