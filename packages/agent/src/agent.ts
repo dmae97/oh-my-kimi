@@ -36,6 +36,7 @@ import {
 	resolveOwnedDialectFromEnv,
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
+import { isProviderRefusalMessage } from "./replay-policy";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -54,10 +55,13 @@ import { isSoftToolRequirement } from "./types";
 import { EventLoopKeepalive } from "./utils/yield";
 
 /**
- * Default convertToLlm: Keep only LLM-compatible messages, convert attachments.
+ * Default convertToLlm: Keep only LLM-compatible replay messages.
  */
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.filter((m): m is Message => m.role === "user" || m.role === "assistant" || m.role === "toolResult");
+	return messages.filter((m): m is Message => {
+		if (m.role === "assistant") return !isProviderRefusalMessage(m);
+		return m.role === "user" || m.role === "toolResult";
+	});
 }
 
 const ANTHROPIC_OUTPUT_BLOCKED_PREFIX = "Output blocked by conten";

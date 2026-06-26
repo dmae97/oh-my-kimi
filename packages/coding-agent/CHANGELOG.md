@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Claude API refusals polluting the replayed session context and causing later prompts to refuse again. ([#3592](https://github.com/can1357/oh-my-pi/issues/3592))
+
 ## [16.1.23] - 2026-06-26
 
 ### Added

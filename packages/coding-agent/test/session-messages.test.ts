@@ -54,6 +54,39 @@ describe("convertToLlm compaction summary", () => {
 	});
 });
 
+describe("convertToLlm assistant replay policy", () => {
+	it("drops API-level Anthropic refusals from provider replay", () => {
+		const messages: AgentMessage[] = [
+			{ role: "user", content: [{ type: "text", text: "trigger" }], timestamp: 1 },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "I can't assist with that request." }],
+				stopReason: "error",
+				stopDetails: { type: "refusal", category: "bio", explanation: "policy refusal" },
+				errorMessage: "Refusal (bio): policy refusal",
+				api: "anthropic",
+				provider: "anthropic",
+				model: "claude-opus-4",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 2,
+			},
+			{ role: "user", content: [{ type: "text", text: "recover" }], timestamp: 3 },
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted.map(message => message.role)).toEqual(["user", "user"]);
+		expect(JSON.stringify(converted)).not.toContain("Refusal (bio)");
+	});
+});
+
 describe("convertToLlm custom message mapping", () => {
 	it("maps custom messages to developer role with explicit agent attribution", () => {
 		const messages: AgentMessage[] = [
