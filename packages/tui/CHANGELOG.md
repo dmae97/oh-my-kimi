@@ -26,6 +26,10 @@
 
 - Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal. Inline images now negotiate the Kitty graphics protocol on macOS/Linux (direct placement — Warp has no Unicode-placeholder support); the protocol is dropped on Windows, where Warp ships without Kitty support and the APC sequences would render as visible garbage. True color is enabled. OSC 8 hyperlinks stay off by default because Warp's renderer prints the escape as literal text rather than a clickable link (opt in with `PI_FORCE_HYPERLINKS=1` once Warp lands real support), and synchronized output remains gated on the runtime DECRQM probe ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
 
+### Fixed
+
+- Fixed ordinary render scheduling to yield behind already-queued terminal input, preventing delayed Esc delivery during heavy streaming paints ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed

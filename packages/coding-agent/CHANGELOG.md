@@ -100,6 +100,10 @@
 - Fixed a background-task spawn slot leaking from the `task.maxConcurrency` limiter when progress reporting threw between acquiring the slot and entering the guarded run: `markRunning`/`reportProgress` now run inside the try whose `finally` releases the semaphore, so a failed progress report can no longer permanently shrink subagent concurrency. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed active goal runs that successfully call `yield` and then receive a trailing empty assistant `stop` skipping threshold compaction; post-yield empty-stop suppression now still anchors active-goal compaction on the yield-bearing assistant turn, so long-running tasks continue after maintenance instead of settling early.
 
+### Fixed
+
+- Fixed streaming Esc handling so the first Esc arms a 2s cancel hint and only a second Esc in that window aborts the active response ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+
 ## [16.1.19] - 2026-06-25
 
 ### Fixed
