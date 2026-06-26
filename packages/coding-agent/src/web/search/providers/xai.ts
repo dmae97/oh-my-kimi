@@ -67,26 +67,34 @@ function buildRequestBody(params: SearchParams): Record<string, unknown> {
 	return body;
 }
 
-async function callXAIResponses(apiKey: string, params: SearchParams): Promise<XAIResponsesResponse> {
-	const response = await (params.fetch ?? fetch)(XAI_RESPONSES_URL, {
+async function postXAIResponses(
+	apiKey: string,
+	params: SearchParams,
+	body: Record<string, unknown>,
+): Promise<Response> {
+	return (params.fetch ?? fetch)(XAI_RESPONSES_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
 		},
-		body: JSON.stringify(buildRequestBody(params)),
+		body: JSON.stringify(body),
 		signal: withHardTimeout(params.signal),
 	});
+}
+
+function throwXAIResponsesError(status: number, errorText: string): never {
+	const classified = classifyProviderHttpError("xai", status, errorText);
+	if (classified) throw classified;
+	throw new SearchProviderError("xai", `xAI Responses API error (${status}): ${errorText}`, status);
+}
+
+async function callXAIResponses(apiKey: string, params: SearchParams): Promise<XAIResponsesResponse> {
+	const requestBody = buildRequestBody(params);
+	const response = await postXAIResponses(apiKey, params, requestBody);
 
 	if (!response.ok) {
-		const errorText = await response.text();
-		const classified = classifyProviderHttpError("xai", response.status, errorText);
-		if (classified) throw classified;
-		throw new SearchProviderError(
-			"xai",
-			`xAI Responses API error (${response.status}): ${errorText}`,
-			response.status,
-		);
+		throwXAIResponsesError(response.status, await response.text());
 	}
 
 	return (await response.json()) as XAIResponsesResponse;

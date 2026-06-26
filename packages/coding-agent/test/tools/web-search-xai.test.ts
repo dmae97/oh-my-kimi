@@ -33,17 +33,17 @@ function makeParams(fetch: FetchImpl, authStorage: AuthStorage = makeAuthStorage
 	} as const;
 }
 
-function captureFetch(responseBody: Record<string, unknown>, status = 200) {
-	let capturedRequest: CapturedRequest | null = null;
+function captureFetch(responseBody: Record<string, unknown> | string, status = 200) {
+	const capturedRequests: CapturedRequest[] = [];
 	const fetchMock: FetchImpl = (input, init) => {
-		capturedRequest = {
+		capturedRequests.push({
 			url: typeof input === "string" ? input : input.toString(),
 			method: init?.method,
 			headers: init?.headers,
 			body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : null,
-		};
+		});
 		return Promise.resolve(
-			new Response(JSON.stringify(responseBody), {
+			new Response(typeof responseBody === "string" ? responseBody : JSON.stringify(responseBody), {
 				status,
 				headers: { "Content-Type": "application/json" },
 			}),
@@ -51,8 +51,9 @@ function captureFetch(responseBody: Record<string, unknown>, status = 200) {
 	};
 	return {
 		fetchMock,
+		capturedRequests,
 		get capturedRequest() {
-			return capturedRequest;
+			return capturedRequests.at(-1) ?? null;
 		},
 	};
 }
@@ -88,6 +89,66 @@ describe("xAI web search provider", () => {
 			max_output_tokens: 512,
 			temperature: 0.2,
 		});
+		expect(capture.capturedRequest?.body?.tools).toEqual([{ type: "web_search" }]);
+		expect(capture.capturedRequest?.body).not.toHaveProperty("search_parameters");
+	});
+
+	it("omits search_parameters for minimal web_search requests", async () => {
+		const capture = captureFetch({ id: "resp_minimal", model: "grok-4.3", output_text: "minimal xAI answer" });
+
+		await searchXAI(makeParams(capture.fetchMock));
+
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+	});
+
+	it.each([
+		["limit", { limit: 6 }],
+		["numSearchResults", { numSearchResults: 7 }],
+		["limit and numSearchResults", { limit: 2, numSearchResults: 50 }],
+		["recency", { recency: "week" }],
+		["limit, numSearchResults, and recency", { limit: 0, numSearchResults: 30, recency: "day" }],
+	] as const)("does not map %s to xAI search_parameters", async (_caseName, searchParams) => {
+		const capture = captureFetch({ id: "resp_agent_tools", model: "grok-4.3", output_text: "xAI answer" });
+
+		await searchXAI({
+			...makeParams(capture.fetchMock),
+			...searchParams,
+		});
+
+		expect(capture.capturedRequest).not.toBeNull();
+		const body = capture.capturedRequest?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
+		expect(Object.keys(body ?? {}).sort()).toEqual(["input", "model", "tools"]);
+	});
+
+	it("rejects deprecated live-search 410 responses without retrying", async () => {
+		const capture = captureFetch("Live search is deprecated. Please use the Agent Tools API.", 410);
+
+		try {
+			await searchXAI({
+				...makeParams(capture.fetchMock),
+				limit: 2,
+				numSearchResults: 5,
+				recency: "week",
+			});
+			expect.unreachable("xAI HTTP 410 deprecation failure should reject");
+		} catch (error) {
+			expect(error).toBeInstanceOf(SearchProviderError);
+			expect(error).toMatchObject({
+				provider: "xai",
+				status: 410,
+				message: "xAI Responses API error (410): Live search is deprecated. Please use the Agent Tools API.",
+			});
+		}
+
+		expect(capture.capturedRequests).toHaveLength(1);
+		const body = capture.capturedRequests[0]?.body;
+		expect(body?.tools).toEqual([{ type: "web_search" }]);
+		expect(body).not.toHaveProperty("search_parameters");
 	});
 
 	it("maps output_text, URL citation annotations, top-level citations, id, model, usage, and auth mode", async () => {
