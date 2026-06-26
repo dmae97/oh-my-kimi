@@ -115,6 +115,13 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 				type: "module",
 				exports: { "./value": "./value.js" },
 			}),
+			"node_modules/rootdep/package.json": JSON.stringify({
+				name: "rootdep",
+				version: "1.0.0",
+				type: "module",
+				exports: "./dist/index.js",
+			}),
+			"node_modules/rootdep/dist/index.js": "export const rootValue = 2;",
 			"node_modules/esmdep/value.js": "export const value = 1;",
 			"index.ts": "",
 		});
@@ -123,12 +130,14 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 			[
 				'import * as path from "node:path";',
 				'import { value } from "esmdep/value";',
-				"export const loaded = value;",
+				'import { rootValue } from "rootdep";',
+				"export const loaded = value + rootValue;",
 			].join("\n"),
 			importer,
 		);
 
 		expect(rewritten).toContain(url.pathToFileURL(path.join(dir, "node_modules/esmdep/value.js")).href);
+		expect(rewritten).toContain(url.pathToFileURL(path.join(dir, "node_modules/rootdep/dist/index.js")).href);
 		expect(rewritten).toContain('from "node:path"');
 	});
 

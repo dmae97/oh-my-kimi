@@ -771,6 +771,10 @@ async function resolveNodePackageExport(
 	manifest: Record<string, unknown>,
 ): Promise<string | null> {
 	const exportsField = manifest.exports;
+	const rootTarget = subpath === null ? selectPackageImportTarget(exportsField) : null;
+	if (rootTarget !== null && rootTarget !== PACKAGE_IMPORT_EXCLUDED) {
+		return resolvePackageExportTarget(packageRoot, rootTarget, null);
+	}
 	if (!isRecord(exportsField)) {
 		return null;
 	}
