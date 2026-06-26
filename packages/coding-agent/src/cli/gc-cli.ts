@@ -3,9 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { getAgentDir, getBlobsDir, getHistoryDbPath, getModelDbPath, getSessionsDir } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
 import { Settings } from "../config/settings";
-import { getDefault } from "../config/settings-schema";
 import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
 import { FileSessionStorage } from "../session/session-storage";
 
@@ -129,53 +127,19 @@ interface GcLockSnapshot {
 	text: string;
 }
 
-type RawConfig = Record<string, unknown>;
-
 function numberSetting(value: number | undefined, fallback: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
 	return Math.max(0, Math.floor(value));
 }
 
-function rawConfigValue(config: RawConfig, pathKey: string): unknown {
-	let current: unknown = config;
-	for (const segment of pathKey.split(".")) {
-		if (current === null || current === undefined || typeof current !== "object" || Array.isArray(current)) {
-			return undefined;
-		}
-		current = (current as RawConfig)[segment];
-	}
-	return current;
-}
-
-function booleanConfigValue(config: RawConfig, pathKey: string, fallback: boolean): boolean {
-	const value = rawConfigValue(config, pathKey);
-	return typeof value === "boolean" ? value : fallback;
-}
-
-function numberConfigValue(config: RawConfig, pathKey: string, fallback: number): number {
-	const value = rawConfigValue(config, pathKey);
-	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-async function loadConfigReadOnly(agentDir: string): Promise<RawConfig> {
-	try {
-		const parsed = YAML.parse(await Bun.file(path.join(agentDir, "config.yml")).text());
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-		return parsed as RawConfig;
-	} catch {
-		return {};
-	}
-}
-
 async function resolveOptions(flags: GcCommandFlags): Promise<ResolvedGcOptions> {
 	const agentDir = path.resolve(flags.agentDir ?? getAgentDir());
 	const selected = flags.blobs === true || flags.archive === true || flags.wal === true;
-	const config = flags.apply === true ? undefined : await loadConfigReadOnly(agentDir);
-	const settings = flags.apply === true ? await Settings.init({ agentDir }) : undefined;
-	const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") =>
-		settings?.get(pathKey) ?? booleanConfigValue(config ?? {}, pathKey, getDefault(pathKey));
+	const settings =
+		flags.apply === true ? await Settings.init({ agentDir }) : await Settings.loadReadOnly({ agentDir });
+	const getBoolean = (pathKey: "gc.blobs" | "gc.archive" | "gc.wal") => settings.get(pathKey);
 	const getNumber = (pathKey: "gc.coldArchiveAfterDays" | "gc.retainNewestGlobal" | "gc.retainNewestPerCwd") =>
-		settings?.get(pathKey) ?? numberConfigValue(config ?? {}, pathKey, getDefault(pathKey));
+		settings.get(pathKey);
 	return {
 		apply: flags.apply === true,
 		json: flags.json === true,
@@ -674,10 +638,11 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 	if (!apply || !(await pathExists(dbPath))) return result;
 
 	const db = new Database(dbPath);
+	let checkpointAttempted = false;
 	try {
 		db.run("PRAGMA busy_timeout = 5000");
 		const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as WalCheckpointRow | null;
-		result.checkpointed = true;
+		checkpointAttempted = true;
 		result.busy = sqliteNumber(row?.busy);
 		result.log = sqliteNumber(row?.log);
 		result.checkpointedFrames = sqliteNumber(row?.checkpointed);
@@ -690,6 +655,10 @@ async function checkpointWal(dbPath: string, apply: boolean): Promise<WalCheckpo
 		if (codeOf(error) !== "ENOENT") throw error;
 		result.walBytes = 0;
 	}
+	if (checkpointAttempted && (result.busy > 0 || result.walBytes > 0)) {
+		throw new Error(`WAL checkpoint failed for ${dbPath}: busy=${result.busy}, walBytes=${result.walBytes}`);
+	}
+	result.checkpointed = checkpointAttempted;
 	return result;
 }
 

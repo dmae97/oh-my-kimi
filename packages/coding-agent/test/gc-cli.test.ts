@@ -5,7 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { runGcCommand } from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
-import { getAgentDir, getBlobsDir, getHistoryDbPath, getSessionsDir, setAgentDir } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDir,
+	getBlobsDir,
+	getHistoryDbPath,
+	getSessionsDir,
+	setAgentDir,
+	setProjectDir,
+} from "@oh-my-pi/pi-utils";
 import { runCli } from "../src/cli";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
@@ -99,6 +106,12 @@ async function agePath(file: string, ageDays = 1): Promise<void> {
 async function writeConfig(agentDir: string, body: string): Promise<void> {
 	await fs.mkdir(agentDir, { recursive: true });
 	await Bun.write(path.join(agentDir, "config.yml"), body);
+}
+
+async function writeProjectConfig(projectDir: string, body: string): Promise<void> {
+	const configDir = path.join(projectDir, ".omp");
+	await fs.mkdir(configDir, { recursive: true });
+	await Bun.write(path.join(configDir, "config.yml"), body);
 }
 
 describe("runGcCommand blob sweep", () => {
@@ -246,6 +259,50 @@ describe("runGcCommand blob sweep", () => {
 		expect(await Bun.file(path.join(root, "agent.db")).exists()).toBe(false);
 		expect(await Bun.file(path.join(root, "settings.json.bak")).exists()).toBe(false);
 	});
+
+	test("dry-run merges project gc settings like apply without initializing settings storage", async () => {
+		const projectRoot = path.join(root, "project-root");
+		await fs.mkdir(projectRoot, { recursive: true });
+		setProjectDir(projectRoot);
+		await writeSession(root, "project", "archive-me", "complete", { ageDays: 10 });
+		await writeConfig(
+			root,
+			[
+				"gc:",
+				"  blobs: false",
+				"  archive: false",
+				"  wal: false",
+				"  coldArchiveAfterDays: 30",
+				"  retainNewestGlobal: 1",
+				"  retainNewestPerCwd: 1",
+				"",
+			].join("\n"),
+		);
+		await writeProjectConfig(
+			projectRoot,
+			[
+				"gc:",
+				"  archive: true",
+				"  coldArchiveAfterDays: 7",
+				"  retainNewestGlobal: 0",
+				"  retainNewestPerCwd: 0",
+				"",
+			].join("\n"),
+		);
+
+		const dryRun = await runGcCommand({ flags: { agentDir: root } });
+
+		expect(dryRun.blobs).toBeUndefined();
+		expect(dryRun.archive?.wouldArchive).toBe(1);
+		expect(dryRun.archive?.archived).toBe(0);
+		expect(dryRun.wal).toBeUndefined();
+		expect(await Bun.file(path.join(root, "agent.db")).exists()).toBe(false);
+		expect(await Bun.file(path.join(root, "settings.json.bak")).exists()).toBe(false);
+
+		const applied = await runGcCommand({ flags: { agentDir: root, apply: true } });
+
+		expect(applied.archive?.archived).toBe(1);
+	});
 });
 
 describe("runGcCommand history checkpoint", () => {
@@ -295,6 +352,34 @@ describe("runGcCommand history checkpoint", () => {
 
 		expect(await Bun.file(path.join(root, "gc.lock")).exists()).toBe(false);
 	});
+
+	test("--apply reports busy WAL checkpoints and releases the gc lock", async () => {
+		const dbPath = getHistoryDbPath(root);
+		await fs.mkdir(path.dirname(dbPath), { recursive: true });
+		const writer = new Database(dbPath);
+		const reader = new Database(dbPath);
+		try {
+			writer.run("PRAGMA journal_mode=WAL");
+			writer.run("CREATE TABLE history (id INTEGER PRIMARY KEY, prompt TEXT)");
+			writer.run("INSERT INTO history (prompt) VALUES ('before-reader')");
+			reader.run("PRAGMA journal_mode=WAL");
+			reader.run("BEGIN");
+			reader.prepare("SELECT * FROM history").all();
+			writer.run("INSERT INTO history (prompt) VALUES ('after-reader')");
+
+			await expect(runGcCommand({ flags: { agentDir: root, wal: true, apply: true } })).rejects.toThrow(
+				`WAL checkpoint failed for ${dbPath}: busy=1`,
+			);
+
+			expect(await Bun.file(path.join(root, "gc.lock")).exists()).toBe(false);
+		} finally {
+			try {
+				reader.run("COMMIT");
+			} catch {}
+			reader.close();
+			writer.close();
+		}
+	}, 10_000);
 });
 
 describe("runGcCommand cold-session archive", () => {
