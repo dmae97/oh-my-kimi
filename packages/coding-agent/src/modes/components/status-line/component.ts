@@ -176,6 +176,10 @@ function hasGitSegment(segments: readonly StatusLineSegmentId[]): boolean {
 function hasPrSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return segments.includes("pr");
 }
+function hasPathSegment(segments: readonly StatusLineSegmentId[]): boolean {
+	return segments.includes("path");
+}
+
 function hasGitBackedSegment(segments: readonly StatusLineSegmentId[]): boolean {
 	return hasGitSegment(segments) || hasPrSegment(segments);
 }
@@ -522,7 +526,7 @@ export class StatusLineComponent implements Component {
 		(async () => {
 			// Helper: only write cache if branch/repo context hasn't changed since launch
 			const setCachedPr = (value: { number: number; url: string } | null) => {
-				const latestBranch = this.#getCurrentBranch();
+				const latestBranch = this.#getCurrentBranch(lookupCwd);
 				const latestContext = latestBranch
 					? createPrCacheContext(latestBranch, this.#cachedBranchRepoId ?? null)
 					: undefined;
@@ -800,6 +804,7 @@ export class StatusLineComponent implements Component {
 	#buildSegmentContext(
 		width: number,
 		segmentOptions: StatusLineSettings["segmentOptions"],
+		includePath: boolean,
 		includeContext: boolean,
 		includeGit: boolean,
 		includePr: boolean,
@@ -842,7 +847,11 @@ export class StatusLineComponent implements Component {
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
 
-		const activeRepoCache = this.#resolveActiveRepoCache();
+		const shouldResolveActiveRepo = this.#gitEnabled() && (includePath || includeGit || includePr);
+		const projectDir = getProjectDir();
+		const activeRepoCache = shouldResolveActiveRepo
+			? this.#resolveActiveRepoCache()
+			: { projectDir, activeRepo: null, effectiveGitCwd: projectDir };
 		const gitBranch = includeGit || includePr ? this.#getCurrentBranch(activeRepoCache.effectiveGitCwd) : null;
 		const gitStatus = includeGit ? this.#getGitStatus(activeRepoCache.effectiveGitCwd) : null;
 		const gitPr = includePr ? this.#lookupPr(activeRepoCache.effectiveGitCwd) : null;
@@ -922,6 +931,8 @@ export class StatusLineComponent implements Component {
 
 	#buildStatusLine(width: number): string {
 		const effectiveSettings = this.#resolveSettings();
+		const includePath =
+			hasPathSegment(effectiveSettings.leftSegments) || hasPathSegment(effectiveSettings.rightSegments);
 		const includeContext =
 			hasContextSegment(effectiveSettings.leftSegments) || hasContextSegment(effectiveSettings.rightSegments);
 		const gitEnabled = this.#gitEnabled();
@@ -933,6 +944,7 @@ export class StatusLineComponent implements Component {
 		const ctx = this.#buildSegmentContext(
 			width,
 			effectiveSettings.segmentOptions,
+			includePath,
 			includeContext,
 			includeGit,
 			includePr,
