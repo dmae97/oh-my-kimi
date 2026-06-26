@@ -13,7 +13,7 @@ import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import * as markit from "@oh-my-pi/pi-coding-agent/utils/markit";
-import { __resetProfileSnapshotForTests, refreshDirsFromEnv, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 function restoreEnv(key: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -143,8 +143,7 @@ describe("read PDF with a line-range selector", () => {
 			restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
 			restoreEnv("OMP_PROFILE", originalOmpProfile);
 			restoreEnv("PI_PROFILE", originalPiProfile);
-			__resetProfileSnapshotForTests();
-			refreshDirsFromEnv();
+			__resetDirsFromEnvForTests();
 		}
 	});
 });

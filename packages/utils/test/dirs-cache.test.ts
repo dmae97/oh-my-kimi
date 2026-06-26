@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	__resetProfileSnapshotForTests,
+	__resetDirsFromEnvForTests,
+	getActiveProfile,
 	getConfigDirName,
 	getDocumentConversionCacheDir,
-	refreshDirsFromEnv,
+	getProfileRootDir,
 	setAgentDir,
 } from "@oh-my-pi/pi-utils/dirs";
 import { Snowflake } from "@oh-my-pi/pi-utils/snowflake";
@@ -40,8 +41,7 @@ describe("document conversion cache directory", () => {
 		restoreEnv("OMP_PROFILE", originalOmpProfile);
 		restoreEnv("PI_PROFILE", originalPiProfile);
 		restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
-		__resetProfileSnapshotForTests();
-		refreshDirsFromEnv();
+		__resetDirsFromEnvForTests();
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	});
 
@@ -65,5 +65,40 @@ describe("document conversion cache directory", () => {
 		setAgentDir(customAgentDir);
 
 		expect(getDocumentConversionCacheDir()).toBe(path.join(customAgentDir, "cache", "document-conversions"));
+	});
+});
+
+describe("test directory state cleanup", () => {
+	it("restores the active profile from the current env after setAgentDir mutations", () => {
+		const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+		const originalOmpProfile = process.env.OMP_PROFILE;
+		const originalPiProfile = process.env.PI_PROFILE;
+		const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+		try {
+			process.env.OMP_PROFILE = "cache-profile";
+			delete process.env.PI_PROFILE;
+			delete process.env.PI_CODING_AGENT_DIR;
+			delete process.env.XDG_CACHE_HOME;
+			__resetDirsFromEnvForTests();
+
+			setAgentDir(path.join(os.tmpdir(), "pi-utils-document-cache", Snowflake.next(), "agent"));
+			expect(getActiveProfile()).toBeUndefined();
+
+			process.env.OMP_PROFILE = "cache-profile";
+			delete process.env.PI_PROFILE;
+			delete process.env.PI_CODING_AGENT_DIR;
+			__resetDirsFromEnvForTests();
+
+			expect(getActiveProfile()).toBe("cache-profile");
+			expect(getDocumentConversionCacheDir()).toBe(
+				path.join(getProfileRootDir("cache-profile"), "agent", "cache", "document-conversions"),
+			);
+		} finally {
+			restoreEnv("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+			restoreEnv("OMP_PROFILE", originalOmpProfile);
+			restoreEnv("PI_PROFILE", originalPiProfile);
+			restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
+			__resetDirsFromEnvForTests();
+		}
 	});
 });

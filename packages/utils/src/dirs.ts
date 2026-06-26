@@ -431,6 +431,18 @@ export function __resetProfileSnapshotForTests(): void {
 	);
 }
 
+/**
+ * Test-only: rebuild profile + directory state from the current process env.
+ * Production code keeps the module-load profile stable; tests that mutate
+ * `setAgentDir`/`setProfile` need an exact restore point after they put env vars
+ * back.
+ */
+export function __resetDirsFromEnvForTests(): void {
+	activeProfile = readProfileFromEnvSafe();
+	__resetProfileSnapshotForTests();
+	refreshDirsFromEnv();
+}
+
 /** Activate a named profile. Passing undefined or "default" returns to the default profile. */
 export function setProfile(profile: string | undefined): void {
 	const next = normalizeProfileName(profile);

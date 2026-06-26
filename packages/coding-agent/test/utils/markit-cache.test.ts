@@ -13,13 +13,7 @@ import * as path from "node:path";
 import { Markit } from "@oh-my-pi/pi-coding-agent/markit";
 import { convertBufferWithMarkit, convertFileWithMarkit } from "@oh-my-pi/pi-coding-agent/utils/markit";
 import { pruneMarkitConversionCache } from "@oh-my-pi/pi-coding-agent/utils/markit-cache";
-import {
-	__resetProfileSnapshotForTests,
-	getAgentDir,
-	refreshDirsFromEnv,
-	Snowflake,
-	setAgentDir,
-} from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 
 function restoreEnv(key: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -52,8 +46,7 @@ describe("document conversion cache", () => {
 		restoreEnv("OMP_PROFILE", originalOmpProfile);
 		restoreEnv("PI_PROFILE", originalPiProfile);
 		restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
-		__resetProfileSnapshotForTests();
-		refreshDirsFromEnv();
+		__resetDirsFromEnvForTests();
 		await fs.rm(testDir, { recursive: true, force: true });
 	});
 
