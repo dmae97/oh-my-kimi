@@ -270,6 +270,10 @@ describe("SshProtocolHandler", () => {
 			/malformed authority/,
 		);
 		await expect(handler.resolve(parseInternalUrl("ssh://:@prod/etc/hosts"))).rejects.toThrow(/malformed authority/);
+		await expect(handler.resolve(parseInternalUrl("ssh://prod%ZZ/etc/hosts"))).rejects.toThrow(/percent-escape/i);
+		await expect(handler.resolve(parseInternalUrl("ssh://user%ZZ@prod/etc/hosts"))).rejects.toThrow(
+			/percent-escape/i,
+		);
 	});
 
 	it("matches a configured colon-suffixed alias via %3A instead of treating it as an empty port", async () => {

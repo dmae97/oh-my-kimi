@@ -137,6 +137,18 @@ async function resolveTarget(url: InternalUrl, cwd?: string): Promise<SSHConnect
 	if (!bareHost && !rawAuthority) {
 		throw new Error("ssh:// requires a host: ssh://<host>/<absolute-path>");
 	}
+	// `decodeOr` fails open, so a malformed percent-escape (`%ZZ`) in the authority
+	// would otherwise pass the canonical check below and reach OpenSSH literally.
+	// Reject it up front — the path decoder fails closed for the same bad escapes.
+	for (const part of [url.username, bareHost]) {
+		if (part.includes("%")) {
+			try {
+				decodeURIComponent(part);
+			} catch {
+				throw new Error(`ssh://: invalid percent-escape in authority "${url.href}"`);
+			}
+		}
+	}
 	if (url.password) {
 		throw new Error(
 			"ssh://: password authentication is not supported; ssh:// uses key/agent auth — drop the ':<password>' from the URL",
