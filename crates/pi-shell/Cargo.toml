@@ -26,6 +26,19 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 xxhash-rust.workspace = true
+pi-uutils-ctx = { path = "../pi-uutils-ctx" }
+uu_mkdir = { path = "../uu-mkdir-vendored" }
+uu_head = { path = "../uu-head-vendored" }
+uu_sort = { path = "../uu-sort-vendored" }
+uu_wc = { path = "../uu-wc-vendored" }
+uu_tail = { path = "../uu-tail-vendored" }
+uu_rm = { path = "../uu-rm-vendored" }
+uu_mv = { path = "../uu-mv-vendored" }
+uu_ls = { path = "../uu-ls-vendored" }
+uu_find = { path = "../uu-find-vendored" }
+pi_uu_grep = { path = "../pi-uu-grep" }
+uu_cat = { path = "../uu-cat-vendored" }
+uu_uniq = { path = "../uu-uniq-vendored" }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
