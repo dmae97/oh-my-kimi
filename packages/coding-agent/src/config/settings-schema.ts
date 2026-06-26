@@ -132,7 +132,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	tools: [
 		"Available Tools",
 		"Todos",
-		"Search & Browser",
+		"Grep & Browser",
 		"GitHub",
 		"Output Limits",
 		"Execution",
@@ -3500,7 +3500,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
-			group: "Search & Browser",
+			group: "Grep & Browser",
 			label: "Headless Browser",
 			description: "Launch browser in headless mode (disable to show browser UI)",
 		},
@@ -3511,7 +3511,7 @@ export const SETTINGS_SCHEMA = {
 		default: true,
 		ui: {
 			tab: "tools",
-			group: "Search & Browser",
+			group: "Grep & Browser",
 			label: "cmux Browser",
 			description:
 				"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override.",
@@ -3522,7 +3522,7 @@ export const SETTINGS_SCHEMA = {
 		default: undefined,
 		ui: {
 			tab: "tools",
-			group: "Search & Browser",
+			group: "Grep & Browser",
 			label: "Screenshot Directory",
 			description:
 				"Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)",
