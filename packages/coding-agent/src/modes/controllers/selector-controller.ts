@@ -22,6 +22,7 @@ import {
 	getSymbolTheme,
 	previewTheme,
 	setColorBlindMode,
+	setMarkdownMermaidRendering,
 	setSymbolPreset,
 	setTheme,
 	theme,
@@ -372,6 +373,15 @@ export class SelectorController {
 				this.ctx.ui.invalidate();
 				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
+				break;
+
+			case "tui.renderMermaid":
+				setMarkdownMermaidRendering(value as boolean);
+				this.ctx.session.refreshBaseSystemPrompt().catch(err => {
+					this.ctx.showError(`Failed to apply Mermaid rendering setting: ${err}`);
+				});
+				this.ctx.rebuildChatFromMessages();
+				this.ctx.ui.resetDisplay();
 				break;
 
 			case "theme": {

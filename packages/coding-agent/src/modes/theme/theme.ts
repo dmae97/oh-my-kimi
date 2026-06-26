@@ -2824,23 +2824,36 @@ export function getSymbolTheme(): SymbolTheme {
 
 let cachedMarkdownTheme: MarkdownTheme | undefined;
 let cachedMarkdownThemeRef: Theme | undefined;
+let markdownMermaidRendering = true;
+
+export function setMarkdownMermaidRendering(enabled: boolean): void {
+	if (markdownMermaidRendering === enabled) return;
+	markdownMermaidRendering = enabled;
+	cachedMarkdownTheme = undefined;
+}
 
 export function getMarkdownTheme(): MarkdownTheme {
 	if (cachedMarkdownTheme !== undefined && cachedMarkdownThemeRef === theme) {
 		return cachedMarkdownTheme;
 	}
-	// Mermaid ASCII diagrams render with the active palette so they read as
-	// content rather than raw monochrome. Roles mirror the SVG renderer's
-	// mapping; `text`/`muted`/`border`/`borderMuted`/`accent` exist in every theme.
-	const mermaidColorMode = theme.getColorMode() === "truecolor" ? "truecolor" : "ansi256";
-	const mermaidTheme = {
-		fg: theme.getColorHex("text"),
-		border: theme.getColorHex("border"),
-		line: theme.getColorHex("muted"),
-		arrow: theme.getColorHex("accent"),
-		corner: theme.getColorHex("muted"),
-		junction: theme.getColorHex("borderMuted"),
-	};
+	const mermaid = markdownMermaidRendering
+		? (() => {
+				// Mermaid ASCII diagrams render with the active palette so they read as
+				// content rather than raw monochrome. Roles mirror the SVG renderer's
+				// mapping; `text`/`muted`/`border`/`borderMuted`/`accent` exist in every theme.
+				const mermaidColorMode =
+					theme.getColorMode() === "truecolor" ? ("truecolor" as const) : ("ansi256" as const);
+				const mermaidTheme = {
+					fg: theme.getColorHex("text"),
+					border: theme.getColorHex("border"),
+					line: theme.getColorHex("muted"),
+					arrow: theme.getColorHex("accent"),
+					corner: theme.getColorHex("muted"),
+					junction: theme.getColorHex("borderMuted"),
+				};
+				return { mermaidColorMode, mermaidTheme };
+			})()
+		: undefined;
 	const markdownTheme: MarkdownTheme = {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
@@ -2857,8 +2870,14 @@ export function getMarkdownTheme(): MarkdownTheme {
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => chalk.strikethrough(text),
 		symbols: getSymbolTheme(),
-		resolveMermaidAscii: (source, maxWidth) =>
-			resolveMermaidAscii(source, { maxWidth, theme: mermaidTheme, colorMode: mermaidColorMode }),
+		resolveMermaidAscii: mermaid
+			? (source, maxWidth) =>
+					resolveMermaidAscii(source, {
+						maxWidth,
+						theme: mermaid.mermaidTheme,
+						colorMode: mermaid.mermaidColorMode,
+					})
+			: undefined,
 		highlightCode: (code: string, lang?: string): string[] => {
 			const validLang = lang && nativeSupportsLanguage(lang) ? lang : undefined;
 			const highlighted = highlightCached(code, validLang, theme);

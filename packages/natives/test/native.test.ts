@@ -251,6 +251,29 @@ describe("pi-natives", () => {
 			expect(out).toContain("<s>hello");
 			expect(out).toContain("<c># greeting");
 		});
+
+		it("highlights Mermaid via the vendored syntax", () => {
+			expect(getSupportedLanguages()).toContain("Mermaid");
+			expect(supportsLanguage("mermaid")).toBe(true);
+			expect(supportsLanguage("mmd")).toBe(true);
+
+			const colors = {
+				comment: "<c>",
+				keyword: "<k>",
+				function: "<f>",
+				variable: "<v>",
+				string: "<s>",
+				number: "<n>",
+				type: "<t>",
+				operator: "<o>",
+				punctuation: "<p>",
+			};
+			const out = highlightCode('graph TD\n  A["Start"] --> B\n  %% note\n', "mermaid", colors);
+			expect(out).toContain("<k>graph");
+			expect(out).toContain("<s>Start");
+			expect(out).toContain("<k>-->");
+			expect(out).toContain("<c> note");
+		});
 	});
 
 	describe("keys", () => {

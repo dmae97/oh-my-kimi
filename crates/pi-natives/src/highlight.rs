@@ -25,6 +25,7 @@ thread_local! {
 const EXTRA_SYNTAXES: &[&str] = &[
 	include_str!("syntaxes/Julia.sublime-syntax"),
 	include_str!("syntaxes/Nix.sublime-syntax"),
+	include_str!("syntaxes/Mermaid.sublime-syntax"),
 ];
 
 fn get_syntax_set() -> &'static SyntaxSet {
@@ -179,6 +180,7 @@ const LANG_ALIASES: &[(&[&str], &str)] = &[
 	(&["rb", "ruby"], "Ruby"),
 	(&["jl", "julia"], "Julia"),
 	(&["nix"], "Nix"),
+	(&["mermaid", "mmd"], "Mermaid"),
 	(&["rs", "rust"], "Rust"),
 	(&["go", "golang"], "Go"),
 	(&["java"], "Java"),

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Mermaid syntax highlighting support to `highlightCode`/`supportsLanguage` via a vendored `Mermaid.sublime-syntax` and `mermaid`/`mmd` aliases.
+
 ## [16.1.17] - 2026-06-24
 
 ### Added
