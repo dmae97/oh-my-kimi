@@ -1,10 +1,10 @@
-/** `search` (alias `grep`) — ripgrep content search across workspace files. */
+/** `grep` (legacy `search`) — ripgrep content search across workspace files. */
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, num, resultTextOf, shortenPath, str } from "../util";
 
-/** Search targets: modern `paths` (string | string[]) or legacy grep `path`. */
+/** Grep targets: current `paths` (string | string[]) or legacy `path`. */
 function pathsOf(args: Record<string, unknown>): string[] {
 	const raw = args.paths ?? args.path;
 	if (typeof raw === "string") return [shortenPath(raw)];
@@ -18,7 +18,7 @@ function pathsOf(args: Record<string, unknown>): string[] {
 	return ["."];
 }
 
-/** Flag badges covering both arg dialects (search: i/skip/gitignore; grep: glob/type/multiline). */
+/** Flag badges covering current and legacy arg dialects. */
 function argBadges(args: Record<string, unknown>): ReactNode[] {
 	const badges: ReactNode[] = [];
 	const glob = str(args.glob);
@@ -82,4 +82,4 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	);
 }
 
-export const searchRenderer: ToolRenderer = { Summary, Body };
+export const grepRenderer: ToolRenderer = { Summary, Body };

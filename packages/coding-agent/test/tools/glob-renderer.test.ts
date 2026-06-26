@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { findToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/find";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { globToolRenderer } from "../../src/tools/glob";
 
-describe("findToolRenderer", () => {
-	it("indents inline find output and avoids accent-colored success headers", async () => {
+describe("globToolRenderer", () => {
+	it("indents inline glob output and avoids accent-colored success headers", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
@@ -16,7 +16,7 @@ describe("findToolRenderer", () => {
 			},
 		};
 
-		const renderedLines = findToolRenderer
+		const renderedLines = globToolRenderer
 			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { paths: "src/**/*.ts" })
 			.render(240);
 		const plainLines = sanitizeText(renderedLines.join("\n")).split("\n");

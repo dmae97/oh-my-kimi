@@ -194,8 +194,8 @@ describe("SearchToolBm25Tool", () => {
 
 	it("discovers built-in tools when using the new tools.discoveryMode=all setting", async () => {
 		const builtinTools: DiscoverableTool[] = [
-			builtinTool("find", "Find files and directories matching a glob pattern"),
-			builtinTool("search", "Search file contents using ripgrep"),
+			builtinTool("glob", "Find files and directories matching a glob pattern"),
+			builtinTool("grep", "Search file contents using ripgrep"),
 		];
 		const allTools = [...discoverableTools, ...builtinTools];
 		const session = createSession(discoverableTools, {
@@ -206,7 +206,7 @@ describe("SearchToolBm25Tool", () => {
 
 		const result = await tool.execute("call-builtin", { query: "find files" });
 		const names = result.details?.tools.map(t => t.name) ?? [];
-		expect(names).toContain("find");
+		expect(names).toContain("glob");
 	});
 });
 
@@ -218,8 +218,8 @@ describe("renderSearchToolBm25Description", () => {
 	it("lists discoverable built-in tool names alphabetically without leaking them into the MCP server line", () => {
 		const rendered = renderSearchToolBm25Description([
 			builtinTool("write", "Create or overwrite a file"),
-			builtinTool("find", "Find files by name"),
-			builtinTool("search", "Search file contents"),
+			builtinTool("glob", "Find files by name"),
+			builtinTool("grep", "Search file contents"),
 			mcpTool("mcp__github_create_issue", "github", "create_issue", "Create a GitHub issue", ["owner"]),
 			mcpTool("mcp__slack_post_message", "slack", "post_message", "Post a message to Slack", ["channel"]),
 		]);
@@ -233,7 +233,7 @@ describe("renderSearchToolBm25Description", () => {
 		const mcpLine = lineWith(rendered, "Discoverable MCP servers");
 		expect(mcpLine).toBe("Discoverable MCP servers in this session: github (1 tool), slack (1 tool).");
 		expect(mcpLine).not.toContain("write");
-		expect(mcpLine).not.toContain("find");
+		expect(mcpLine).not.toContain("glob");
 		expect(rendered).toContain(
 			"Discoverable MCP servers in this session: github (1 tool), slack (1 tool).\n" +
 				"Discoverable built-in tools: find, search, write.\n" +
@@ -255,7 +255,7 @@ describe("renderSearchToolBm25Description", () => {
 	it("keeps built-ins counted in the total discoverable tools line", () => {
 		const rendered = renderSearchToolBm25Description([
 			builtinTool("write", "Create or overwrite a file"),
-			builtinTool("find", "Find files by name"),
+			builtinTool("glob", "Find files by name"),
 			mcpTool("mcp__slack_post_message", "slack", "post_message", "Post a message to Slack", ["channel"]),
 		]);
 

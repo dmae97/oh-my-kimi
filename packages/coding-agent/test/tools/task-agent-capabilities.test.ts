@@ -53,7 +53,7 @@ describe("task agent capability descriptions", () => {
 					name: "read_scout",
 					description: "Read-only scout",
 					systemPrompt: "Scout the codebase.",
-					tools: ["read", "search", "find"],
+					tools: ["read", "grep", "glob"],
 					source: "project",
 				},
 				{

@@ -1,12 +1,17 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added support for file deletion and moving within file editing operations
 
 ### Changed
 
+- Renamed `search` tool to `grep`
+- Renamed `find` tool to `glob`
+- Updated configuration keys and UI labels to reflect `grep` and `glob` tool naming
+- Automatically migrated existing user settings for `search` and `find` to `grep` and `glob` configs
 - Changed the `inlineToolDescriptors` setting ("Inline Tool Descriptors") from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto`. `auto` inlines tool descriptors into the system prompt (and strips them from provider tool schemas) only for Gemini models, leaving them in the schemas otherwise; `on`/`off` force the behavior regardless of model. Existing `true`/`false` configs migrate to `on`/`off`.
 - Replaced `as string | undefined` inline casts with `typeof` guards in the TUI usage renderer's account identity resolution (`formatAccountLabel`, `formatUnlimitedReportLabel`, reset-credits label, and unlimited-plan tier), so empty-string metadata values fall through to the next fallback instead of being displayed
 

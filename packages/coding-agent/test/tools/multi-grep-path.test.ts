@@ -58,8 +58,8 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 
 	it("defaults to the workspace root when paths is omitted", async () => {
 		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "search");
-		if (!tool) throw new Error("Missing search tool");
+		const tool = tools.find(entry => entry.name === "grep");
+		if (!tool) throw new Error("Missing grep tool");
 
 		// Callers that omit `paths` would otherwise be rejected at schema
 		// validation with `paths: Invalid input` and never run. Omission must
@@ -74,8 +74,8 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 
 	it("defaults to the workspace root when paths is an empty array", async () => {
 		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "search");
-		if (!tool) throw new Error("Missing search tool");
+		const tool = tools.find(entry => entry.name === "grep");
+		if (!tool) throw new Error("Missing grep tool");
 
 		const result = await tool.execute("search-empty-paths", {
 			pattern: "default-needle",
@@ -112,8 +112,8 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 
 	it("returns matches from both trees without rooting the scan at /", async () => {
 		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "search");
-		if (!tool) throw new Error("Missing search tool");
+		const tool = tools.find(entry => entry.name === "grep");
+		if (!tool) throw new Error("Missing grep tool");
 
 		const start = performance.now();
 		const result = await tool.execute("search-cross-tree", {
@@ -206,8 +206,8 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 		// explicit file into the walk's glob union silently returned 0 matches.
 		// The file must be read directly as its own target.
 		const tools = await createTools(createTestSession(repo));
-		const tool = tools.find(entry => entry.name === "search");
-		if (!tool) throw new Error("Missing search tool");
+		const tool = tools.find(entry => entry.name === "grep");
+		if (!tool) throw new Error("Missing grep tool");
 
 		const result = await tool.execute("search-git-config", {
 			pattern: "followTags",
@@ -223,8 +223,8 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 		await fs.mkdir(path.join(repo, "src"), { recursive: true });
 		await Bun.write(path.join(repo, "src", "a.ts"), "needle-dup\n");
 		const tools = await createTools(createTestSession(repo));
-		const tool = tools.find(entry => entry.name === "search");
-		if (!tool) throw new Error("Missing search tool");
+		const tool = tools.find(entry => entry.name === "grep");
+		if (!tool) throw new Error("Missing grep tool");
 
 		const result = await tool.execute("search-overlap", {
 			pattern: "needle-dup",

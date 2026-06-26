@@ -584,11 +584,7 @@ export function setWorktreesDir(dir: string | undefined): string | undefined {
  * ignored and resolution falls through.
  */
 export function getWorktreesDir(): string {
-	return (
-		resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ??
-		worktreesDirOverride ??
-		dirs.rootSubdir("wt", "data")
-	);
+	return resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
 }
 
 /** Get the SSH control socket directory (~/.omp/ssh-control). */

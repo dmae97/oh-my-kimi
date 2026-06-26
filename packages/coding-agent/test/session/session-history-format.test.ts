@@ -106,7 +106,7 @@ describe("formatSessionHistoryMarkdown", () => {
 			{
 				role: "toolResult",
 				toolCallId: "tc-orphan",
-				toolName: "search",
+				toolName: "grep",
 				content: [{ type: "text", text: "one match" }],
 				isError: false,
 				timestamp: 1,
@@ -122,8 +122,8 @@ describe("formatSessionHistoryMarkdown", () => {
 				content: [
 					{
 						type: "toolCall",
-						id: "tc-find",
-						name: "find",
+						id: "tc-glob",
+						name: "glob",
 						arguments: { paths: ["packages/coding-agent/src/**/*.ts"] },
 					},
 				],
@@ -131,8 +131,8 @@ describe("formatSessionHistoryMarkdown", () => {
 			},
 			{
 				role: "toolResult",
-				toolCallId: "tc-find",
-				toolName: "find",
+				toolCallId: "tc-glob",
+				toolName: "glob",
 				content: [{ type: "text", text: "session-history-format.ts" }],
 				isError: false,
 				timestamp: 2,
@@ -150,8 +150,8 @@ describe("formatSessionHistoryMarkdown", () => {
 				content: [
 					{
 						type: "toolCall",
-						id: "tc-search",
-						name: "search",
+						id: "tc-grep",
+						name: "grep",
 						arguments: { pattern: "PRIMARY_ARG_KEYS", paths: ["packages/coding-agent/src/session"] },
 					},
 				],
@@ -159,8 +159,8 @@ describe("formatSessionHistoryMarkdown", () => {
 			},
 			{
 				role: "toolResult",
-				toolCallId: "tc-search",
-				toolName: "search",
+				toolCallId: "tc-grep",
+				toolName: "grep",
 				content: [{ type: "text", text: "timed out" }],
 				isError: true,
 				timestamp: 2,

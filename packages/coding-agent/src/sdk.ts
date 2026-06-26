@@ -160,8 +160,9 @@ import {
 	discoverStartupLspServers,
 	EditTool,
 	EvalTool,
-	FindTool,
 	filterInitialToolsForDiscoveryAll,
+	GlobTool,
+	GrepTool,
 	getSearchTools,
 	HIDDEN_TOOLS,
 	isImageProviderPreference,
@@ -172,7 +173,6 @@ import {
 	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
-	SearchTool,
 	SearchToolBm25Tool,
 	setExcludedSearchProviders,
 	setPreferredImageProvider,
@@ -183,6 +183,7 @@ import {
 	WriteTool,
 	warmupLspServers,
 } from "./tools";
+import { normalizeToolName, normalizeToolNames } from "./tools/builtin-names";
 import { ToolContextStore } from "./tools/context";
 import { getImageGenTools } from "./tools/image-gen";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -608,12 +609,12 @@ export {
 	createTools,
 	EditTool,
 	EvalTool,
-	FindTool,
+	GlobTool,
+	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
 	ReadTool,
 	ResolveTool,
-	SearchTool,
 	type ToolSession,
 	WebSearchTool,
 	WriteTool,
@@ -1491,9 +1492,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			hasUI: options.hasUI ?? false,
 			enableLsp,
 			get hasEditTool() {
-				const requestedToolNames = options.toolNames
-					? [...new Set(options.toolNames.map(name => name.toLowerCase()))]
-					: undefined;
+				const requestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 				return !requestedToolNames || requestedToolNames.includes("edit");
 			},
 			skipPythonPreflight: options.skipPythonPreflight,
@@ -2284,9 +2283,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		};
 
 		const toolNamesFromRegistry = Array.from(toolRegistry.keys());
-		const explicitlyRequestedToolNames = options.toolNames
-			? [...new Set(options.toolNames.map(name => name.toLowerCase()))]
-			: undefined;
+		const explicitlyRequestedToolNames = options.toolNames ? normalizeToolNames(options.toolNames) : undefined;
 		// When `requireYieldTool` is set, the subagent's prompts and idle-reminders demand a
 		// `yield` call to terminate. The tool registry already includes `yield` (see
 		// `createTools`), but an explicit `toolNames` list would otherwise drop it from the
@@ -2336,13 +2333,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					discoveryDefaultServers,
 				)
 			: [];
+		const normalizeRenamedBuiltinToolName = normalizeToolName;
 		let initialSelectedMCPToolNames: string[] = [];
 		let defaultSelectedMCPToolNames: string[] = [];
 		let initialToolNames = [...initialRequestedActiveToolNames];
 		if (mcpDiscoveryEnabled) {
-			const restoredSelectedMCPToolNames = existingSession.selectedMCPToolNames.filter(name =>
-				toolRegistry.has(name),
-			);
+			const restoredSelectedMCPToolNames = existingSession.selectedMCPToolNames
+				.map(normalizeRenamedBuiltinToolName)
+				.filter(name => toolRegistry.has(name));
 			defaultSelectedMCPToolNames = [
 				...new Set([...discoveryDefaultServerToolNames, ...explicitlyRequestedMCPToolNames]),
 			];
@@ -2391,10 +2389,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			initialToolNames = filterInitialToolsForDiscoveryAll(initialToolNames, {
 				loadModeOf: name => toolRegistry.get(name)?.loadMode,
 				essentialNames: new Set(computeEssentialBuiltinNames(settings)),
-				explicitlyRequested: new Set(options.toolNames?.map(name => name.toLowerCase()) ?? []),
+				explicitlyRequested: new Set(options.toolNames ? normalizeToolNames(options.toolNames) : []),
 				// Back-compat: persisted activations live under selectedMCPToolNames today (built-in
 				// activation persistence is a follow-up). MCP names won't collide with built-in names.
-				restored: new Set(existingSession.selectedMCPToolNames),
+				restored: new Set(existingSession.selectedMCPToolNames.map(normalizeRenamedBuiltinToolName)),
 				forceActive,
 			});
 		}
@@ -2626,7 +2624,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 
 		// Hard-isolated read-only toolset for the advisor (built unconditionally so
-		// it can be toggled at runtime). Fresh ReadTool/SearchTool/FindTool bound to a
+		// it can be toggled at runtime). Fresh ReadTool/GrepTool/GlobTool bound to a
 		// DISTINCT ToolSession so the advisor's investigative reads never touch the
 		// primary's snapshot, seen-lines, conflict, or summary caches (all keyed on
 		// session identity). `cwd` stays dynamic; edit/yield capabilities are off.

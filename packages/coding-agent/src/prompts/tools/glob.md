@@ -1,4 +1,4 @@
-Finds files and directories via fast pattern matching, any codebase size.
+Globs files and directories via fast pattern matching, any codebase size.
 
 <instruction>
 - `paths`: array of globs, files, or directories.

@@ -9,8 +9,8 @@ import { getThemeByName, initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { astGrepToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/ast-grep";
 import { ReadTool, readToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/read";
-import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { WriteTool, writeToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { grepToolRenderer } from "../../src/tools/grep";
 
 // 1x1 PNG so the read tool takes its image branch.
 const TINY_PNG_BASE64 =
@@ -128,7 +128,7 @@ describe("tool output OSC 8 file:// hyperlinks", () => {
 				displayContent: ["# src/", "## interactive-mode.ts#abcd", "*12│const needle = true;"].join("\n"),
 			},
 		};
-		const rendered = searchToolRenderer
+		const rendered = grepToolRenderer
 			.renderResult(result as never, { expanded: true, isPartial: false }, theme, { pattern: "needle" })
 			.render(240)
 			.join("\n");

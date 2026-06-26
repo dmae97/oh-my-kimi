@@ -10,7 +10,7 @@ import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
-import findDescription from "../prompts/tools/find.md" with { type: "text" };
+import globDescription from "../prompts/tools/glob.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
 import { Ellipsis, fileHyperlink, renderFileList, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
@@ -47,13 +47,13 @@ const findSchema = type({
 	"limit?": type("number").describe("max results"),
 });
 
-export type FindToolInput = typeof findSchema.infer;
+export type GlobToolInput = typeof findSchema.infer;
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 
-export interface FindToolDetails {
+export interface GlobToolDetails {
 	truncation?: TruncationResult;
 	resultLimitReached?: number;
 	meta?: OutputMeta;
@@ -76,7 +76,7 @@ export interface FindToolDetails {
  * Pluggable operations for the find tool.
  * Override these to delegate file search to remote systems (e.g., SSH).
  */
-export interface FindOperations {
+export interface GlobOperations {
 	/** Check if path exists */
 	exists: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Optional stat for distinguishing files vs directories. */
@@ -87,28 +87,28 @@ export interface FindOperations {
 	glob: (pattern: string, cwd: string, options: { ignore: string[]; limit: number }) => Promise<string[]> | string[];
 }
 
-export interface FindToolOptions {
+export interface GlobToolOptions {
 	/** Custom operations for find. Default: local filesystem + rg */
-	operations?: FindOperations;
+	operations?: GlobOperations;
 }
 
-interface FindTarget {
+interface GlobTarget {
 	searchPath: string;
 	globPattern: string;
 	hasGlob: boolean;
 }
 
-export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
-	readonly name = "find";
+export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
+	readonly name = "glob";
 	readonly approval = "read" as const;
 	readonly loadMode = "essential";
-	readonly label = "Find";
+	readonly label = "Glob";
 	readonly description: string;
 	readonly parameters = findSchema;
 
 	readonly examples: readonly ToolExample<typeof findSchema.infer>[] = [
 		{
-			caption: "Find files",
+			caption: "Glob files",
 			call: { paths: ["src/**/*.ts"] },
 		},
 		{
@@ -116,33 +116,33 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			call: { paths: ["src/**/*.ts", "test/**/*.ts"] },
 		},
 		{
-			caption: "Find gitignored files like .env",
+			caption: "Glob gitignored files like .env",
 			call: { paths: [".env*"], gitignore: false },
 		},
 		{
-			caption: "Find directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
+			caption: "Glob directories matching a name (returns both files and dirs; directories are suffixed with `/`)",
 			call: { paths: ["**/tests"] },
 		},
 	];
 	readonly strict = true;
 
-	readonly #customOps?: FindOperations;
+	readonly #customOps?: GlobOperations;
 
 	constructor(
 		private readonly session: ToolSession,
-		options?: FindToolOptions,
+		options?: GlobToolOptions,
 	) {
 		this.#customOps = options?.operations;
-		this.description = prompt.render(findDescription);
+		this.description = prompt.render(globDescription);
 	}
 
 	async execute(
 		_toolCallId: string,
 		params: typeof findSchema.infer,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
+		onUpdate?: AgentToolUpdateCallback<GlobToolDetails>,
 		_context?: AgentToolContext,
-	): Promise<AgentToolResult<FindToolDetails>> {
+	): Promise<AgentToolResult<GlobToolDetails>> {
 		const { paths, limit, hidden, gitignore } = params;
 
 		return untilAborted(signal, async () => {
@@ -194,7 +194,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 
 			const multiPattern = await resolveExplicitFindPatterns(effectivePatterns, this.session.cwd);
 			const isSingle = !multiPattern;
-			const targets: FindTarget[] = multiPattern
+			const targets: GlobTarget[] = multiPattern
 				? multiPattern.targets.map(target => ({
 						searchPath: resolveToCwd(target.basePath, this.session.cwd),
 						globPattern: target.globPattern,
@@ -242,11 +242,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const buildResult = (
 				files: string[],
 				opts?: { notice?: string; forceTruncated?: boolean },
-			): AgentToolResult<FindToolDetails> => {
+			): AgentToolResult<GlobToolDetails> => {
 				const notice = opts?.notice;
 				const forceTruncated = opts?.forceTruncated ?? false;
 				if (files.length === 0) {
-					const details: FindToolDetails = {
+					const details: GlobToolDetails = {
 						scopePath,
 						fileCount: 0,
 						files: [],
@@ -272,7 +272,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const rawOutput = trailingNotes.length > 0 ? `${baseOutput}\n\n${trailingNotes.join("\n")}` : baseOutput;
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
-				const details: FindToolDetails = {
+				const details: GlobToolDetails = {
 					scopePath,
 					fileCount: limited.length,
 					files: limited,
@@ -337,7 +337,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const now = Date.now();
 				if (now - lastUpdate < updateIntervalMs) return;
 				lastUpdate = now;
-				const details: FindToolDetails = {
+				const details: GlobToolDetails = {
 					scopePath,
 					fileCount: onUpdateMatches.length,
 					files: onUpdateMatches.slice(),
@@ -362,7 +362,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				};
 
 			let timedOut = false;
-			const runTarget = async (target: FindTarget): Promise<Array<{ path: string; mtime: number }>> => {
+			const runTarget = async (target: GlobTarget): Promise<Array<{ path: string; mtime: number }>> => {
 				throwIfAborted(signal);
 				let stat: fs.Stats;
 				try {
@@ -435,7 +435,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				partial.sort((a, b) => b.m - a.m);
 				const sortedPaths = partial.map(entry => entry.p);
 				const seconds = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}` : (timeoutMs / 1000).toFixed(1);
-				const notice = `find timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — narrow the pattern instead of retrying blindly`;
+				const notice = `glob timed out after ${seconds}s; returning ${sortedPaths.length} partial matches — narrow the pattern instead of retrying blindly`;
 				return buildResult(sortedPaths, { notice, forceTruncated: true });
 			}
 
@@ -461,33 +461,33 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-interface FindRenderArgs {
+interface GlobRenderArgs {
 	paths?: string | string[];
 	limit?: number;
 }
 
-function formatFindRenderPaths(paths: FindRenderArgs["paths"]): string | undefined {
+function formatGlobRenderPaths(paths: GlobRenderArgs["paths"]): string | undefined {
 	return Array.isArray(paths) ? paths.join(", ") : paths;
 }
 
 const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 
-function findStatusIcon(uiTheme: Theme): string {
+function globStatusIcon(uiTheme: Theme): string {
 	return uiTheme.fg("toolTitle", uiTheme.symbol("icon.search"));
 }
 
-export const findToolRenderer = {
+export const globToolRenderer = {
 	inline: true,
-	renderCall(args: FindRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: GlobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
 			{
 				icon: "pending",
-				title: "Find",
+				title: "Glob",
 				titleColor: "toolTitle",
-				description: formatFindRenderPaths(args.paths) || "*",
+				description: formatGlobRenderPaths(args.paths) || "*",
 				meta,
 			},
 			uiTheme,
@@ -496,10 +496,10 @@ export const findToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: FindToolDetails; isError?: boolean },
+		result: { content: Array<{ type: string; text?: string }>; details?: GlobToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: FindRenderArgs,
+		args?: GlobRenderArgs,
 	): Component {
 		const details = result.details;
 
@@ -524,10 +524,10 @@ export const findToolRenderer = {
 			const lines = textContent.split("\n").filter(l => l.trim());
 			const header = renderStatusLine(
 				{
-					iconOverride: findStatusIcon(uiTheme),
-					title: "Find",
+					iconOverride: globStatusIcon(uiTheme),
+					title: "Glob",
 					titleColor: "toolTitle",
-					description: formatFindRenderPaths(args?.paths),
+					description: formatGlobRenderPaths(args?.paths),
 					meta: [formatCount("file", lines.length)],
 				},
 				uiTheme,
@@ -565,9 +565,9 @@ export const findToolRenderer = {
 			const header = renderStatusLine(
 				{
 					icon: "warning",
-					title: "Find",
+					title: "Glob",
 					titleColor: "toolTitle",
-					description: formatFindRenderPaths(args?.paths),
+					description: formatGlobRenderPaths(args?.paths),
 					meta: ["0 files"],
 				},
 				uiTheme,
@@ -581,10 +581,10 @@ export const findToolRenderer = {
 		if (truncated) meta.push(uiTheme.fg("warning", "truncated"));
 		const header = renderStatusLine(
 			{
-				...(truncated ? { icon: "warning" as const } : { iconOverride: findStatusIcon(uiTheme) }),
-				title: "Find",
+				...(truncated ? { icon: "warning" as const } : { iconOverride: globStatusIcon(uiTheme) }),
+				title: "Glob",
 				titleColor: "toolTitle",
-				description: formatFindRenderPaths(args?.paths),
+				description: formatGlobRenderPaths(args?.paths),
 				meta,
 			},
 			uiTheme,

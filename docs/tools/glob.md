@@ -1,10 +1,10 @@
-# find
+# glob
 
-> Find filesystem paths by glob; use `search` when you need content matches instead of path matches.
+> Find filesystem paths by glob; use `grep` when you need content matches instead of path matches.
 
 ## Source
-- Entry: `packages/coding-agent/src/tools/find.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/find.md`
+- Entry: `packages/coding-agent/src/tools/glob.ts`
+- Model-facing prompt: `packages/coding-agent/src/prompts/tools/glob.md`
 - Key collaborators:
   - `packages/coding-agent/src/tools/path-utils.ts` — normalize inputs; split base path vs glob.
   - `packages/coding-agent/src/tools/list-limit.ts` — apply result-count caps.
@@ -41,8 +41,8 @@ The tool returns a single text block plus structured `details`.
 
 ## Flow
 
-1. `FindTool.execute()` expands delimiter-flattened local `paths` entries with `expandDelimitedPathEntries(..., parseFindPattern)` unless custom operations are injected. The splitter validates candidate parts by statting their parsed base paths, keeps existing delimiter-containing paths intact, accepts comma/semicolon splits when at least one part resolves, and accepts whitespace splits only when every part resolves.
-2. The tool normalizes each resulting entry with `normalizePathLikeInput()` and `/\\/g -> "/"` (`packages/coding-agent/src/tools/find.ts`). Empty normalized entries fail with `` `paths` must contain non-empty globs or paths ``.
+1. `GlobTool.execute()` expands delimiter-flattened local `paths` entries with `expandDelimitedPathEntries(..., parseFindPattern)` unless custom operations are injected. The splitter validates candidate parts by statting their parsed base paths, keeps existing delimiter-containing paths intact, accepts comma/semicolon splits when at least one part resolves, and accepts whitespace splits only when every part resolves.
+2. The tool normalizes each resulting entry with `normalizePathLikeInput()` and `/\\/g -> "/"` (`packages/coding-agent/src/tools/glob.ts`). Empty normalized entries fail with `` `paths` must contain non-empty globs or paths ``.
 3. For multi-path local calls, `partitionExistingPaths(..., parseFindPattern)` (`packages/coding-agent/src/tools/path-utils.ts`) stats each base path. Missing entries are skipped; if all are missing, the tool throws `Path not found: ...`. Single missing paths still hard-fail.
 4. The tool calls `resolveExplicitFindPatterns()` for multi-entry calls; it parses each entry into its own `(basePath, globPattern, hasGlob)` target so every path is walked as its own root (collapsing to a shared ancestor would scan unrelated siblings). Single-entry calls parse with `parseFindPattern()` directly.
 5. `parseFindPattern()` determines `(basePath, globPattern, hasGlob)`:
@@ -52,7 +52,7 @@ The tool returns a single text block plus structured `details`.
 6. `resolveToCwd()` converts the base path to an absolute path under the session cwd. A resolved `/` is rejected with `Searching from root directory '/' is not allowed`.
 7. `limit` defaults to `DEFAULT_LIMIT` (`200`), must be positive and finite, is floored, then clamped to `MAX_LIMIT` (`200`). `hidden` and `gitignore` both default to `true`. An internal timeout of `5` seconds (`5000` ms) is built via `AbortSignal.timeout(...)`.
 8. Execution then branches:
-   - **Custom operations branch**: if `FindToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
+   - **Custom operations branch**: if `GlobToolOptions.operations.glob` exists, the tool checks existence with `operations.exists()`, short-circuits exact-file inputs via `operations.stat()` when available, then calls `operations.glob(globPattern, searchPath, { ignore: ["**/node_modules/**", "**/.git/**"], limit })`.
    - **Built-in local branch**: the tool stats each target's `searchPath`. Exact-file inputs return immediately. Directory inputs call `natives.glob()` with `hidden`, `maxResults: effectiveLimit`, `sortByMtime: true`, `gitignore: useGitignore`, `recursive: false` (recursion comes from the `**/` prefix `parseFindPattern()` adds), and the combined abort signal; multi-target calls run their globs concurrently.
 9. In the local branch, optional `onMatch` callbacks convert each match to a cwd-relative display path and emit throttled progress updates.
 10. After native glob returns, JS merges per-target results, deduplicates repeated display paths, and sorts the merged list by `mtime` descending before formatting paths.
@@ -66,7 +66,7 @@ The tool returns a single text block plus structured `details`.
 - **Multi-path search**: multiple inputs resolved by `resolveExplicitFindPatterns()` into per-entry targets, each walked as its own root concurrently and merged afterwards.
 - **Partial multi-path search with missing inputs**: local multi-path calls skip missing base paths and surface them as `missingPaths` / `Skipped missing paths: ...`.
 - **Internal URL input**: supported when the internal router resolves the URL to a backing file. Internal URL globs are rejected.
-- **Custom delegated search**: uses injected `FindOperations` instead of local fs + native glob.
+- **Custom delegated search**: uses injected `GlobOperations` instead of local fs + native glob.
 
 ## Side Effects
 - Filesystem
@@ -81,31 +81,31 @@ The tool returns a single text block plus structured `details`.
   - Local globbing is cancellable through the caller abort signal plus the internal timeout.
 
 ## Limits & Caps
-- Default result limit: `200` (`DEFAULT_LIMIT` in `packages/coding-agent/src/tools/find.ts`).
+- Default result limit: `200` (`DEFAULT_LIMIT` in `packages/coding-agent/src/tools/glob.ts`).
 - Maximum result limit: `200` (`MAX_LIMIT`); larger inputs are clamped.
 - Local glob timeout: fixed at `5000` ms.
 - Output byte cap: `50 * 1024` bytes (`DEFAULT_MAX_BYTES` in `packages/coding-agent/src/session/streaming-output.ts`).
-- Default generic line cap in `truncateHead()` is `3000`, but `find` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so byte size — not line count — is the practical output truncation cap.
+- Default generic line cap in `truncateHead()` is `3000`, but `glob` overrides `maxLines` to `Number.MAX_SAFE_INTEGER`, so byte size — not line count — is the practical output truncation cap.
 - Streaming update throttle: `200` ms between `onUpdate` emissions.
 - Sort order: most recent `mtime` first in the built-in local branch and promised in the prompt. The tool re-sorts in JS even though native glob receives `sortByMtime: true` so native code can still stop early at `maxResults`.
 
 ## Errors
-- User-facing `ToolError`s from `FindTool.execute()` include:
+- User-facing `ToolError`s from `GlobTool.execute()` include:
   - `` `paths` must contain non-empty globs or paths ``
   - `Path not found: ...`
   - `Searching from root directory '/' is not allowed`
   - `Limit must be a positive number`
   - `Path is not a directory: ...`
-  - timeout result text is `find timed out after <seconds>s; returning <N> partial matches — narrow the pattern instead of retrying blindly` and is returned as a successful, truncated partial result rather than an error.
+  - timeout result text is `glob timed out after <seconds>s; returning <N> partial matches — narrow the pattern instead of retrying blindly` and is returned as a successful, truncated partial result rather than an error.
 - If the caller aborts, the local branch converts `AbortError` into `ToolAbortError`.
 - Non-`ENOENT` stat failures and other unexpected errors are rethrown.
 - Empty matches are not errors; they return the no-files text result.
 
 ## Notes
-- Reach for `find` for filename / path discovery. Reach for `search` when the selection criterion is file contents or regex matches; `search` takes a `pattern` and returns anchored content matches, while `find` only returns matching paths (`packages/coding-agent/src/prompts/tools/find.md`, `packages/coding-agent/src/prompts/tools/search.md`).
+- Reach for `glob` for filename / path discovery. Reach for `grep` when the selection criterion is file contents or regex matches; `grep` takes a `pattern` and returns anchored content matches, while `glob` only returns matching paths (`packages/coding-agent/src/prompts/tools/glob.md`, `packages/coding-agent/src/prompts/tools/grep.md`).
 - Bare top-level globs are made recursive. `*.ts` is parsed as base `.` plus glob `**/*.ts`; `src/*.ts` stays rooted at `src` with a non-recursive `*.ts` segment; `src/**/*.ts` preserves explicit recursion.
 - `.gitignore` defaults to enabled in the built-in local branch. Use `gitignore: false` to disable it for native traversal.
 - `hidden` defaults to `true`; hidden-file exclusion is opt-out, not opt-in.
 - Multi-path missing-input tolerance applies in both branches, but only the built-in local branch surfaces `missingPaths` / `Skipped missing paths: ...`. The custom-operations branch hard-fails a missing `searchPath` only for single-input calls; in multi-input calls a missing target silently contributes no results.
-- The custom `FindOperations.glob()` hook receives `ignore` and `limit`, but not the `hidden` flag or an explicit `.gitignore` toggle. A remote delegate must account for that itself if it wants parity with the local branch.
+- The custom `GlobOperations.glob()` hook receives `ignore` and `limit`, but not the `hidden` flag or an explicit `.gitignore` toggle. A remote delegate must account for that itself if it wants parity with the local branch.
 - Built-in local globbing does not force `fileType: File`; it can return files and directories from native glob. Directory outputs also occur through exact-path passthrough or custom delegates that return them.

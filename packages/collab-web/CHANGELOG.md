@@ -1,6 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added dedicated renderers for `glob` and `grep` tools to improve result readability
+- Enabled display support for legacy `find` and `search` tool outputs via new renderers
 
 ## [16.1.23] - 2026-06-26
 

@@ -1,4 +1,4 @@
-/** `find` — glob-based file finder; results are paths sorted by mtime. */
+/** `glob` (legacy `find`) — glob-based file finder; results are paths sorted by mtime. */
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -63,4 +63,4 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	);
 }
 
-export const findRenderer: ToolRenderer = { Summary, Body };
+export const globRenderer: ToolRenderer = { Summary, Body };

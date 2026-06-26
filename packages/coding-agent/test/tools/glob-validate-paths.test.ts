@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { getThemeByName, initTheme, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { findToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/find";
 import {
 	expandDelimitedPathEntries,
 	parseFindPattern,
@@ -12,6 +11,7 @@ import {
 	splitDelimitedPathEntry,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import type { Component } from "@oh-my-pi/pi-tui";
+import { globToolRenderer } from "../../src/tools/glob";
 
 let uiTheme: Theme;
 
@@ -133,24 +133,24 @@ describe("delimited path expansion", () => {
 	});
 });
 
-describe("findToolRenderer", () => {
+describe("globToolRenderer", () => {
 	it("accepts a single string paths value before validation", async () => {
 		const args = { paths: "src/**/*.ts" };
 		const renderings = [
-			findToolRenderer.renderCall(args, renderOptions, uiTheme),
-			findToolRenderer.renderResult(
+			globToolRenderer.renderCall(args, renderOptions, uiTheme),
+			globToolRenderer.renderResult(
 				{ content: [{ type: "text", text: "src/index.ts\n" }] },
 				renderOptions,
 				uiTheme,
 				args,
 			),
-			findToolRenderer.renderResult(
+			globToolRenderer.renderResult(
 				{ content: [{ type: "text", text: "" }], details: { fileCount: 0, files: [] } },
 				renderOptions,
 				uiTheme,
 				args,
 			),
-			findToolRenderer.renderResult(
+			globToolRenderer.renderResult(
 				{ content: [{ type: "text", text: "src/index.ts" }], details: { fileCount: 1, files: ["src/index.ts"] } },
 				renderOptions,
 				uiTheme,

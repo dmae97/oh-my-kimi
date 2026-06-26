@@ -31,7 +31,7 @@ describe("advisor", () => {
 						{
 							type: "toolCall",
 							id: "search-timeout",
-							name: "search",
+							name: "grep",
 							arguments: { pattern: "needle", paths: ["packages/coding-agent/src"] },
 						},
 					],
@@ -40,7 +40,7 @@ describe("advisor", () => {
 				{
 					role: "toolResult",
 					toolCallId: "search-timeout",
-					toolName: "search",
+					toolName: "grep",
 					content: [{ type: "text", text: "timed out after 30s" }],
 					isError: true,
 					timestamp: 2,
@@ -711,13 +711,13 @@ describe("advisor", () => {
 				} as AgentMessage,
 				{
 					role: "assistant",
-					content: [{ type: "toolCall", id: "b", name: "search", arguments: { pattern: "y" } }],
+					content: [{ type: "toolCall", id: "b", name: "grep", arguments: { pattern: "y" } }],
 					timestamp: 4,
 				} as unknown as AgentMessage,
 				{
 					role: "toolResult",
 					toolCallId: "b",
-					toolName: "search",
+					toolName: "grep",
 					content: [{ type: "text", text: "ok" }],
 					isError: false,
 					timestamp: 5,
@@ -1044,9 +1044,9 @@ describe("advisor", () => {
 
 	describe("read-only tool allowlist", () => {
 		it("selects only the investigation tools from a mixed toolset", () => {
-			const toolset = ["read", "edit", "search", "bash", "find", "write", "advise"];
+			const toolset = ["read", "edit", "grep", "bash", "glob", "write", "advise"];
 			const selected = toolset.filter(name => ADVISOR_READONLY_TOOL_NAMES.has(name));
-			expect(selected).toEqual(["read", "search", "find"]);
+			expect(selected).toEqual(["read", "grep", "glob"]);
 			expect(ADVISOR_READONLY_TOOL_NAMES.has("edit")).toBe(false);
 			expect(ADVISOR_READONLY_TOOL_NAMES.has("bash")).toBe(false);
 			expect(ADVISOR_READONLY_TOOL_NAMES.has("write")).toBe(false);

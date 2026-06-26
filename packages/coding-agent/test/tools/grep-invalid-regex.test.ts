@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { SearchTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -30,7 +30,7 @@ describe("search tool invalid regex handling", () => {
 	});
 
 	it("wraps invalid regex pattern errors in a ToolError", async () => {
-		const tool = new SearchTool(createTestSession(cwd));
+		const tool = new GrepTool(createTestSession(cwd));
 
 		let caught: unknown;
 		try {

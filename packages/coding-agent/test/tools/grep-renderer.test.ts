@@ -3,8 +3,8 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { searchToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/search";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { grepToolRenderer } from "../../src/tools/grep";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
@@ -23,8 +23,8 @@ afterAll(() => {
 	resetSettingsForTest();
 });
 
-describe("searchToolRenderer", () => {
-	it("indents inline search output and avoids accent-colored success headers", async () => {
+describe("grepToolRenderer", () => {
+	it("indents inline grep output and avoids accent-colored success headers", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
@@ -37,7 +37,7 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const renderedLines = searchToolRenderer
+		const renderedLines = grepToolRenderer
 			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { pattern: "needle" })
 			.render(240);
 		const plainLines = sanitizeText(renderedLines.join("\n")).split("\n");
@@ -68,14 +68,9 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const collapsed = searchToolRenderer.renderResult(
-			result as never,
-			{ expanded: false, isPartial: false },
-			uiTheme,
-			{
-				pattern: "needle",
-			},
-		);
+		const collapsed = grepToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+			pattern: "needle",
+		});
 		const renderedLines = sanitizeText(collapsed.render(200).join("\n")).split("\n");
 		const bodyLines = renderedLines.slice(1);
 
@@ -111,12 +106,9 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const collapsed = searchToolRenderer.renderResult(
-			result as never,
-			{ expanded: false, isPartial: false },
-			uiTheme,
-			{ pattern: "Flag" },
-		);
+		const collapsed = grepToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+			pattern: "Flag",
+		});
 		const renderedLines = sanitizeText(collapsed.render(240).join("\n")).split("\n");
 		const bodyLines = renderedLines.slice(1);
 
@@ -147,7 +139,7 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const rendered = searchToolRenderer
+		const rendered = grepToolRenderer
 			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { pattern: "needle" })
 			.render(240)
 			.join("\n");
@@ -178,7 +170,7 @@ describe("searchToolRenderer", () => {
 			},
 		};
 
-		const rendered = searchToolRenderer
+		const rendered = grepToolRenderer
 			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { pattern: "needle" })
 			.render(240)
 			.join("\n");
@@ -218,7 +210,7 @@ describe("searchToolRenderer", () => {
 
 		const render = (expanded: boolean) =>
 			sanitizeText(
-				searchToolRenderer
+				grepToolRenderer
 					.renderResult(result as never, { expanded, isPartial: false }, uiTheme, { pattern: "needle" })
 					.render(200)
 					.join("\n"),

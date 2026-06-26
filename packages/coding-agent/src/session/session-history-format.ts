@@ -105,14 +105,14 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
 	}
-	if (name === "search") {
+	if (name === "grep") {
 		const pattern = primaryArgValue(args.pattern);
 		const paths = primaryArgValue(args.paths);
 		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
 		if (pattern) return oneLine(pattern);
 		if (paths) return oneLine(paths);
 	}
-	if (name === "find") {
+	if (name === "glob") {
 		const paths = primaryArgValue(args.paths);
 		if (paths) return oneLine(paths);
 	}

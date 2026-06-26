@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
-import { SearchTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -19,16 +19,16 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 
 describe("CursorExecHandlers.grep bridge", () => {
 	let cwd: string;
-	let searchTool: SearchTool;
+	let searchTool: GrepTool;
 	let handlers: CursorExecHandlers;
 
 	beforeEach(async () => {
 		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-exec-test-"));
 		await Bun.write(path.join(cwd, "sample.txt"), "Hello World\nhello world\n");
-		searchTool = new SearchTool(createTestSession(cwd));
+		searchTool = new GrepTool(createTestSession(cwd));
 		handlers = new CursorExecHandlers({
 			cwd,
-			tools: new Map([["search", searchTool as any]]),
+			tools: new Map([["grep", searchTool as any]]),
 		});
 	});
 

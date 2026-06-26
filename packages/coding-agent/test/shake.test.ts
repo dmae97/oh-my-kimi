@@ -363,7 +363,7 @@ describe("AgentSession shake", () => {
 			const bigCallId = "call-big-useless-for-shake";
 			sessionManager.appendMessage({
 				role: "assistant",
-				content: [{ type: "toolCall", id: bigCallId, name: "search", arguments: { pattern: "TODO" } }],
+				content: [{ type: "toolCall", id: bigCallId, name: "grep", arguments: { pattern: "TODO" } }],
 				...apiInfo,
 				stopReason: "toolUse",
 				usage,
@@ -372,7 +372,7 @@ describe("AgentSession shake", () => {
 			sessionManager.appendMessage({
 				role: "toolResult",
 				toolCallId: bigCallId,
-				toolName: "search",
+				toolName: "grep",
 				content: [{ type: "text", text: "match line\n".repeat(20000) }],
 				isError: false,
 				useless: true,

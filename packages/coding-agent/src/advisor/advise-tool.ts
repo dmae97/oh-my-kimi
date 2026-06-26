@@ -137,7 +137,7 @@ export function deriveAdvisorTelemetry(
  * inspect the workspace before weighing in. Names match the primary session's
  * tool instances, which the advisor reuses.
  */
-export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "search", "find"]);
+export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
 
 function advisorNoteDedupeKey(note: string): string {
 	return note.trim().replace(/\s+/g, " ");
