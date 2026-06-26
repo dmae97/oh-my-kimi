@@ -225,6 +225,57 @@ describe("llama.cpp warm-prefix preservation (#3528)", () => {
 		expect(assistant.reasoning_content).toBe("Trace the call graph through service.ts and the registry.");
 	});
 
+	it("preserves cross-API thinking into a discovered local target (reasoning: false on the spec)", () => {
+		// Cross-API/model switch into a discovered llama.cpp target: an
+		// Anthropic-source thinking block (opaque continuation signature, foreign
+		// to the openai-completions wire) must NOT be demoted to text just because
+		// the discovery path stamped `reasoning: false` on the spec. The
+		// `replayReasoningContent` flag has to bypass the `model.reasoning` gate
+		// in `transform-messages.ts` for the cross-API replay branch to fire, so
+		// the encoder receives a signature-stripped thinking block to surface as
+		// `reasoning_content` on the wire. Without the bypass the prior turn's
+		// reasoning rides as plain conversation text and the local server still
+		// loses the cache-stable `<think>` prefix.
+		const target = llamaCppQwenModel({ reasoning: false });
+		const anthropicSourceTurn: AssistantMessage = {
+			role: "assistant",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-opus-4-8",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Cross-vendor reasoning chain that must survive the switch.",
+					thinkingSignature: "EvAnthropicOpaqueContinuationBlob==",
+				} satisfies ThinkingContent,
+				{ type: "text", text: "Switched-in answer." },
+			],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: 0,
+		};
+		const wire = convertMessages(
+			target,
+			{
+				messages: [userMessage("Plan the migration."), anthropicSourceTurn, userMessage("Continue on the local box.")],
+			},
+			target.compat,
+		);
+		const found = findAssistantMessage(wire) as Record<string, unknown> | undefined;
+		expect(found?.reasoning_content).toBe("Cross-vendor reasoning chain that must survive the switch.");
+		expect(found?.content).toBe("Switched-in answer.");
+		// The Anthropic continuation signature is bound to the source wire and
+		// must NEVER leak as a stray field name on the openai-completions target.
+		expect("EvAnthropicOpaqueContinuationBlob==" in (found ?? {})).toBe(false);
+	});
+
 	it("honors the streamed signature when it identifies a recognized wire field", () => {
 		// Some llama.cpp builds stream reasoning under `reasoning` rather than
 		// `reasoning_content`. Round-trip into the same field so the chat

@@ -253,19 +253,25 @@ function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messa
  * branch.
  */
 function openAICompletionsReplaysUnsignedThinking(model: Model, compat: Model["compat"]): boolean {
-	if (model.api !== "openai-completions" || !model.reasoning) return false;
+	if (model.api !== "openai-completions") return false;
 	if (compat === undefined || !("requiresReasoningContentForToolCalls" in compat)) return false;
 	if (compat.requiresThinkingAsText) return false;
+	// Local llama.cpp-style servers (`replayReasoningContent`) need the replay
+	// for KV-cache prefix reuse — Qwen3 / DeepSeek-R1 / GLM chat templates
+	// reconstruct the prior turn's `<think>` block from `reasoning_content`
+	// (#3528). Checked BEFORE the `model.reasoning` gate: the runtime discovery
+	// paths for `llama.cpp` / `lm-studio` / `openai-models-list` hardcode
+	// `reasoning: false` even when the upstream actually emits reasoning, so
+	// gating on the spec flag here would let a cross-API switch into such a
+	// target demote the prior `thinking` block to text and lose the
+	// cache-stable prefix `replayReasoningContent` is meant to preserve.
+	if (compat.replayReasoningContent) return true;
+	if (!model.reasoning) return false;
 	// Hosts that REQUIRE `reasoning_content` on tool-call turns (DeepSeek
 	// reasoning, Kimi, OpenRouter reasoning, OpenCode thinking-on) already
 	// accept the replay; Z.AI-format hosts (Z.AI, Zhipu, Moonshot Kimi native,
-	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint. Local
-	// llama.cpp-style servers (`replayReasoningContent`) need it for KV-cache
-	// prefix reuse — Qwen3 / DeepSeek-R1 / GLM chat templates reconstruct the
-	// prior turn's `<think>` block from `reasoning_content` (#3528).
-	return (
-		compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai" || compat.replayReasoningContent
-	);
+	// Xiaomi MiMo) advertise `reasoning_content` as a continuation hint.
+	return compat.requiresReasoningContentForToolCalls || compat.thinkingFormat === "zai";
 }
 
 const ANTHROPIC_TOOL_CALL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
