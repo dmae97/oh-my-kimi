@@ -15,13 +15,13 @@ const VAULT_SCHEME_PREFIX = "vault:";
 const LOCAL_SCHEME_PREFIX = "local:";
 const HL_TRAILING_TAG_RE = new RegExp(`${HL_FILE_HASH_SEP}[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}$`);
 
-/** Resolve the `local://` options the session actually uses, preferring its own
- *  {@link LocalProtocolOptions} (the exact mapping `read`/`write`/`eval` resolve
- *  through) over the bare `getArtifactsDir`/`getSessionId` pair. Without this the
- *  guard derives the sandbox root from the session's own artifacts dir/id while a
- *  subagent or multi-session host (cmux/ACP, embedded SDK) has pinned `local://`
- *  to a parent/foreign root — so the absolute path `read` echoes back resolves
- *  outside the guard's root and a legitimate plan edit is rejected. */
+/** Resolve the `local://` options the session uses, preferring its own
+ *  {@link LocalProtocolOptions} (the mapping `read`/`write`/`eval` resolve
+ *  through) over the bare `getArtifactsDir`/`getSessionId` pair. Subagents and
+ *  multi-session hosts (cmux/ACP, embedded SDK) pin `local://` to a parent/foreign
+ *  root via `localProtocolOptions`; the sandbox root the plan-mode guard derives
+ *  must match where the artifact actually lives, or it rejects a legitimate plan
+ *  edit (and tag-based path recovery onto the sandbox would miss it). */
 function planLocalProtocolOptions(session: ToolSession): LocalProtocolOptions {
 	return (
 		session.localProtocolOptions ?? {
@@ -78,8 +78,8 @@ export function unwrapHashlineHeaderPath(targetPath: string): string {
  *  always agree on the absolute target (including bracketed hashline headers,
  *  `local://` URLs, and bare absolute paths). Files inside the sandbox are not
  *  part of the working tree, so plan mode treats them as freely writable
- *  scratch/plan space. */
-function targetsLocalSandbox(session: ToolSession, targetPath: string): boolean {
+ *  scratch/plan space — and tag-based path recovery may rebind onto them. */
+export function targetsLocalSandbox(session: ToolSession, targetPath: string): boolean {
 	const root = localSandboxRoot(session);
 	if (!root) return false;
 	let resolved: string;

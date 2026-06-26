@@ -294,4 +294,38 @@ describe("Patcher tag-based path recovery", () => {
 		await expect(patcher.apply(Patch.parse(`[file.ts#${tag}]\nSWAP 2.=2:\n+TWO`))).rejects.toThrow(/File not found/);
 		expect(fs.get(NESTED)).toBe(CONTENT);
 	});
+
+	it("runs the write gate on the recovered path, not the authored bare path", async () => {
+		// A gate that refuses the bare authored path but allows the recovered full
+		// path. Mirrors plan mode rejecting a bare cwd path before tag recovery
+		// rebinds it to its real (writable) location; recovery must precede the gate.
+		class GatedFs extends InMemoryFilesystem {
+			override async preflightWrite(p: string): Promise<void> {
+				if (p === "file.ts") throw new Error("write gate: read-only");
+			}
+		}
+		const fs = new GatedFs([[NESTED, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(NESTED, CONTENT);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`[file.ts#${tag}]\nSWAP 2.=2:\n+TWO`));
+		expect(result.sections[0]?.path).toBe(NESTED);
+		expect(fs.get(NESTED)).toBe("one\nTWO\nthree\n");
+	});
+
+	it("runs the write gate on an unrecoverable authored path (gate wins over not-found)", async () => {
+		// No snapshot for the bare name → no recovery; the gate still runs on the
+		// authored path and its rejection wins over the file-not-found error.
+		class GatedFs extends InMemoryFilesystem {
+			override async preflightWrite(): Promise<void> {
+				throw new Error("write gate: read-only");
+			}
+		}
+		const fs = new GatedFs([[NESTED, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		const patcher = new Patcher({ fs, snapshots });
+
+		await expect(patcher.apply(Patch.parse(`[file.ts#ABCD]\nSWAP 1.=1:\n+X`))).rejects.toThrow(/write gate/);
+	});
 });

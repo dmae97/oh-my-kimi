@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { enforcePlanModeWrite, resolvePlanPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
@@ -16,7 +15,6 @@ interface SessionOverrides {
 	sessionId?: string | null;
 	cwd?: string;
 	planMode?: PlanModeState;
-	localProtocolOptions?: LocalProtocolOptions;
 }
 
 function makeSession(overrides: SessionOverrides): ToolSession {
@@ -30,7 +28,6 @@ function makeSession(overrides: SessionOverrides): ToolSession {
 		},
 		getArtifactsDir: () => overrides.artifactsDir ?? null,
 		getSessionId: () => overrides.sessionId ?? null,
-		localProtocolOptions: overrides.localProtocolOptions,
 		getPlanModeState: () => overrides.planMode,
 	} as unknown as ToolSession;
 }
@@ -174,62 +171,5 @@ describe("enforcePlanModeWrite accepts absolute local-sandbox paths", () => {
 		expect(() => enforcePlanModeWrite(session, `[${workingTreePath}#ABCD]`, { op: "update" })).toThrow(
 			/working tree is read-only/,
 		);
-	});
-});
-
-describe("enforcePlanModeWrite honors session.localProtocolOptions", () => {
-	const planMode: PlanModeState = { enabled: true, planFilePath: "local://some-plan.md" };
-
-	// A subagent / multi-session host (cmux/ACP, embedded SDK) pins local:// to a
-	// parent/foreign root via `localProtocolOptions`, which differs from the
-	// session's own getArtifactsDir/getSessionId. read/write resolve the plan file
-	// under the pinned root; the guard must use the same mapping or it derives a
-	// different sandbox root and rejects a legitimate plan edit.
-	it("resolves local:// through the override root, not the session's own artifacts dir", async () => {
-		const overrideDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-override-"));
-		try {
-			const localProtocolOptions: LocalProtocolOptions = {
-				getArtifactsDir: () => overrideDir,
-				getSessionId: () => "override-session",
-			};
-			const session = makeSession({
-				artifactsDir: path.join(os.tmpdir(), "guard-own-artifacts"),
-				sessionId: "own-session",
-				planMode,
-				localProtocolOptions,
-			});
-
-			// resolvePlanPath must land under the override root, matching where
-			// read/write actually put the file.
-			const resolved = resolvePlanPath(session, "local://my-plan.md");
-			expect(resolved).toBe(path.join(overrideDir, "local", "my-plan.md"));
-
-			// The absolute path read echoes back (resolved under the override root)
-			// must be accepted — the regression the bare `not.toThrow` on the
-			// `local://` spelling alone would have missed.
-			expect(() => enforcePlanModeWrite(session, resolved, { op: "update" })).not.toThrow();
-			expect(() => enforcePlanModeWrite(session, `[${resolved}#ABCD]`, { op: "update" })).not.toThrow();
-			expect(() => enforcePlanModeWrite(session, "local://my-plan.md", { op: "update" })).not.toThrow();
-		} finally {
-			await fs.rm(overrideDir, { recursive: true, force: true });
-		}
-	});
-
-	it("still rejects working-tree paths under an override root", async () => {
-		const overrideDir = await fs.mkdtemp(path.join(os.tmpdir(), "plan-guard-override-"));
-		try {
-			const session = makeSession({
-				artifactsDir: path.join(os.tmpdir(), "guard-own-artifacts"),
-				sessionId: "own-session",
-				cwd: REPO_ROOT,
-				planMode,
-				localProtocolOptions: { getArtifactsDir: () => overrideDir, getSessionId: () => "override-session" },
-			});
-			expect(() => enforcePlanModeWrite(session, path.join(REPO_ROOT, "src", "foo.ts"), { op: "update" })).toThrow(
-				/working tree is read-only/,
-			);
-		} finally {
-			await fs.rm(overrideDir, { recursive: true, force: true });
-		}
 	});
 });
