@@ -5,6 +5,7 @@
 ### Added
 
 - Added `tui.renderMermaid` to control Mermaid fenced-block ASCII rendering; disabling it also removes the Mermaid diagram hint from the generated system prompt so Mermaid blocks fall back to ordinary highlighted code fences.
+- Added `/resume <session-id>` in the interactive command system, reusing the existing session-id/prefix resolver while bare `/resume` still opens the selector.
 
 ## [16.1.22] - 2026-06-26
 
