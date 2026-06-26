@@ -68,9 +68,21 @@ describe("formatTitleUserMessage", () => {
 });
 
 describe("normalizeGeneratedTitle", () => {
-	it("returns the cleaned first line of a real title", () => {
-		expect(normalizeGeneratedTitle('"Investigate the resolver"')).toBe("Investigate The Resolver");
-		expect(normalizeGeneratedTitle("Investigate the resolver.")).toBe("Investigate The Resolver");
+	it("strips surrounding quotes and trailing punctuation but preserves casing", () => {
+		expect(normalizeGeneratedTitle('"Investigate the resolver"')).toBe("Investigate the resolver");
+		expect(normalizeGeneratedTitle("Investigate the resolver.")).toBe("Investigate the resolver");
+	});
+
+	it("preserves the model's sentence/proper-noun casing without title-casing", () => {
+		// Regression: the normalizer used to force Title Case, capitalizing function
+		// words ("for" → "For") and clobbering proper nouns the model cased right.
+		expect(normalizeGeneratedTitle("Docker client/daemon for TinyVMM")).toBe("Docker client/daemon for TinyVMM");
+	});
+
+	it("preserves model casing verbatim when no source message is provided", () => {
+		// Without the user's message there is nothing to reconcile against, so the
+		// model's output is kept as-is (no title-casing, no flattening).
+		expect(normalizeGeneratedTitle("Docker client/dAemon for tinyvmm")).toBe("Docker client/dAemon for tinyvmm");
 	});
 
 	it("treats the bare none sentinel as no title (case/punctuation-insensitive)", () => {
@@ -81,13 +93,53 @@ describe("normalizeGeneratedTitle", () => {
 	});
 
 	it("keeps a title that merely contains the word none", () => {
-		expect(normalizeGeneratedTitle("Explain python None keyword")).toBe("Explain Python None Keyword");
+		expect(normalizeGeneratedTitle("Explain Python None keyword")).toBe("Explain Python None keyword");
 	});
 
 	it("returns null for empty or whitespace-only output", () => {
 		expect(normalizeGeneratedTitle("")).toBeNull();
 		expect(normalizeGeneratedTitle("   ")).toBeNull();
 		expect(normalizeGeneratedTitle(null)).toBeNull();
+	});
+});
+
+describe("normalizeGeneratedTitle source-aware casing", () => {
+	it("flattens a stray interior capital the user never typed", () => {
+		// "dAemon" is a model artifact; the user's message has no such token.
+		expect(normalizeGeneratedTitle("Docker client/dAemon for tinyvmm", "build a docker daemon for tinyvmm")).toBe(
+			"Docker client/daemon for tinyvmm",
+		);
+	});
+
+	it("keeps odd casing the user typed verbatim", () => {
+		expect(normalizeGeneratedTitle("Use the dAemon API", "the dAemon name is intentional")).toBe(
+			"Use the dAemon API",
+		);
+	});
+
+	it("restores a proper noun's casing from the user's message", () => {
+		// Tiny model flattened "TinyVMM" → "tinyvmm"; the user wrote it distinctively.
+		expect(normalizeGeneratedTitle("Set up tinyvmm daemon", "please configure TinyVMM")).toBe(
+			"Set up TinyVMM daemon",
+		);
+	});
+
+	it("leaves PascalCase proper nouns the model produced even when absent from source", () => {
+		expect(normalizeGeneratedTitle("Fix GitHub OAuth flow", "fix the login redirect")).toBe("Fix GitHub OAuth flow");
+	});
+
+	it("does not lowercase the model's correct casing when the user typed it lower", () => {
+		// Source "tinyvmm" is not distinctive, so it must not pull "TinyVMM" down.
+		expect(normalizeGeneratedTitle("Improve TinyVMM startup", "improve tinyvmm startup")).toBe(
+			"Improve TinyVMM startup",
+		);
+	});
+
+	it("a source word that merely starts a sentence does not force mid-title casing", () => {
+		// Regression: leading "For" in the message must not capitalize "for" in the title.
+		expect(normalizeGeneratedTitle("Add retry to the for loop", "For reliability, add retries")).toBe(
+			"Add retry to the for loop",
+		);
 	});
 });
 

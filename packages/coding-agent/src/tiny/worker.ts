@@ -217,14 +217,14 @@ function buildPrompt(generator: TextGenerationPipeline, message: string, systemP
 	return `${generator.tokenizer.apply_chat_template(chat, chatTemplateOptions)}${TITLE_PREFILL}`;
 }
 
-function extractTinyTitle(text: string): string | null {
+function extractTinyTitle(text: string, sourceText: string): string | null {
 	const titleStart = text.lastIndexOf(TITLE_PREFILL);
 	const withoutPrefix = titleStart >= 0 ? text.slice(titleStart + TITLE_PREFILL.length) : text;
 	const closeIndex = withoutPrefix.indexOf(TITLE_CLOSE);
 	const withoutClose = closeIndex >= 0 ? withoutPrefix.slice(0, closeIndex) : withoutPrefix;
 	const tagIndex = withoutClose.indexOf("<");
 	const withoutTag = tagIndex >= 0 ? withoutClose.slice(0, tagIndex) : withoutClose;
-	return normalizeGeneratedTitle(withoutTag);
+	return normalizeGeneratedTitle(withoutTag, sourceText);
 }
 
 async function generateTitle(
@@ -249,7 +249,7 @@ async function generateTitle(
 		return_full_text: false,
 		stopping_criteria: createStopOnTextCriteria(transformers, generator.tokenizer, TITLE_CLOSE),
 	})) as TextGenerationStringOutput;
-	return extractTinyTitle(output[0]?.generated_text ?? "");
+	return extractTinyTitle(output[0]?.generated_text ?? "", message);
 }
 
 function buildCompletionPrompt(generator: TextGenerationPipeline, promptText: string): string {
