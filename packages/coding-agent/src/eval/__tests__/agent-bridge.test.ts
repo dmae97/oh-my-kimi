@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import type { PlanModeState } from "../../plan-mode/state";
+import { AgentRegistry } from "../../registry/agent-registry";
+import type { AgentSession } from "../../session/agent-session";
 import * as taskDiscovery from "../../task/discovery";
 import type { ExecutorOptions } from "../../task/executor";
 import * as taskExecutor from "../../task/executor";
@@ -154,6 +156,7 @@ function spyConcurrencyBarrier(limit: number): { maxInFlight: () => number } {
 describe("runEvalAgent", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		AgentRegistry.resetGlobalForTests();
 	});
 
 	it("resolves the default task agent and agent overrides", async () => {
@@ -246,6 +249,47 @@ describe("runEvalAgent", () => {
 		const options = runSpy.mock.calls[0]?.[0];
 		if (!options) throw new Error("runSubprocess was not called");
 		expect(options.enableLsp).toBe(false);
+		expect(options.keepAlive).toBe(false);
+	});
+
+	it("unregisters eval subagents through the bridge cleanup path", async () => {
+		AgentRegistry.resetGlobalForTests();
+		mockAgents();
+		let disposed = false;
+		const cleanupSession = {
+			dispose: async () => {
+				disposed = true;
+			},
+		} as unknown as AgentSession;
+		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			AgentRegistry.global().register({
+				id: options.id,
+				displayName: options.id,
+				kind: "sub",
+				session: cleanupSession,
+				status: "idle",
+			});
+			await taskExecutor.finalizeSubagentLifecycle({
+				id: options.id,
+				session: cleanupSession,
+				aborted: false,
+				keepAlive: options.keepAlive !== false,
+				isolated: options.worktree !== undefined,
+				agentIdleTtlMs: 0,
+				reviveSession: null,
+			});
+			return singleResult(options);
+		});
+
+		await runEvalAgent({ prompt: "hello", label: "Cleanup" }, { session: makeSession() });
+
+		expect(disposed).toBe(true);
+		expect(AgentRegistry.global().get("Cleanup")).toBeUndefined();
+		expect(
+			AgentRegistry.global()
+				.listVisibleTo("Main")
+				.map(ref => ref.id),
+		).not.toContain("Cleanup");
 	});
 
 	it("maps successful and failed subagent results", async () => {
