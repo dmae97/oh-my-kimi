@@ -434,8 +434,7 @@ export async function discoverOAuthEndpoints(
 						// different schema, so the issuer check only gates the two official
 						// auth-server documents.
 						const requireIssuerMatch =
-							path === "/.well-known/oauth-authorization-server" ||
-							path === "/.well-known/openid-configuration";
+							path === "/.well-known/oauth-authorization-server" || path === "/.well-known/openid-configuration";
 						const issuerOk = requireIssuerMatch ? issuerMatchesBase(metadata.issuer, baseUrl) : true;
 						const endpoints = issuerOk ? findEndpoints(metadata) : null;
 						if (endpoints) return endpoints;
