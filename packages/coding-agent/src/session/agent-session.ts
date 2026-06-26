@@ -1126,6 +1126,12 @@ function mergeLlmCompactionPreserveData(
 	return snapcompact.stripPreservedArchive(Object.keys(preserveData).length > 0 ? preserveData : undefined);
 }
 
+type MessageEndPersistenceSlot = {
+	readonly promise: Promise<void>;
+	persist: (persistMessage: () => void) => Promise<void>;
+	release: () => void;
+};
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -1258,6 +1264,8 @@ export class AgentSession {
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
+	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
+	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
 
 	#skills: Skill[];
 	#skillWarnings: SkillWarning[];
@@ -2510,8 +2518,138 @@ export class AgentSession {
 		}
 	};
 
+	#messageValueSignature(value: unknown): string {
+		return JSON.stringify(value) ?? "undefined";
+	}
+
+	#sessionMessagesReferToSameTurn(left: AgentMessage, right: AgentMessage): boolean {
+		if (left === right) return true;
+		if (left.role !== right.role) return false;
+		switch (left.role) {
+			case "assistant":
+				if (right.role !== "assistant") return false;
+				return (
+					left.timestamp === right.timestamp &&
+					left.provider === right.provider &&
+					left.model === right.model &&
+					left.responseId === right.responseId &&
+					left.stopReason === right.stopReason &&
+					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
+				);
+			case "toolResult":
+				if (right.role !== "toolResult") return false;
+				return (
+					left.timestamp === right.timestamp &&
+					left.toolCallId === right.toolCallId &&
+					left.toolName === right.toolName &&
+					left.isError === right.isError &&
+					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
+				);
+			case "user":
+				if (right.role !== "user") return false;
+				return (
+					left.timestamp === right.timestamp &&
+					left.attribution === right.attribution &&
+					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
+				);
+			case "developer":
+				if (right.role !== "developer") return false;
+				return (
+					left.timestamp === right.timestamp &&
+					left.attribution === right.attribution &&
+					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
+				);
+			case "fileMention":
+				if (right.role !== "fileMention") return false;
+				return (
+					left.timestamp === right.timestamp &&
+					this.#messageValueSignature(left.files) === this.#messageValueSignature(right.files)
+				);
+			default:
+				return false;
+		}
+	}
+
+	#sessionMessagePersistenceKey(message: AgentMessage): string | undefined {
+		switch (message.role) {
+			case "assistant":
+				return [
+					"assistant",
+					message.timestamp,
+					message.provider,
+					message.model,
+					message.responseId ?? "",
+					message.stopReason,
+				].join(":");
+			case "toolResult":
+				return `toolResult:${message.timestamp}:${message.toolCallId}:${message.toolName}`;
+			case "user":
+			case "developer":
+			case "fileMention":
+				return `${message.role}:${message.timestamp}`;
+			default:
+				return undefined;
+		}
+	}
+
+	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
+		const key = this.#sessionMessagePersistenceKey(message);
+		if (!key) return undefined;
+		const previous = this.#messageEndPersistenceTail;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const clear = () => {
+			if (this.#pendingMessageEndPersistence.get(key) === promise) {
+				this.#pendingMessageEndPersistence.delete(key);
+			}
+		};
+		this.#pendingMessageEndPersistence.set(key, promise);
+		this.#messageEndPersistenceTail = promise.catch(() => {});
+		return {
+			promise,
+			persist: async persistMessage => {
+				await previous;
+				try {
+					persistMessage();
+				} finally {
+					resolve();
+					clear();
+				}
+			},
+			release: () => {
+				resolve();
+				clear();
+			},
+		};
+	}
+
+	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
+		const key = this.#sessionMessagePersistenceKey(message);
+		if (!key) return;
+		await this.#pendingMessageEndPersistence.get(key);
+	}
+
 	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
-		return this.sessionManager.getBranch().some(entry => entry.type === "message" && entry.message === message);
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type === "message" && this.#sessionMessagesReferToSameTurn(entry.message, message)) return true;
+		}
+		return false;
+	}
+
+	#hasPersistedLaterTurnMessage(turnMessages: AgentMessage[], messageIndex: number): boolean {
+		const branch = this.sessionManager.getBranch();
+		for (let index = messageIndex + 1; index < turnMessages.length; index++) {
+			const message = turnMessages[index];
+			if (
+				branch.some(
+					entry => entry.type === "message" && this.#sessionMessagesReferToSameTurn(entry.message, message),
+				)
+			) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	#persistSessionMessageIfMissing(message: AgentMessage): void {
@@ -2543,12 +2681,25 @@ export class AgentSession {
 		}
 	}
 
-	#persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): void {
-		if (!context) return;
-		this.#persistSessionMessageIfMissing(context.message);
-		for (const toolResult of context.toolResults) {
-			this.#persistSessionMessageIfMissing(toolResult);
+	async #persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): Promise<boolean> {
+		if (!context) return true;
+		const turnMessages = [context.message, ...context.toolResults];
+		for (const message of turnMessages) {
+			await this.#waitForSessionMessagePersistence(message);
 		}
+		for (let index = 0; index < turnMessages.length; index++) {
+			const message = turnMessages[index];
+			if (this.#sessionMessageAlreadyPersisted(message)) continue;
+			if (this.#hasPersistedLaterTurnMessage(turnMessages, index)) {
+				logger.debug("Skipping mid-run compaction because turn persistence is out of order", {
+					role: message.role,
+					timestamp: message.timestamp,
+				});
+				return false;
+			}
+			this.#persistSessionMessageIfMissing(message);
+		}
+		return true;
 	}
 
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
@@ -2571,6 +2722,9 @@ export class AgentSession {
 			(event.message as AssistantMessage).errorMessage = SILENT_ABORT_MARKER;
 			this.#planInternalAbortPending = false;
 		}
+
+		const messageEndPersistence =
+			event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
 
 		// Deobfuscate assistant message content for display emission — the LLM echoes back
 		// obfuscated placeholders, but listeners (TUI, extensions, exporters) must see real
@@ -2597,7 +2751,12 @@ export class AgentSession {
 			});
 		}
 
-		await this.#emitSessionEvent(displayEvent);
+		try {
+			await this.#emitSessionEvent(displayEvent);
+		} catch (error) {
+			messageEndPersistence?.release();
+			throw error;
+		}
 
 		if (event.type === "turn_start") {
 			this.#resetStreamingEditState();
@@ -2683,21 +2842,28 @@ export class AgentSession {
 
 		// Handle session persistence
 		if (event.type === "message_end") {
-			// Check if this is a hook/custom message
-			if (event.message.role === "hookMessage" || event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-					event.message.attribution ?? "agent",
-				);
-				if (event.message.role === "custom" && event.message.customType === "ttsr-injection") {
-					this.#markTtsrInjected(this.#extractTtsrRuleNames(event.message.details));
+			const persistMessageEnd = () => {
+				// Check if this is a hook/custom message
+				if (event.message.role === "hookMessage" || event.message.role === "custom") {
+					// Persist as CustomMessageEntry
+					this.sessionManager.appendCustomMessageEntry(
+						event.message.customType,
+						event.message.content,
+						event.message.display,
+						event.message.details,
+						event.message.attribution ?? "agent",
+					);
+					if (event.message.role === "custom" && event.message.customType === "ttsr-injection") {
+						this.#markTtsrInjected(this.#extractTtsrRuleNames(event.message.details));
+					}
+				} else {
+					this.#persistSessionMessageIfMissing(event.message);
 				}
+			};
+			if (messageEndPersistence) {
+				await messageEndPersistence.persist(persistMessageEnd);
 			} else {
-				this.#persistSessionMessageIfMissing(event.message);
+				persistMessageEnd();
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -8505,7 +8671,7 @@ export class AgentSession {
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
 
-		this.#persistTurnMessagesForMidRunCompaction(context);
+		if (!(await this.#persistTurnMessagesForMidRunCompaction(context))) return;
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();

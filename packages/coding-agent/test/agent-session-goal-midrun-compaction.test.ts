@@ -65,6 +65,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 	): Promise<{
 		session: AgentSession;
 		observedContexts: string[][];
+		sessionManager: SessionManager;
 	}> {
 		const observedContexts: string[][] = [];
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -149,7 +150,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 			await session.dispose();
 			authStorage.close();
 		});
-		return { session, observedContexts };
+		return { session, sessionManager, observedContexts };
 	}
 
 	function mockCompaction(summary: string) {
@@ -202,10 +203,15 @@ describe("AgentSession mid-run threshold compaction", () => {
 	it("preserves the just-finished tool turn when message_end hooks are still pending", async () => {
 		const releaseMessageEnd = Promise.withResolvers<void>();
 		const messageEndEntered = Promise.withResolvers<void>();
+		const turnEndEntered = Promise.withResolvers<void>();
 		const extensionRunner = {
-			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
+			hasHandlers: vi.fn((eventType: string) => eventType === "message_end" || eventType === "turn_end"),
 			emitBeforeAgentStart: vi.fn(async () => undefined),
 			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
+				if (event.type === "turn_end") {
+					turnEndEntered.resolve();
+					return;
+				}
 				if (
 					event.type === "message_end" &&
 					event.message?.role === "assistant" &&
@@ -216,19 +222,47 @@ describe("AgentSession mid-run threshold compaction", () => {
 				}
 			}),
 		} as unknown as ExtensionRunner;
-		const { session, observedContexts } = await createHarness({}, { extensionRunner });
+		const { session, sessionManager, observedContexts } = await createHarness({}, { extensionRunner });
 		const compactSpy = mockCompaction("MID-RUN-COMPACTED-WITH-PENDING-HOOK");
 
 		const prompt = session.prompt("work on the release");
 		await messageEndEntered.promise;
-		await prompt;
+		await turnEndEntered.promise;
 		releaseMessageEnd.resolve();
+		await prompt;
 
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
-		const nextProviderContext = observedContexts[1].join("\n");
-		expect(nextProviderContext).toContain("MID-RUN-COMPACTED-WITH-PENDING-HOOK");
-		expect(nextProviderContext).toContain("tool output");
+		const nextProviderContext = observedContexts[1];
+		const toolUseAssistantIndex = nextProviderContext.findIndex(
+			serialized =>
+				serialized.includes('"role":"assistant"') &&
+				serialized.includes('"stopReason":"toolUse"') &&
+				serialized.includes('"id":"tc-0"'),
+		);
+		const toolResultIndex = nextProviderContext.findIndex(
+			serialized => serialized.includes('"role":"toolResult"') && serialized.includes('"toolCallId":"tc-0"'),
+		);
+		expect(toolUseAssistantIndex).toBeGreaterThanOrEqual(0);
+		expect(toolResultIndex).toBeGreaterThan(toolUseAssistantIndex);
+		expect(nextProviderContext.filter(serialized => serialized.includes('"id":"tc-0"'))).toHaveLength(1);
+		expect(nextProviderContext.filter(serialized => serialized.includes('"toolCallId":"tc-0"'))).toHaveLength(1);
+		expect(nextProviderContext.join("\n")).toContain("MID-RUN-COMPACTED-WITH-PENDING-HOOK");
+		expect(nextProviderContext.join("\n")).toContain("tool output");
+
+		const persistedToolTurnRoles = sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message)
+			.filter(message => {
+				const serialized = JSON.stringify(message);
+				return (
+					(message.role === "assistant" || message.role === "toolResult") &&
+					(serialized.includes('"id":"tc-0"') || serialized.includes('"toolCallId":"tc-0"'))
+				);
+			})
+			.map(message => message.role);
+		expect(persistedToolTurnRoles).toEqual(["assistant", "toolResult"]);
 	});
 
 	it("does not compact mid-run outside goal mode when disabled", async () => {
