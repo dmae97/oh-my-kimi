@@ -202,7 +202,7 @@ const pathSegment: StatusLineSegment = {
 	render(ctx) {
 		const opts = ctx.options.path ?? {};
 
-		const projectDir = getProjectDir();
+		const projectDir = ctx.activeRepo?.cwd ?? getProjectDir();
 		const { scratch, relative } = classifyProjectDir(projectDir);
 		let pwd = projectDir;
 
@@ -212,6 +212,9 @@ const pathSegment: StatusLineSegment = {
 			} else {
 				pwd = stripDisplayRoot(pwd);
 			}
+		}
+		if (ctx.activeRepo) {
+			pwd = `${pwd} ↳ ${ctx.activeRepo.relativeRepoRoot}`;
 		}
 		if (opts.abbreviate !== false) {
 			pwd = shortenPath(pwd);

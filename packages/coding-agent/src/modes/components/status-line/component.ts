@@ -9,6 +9,7 @@ import { settings } from "../../../config/settings";
 import type { AgentSession } from "../../../session/agent-session";
 import type { OAuthAccountIdentity } from "../../../session/auth-storage";
 import { limitMatchesActiveAccount } from "../../../slash-commands/helpers/active-oauth-account";
+import { type ActiveRepoContext, resolveActiveRepoContextSync } from "../../../utils/active-repo-context";
 import * as git from "../../../utils/git";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../../../utils/session-color";
 import { sanitizeStatusText } from "../../shared";
@@ -155,6 +156,12 @@ interface ContextUsageMemo {
 	skillsRef: readonly any[] | undefined;
 }
 
+interface ActiveRepoCache {
+	projectDir: string;
+	activeRepo: ActiveRepoContext | null;
+	effectiveGitCwd: string;
+}
+
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
 const STATUS_USAGE_START_DELAY_MS = 0;
 const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
@@ -196,17 +203,20 @@ export class StatusLineComponent implements Component {
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#collabStatus: CollabStatus | null = null;
 	#focusedAgentId: string | undefined;
+	#activeRepoCache: ActiveRepoCache | undefined;
 
 	// Git status caching (1s TTL)
 	#cachedGitStatus: { staged: number; unstaged: number; untracked: number } | null = null;
+	#cachedGitStatusCwd: string | undefined = undefined;
 	#gitStatusLastFetch = 0;
-	#gitStatusInFlight = false;
+	#gitStatusInFlightCwd: string | undefined = undefined;
 
 	// PR lookup caching (invalidated on branch/repo context changes)
 	#cachedPr: { number: number; url: string } | null | undefined = undefined;
 	#cachedPrContext: PrCacheContext | undefined = undefined;
 	#prLookupInFlight = false;
 	#defaultBranch?: string;
+	#defaultBranchCwd: string | undefined = undefined;
 	#lastTokensPerSecond: number | null = null;
 	#lastTokensPerSecondTimestamp: number | null = null;
 
@@ -247,6 +257,18 @@ export class StatusLineComponent implements Component {
 		return (
 			hasGitBackedSegment(effectiveSettings.leftSegments) || hasGitBackedSegment(effectiveSettings.rightSegments)
 		);
+	}
+
+	#resolveActiveRepoCache(): ActiveRepoCache {
+		const projectDir = getProjectDir();
+		if (this.#activeRepoCache?.projectDir === projectDir) {
+			return this.#activeRepoCache;
+		}
+
+		const activeRepo = resolveActiveRepoContextSync(projectDir);
+		const effectiveGitCwd = activeRepo?.repoRoot ?? projectDir;
+		this.#activeRepoCache = { projectDir, activeRepo, effectiveGitCwd };
+		return this.#activeRepoCache;
 	}
 
 	/**
@@ -335,7 +357,8 @@ export class StatusLineComponent implements Component {
 			return;
 		}
 
-		const repository = git.repo.resolveSync(getProjectDir());
+		const { effectiveGitCwd } = this.#resolveActiveRepoCache();
+		const repository = git.repo.resolveSync(effectiveGitCwd);
 		if (!repository) return;
 
 		const watchPath = git.repo.isReftableSync(repository)
@@ -390,17 +413,17 @@ export class StatusLineComponent implements Component {
 		this.#cachedBranchCwd = undefined;
 		this.#cachedPrContext = undefined;
 	}
-	#getCurrentBranch(): string | null {
+	#getCurrentBranch(effectiveGitCwd?: string): string | null {
 		if (!this.#gitEnabled()) return null;
 
-		const cwd = getProjectDir();
-		if (this.#cachedBranch !== undefined && this.#cachedBranchCwd === cwd) {
+		const gitCwd = effectiveGitCwd ?? this.#resolveActiveRepoCache().effectiveGitCwd;
+		if (this.#cachedBranch !== undefined && this.#cachedBranchCwd === gitCwd) {
 			return this.#cachedBranch;
 		}
 
-		const head = git.head.resolveSync(cwd);
+		const head = git.head.resolveSync(gitCwd);
 		const gitHeadPath = head?.headPath ?? null;
-		this.#cachedBranchCwd = cwd;
+		this.#cachedBranchCwd = gitCwd;
 		this.#cachedBranchRepoId = gitHeadPath;
 		if (!head) {
 			this.#cachedBranch = null;
@@ -412,12 +435,18 @@ export class StatusLineComponent implements Component {
 		return this.#cachedBranch ?? null;
 	}
 
-	#isDefaultBranch(branch: string): boolean {
+	#isDefaultBranch(branch: string, effectiveGitCwd: string): boolean {
+		if (this.#defaultBranchCwd !== effectiveGitCwd) {
+			this.#defaultBranch = undefined;
+			this.#defaultBranchCwd = effectiveGitCwd;
+		}
+
 		if (this.#defaultBranch === undefined) {
 			this.#defaultBranch = "main";
+			const lookupCwd = effectiveGitCwd;
 			(async () => {
-				const resolved = await git.branch.default(getProjectDir());
-				if (this.#disposed) return;
+				const resolved = await git.branch.default(lookupCwd);
+				if (this.#disposed || this.#defaultBranchCwd !== lookupCwd) return;
 				if (resolved) {
 					this.#defaultBranch = resolved;
 					if (this.#onBranchChange) {
@@ -429,32 +458,43 @@ export class StatusLineComponent implements Component {
 		return branch === this.#defaultBranch;
 	}
 
-	#getGitStatus(): { staged: number; unstaged: number; untracked: number } | null {
+	#getGitStatus(effectiveGitCwd?: string): { staged: number; unstaged: number; untracked: number } | null {
 		if (!this.#gitEnabled()) return null;
-		if (this.#gitStatusInFlight || Date.now() - this.#gitStatusLastFetch < 1000) {
+
+		const gitCwd = effectiveGitCwd ?? this.#resolveActiveRepoCache().effectiveGitCwd;
+		if (this.#gitStatusInFlightCwd !== undefined) {
+			return this.#cachedGitStatusCwd === gitCwd ? this.#cachedGitStatus : null;
+		}
+		if (this.#cachedGitStatusCwd === gitCwd && Date.now() - this.#gitStatusLastFetch < 1000) {
 			return this.#cachedGitStatus;
 		}
 
-		this.#gitStatusInFlight = true;
+		this.#gitStatusInFlightCwd = gitCwd;
 
 		(async () => {
+			let nextStatus: { staged: number; unstaged: number; untracked: number } | null = null;
 			try {
-				this.#cachedGitStatus = await git.status.summary(getProjectDir());
+				nextStatus = await git.status.summary(gitCwd);
 			} catch {
-				this.#cachedGitStatus = null;
+				nextStatus = null;
 			} finally {
-				this.#gitStatusLastFetch = Date.now();
-				this.#gitStatusInFlight = false;
+				if (this.#gitStatusInFlightCwd === gitCwd) {
+					this.#cachedGitStatus = nextStatus;
+					this.#cachedGitStatusCwd = gitCwd;
+					this.#gitStatusLastFetch = Date.now();
+					this.#gitStatusInFlightCwd = undefined;
+				}
 			}
 		})();
 
-		return this.#cachedGitStatus;
+		return this.#cachedGitStatusCwd === gitCwd ? this.#cachedGitStatus : null;
 	}
 
-	#lookupPr(): { number: number; url: string } | null {
+	#lookupPr(effectiveGitCwd?: string): { number: number; url: string } | null {
 		if (!this.#gitEnabled()) return null;
 
-		const branch = this.#getCurrentBranch();
+		const gitCwd = effectiveGitCwd ?? this.#resolveActiveRepoCache().effectiveGitCwd;
+		const branch = this.#getCurrentBranch(gitCwd);
 		const currentContext = branch ? createPrCacheContext(branch, this.#cachedBranchRepoId ?? null) : null;
 
 		if (canReuseCachedPr(this.#cachedPr, this.#cachedPrContext, currentContext)) {
@@ -463,13 +503,20 @@ export class StatusLineComponent implements Component {
 
 		const stalePr = this.#cachedPr;
 
-		// Don't look up if no branch, detached HEAD, default branch, or already in flight
-		if (!branch || branch === "detached" || this.#isDefaultBranch(branch) || this.#prLookupInFlight) {
+		if (!branch) {
+			this.#cachedPr = null;
+			this.#cachedPrContext = undefined;
+			return null;
+		}
+
+		// Don't look up if detached, default branch, or already in flight.
+		if (branch === "detached" || this.#isDefaultBranch(branch, gitCwd) || this.#prLookupInFlight) {
 			return stalePr ?? null;
 		}
 
 		this.#prLookupInFlight = true;
 		const lookupContext = currentContext;
+		const lookupCwd = gitCwd;
 
 		// Fire async lookup, keep stale value visible until resolved
 		(async () => {
@@ -486,7 +533,7 @@ export class StatusLineComponent implements Component {
 			};
 			try {
 				// Requires `gh repo set-default` to be configured; fails gracefully if not
-				const result = await $`gh pr view --json number,url`.quiet().nothrow();
+				const result = await $`gh pr view --json number,url`.cwd(lookupCwd).quiet().nothrow();
 				if (this.#disposed) return;
 				if (result.exitCode !== 0) {
 					setCachedPr(null);
@@ -795,13 +842,14 @@ export class StatusLineComponent implements Component {
 			contextPercent = collabState.contextUsage.percent ?? contextPercent;
 		}
 
-		const gitBranch = includeGit || includePr ? this.#getCurrentBranch() : null;
-		const gitStatus = includeGit ? this.#getGitStatus() : null;
-		const gitPr = includePr ? this.#lookupPr() : null;
-
+		const activeRepoCache = this.#resolveActiveRepoCache();
+		const gitBranch = includeGit || includePr ? this.#getCurrentBranch(activeRepoCache.effectiveGitCwd) : null;
+		const gitStatus = includeGit ? this.#getGitStatus(activeRepoCache.effectiveGitCwd) : null;
+		const gitPr = includePr ? this.#lookupPr(activeRepoCache.effectiveGitCwd) : null;
 		return {
 			session: this.session,
 			focusedAgentId: this.#focusedAgentId,
+			activeRepo: activeRepoCache.activeRepo,
 			width,
 			options: segmentOptions ?? {},
 			planMode: this.#planModeStatus,

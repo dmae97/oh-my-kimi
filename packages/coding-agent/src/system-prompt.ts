@@ -16,6 +16,7 @@ import { type ContextFile, loadCapability, type SystemPrompt as SystemPromptFile
 import { expandAtImports } from "./discovery/at-imports";
 import { loadSkills, type Skill } from "./extensibility/skills";
 import { hasObsidian } from "./internal-urls/vault-protocol";
+import activeRepoContextTemplate from "./prompts/system/active-repo-context.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import defaultPersonality from "./prompts/system/personalities/default.md" with { type: "text" };
 import friendlyPersonality from "./prompts/system/personalities/friendly.md" with { type: "text" };
@@ -23,6 +24,7 @@ import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" w
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
 import { shortenPath } from "./tools/render-utils";
+import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 /** Bundled personality specs, keyed by the `personality` setting value. */
@@ -88,6 +90,19 @@ function firstNonEmpty(...values: (string | undefined | null)[]): string | null 
 		if (trimmed) return trimmed;
 	}
 	return null;
+}
+
+function normalizePromptPath(value: string): string {
+	return value.replace(/\\/g, "/");
+}
+
+function renderActiveRepoContextPrompt(activeRepoContext: ActiveRepoContext | null): string {
+	if (!activeRepoContext) return "";
+	return prompt
+		.render(activeRepoContextTemplate, {
+			relativeRepoRoot: normalizePromptPath(activeRepoContext.relativeRepoRoot),
+		})
+		.trim();
 }
 
 function parseWmicTable(output: string, header: string): string | null {
@@ -425,6 +440,8 @@ export interface BuildSystemPromptOptions {
 	includeWorkspaceTree?: boolean;
 	/** Whether Mermaid fenced blocks render as terminal ASCII diagrams. Default: true */
 	renderMermaid?: boolean;
+	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
+	activeRepoContext?: ActiveRepoContext | null;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -467,6 +484,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		personality = "default",
 		includeWorkspaceTree = false,
 		renderMermaid = true,
+		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
 	const resolvedCwd = cwd ?? getProjectDir();
@@ -484,6 +502,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			totalLines: 0,
 			agentsMdFiles: [],
 		} satisfies WorkspaceTree,
+		activeRepoContext: null as ActiveRepoContext | null,
 	};
 
 	const deadline = Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => "__timeout__" as const);
@@ -546,34 +565,42 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			: skillsSettings?.enabled !== false
 				? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(result => result.skills)
 				: Promise.resolve([]);
+	const activeRepoContextPromise =
+		providedActiveRepoContext !== undefined
+			? Promise.resolve(providedActiveRepoContext)
+			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
 
-	const [resolvedCustomPrompt, resolvedAppendPrompt, systemPromptCustomization, contextFiles, skills, workspaceTree] =
-		await Promise.all([
-			withDeadline(
-				"customPrompt",
-				providedResolvedCustomPrompt !== undefined
-					? Promise.resolve(providedResolvedCustomPrompt)
-					: resolvePromptInput(customPrompt, "system prompt"),
-				prepDefaults.resolvedCustomPrompt,
-			),
-			withDeadline(
-				"appendSystemPrompt",
-				providedResolvedAppendPrompt !== undefined
-					? Promise.resolve(providedResolvedAppendPrompt)
-					: resolvePromptInput(appendSystemPrompt, "append system prompt"),
-				prepDefaults.resolvedAppendPrompt,
-			),
-			withDeadline(
-				"loadSystemPromptFiles",
-				systemPromptCustomizationPromise,
-				prepDefaults.systemPromptCustomization,
-			),
-			withDeadline("loadProjectContextFiles", contextFilesPromise, prepDefaults.contextFiles).then(
-				dedupeExactContextFiles,
-			),
-			withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
-			withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
-		]);
+	const [
+		resolvedCustomPrompt,
+		resolvedAppendPrompt,
+		systemPromptCustomization,
+		contextFiles,
+		skills,
+		workspaceTree,
+		activeRepoContext,
+	] = await Promise.all([
+		withDeadline(
+			"customPrompt",
+			providedResolvedCustomPrompt !== undefined
+				? Promise.resolve(providedResolvedCustomPrompt)
+				: resolvePromptInput(customPrompt, "system prompt"),
+			prepDefaults.resolvedCustomPrompt,
+		),
+		withDeadline(
+			"appendSystemPrompt",
+			providedResolvedAppendPrompt !== undefined
+				? Promise.resolve(providedResolvedAppendPrompt)
+				: resolvePromptInput(appendSystemPrompt, "append system prompt"),
+			prepDefaults.resolvedAppendPrompt,
+		),
+		withDeadline("loadSystemPromptFiles", systemPromptCustomizationPromise, prepDefaults.systemPromptCustomization),
+		withDeadline("loadProjectContextFiles", contextFilesPromise, prepDefaults.contextFiles).then(
+			dedupeExactContextFiles,
+		),
+		withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
+		withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
+		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
+	]);
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	if (timedOut.length > 0) {
@@ -598,7 +625,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	const date = new Date().toISOString().slice(0, 10);
 	const dateTime = date;
-	const promptCwd = shortenPath(resolvedCwd.replace(/\\/g, "/"));
+	const promptCwd = shortenPath(normalizePromptPath(resolvedCwd));
+	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext);
 
 	// Build tool metadata for system prompt rendering.
 	// Priority: explicit list > tools map > conservative SDK fallback.
@@ -696,6 +724,9 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		.trim();
 	if (projectPrompt) {
 		systemPrompt.push(projectPrompt);
+	}
+	if (activeRepoContextPrompt) {
+		systemPrompt.push(activeRepoContextPrompt);
 	}
 
 	return { systemPrompt };
