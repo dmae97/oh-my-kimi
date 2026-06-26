@@ -153,6 +153,12 @@ describe("Settings", () => {
 			const nestedLegacy = { snapcompact: { systemPrompt: false } } as Partial<Record<SettingPath, unknown>>;
 			expect(Settings.isolated(nestedLegacy).get("snapcompact.systemPrompt")).toBe("none");
 		});
+
+		it("migrates legacy inlineToolDescriptors booleans to the on/off enum", () => {
+			expect(Settings.isolated({ inlineToolDescriptors: true }).get("inlineToolDescriptors")).toBe("on");
+			expect(Settings.isolated({ inlineToolDescriptors: false }).get("inlineToolDescriptors")).toBe("off");
+			expect(Settings.isolated().get("inlineToolDescriptors")).toBe("auto");
+		});
 	});
 
 	describe("statusLine.sessionAccent hooks", () => {

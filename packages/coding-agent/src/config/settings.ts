@@ -854,6 +854,14 @@ export class Settings {
 			raw["snapcompact.systemPrompt"] = raw["snapcompact.systemPrompt"] ? "all" : "none";
 		}
 
+		// inlineToolDescriptors: boolean -> enum (auto | on | off). The old
+		// `true`/`false` mapped directly onto inline-on/inline-off, so preserve
+		// the user's explicit choice; new installs get the `auto` default that
+		// turns it on only for Gemini models.
+		if (typeof raw.inlineToolDescriptors === "boolean") {
+			raw.inlineToolDescriptors = raw.inlineToolDescriptors ? "on" : "off";
+		}
+
 		// statusLine: rename "plan_mode" segment to "mode"
 		const statusLineObj = raw.statusLine as Record<string, unknown> | undefined;
 		if (statusLineObj) {
