@@ -23,7 +23,35 @@ import {
 
 describe("advisor", () => {
 	describe("advisor system prompt", () => {
-		it("forbids concrete claims about hidden arguments", () => {
+		it("forbids concrete claims about tool arguments hidden from the advisor transcript", () => {
+			const messages = [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "search-timeout",
+							name: "search",
+							arguments: { pattern: "needle", paths: ["packages/coding-agent/src"] },
+						},
+					],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "search-timeout",
+					toolName: "search",
+					content: [{ type: "text", text: "timed out after 30s" }],
+					isError: true,
+					timestamp: 2,
+				},
+			] as unknown as AgentMessage[];
+
+			const rendered = formatSessionHistoryMarkdown(messages);
+
+			expect(rendered).toContain("→ search(needle) ⇒ error");
+			expect(rendered).not.toContain("packages/coding-agent/src");
+			expect(rendered).not.toContain("paths[0]");
 			expect(advisorSystemPrompt).toContain("Arguments absent from the rendered transcript are UNKNOWN");
 			expect(advisorSystemPrompt).toContain("NEVER assert concrete values, array indexes");
 			expect(advisorSystemPrompt).toContain("NEVER claim `paths[0]`, array flattening, or malformed `paths`");
