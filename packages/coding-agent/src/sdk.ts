@@ -1223,7 +1223,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const allowedModels = await logger.time("resolveAllowedModels", () =>
 		resolveAllowedModels(modelRegistry, settings, modelMatchPreferences),
 	);
-	const defaultRoleSpec = logger.time("resolveDefaultModelRole", () =>
+	let defaultRoleSpec = logger.time("resolveDefaultModelRole", () =>
 		resolveModelRoleValue(settings.getModelRole("default"), allowedModels, {
 			settings,
 			matchPreferences: modelMatchPreferences,
@@ -1946,9 +1946,47 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// Re-resolve the allowed set: extension factories above may have
 			// registered providers/models that weren't visible at startup.
 			const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
-			const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
-			if (defaultModel) {
-				model = defaultModel;
+
+			// Retry the default-role lookup against the post-extension allowed
+			// set. Extension factories register providers AFTER the early
+			// `defaultRoleSpec` resolution, so a role pointing at an extension
+			// model (e.g. an openai-compat plugin's `posthog/claude-opus-4-8`)
+			// returned `undefined` there. Without this retry the next step's
+			// `pickDefaultAvailableModel` happily replaces the user's configured
+			// default with a bundled provider's default whenever a stray
+			// `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is in the environment.
+			// (issue #3569)
+			if (!hasExplicitModel && !defaultRoleSpec.model) {
+				const reResolvedRoleSpec = resolveModelRoleValue(settings.getModelRole("default"), fallbackCandidates, {
+					settings,
+					matchPreferences: modelMatchPreferences,
+					modelRegistry,
+				});
+				if (reResolvedRoleSpec.model) {
+					defaultRoleSpec = reResolvedRoleSpec;
+					const resolvedDefaultModel = reResolvedRoleSpec.model;
+					model = resolvedDefaultModel;
+					modelFallbackMessage = undefined;
+					// Recompute the thinking level against the now-real model.
+					// `pickInitialThinkingLevel` closes over `defaultRoleSpec`,
+					// so the role's explicit selector (e.g. `:max`) now applies.
+					thinkingLevel = pickInitialThinkingLevel(resolvedDefaultModel);
+					autoThinking = thinkingLevel === AUTO_THINKING;
+					effectiveThinkingLevel = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
+					effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
+						autoThinking
+							? resolveProvisionalAutoLevel(resolvedDefaultModel)
+							: resolveThinkingLevelForModel(resolvedDefaultModel, effectiveThinkingLevel),
+					);
+					preconnectModelHost(resolvedDefaultModel.baseUrl);
+				}
+			}
+
+			if (!model) {
+				const defaultModel = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth));
+				if (defaultModel) {
+					model = defaultModel;
+				}
 			}
 			if (model) {
 				if (modelFallbackMessage) {

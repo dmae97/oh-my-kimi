@@ -127,6 +127,34 @@ describe("HashlineFilesystem ACP fs routing", () => {
 		expect(bridgeSpy).not.toHaveBeenCalled();
 		expect(writeSpy.calledWith.length).toBeGreaterThan(0);
 	});
+
+	it("keeps a local sandbox artifact addressed by absolute path off the ACP bridge", async () => {
+		// Tag-based path recovery rebinds a bare `cfg-…-plan.md` edit onto its
+		// absolute sandbox path. Even though it is NOT the active plan file
+		// (planFilePath is still the default local://PLAN.md, a fresh-slug plan),
+		// the OMP-owned artifact must be written to disk, never pushed to the editor.
+		const { bridge, spy: bridgeSpy } = makeBridge();
+		const session = createSession(tmpDir, {
+			bridge,
+			planMode: { enabled: true, planFilePath: "local://PLAN.md", workflow: "parallel", reentry: false },
+		});
+		const { writethrough, spy: writeSpy } = makeWritethroughMock();
+		const filesystem = new HashlineFilesystem({
+			session,
+			writethrough,
+			beginDeferredDiagnosticsForPath: noopBeginDeferred,
+		});
+
+		const sandboxAbs = resolveLocalUrlToPath("local://cfg-module-hygiene-plan.md", {
+			getArtifactsDir: () => path.join(tmpDir, "artifacts"),
+			getSessionId: () => "session-a",
+		});
+
+		await filesystem.writeText(sandboxAbs, "# Plan\n");
+
+		expect(bridgeSpy).not.toHaveBeenCalled();
+		expect(writeSpy.calledWith).toContain(sandboxAbs);
+	});
 });
 
 // ─── executeReplaceSingle ─────────────────────────────────────────────────────

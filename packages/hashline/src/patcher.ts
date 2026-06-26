@@ -256,13 +256,15 @@ export class Patcher {
 
 		let target = section;
 		let canonicalPath = this.fs.canonicalPath(target.path);
-		await this.fs.preflightWrite(target.path);
 		let read = await this.#tryRead(target.path);
 
 		// Path recovery: the authored path doesn't exist on disk, but its
 		// filename + snapshot tag may name a file the model read this session
 		// (it supplied a bare filename, or the wrong directory). Rebind to that
-		// file so the edit lands where the tag points, and warn.
+		// file so the edit lands where the tag points, and warn. This runs
+		// before the write gate so a recoverable bare/mis-typed path is rebound
+		// to its real (writable) location instead of being rejected against the
+		// literal — possibly read-only — path it was authored as.
 		if (!read.exists) {
 			const recovered = this.#recoverSectionPathFromTag(target, canonicalPath);
 			if (recovered && this.fs.allowTagPathRecovery(target.path, recovered.section.path)) {
@@ -271,10 +273,15 @@ export class Patcher {
 				);
 				target = recovered.section;
 				canonicalPath = recovered.canonicalPath;
-				await this.fs.preflightWrite(target.path);
 				read = await this.#tryRead(target.path);
 			}
 		}
+
+		// Gate the final (possibly recovered) target before any write work, so
+		// an unrecoverable read-only target (e.g. a plan-mode working-tree path)
+		// fails with the write guard rather than a misleading "file not found".
+		await this.fs.preflightWrite(target.path);
+
 		if (!read.exists) {
 			throw new Error(`File not found: ${target.path}. Use the write tool to create new files.`);
 		}

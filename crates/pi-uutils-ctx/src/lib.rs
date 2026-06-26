@@ -26,18 +26,20 @@ use std::{
 };
 
 struct Ctx {
-	stdin:     Box<dyn Read + Send>,
+	stdin:                 Box<dyn Read + Send>,
 	/// Raw fd backing `stdin` when it is a real OS file/pipe, used for
 	/// cancellable readiness polling on unix. `None` for non-fd readers.
-	stdin_fd:  Option<i32>,
-	stdout:    Box<dyn Write + Send>,
-	stderr:    Box<dyn Write + Send>,
-	cwd:       PathBuf,
-	env:       HashMap<String, String>,
+	stdin_fd:              Option<i32>,
+	/// Whether stdin is a shell pipe/stream that should be searched implicitly.
+	stdin_is_search_input: bool,
+	stdout:                Box<dyn Write + Send>,
+	stderr:                Box<dyn Write + Send>,
+	cwd:                   PathBuf,
+	env:                   HashMap<String, String>,
 	/// Set by the host when the command is aborted/timed out; makes a blocked
 	/// `stdin` read return EOF so the utility unwinds promptly.
-	cancel:    Arc<AtomicBool>,
-	exit_code: i32,
+	cancel:                Arc<AtomicBool>,
+	exit_code:             i32,
 }
 
 thread_local! {
@@ -48,20 +50,22 @@ thread_local! {
 /// utility invocation. Grouped into one value to keep [`scope`] readable.
 pub struct ScopeIo {
 	/// Standard input reader.
-	pub stdin:    Box<dyn Read + Send>,
+	pub stdin:                 Box<dyn Read + Send>,
 	/// Raw fd backing `stdin` when it is a real OS file/pipe (unix), used for
 	/// cancellable readiness polling; `None` for non-fd readers.
-	pub stdin_fd: Option<i32>,
+	pub stdin_fd:              Option<i32>,
+	/// Whether stdin should be used as `rg PATTERN`'s implicit input.
+	pub stdin_is_search_input: bool,
 	/// Standard output writer.
-	pub stdout:   Box<dyn Write + Send>,
+	pub stdout:                Box<dyn Write + Send>,
 	/// Standard error writer.
-	pub stderr:   Box<dyn Write + Send>,
+	pub stderr:                Box<dyn Write + Send>,
 	/// Working directory that relative paths resolve against.
-	pub cwd:      PathBuf,
+	pub cwd:                   PathBuf,
 	/// Exported shell environment.
-	pub env:      HashMap<String, String>,
+	pub env:                   HashMap<String, String>,
 	/// Set by the host on abort/timeout to unblock a stalled `stdin` read.
-	pub cancel:   Arc<AtomicBool>,
+	pub cancel:                Arc<AtomicBool>,
 }
 
 /// Installs `io` as the current thread's uutils context, runs `f`, then
@@ -84,14 +88,15 @@ pub fn scope<R>(io: ScopeIo, f: impl FnOnce() -> R) -> R {
 
 	let prev = CTX.with(|c| {
 		c.borrow_mut().replace(Ctx {
-			stdin:     io.stdin,
-			stdin_fd:  io.stdin_fd,
-			stdout:    io.stdout,
-			stderr:    io.stderr,
-			cwd:       io.cwd,
-			env:       io.env,
-			cancel:    io.cancel,
-			exit_code: 0,
+			stdin:                 io.stdin,
+			stdin_fd:              io.stdin_fd,
+			stdin_is_search_input: io.stdin_is_search_input,
+			stdout:                io.stdout,
+			stderr:                io.stderr,
+			cwd:                   io.cwd,
+			env:                   io.env,
+			cancel:                io.cancel,
+			exit_code:             0,
 		})
 	});
 	let _guard = Guard { prev };
@@ -143,6 +148,16 @@ pub fn var(key: &str) -> Option<String> {
 		c.borrow()
 			.as_ref()
 			.and_then(|ctx| ctx.env.get(key).cloned())
+	})
+}
+/// Returns true when scoped stdin is a shell pipe or custom stream that should
+/// be treated as `rg PATTERN`'s implicit input instead of searching `.`.
+#[must_use]
+pub fn stdin_is_search_input() -> bool {
+	CTX.with(|c| {
+		c.borrow()
+			.as_ref()
+			.is_some_and(|ctx| ctx.stdin_is_search_input)
 	})
 }
 

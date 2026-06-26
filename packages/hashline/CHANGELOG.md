@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Updated prompt documentation to include support for Markdown section operations
+
+### Fixed
+
+- Improved file path recovery to correctly handle read-only or incorrectly typed paths
+
 ## [16.1.14] - 2026-06-22
 
 ### Fixed
