@@ -8,7 +8,7 @@ import { FIREWORKS_FAST_SUFFIX, toFireworksPublicModelId } from "../fireworks-mo
 import { isGlmVisionModelId, isGrokReasoningEffortCapable, isReasoningGlmModelId } from "../identity/family";
 import type { ModelManagerOptions } from "../model-manager";
 import { getBundledModels } from "../models";
-import type { Api, FetchImpl, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
+import type { Api, FetchImpl, Model, ModelSpec, OpenAICompat, Provider, ThinkingConfig } from "../types";
 import { isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
 import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import {
@@ -2817,6 +2817,231 @@ export interface LiteLLMModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+export interface FetchLiteLLMRichModelsOptions<TApi extends Api> {
+	api: TApi;
+	provider: Provider;
+	baseUrl: string;
+	apiKey?: string;
+	headers?: Record<string, string>;
+	fetch?: FetchImpl;
+	signal?: AbortSignal;
+	referenceResolver?: (modelId: string) => ModelSpec<TApi> | undefined;
+}
+
+type LiteLLMRichModelEntry = Record<string, unknown>;
+
+const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/info", "/v1/model/info"] as const;
+export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
+export const OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
+const UNKNOWN_PROXY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+
+export function normalizeLiteLLMManagementBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.trim().replace(/\/+$/g, "");
+	if (!trimmed) {
+		return "";
+	}
+	try {
+		const parsed = new URL(trimmed);
+		const path = parsed.pathname.replace(/\/+$/g, "");
+		parsed.pathname = path.endsWith("/v1") ? path.slice(0, -3) || "/" : path || "/";
+		const normalized = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+		return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+	} catch {
+		return trimmed.replace(/\/v1$/, "");
+	}
+}
+
+function normalizeLiteLLMRuntimeBaseUrl(baseUrl: string): string {
+	const trimmed = baseUrl.trim();
+	return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+function toNonEmptyString(value: unknown): string | undefined {
+	if (typeof value !== "string") {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractLiteLLMRichEntries(payload: unknown): LiteLLMRichModelEntry[] | null {
+	if (Array.isArray(payload)) {
+		return payload.flatMap(entry => (isRecord(entry) ? [entry] : []));
+	}
+	if (!isRecord(payload)) {
+		return null;
+	}
+	for (const candidate of [payload.data, payload.models, payload.result, payload.items]) {
+		if (candidate === undefined) {
+			continue;
+		}
+		const entries = extractLiteLLMRichEntries(candidate);
+		if (entries !== null) {
+			return entries;
+		}
+	}
+	return null;
+}
+
+function getLiteLLMModelInfo(entry: LiteLLMRichModelEntry): LiteLLMRichModelEntry | undefined {
+	return isRecord(entry.model_info) ? entry.model_info : undefined;
+}
+
+function getLiteLLMParams(entry: LiteLLMRichModelEntry): LiteLLMRichModelEntry | undefined {
+	return isRecord(entry.litellm_params) ? entry.litellm_params : undefined;
+}
+
+function getLiteLLMMetadataValue(entry: LiteLLMRichModelEntry, key: string): unknown {
+	return entry[key] ?? getLiteLLMModelInfo(entry)?.[key];
+}
+
+function getLiteLLMRichModelId(entry: LiteLLMRichModelEntry): string | undefined {
+	return (
+		toNonEmptyString(entry.model_group) ??
+		toNonEmptyString(entry.model_name) ??
+		toNonEmptyString(entry.id) ??
+		toNonEmptyString(getLiteLLMParams(entry)?.model)
+	);
+}
+
+function getSupportedOpenAIParams(entry: LiteLLMRichModelEntry): string[] | undefined {
+	const value = getLiteLLMMetadataValue(entry, "supported_openai_params");
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	return value.flatMap(item => (typeof item === "string" ? [item] : []));
+}
+
+function mapLiteLLMRichEntry<TApi extends Api>(
+	entry: LiteLLMRichModelEntry,
+	options: FetchLiteLLMRichModelsOptions<TApi>,
+	runtimeBaseUrl: string,
+): ModelSpec<TApi> | null {
+	const id = getLiteLLMRichModelId(entry);
+	if (!id) {
+		return null;
+	}
+	const reference = options.referenceResolver?.(id);
+	const modelName = toNonEmptyString(entry.model_name);
+	const contextWindow = toPositiveNumber(
+		getLiteLLMMetadataValue(entry, "max_input_tokens"),
+		reference?.contextWindow ?? OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
+	);
+	const maxTokens = toPositiveNumber(
+		getLiteLLMMetadataValue(entry, "max_output_tokens"),
+		reference?.maxTokens ?? Math.min(contextWindow, OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS),
+	);
+	const supportsVision = getLiteLLMMetadataValue(entry, "supports_vision");
+	const supportsReasoning = getLiteLLMMetadataValue(entry, "supports_reasoning");
+	const supportedOpenAIParams = getSupportedOpenAIParams(entry);
+	const supportsFunctionCalling = getLiteLLMMetadataValue(entry, "supports_function_calling");
+	const supportsTools =
+		supportsFunctionCalling === true
+			? true
+			: supportsFunctionCalling === false
+				? false
+				: supportedOpenAIParams !== undefined
+					? supportedOpenAIParams.some(param =>
+							["tools", "tool_choice", "functions", "function_call"].includes(param),
+						)
+					: reference?.supportsTools;
+	const compat: OpenAICompat = {
+		...(reference?.compat ?? {}),
+		supportsStore: false,
+		supportsDeveloperRole: false,
+		...(supportedOpenAIParams !== undefined
+			? { supportsReasoningEffort: supportedOpenAIParams.includes("reasoning_effort") }
+			: {}),
+	};
+	return {
+		id,
+		name: modelName && modelName !== id ? modelName : (reference?.name ?? id),
+		api: options.api,
+		provider: options.provider,
+		baseUrl: runtimeBaseUrl,
+		contextWindow,
+		maxTokens,
+		input:
+			supportsVision === true
+				? ["text", "image"]
+				: supportsVision === false
+					? ["text"]
+					: (reference?.input ?? ["text"]),
+		reasoning: typeof supportsReasoning === "boolean" ? supportsReasoning : (reference?.reasoning ?? false),
+		thinking: reference?.thinking,
+		cost: reference?.cost ?? UNKNOWN_PROXY_COST,
+		...(supportsTools !== undefined ? { supportsTools } : {}),
+		compat: compat as ModelSpec<TApi>["compat"],
+	};
+}
+
+async function fetchLiteLLMRichEndpoint<TApi extends Api>(
+	endpoint: string,
+	options: FetchLiteLLMRichModelsOptions<TApi>,
+	managementBaseUrl: string,
+	runtimeBaseUrl: string,
+): Promise<ModelSpec<TApi>[] | null> {
+	const fetchImpl = options.fetch ?? globalThis.fetch;
+	const requestHeaders: Record<string, string> = {
+		Accept: "application/json",
+		...options.headers,
+	};
+	if (options.apiKey) {
+		requestHeaders.Authorization = `Bearer ${options.apiKey}`;
+	}
+	let response: Response;
+	try {
+		response = await fetchImpl(`${managementBaseUrl}${endpoint}`, {
+			method: "GET",
+			headers: requestHeaders,
+			signal: options.signal,
+		});
+	} catch {
+		return null;
+	}
+	if (!response.ok) {
+		return null;
+	}
+	let payload: unknown;
+	try {
+		payload = await response.json();
+	} catch {
+		return null;
+	}
+	const entries = extractLiteLLMRichEntries(payload);
+	if (!entries || entries.length === 0) {
+		return null;
+	}
+	const deduped = new Map<string, ModelSpec<TApi>>();
+	for (const entry of entries) {
+		const model = mapLiteLLMRichEntry(entry, options, runtimeBaseUrl);
+		if (model) {
+			deduped.set(model.id, model);
+		}
+	}
+	if (deduped.size === 0) {
+		return null;
+	}
+	return Array.from(deduped.values()).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function fetchLiteLLMRichModels<TApi extends Api>(
+	options: FetchLiteLLMRichModelsOptions<TApi>,
+): Promise<ModelSpec<TApi>[] | null> {
+	const managementBaseUrl = normalizeLiteLLMManagementBaseUrl(options.baseUrl);
+	const runtimeBaseUrl = normalizeLiteLLMRuntimeBaseUrl(options.baseUrl);
+	if (!managementBaseUrl || !runtimeBaseUrl) {
+		return null;
+	}
+	for (const endpoint of LITELLM_RICH_ENDPOINTS) {
+		const models = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl);
+		if (models) {
+			return models;
+		}
+	}
+	return null;
+}
+
 export function litellmModelManagerOptions(
 	config?: LiteLLMModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -2824,21 +3049,32 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		cacheProviderId: `litellm:${Bun.hash(baseUrl).toString(36)}`,
-		// litellm is a local-only proxy whose /v1/models returns bare ids with no
-		// metadata, and it is never bundled in models.json (that would leak the
-		// machine's localhost catalog). It proxies known upstream models, so we
-		// enrich discovered ids against models.dev — the same reference source the
-		// gateway providers (fireworks et al.) use — instead of a bundled map.
+		cacheProviderId: `litellm:rich-v1:${Bun.hash(baseUrl).toString(36)}`,
+		// litellm is a local-only proxy and is never bundled in models.json (that
+		// would leak the machine's localhost catalog). Prefer the proxy's richer
+		// management metadata, then fall back to /v1/models and enrich bare ids
+		// against models.dev like the gateway providers (fireworks et al.) do.
 		fetchDynamicModels: async () => {
 			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
+			const resolveReference = (id: string) => modelsDevReferences.get(id);
+			const richModels = await fetchLiteLLMRichModels({
+				api: "openai-completions",
+				provider: "litellm",
+				baseUrl,
+				apiKey,
+				fetch: config?.fetch,
+				referenceResolver: resolveReference,
+				signal: AbortSignal.timeout(10_000),
+			});
+			if (richModels && richModels.length > 0) {
+				return richModels;
+			}
 			return fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "litellm",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) =>
-					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
+				mapModel: (entry, defaults) => mapWithBundledReference(entry, defaults, resolveReference(defaults.id)),
 				fetch: config?.fetch,
 			});
 		},

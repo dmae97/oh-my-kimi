@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import type { OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -932,5 +933,200 @@ describe("ModelRegistry runtime discovery", () => {
 		// never pinning the model at a broken `0` window.
 		const zeroCtx = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "zero-context-model");
 		expect(zeroCtx?.contextWindow).toBe(128000);
+	});
+
+	test("litellm discovery maps rich model metadata and keeps runtime /v1 baseUrl", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				baseUrl: "http://127.0.0.1:4000",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "litellm" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "gpt-big",
+							max_input_tokens: 262_144,
+							max_output_tokens: 16_384,
+							supports_vision: true,
+							supports_reasoning: true,
+							supported_openai_params: ["reasoning_effort"],
+						},
+					],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const model = registry.find("litellm-test", "gpt-big");
+
+		expect(model?.baseUrl).toBe("http://127.0.0.1:4000/v1");
+		expect(model?.contextWindow).toBe(262_144);
+		expect(model?.maxTokens).toBe(16_384);
+		expect(model?.input).toEqual(["text", "image"]);
+		expect(model?.reasoning).toBe(true);
+	});
+
+	test("litellm discovery enriches configured proxy models with bundled references", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				baseUrl: "http://127.0.0.1:4000/v1",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "litellm" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4000/model_group/info") {
+				return Response.json({ data: [{ model_group: "gpt-5", supports_reasoning: true }] });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const model = registry.find("litellm-test", "gpt-5");
+
+		expect(model?.name).toBe("GPT-5");
+		expect(model?.contextWindow).toBe(400_000);
+		expect(model?.maxTokens).toBe(128_000);
+		expect(model?.thinking?.mode).toBe("effort");
+		expect((model?.compat as OpenAICompat | undefined)?.supportsReasoningEffort).toBe(true);
+	});
+
+	test("litellm discovery defaults to LiteLLM local proxy when baseUrl is omitted", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "litellm" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://localhost:4000/model_group/info") {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://localhost:4000/v2/model/info" || url === "http://localhost:4000/model/info") {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://localhost:4000/v1/model/info") {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://localhost:4000/v1/models") {
+				return Response.json({ data: [{ id: "default-litellm" }] });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		expect(registry.find("litellm-test", "default-litellm")?.baseUrl).toBe("http://localhost:4000/v1");
+	});
+
+	test("litellm discovery reuses configured bearer on rich and fallback requests", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				baseUrl: "http://127.0.0.1:4001",
+				apiKey: "sk-1234",
+				api: "openai-completions",
+				auth: "apiKey",
+				discovery: { type: "litellm" },
+			},
+		});
+		const authByUrl = new Map<string, string | undefined>();
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url = String(input);
+			const headers = init?.headers as Record<string, string> | undefined;
+			authByUrl.set(url, headers?.Authorization);
+			if (url === "http://127.0.0.1:4001/model_group/info") {
+				return new Response("{}", { status: 401 });
+			}
+			if (url === "http://127.0.0.1:4001/v2/model/info") {
+				return new Response("{}", { status: 500 });
+			}
+			if (url === "http://127.0.0.1:4001/model/info" || url === "http://127.0.0.1:4001/v1/model/info") {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://127.0.0.1:4001/v1/models") {
+				return Response.json({ data: [{ id: "fallback-model" }] });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		expect(authByUrl.get("http://127.0.0.1:4001/model_group/info")).toBe("Bearer sk-1234");
+		expect(authByUrl.get("http://127.0.0.1:4001/v2/model/info")).toBe("Bearer sk-1234");
+		expect(authByUrl.get("http://127.0.0.1:4001/model/info")).toBe("Bearer sk-1234");
+		expect(authByUrl.get("http://127.0.0.1:4001/v1/model/info")).toBe("Bearer sk-1234");
+		expect(authByUrl.get("http://127.0.0.1:4001/v1/models")).toBe("Bearer sk-1234");
+		expect(registry.getProviderDiscoveryState("litellm-test")?.status).toBe("ok");
+		expect(registry.find("litellm-test", "fallback-model")?.baseUrl).toBe("http://127.0.0.1:4001/v1");
+	});
+
+	test("litellm discovery rejects invalid rich limits and falls back safely", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				baseUrl: "http://127.0.0.1:4002/v1",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "litellm" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4002/model_group/info") {
+				return Response.json({
+					data: [{ model_group: "bad-limits", max_input_tokens: 0, max_output_tokens: "nope" }],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const model = registry.find("litellm-test", "bad-limits");
+
+		expect(model?.contextWindow).toBe(128000);
+		expect(model?.maxTokens).toBe(32768);
+	});
+
+	test("litellm discovery accepts v2 model info when model_group info is absent", async () => {
+		writeRawModelsJson({
+			"litellm-test": {
+				baseUrl: "http://127.0.0.1:4003/v1",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "litellm" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:4003/model_group/info") {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://127.0.0.1:4003/v2/model/info") {
+				return Response.json({
+					data: [
+						{
+							model_name: "team-gpt",
+							model_info: { id: "deployment-id", max_input_tokens: 200_000, max_output_tokens: 12_000 },
+						},
+					],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		expect(registry.find("litellm-test", "team-gpt")?.contextWindow).toBe(200_000);
+		expect(registry.find("litellm-test", "deployment-id")).toBeUndefined();
 	});
 });
