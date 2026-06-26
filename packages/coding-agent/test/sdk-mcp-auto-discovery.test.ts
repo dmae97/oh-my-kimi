@@ -8,7 +8,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { getAgentDir, Snowflake, setAgentDir } from "@oh-my-pi/pi-utils";
 import { MANY_TOOL_COUNT } from "./fixtures/many-tools-mcp";
 
 // Contracts for deferred (hasUI) MCP discovery follow-ups:
@@ -30,6 +30,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 	let tempDir: string;
 	let authStorage: AuthStorage;
 	let modelRegistry: ModelRegistry;
+	let originalAgentDir: string;
 	// Discovery resolves user-level MCP config from `os.homedir()`; redirect it
 	// to an empty dir so the test connects ONLY to the fixture server and never
 	// spawns the developer's real MCP servers.
@@ -40,6 +41,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		fs.mkdirSync(registryDir, { recursive: true });
 		isolatedHome = path.join(os.tmpdir(), `pi-sdk-mcp-auto-home-${Snowflake.next()}`);
 		fs.mkdirSync(isolatedHome, { recursive: true });
+		originalAgentDir = getAgentDir();
 		authStorage = await AuthStorage.create(path.join(registryDir, "auth.db"));
 		modelRegistry = new ModelRegistry(authStorage);
 	});
@@ -56,10 +58,12 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 	beforeEach(() => {
 		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-auto-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
+		setAgentDir(tempDir);
 		spyOn(os, "homedir").mockReturnValue(isolatedHome);
 	});
 
 	afterEach(() => {
+		setAgentDir(originalAgentDir);
 		if (tempDir && fs.existsSync(tempDir)) {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}

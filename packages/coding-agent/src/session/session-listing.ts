@@ -495,12 +495,32 @@ async function scanSessionDir(
 	}
 }
 
+async function scanSessionDirReadOnly(
+	sessionDir: string,
+	storage: SessionStorage,
+	withStatus: boolean,
+): Promise<SessionInfo[]> {
+	try {
+		const files = storage.listFilesSync(sessionDir, "*.jsonl");
+		return await collectSessionsFromFiles(files, storage, withStatus);
+	} catch {
+		return [];
+	}
+}
+
 /**
  * List sessions in a resolved session directory (newest first), reading each
  * file's lifecycle {@link SessionStatus}.
  */
 export function listSessions(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
 	return scanSessionDir(sessionDir, storage, true);
+}
+
+/**
+ * List sessions without repairing orphaned backups or mutating the directory.
+ */
+export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
+	return scanSessionDirReadOnly(sessionDir, storage, true);
 }
 
 /** List all sessions across all project directories (newest first). */

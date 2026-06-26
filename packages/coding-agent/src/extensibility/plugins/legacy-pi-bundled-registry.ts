@@ -223,6 +223,7 @@ import * as bundledPiCodingAgentCliGalleryFixturesShell from "@oh-my-pi/pi-codin
 import * as bundledPiCodingAgentCliGalleryFixturesTypes from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures/types";
 import * as bundledPiCodingAgentCliGalleryFixturesWeb from "@oh-my-pi/pi-coding-agent/cli/gallery-fixtures/web";
 import * as bundledPiCodingAgentCliGalleryScreenshot from "@oh-my-pi/pi-coding-agent/cli/gallery-screenshot";
+import * as bundledPiCodingAgentCliGcCli from "@oh-my-pi/pi-coding-agent/cli/gc-cli";
 import * as bundledPiCodingAgentCliGrepCli from "@oh-my-pi/pi-coding-agent/cli/grep-cli";
 import * as bundledPiCodingAgentCliGrievancesCli from "@oh-my-pi/pi-coding-agent/cli/grievances-cli";
 import * as bundledPiCodingAgentCliInitialMessage from "@oh-my-pi/pi-coding-agent/cli/initial-message";
@@ -255,6 +256,7 @@ import * as bundledPiCodingAgentCommandsCompletions from "@oh-my-pi/pi-coding-ag
 import * as bundledPiCodingAgentCommandsConfig from "@oh-my-pi/pi-coding-agent/commands/config";
 import * as bundledPiCodingAgentCommandsDryBalance from "@oh-my-pi/pi-coding-agent/commands/dry-balance";
 import * as bundledPiCodingAgentCommandsGallery from "@oh-my-pi/pi-coding-agent/commands/gallery";
+import * as bundledPiCodingAgentCommandsGc from "@oh-my-pi/pi-coding-agent/commands/gc";
 import * as bundledPiCodingAgentCommandsGrep from "@oh-my-pi/pi-coding-agent/commands/grep";
 import * as bundledPiCodingAgentCommandsGrievances from "@oh-my-pi/pi-coding-agent/commands/grievances";
 import * as bundledPiCodingAgentCommandsInstall from "@oh-my-pi/pi-coding-agent/commands/install";
@@ -1503,6 +1505,7 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 	"@oh-my-pi/pi-coding-agent/cli/gallery-screenshot": bundledPiCodingAgentCliGalleryScreenshot as unknown as Readonly<
 		Record<string, unknown>
 	>,
+	"@oh-my-pi/pi-coding-agent/cli/gc-cli": bundledPiCodingAgentCliGcCli as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/cli/grep-cli": bundledPiCodingAgentCliGrepCli as unknown as Readonly<
 		Record<string, unknown>
 	>,
@@ -1623,6 +1626,9 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/commands/gallery": bundledPiCodingAgentCommandsGallery as unknown as Readonly<
+		Record<string, unknown>
+	>,
+	"@oh-my-pi/pi-coding-agent/commands/gc": bundledPiCodingAgentCommandsGc as unknown as Readonly<
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/commands/grep": bundledPiCodingAgentCommandsGrep as unknown as Readonly<

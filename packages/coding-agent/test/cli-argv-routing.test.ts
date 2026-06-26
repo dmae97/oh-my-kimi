@@ -55,4 +55,10 @@ describe("resolveCliArgv routes subcommands hidden behind leading global flags",
 			argv: ["acp", "--approval-mode=yolo"],
 		});
 	});
+
+	test("`gc` dispatches as a top-level maintenance subcommand", () => {
+		expect(resolveCliArgv(["gc", "--apply"])).toEqual({
+			argv: ["gc", "--apply"],
+		});
+	});
 });

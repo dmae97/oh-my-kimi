@@ -4641,6 +4641,18 @@ export const SETTINGS_SCHEMA = {
 		default: "unset" as const,
 	},
 
+	"gc.blobs": { type: "boolean", default: true },
+
+	"gc.archive": { type: "boolean", default: true },
+
+	"gc.wal": { type: "boolean", default: true },
+
+	"gc.coldArchiveAfterDays": { type: "number", default: 30 },
+
+	"gc.retainNewestGlobal": { type: "number", default: 20 },
+
+	"gc.retainNewestPerCwd": { type: "number", default: 10 },
+
 	"thinkingBudgets.minimal": { type: "number", default: 1024 },
 
 	"thinkingBudgets.low": { type: "number", default: 2048 },
@@ -4886,6 +4898,15 @@ export interface CodexResetsSettings {
 	keepCredits: number;
 }
 
+export interface GcSettings {
+	blobs: boolean;
+	archive: boolean;
+	wal: boolean;
+	coldArchiveAfterDays: number;
+	retainNewestGlobal: number;
+	retainNewestPerCwd: number;
+}
+
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
 	compaction: CompactionSettings;
@@ -4905,6 +4926,7 @@ export interface GroupTypeMap {
 	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;
 	codexResets: CodexResetsSettings;
+	gc: GcSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;
