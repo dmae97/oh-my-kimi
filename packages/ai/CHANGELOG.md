@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed llama.cpp OpenAI-compatible capture follow-ups sending named forced `tool_choice` as an object; the chat-completions encoder now downgrades that shape to string `"required"` for llama.cpp so its parser no longer falls back with `type must be string, but is object`. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
+- Fixed `omp usage` silently omitting Ollama and Ollama Cloud accounts by registering placeholder usage providers for both until an upstream quota endpoint is available. ([#3555](https://github.com/can1357/oh-my-pi/issues/3555))
 
 ## [16.1.23] - 2026-06-26
 
@@ -22,10 +23,6 @@
 ### Fixed
 
 - Fixed local llama.cpp (and any local OpenAI-compatible server rendering the Qwen3.6+ chat template) re-processing the full prompt every new user message even with `replayReasoningContent` enabled (#3541 follow-up to #3528). Sending `reasoning_content` alone wasn't enough: Qwen3's chat template strips `<think>...</think>` from any assistant turn whose index is `<= last_query_index`, so the moment a new user message (the user's next prompt, or the auto-learn capture-at-stop nudge) lands, every prior assistant turn becomes "older" and is re-rendered without the `<think>` block — diverging from the generation tokens still in the slot's KV cache. The chat-completions encoder now emits `preserve_thinking: true` for Qwen thinking dialects on local servers, route-split the same way the existing `enable_thinking` emission is: the `qwen` dialect rides the top-level field (llama.cpp's `--jinja` hook and Alibaba Cloud Model Studio's compatible-mode), the `qwen-chat-template` dialect (NVIDIA NIM, vLLM/SGLang's chat-template-kwargs path) rides only `chat_template_kwargs.preserve_thinking` because NIM's request schema is `additionalProperties: false` and rejects unknown top-level fields (#2299). The emission is hoisted above the `reasoning.enabled` gate so it fires for THREE cases the original gating missed: (1) runtime-discovered local Qwen models that ship with `reasoning: false` because the upstream `/v1/models` doesn't advertise the capability (same gotcha #3532 fixed for `replayReasoningContent`), (2) caller-disabled reasoning (`/think off`) — the kwarg is a history-rendering knob, not a per-turn thinking switch, and the slot still holds `<think>` tokens from earlier turns, and (3) forced-tool-choice / DeepSeek-style auto-disable. Qwen3.6+ then renders `<think>...</think>` for every assistant turn regardless of position, and the next-turn render matches the cached generation tokens. ([#3541](https://github.com/can1357/oh-my-pi/issues/3541))
-
-### Fixed
-
-- Fixed `omp usage` silently omitting Ollama and Ollama Cloud accounts by registering placeholder usage providers for both until an upstream quota endpoint is available. ([#3555](https://github.com/can1357/oh-my-pi/issues/3555))
 
 ## [16.1.22] - 2026-06-26
 

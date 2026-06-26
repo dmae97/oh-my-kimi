@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed API-level provider refusals being replayed as assistant dialogue on later requests, which could anchor repeated refusals after a single blocked turn. ([#3592](https://github.com/can1357/oh-my-pi/issues/3592))
+- Fixed `streamProxy` leaking internal `partialJson` streaming state onto the final `AssistantMessage` when the stream ended without a `toolcall_end` event. The field is now accumulated in a side-channel `Map` (eliminating `as any` casts on the accumulation path), written onto the content object via a typed `ToolCall & { partialJson: string }` intersection so downstream renderers can still read it during streaming, and scrubbed from all content blocks at `toolcall_end`, `done`, and `error` — guaranteeing it never appears on the final message.
 
 ## [16.1.23] - 2026-06-26
 
@@ -27,10 +28,6 @@
 ### Fixed
 
 - Hardened the agent-loop cooperative yield against backward wall-clock jumps. A stale future timestamp left in the shared yield gate (NTP step, or a fake-timer test mocking `Date.now`) could make `yieldIfDue()` gate forever and stop yielding to the event loop; the gate now treats a backward clock delta as due and re-anchors. The gate is exposed as an injectable `YieldGate` (with `yieldIfDue()` retained as the shared singleton) so it can be exercised without mocking process-global timers.
-
-### Fixed
-
-- Fixed `streamProxy` leaking internal `partialJson` streaming state onto the final `AssistantMessage` when the stream ended without a `toolcall_end` event. The field is now accumulated in a side-channel `Map` (eliminating `as any` casts on the accumulation path), written onto the content object via a typed `ToolCall & { partialJson: string }` intersection so downstream renderers can still read it during streaming, and scrubbed from all content blocks at `toolcall_end`, `done`, and `error` — guaranteeing it never appears on the final message.
 
 ## [16.1.16] - 2026-06-23
 

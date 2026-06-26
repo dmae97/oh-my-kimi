@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added support for rendering HTML `<code>` tags as theme-styled inline code blocks
