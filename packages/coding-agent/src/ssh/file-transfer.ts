@@ -14,8 +14,12 @@ import { quotePosixPath } from "./utils";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * Ensure the ControlMaster connection and reject non-POSIX (Windows) remotes,
- * which the POSIX `head`/`cat`/`mv`/`ls` commands in this module cannot drive.
+ * Ensure the ControlMaster connection and restrict transfers to remotes whose
+ * *login* shell runs our POSIX snippets directly. OpenSSH hands each command to
+ * `$SHELL -c`, so the login shell must be POSIX: Windows (cmd/powershell) can't
+ * drive `head`/`cat`/`mv`, and csh/tcsh apply `!` history expansion to the
+ * command line. `ensureHostInfo` classifies those (and fish) as a non-sh shell,
+ * so accept only sh, bash, and zsh; anything else is refused here.
  */
 async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
 	await ensureConnection(target);
@@ -23,6 +27,11 @@ async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
 	if (info.os === "windows") {
 		throw new Error(
 			`ssh://: ${target.name} is a Windows host; ssh:// supports POSIX remotes only (head/cat/mv) — use the ssh tool for Windows hosts`,
+		);
+	}
+	if (info.shell !== "sh" && info.shell !== "bash" && info.shell !== "zsh") {
+		throw new Error(
+			`ssh://: ${target.name} uses a non-POSIX login shell (${info.shell}); ssh:// read/write needs sh, bash, or zsh — use the ssh tool for this host`,
 		);
 	}
 }

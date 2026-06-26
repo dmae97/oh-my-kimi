@@ -70,6 +70,20 @@ function decodeUtf8Text(bytes: Uint8Array): string | null {
  * the non-special `ssh` scheme.
  */
 function remotePathFromUrl(url: InternalUrl): string {
+	// `?`/`#` are URL delimiters, so parseInternalUrl strips them from the path
+	// (`ssh://h/tmp/a?draft` → `/tmp/a`). Reject the unsupported suffix instead of
+	// silently operating on the truncated path; a literal `?`/`#` in a filename
+	// must be percent-encoded (`%3F`/`%23`).
+	if (url.search) {
+		throw new Error(
+			`ssh:// does not support URL query strings; percent-encode a literal '?' as %3F in the path: ${url.href}`,
+		);
+	}
+	if (url.hash) {
+		throw new Error(
+			`ssh:// does not support URL fragments; percent-encode a literal '#' as %23 in the path: ${url.href}`,
+		);
+	}
 	const raw = url.rawPathname ?? url.pathname;
 	let decoded: string;
 	try {

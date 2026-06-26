@@ -316,4 +316,16 @@ describe("SshProtocolHandler", () => {
 		await handler.resolve(parseInternalUrl("ssh://h/etc"));
 		expect(listSpy).toHaveBeenCalledTimes(1);
 	});
+
+	it("rejects ssh:// URL queries and fragments instead of operating on the truncated path", async () => {
+		mockHosts();
+		// `?`/`#` are URL delimiters, so the query/fragment is stripped from the path;
+		// `ssh://h/tmp/a?draft` would otherwise read/write `/tmp/a`, the wrong file.
+		await expect(handler.resolve(parseInternalUrl("ssh://h/tmp/a?draft"))).rejects.toThrow(/quer/i);
+		await expect(handler.resolve(parseInternalUrl("ssh://h/tmp/a#draft"))).rejects.toThrow(/fragment/i);
+		// A literal `?` in a filename must be percent-encoded (`%3F`) and is then accepted.
+		const spy = mockReadBytes("ok\n");
+		await handler.resolve(parseInternalUrl("ssh://h/tmp/a%3Fdraft"));
+		expect(spy.mock.calls[0]?.[1]).toBe("/tmp/a?draft");
+	});
 });
