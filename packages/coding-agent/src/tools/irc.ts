@@ -19,7 +19,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { IrcBus, type IrcDeliveryReceipt, type IrcMessage } from "../irc/bus";
 import type { Theme } from "../modes/theme/theme";
 import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
-import type { AgentRegistry } from "../registry/agent-registry";
+import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { canSpawnAtDepth } from "../task/types";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
@@ -280,6 +280,10 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			// parked agent on a broadcast would be a stampede. Direct sends go
 			// through the bus unfiltered so parked recipients are revived.
 			const targets = isBroadcast ? registry.listVisibleTo(senderId).map(ref => ref.id) : [to];
+			// A broadcast that also reaches the main agent delivers the body to it
+			// directly (its own incoming card); relaying the sibling legs to the
+			// main UI would then show the same body once per other recipient.
+			const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
 			const receipts = await Promise.all(
 				targets.map(target =>
 					bus.send(
@@ -287,7 +291,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 						// Awaited sends mark the sender as blocked on an answer so a
 						// busy recipient that cannot reach a step boundary (async
 						// disabled) auto-replies instead of stranding the sender.
-						params.await ? { expectsReply: true } : undefined,
+						{ expectsReply: params.await || undefined, suppressRelay: suppressRelay || undefined },
 					),
 				),
 			);
