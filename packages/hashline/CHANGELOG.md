@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Updated prompt documentation to include support for Markdown section operations
 
 ## [16.1.14] - 2026-06-22
 
