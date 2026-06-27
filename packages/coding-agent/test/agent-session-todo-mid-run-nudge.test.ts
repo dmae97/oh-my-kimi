@@ -205,4 +205,28 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		expect(messages).toEqual([]);
 		expect(reminderEvents).toEqual([]);
 	});
+
+	it("counter update lands synchronously with the message_end emit (no microtask drain required)", () => {
+		// Regression for the review on PR #3652: pre-fix the counter update sat
+		// after `await messageEndPersistence.persist(...)`, so the live counter
+		// only caught up once microtasks drained. A poll between the emit burst
+		// and the persistence chain settling would observe stale state — a turn
+		// that JUST flipped a todo could still trip the nudge against the
+		// pre-reset counter. With the hoisted (synchronous) update, the
+		// production-shaped contract holds even when the aside poll runs in the
+		// same JS task as the emit, before any microtask gets a chance to fire.
+		for (let i = 0; i < THRESHOLD; i++) emitToolUseTurn("edit");
+
+		if (!asideProvider) throw new Error("aside provider was never captured");
+		const result = asideProvider();
+		if (result instanceof Promise) throw new Error("aside provider unexpectedly returned a Promise");
+		const messagesAfterThreshold = result
+			.map(entry => (typeof entry === "function" ? entry() : entry))
+			.filter((m): m is NonNullable<typeof m> => Boolean(m))
+			.filter(m => m.role === "developer");
+		// The threshold-hit fire is the proof point: pre-hoist, the eight
+		// increments are all queued microtasks, so this sync poll would see
+		// counter=0 and skip the nudge entirely.
+		expect(messagesAfterThreshold.length).toBe(1);
+	});
 });

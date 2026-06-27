@@ -2840,6 +2840,27 @@ export class AgentSession {
 	}
 
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		// Step the mid-run todo counter synchronously, BEFORE any await in this
+		// handler. The agent loop's next-turn `getAsideMessages` poll can run
+		// before queued microtasks drain, so `#takeMidRunTodoNudge` MUST see the
+		// freshest counter — otherwise a turn that just invoked `todo` could
+		// trip a spurious nudge against stale state, and a turn that just hit
+		// the threshold could fail to nudge until a later turn (issue #3651).
+		// Pure in-memory math — no ordering requirement vs persistence or
+		// session-event fan-out.
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			const tooledTurn = event.message.content.some(content => content.type === "toolCall");
+			if (tooledTurn) {
+				const touchedTodo = event.message.content.some(
+					content => content.type === "toolCall" && content.name === "todo",
+				);
+				if (touchedTodo) {
+					this.#toolTurnsSinceLastTodoTouch = 0;
+				} else {
+					this.#toolTurnsSinceLastTodoTouch++;
+				}
+			}
+		}
 		// Plan-mode internal transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
 		// Invariant (must hold across refactors): this branch precedes the
@@ -3014,17 +3035,6 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
-				const tooledTurn = assistantMsg.content.some(content => content.type === "toolCall");
-				if (tooledTurn) {
-					const touchedTodo = assistantMsg.content.some(
-						content => content.type === "toolCall" && content.name === "todo",
-					);
-					if (touchedTodo) {
-						this.#toolTurnsSinceLastTodoTouch = 0;
-					} else {
-						this.#toolTurnsSinceLastTodoTouch++;
-					}
-				}
 				const currentGrantsAnthropicPriority =
 					this.serviceTier === "priority" || this.serviceTier === "claude-only";
 				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
