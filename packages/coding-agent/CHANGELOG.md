@@ -15,6 +15,7 @@
 ### Fixed
 
 - Preserved interrupted assistant thinking as hidden durable context after user interrupts.
+- Fixed the ask tool's `Other (type your own)` editor dropping the original question and option list while the user types a custom answer. ([#3660](https://github.com/can1357/oh-my-pi/issues/3660))
 
 ## [16.2.2] - 2026-06-27
 

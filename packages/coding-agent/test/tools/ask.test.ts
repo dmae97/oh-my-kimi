@@ -563,6 +563,31 @@ describe("AskTool custom input", () => {
 		expect(editor).toHaveBeenCalledTimes(1);
 		expect(abort).not.toHaveBeenCalled();
 	});
+	it("keeps question context visible while entering Other custom input", async () => {
+		const tool = new AskTool(createSession());
+		const editor = vi.fn(async (_title: string) => "custom");
+		const questions = [
+			{
+				id: "details",
+				question: "Share details",
+				options: [{ label: "yes" }, { label: "no", description: "Skip the optional detail." }],
+			},
+		];
+		const context = createContext({
+			select: async () => "Other (type your own)",
+			editor,
+		});
+
+		await tool.execute("call-editor-context", { questions }, undefined, undefined, context);
+
+		const title = editor.mock.calls[0]?.[0] ?? "";
+		expect(title).toContain("Share details");
+		expect(title).toContain("yes");
+		expect(title).toContain("no");
+		expect(title).toContain("Skip the optional detail.");
+		expect(title).toContain("Other (type your own)");
+		expect(title).toContain("Enter your response:");
+	});
 
 	it("returns to the option selector when custom input is dismissed in single-question flow", async () => {
 		const tool = new AskTool(createSession());

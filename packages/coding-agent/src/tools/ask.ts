@@ -136,6 +136,45 @@ function stripRecommendedSuffix(label: string): string {
 	return label.endsWith(RECOMMENDED_SUFFIX) ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label;
 }
 
+interface CustomInputContext {
+	selectionMarker: "radio" | "checkbox";
+	checkedIndices?: readonly number[];
+	markableCount: number;
+}
+
+function getSelectOptionDescription(option: ExtensionUISelectItem): string | undefined {
+	return typeof option === "string" ? undefined : option.description;
+}
+
+function formatCustomInputTitle(
+	question: string,
+	options: ExtensionUISelectItem[],
+	context: CustomInputContext,
+): string {
+	const selectedIndex = options.findIndex(option => getSelectOptionLabel(option) === OTHER_OPTION);
+	const lines = [question, ""];
+	const checked = new Set(context.checkedIndices ?? []);
+	for (let index = 0; index < options.length; index++) {
+		const option = options[index]!;
+		const label = getSelectOptionLabel(option);
+		const isSelected = index === selectedIndex;
+		const isMarkable = index < context.markableCount;
+		const prefix =
+			context.selectionMarker === "radio" && (isMarkable || isSelected)
+				? `${isSelected ? theme.radio.selected : theme.radio.unselected} `
+				: context.selectionMarker === "checkbox" && isMarkable
+					? `${checked.has(index) ? theme.checkbox.checked : theme.checkbox.unchecked} `
+					: isSelected
+						? `${theme.nav.cursor} `
+						: "  ";
+		lines.push(prefix + label);
+		const description = getSelectOptionDescription(option);
+		if (description) lines.push(`    ${description}`);
+	}
+	lines.push("", "Enter your response:");
+	return lines.join("\n");
+}
+
 // =============================================================================
 // Question Selection Logic
 // =============================================================================
@@ -250,9 +289,14 @@ async function askSingleQuestion(
 		return { choice, timedOut: timeoutTriggered, navigation: navigationAction };
 	};
 
-	const promptForCustomInput = async (): Promise<{ input: string | undefined }> => {
+	const promptForCustomInput = async (
+		title: string,
+		optionsToShow: ExtensionUISelectItem[],
+		context: CustomInputContext,
+	): Promise<{ input: string | undefined }> => {
 		const dialogOptions = signal ? { signal } : undefined;
-		const showCustomInput = () => ui.editor("Enter your response:", undefined, dialogOptions, { promptStyle: true });
+		const editorTitle = formatCustomInputTitle(title, optionsToShow, context);
+		const showCustomInput = () => ui.editor(editorTitle, undefined, dialogOptions, { promptStyle: true });
 		const input = signal ? await untilAborted(signal, showCustomInput) : await showCustomInput();
 		return { input };
 	};
@@ -306,7 +350,11 @@ async function askSingleQuestion(
 					timedOut = true;
 					break;
 				}
-				const customResult = await promptForCustomInput();
+				const customResult = await promptForCustomInput(`${prefix}${promptWithProgress}`, opts, {
+					selectionMarker: "checkbox",
+					checkedIndices,
+					markableCount: questionOptions.length,
+				});
 				if (customResult.input === undefined) {
 					continue;
 				}
@@ -372,7 +420,10 @@ async function askSingleQuestion(
 				if (selectTimedOut) {
 					break;
 				}
-				const customResult = await promptForCustomInput();
+				const customResult = await promptForCustomInput(promptWithProgress, optionsWithNavigation, {
+					selectionMarker: "radio",
+					markableCount: displayOptions.length,
+				});
 				if (customResult.input === undefined) {
 					continue;
 				}
