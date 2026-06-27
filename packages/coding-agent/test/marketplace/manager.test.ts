@@ -1,13 +1,16 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { listOmpExtensionRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import {
 	MarketplaceManager,
 	readInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
@@ -88,6 +91,16 @@ function createTestContext(): TestContext {
 	});
 
 	return { manager, tmpDir, clearCount: () => count };
+}
+
+function mockPluginManagerPaths(root: string) {
+	return [
+		spyOn(piUtils, "getPluginsDir").mockReturnValue(root),
+		spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(root, "node_modules")),
+		spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(root, "package.json")),
+		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(root, "omp-plugins.lock.json")),
+		spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(path.join(root, "plugin-overrides.json")),
+	];
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -258,6 +271,104 @@ describe("MarketplaceManager", () => {
 		}
 	});
 
+	it("installPlugin keeps marketplace packages out of the npm plugin list", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const plugins = await new PluginManager(ctx.tmpDir).list();
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
+	it("hides legacy marketplace entries that pre-date the scope field", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const registryPath = path.join(ctx.tmpDir, "installed_plugins.json");
+		const registry = (await Bun.file(registryPath).json()) as {
+			version: number;
+			plugins: Record<string, Array<Record<string, unknown>>>;
+		};
+		for (const entries of Object.values(registry.plugins)) {
+			for (const entry of entries) {
+				delete entry.scope;
+			}
+		}
+		await Bun.write(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+			expect(checks.filter(check => check.name.includes("hello-plugin"))).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
+	it("installPlugin keeps same-name local runtime links visible", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const localPlugin = path.join(ctx.tmpDir, "local-dev-plugin");
+		await Bun.write(
+			path.join(localPlugin, "package.json"),
+			`${JSON.stringify({
+				name: "hello-plugin",
+				version: "9.9.9",
+				omp: { tools: "tools" },
+			})}\n`,
+		);
+		fs.mkdirSync(path.join(localPlugin, "tools"), { recursive: true });
+		const linkPath = path.join(ctx.tmpDir, "node_modules", "hello-plugin");
+		fs.rmSync(linkPath, { recursive: true, force: true });
+		fs.symlinkSync(localPlugin, linkPath, "dir");
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => `${plugin.name}@${plugin.version}`)).toEqual(["hello-plugin@9.9.9"]);
+			expect(checks).toContainEqual({
+				name: "plugin:hello-plugin",
+				status: "ok",
+				message: "v9.9.9",
+			});
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
+	it("installPlugin keeps marketplace packages out of OMP extension roots", async () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-home-"));
+		try {
+			const pluginsDir = path.join(tmpHome, ".omp", "plugins");
+			const manager = new MarketplaceManager({
+				marketplacesRegistryPath: path.join(tmpHome, ".omp", "marketplaces.json"),
+				installedRegistryPath: path.join(pluginsDir, "installed_plugins.json"),
+				marketplacesCacheDir: path.join(pluginsDir, "cache", "marketplaces"),
+				pluginsCacheDir: path.join(pluginsDir, "cache", "plugins"),
+			});
+
+			await manager.addMarketplace(FIXTURE_DIR);
+			await manager.installPlugin("hello-plugin", "test-marketplace");
+
+			const roots = await listOmpExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
+			expect(roots.map(root => root.name)).toEqual([]);
+		} finally {
+			fs.rmSync(tmpHome, { recursive: true, force: true });
+		}
+	});
+
 	it("installPlugin with scope:project exposes the marketplace package to the runtime loader", async () => {
 		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-home-"));
 		const projectAnchor = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-project-"));
@@ -345,6 +456,18 @@ describe("MarketplaceManager", () => {
 				},
 			},
 		});
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+			expect(checks.filter(check => check.name.includes("csharp-lsp"))).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
 	});
 
 	it("installPlugin embeds config-only marketplace DAP metadata", async () => {
