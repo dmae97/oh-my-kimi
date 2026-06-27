@@ -63,8 +63,6 @@ import {
 import {
 	clearStreamingPartialJson,
 	kStreamingArgumentsDone,
-	kStreamingBlockIndex,
-	kStreamingBlockKind,
 	kStreamingLastParseLen,
 	kStreamingPartialJson,
 } from "../utils/block-symbols";
@@ -2535,40 +2533,33 @@ export function populateResponsesUsageFromResponse(
 }
 
 /**
- * Drops the transient streaming symbols providers stamp onto live stream blocks
- * (decode-time bookkeeping), mirroring the `input`/`client_metadata` omission in
- * {@link buildResponsesDeltaInput}. {@link Bun.deepEquals} compares enumerable
- * symbol-keyed properties, so a current item still carrying one would never
- * match its deep-cloned (symbol-free) baseline twin and would needlessly break
- * the chain. {@link clearStreamingPartialJson} also leaves an own
- * `undefined`-valued key behind, which `deepEquals` still sees — so discard it too.
+ * Structural equality for the chain prefix/option check, equivalent to the
+ * default {@link Bun.deepEquals} (own enumerable keys, `absent ≡ own-undefined`)
+ * except for two deliberate exclusions:
+ *  - **symbol-keyed properties are ignored** — `for…in` enumerates only own
+ *    *string* keys (these are plain wire items with no enumerable prototype),
+ *    which is how the transient streaming symbols (`block-symbols.ts`) stamped
+ *    onto live request items are excluded (the deep-cloned baseline never
+ *    carries them). Do NOT add an `Object.getOwnPropertySymbols` pass, or those
+ *    symbols resurface and break chaining.
+ *  - keys listed in `omitKeys` are skipped (the option compare omits `input`
+ *    and the per-turn `client_metadata`).
+ * A defined value differing across sides IS a difference; a key undefined or
+ * absent on both stays equal. Nested values use full {@link Bun.deepEquals}.
  */
-function stripStreamingBlockSymbols(item: unknown): unknown {
-	if (!item || typeof item !== "object") return item;
-	const {
-		[kStreamingPartialJson]: _partialJson,
-		[kStreamingBlockIndex]: _blockIndex,
-		[kStreamingLastParseLen]: _lastParseLen,
-		[kStreamingArgumentsDone]: _argumentsDone,
-		[kStreamingBlockKind]: _blockKind,
-		...rest
-	} = item as Record<PropertyKey, unknown>;
-	return rest;
-}
-
 function deepEqualsWithout(a: unknown, b: unknown, omitKeys?: Record<string, boolean>): boolean {
 	if (!a || !b || typeof a !== "object" || typeof b !== "object") return Bun.deepEquals(a, b);
-	for (const key in a) {
-		const value = (a as Record<string, unknown>)[key];
-		if (value !== undefined && !omitKeys?.[key]) {
-			if (!Bun.deepEquals(value, (b as Record<string, unknown>)[key])) return false;
-		}
+	const ao = a as Record<string, unknown>;
+	const bo = b as Record<string, unknown>;
+	for (const key in ao) {
+		if (omitKeys?.[key]) continue;
+		const av = ao[key];
+		const bv = bo[key];
+		if (av !== bv && !Bun.deepEquals(av, bv)) return false;
 	}
-	for (const key in b) {
-		const value = (b as Record<string, unknown>)[key];
-		if (value !== undefined && !(key in a) && !omitKeys?.[key]) {
-			return false;
-		}
+	for (const key in bo) {
+		if (omitKeys?.[key]) continue;
+		if (bo[key] !== undefined && !(key in ao)) return false;
 	}
 	return true;
 }
