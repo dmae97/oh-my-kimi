@@ -31,7 +31,6 @@ describe("renderToolExamples", () => {
 		expect(rendered).toContain("</examples>");
 	});
 
-
 	it("renders call example in hermes format", () => {
 		const tool: InbandTool = {
 			name: "find",

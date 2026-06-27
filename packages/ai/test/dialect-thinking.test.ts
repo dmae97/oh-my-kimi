@@ -164,7 +164,6 @@ describe("kimi think tags (<think>…</think>)", () => {
 	});
 });
 
-
 describe("every dialect round-trips thinking (no missing thinking element)", () => {
 	const dialects: Dialect[] = [
 		"anthropic",

@@ -11,4 +11,5 @@ export * from "./owned-stream";
 // consumer needs (the legacy markdown `/dump` reuses its `<thinking>` envelope
 // unwrap), so re-export only that symbol rather than `export *`-ing the rest.
 export { renderDelimitedThinking } from "./rendering";
+export * from "./thinking";
 export * from "./types";
