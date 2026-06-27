@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Renamed the `search` tool to `grep` and the `find` tool to `glob`. Existing user settings are automatically migrated to the new configuration keys.
@@ -34,7 +35,6 @@
 ### Fixed
 
 - Fixed Z.AI web search to initialize the Streamable HTTP MCP session before calling `web_search_prime`, preserving the returned session ID for authenticated tool calls. ([#3619](https://github.com/can1357/oh-my-pi/issues/3619))
-
 - Fixed terminal hangs on Ctrl+Z (SIGTSTP) after running bash tool calls, and insulated MCP stdio servers from terminal job-control signals.
 - Fixed macOS `Cmd+V` silently dropping image-only clipboard pastes in supported terminals.
 - Fixed an infinite loop in auto-compaction when a single recent turn exceeded the compaction threshold.
