@@ -29,6 +29,7 @@ export type TerminalId =
 	| "vscode"
 	| "alacritty"
 	| "warp"
+	| "vte"
 	| "base"
 	| "trueColor";
 
@@ -405,6 +406,7 @@ const KNOWN_TERMINALS = Object.freeze({
 	// Fallback terminals
 	base: new TerminalInfo("base", null, false, false, NotifyProtocol.Bell),
 	trueColor: new TerminalInfo("trueColor", null, true, false, NotifyProtocol.Bell),
+	vte: new TerminalInfo("vte", null, true, false, NotifyProtocol.Osc9),
 	// Recognized terminals
 	kitty: new TerminalInfo("kitty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc99, true, true, true),
 	ghostty: new TerminalInfo("ghostty", ImageProtocol.Kitty, true, true, NotifyProtocol.Osc9),
@@ -418,6 +420,11 @@ const KNOWN_TERMINALS = Object.freeze({
 	// honor OSC 8 yet (the escape renders as visible text), so hyperlinks stay off.
 	warp: new TerminalInfo("warp", ImageProtocol.Kitty, true, false, NotifyProtocol.Bell),
 });
+
+function isVteOsc9Supported(versionRaw: string | undefined): boolean {
+	const version = Number.parseInt(versionRaw ?? "", 10);
+	return Number.isFinite(version) && version >= 6800;
+}
 
 /** Resolve terminal identity from environment markers used by common emulators. */
 export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
@@ -435,6 +442,7 @@ export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 		TERM_PROGRAM,
 		TERM,
 		COLORTERM,
+		VTE_VERSION,
 	} = env;
 
 	if (KITTY_WINDOW_ID) return "kitty";
@@ -455,6 +463,8 @@ export function detectTerminalId(env: NodeJS.ProcessEnv = Bun.env): TerminalId {
 	}
 
 	if (TERM?.toLowerCase().includes("ghostty")) return "ghostty";
+
+	if (isVteOsc9Supported(VTE_VERSION)) return "vte";
 
 	if (COLORTERM) {
 		if (caseEq(COLORTERM, "truecolor") || caseEq(COLORTERM, "24bit")) return "trueColor";
