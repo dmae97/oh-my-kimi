@@ -6,6 +6,7 @@
 
 import { toBoolean, toNumber } from "@oh-my-pi/pi-catalog/utils";
 import { OPENCODE_HEADERS } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import * as AIError from "../error";
 import type {
 	UsageAmount,
 	UsageFetchContext,
@@ -16,7 +17,6 @@ import type {
 	UsageStatus,
 	UsageWindow,
 } from "../usage";
-import * as AIError from "../error";
 import { isRecord } from "../utils";
 
 type CopilotQuotaDetail = {

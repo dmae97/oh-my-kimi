@@ -3205,7 +3205,10 @@ function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 function getAccountId(accessToken: string): string {
 	const accountId = getCodexAccountId(accessToken);
 	if (!accountId) {
-		throw new AIError.OAuthError("Failed to extract accountId from token", { kind: "validation", provider: "openai" });
+		throw new AIError.OAuthError("Failed to extract accountId from token", {
+			kind: "validation",
+			provider: "openai",
+		});
 	}
 	return accountId;
 }

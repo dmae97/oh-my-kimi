@@ -1,7 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
-import * as AIError from "../error";
 import { captureRequestHeaders, resolvePromptCacheKey } from "../auth-gateway/http";
+import * as AIError from "../error";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
@@ -458,10 +458,13 @@ function encodeUsage(message: AssistantMessage): Record<string, unknown> {
 
 export function encodeResponse(message: AssistantMessage, requestedModelId: string): Record<string, unknown> {
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
-		throw new AIError.ProviderResponseError(message.errorMessage ?? `anthropic-messages: upstream ${message.stopReason}`, {
-			provider: "anthropic",
-			kind: "output",
-		});
+		throw new AIError.ProviderResponseError(
+			message.errorMessage ?? `anthropic-messages: upstream ${message.stopReason}`,
+			{
+				provider: "anthropic",
+				kind: "output",
+			},
+		);
 	}
 	return {
 		id: message.responseId ?? newMessageId(),

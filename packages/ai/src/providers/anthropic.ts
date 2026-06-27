@@ -11,8 +11,6 @@ import {
 	$env,
 	getInstallId,
 	isEnoent,
-	isRetryableError,
-	isUnexpectedSocketCloseMessage,
 	logger,
 	parseJsonWithRepair,
 	parseStreamingJsonThrottled,
@@ -383,7 +381,6 @@ export function clearAnthropicFastModeFallback(
 		(value as AnthropicProviderSessionState).fastModeDisabled = false;
 	}
 }
-
 
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	return params.tools?.some(tool => tool.strict === true) ?? false;
@@ -1218,7 +1215,9 @@ function resolveFoundryTlsOptions(model: Model<"anthropic-messages">): FoundryTl
 	const key = resolvePemValue($env.CLAUDE_CODE_CLIENT_KEY, "CLAUDE_CODE_CLIENT_KEY");
 
 	if ((cert && !key) || (!cert && key)) {
-		throw new AIError.ConfigurationError("Both CLAUDE_CODE_CLIENT_CERT and CLAUDE_CODE_CLIENT_KEY must be set for mTLS.");
+		throw new AIError.ConfigurationError(
+			"Both CLAUDE_CODE_CLIENT_CERT and CLAUDE_CODE_CLIENT_KEY must be set for mTLS.",
+		);
 	}
 
 	const options: FoundryTlsOptions = {};

@@ -1,8 +1,17 @@
 import { isRetryableError, isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
-import { isRetryableStreamEnvelopeError, isTransientStreamParseError, isUsageLimit, status } from "./flags";
+import {
+	isRetryableStreamEnvelopeError,
+	isTransientStreamParseError,
+	isUsageLimit,
+	status,
+	TRANSIENT_TRANSPORT_PATTERN,
+} from "./flags";
 
-const PROVIDER_TRANSIENT_PATTERN =
-	/rate.?limit|too many requests|overloaded|service.?unavailable|internal_error|server_error|bad record mac|stream error.*received from peer|1302|timed?\s*out while waiting for the first event|timeout waiting for first/i;
+// Provider-stream transient phrasings not covered by the shared
+// TRANSIENT_TRANSPORT_PATTERN (TLS record corruption, HTTP/2 peer stream
+// errors, upstream code 1302). The shared pattern already covers rate-limit /
+// overloaded / 5xx / timeout / first-event wording.
+const PROVIDER_TRANSIENT_EXTRA_PATTERN = /bad record mac|stream error.*received from peer|1302/i;
 
 function isTransientTransportMessage(message: string): boolean {
 	return message.includes("tls: bad record mac") || message.includes("type=server_error");
@@ -38,7 +47,8 @@ export function isProviderRetryableError(error: unknown, hooks: ProviderRetryabl
 	if (
 		isUnexpectedSocketCloseMessage(msg) ||
 		isTransientTransportMessage(msg) ||
-		PROVIDER_TRANSIENT_PATTERN.test(msg) ||
+		TRANSIENT_TRANSPORT_PATTERN.test(msg) ||
+		PROVIDER_TRANSIENT_EXTRA_PATTERN.test(msg) ||
 		isTransientStreamParseError(error) ||
 		isRetryableStreamEnvelopeError(error)
 	) {

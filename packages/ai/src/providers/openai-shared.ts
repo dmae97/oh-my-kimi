@@ -27,6 +27,7 @@ import {
 	parseStreamingJsonThrottled,
 	structuredCloneJSON,
 } from "@oh-my-pi/pi-utils";
+import * as AIError from "../error";
 import {
 	type Api,
 	type AssistantMessage,
@@ -85,7 +86,6 @@ import type {
 	ResponseStatus,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
-import * as AIError from "../error";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 

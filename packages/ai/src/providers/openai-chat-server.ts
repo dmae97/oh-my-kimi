@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
-import * as AIError from "../error";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
  * `stream(model, context, options)`.
  */
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
+import * as AIError from "../error";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,

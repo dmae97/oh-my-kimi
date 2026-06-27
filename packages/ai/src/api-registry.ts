@@ -4,6 +4,8 @@
  * Allows extensions to register streaming functions for custom API types
  * (e.g., "vertex-claude-api") that are not built into stream.ts.
  */
+
+import * as AIError from "./error";
 import type {
 	Api,
 	AssistantMessageEventStream,
@@ -13,7 +15,6 @@ import type {
 	SimpleStreamOptions,
 	StreamOptions,
 } from "./types";
-import * as AIError from "./error";
 
 const BUILTIN_API_IDS = [
 	"openai-completions",

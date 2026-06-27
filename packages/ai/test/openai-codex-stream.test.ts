@@ -406,8 +406,8 @@ describe("openai-codex streaming", () => {
 		const toolCall = result.content.find(c => c.type === "toolCall");
 		if (toolCall?.type !== "toolCall") throw new Error("expected a finalized toolCall block");
 		expect(toolCall.arguments).toEqual({ path: "README.md" });
-		expect((toolCall as Record<string, unknown>).partialJson).toBeUndefined();
-		expect((toolCall as Record<string, unknown>).lastParseLen).toBeUndefined();
+		expect((toolCall as unknown as Record<string, unknown>).partialJson).toBeUndefined();
+		expect((toolCall as unknown as Record<string, unknown>).lastParseLen).toBeUndefined();
 	});
 
 	it("routes interleaved function-call argument deltas to the matching open item", async () => {

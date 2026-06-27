@@ -10,6 +10,8 @@
  * wired into the main streaming path. It provides the infrastructure for lazy
  * loading that can be integrated when stream.ts is refactored.
  */
+
+import * as AIError from "../error";
 import type {
 	Api,
 	AssistantMessage,
@@ -19,7 +21,6 @@ import type {
 	Model,
 	OptionsForApi,
 } from "../types";
-import * as AIError from "../error";
 import { type AbortSourceTracker, createAbortSourceTracker } from "../utils/abort";
 import { AssistantMessageEventStream as EventStreamImpl } from "../utils/event-stream";
 import {

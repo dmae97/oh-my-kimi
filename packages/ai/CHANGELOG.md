@@ -28,7 +28,6 @@
 - Exported error module as public API via package.json `"./error"` export path
 - OAuth error constructors now accept structured options with `kind`, `provider`, `status`, and `cause` fields
 - Registry login functions now use `AIError.OnPromptRequiredError` instead of generic errors
-
 - Enhanced cross-model reasoning recovery to support additional thinking dialects and leakage patterns
 - Demote cross-vendor reasoning to plain text when the target does not natively support it
 - Refine cross-model reasoning preservation to prevent leaking inert context into structured fields
@@ -43,10 +42,12 @@
 - Deleted `src/utils/error-id.ts` (migrated to `error/flags.ts`)
 - Removed `rate-limit-utils.ts` from root (moved to `error/rate-limit.ts`)
 - Removed generic `Error` constructor calls throughout codebase in favor of typed error classes
-
 - Removed Pi dialect support and related serialization/parsing logic
 
 ### Fixed
+
+- Improved recovery and rendering of demoted cross-provider reasoning blocks
+- Enhanced reliability of transient error classification during provider stream processing
 
 - Improved error message consistency across all providers with structured error formatting
 - Corrected error classification for rate-limit vs transient failures in auth retry logic

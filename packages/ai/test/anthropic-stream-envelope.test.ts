@@ -643,7 +643,7 @@ describe("anthropic stream envelope handling", () => {
 		);
 		const replayAssistant = replayParams.find(param => param.role === "assistant");
 		expect(replayAssistant?.content).toEqual([
-			{ type: "text", text: "Check logs before accepting container health." },
+			{ type: "text", text: "<thinking>\nCheck logs before accepting container health.\n</thinking>\n" },
 		]);
 	});
 	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {
@@ -1076,7 +1076,7 @@ describe("anthropic stream envelope handling", () => {
 		}
 		// Best-effort arguments recovered by the throttled streaming parser are retained.
 		expect(toolCall.arguments).toEqual({ city: "Par" });
-		expect((toolCall as Record<string, unknown>).partialJson).toBeUndefined();
+		expect((toolCall as unknown as Record<string, unknown>).partialJson).toBeUndefined();
 	});
 
 	it("records __parseError and pre-truncated __rawJson when partialParse fails on malformed JSON", async () => {

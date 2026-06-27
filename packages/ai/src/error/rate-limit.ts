@@ -143,7 +143,7 @@ export function isUsageLimitOutcome(status: number | undefined, message: string 
  * generic punctuation. Anything else (retry hints, capacity wording, error
  * descriptions) is informative enough to defer to the classifier.
  */
-function isOpaqueStatusBody(message: string): boolean {
+export function isOpaqueStatusBody(message: string): boolean {
 	const cleaned = message
 		.replace(/\b429\b/g, "")
 		.replace(/\b(?:http|https|status|error|code|response|message)\b/gi, "");

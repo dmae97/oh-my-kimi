@@ -96,7 +96,10 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 	});
 	const trimmedEmail = email.trim();
 	if (!trimmedEmail)
-		throw new AIError.OAuthError("Email is required for Perplexity login", { kind: "validation", provider: "perplexity" });
+		throw new AIError.OAuthError("Email is required for Perplexity login", {
+			kind: "validation",
+			provider: "perplexity",
+		});
 	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 
 	ctrl.onProgress?.("Fetching Perplexity CSRF token...");
@@ -109,12 +112,18 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 	});
 
 	if (!csrfResponse.ok) {
-		throw new AIError.ProviderHttpError(`Perplexity CSRF request failed: ${csrfResponse.status}`, csrfResponse.status);
+		throw new AIError.ProviderHttpError(
+			`Perplexity CSRF request failed: ${csrfResponse.status}`,
+			csrfResponse.status,
+		);
 	}
 
 	const csrfData = (await csrfResponse.json()) as { csrfToken?: string };
 	if (!csrfData.csrfToken) {
-		throw new AIError.OAuthError("Perplexity CSRF response missing csrfToken", { kind: "validation", provider: "perplexity" });
+		throw new AIError.OAuthError("Perplexity CSRF response missing csrfToken", {
+			kind: "validation",
+			provider: "perplexity",
+		});
 	}
 	ctrl.onProgress?.("Sending login code to your email...");
 	const sendResponse = await fetch("https://www.perplexity.ai/api/auth/signin-email", {
@@ -133,7 +142,10 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 
 	if (!sendResponse.ok) {
 		const body = await sendResponse.text();
-		throw new AIError.ProviderHttpError(`Perplexity send login code failed (${sendResponse.status}): ${body}`, sendResponse.status);
+		throw new AIError.ProviderHttpError(
+			`Perplexity send login code failed (${sendResponse.status}): ${body}`,
+			sendResponse.status,
+		);
 	}
 	const otp = await ctrl.onPrompt({
 		message: "Enter the code sent to your email",
@@ -176,7 +188,10 @@ async function httpEmailLogin(ctrl: OAuthController): Promise<OAuthCredentials> 
 	}
 
 	if (!verifyData.token) {
-		throw new AIError.OAuthError("Perplexity OTP verification response missing token", { kind: "validation", provider: "perplexity" });
+		throw new AIError.OAuthError("Perplexity OTP verification response missing token", {
+			kind: "validation",
+			provider: "perplexity",
+		});
 	}
 
 	return jwtToCredentials(verifyData.token, trimmedEmail);

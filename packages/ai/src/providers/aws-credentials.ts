@@ -281,7 +281,10 @@ async function readSsoCredentials(
 	};
 	const role = json.roleCredentials;
 	if (!role)
-		throw new AIError.AwsCredentialsError("AWS SSO GetRoleCredentials: missing roleCredentials in response", "sso-role");
+		throw new AIError.AwsCredentialsError(
+			"AWS SSO GetRoleCredentials: missing roleCredentials in response",
+			"sso-role",
+		);
 
 	// region is honored at the caller; we only consume defaultRegion to keep the
 	// param wired for symmetry with other resolution paths.
@@ -418,7 +421,10 @@ async function readCredentialProcess(
 function buildCredentialProcessArgv(profile: string, command: string): string[] {
 	const tokens = tokenizeCredentialProcessCommand(command);
 	if (tokens.length === 0) {
-		throw new AIError.AwsCredentialsError(`AWS credential_process for profile '${profile}' is empty.`, "credential-process");
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' is empty.`,
+			"credential-process",
+		);
 	}
 	if (process.platform === "win32" && isBatchScript(tokens[0])) {
 		return ["cmd.exe", "/d", "/s", "/c", command];
@@ -500,7 +506,10 @@ export function tokenizeCredentialProcessCommand(cmd: string): string[] {
 		current += ch;
 	}
 	if (mode !== "normal") {
-		throw new AIError.AwsCredentialsError("AWS credential_process command has an unterminated quote.", "credential-process");
+		throw new AIError.AwsCredentialsError(
+			"AWS credential_process command has an unterminated quote.",
+			"credential-process",
+		);
 	}
 	if (hasToken) tokens.push(current);
 	return tokens;

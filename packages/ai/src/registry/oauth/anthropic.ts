@@ -288,11 +288,14 @@ export async function refreshAnthropicToken(
 			},
 		);
 	} catch (error) {
-		throw new AIError.OAuthError(`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`, {
-			kind: "token-refresh",
-			provider: "anthropic",
-			cause: error,
-		});
+		throw new AIError.OAuthError(
+			`Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`,
+			{
+				kind: "token-refresh",
+				provider: "anthropic",
+				cause: error,
+			},
+		);
 	}
 
 	const data = parseOAuthTokenResponse(responseBody, "token refresh");

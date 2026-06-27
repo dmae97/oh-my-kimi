@@ -25,8 +25,9 @@
  *   200 JSON (stream=false): { message: AssistantMessage }
  *   4xx/5xx: { error: { type, message } }
  */
-import * as AIError from "../error";
+
 import type { AuthGatewayStreamControl } from "../auth-gateway/types";
+import * as AIError from "../error";
 import type { AssistantMessageEventStream, Context, SimpleStreamOptions } from "../types";
 
 export interface PiNativeParsedRequest {

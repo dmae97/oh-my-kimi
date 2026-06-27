@@ -9,7 +9,6 @@
  */
 import { scheduler } from "node:timers/promises";
 import { logger } from "@oh-my-pi/pi-utils";
-import * as AIError from "../error";
 import {
 	type AuthCredential,
 	type AuthCredentialSnapshotEntry,
@@ -18,6 +17,7 @@ import {
 	REMOTE_REFRESH_SENTINEL,
 	type StoredAuthCredential,
 } from "../auth-storage";
+import * as AIError from "../error";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { UsageReport } from "../usage";

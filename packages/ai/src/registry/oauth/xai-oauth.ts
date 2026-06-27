@@ -85,11 +85,14 @@ async function xaiOAuthDiscovery(
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 	} catch (error) {
-		throw new AIError.OAuthError(`xAI OIDC discovery failed: ${error instanceof Error ? error.message : String(error)}`, {
-			kind: "discovery",
-			provider: "xai",
-			cause: error,
-		});
+		throw new AIError.OAuthError(
+			`xAI OIDC discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+			{
+				kind: "discovery",
+				provider: "xai",
+				cause: error,
+			},
+		);
 	}
 	if (response.status !== 200) {
 		throw new AIError.OAuthError(`xAI OIDC discovery returned status ${response.status}.`, {

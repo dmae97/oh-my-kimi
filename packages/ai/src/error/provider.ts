@@ -1,5 +1,5 @@
-import { attach, create, Flag } from "./flags";
 import { ProviderHttpError } from "./classes";
+import { attach, create, Flag } from "./flags";
 
 /** Which part of a provider exchange produced a non-HTTP error. */
 export type ProviderResponseErrorKind =

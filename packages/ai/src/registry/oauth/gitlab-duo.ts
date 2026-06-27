@@ -60,7 +60,10 @@ function resolveCallbackOptions(): OAuthCallbackFlowOptions {
 	try {
 		parsed = new URL(raw);
 	} catch {
-		throw new AIError.OAuthError(`Invalid GITLAB_REDIRECT_URI: ${raw}`, { kind: "configuration", provider: "gitlab-duo" });
+		throw new AIError.OAuthError(`Invalid GITLAB_REDIRECT_URI: ${raw}`, {
+			kind: "configuration",
+			provider: "gitlab-duo",
+		});
 	}
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
 		throw new AIError.OAuthError(`GITLAB_REDIRECT_URI must use http:// or https://, got: ${raw}`, {
@@ -158,11 +161,14 @@ class GitLabDuoOAuthFlow extends OAuthCallbackFlow {
 		});
 
 		if (!response.ok) {
-			throw new AIError.OAuthError(`GitLab OAuth token exchange failed: ${response.status} ${await response.text()}`, {
-				kind: "token-exchange",
-				provider: "gitlab-duo",
-				status: response.status,
-			});
+			throw new AIError.OAuthError(
+				`GitLab OAuth token exchange failed: ${response.status} ${await response.text()}`,
+				{
+					kind: "token-exchange",
+					provider: "gitlab-duo",
+					status: response.status,
+				},
+			);
 		}
 
 		clearGitLabDuoDirectAccessCache();

@@ -6,6 +6,7 @@ export type { AuthGatewayBootOptions, ModelResolver } from "./auth-gateway/serve
 export * from "./auth-gateway/types";
 export * from "./auth-retry";
 export * from "./auth-storage";
+export * from "./error/rate-limit";
 export * from "./provider-details";
 export * from "./providers/anthropic";
 export * from "./providers/anthropic-client";
@@ -23,7 +24,6 @@ export * from "./providers/openai-codex-responses";
 export * from "./providers/openai-completions";
 export * from "./providers/openai-responses";
 export * from "./providers/synthetic";
-export * from "./error/rate-limit";
 export * from "./registry";
 export * from "./stream";
 export * from "./types";

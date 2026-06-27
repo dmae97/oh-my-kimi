@@ -1,5 +1,4 @@
 import { isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
-import { matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
 import type { Api, AssistantMessage } from "../types";
 import {
 	AnthropicConnectionError,
@@ -7,6 +6,7 @@ import {
 	ProviderHttpError,
 	STREAM_ENVELOPE_ERROR_PREFIX,
 } from "./classes";
+import { isOpaqueStatusBody, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
 
 export const Flag = {
 	Class: 0x1000,
@@ -85,7 +85,7 @@ const OVERFLOW_NO_BODY_PATTERN = /\b4(00|13)\s*(status code)?\s*\(no body\)/i;
 const TIMEOUT_PATTERN = /\b(?:operation\s+)?timed?\s*out\b|\btimeout\b|\bstream stall\b/i;
 const TRANSIENT_ENVELOPE_PATTERN = /anthropic stream envelope error:/i;
 const TRANSIENT_ENVELOPE_BEFORE_START_PATTERN = /before message_start/i;
-const TRANSIENT_TRANSPORT_PATTERN =
+export const TRANSIENT_TRANSPORT_PATTERN =
 	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)|malformed.?function.?call/i;
 const AUTH_FAILURE_PATTERN =
 	/\b(?:401|403|unauthorized|forbidden|authentication|auth[_ ]?unavailable|no auth available|(?:invalid|no)[_ ]?api[_ ]?key)\b/i;
@@ -139,7 +139,9 @@ function matchesFastModeUnsupported(message: string, errorStatus: number | undef
 	) {
 		return true;
 	}
-	return errorStatus === 429 && FAST_MODE_RATE_LIMIT_PATTERN.test(message) && FAST_MODE_ENTITLEMENT_PATTERN.test(message);
+	return (
+		errorStatus === 429 && FAST_MODE_RATE_LIMIT_PATTERN.test(message) && FAST_MODE_ENTITLEMENT_PATTERN.test(message)
+	);
 }
 
 /** Whether an OAuth refresh error message means the grant is definitively dead. */
@@ -167,7 +169,7 @@ const STATUS_MESSAGE_PATTERNS = [
 	/\bstatus(?:_code)?[:=]\s*(\d{3})\b/i,
 	/\bstatus\s+(\d{3})\b/i,
 	/\bHTTP\s+(\d{3})\b/i,
-	/\b(?:error|failed)\s+(\d{3})\b/i,
+	/\b(?:error|failed)\s*[:=]?\s*(\d{3})\b/i,
 	/(?:^|\s)(\d{3})\s+(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/,
 ] as const;
 
@@ -283,10 +285,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 
 		const statusClean = errorStatus ? errorStatus : (status({ message: errorMessage }) ?? undefined);
 		const cleanMessage = errorMessage;
-		const cleaned = cleanMessage
-			.replace(/\b429\b/g, "")
-			.replace(/\b(?:http|https|status|error|code|response|message)\b/gi, "");
-		const isOpaque = !/[a-z\d]{3,}/i.test(cleaned);
+		const isOpaque = isOpaqueStatusBody(cleanMessage);
 
 		const isLimitStatus = statusClean === 429;
 		if (

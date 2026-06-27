@@ -5,7 +5,6 @@
  * credentials as the TUI.
  */
 import * as path from "node:path";
-import * as AIError from "../error";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -16,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { AuthStorage } from "../auth-storage";
+import * as AIError from "../error";
 import { AuthBrokerClient } from "./client";
 import { RemoteAuthCredentialStore } from "./remote-store";
 import { readAuthBrokerSnapshotCache, writeAuthBrokerSnapshotCache } from "./snapshot-cache";
@@ -193,9 +193,9 @@ export async function discoverAuthStorage(options: DiscoverAuthStorageOptions = 
 		if (!initialSnapshot) {
 			const initialResult = await client.fetchSnapshot();
 			if (initialResult.status !== 200)
-					throw new AIError.AuthBrokerError("Auth broker returned no initial snapshot", {
-						status: initialResult.status,
-					});
+				throw new AIError.AuthBrokerError("Auth broker returned no initial snapshot", {
+					status: initialResult.status,
+				});
 			initialSnapshot = initialResult.snapshot;
 			persist?.(initialSnapshot);
 		}

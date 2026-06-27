@@ -50,6 +50,9 @@ export class OAuthError extends Error {
 		this.kind = options.kind ?? "http";
 		this.provider = options.provider;
 		this.status = options.status;
-		attach(this, this.kind === "timeout" || this.kind === "polling" ? create(Flag.Transient) : create(Flag.AuthFailed));
+		attach(
+			this,
+			this.kind === "timeout" || this.kind === "polling" ? create(Flag.Transient) : create(Flag.AuthFailed),
+		);
 	}
 }

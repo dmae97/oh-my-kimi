@@ -125,11 +125,14 @@ export async function refreshGitLabDuoWorkflowToken(
 	});
 
 	if (!response.ok) {
-		throw new AIError.OAuthError(`GitLab Duo Workflow OAuth refresh failed: ${response.status} ${await response.text()}`, {
-			kind: "token-refresh",
-			provider: "gitlab-duo-workflow",
-			status: response.status,
-		});
+		throw new AIError.OAuthError(
+			`GitLab Duo Workflow OAuth refresh failed: ${response.status} ${await response.text()}`,
+			{
+				kind: "token-refresh",
+				provider: "gitlab-duo-workflow",
+				status: response.status,
+			},
+		);
 	}
 
 	return mapTokenResponse(

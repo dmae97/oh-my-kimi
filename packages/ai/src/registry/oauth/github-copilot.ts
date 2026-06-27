@@ -105,7 +105,10 @@ async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<De
 		typeof interval !== "number" ||
 		typeof expiresIn !== "number"
 	) {
-		throw new AIError.OAuthError("Invalid device code response fields", { kind: "validation", provider: "github-copilot" });
+		throw new AIError.OAuthError("Invalid device code response fields", {
+			kind: "validation",
+			provider: "github-copilot",
+		});
 	}
 
 	return {
@@ -185,7 +188,10 @@ async function pollForGitHubAccessToken(
 			}
 
 			const descriptionSuffix = description ? `: ${description}` : "";
-			throw new AIError.OAuthError(`Device flow failed: ${error}${descriptionSuffix}`, { kind: "polling", provider: "github-copilot" });
+			throw new AIError.OAuthError(`Device flow failed: ${error}${descriptionSuffix}`, {
+				kind: "polling",
+				provider: "github-copilot",
+			});
 		}
 	}
 
@@ -322,7 +328,10 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 	const trimmed = input.trim();
 	const normalizedDomain = normalizeDomain(input);
 	if (trimmed && !normalizedDomain) {
-		throw new AIError.OAuthError("Invalid GitHub Enterprise URL/domain", { kind: "validation", provider: "github-copilot" });
+		throw new AIError.OAuthError("Invalid GitHub Enterprise URL/domain", {
+			kind: "validation",
+			provider: "github-copilot",
+		});
 	}
 	const enterpriseDomain = normalizeGitHubCopilotEnterpriseDomain(normalizedDomain ?? undefined);
 	const domain =

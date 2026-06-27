@@ -24,9 +24,9 @@
  */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { type Type, type } from "arktype";
-import * as AIError from "../error";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
+import * as AIError from "../error";
 import type { Tool, ToolCall } from "../types";
 import { upgradeJsonSchemaTo202012 } from "./schema/draft";
 import {

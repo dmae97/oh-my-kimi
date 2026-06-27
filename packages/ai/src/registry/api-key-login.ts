@@ -6,13 +6,13 @@
  * optionally validate it, and return the trimmed key.
  */
 
+import * as AIError from "../error";
 import {
 	validateAnthropicCompatibleApiKey,
 	validateApiKeyAgainstModelsEndpoint,
 	validateOpenAICompatibleApiKey,
 } from "./api-key-validation";
 import type { OAuthController } from "./oauth/types";
-import * as AIError from "../error";
 
 type ChatCompletionsValidation = {
 	kind: "chat-completions";

@@ -46,7 +46,8 @@ export function decodeMessage(frame: Uint8Array): EventStreamMessage {
 	if (frame.length < MIN_MESSAGE_LEN) throw new AIError.EventStreamFrameError("frame too short");
 	const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
 	const total = view.getUint32(0, false);
-	if (total !== frame.length) throw new AIError.EventStreamFrameError(`framed length ${total} != buffer ${frame.length}`);
+	if (total !== frame.length)
+		throw new AIError.EventStreamFrameError(`framed length ${total} != buffer ${frame.length}`);
 	const headersLen = view.getUint32(4, false);
 	const preludeCrc = view.getUint32(8, false);
 	const computedPreludeCrc = crc32(frame.subarray(0, PRELUDE_LEN));
