@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.2] - 2026-06-27
+
 ### Added
 
 - Added a comprehensive, public-facing error module exported via the "./error" path, featuring structured error classification, provider-specific HTTP error classes (e.g., Anthropic, OpenAI, Gemini), OAuth/Auth-specific errors, rate-limit utilities, and retryability predicates.

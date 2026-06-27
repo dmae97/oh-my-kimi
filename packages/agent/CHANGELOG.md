@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.2] - 2026-06-27
+
 ### Added
 
 - Added optional AgentTool.matcherPaths(args) and AgentTool.matcherEntries(args) hooks to allow tools to surface target file paths and isolate file evaluations for path-scoped stream matchers (e.g., when handling multi-file payloads or embedded paths in streamed arguments).

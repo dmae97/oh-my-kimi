@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.2] - 2026-06-27
+
 ### Added
 
 - Added a new `tiny` model role for consolidated online task handling.
