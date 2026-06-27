@@ -19,8 +19,11 @@
 
 ### Changed
 
-- Updated OpenAI Codex WebSocket transport to resolve configuration from environment variables at runtime
+- Increased default text verbosity to medium for OpenAI Codex models
+- Configured detailed reasoning summaries by default for OpenAI Codex responses
+- Standardized reasoning context to include all turns by default for OpenAI Codex requests
 
+- Updated OpenAI Codex WebSocket transport to resolve configuration from environment variables at runtime
 - Unified transient status code checks across providers using standardized retry logic
 - Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
 - Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)

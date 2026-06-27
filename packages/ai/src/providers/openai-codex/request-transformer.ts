@@ -257,7 +257,7 @@ export async function transformRequestBody(
 		// Responses Lite keeps reasoning replay server-side; codex-rs requests
 		// `all_turns` there and otherwise omits context so the server default
 		// (currently `current_turn`) applies.
-		const reasoningContext = options.reasoningContext ?? (responsesLite ? "all_turns" : undefined);
+		const reasoningContext = options.reasoningContext ?? "all_turns";
 		if (reasoningContext !== undefined) {
 			body.reasoning.context = reasoningContext;
 		}
@@ -267,7 +267,7 @@ export async function transformRequestBody(
 
 	body.text = {
 		...body.text,
-		verbosity: options.textVerbosity || "low",
+		verbosity: options.textVerbosity || "high",
 	};
 
 	const include = Array.isArray(options.include) ? [...options.include] : [];
