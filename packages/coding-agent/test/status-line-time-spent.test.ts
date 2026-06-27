@@ -63,9 +63,7 @@ function createCtx(activeMs: number): SegmentContext {
 	};
 }
 
-function makeSession(
-	overrides: { isStreaming?: boolean } = {},
-): ConstructorParameters<typeof StatusLineComponent>[0] {
+function makeSession(overrides: { isStreaming?: boolean } = {}): ConstructorParameters<typeof StatusLineComponent>[0] {
 	// The component reads the session for usage stats, model, and the
 	// `isStreaming` gate inside `#closeStaleActiveWindow`. The time-spent
 	// accounting path otherwise never touches it — stub with the minimum
