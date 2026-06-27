@@ -178,12 +178,19 @@ export function sendDesktopNotification(message: string | TerminalNotification):
 	const notifier = resolveDesktopNotifier();
 	if (!notifier) return;
 	try {
-		Bun.spawn({
+		// `.unref()` lets the event loop exit while the notifier is still running.
+		// Without it, an unresponsive D-Bus activation (slow `notify-send`, hung
+		// `gdbus` waiting on a stalled session bus) would keep `omp` alive past
+		// the renderer's shutdown — a completion toast must never delay process
+		// exit. Ignored stdio alone does not detach the child from the parent's
+		// reference count.
+		const child = Bun.spawn({
 			cmd: buildDesktopNotifyCommand(notifier, message),
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
 		});
+		child.unref();
 	} catch {
 		// Best-effort: a failed spawn is silent.
 	}

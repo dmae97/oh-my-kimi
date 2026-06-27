@@ -173,9 +173,10 @@ describe("sendDesktopNotification", () => {
 		resetDesktopNotifierCache();
 	});
 
-	it("fires Bun.spawn with the resolved notify-send argv and detached stdio", () => {
+	it("fires Bun.spawn with the resolved notify-send argv and unref's the child so it never blocks process exit", () => {
 		vi.spyOn(utils, "$which").mockImplementation(name => (name === "notify-send" ? "/usr/bin/notify-send" : null));
-		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({}) as never);
+		const unref = vi.fn();
+		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref }) as never);
 
 		sendDesktopNotification({ title: "Session", body: "Complete" });
 
@@ -198,11 +199,15 @@ describe("sendDesktopNotification", () => {
 		expect(opts.stdin).toBe("ignore");
 		expect(opts.stdout).toBe("ignore");
 		expect(opts.stderr).toBe("ignore");
+		// `.unref()` is what actually decouples a slow notifier from process exit;
+		// without it Bun keeps the event loop pinned to the child even with
+		// stdio: "ignore".
+		expect(unref).toHaveBeenCalledTimes(1);
 	});
 
 	it("is a silent no-op when no notifier binary is installed", () => {
 		vi.spyOn(utils, "$which").mockReturnValue(null);
-		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({}) as never);
+		const spawn = vi.spyOn(Bun, "spawn").mockImplementation((..._args: unknown[]) => ({ unref: vi.fn() }) as never);
 
 		sendDesktopNotification("ping");
 
