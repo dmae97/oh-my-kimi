@@ -167,10 +167,22 @@ interface ActiveRepoCache {
  * segment. `activeMs` is the union of every completed `agent_start`→
  * `agent_end` window; `activeStartedAt` is the start timestamp of the
  * currently-running window, or `null` when idle.
+ *
+ * `sessionFile` snapshots the loaded session-file path at meter-creation
+ * time. `AgentSession.switchSession` (/resume, /move, ACP fork, RPC
+ * `switch_session`, extension `switchSession`) mutates the loaded file
+ * under the same {@link AgentSession} ref, so the WeakMap key alone
+ * cannot tell two conversations apart. `#meter()` compares this snapshot
+ * against the live `session.sessionFile`, and a real-to-real change
+ * starts the meter fresh instead of crediting the new conversation with
+ * the previous one's accumulated active time. The undefined → real
+ * first-save transition does not reset, since the session identity has
+ * not changed.
  */
 interface ActiveMeter {
 	activeMs: number;
 	activeStartedAt: number | null;
+	sessionFile: string | undefined;
 }
 
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
@@ -330,8 +342,8 @@ export class StatusLineComponent implements Component {
 	 * observed), so the window is dropped rather than folded in.
 	 */
 	#closeStaleActiveWindow(): void {
-		const meter = this.#activeMeters.get(this.session);
-		if (!meter || meter.activeStartedAt === null) return;
+		const meter = this.#meter();
+		if (meter.activeStartedAt === null) return;
 		if (this.session.isStreaming) return;
 		meter.activeStartedAt = null;
 	}
@@ -410,12 +422,32 @@ export class StatusLineComponent implements Component {
 		return meter.activeMs + Date.now() - meter.activeStartedAt;
 	}
 
-	/** Return (lazily creating) the meter for the currently-attached session. */
+	/**
+	 * Return (lazily creating) the meter for the currently-attached
+	 * session. Detects an in-place session-file swap under the same
+	 * {@link AgentSession} ref (`switchSession` paths: `/resume`, `/move`,
+	 * ACP fork/load, RPC `switch_session`, extension `switchSession`):
+	 * a real-to-real change starts the meter fresh so the new
+	 * conversation does not inherit the previous one's accumulated active
+	 * time. The undefined → real first-save transition only refreshes the
+	 * snapshot — the conversation identity has not changed.
+	 */
 	#meter(): ActiveMeter {
+		const currentFile = this.session.sessionFile;
 		let meter = this.#activeMeters.get(this.session);
-		if (meter) return meter;
-		meter = { activeMs: 0, activeStartedAt: null };
-		this.#activeMeters.set(this.session, meter);
+		if (meter) {
+			const switched =
+				currentFile !== undefined && meter.sessionFile !== undefined && meter.sessionFile !== currentFile;
+			if (switched) {
+				meter = undefined;
+			} else {
+				meter.sessionFile = currentFile;
+			}
+		}
+		if (!meter) {
+			meter = { activeMs: 0, activeStartedAt: null, sessionFile: currentFile };
+			this.#activeMeters.set(this.session, meter);
+		}
 		return meter;
 	}
 

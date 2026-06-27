@@ -63,11 +63,14 @@ function createCtx(activeMs: number): SegmentContext {
 	};
 }
 
-function makeSession(overrides: { isStreaming?: boolean } = {}): ConstructorParameters<typeof StatusLineComponent>[0] {
-	// The component reads the session for usage stats, model, and the
-	// `isStreaming` gate inside `#closeStaleActiveWindow`. The time-spent
-	// accounting path otherwise never touches it — stub with the minimum
-	// surface the constructor needs to settle.
+function makeSession(
+	overrides: { isStreaming?: boolean; sessionFile?: string | undefined } = {},
+): ConstructorParameters<typeof StatusLineComponent>[0] {
+	// The component reads the session for usage stats, model, the
+	// `isStreaming` gate inside `#closeStaleActiveWindow`, and the
+	// `sessionFile` snapshot inside `#meter()` (file-change detection).
+	// The time-spent accounting path otherwise never touches it — stub
+	// with the minimum surface the constructor needs to settle.
 	return {
 		state: { messages: [], model: undefined },
 		messages: [],
@@ -82,6 +85,7 @@ function makeSession(overrides: { isStreaming?: boolean } = {}): ConstructorPara
 		getGoalModeState: () => null,
 		getAsyncJobSnapshot: () => ({ running: [] }),
 		modelRegistry: { isUsingOAuth: () => false },
+		sessionFile: overrides.sessionFile,
 		sessionManager: {
 			getSessionName: () => "time-spent test",
 			getUsageStatistics: () => ({
@@ -282,5 +286,56 @@ describe("StatusLineComponent active-time accounting", () => {
 		(sub as unknown as { isStreaming: boolean }).isStreaming = false;
 		c.setSession(sub, "Subagent");
 		expect(c.getActiveMs()).toBe(0);
+	});
+
+	it("resets the meter when AgentSession.switchSession swaps the loaded session file under the same ref", () => {
+		// Regression for the PR review: /resume, /move, ACP fork/load,
+		// RPC switch_session, and extension switchSession all mutate
+		// `sessionManager`'s loaded file in place under the same
+		// AgentSession ref, so a WeakMap keyed only on the session ref
+		// would carry the previous conversation's meter into the
+		// resumed one.
+		const session = makeSession({ sessionFile: "/tmp/conv-a.jsonl" });
+		const c = new StatusLineComponent(session);
+		let now = 8_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+
+		c.markActivityStart();
+		now += 30_000;
+		c.markActivityEnd();
+		expect(c.getActiveMs()).toBe(30_000);
+
+		// Simulate `session.switchSession("/tmp/conv-b.jsonl")` mutating
+		// the file in place. The next meter read sees a real-to-real
+		// transition and starts fresh.
+		(session as unknown as { sessionFile: string }).sessionFile = "/tmp/conv-b.jsonl";
+		expect(c.getActiveMs()).toBe(0);
+
+		// Activity in the resumed conversation accrues from zero, not
+		// from the previous conversation's 30s.
+		c.markActivityStart();
+		now += 2_000;
+		c.markActivityEnd();
+		expect(c.getActiveMs()).toBe(2_000);
+	});
+
+	it("does not reset the meter on a first-save transition (sessionFile undefined → real)", () => {
+		// A brand-new session starts without a loaded file path; the
+		// first autosave sets one. That transition is the same
+		// conversation, so accumulated active time MUST survive.
+		const session = makeSession({ sessionFile: undefined });
+		const c = new StatusLineComponent(session);
+		let now = 9_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+
+		c.markActivityStart();
+		now += 5_000;
+		c.markActivityEnd();
+		expect(c.getActiveMs()).toBe(5_000);
+
+		// First save assigns a session file path. Same conversation —
+		// the meter must NOT reset.
+		(session as unknown as { sessionFile: string }).sessionFile = "/tmp/new-session.jsonl";
+		expect(c.getActiveMs()).toBe(5_000);
 	});
 });
