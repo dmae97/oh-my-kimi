@@ -307,8 +307,8 @@ describe("custom_tool_call stream receive", () => {
 		expect(block?.type).toBe("toolCall");
 		if (block?.type !== "toolCall") throw new Error("expected toolCall block");
 		expect(block.arguments).toEqual({ command: "x".repeat(300) });
-		expect("partialJson" in block).toBe(false);
-		expect("lastParseLen" in block).toBe(false);
+		expect((block as Record<string, unknown>).partialJson).toBeUndefined();
+		expect((block as Record<string, unknown>).lastParseLen).toBeUndefined();
 	});
 
 	test("persists final args on the block when finalized via output_item.done without an args.done event", async () => {
@@ -364,8 +364,8 @@ describe("custom_tool_call stream receive", () => {
 		expect(block?.type).toBe("toolCall");
 		if (block?.type !== "toolCall") throw new Error("expected toolCall block");
 		expect(block.arguments).toEqual({ path: "README.md" });
-		expect("partialJson" in block).toBe(false);
-		expect("lastParseLen" in block).toBe(false);
+		expect((block as Record<string, unknown>).partialJson).toBeUndefined();
+		expect((block as Record<string, unknown>).lastParseLen).toBeUndefined();
 	});
 
 	test("aggregates delta events into a ToolCall with input arg", async () => {

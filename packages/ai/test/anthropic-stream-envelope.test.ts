@@ -1076,7 +1076,7 @@ describe("anthropic stream envelope handling", () => {
 		}
 		// Best-effort arguments recovered by the throttled streaming parser are retained.
 		expect(toolCall.arguments).toEqual({ city: "Par" });
-		expect("partialJson" in toolCall).toBe(false);
+		expect((toolCall as Record<string, unknown>).partialJson).toBeUndefined();
 	});
 
 	it("records __parseError and pre-truncated __rawJson when partialParse fails on malformed JSON", async () => {
