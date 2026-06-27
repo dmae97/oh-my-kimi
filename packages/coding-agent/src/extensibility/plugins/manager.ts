@@ -11,6 +11,7 @@ import {
 	isEnoent,
 	logger,
 } from "@oh-my-pi/pi-utils";
+import { withExitGuard } from "../utils";
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
@@ -363,7 +364,7 @@ export class PluginManager {
 			installLegacyPiSpecifierShim();
 			for (const extensionPath of loadable) {
 				try {
-					const module = await loadLegacyPiModule(extensionPath);
+					const module = await withExitGuard(() => loadLegacyPiModule(extensionPath));
 					if (!hasExtensionFactoryExport(module)) {
 						errors.push(`${extensionPath}: extension does not export a valid factory function`);
 					}
