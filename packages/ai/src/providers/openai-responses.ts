@@ -98,6 +98,7 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ServiceTier;
+	textVerbosity?: "low" | "medium" | "high";
 	toolChoice?: ToolChoice;
 	openrouterVariant?: string;
 	maxTokensExplicit?: boolean;
@@ -772,6 +773,16 @@ const streamOpenAIResponsesOnce = (
 export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (model, context, options) =>
 	withEmptyCompletionRetry(model, context, options, streamOpenAIResponsesOnce);
 
+function isOfficialOpenAIResponsesEndpoint(model: Model<"openai-responses">): boolean {
+	if (model.provider !== "openai") return false;
+	if (!model.baseUrl) return true;
+	try {
+		return new URL(model.baseUrl).hostname === "api.openai.com";
+	} catch {
+		return false;
+	}
+}
+
 export function buildParams(
 	model: Model<"openai-responses">,
 	context: Context,
@@ -859,6 +870,9 @@ export function buildParams(
 	});
 
 	applyCommonResponsesSamplingParams(params, { ...options, maxTokens: outputToken?.value }, model);
+	if (options?.textVerbosity && isOfficialOpenAIResponsesEndpoint(model)) {
+		params.text = { ...params.text, verbosity: options.textVerbosity };
+	}
 	// TODO: openai responses has no top-level `stop`/`stop_sequences`; surface via reasoning.stop?
 	// `StreamOptions.stopSequences` is intentionally dropped for this provider.
 	// TODO: openai responses has no top-level `frequency_penalty` field as of the current SDK;

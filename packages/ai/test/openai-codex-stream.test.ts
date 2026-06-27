@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { streamSimple } from "@oh-my-pi/pi-ai";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
@@ -304,6 +305,34 @@ describe("openai-codex streaming", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(capturedBody?.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "replacement" }] }]);
 		expect(capturedBody?.prompt_cache_key).toBe("replacement-cache-key");
+	});
+
+	it("forwards SimpleStreamOptions textVerbosity into the Codex request body", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const context = createCodexTestContext();
+		const model = { ...createCodexTestModel("https://chatgpt.com/backend-api"), preferWebsockets: false };
+		let capturedText: unknown;
+		const fetchMock: FetchImpl = async (_input, init) => {
+			if (typeof init?.body === "string") {
+				const parsed: { text?: unknown } = JSON.parse(init.body);
+				capturedText = parsed.text;
+			}
+			return new Response(createCompletedCodexSse("Hello"), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamSimple(model, context, {
+			apiKey: token,
+			fetch: fetchMock,
+			textVerbosity: "low",
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(capturedText).toEqual({ verbosity: "low" });
 	});
 
 	it("maps end_turn=false on the terminal event to a pause_turn stop", async () => {
@@ -935,10 +964,18 @@ describe("openai-codex streaming", () => {
 		).toBase64();
 		const token = `aaa.${payload}.bbb`;
 
+		const textSignature = JSON.stringify({ v: 1, id: "msg_1", phase: "commentary" });
 		const sse = `${[
 			`data: ${JSON.stringify({
 				type: "response.output_item.added",
-				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "in_progress",
+					phase: "commentary",
+					content: [],
+				},
 			})}`,
 			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
 			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
@@ -949,6 +986,7 @@ describe("openai-codex streaming", () => {
 					id: "msg_1",
 					role: "assistant",
 					status: "completed",
+					phase: "commentary",
 					content: [{ type: "output_text", text: "Hello" }],
 				},
 			})}`,
@@ -1018,18 +1056,28 @@ describe("openai-codex streaming", () => {
 
 		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, fetch: fetchMock as FetchImpl });
 		let sawTextDelta = false;
+		let sawTextStart = false;
 		let sawDone = false;
 
 		for await (const event of streamResult) {
+			if (event.type === "text_start") {
+				sawTextStart = true;
+				const block = event.partial.content[event.contentIndex];
+				if (block?.type !== "text") throw new Error("expected text block");
+				expect(block.textSignature).toBe(textSignature);
+			}
 			if (event.type === "text_delta") {
 				sawTextDelta = true;
 			}
 			if (event.type === "done") {
 				sawDone = true;
-				expect(event.message.content.find(c => c.type === "text")?.text).toBe("Hello");
+				const block = event.message.content.find(c => c.type === "text");
+				expect(block?.text).toBe("Hello");
+				expect(block?.textSignature).toBe(textSignature);
 			}
 		}
 
+		expect(sawTextStart).toBe(true);
 		expect(sawTextDelta).toBe(true);
 		expect(sawDone).toBe(true);
 	});
@@ -2468,7 +2516,6 @@ describe("openai-codex streaming", () => {
 			lastPreviousResponseId: undefined,
 		});
 	});
-
 
 	it("uses websocket v2 beta header when v2 mode is enabled", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");

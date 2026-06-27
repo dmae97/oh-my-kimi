@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type OpenAIResponsesOptions, streamOpenAIResponses } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import { stream as streamModel } from "@oh-my-pi/pi-ai/stream";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import { stream as streamModel, streamSimple } from "@oh-my-pi/pi-ai/stream";
+import type { Context, FetchImpl, Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai/types";
 import { buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog/compat/openai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
@@ -189,6 +189,58 @@ async function captureDispatchedOpenAIResponseHeaders(
 	return captured;
 }
 
+async function captureSimpleOpenAIResponseBody(
+	options: SimpleStreamOptions,
+	requestModel: Model<"openai-responses"> = model,
+): Promise<Record<string, unknown> | null> {
+	let body: Record<string, unknown> | null = null;
+	const fetchMock: FetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+		body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+		return createSseResponse([
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hello" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 5,
+						output_tokens: 3,
+						total_tokens: 8,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			},
+		]);
+	});
+
+	const context: Context = {
+		systemPrompt: ["stable system", "stable durable context"],
+		messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+	};
+	const stream = streamSimple(requestModel, context, { apiKey: "test-key", ...options, fetch: fetchMock });
+
+	for await (const event of stream) {
+		if (event.type === "done" || event.type === "error") break;
+	}
+
+	return body;
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 });
@@ -200,6 +252,12 @@ describe("openai-responses cache affinity", () => {
 		expect(captured.sessionId).toBe("session-123");
 		expect(captured.clientRequestId).toBe("session-123");
 		expect(captured.body?.prompt_cache_key).toBe("session-123");
+	});
+
+	it("forwards textVerbosity through streamSimple to official OpenAI Responses text config", async () => {
+		const body = await captureSimpleOpenAIResponseBody({ textVerbosity: "low" });
+
+		expect(body?.text).toEqual({ verbosity: "low" });
 	});
 	it("keeps prompt cache key separate from OpenAI routing headers when both are provided", async () => {
 		const captured = await captureOpenAIResponseHeaders({
