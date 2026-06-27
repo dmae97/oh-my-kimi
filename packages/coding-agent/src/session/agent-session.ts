@@ -232,6 +232,7 @@ import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
 import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with { type: "text" };
 import geminiToolReminderTemplate from "../prompts/system/gemini-tool-call-reminder.md" with { type: "text" };
+import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -305,6 +306,10 @@ import {
 	type BashExecutionMessage,
 	type CustomMessage,
 	convertToLlm,
+	demoteInterruptedThinking,
+	INTERRUPTED_THINKING_MESSAGE_TYPE,
+	type InterruptedThinkingDetails,
+	isUserInterruptAbort,
 	type PythonExecutionMessage,
 	readQueueChipText,
 	SILENT_ABORT_MARKER,
@@ -2834,6 +2839,30 @@ export class AgentSession {
 		}
 	}
 
+	#demoteInterruptedThinkingOnUserInterrupt(
+		message: AssistantMessage,
+	): CustomMessage<InterruptedThinkingDetails> | undefined {
+		if (message.stopReason !== "aborted" || !isUserInterruptAbort(message)) return undefined;
+		const demoted = demoteInterruptedThinking(message);
+		if (!demoted) return undefined;
+		message.content = demoted.strippedContent;
+		const interruptedAt = Date.now();
+		return {
+			role: "custom",
+			customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
+			content: prompt.render(interruptedThinkingTemplate, { reasoning: demoted.reasoning }),
+			display: false,
+			details: {
+				interruptedAt,
+				provider: message.provider,
+				model: message.model,
+				blockCount: demoted.blockCount,
+			},
+			attribution: "agent",
+			timestamp: interruptedAt,
+		};
+	}
+
 	async #persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): Promise<boolean> {
 		if (!context) return true;
 		const turnMessages = [context.message, ...context.toolResults];
@@ -2900,6 +2929,11 @@ export class AgentSession {
 				this.#pendingAbortErrorId = undefined;
 			}
 		}
+
+		const interruptedThinkingMessage =
+			event.type === "message_end" && event.message.role === "assistant"
+				? this.#demoteInterruptedThinkingOnUserInterrupt(event.message as AssistantMessage)
+				: undefined;
 
 		const messageEndPersistence =
 			event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
@@ -3042,6 +3076,16 @@ export class AgentSession {
 				await messageEndPersistence.persist(persistMessageEnd);
 			} else {
 				persistMessageEnd();
+			}
+			if (interruptedThinkingMessage) {
+				this.agent.appendMessage(interruptedThinkingMessage);
+				this.sessionManager.appendCustomMessageEntry(
+					interruptedThinkingMessage.customType,
+					interruptedThinkingMessage.content,
+					interruptedThinkingMessage.display,
+					interruptedThinkingMessage.details,
+					interruptedThinkingMessage.attribution,
+				);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 

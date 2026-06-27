@@ -37,6 +37,74 @@ export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
 
+/** Custom message type for hidden interrupted-thinking continuity context. */
+export const INTERRUPTED_THINKING_MESSAGE_TYPE = "interrupted-thinking";
+
+/** Metadata persisted with a hidden interrupted-thinking continuity message. */
+export interface InterruptedThinkingDetails {
+	interruptedAt: number;
+	provider: AssistantMessage["provider"];
+	model: string;
+	blockCount: number;
+}
+
+/** Pure helper result for persisting interrupted thinking outside the assistant turn. */
+export interface DemotedInterruptedThinking {
+	reasoning: string;
+	strippedContent: AssistantMessage["content"];
+	blockCount: number;
+}
+
+/**
+ * Remove a trailing interrupted-thinking run from an assistant message.
+ *
+ * Only visible, non-empty `thinking` blocks at the meaningful tail are demoted.
+ * Trailing empty text placeholders are ignored and omitted from the stripped
+ * content. Text, tool-call, redacted/encrypted-only, and empty-thinking tails
+ * are left unchanged.
+ */
+export function demoteInterruptedThinking(
+	message: Pick<AssistantMessage, "content">,
+): DemotedInterruptedThinking | undefined {
+	const content = message.content;
+	let scanEnd = content.length;
+	while (scanEnd > 0) {
+		const block = content[scanEnd - 1]!;
+		if (block.type !== "text" || block.text.trim().length > 0) {
+			break;
+		}
+		scanEnd--;
+	}
+
+	let runStart = scanEnd;
+	while (runStart > 0) {
+		const block = content[runStart - 1]!;
+		if (block.type !== "thinking" || block.thinking.trim().length === 0) {
+			break;
+		}
+		runStart--;
+	}
+
+	const blockCount = scanEnd - runStart;
+	if (blockCount === 0) {
+		return undefined;
+	}
+
+	const reasoningBlocks: string[] = [];
+	for (let index = runStart; index < scanEnd; index++) {
+		const block = content[index]!;
+		if (block.type === "thinking") {
+			reasoningBlocks.push(block.thinking.trim());
+		}
+	}
+
+	return {
+		reasoning: reasoningBlocks.join("\n\n"),
+		strippedContent: content.slice(0, runStart),
+		blockCount,
+	};
+}
+
 /** Details persisted on a `/tan` background-dispatch breadcrumb. */
 export interface BackgroundTanDispatchDetails {
 	jobId: string;
