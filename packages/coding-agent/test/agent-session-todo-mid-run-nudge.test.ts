@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AsideMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, type AsideMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -8,6 +8,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TodoTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 /**
@@ -102,11 +103,26 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected built-in anthropic model to exist");
 
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": true,
+			"todo.reminders": true,
+			"todo.reminders.max": 3,
+		});
+		const toolSession: ToolSession = {
+			cwd: tempDir.path(),
+			hasUI: false,
+			getSessionFile: () => sessionManager.getSessionFile() ?? null,
+			getSessionSpawns: () => "*",
+			settings,
+		};
+		const todoTool = new TodoTool(toolSession);
+
 		const agent = new Agent({
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
-				tools: [],
+				tools: [todoTool as unknown as AgentTool],
 				messages: [],
 			},
 		});
@@ -124,12 +140,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		session = new AgentSession({
 			agent,
 			sessionManager,
-			settings: Settings.isolated({
-				"compaction.enabled": false,
-				"todo.enabled": true,
-				"todo.reminders": true,
-				"todo.reminders.max": 3,
-			}),
+			settings,
 			modelRegistry,
 		});
 
@@ -228,5 +239,22 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		// increments are all queued microtasks, so this sync poll would see
 		// counter=0 and skip the nudge entirely.
 		expect(messagesAfterThreshold.length).toBe(1);
+	});
+
+	it("stays silent when `todo` is not in the active-tool list, even if `todo.enabled` is still on", async () => {
+		// Regression for the review on PR #3652: an explicit active-tool list
+		// (or discovery-mode filtering) can drop `todo` from the slate while the
+		// setting flag stays true and an incomplete persisted/user-edited todo
+		// list survives. Asking the model to call a tool that is not in its
+		// schema would produce fabricated/unknown tool calls or loop on
+		// impossible reminders. Mirror {@link #createEagerTodoPrelude}'s guard.
+		await session.setActiveToolsByName([]);
+		expect(session.getActiveToolNames()).not.toContain("todo");
+
+		for (let i = 0; i < THRESHOLD; i++) emitToolUseTurn("edit");
+		await settle();
+		const messages = await drainAsides();
+		expect(messages).toEqual([]);
+		expect(reminderEvents).toEqual([]);
 	});
 });

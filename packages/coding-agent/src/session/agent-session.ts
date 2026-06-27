@@ -9874,6 +9874,12 @@ export class AgentSession {
 		// Plan-mode runs are authoring a plan file, not implementing it; todos
 		// don't apply, mirroring {@link #createEagerTodoPrelude}.
 		if (this.#planModeState?.enabled) return null;
+		// Tool discovery / explicit active-tool lists can hide `todo` from this
+		// run while `todo.enabled` remains true (e.g. `setActiveToolsByName`
+		// restricting the slate). Mirror {@link #createEagerTodoPrelude}'s
+		// guard so we never ask the model to call a tool that is not in its
+		// schema — the request would fabricate an unknown tool call.
+		if (!this.getActiveToolNames().includes("todo")) return null;
 
 		const remindersMax = this.settings.get("todo.reminders.max");
 		if (this.#todoReminderCount >= remindersMax) return null;
