@@ -5,6 +5,7 @@
 import { scheduler } from "node:timers/promises";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { extractHttpStatusFromError, readSseJson } from "@oh-my-pi/pi-utils";
+import { renderDemotedThinking } from "../dialect/demotion";
 import { ProviderHttpError } from "../errors";
 import type {
 	Api,
@@ -234,18 +235,16 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				} else if (block.type === "thinking") {
 					// Skip empty thinking blocks
 					if (!block.thinking || block.thinking.trim() === "") continue;
-					// Only keep as thinking block if same provider AND same model
-					// Otherwise convert to plain text (no tags to avoid model mimicking them)
-					if (isSameProviderAndModel) {
-						const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thinkingSignature);
+					const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thinkingSignature);
+					if (thoughtSignature) {
 						parts.push({
 							thought: true,
 							text: block.thinking.toWellFormed(),
-							...(thoughtSignature && { thoughtSignature }),
+							thoughtSignature,
 						});
 					} else {
 						parts.push({
-							text: block.thinking.toWellFormed(),
+							text: renderDemotedThinking(model.id, block.thinking),
 						});
 					}
 				} else if (block.type === "toolCall") {

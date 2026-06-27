@@ -24,6 +24,7 @@ import { getDialectDefinition } from "./factory";
  */
 export function renderDemotedThinking(modelId: string, text: string): string {
 	if (!text) return "";
+	text = text.toWellFormed();
 	const dialect = preferredDialect(modelId);
 	if (dialect === "harmony" || dialect === "gemma") return `<think>\n${text}\n</think>\n`;
 	return `${getDialectDefinition(dialect).renderThinking(text)}\n`;

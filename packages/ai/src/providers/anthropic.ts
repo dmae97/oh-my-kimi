@@ -19,6 +19,7 @@ import {
 	parseStreamingJsonThrottled,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
+import { renderDemotedThinking } from "../dialect/demotion";
 import { isUsageLimitError } from "../rate-limit-utils";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -3238,7 +3239,7 @@ export function convertAnthropicMessages(
 							if (block.thinking.trim().length === 0) continue;
 							blocks.push({
 								type: "text",
-								text: block.thinking.toWellFormed(),
+								text: renderDemotedThinking(model.id, block.thinking),
 							});
 							continue;
 						}
@@ -3260,7 +3261,7 @@ export function convertAnthropicMessages(
 						} else {
 							blocks.push({
 								type: "text",
-								text: block.thinking.toWellFormed(),
+								text: renderDemotedThinking(model.id, block.thinking),
 							});
 						}
 					} else {

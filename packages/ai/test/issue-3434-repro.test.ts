@@ -1,32 +1,18 @@
 /**
- * Regression guard for cross-API 3p ↔ 3p thinking-block preservation (#3434).
+ * Regression guard for cross-API 3p ↔ 3p thinking-block handling (#3434).
  *
- * Mid-session switches between an Anthropic-compatible 3p provider and an
- * OpenAI-compatible 3p provider on the same vendor (Z.AI Anthropic → Z.AI
- * OpenAI, Kimi Anthropic → Kimi OpenAI, …) used to demote every prior
- * `thinking` block to plain text on the cross-API path of `transformMessages`:
- *
- *     // Cross-API target: keep the existing text-demotion fallback.
- *     return { type: "text", text: sanitized.thinking };
- *
- * The next request shipped the reasoning chain as conversation text instead
- * of structured `reasoning_content`, so the target model lost the prior
- * reasoning context and the user paid twice — once to generate the thinking
- * on the source endpoint, once again to re-derive it on the target.
- *
- * The fix has two halves:
- *
- *  1. `transformMessages` preserves the prior thinking text as a native,
- *     signature-stripped `thinking` block whenever the target encoder can
- *     re-emit it on the wire (today: `openai-completions` reasoning targets
- *     that accept `reasoning_content` as a continuation hint).
- *  2. The `openai-completions` encoder surfaces those preserved blocks via
- *     `reasoningContentField` even for hosts that don't strictly require
- *     `reasoning_content` — specifically `thinkingFormat: "zai"` targets.
+ * Mid-session switches can replay a prior assistant turn whose native reasoning
+ * slot was authored by a different provider. Live provider probes showed that
+ * unsigned foreign reasoning is only semantically carried by Z.AI-format
+ * OpenAI-compatible targets; schema requirements such as
+ * `requiresReasoningContentForToolCalls` and local llama.cpp cache-prefix replay
+ * do not make the reasoning meaningful. Non-allowlisted targets demote the
+ * reasoning into canonical visible text so the next model can still read it.
  *
  * This file pins the wire output for the canonical scenarios.
  */
 import { describe, expect, it } from "bun:test";
+import { renderDemotedThinking } from "@oh-my-pi/pi-ai/dialect";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { AssistantMessage, Message, Model, ModelSpec, UserMessage } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -98,9 +84,10 @@ function zaiOpenAITarget(): Model<"openai-completions"> {
 }
 
 function deepseekReasoningTarget(): Model<"openai-completions"> {
-	// DeepSeek-family reasoning target: requiresReasoningContentForToolCalls is
-	// true here, so the preserved block reaches reasoning_content via the
-	// existing recovery branch. Guards the other half of the fix from regressing.
+	// DeepSeek-family reasoning targets require `reasoning_content` for schema
+	// validity, but measured foreign reasoning in that slot is inert. Cross-API
+	// foreign thinking must demote to text; the encoder may still emit an empty
+	// schema placeholder where required.
 	return buildModel({
 		id: "deepseek-v4-flash",
 		name: "DeepSeek V4 Flash",
@@ -119,12 +106,8 @@ function opencodeGoKimiTarget(): Model<"openai-completions"> {
 	// OpenCode Go's reasoning-enabled Kimi. Base compat keeps
 	// `requiresReasoningContentForToolCalls: false` to dodge the
 	// `Extra inputs are not permitted` 400 (#1071); only the resolved
-	// `whenThinking` policy reactivates it (#1484). `convertMessages` threads
-	// that request-time resolved compat into `transformMessages`, so a
-	// thinking-on request preserves the prior reasoning; without the resolved
-	// compat the predicate would read base compat, demote to text, and the
-	// next thinking-on request would 400 with `thinking is enabled but
-	// reasoning_content is missing in assistant tool call message at index N`.
+	// `whenThinking` policy reactivates it (#1484). That schema requirement must
+	// not preserve foreign non-tool-call reasoning as native semantic context.
 	return buildModel({
 		id: "kimi-k2.6",
 		name: "Kimi K2.6",
@@ -197,11 +180,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		expect(assistant.reasoning_content).toBe("opaque continuation metadata payload");
 	});
 
-	it("emits reasoning_content on Anthropic 3p → DeepSeek cross-API switch", () => {
-		// DeepSeek-family reasoning targets reach reasoning_content via the
-		// existing `requiresReasoningContentForToolCalls` recovery branch. This
-		// pin guards against a regression in either fix half that would drop
-		// the preserved block before recovery runs.
+	it("demotes Anthropic 3p → DeepSeek cross-API thinking instead of semantic replay", () => {
 		const target = deepseekReasoningTarget();
 		const messages: Message[] = [
 			userMessage("Inspect README"),
@@ -214,15 +193,11 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		expect(assistant).toBeDefined();
 		if (!assistant) throw new Error("assistant message missing");
 
-		expect(assistant.reasoning_content).toBe("Read README and answer.");
+		expect(assistant.reasoning_content).toBe("");
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
 	});
 
-	it("demotes thinking to text when the target cannot replay reasoning_content", () => {
-		// Anthropic 3p → official OpenAI non-reasoning model: the encoder
-		// cannot emit `reasoning_content` here (the field would be ignored and
-		// strict OpenAI-compat shims would reject it). Reasoning must survive
-		// at minimum as visible conversation text so the next turn still sees
-		// the prior plan.
+	it("demotes thinking to canonical text when the target cannot replay it semantically", () => {
 		const target = openAIGpt4oTarget();
 		const messages: Message[] = [
 			userMessage("Plan it."),
@@ -236,23 +211,10 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBeUndefined();
-		const content = assistant.content;
-		expect(typeof content).toBe("string");
-		if (typeof content !== "string") throw new Error("content not a string");
-		expect(content).toContain("Explore the repo, then patch it.");
-		expect(content).toContain("Done.");
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Explore the repo, then patch it.")}Done.`);
 	});
 
-	it("preserves cross-API thinking for OpenCode reasoning targets that gate replay via compat.whenThinking", () => {
-		// OpenCode (`opencode-go`, `opencode-zen`) reasoning models keep
-		// `requiresReasoningContentForToolCalls: false` on the base compat
-		// (dodges the thinking-off `Extra inputs are not permitted` 400 — #1071)
-		// and reactivate the flag on `compat.whenThinking` for thinking-engaged
-		// requests (dodges the `thinking is enabled but reasoning_content is
-		// missing` 400 — #1484). The cross-API preservation predicate must run
-		// against the resolved compat that `convertMessages` threads in (the
-		// `whenThinking` view here); reading base compat would demote the prior
-		// thinking to text and re-trigger #1484 on the next thinking-on request.
+	it("demotes cross-API thinking for OpenCode reasoning targets with whenThinking schema", () => {
 		const target = opencodeGoKimiTarget();
 		const messages: Message[] = [
 			userMessage("Plan it."),
@@ -261,9 +223,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		];
 
 		// Resolve the thinking-engaged compat the way `streamOpenAICompletions`
-		// does for a request with reasoning effort set, then hand it to
-		// `convertMessages` directly so the test exercises the same encoder
-		// configuration the live wire would.
+		// does for a request with reasoning effort set.
 		const compat = target.compat.whenThinking ?? target.compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(true);
 
@@ -272,19 +232,11 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		expect(assistant).toBeDefined();
 		if (!assistant) throw new Error("assistant message missing");
 
-		expect(assistant.reasoning_content).toBe("Read README and answer.");
+		expect(assistant.reasoning_content).toBeUndefined();
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
 	});
 
-	it("demotes prior thinking to content when the OpenCode base compat (thinking off) cannot surface reasoning_content", () => {
-		// Companion of the prior test: same OpenCode target, but the request
-		// runs against the BASE compat (thinking disabled, the path that bars
-		// `reasoning_content` per #1071). The cross-API preservation predicate
-		// reads this resolved base compat — which neither requires
-		// `reasoning_content` nor is a Z.AI-format host — so it preserves no
-		// native thinking block the encoder couldn't surface; the cross-API path
-		// instead text-demotes the prior reasoning into visible content. The
-		// reasoning still survives as conversation context, with no
-		// `reasoning_content` on the wire and no #1071 regression.
+	it("demotes prior thinking to content when the OpenCode base compat runs with thinking off", () => {
 		const target = opencodeGoKimiTarget();
 		const compat = target.compat;
 		expect(compat.requiresReasoningContentForToolCalls).toBe(false);
@@ -301,11 +253,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBeUndefined();
-		const content = assistant.content;
-		expect(typeof content).toBe("string");
-		if (typeof content !== "string") throw new Error("content not a string");
-		expect(content).toContain("Read README and answer.");
-		expect(content).toContain("Done.");
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
 	});
 
 	it("does not promote markup-healed same-model thinking into visible content", () => {

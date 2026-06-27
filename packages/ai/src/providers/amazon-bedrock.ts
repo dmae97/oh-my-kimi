@@ -18,6 +18,7 @@ import {
 	parseStreamingJson,
 	parseStreamingJsonThrottled,
 } from "@oh-my-pi/pi-utils";
+import { renderDemotedThinking } from "../dialect/demotion";
 import { ProviderHttpError } from "../errors";
 import type {
 	Api,
@@ -820,7 +821,7 @@ function convertMessages(
 								});
 							} else {
 								// Model requires signature but we don't have one — demote to text
-								contentBlocks.push({ text: `[Thinking]: ${c.thinking.toWellFormed()}` });
+								contentBlocks.push({ text: renderDemotedThinking(model.id, c.thinking) });
 							}
 							break;
 						default:
