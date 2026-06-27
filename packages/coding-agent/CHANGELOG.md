@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Breaking Changes
 
 - Renamed the `search` tool to `grep` and the `find` tool to `glob`. Existing user settings are automatically migrated to the new configuration keys.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added a Gain tab to the `omp stats` dashboard (`/#/gain`) to display snapcompact token-savings with project scoping from synced session folders.

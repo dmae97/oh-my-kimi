@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added an optional `cwdResolver` to `Agent` and `getCwd` to `AgentLoopConfig` to dynamically resolve the working directory per LLM call, allowing workspace-scoped provider discovery (such as GitLab Duo Agent) to follow live directory changes without reconstructing the agent.

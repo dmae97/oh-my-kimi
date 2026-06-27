@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added GitLab Duo Agent catalog discovery, including namespace selection, live model mapping, and a bundled fallback model for fresh installs.

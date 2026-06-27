@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added support for rendering HTML <code>, <hr>, and <blockquote> tags with proper theme styling, entity decoding, and layout consistency across Markdown transcripts, table cells, list items, and option labels.

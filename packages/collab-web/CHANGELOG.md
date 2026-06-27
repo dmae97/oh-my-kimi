@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added dedicated renderers for glob, grep, and legacy find and search tools to improve the readability of search and file discovery results.

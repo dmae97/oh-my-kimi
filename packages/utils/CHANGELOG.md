@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.0] - 2026-06-27
+
 ### Added
 
 - Added a relaxed JSON parser supporting single-quoted strings, unquoted keys, and comments.
