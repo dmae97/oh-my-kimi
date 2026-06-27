@@ -37,6 +37,8 @@ export interface AdvisorRuntimeHost {
 	 * one that routes `advise()` results back to the primary.
 	 */
 	beginAdvisorUpdate?(): void;
+	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
+	notifyFailure?(error: unknown): void;
 }
 
 interface PendingDelta {
@@ -63,6 +65,7 @@ export class AdvisorRuntime {
 	#busy = false;
 	#backlog = 0;
 	#consecutiveFailures = 0;
+	#failureNotified = false;
 	#latestMessages?: AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
 	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
@@ -121,6 +124,7 @@ export class AdvisorRuntime {
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
+		this.#failureNotified = false;
 		this.#wakeAllWaiters();
 		try {
 			this.agent.abort("advisor disposed");
@@ -131,6 +135,7 @@ export class AdvisorRuntime {
 		this.#lastCount = 0;
 		this.#pending = [];
 		this.#consecutiveFailures = 0;
+		this.#failureNotified = false;
 		this.#seenContext.clear();
 		if (clearBacklog) {
 			this.#backlog = 0;
@@ -168,6 +173,7 @@ export class AdvisorRuntime {
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
+		this.#failureNotified = false;
 		this.#seenContext.clear();
 		this.#wakeAllWaiters();
 	}
@@ -289,6 +295,7 @@ export class AdvisorRuntime {
 					await this.agent.prompt(batch);
 					success = true;
 					this.#consecutiveFailures = 0;
+					this.#failureNotified = false;
 				} catch (err) {
 					// reset()/dispose() aborts the in-flight prompt; the rejection is the
 					// reset itself, not a transient advisor failure. Drop the stale batch
@@ -299,6 +306,14 @@ export class AdvisorRuntime {
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
 						logger.warn("advisor failed consecutively 3 times; dropping backlog to prevent stall");
+						if (!this.#failureNotified) {
+							this.#failureNotified = true;
+							try {
+								this.host.notifyFailure?.(err);
+							} catch (notifyErr) {
+								logger.warn("advisor failure notification failed", { err: String(notifyErr) });
+							}
+						}
 						this.#consecutiveFailures = 0;
 						// The dropped batch may carry primary-context we never delivered; drop
 						// the seen-state too so the next turn re-expands it instead of marking
