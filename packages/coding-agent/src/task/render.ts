@@ -144,7 +144,9 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
 	return findings;
 }
 
-function extractIncrementalReviewResult(value: unknown): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
+function extractIncrementalReviewResult(
+	value: unknown,
+): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
 	const yieldItems = normalizeYieldData(value).map(item => ({
 		data: item.data,
 		type: item.type,
@@ -923,7 +925,13 @@ function renderAgentProgress(
 			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
 			if (incrementalReview) {
 				lines.push(
-					...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
+					...renderReviewResult(
+						incrementalReview.summary,
+						incrementalReview.findings,
+						continuePrefix,
+						expanded,
+						theme,
+					),
 				);
 				return lines; // Review result handles its own rendering
 			}
@@ -1199,7 +1207,9 @@ function renderAgentResult(
 	const incrementalReview = extractIncrementalReviewResult(result.extractedToolData?.yield);
 
 	if (incrementalReview) {
-		lines.push(...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme));
+		lines.push(
+			...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
+		);
 		return lines;
 	}
 
@@ -1217,7 +1227,9 @@ function renderAgentResult(
 	}
 	if (reportFindingData.length > 0) {
 		const hasCompleteData = completeData.length > 0;
-		const message = hasCompleteData ? "Review verdict missing expected fields" : "Review incomplete (yield not called)";
+		const message = hasCompleteData
+			? "Review verdict missing expected fields"
+			: "Review incomplete (yield not called)";
 		lines.push(`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg("dim", message)}`);
 		lines.push(`${continuePrefix}${formatFindingSummary(reportFindingData, theme)}`);
 		lines.push(...renderFindings(reportFindingData, continuePrefix, expanded, theme));
@@ -1673,6 +1685,13 @@ function renderNestedTaskTree(
 	return lines;
 }
 
+export const taskToolRenderer = {
+	renderCall,
+	renderResult,
+	mergeCallAndResult: true,
+};
+
+// Register after export to avoid circular dependency issues
 subprocessToolRegistry.register<TaskToolDetails>("task", {
 	extractData: event => {
 		const details = event.result?.details;
@@ -1683,9 +1702,3 @@ subprocessToolRegistry.register<TaskToolDetails>("task", {
 		return new Text(lines.join("\n"), 0, 0);
 	},
 });
-
-export const taskToolRenderer = {
-	renderCall,
-	renderResult,
-	mergeCallAndResult: true,
-};

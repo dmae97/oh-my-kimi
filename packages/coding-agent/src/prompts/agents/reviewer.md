@@ -22,7 +22,7 @@ output:
   optionalProperties:
     findings:
       metadata:
-        description: Populate via incremental `yield` sections under `type: ["findings"]`; don't repeat it in a final payload.
+        description: "Populate via incremental yield sections under type: [\"findings\"]; don't repeat it in a final payload."
       elements:
         properties:
           title:
