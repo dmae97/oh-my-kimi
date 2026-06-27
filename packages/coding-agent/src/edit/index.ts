@@ -397,6 +397,27 @@ export class EditTool implements AgentTool<TInput> {
 		return EDIT_MODE_STRATEGIES[this.mode].matcherDigest(args);
 	}
 
+	/**
+	 * Project the streamed args onto their target file paths so path-scoped
+	 * stream matchers (e.g. TTSR `tool:edit(*.ts)` globs) match hashline and
+	 * apply_patch edits even though the path lives in the wire payload (a
+	 * section header / envelope marker) rather than a top-level argument.
+	 */
+	matcherPaths(args: unknown): readonly string[] | undefined {
+		return EDIT_MODE_STRATEGIES[this.mode].matcherPaths(args);
+	}
+
+	/**
+	 * Per-file projection of the streamed args, splitting multi-section
+	 * hashline / multi-hunk apply_patch payloads into one (path, digest) entry
+	 * per touched file. Path-scoped stream matchers (TTSR) then evaluate each
+	 * file in isolation, so a `tool:edit(*.ts)` rule never fires on text that
+	 * actually belongs to a sibling Markdown hunk.
+	 */
+	matcherEntries(args: unknown): readonly { path: string; digest: string }[] | undefined {
+		return EDIT_MODE_STRATEGIES[this.mode].matcherEntries(args);
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: EditParams,

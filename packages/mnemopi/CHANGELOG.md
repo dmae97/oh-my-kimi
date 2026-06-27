@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Improved handling of rate limits and transient errors during API extraction calls
+- Improved resilience during API extraction calls by enhancing the handling of rate limits and transient errors.
 
 ## [16.1.17] - 2026-06-24
 

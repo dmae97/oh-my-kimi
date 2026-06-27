@@ -4,7 +4,7 @@
 
 ### Removed
 
-- Removed pi from the list of supported dialects
+- Removed 'pi' from the list of supported dialects.
 
 ## [16.2.0] - 2026-06-27
 

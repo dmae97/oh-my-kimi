@@ -4,63 +4,24 @@
 
 ### Added
 
-- Comprehensive error module with structured error classification system supporting multiple error types and providers
-- `AIError.finalize()` function for standardized error finalization with status, id, and message generation
-- `AIError.classifyGatewayError()` for gateway-level error classification into HTTP status codes
-- OAuth-specific error types (`OAuthError`) with kind discrimination for different failure stages
-- AWS credentials error types (`AwsCredentialsError`, `EventStreamFrameError`) with specific failure modes
-- Provider-specific HTTP error classes (`AnthropicApiError`, `OpenAIHttpError`, `GeminiCliApiError`, etc.)
-- Auth-specific errors (`MissingApiKeyError`, `LoginCancelledError`, `AuthBrokerError`)
-- Structured error flags system for classifying errors by trait (timeout, transient, rate-limit, thinking-loop, etc.)
-- Rate-limit utilities in error module including `RateLimitReason` classification and backoff calculation
-- Stream-specific error types (`StreamTimeoutError`) with timeout + transient flag combination
-- Validation and configuration error types with non-retryable classification
-- Error retryability predicates including provider-specific transient detection hooks
+- Added a comprehensive, public-facing error module exported via the "./error" path, featuring structured error classification, provider-specific HTTP error classes (e.g., Anthropic, OpenAI, Gemini), OAuth/Auth-specific errors, rate-limit utilities, and retryability predicates.
 
 ### Changed
 
-- Increased default text verbosity to medium for OpenAI Codex models
-- Configured detailed reasoning summaries by default for OpenAI Codex responses
-- Standardized reasoning context to include all turns by default for OpenAI Codex requests
-- Forwarded `textVerbosity` from `SimpleStreamOptions` into OpenAI Responses/Codex request text verbosity.
-- Updated the OpenAI Codex WebSocket transport to resolve its numeric `PI_CODEX_WEBSOCKET_*` configuration (queue capacity, idle/first-event/pong timeouts, ping interval, retry budget/delay, max idle reuse) from environment variables once at module load — read at startup rather than re-parsed on every request/connection, so these must be set before launch and are no longer re-read mid-process.
-- Unified transient status code checks across providers using standardized retry logic
-- Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
-- Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
-- Unified error classification via `AIError.classify()` and `AIError.classifyMessage()` replacing scattered `classifyError()` implementations
-- All provider implementations now use structured `AIError.*` exceptions instead of generic `Error` or `ProviderHttpError`
-- Error finalization refactored from inline `extractHttpStatusFromError()` + `errorIdFromError()` to single `AIError.finalize()` call
-- Gateway error classification moved from `auth-gateway/server.ts` to `error/gateway.ts` with string-based input
-- Exported error module as public API via package.json `"./error"` export path
-- OAuth error constructors now accept structured options with `kind`, `provider`, `status`, and `cause` fields
-- Registry login functions now use `AIError.OnPromptRequiredError` instead of generic errors
-- Enhanced cross-model reasoning recovery to support additional thinking dialects and leakage patterns
-- Demote cross-vendor reasoning to plain text when the target does not natively support it
-- Refine cross-model reasoning preservation to prevent leaking inert context into structured fields
-- Rendered demoted cross-model reasoning blocks in the target model's canonical thinking dialect
-- Improved reliability of AI model responses by implementing automatic retry logic for detected thinking-loop stalls
-- Changed cross-provider/cross-model thinking demotion to render the prior turn's reasoning in the target model's canonical inline thinking dialect (a ```` ```thinking ```` fence for Gemini, `<think>`/`<thinking>` tags for others) instead of bare prose, with a neutral `<think>` fallback for control-token dialects (Harmony, Gemma) so chat-template tokens never leak into history. Replaying it as a native `thought` block was ruled out: end-to-end testing against Gemini 3 confirmed an unsigned `thought` part is schema-accepted but silently discarded — neither recalled nor influencing generation.
-- Broadened the leaked-thinking stream healer (`StreamMarkupHealing`'s `thinking` pattern) to recover reasoning emitted in any dialect's canonical idiom — Gemini's ` ```thinking ` fence, Gemma's `<|channel>thought` channel, Harmony's `analysis` message, and `<scratchpad>` — not just `<think>`/`<thinking>` tags, so leaked chain-of-thought is routed to thinking events for every dialect instead of rendered as raw markup
-- Hardened stateful `previous_response_id` delta chaining (`buildResponsesDeltaInput`): the prefix/option check now compares via a structural equality that ignores symbol-keyed properties (own string keys only), so the transient decode-time streaming symbols (`block-symbols.ts`) that live request items carry — but the deep-cloned baseline does not — no longer make a semantically identical item read as a history mutation and needlessly break the chain (forcing a full-transcript replay). Genuine differences, including an option toggled from unset to a value, still break the chain.
+- Updated OpenAI Codex defaults to increase default text verbosity to medium, enable detailed reasoning summaries by default, and include all turns in the reasoning context by default.
+- Updated the OpenAI Codex WebSocket transport to resolve its configuration (via PI_CODEX_WEBSOCKET_* environment variables) once at startup rather than re-parsing on every request.
+- Enhanced cross-model reasoning recovery and preservation to render demoted reasoning in the target model's canonical inline thinking dialect (such as Gemini's thinking fence or standard think tags) to prevent leaking inert context or control tokens into history.
+- Broadened the leaked-thinking stream healer to recover reasoning emitted in any dialect's canonical idiom (including Gemini, Gemma, Harmony, and scratchpads) and route them to thinking events instead of raw markup.
+- Implemented automatic retry logic for detected thinking-loop stalls to improve response reliability.
+- Hardened stateful delta chaining to ignore transient streaming bookkeeping symbols during structural equality checks, preventing unnecessary full-transcript replays.
 
 ### Fixed
 
-- Preserved OpenAI Responses assistant message `phase` values across auth-gateway request parsing, response encoding, streamed output items, native history replay, and stateful delta-prefix checks so GPT-5.4/GPT-5.5 intermediate updates and final answers replay with their original phase labels.
-- Fixed stateful delta chaining to correctly ignore transient streaming bookkeeping symbols
-- Improved recovery and rendering of demoted cross-provider reasoning blocks
-- Enhanced reliability of transient error classification during provider stream processing
-- Improved error message consistency across all providers with structured error formatting
-- Corrected error classification for rate-limit vs transient failures in auth retry logic
-- Fixed OAuth token refresh error handling with proper error type discrimination
-- Enhanced thinking-loop error detection with flag-based classification
+- Fixed preservation of OpenAI Responses assistant message phase values across auth-gateway parsing, streaming, and history replay, ensuring GPT-5.4/GPT-5.5 intermediate updates and final answers retain their original phase labels.
 
 ### Removed
 
-- Deleted legacy `src/errors.ts` (replaced by error module)
-- Deleted `src/utils/error-id.ts` (migrated to `error/flags.ts`)
-- Removed `rate-limit-utils.ts` from root (moved to `error/rate-limit.ts`)
-- Removed generic `Error` constructor calls throughout codebase in favor of typed error classes
-- Removed Pi dialect support and related serialization/parsing logic
+- Removed Pi dialect support and related serialization/parsing logic.
 
 ## [16.2.0] - 2026-06-27
 

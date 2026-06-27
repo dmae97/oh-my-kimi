@@ -2,9 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional AgentTool.matcherPaths(args) and AgentTool.matcherEntries(args) hooks to allow tools to surface target file paths and isolate file evaluations for path-scoped stream matchers (e.g., when handling multi-file payloads or embedded paths in streamed arguments).
+
 ### Removed
 
-- Removed support for Pi dialect integration
+- Removed support for Pi dialect integration.
 
 ## [16.2.0] - 2026-06-27
 
