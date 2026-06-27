@@ -1236,7 +1236,7 @@
         let html = `
           <div class="header">
             <h1>Session: ${escapeHtml(header?.id || 'unknown')}</h1>
-            <div class="help-bar">Ctrl+T toggle thinking · Ctrl+O toggle tools</div>
+            <div class="help-bar">T toggle thinking · O toggle tools</div>
             <div class="header-info">
               <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : 'unknown'}</span></div>
               <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${globalStats.models.join(', ') || 'unknown'}</span></div>
@@ -1580,13 +1580,19 @@
           searchQuery = '';
           navigateTo(leafId, 'bottom');
         }
-        if (e.ctrlKey && e.key === 't') {
+        if (e.key === 't' || e.key === 'T' || e.key === 'o' || e.key === 'O') {
+          // Skip when typing in the sidebar search (or any other editable target)
+          // so the chord can't fire on a user's letter input. Avoid Ctrl/Cmd-based
+          // chords entirely — every major browser reserves Ctrl+T (new tab) and
+          // Ctrl+O (open file), so the shortcut would never reach the page.
+          const t = e.target;
+          const editable =
+            t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+          if (editable) return;
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
           e.preventDefault();
-          toggleThinking();
-        }
-        if (e.ctrlKey && e.key === 'o') {
-          e.preventDefault();
-          toggleToolOutputs();
+          if (e.key === 't' || e.key === 'T') toggleThinking();
+          else toggleToolOutputs();
         }
       });
 
