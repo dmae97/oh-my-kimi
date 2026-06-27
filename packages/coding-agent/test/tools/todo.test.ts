@@ -4,6 +4,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
+	nextActionableTask,
 	resolveTodoMarkdownPath,
 	TODO_STRIKE_HOLD_FRAMES,
 	type TodoPhase,
@@ -95,6 +96,38 @@ describe("TodoTool auto-start behavior", () => {
 	});
 });
 
+describe("nextActionableTask", () => {
+	it("returns the in-progress task before the first pending task across phases", () => {
+		const task = nextActionableTask([
+			{
+				name: "First",
+				tasks: [{ content: "queued first", status: "pending" }],
+			},
+			{
+				name: "Second",
+				tasks: [{ content: "active second", status: "in_progress" }],
+			},
+		]);
+
+		expect(task?.content).toBe("active second");
+	});
+
+	it("falls back to the first pending task when nothing is in progress", () => {
+		const task = nextActionableTask([
+			{
+				name: "Done",
+				tasks: [{ content: "finished", status: "completed" }],
+			},
+			{
+				name: "Next",
+				tasks: [{ content: "first pending", status: "pending" }],
+			},
+		]);
+
+		expect(task?.content).toBe("first pending");
+	});
+});
+
 it("renders completed tasks as checked before revealing strikethrough", async () => {
 	const tool = new TodoTool(createSession());
 	await tool.execute("call-1", { op: "init", list: [{ phase: "Execution", items: ["finish"] }] });
@@ -124,6 +157,7 @@ describe("TodoTool operations", () => {
 
 		const tasks = result.details?.phases[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["pending", "pending", "in_progress"]);
+		expect(result.details?.op).toBe("start");
 	});
 
 	it("demotes the current in_progress task when starting another", async () => {

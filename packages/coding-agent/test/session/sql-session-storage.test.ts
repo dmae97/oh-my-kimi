@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
+import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { SqlSessionStorage, type SqlSessionStorageClient } from "@oh-my-pi/pi-coding-agent/session/sql-session-storage";
 import { SQL } from "bun";
 
@@ -38,7 +39,7 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 	it("create() warms the metadata index without selecting full content", async () => {
 		const client = new SQL("sqlite::memory:");
 		await client.unsafe(
-			`CREATE TABLE omp_session_files (path TEXT PRIMARY KEY, content TEXT NOT NULL, mtime_ms INTEGER NOT NULL)`,
+			`CREATE TABLE omp_session_files (path TEXT PRIMARY KEY, content TEXT NOT NULL, mtime_ms INTEGER NOT NULL, title TEXT, title_source TEXT, title_updated_at TEXT)`,
 		);
 		await client.unsafe(`INSERT INTO omp_session_files (path, content, mtime_ms) VALUES (?, ?, ?)`, [
 			"/sessions/p/huge.jsonl",
@@ -218,6 +219,47 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		await client.end();
 	});
 
+	it("persists title updates as indexed fields across storage reloads", async () => {
+		const client = new SQL("sqlite::memory:");
+		const storage = await SqlSessionStorage.create({ client });
+		const sessionPath = "/sessions/p/titled.jsonl";
+		const header = `${JSON.stringify({ type: "session", id: "s", timestamp: "t1", cwd: "/repo" })}\n`;
+		await storage.writeText(
+			sessionPath,
+			`${serializeTitleSlot({ title: "Old", source: "auto", updatedAt: "t1" })}${header}`,
+		);
+
+		await storage.updateSessionTitle(sessionPath, { title: "New", source: "user", updatedAt: "t2" });
+
+		expect(JSON.parse((await storage.readText(sessionPath)).split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+		expect(JSON.parse((await storage.readTextSlices(sessionPath, 256, 0))[0].split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+
+		const reloaded = await SqlSessionStorage.create({ client });
+		expect(JSON.parse((await reloaded.readText(sessionPath)).split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+		expect(JSON.parse((await reloaded.readTextSlices(sessionPath, 256, 0))[0].split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+		await client.end();
+	});
+
 	it("readTextSlices uses bounded SQL byte substrings instead of a full content select", async () => {
 		const client = new SQL("sqlite::memory:");
 		const queries: string[] = [];
@@ -286,7 +328,7 @@ describe("SqlSessionStorage (SQLite backend)", () => {
 		const client = new SQL("sqlite::memory:");
 		// Pre-create the table with the expected schema.
 		await client.unsafe(
-			`CREATE TABLE omp_session_files (path TEXT PRIMARY KEY, content TEXT NOT NULL, mtime_ms INTEGER NOT NULL)`,
+			`CREATE TABLE omp_session_files (path TEXT PRIMARY KEY, content TEXT NOT NULL, mtime_ms INTEGER NOT NULL, title TEXT, title_source TEXT, title_updated_at TEXT)`,
 		);
 		const storage = await SqlSessionStorage.create({ client, createTable: false });
 		await storage.writeText("/s/x.jsonl", "ok");

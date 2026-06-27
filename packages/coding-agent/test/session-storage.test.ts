@@ -4,6 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 
 describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 	let tempDir: string;
@@ -80,5 +81,46 @@ describe("FileSessionStorage.writeTextSync", () => {
 
 		expect(second.ino).not.toBe(first.ino);
 		expect(await Bun.file(sessionPath).text()).toBe("second\n");
+	});
+});
+
+describe("FileSessionStorage.updateSessionTitle", () => {
+	let tempDir: string;
+	let storage: FileSessionStorage;
+
+	beforeEach(async () => {
+		tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-session-storage-"));
+		storage = new FileSessionStorage();
+	});
+
+	afterEach(async () => {
+		await fsp.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("updates the fixed title slot without truncating the tail", async () => {
+		const sessionPath = path.join(tempDir, "session.jsonl");
+		const tail = `${JSON.stringify({ type: "session", id: "s", timestamp: "t", cwd: tempDir })}\n`;
+		storage.writeTextSync(
+			sessionPath,
+			`${serializeTitleSlot({ title: "Old", source: "auto", updatedAt: "t1" })}${tail}`,
+		);
+
+		await storage.updateSessionTitle(sessionPath, { title: "New", source: "user", updatedAt: "t2" });
+
+		const content = await Bun.file(sessionPath).text();
+		const [slotLine, ...rest] = content.split("\n");
+		expect(JSON.parse(slotLine)).toMatchObject({ type: "title", title: "New", source: "user", updatedAt: "t2" });
+		expect(`${rest.join("\n")}`).toBe(tail);
+		expect(fs.statSync(sessionPath).size).toBe(
+			Buffer.byteLength(`${serializeTitleSlot({ title: "Old", source: "auto", updatedAt: "t1" })}${tail}`, "utf-8"),
+		);
+	});
+
+	it("uses the existing file-open error for missing paths", async () => {
+		const sessionPath = path.join(tempDir, "missing.jsonl");
+
+		await expect(
+			storage.updateSessionTitle(sessionPath, { title: "New", source: "user", updatedAt: "t2" }),
+		).rejects.toThrow(/ENOENT|no such file/i);
 	});
 });

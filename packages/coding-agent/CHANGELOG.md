@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
+### Added
+
+- Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source ids.
+- Added citation-marker unwrapping for hashline edit parsing, diff preview, streaming matching, and remove/move detection while preserving snapshot tags for hash verification.
+- Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
+- Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
+
+### Fixed
+
+- Preserved interrupted assistant thinking as hidden durable context after user interrupts.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

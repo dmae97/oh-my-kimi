@@ -19,6 +19,7 @@ import {
 	RedisSessionStorage,
 	type RedisSessionStorageClient,
 } from "@oh-my-pi/pi-coding-agent/session/redis-session-storage";
+import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 
 interface FakeRedisCall {
 	method: string;
@@ -192,6 +193,45 @@ describe("RedisSessionStorage", () => {
 		expect(storage.statSync("/sessions/p/huge.jsonl").size).toBe(10);
 		expect(redis.calls.some(call => call.method === "get")).toBe(false);
 		expect(redis.calls.some(call => call.method === "strlen")).toBe(true);
+	});
+
+	it("persists title updates as indexed fields across storage reloads", async () => {
+		const storage = await RedisSessionStorage.create({ client: redis });
+		const sessionPath = "/sessions/p/titled.jsonl";
+		const header = `${JSON.stringify({ type: "session", id: "s", timestamp: "t1", cwd: "/repo" })}\n`;
+		await storage.writeText(
+			sessionPath,
+			`${serializeTitleSlot({ title: "Old", source: "auto", updatedAt: "t1" })}${header}`,
+		);
+
+		await storage.updateSessionTitle(sessionPath, { title: "New", source: "user", updatedAt: "t2" });
+
+		expect(JSON.parse((await storage.readText(sessionPath)).split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+		expect(JSON.parse((await storage.readTextSlices(sessionPath, 256, 0))[0].split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+
+		const reloaded = await RedisSessionStorage.create({ client: redis });
+		expect(JSON.parse((await reloaded.readText(sessionPath)).split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
+		expect(JSON.parse((await reloaded.readTextSlices(sessionPath, 256, 0))[0].split("\n")[0])).toMatchObject({
+			type: "title",
+			title: "New",
+			source: "user",
+			updatedAt: "t2",
+		});
 	});
 
 	it("listFilesSync returns only direct children matching the glob", async () => {

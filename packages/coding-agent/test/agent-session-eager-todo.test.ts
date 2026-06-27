@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, TextContent, ToolCall } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -67,6 +68,16 @@ function createToolCallAssistantMessage(name: string, args: Record<string, unkno
 	};
 }
 
+function createAssistantMessageWithThinking(text: string, thinking: string): AssistantMessage {
+	return {
+		...createAssistantMessage(text),
+		content: [
+			{ type: "thinking", thinking },
+			{ type: "text", text },
+		],
+	};
+}
+
 function getMessageText(message: AgentMessage): string {
 	if (!("content" in message)) {
 		return "";
@@ -103,6 +114,7 @@ describe("AgentSession eager todo enforcement", () => {
 			"todo.enabled": true,
 			"todo.eager": "always",
 			"todo.reminders": false,
+			"title.refreshOnReplan": false,
 			...settingsOverride,
 		});
 		const sessionManager = SessionManager.inMemory(tempDir.path());
@@ -173,6 +185,27 @@ describe("AgentSession eager todo enforcement", () => {
 		});
 	}
 
+	async function recreateSession(settingsOverride: Record<string, unknown> = {}): Promise<void> {
+		await session.dispose();
+		authStorage?.close();
+		authStorage = undefined;
+		streamCallCount = 0;
+		scriptedResponses = [];
+		observedCalls.length = 0;
+		await createSession(settingsOverride);
+	}
+
+	function waitForSessionName(expected: string): Promise<void> {
+		if (session.sessionManager.getSessionName() === expected) return Promise.resolve();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const unsubscribe = session.sessionManager.onSessionNameChanged(() => {
+			if (session.sessionManager.getSessionName() !== expected) return;
+			unsubscribe();
+			resolve();
+		});
+		return promise;
+	}
+
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-agent-session-eager-todo-");
 		streamCallCount = 0;
@@ -186,6 +219,7 @@ describe("AgentSession eager todo enforcement", () => {
 			await session.dispose();
 		}
 		authStorage?.close();
+		vi.restoreAllMocks();
 		authStorage = undefined;
 		tempDir.removeSync();
 	});
@@ -243,6 +277,89 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[1]?.messageRoles.slice(-2)).toEqual(["assistant", "toolResult"]);
 		expect(session.getTodoPhases()).toHaveLength(1);
 		expect(session.getTodoPhases()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
+	});
+
+	it("refreshes an auto title on todo init from recent user, assistant, and thinking context", async () => {
+		await recreateSession({ "title.refreshOnReplan": true });
+		await session.setSessionName("Old auto title", "auto");
+		const priorUser: AgentMessage = {
+			role: "user",
+			content: "fix parser recovery",
+			timestamp: Date.now() - 2,
+		};
+		const priorAssistant = createAssistantMessageWithThinking(
+			"I found the parser recovery path.",
+			"The recovery heuristic should drive the replan title.",
+		);
+		session.agent.appendMessage(priorUser);
+		session.sessionManager.appendMessage(priorUser);
+		session.agent.appendMessage(priorAssistant);
+		session.sessionManager.appendMessage(priorAssistant);
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [
+				{
+					type: "toolCall",
+					id: "call-title",
+					name: "set_title",
+					arguments: { title: "Parser recovery replan" },
+				},
+			],
+		} as never);
+		scriptedResponses = [
+			createToolCallAssistantMessage("todo", {
+				op: "init",
+				list: [{ phase: "Parser", items: ["Rework parser diagnostics around recovery"] }],
+			}),
+			createAssistantMessage("todo initialized"),
+		];
+
+		const titleApplied = waitForSessionName("Parser recovery replan");
+		await session.prompt("replan parser diagnostics");
+		await titleApplied;
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		const request = completeSimpleMock.mock.calls[0]?.[1] as { messages?: Array<{ content?: string }> } | undefined;
+		const titleInput = request?.messages?.[0]?.content;
+		expect(titleInput).toContain("fix parser recovery");
+		expect(titleInput).toContain("I found the parser recovery path.");
+		expect(titleInput).toContain("The recovery heuristic should drive the replan title.");
+		expect(titleInput).toContain("replan parser diagnostics");
+	});
+
+	it("does not refresh todo-init titles when the current title is user-authored", async () => {
+		await recreateSession({ "title.refreshOnReplan": true });
+		await session.setSessionName("Manual parser title", "user");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+		scriptedResponses = [
+			createToolCallAssistantMessage("todo", {
+				op: "init",
+				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
+			}),
+			createAssistantMessage("todo initialized"),
+		];
+
+		await session.prompt("replan parser diagnostics");
+
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(session.sessionManager.getSessionName()).toBe("Manual parser title");
+	});
+
+	it("does not refresh todo-init titles when title refresh on replan is disabled", async () => {
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+		await session.setSessionName("Old auto title", "auto");
+		scriptedResponses = [
+			createToolCallAssistantMessage("todo", {
+				op: "init",
+				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
+			}),
+			createAssistantMessage("todo initialized"),
+		];
+
+		await session.prompt("replan parser diagnostics");
+
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(session.sessionManager.getSessionName()).toBe("Old auto title");
 	});
 
 	it("skips eager todo enforcement for prompts ending with a question mark", async () => {

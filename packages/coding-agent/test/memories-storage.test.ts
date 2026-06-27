@@ -1,4 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { startMemoryStartupTask } from "@oh-my-pi/pi-coding-agent/memories";
 import {
 	claimStage1Jobs,
 	clearMemoryData,
@@ -10,12 +16,49 @@ import {
 	tryClaimGlobalPhase2Job,
 	upsertThreads,
 } from "@oh-my-pi/pi-coding-agent/memories/storage";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, TempDir } from "@oh-my-pi/pi-utils";
 
 const GLOBAL_KIND = "memory_consolidate_global";
 const PROJECT_CWD = "/repo";
 const GLOBAL_KEY = `global:${PROJECT_CWD}`;
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+	let resolve!: () => void;
+	const promise = new Promise<void>(res => {
+		resolve = res;
+	});
+	return { promise, resolve };
+}
+
+function createMemoryTestModel(): Model {
+	return {
+		provider: "openai",
+		id: "test-model",
+		name: "test-model",
+		contextWindow: 32_000,
+	} as Model;
+}
+
+function assistantText(text: string): AssistantMessage {
+	const message: AssistantMessage = {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "openai-responses",
+		provider: "openai",
+		model: "test-model",
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+	return message;
+}
 describe("memories/storage", () => {
 	let tempDir: TempDir;
 	let dbPath: string;
@@ -27,6 +70,7 @@ describe("memories/storage", () => {
 
 	afterEach(async () => {
 		await Bun.sleep(0);
+		vi.restoreAllMocks();
 		await tempDir.remove().catch(() => {});
 	});
 
@@ -136,6 +180,80 @@ describe("memories/storage", () => {
 		expect(row.retry_remaining).toBe(3);
 		expect(row.retry_at).toBeNull();
 		closeMemoryDb(db);
+	});
+
+	test("startup memory scan reads cwd/id from the session header after a title slot", async () => {
+		const agentDir = tempDir.join("agent");
+		const sessionDir = path.join(agentDir, "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const currentSessionFile = path.join(sessionDir, "current-file.jsonl");
+		const rolloutFile = path.join(sessionDir, "rollout-file.jsonl");
+		await Bun.write(
+			currentSessionFile,
+			[
+				JSON.stringify({ type: "title", v: 1, title: "Current", updatedAt: "2026-06-27T00:00:00.000Z" }),
+				JSON.stringify({ type: "session", id: "current-thread", cwd: PROJECT_CWD }),
+				"",
+			].join("\n"),
+		);
+		await Bun.write(
+			rolloutFile,
+			[
+				JSON.stringify({ type: "title", v: 1, title: "Rollout", updatedAt: "2026-06-27T00:00:00.000Z" }),
+				JSON.stringify({ type: "session", id: "rollout-header-id", cwd: PROJECT_CWD }),
+				JSON.stringify({ type: "message", message: { role: "user", content: "remember this rollout" } }),
+				"",
+			].join("\n"),
+		);
+
+		const model = createMemoryTestModel();
+		const settings = Settings.isolated({
+			"memories.enabled": true,
+			"memories.minRolloutIdleHours": 0,
+			"memories.maxRolloutsPerStartup": 16,
+			"memories.threadScanLimit": 64,
+			"memories.phase2HeartbeatSeconds": 1,
+		});
+		const settled = deferred();
+		const session = {
+			sessionManager: {
+				getSessionFile: () => currentSessionFile,
+				getSessionDir: () => sessionDir,
+				getSessionId: () => "current-thread",
+				getCwd: () => PROJECT_CWD,
+			},
+			settings,
+			model,
+			refreshBaseSystemPrompt: async () => settled.resolve(),
+		} as unknown as Parameters<typeof startMemoryStartupTask>[0]["session"];
+		const modelRegistry = {
+			find: () => model,
+			getAll: () => [model],
+			getApiKey: async () => "test-api-key",
+			resolver: () => async () => "test-api-key",
+		} as unknown as Parameters<typeof startMemoryStartupTask>[0]["modelRegistry"];
+		let completionCount = 0;
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			completionCount += 1;
+			return assistantText(
+				completionCount === 1
+					? JSON.stringify({
+							rollout_summary: "Rollout summary",
+							rollout_slug: "slot-rollout",
+							raw_memory: "Raw memory",
+						})
+					: JSON.stringify({ memory_md: "# Memory\n\nBody", memory_summary: "Summary", skills: [] }),
+			);
+		});
+
+		startMemoryStartupTask({ session, settings, modelRegistry, agentDir, taskDepth: 0 });
+
+		await settled.promise;
+		expect(completeSpy).toHaveBeenCalledTimes(2);
+		const db = openMemoryDb(getAgentDbPath(agentDir));
+		const rows = db.prepare("SELECT id, cwd FROM threads ORDER BY id").all() as Array<{ id: string; cwd: string }>;
+		closeMemoryDb(db);
+		expect(rows).toEqual([{ id: "rollout-header-id", cwd: PROJECT_CWD }]);
 	});
 
 	test("clearMemoryData removes thread/output/job state", () => {

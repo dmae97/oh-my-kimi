@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 
 describe("MemorySessionStorage indexed mirror", () => {
 	test("append builds the same content as a single writeTextSync of the join", async () => {
@@ -130,5 +131,27 @@ describe("MemorySessionStorage indexed mirror", () => {
 		storage.writeTextSync(path, "xy");
 		expect(storage.statSync(path).size).toBe(2);
 		expect(await storage.readText(path)).toBe("xy");
+	});
+
+	test("updateSessionTitle replaces the fixed slot and preserves the tail", async () => {
+		const storage = new MemorySessionStorage();
+		const path = "/virtual/head.jsonl";
+		const tail = `${JSON.stringify({ type: "session", id: "s", timestamp: "t", cwd: "/repo" })}\n`;
+		storage.writeTextSync(path, `${serializeTitleSlot({ title: "Old", source: "auto", updatedAt: "t1" })}${tail}`);
+
+		await storage.updateSessionTitle(path, { title: "New", source: "user", updatedAt: "t2" });
+
+		const content = await storage.readText(path);
+		const [slotLine, ...rest] = content.split("\n");
+		expect(JSON.parse(slotLine)).toMatchObject({ type: "title", title: "New", source: "user", updatedAt: "t2" });
+		expect(rest.join("\n")).toBe(tail);
+	});
+
+	test("updateSessionTitle preserves the memory storage missing-file error", async () => {
+		const storage = new MemorySessionStorage();
+
+		await expect(
+			storage.updateSessionTitle("/virtual/missing.jsonl", { title: "New", updatedAt: "t2" }),
+		).rejects.toThrow("File not found: /virtual/missing.jsonl");
 	});
 });

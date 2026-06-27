@@ -149,12 +149,14 @@ describe("SessionManager + RedisSessionStorage", () => {
 		await storage.drain();
 		await manager.close();
 
-		// Redis now contains the JSONL — header + one message entry.
+		// Redis now contains the JSONL — title slot + header + one message entry.
 		const stored = redis.strings.get(`omp:sessions:file:${sessionFilePath}`);
 		expect(stored).toBeDefined();
 		const lines = (stored as string).trim().split("\n");
-		expect(lines.length).toBeGreaterThanOrEqual(2);
-		const header = JSON.parse(lines[0]);
+		expect(lines.length).toBeGreaterThanOrEqual(3);
+		const slot = JSON.parse(lines[0]);
+		expect(slot.type).toBe("title");
+		const header = JSON.parse(lines[1]);
 		expect(header.type).toBe("session");
 		const msg = JSON.parse(lines[lines.length - 1]);
 		expect(msg.type).toBe("message");
