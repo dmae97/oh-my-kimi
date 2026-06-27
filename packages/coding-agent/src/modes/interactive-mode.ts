@@ -858,11 +858,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerRegistry.subscribeToEventBus(this.#eventBus);
 		}
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
-		this.statusLine.setSubagentHubHint(
-			this.keybindings.getDisplayString("app.agents.hub") ||
-				this.keybindings.getDisplayString("app.session.observe") ||
-				undefined,
-		);
 		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(() => {
 			this.syncRunningSubagentBadge();
