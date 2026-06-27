@@ -234,6 +234,7 @@ import emptyStopRetryTemplate from "../prompts/system/empty-stop-retry.md" with 
 import geminiToolReminderTemplate from "../prompts/system/gemini-tool-call-reminder.md" with { type: "text" };
 import ircAutoReplyTemplate from "../prompts/system/irc-autoreply.md" with { type: "text" };
 import ircIncomingTemplate from "../prompts/system/irc-incoming.md" with { type: "text" };
+import midRunTodoNudgePrompt from "../prompts/system/mid-run-todo-nudge.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
@@ -324,6 +325,16 @@ import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-
 import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
+
+/**
+ * Consecutive tool-use turns without the agent touching the `todo` tool that
+ * trip the mid-run reconciliation nudge. Picked so a single batch of edits +
+ * verification (~3-5 turns each) does not trigger it, but a sustained loop of
+ * work without flipping any todos does. Without this nudge, long runs drive
+ * the live todo HUD to `0/N` until the final stop, then batch-flip to `N/N`
+ * (issue #3651).
+ */
+const MID_RUN_TODO_NUDGE_TURN_THRESHOLD = 8;
 
 /** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
  *  discarded assistant turn only; never reaches the model. */
@@ -1289,6 +1300,15 @@ export class AgentSession {
 	 * instruction") does not drive 1/3 → 2/3 → 3/3 without user input.
 	 */
 	#todoReminderAwaitingProgress = false;
+	/**
+	 * Consecutive tool-use turns the agent has completed without invoking the
+	 * `todo` tool. Drives {@link #takeMidRunTodoNudge} so the live HUD stays in
+	 * sync with actual progress instead of flipping `0/N -> N/N` only at the
+	 * very end of a long run (issue #3651). Reset to 0 on any assistant turn
+	 * that calls `todo`, on a successful nudge fire (cooldown), and at every
+	 * new-prompt / clear / handoff lifecycle boundary.
+	 */
+	#toolTurnsSinceLastTodoTouch = 0;
 	#todoPhases: TodoPhase[] = [];
 	#toolChoiceQueue = new ToolChoiceQueue();
 
@@ -1750,6 +1770,9 @@ export class AgentSession {
 			this.#pendingIrcAsides = [];
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
+			// Mid-run todo reconciliation — evaluated at injection time so a turn
+			// that flips a todo just before this poll suppresses the nudge.
+			thunks.push(() => this.#takeMidRunTodoNudge());
 			return thunks;
 		});
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
@@ -2991,6 +3014,17 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				const tooledTurn = assistantMsg.content.some(content => content.type === "toolCall");
+				if (tooledTurn) {
+					const touchedTodo = assistantMsg.content.some(
+						content => content.type === "toolCall" && content.name === "todo",
+					);
+					if (touchedTodo) {
+						this.#toolTurnsSinceLastTodoTouch = 0;
+					} else {
+						this.#toolTurnsSinceLastTodoTouch++;
+					}
+				}
 				const currentGrantsAnthropicPriority =
 					this.serviceTier === "priority" || this.serviceTier === "claude-only";
 				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
@@ -3285,7 +3319,11 @@ export class AgentSession {
 				this.#trackPostPromptTask(compactionTask);
 				compactionResult = await compactionTask;
 			}
-			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
+			// Stop-time todo reconciliation only fires at a text-only final stop. A run
+			// that ends still mid-tool-use (deadline hit, context full, etc.) skips the
+			// reminder so we don't pile a follow-up onto an already in-flight turn.
+			// Mid-run sync is handled separately via #takeMidRunTodoNudge so a long
+			// tool-use loop still gets prodded to keep the live HUD honest (issue #3651).
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
 				await emitAgentEndNotification();
@@ -6595,6 +6633,7 @@ export class AgentSession {
 			// Reset todo reminder count on new user prompt
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
+			this.#toolTurnsSinceLastTodoTouch = 0;
 			this.#emptyStopRetryCount = 0;
 			this.#unexpectedStopRetryCount = 0;
 			// A new prompt cycle starts: drop any sticky yield-termination from the
@@ -7531,6 +7570,7 @@ export class AgentSession {
 
 		this.#todoReminderCount = 0;
 		this.#todoReminderAwaitingProgress = false;
+		this.#toolTurnsSinceLastTodoTouch = 0;
 		this.#planReferenceSent = false;
 		this.#planReferencePath = "local://PLAN.md";
 		this.#resetAdvisorSessionState();
@@ -8854,6 +8894,7 @@ export class AgentSession {
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
+			this.#toolTurnsSinceLastTodoTouch = 0;
 
 			// Inject the handoff document as a custom message
 			const handoffContent = createHandoffContext(handoffText);
@@ -9799,6 +9840,82 @@ export class AgentSession {
 		this.sessionManager.appendMessage(reminderMessage);
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
 		return true;
+	}
+
+	/**
+	 * Build the next mid-run todo reconciliation nudge when the agent has gone
+	 * {@link MID_RUN_TODO_NUDGE_TURN_THRESHOLD} tool-use turns without invoking
+	 * the `todo` tool and incomplete items remain. Returns the developer-role
+	 * reminder when it should fire, or `null` to skip. Called once per turn via
+	 * the aside provider; mutates internal counters when it fires so the caller
+	 * does not need to track delivery state.
+	 *
+	 * Companion to {@link #checkTodoCompletion}, which only fires when the agent
+	 * stops with text. Without this, a long tool-use loop drives the live HUD
+	 * to `0/N` until the final stop, then batch-flips to `N/N` (issue #3651).
+	 * Shares `#todoReminderCount` / `#todoReminderAwaitingProgress` with the
+	 * stop-time path so the per-cycle reminder budget is unified.
+	 */
+	#takeMidRunTodoNudge(): AgentMessage | null {
+		if (this.#toolTurnsSinceLastTodoTouch < MID_RUN_TODO_NUDGE_TURN_THRESHOLD) return null;
+		if (this.#todoReminderAwaitingProgress) return null;
+		if (!this.settings.get("todo.enabled")) return null;
+		if (!this.settings.get("todo.reminders")) return null;
+		// Plan-mode runs are authoring a plan file, not implementing it; todos
+		// don't apply, mirroring {@link #createEagerTodoPrelude}.
+		if (this.#planModeState?.enabled) return null;
+
+		const remindersMax = this.settings.get("todo.reminders.max");
+		if (this.#todoReminderCount >= remindersMax) return null;
+
+		const phases = this.getTodoPhases();
+		if (phases.length === 0) return null;
+		const incompleteByPhase = phases
+			.map(phase => ({
+				name: phase.name,
+				tasks: phase.tasks
+					.filter(
+						(task): task is TodoItem & { status: "pending" | "in_progress" } =>
+							task.status === "pending" || task.status === "in_progress",
+					)
+					.map(task => ({ content: task.content, status: task.status })),
+			}))
+			.filter(phase => phase.tasks.length > 0);
+		const incomplete = incompleteByPhase.flatMap(phase => phase.tasks);
+		if (incomplete.length === 0) return null;
+
+		// Reset the turn counter so the nudge has another full runway before the
+		// next mid-run fire; the shared #todoReminderCount cap keeps total reminders
+		// (mid-run + stop-time) bounded per cycle.
+		this.#toolTurnsSinceLastTodoTouch = 0;
+		this.#todoReminderCount++;
+		this.#todoReminderAwaitingProgress = true;
+		const attempt = this.#todoReminderCount;
+
+		const { toolRefs } = this.#buildEagerPreludeContext();
+		const reminder = prompt.render(midRunTodoNudgePrompt, {
+			toolRefs,
+			incompleteCount: incomplete.length,
+			plural: incomplete.length !== 1,
+			phases: incompleteByPhase,
+			attempt,
+			maxAttempts: remindersMax,
+		});
+
+		logger.debug("Mid-run todo nudge fired", { incomplete: incomplete.length, attempt });
+		void this.#emitSessionEvent({
+			type: "todo_reminder",
+			todos: incomplete,
+			attempt,
+			maxAttempts: remindersMax,
+		});
+
+		return {
+			role: "developer",
+			content: [{ type: "text", text: reminder }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
 	}
 
 	/**
