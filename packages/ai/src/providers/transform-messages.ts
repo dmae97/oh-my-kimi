@@ -1,3 +1,4 @@
+import { renderDemotedThinking } from "../dialect/demotion";
 import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
 
 const enum ToolCallStatus {
@@ -477,13 +478,18 @@ export function transformMessages<TApi extends Api>(
 						return sanitized.thinkingSignature ? { ...sanitized, thinkingSignature: undefined } : sanitized;
 					}
 					// Other cross-API targets (openai-responses encrypted blobs, google
-					// signed thought parts, anthropic-target from a non-Anthropic source,
-					// or any reasoning-disabled target) can't usefully replay an unsigned
-					// thinking block. Demote to text so the reasoning survives at least
-					// as visible conversation context.
+					// thought parts, anthropic-target from a non-Anthropic source, or any
+					// reasoning-disabled target) can't replay an unsigned thinking block:
+					// the native reasoning slot either rejects a foreign signature or — as
+					// verified end-to-end against Gemini 3 — silently discards unsigned
+					// thought content (it is neither recalled nor influences generation).
+					// Demote to text so the reasoning survives as context, wrapped in the
+					// TARGET model's own canonical thinking-block dialect (e.g. a ```thinking
+					// fence for Gemini) so it reads as reasoning rather than bare prose the
+					// model might mimic.
 					return {
 						type: "text" as const,
-						text: sanitized.thinking,
+						text: renderDemotedThinking(model.id, sanitized.thinking),
 					};
 				}
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { renderDemotedThinking } from "@oh-my-pi/pi-ai/dialect";
 import { convertAnthropicMessages } from "@oh-my-pi/pi-ai/providers/anthropic";
 import type {
 	AssistantMessage,
@@ -300,11 +301,13 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		expect(thinking?.signature).toBe("");
 	});
 
-	it("does not promote prior unsigned thinking from non-anthropic sources to thinking blocks", () => {
-		// Cross-API replay: prior turn came from OpenAI-responses with no
-		// Anthropic signature. The all-or-none rule scope is per-API; we must
-		// not invent thinking blocks for a turn whose source can't sign them —
-		// the existing cross-API text demotion is the right behavior.
+	it("demotes prior unsigned thinking from non-anthropic sources to canonical-dialect text, not native blocks", () => {
+		// Cross-API replay: the prior turn came from OpenAI-responses with no
+		// Anthropic signature, so it can't wire as a native `thinking` block
+		// (Anthropic rejects a foreign/missing signature). It is demoted to a
+		// text block wrapped in the TARGET's canonical thinking dialect
+		// (Anthropic → `<thinking>`) so the reasoning survives as recognizable
+		// reasoning context rather than bare prose.
 		const target = makeAnthropicModel();
 		const messages: Message[] = [
 			makeUser("Summarize README"),
@@ -334,9 +337,9 @@ describe("Anthropic prior-turn thinking preservation (#2257, #2265)", () => {
 		const assistants = params.filter(p => p.role === "assistant");
 		const priorBlocks = assistants[0].content as WireBlock[];
 		expect(priorBlocks.find(b => b.type === "thinking")).toBeUndefined();
-		// Reasoning text still survives on the wire (as text, via the existing
-		// cross-API demotion path).
+		// Reasoning survives on the wire as text, wrapped in the target's canonical
+		// thinking dialect rather than emitted as a native (signature-bound) block.
 		const text = priorBlocks.find(b => b.type === "text") as WireTextBlock | undefined;
-		expect(text?.text).toBe("openai chain-of-thought");
+		expect(text?.text?.trimEnd()).toBe(renderDemotedThinking(target.id, "openai chain-of-thought").trimEnd());
 	});
 });
