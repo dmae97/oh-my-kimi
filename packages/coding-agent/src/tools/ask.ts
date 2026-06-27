@@ -142,8 +142,58 @@ interface CustomInputContext {
 	markableCount: number;
 }
 
+/** Hard caps for the editor title rendered while the user types an `Other`
+ *  custom answer. Without these the title is one `Text` child stacked above the
+ *  prompt editor (no `maxVisible` windowing), so a question with many options
+ *  or paragraph-long descriptions hides the input row and hint. */
+const MAX_CUSTOM_INPUT_OPTION_ROWS = 8;
+const MAX_CUSTOM_INPUT_DESCRIPTION_CHARS = 120;
+
 function getSelectOptionDescription(option: ExtensionUISelectItem): string | undefined {
 	return typeof option === "string" ? undefined : option.description;
+}
+
+function truncateCustomInputDescription(text: string): string {
+	const flattened = text.replace(/\s+/g, " ").trim();
+	if (flattened.length <= MAX_CUSTOM_INPUT_DESCRIPTION_CHARS) return flattened;
+	return `${flattened.slice(0, MAX_CUSTOM_INPUT_DESCRIPTION_CHARS - 1).trimEnd()}…`;
+}
+
+/** Window the option list around must-keep rows so the title stays bounded.
+ *  Must-keep = the selected `Other` row, the first option (anchor), and every
+ *  user-checked row. Remaining budget fills from the start. Gaps between kept
+ *  indices are reported so the renderer can drop a `… N more options …`
+ *  marker, preserving the "more available" signal. */
+function pickCustomInputOptionWindow(
+	total: number,
+	selectedIndex: number,
+	checked: ReadonlySet<number>,
+): { indices: number[]; gapBefore: Map<number, number> } {
+	if (total === 0) return { indices: [], gapBefore: new Map() };
+	if (total <= MAX_CUSTOM_INPUT_OPTION_ROWS) {
+		return {
+			indices: Array.from({ length: total }, (_, i) => i),
+			gapBefore: new Map(),
+		};
+	}
+	const keep = new Set<number>();
+	if (selectedIndex >= 0 && selectedIndex < total) keep.add(selectedIndex);
+	keep.add(0);
+	for (const i of checked) {
+		if (i >= 0 && i < total) keep.add(i);
+	}
+	for (let i = 0; i < total && keep.size < MAX_CUSTOM_INPUT_OPTION_ROWS; i++) {
+		keep.add(i);
+	}
+	const indices = [...keep].sort((a, b) => a - b);
+	const gapBefore = new Map<number, number>();
+	let prev = -1;
+	for (const idx of indices) {
+		if (idx > prev + 1) gapBefore.set(idx, idx - prev - 1);
+		prev = idx;
+	}
+	if (prev < total - 1) gapBefore.set(total, total - 1 - prev);
+	return { indices, gapBefore };
 }
 
 function formatCustomInputTitle(
@@ -152,9 +202,15 @@ function formatCustomInputTitle(
 	context: CustomInputContext,
 ): string {
 	const selectedIndex = options.findIndex(option => getSelectOptionLabel(option) === OTHER_OPTION);
-	const lines = [question, ""];
 	const checked = new Set(context.checkedIndices ?? []);
-	for (let index = 0; index < options.length; index++) {
+	const window = pickCustomInputOptionWindow(options.length, selectedIndex, checked);
+	const lines: string[] = [question, ""];
+	const emitGap = (count: number) => {
+		lines.push(`    … ${count} more option${count === 1 ? "" : "s"} …`);
+	};
+	for (const index of window.indices) {
+		const gap = window.gapBefore.get(index);
+		if (gap !== undefined) emitGap(gap);
 		const option = options[index]!;
 		const label = getSelectOptionLabel(option);
 		const isSelected = index === selectedIndex;
@@ -169,8 +225,10 @@ function formatCustomInputTitle(
 						: "  ";
 		lines.push(prefix + label);
 		const description = getSelectOptionDescription(option);
-		if (description) lines.push(`    ${description}`);
+		if (description) lines.push(`    ${truncateCustomInputDescription(description)}`);
 	}
+	const trailingGap = window.gapBefore.get(options.length);
+	if (trailingGap !== undefined) emitGap(trailingGap);
 	lines.push("", "Enter your response:");
 	return lines.join("\n");
 }

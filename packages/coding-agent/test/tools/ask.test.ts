@@ -589,6 +589,68 @@ describe("AskTool custom input", () => {
 		expect(title).toContain("Enter your response:");
 	});
 
+	it("caps Other editor context for long option lists with long descriptions", async () => {
+		const tool = new AskTool(createSession());
+		const editor = vi.fn(async (_title: string) => "custom");
+		const longDescription = "x".repeat(400);
+		const optionCount = 20;
+		const options = Array.from({ length: optionCount }, (_, i) => ({
+			label: `option-${i}`,
+			description: longDescription,
+		}));
+		const questions = [{ id: "pick", question: "Pick one", options }];
+		const context = createContext({
+			select: async () => "Other (type your own)",
+			editor,
+		});
+
+		await tool.execute("call-editor-cap", { questions }, undefined, undefined, context);
+
+		const title = editor.mock.calls[0]?.[0] ?? "";
+		const lineCount = title.split("\n").length;
+		// Cap is 8 option rows + their (single-line) descriptions + chrome; far below
+		// 20 options × (label + multi-line description) the unbounded path would emit.
+		expect(lineCount).toBeLessThanOrEqual(22);
+		expect(title).toContain("Pick one");
+		expect(title).toContain("option-0");
+		expect(title).toContain("Other (type your own)");
+		expect(title).toContain("more option");
+		expect(title).toContain("Enter your response:");
+		// Descriptions are flattened to a single line and truncated.
+		expect(title).not.toContain("x".repeat(400));
+		// Every option-row description must fit on one line.
+		for (const line of title.split("\n")) {
+			expect(line.length).toBeLessThanOrEqual(160);
+		}
+	});
+
+	it("keeps user-checked options visible in capped multi-select context", async () => {
+		const tool = new AskTool(createSession());
+		const editor = vi.fn(async (_title: string) => "custom");
+		const options = Array.from({ length: 20 }, (_, i) => ({ label: `opt-${i}` }));
+		const questions = [{ id: "pick", question: "Multi pick", options, multi: true }];
+		let call = 0;
+		const context = createContext({
+			select: async (_prompt, opts) => {
+				call += 1;
+				if (call === 1) return selectItemLabel(opts.find(o => selectItemLabel(o) === "opt-12"));
+				if (call === 2) return selectItemLabel(opts.find(o => selectItemLabel(o) === "opt-17"));
+				return "Other (type your own)";
+			},
+			editor,
+		});
+
+		await tool.execute("call-editor-cap-multi", { questions }, undefined, undefined, context);
+
+		const title = editor.mock.calls[0]?.[0] ?? "";
+		// Checked options must survive the window so the user sees what they had
+		// already toggled before switching to Other.
+		expect(title).toContain("opt-12");
+		expect(title).toContain("opt-17");
+		expect(title).toContain("Other (type your own)");
+		expect(title).toContain("more option");
+	});
+
 	it("returns to the option selector when custom input is dismissed in single-question flow", async () => {
 		const tool = new AskTool(createSession());
 		const abort = vi.fn();
