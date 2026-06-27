@@ -3,6 +3,7 @@ import {
 	type AutocompleteProvider,
 	type CombinedAutocompleteProvider,
 	findLeadingSlashCommandStart,
+	findTrailingSlashCommandStart,
 } from "../autocomplete";
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { getKeybindings, type KeybindingsManager } from "../keybindings";
@@ -1131,7 +1132,7 @@ export class Editor implements Component, Focusable {
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (currentTextBeforeCursor !== this.#autocompletePrefix) {
+					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
@@ -1755,8 +1756,8 @@ export class Editor implements Component, Focusable {
 
 		// Check if we should trigger or update autocomplete
 		if (!this.#autocompleteState) {
-			// Auto-trigger for "/" at the start of a line (slash commands)
-			if (char === "/" && this.#isAtStartOfSubmittedMessage()) {
+			// Auto-trigger for "/" at the start of a submitted command or a mid-prompt skill lookup.
+			if (char === "/" && (this.#isAtStartOfSubmittedMessage() || this.#isInMidPromptSkillSlashContext())) {
 				this.#tryTriggerAutocomplete();
 			}
 			// Auto-trigger for "@" file reference (fuzzy search)
@@ -1777,8 +1778,8 @@ export class Editor implements Component, Focusable {
 			else if (/[a-zA-Z0-9.\-_/]/.test(char)) {
 				const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-				// Check if we're in a slash command (with or without space for arguments)
-				if (this.#isInSubmittedSlashCommandContext()) {
+				// Check if we're in a slash command or mid-prompt skill lookup.
+				if (this.#isInSlashAutocompleteContext()) {
 					this.#tryTriggerAutocomplete();
 				}
 				// Check if we're in an @ file reference context
@@ -1901,7 +1902,7 @@ export class Editor implements Component, Focusable {
 		}
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-		if (this.#isInSubmittedSlashCommandContext()) {
+		if (this.#isInSlashAutocompleteContext()) {
 			this.#tryTriggerAutocomplete();
 		} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 			this.#tryTriggerAutocomplete();
@@ -2067,8 +2068,8 @@ export class Editor implements Component, Focusable {
 			// If autocomplete was cancelled (no matches), re-trigger if we're in a completable context
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 			const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-			// Slash command context
-			if (this.#isInSubmittedSlashCommandContext()) {
+			// Slash command or mid-prompt skill lookup context
+			if (this.#isInSlashAutocompleteContext()) {
 				this.#tryTriggerAutocomplete();
 			}
 			// @ file reference context
@@ -2236,7 +2237,7 @@ export class Editor implements Component, Focusable {
 		} else {
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 			const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-			if (this.#isInSubmittedSlashCommandContext()) {
+			if (this.#isInSlashAutocompleteContext()) {
 				this.#tryTriggerAutocomplete();
 			} else if (textBeforeCursor.match(/(?:^|[\s])@[^\s]*$/)) {
 				this.#tryTriggerAutocomplete();
@@ -2568,8 +2569,8 @@ export class Editor implements Component, Focusable {
 		} else {
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 			const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-			// Slash command context
-			if (this.#isInSubmittedSlashCommandContext()) {
+			// Slash command or mid-prompt skill lookup context
+			if (this.#isInSlashAutocompleteContext()) {
 				this.#tryTriggerAutocomplete();
 			}
 			// @ file reference context
@@ -2799,6 +2800,27 @@ export class Editor implements Component, Focusable {
 		return this.#hasOnlyWhitespaceBeforeCursorLine() && beforeCursor.trimStart().startsWith("/");
 	}
 
+	#isInMidPromptSkillSlashContext(): boolean {
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		const beforeCursor = currentLine.slice(0, this.#state.cursorCol);
+		const slashStart = findTrailingSlashCommandStart(beforeCursor);
+		if (slashStart === null) return false;
+		if (this.#hasOnlyWhitespaceBeforeCursorLine() && findLeadingSlashCommandStart(beforeCursor) !== null)
+			return false;
+		return !this.#hasOnlyWhitespaceBeforeCursorLine() || beforeCursor.slice(0, slashStart).trim() !== "";
+	}
+
+	#isInSlashAutocompleteContext(): boolean {
+		return this.#isInSubmittedSlashCommandContext() || this.#isInMidPromptSkillSlashContext();
+	}
+
+	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string): boolean {
+		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
+		if (findTrailingSlashCommandStart(this.#autocompletePrefix) !== 0) return false;
+		const slashStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
+		return slashStart !== null && currentTextBeforeCursor.slice(slashStart) === this.#autocompletePrefix;
+	}
+
 	#isSlashCommandNameAutocompleteSelection(): boolean {
 		if (this.#autocompleteState !== "regular") {
 			return false;
@@ -2879,16 +2901,18 @@ export class Editor implements Component, Focusable {
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.#state.cursorCol);
 
-		// Check if we're in a slash command context
-		if (this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) {
+		// Check if we're in a slash command or mid-prompt skill lookup context
+		if (
+			(this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) ||
+			this.#isInMidPromptSkillSlashContext()
+		) {
 			this.#handleSlashCommandCompletion();
 		} else {
 			this.#forceFileAutocomplete(true);
 		}
 	}
-
 	#handleSlashCommandCompletion(): void {
-		this.#tryTriggerAutocomplete(true);
+		this.#tryTriggerAutocomplete();
 	}
 
 	/*
