@@ -188,15 +188,28 @@ interface TempHome {
 async function setupTempHome(): Promise<{ home: string; cleanup: () => Promise<void> }> {
 	const home = await fs.mkdtemp(path.join(os.tmpdir(), "gh-pr-tool-home-"));
 	vi.spyOn(os, "homedir").mockReturnValue(home);
+	// Clear XDG_*_HOME so the rebuilt resolver routes `dirs.rootSubdir("wt", "data")`
+	// through the spied homedir instead of `$XDG_DATA_HOME/omp/wt` (CI sets these).
+	const xdgKeys = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
+	const xdgPrevious: Partial<Record<(typeof xdgKeys)[number], string | undefined>> = {};
+	for (const key of xdgKeys) {
+		xdgPrevious[key] = process.env[key];
+		delete process.env[key];
+	}
 	// `dirs.configRoot` is computed at constructor time from `os.homedir()`, so
-	// we must rebuild the resolver after the spy is in place. `setAgentDir`
-	// recreates it; we point it at the temp home's default agent dir.
+	// we must rebuild the resolver after the spy + env scrub are in place.
+	// `setAgentDir` recreates it; we point it at the temp home's default agent dir.
 	const originalAgentDir = getAgentDir();
 	setAgentDir(path.join(home, ".omp", "agent"));
 	return {
 		home,
 		cleanup: async () => {
 			setAgentDir(originalAgentDir);
+			for (const key of xdgKeys) {
+				const previous = xdgPrevious[key];
+				if (previous === undefined) delete process.env[key];
+				else process.env[key] = previous;
+			}
 			await removeWithRetries(home);
 		},
 	};

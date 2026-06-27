@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -58,6 +58,7 @@ function createPathContext(): SegmentContext {
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	setProjectDir(originalProjectDir);
 });
 
@@ -69,12 +70,21 @@ function expectContentToContainPath(content: string, expected: string): void {
 	expect(content).toContain(expected);
 }
 
+function createFakeHome(): { home: string; projectsRoot: string } {
+	const homeRoot = path.join(originalProjectDir, ".wt");
+	fs.mkdirSync(homeRoot, { recursive: true });
+	const home = fs.mkdtempSync(path.join(homeRoot, "omp-status-line-home-"));
+	const projectsRoot = path.join(home, "Projects");
+	fs.mkdirSync(projectsRoot, { recursive: true });
+	vi.spyOn(os, "homedir").mockReturnValue(home);
+	return { home, projectsRoot };
+}
+
 describe("status line path segment", () => {
 	it("strips the Projects root for symlink-equivalent aliases", () => {
 		if (process.platform === "win32") return;
 
-		const projectsRoot = path.join(os.homedir(), "Projects");
-		fs.mkdirSync(projectsRoot, { recursive: true });
+		const { home, projectsRoot } = createFakeHome();
 
 		const realProjectDir = fs.mkdtempSync(path.join(projectsRoot, "omp-status-line-"));
 		const nestedDir = path.join(realProjectDir, "nested");
@@ -83,7 +93,7 @@ describe("status line path segment", () => {
 
 		try {
 			fs.mkdirSync(nestedDir, { recursive: true });
-			fs.symlinkSync(os.homedir(), homeAlias, "dir");
+			fs.symlinkSync(home, homeAlias, "dir");
 
 			const aliasedDir = path.join(homeAlias, "Projects", path.basename(realProjectDir), "nested");
 			setProjectDir(aliasedDir);
@@ -99,6 +109,7 @@ describe("status line path segment", () => {
 			setProjectDir(originalProjectDir);
 			removeSyncWithRetries(aliasRoot);
 			removeSyncWithRetries(realProjectDir);
+			removeSyncWithRetries(home);
 		}
 	});
 
@@ -156,8 +167,7 @@ describe("status line path segment", () => {
 	});
 
 	it("keeps the folder icon for paths outside any scratch root", () => {
-		const projectsRoot = path.join(os.homedir(), "Projects");
-		fs.mkdirSync(projectsRoot, { recursive: true });
+		const { home, projectsRoot } = createFakeHome();
 		const realProjectDir = fs.mkdtempSync(path.join(projectsRoot, "omp-status-line-real-"));
 		try {
 			setProjectDir(realProjectDir);
@@ -169,6 +179,7 @@ describe("status line path segment", () => {
 		} finally {
 			setProjectDir(originalProjectDir);
 			removeSyncWithRetries(realProjectDir);
+			removeSyncWithRetries(home);
 		}
 	});
 

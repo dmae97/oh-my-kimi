@@ -144,8 +144,9 @@ export abstract class OAuthCallbackFlow {
 	 * Create HTTP server for OAuth callback.
 	 */
 	#createServer(port: number, expectedState: string): Bun.Server<unknown> {
+		const hostname = this.callbackHostname === DEFAULT_HOSTNAME ? undefined : this.callbackHostname;
 		return Bun.serve({
-			hostname: this.callbackHostname,
+			...(hostname === undefined ? {} : { hostname }),
 			port,
 			reusePort: false,
 			fetch: req => this.#handleCallback(req, expectedState),

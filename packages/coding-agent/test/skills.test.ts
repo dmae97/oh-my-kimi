@@ -360,8 +360,10 @@ enabled: false
 	});
 
 	it("should expand ~ in customDirectories", async () => {
-		const tempHomeSkillsDir = await fs.mkdtemp(path.join(os.homedir(), ".pi-skills-test-"));
-		const relativeToHome = path.relative(os.homedir(), tempHomeSkillsDir);
+		const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-home-"));
+		const homedirSpy = spyOn(os, "homedir").mockReturnValue(fakeHome);
+		const tempHomeSkillsDir = await fs.mkdtemp(path.join(fakeHome, ".pi-skills-test-"));
+		const relativeToHome = path.relative(fakeHome, tempHomeSkillsDir);
 		const tildeDir = `~/${relativeToHome.split(path.sep).join("/")}`;
 		const skillDir = path.join(tempHomeSkillsDir, "tilde-skill");
 		const skillPath = path.join(skillDir, "SKILL.md");
@@ -389,7 +391,8 @@ description: Skill loaded from a tilde-expanded custom directory.
 			expect(withTilde.length).toBe(withoutTilde.length);
 			expect(withTilde.some(skill => skill.name === "tilde-skill")).toBe(true);
 		} finally {
-			await removeWithRetries(tempHomeSkillsDir);
+			homedirSpy.mockRestore();
+			await removeWithRetries(fakeHome);
 		}
 	});
 
