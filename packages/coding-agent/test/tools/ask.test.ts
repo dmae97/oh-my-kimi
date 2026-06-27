@@ -651,6 +651,37 @@ describe("AskTool custom input", () => {
 		expect(title).toContain("more option");
 	});
 
+	it("summarizes excess checked options instead of exceeding the context cap", async () => {
+		const tool = new AskTool(createSession());
+		const editor = vi.fn(async (_title: string) => "custom");
+		const options = Array.from({ length: 20 }, (_, i) => ({ label: `checked-${i}` }));
+		const questions = [{ id: "pick", question: "Pick many", options, multi: true }];
+		let call = 0;
+		const context = createContext({
+			select: async (_prompt, opts) => {
+				if (call < 12) {
+					const label = `checked-${call}`;
+					call += 1;
+					return selectItemLabel(opts.find(o => selectItemLabel(o) === label));
+				}
+				return "Other (type your own)";
+			},
+			editor,
+		});
+
+		await tool.execute("call-editor-cap-many-checked", { questions }, undefined, undefined, context);
+
+		const title = editor.mock.calls[0]?.[0] ?? "";
+		const optionRows = title
+			.split("\n")
+			.filter(line => line.includes("checked-") || line.includes("Other (type your own)"));
+		expect(optionRows.length).toBeLessThanOrEqual(8);
+		expect(title).toContain("Other (type your own)");
+		expect(title).toContain("checked");
+		expect(title).toContain("more option");
+		expect(title).toContain("Enter your response:");
+	});
+
 	it("returns to the option selector when custom input is dismissed in single-question flow", async () => {
 		const tool = new AskTool(createSession());
 		const abort = vi.fn();

@@ -159,16 +159,26 @@ function truncateCustomInputDescription(text: string): string {
 	return `${flattened.slice(0, MAX_CUSTOM_INPUT_DESCRIPTION_CHARS - 1).trimEnd()}…`;
 }
 
-/** Window the option list around must-keep rows so the title stays bounded.
- *  Must-keep = the selected `Other` row, the first option (anchor), and every
- *  user-checked row. Remaining budget fills from the start. Gaps between kept
- *  indices are reported so the renderer can drop a `… N more options …`
- *  marker, preserving the "more available" signal. */
+interface CustomInputOptionGap {
+	total: number;
+	checked: number;
+}
+
+interface CustomInputOptionWindow {
+	indices: number[];
+	gapBefore: Map<number, CustomInputOptionGap>;
+}
+
+/** Window the option list so the title stays bounded. Required rows are the
+ *  selected `Other` row and the first option as an anchor; checked rows fill
+ *  the remaining budget before unselected leading rows. Hidden checked options
+ *  are summarized in gap markers so the rendered option-row count still never
+ *  exceeds {@link MAX_CUSTOM_INPUT_OPTION_ROWS}. */
 function pickCustomInputOptionWindow(
 	total: number,
 	selectedIndex: number,
 	checked: ReadonlySet<number>,
-): { indices: number[]; gapBefore: Map<number, number> } {
+): CustomInputOptionWindow {
 	if (total === 0) return { indices: [], gapBefore: new Map() };
 	if (total <= MAX_CUSTOM_INPUT_OPTION_ROWS) {
 		return {
@@ -177,22 +187,44 @@ function pickCustomInputOptionWindow(
 		};
 	}
 	const keep = new Set<number>();
-	if (selectedIndex >= 0 && selectedIndex < total) keep.add(selectedIndex);
-	keep.add(0);
-	for (const i of checked) {
-		if (i >= 0 && i < total) keep.add(i);
+	const addIfRoom = (index: number) => {
+		if (index >= 0 && index < total && keep.size < MAX_CUSTOM_INPUT_OPTION_ROWS) {
+			keep.add(index);
+		}
+	};
+	addIfRoom(selectedIndex);
+	addIfRoom(0);
+	for (const i of [...checked].sort((a, b) => a - b)) {
+		addIfRoom(i);
 	}
 	for (let i = 0; i < total && keep.size < MAX_CUSTOM_INPUT_OPTION_ROWS; i++) {
-		keep.add(i);
+		addIfRoom(i);
 	}
 	const indices = [...keep].sort((a, b) => a - b);
-	const gapBefore = new Map<number, number>();
+	const gapBefore = new Map<number, CustomInputOptionGap>();
+	const countCheckedBetween = (startInclusive: number, endExclusive: number): number => {
+		let count = 0;
+		for (const i of checked) {
+			if (i >= startInclusive && i < endExclusive) count++;
+		}
+		return count;
+	};
 	let prev = -1;
 	for (const idx of indices) {
-		if (idx > prev + 1) gapBefore.set(idx, idx - prev - 1);
+		if (idx > prev + 1) {
+			gapBefore.set(idx, {
+				total: idx - prev - 1,
+				checked: countCheckedBetween(prev + 1, idx),
+			});
+		}
 		prev = idx;
 	}
-	if (prev < total - 1) gapBefore.set(total, total - 1 - prev);
+	if (prev < total - 1) {
+		gapBefore.set(total, {
+			total: total - 1 - prev,
+			checked: countCheckedBetween(prev + 1, total),
+		});
+	}
 	return { indices, gapBefore };
 }
 
@@ -205,8 +237,9 @@ function formatCustomInputTitle(
 	const checked = new Set(context.checkedIndices ?? []);
 	const window = pickCustomInputOptionWindow(options.length, selectedIndex, checked);
 	const lines: string[] = [question, ""];
-	const emitGap = (count: number) => {
-		lines.push(`    … ${count} more option${count === 1 ? "" : "s"} …`);
+	const emitGap = (gap: CustomInputOptionGap) => {
+		const checkedSuffix = gap.checked > 0 ? `, ${gap.checked} checked` : "";
+		lines.push(`    … ${gap.total} more option${gap.total === 1 ? "" : "s"}${checkedSuffix} …`);
 	};
 	for (const index of window.indices) {
 		const gap = window.gapBefore.get(index);
