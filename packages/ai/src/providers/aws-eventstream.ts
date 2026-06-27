@@ -30,20 +30,8 @@ export interface EventStreamMessage {
 }
 
 /** CRC32 (IEEE / zlib polynomial 0xEDB88320), matches `@aws-crypto/crc32`. */
-const CRC_TABLE = (() => {
-	const t = new Uint32Array(256);
-	for (let i = 0; i < 256; i++) {
-		let c = i;
-		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-		t[i] = c >>> 0;
-	}
-	return t;
-})();
-
-export function crc32(bytes: Uint8Array, seed = 0): number {
-	let c = (seed ^ 0xffffffff) >>> 0;
-	for (let i = 0; i < bytes.length; i++) c = (CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)) >>> 0;
-	return (c ^ 0xffffffff) >>> 0;
+export function crc32(bytes: Uint8Array): number {
+	return Bun.hash.crc32(bytes) >>> 0;
 }
 
 /**
