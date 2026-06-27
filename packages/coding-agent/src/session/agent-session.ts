@@ -3767,8 +3767,32 @@ export class AgentSession {
 
 		context.toolName = toolCall.name;
 		context.streamKey = toolCall.id ? `toolcall:${toolCall.id}` : `tool:${toolCall.name}:${contentIndex}`;
-		context.filePaths = this.#extractTtsrFilePathsFromArgs(toolCall.arguments);
+		context.filePaths = this.#extractTtsrToolFilePaths(toolCall);
 		return context;
+	}
+
+	/**
+	 * Resolve the file paths a tool call would touch for TTSR path-glob matching.
+	 *
+	 * Prefer the tool's own `matcherPaths` hook — it understands the wire format
+	 * (hashline `[path#TAG]` section headers, apply_patch envelope markers) and
+	 * surfaces paths the generic top-level argument scan never sees. Fall back
+	 * to {@link #extractTtsrFilePathsFromArgs} for tools that pass paths as
+	 * `path`/`paths` arguments and for tool calls whose payload has not yet
+	 * streamed a header.
+	 */
+	#extractTtsrToolFilePaths(toolCall: ToolCall): string[] | undefined {
+		const args = toolCall.arguments ?? {};
+		const tools = this.agent.state.tools;
+		const tool =
+			tools.find(t => t.name === toolCall.name) ??
+			tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		const toolPaths = tool?.matcherPaths?.(args);
+		if (toolPaths && toolPaths.length > 0) {
+			const normalized = toolPaths.flatMap(p => this.#normalizeTtsrPathCandidates(p));
+			if (normalized.length > 0) return Array.from(new Set(normalized));
+		}
+		return this.#extractTtsrFilePathsFromArgs(args);
 	}
 
 	/**

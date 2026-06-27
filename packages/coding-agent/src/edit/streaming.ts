@@ -77,6 +77,14 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * args don't yet carry any content.
 	 */
 	matcherDigest(args: Args): string | undefined;
+	/**
+	 * Surface the target file paths a (potentially partial) call would touch,
+	 * so path-scoped stream matchers (e.g. TTSR `tool:edit(*.ts)` globs) match
+	 * even when the path is not a top-level argument but lives inside the wire
+	 * payload — `hashline` section headers, `apply_patch` envelope markers.
+	 * Returns `undefined` (or an empty list) when no paths are recoverable.
+	 */
+	matcherPaths(args: Args): readonly string[] | undefined;
 }
 
 // -----------------------------------------------------------------------------
@@ -191,6 +199,44 @@ function extractAddedLines(text: string, fallbackToWhole: boolean): string {
 	return added;
 }
 
+/**
+ * Extract hashline `[path#TAG]` (and untagged `[path]`) section-header paths
+ * from a (possibly partial) hashline buffer. Tolerant of streaming chunks
+ * where `Patch.parse` would still throw on the trailing op — only fully
+ * closed header lines are recognised.
+ */
+function extractHashlineHeaderPaths(input: string): string[] {
+	const paths: string[] = [];
+	const re = /^\s*\[([^\]\r\n]+?)(?:#[0-9a-fA-F]{4})?\]\s*$/gm;
+	for (const match of input.matchAll(re)) {
+		const candidate = stripApplyPatchPathNoise(match[1]).trim();
+		if (candidate.length > 0) paths.push(candidate);
+	}
+	return paths;
+}
+
+/**
+ * Strip the `*** Add/Update/Delete File:` / `*** Move to:` noise that the
+ * model sometimes pastes into a hashline header (the hashline tokenizer does
+ * the same in its recovery path).
+ */
+function stripApplyPatchPathNoise(value: string): string {
+	return value
+		.replace(/^\s*\*{3}\s*(?:Add|Update|Delete)\s+File\s*:\s*/i, "")
+		.replace(/^\s*\*{3}\s*Move\s+to\s*:\s*/i, "");
+}
+
+/** Extract `*** Add/Update/Delete File:` paths from a (possibly partial) apply_patch envelope. */
+function extractApplyPatchEnvelopePaths(input: string): string[] {
+	const paths: string[] = [];
+	const re = /^\s*\*{3}\s+(?:Add|Update|Delete)\s+File\s*:\s*(\S.*?)\s*$/gm;
+	for (const match of input.matchAll(re)) {
+		const candidate = match[1].trim();
+		if (candidate.length > 0) paths.push(candidate);
+	}
+	return paths;
+}
+
 // -----------------------------------------------------------------------------
 // Strategies
 // -----------------------------------------------------------------------------
@@ -236,6 +282,9 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 		}
 		return digest;
 	},
+	matcherPaths(args) {
+		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
+	},
 };
 
 interface PatchArgs {
@@ -277,6 +326,9 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 			digest = digest === undefined ? added : `${digest}\n${added}`;
 		}
 		return digest;
+	},
+	matcherPaths(args) {
+		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
 	},
 };
 
@@ -437,6 +489,12 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		// Body rows are `+TEXT`; headers and op lines are grammar, never content.
 		return extractAddedLines(input, false);
 	},
+	matcherPaths(args) {
+		const input = args?.input;
+		if (typeof input !== "string" || input.length === 0) return undefined;
+		const paths = extractHashlineHeaderPaths(input);
+		return paths.length > 0 ? paths : undefined;
+	},
 };
 
 interface ApplyPatchArgs {
@@ -494,6 +552,12 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 		if (typeof input !== "string") return undefined;
 		// Envelope markers and `@@` hunk headers are grammar, never content.
 		return extractAddedLines(input, false);
+	},
+	matcherPaths(args) {
+		const input = args?.input;
+		if (typeof input !== "string" || input.length === 0) return undefined;
+		const paths = extractApplyPatchEnvelopePaths(input);
+		return paths.length > 0 ? paths : undefined;
 	},
 };
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {

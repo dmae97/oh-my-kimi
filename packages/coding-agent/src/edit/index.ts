@@ -397,6 +397,16 @@ export class EditTool implements AgentTool<TInput> {
 		return EDIT_MODE_STRATEGIES[this.mode].matcherDigest(args);
 	}
 
+	/**
+	 * Project the streamed args onto their target file paths so path-scoped
+	 * stream matchers (e.g. TTSR `tool:edit(*.ts)` globs) match hashline and
+	 * apply_patch edits even though the path lives in the wire payload (a
+	 * section header / envelope marker) rather than a top-level argument.
+	 */
+	matcherPaths(args: unknown): readonly string[] | undefined {
+		return EDIT_MODE_STRATEGIES[this.mode].matcherPaths(args);
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: EditParams,

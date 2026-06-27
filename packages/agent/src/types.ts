@@ -633,6 +633,16 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	matcherDigest?: (args: unknown) => string | undefined;
 
+	/**
+	 * Surface the target file paths a (potentially partial) streamed call would
+	 * touch, so path-scoped stream matchers (e.g. TTSR `tool:edit(*.ts)` globs)
+	 * can match without a top-level `path`/`paths` argument. Used for tools whose
+	 * wire grammar embeds paths inside the streamed payload (hashline section
+	 * headers, apply_patch envelope markers). Return `undefined` (or an empty
+	 * array) to fall back to the caller's top-level argument scan.
+	 */
+	matcherPaths?: (args: unknown) => readonly string[] | undefined;
+
 	/** Capability tier declaration used by approval gates. Omitted means "exec". */
 	approval?: ToolApproval;
 

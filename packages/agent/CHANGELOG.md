@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `AgentTool.matcherPaths(args)` hook: tools whose streamed arguments embed target file paths inside the wire payload (patch envelope markers, hashline section headers) can surface those paths so path-scoped stream matchers (e.g. TTSR `tool:edit(*.ts)` globs) match without a top-level `path` / `paths` argument. Returns `undefined` (or an empty list) to fall back to the caller's existing top-level argument scan.
+
 ### Removed
 
 - Removed support for Pi dialect integration
