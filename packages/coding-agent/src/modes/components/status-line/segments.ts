@@ -21,7 +21,7 @@ function withIcon(icon: string, text: string): string {
 }
 
 function stripDisplayRoot(pwd: string): string {
-	for (const root of ["/work", path.join(os.homedir(), "Projects")]) {
+	for (const root of [path.join(os.homedir(), "Projects"), "/work"]) {
 		const relative = relativePathWithinRoot(root, pwd);
 		if (relative) return relative;
 	}
