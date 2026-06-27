@@ -22,8 +22,8 @@
 - Increased default text verbosity to medium for OpenAI Codex models
 - Configured detailed reasoning summaries by default for OpenAI Codex responses
 - Standardized reasoning context to include all turns by default for OpenAI Codex requests
-
-- Updated OpenAI Codex WebSocket transport to resolve configuration from environment variables at runtime
+- Forwarded `textVerbosity` from `SimpleStreamOptions` into OpenAI Responses/Codex request text verbosity.
+- Updated the OpenAI Codex WebSocket transport to resolve its numeric `PI_CODEX_WEBSOCKET_*` configuration (queue capacity, idle/first-event/pong timeouts, ping interval, retry budget/delay, max idle reuse) from environment variables once at module load — read at startup rather than re-parsed on every request/connection, so these must be set before launch and are no longer re-read mid-process.
 - Unified transient status code checks across providers using standardized retry logic
 - Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
 - Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
@@ -42,7 +42,17 @@
 - Changed cross-provider/cross-model thinking demotion to render the prior turn's reasoning in the target model's canonical inline thinking dialect (a ```` ```thinking ```` fence for Gemini, `<think>`/`<thinking>` tags for others) instead of bare prose, with a neutral `<think>` fallback for control-token dialects (Harmony, Gemma) so chat-template tokens never leak into history. Replaying it as a native `thought` block was ruled out: end-to-end testing against Gemini 3 confirmed an unsigned `thought` part is schema-accepted but silently discarded — neither recalled nor influencing generation.
 - Broadened the leaked-thinking stream healer (`StreamMarkupHealing`'s `thinking` pattern) to recover reasoning emitted in any dialect's canonical idiom — Gemini's ` ```thinking ` fence, Gemma's `<|channel>thought` channel, Harmony's `analysis` message, and `<scratchpad>` — not just `<think>`/`<thinking>` tags, so leaked chain-of-thought is routed to thinking events for every dialect instead of rendered as raw markup
 - Hardened stateful `previous_response_id` delta chaining (`buildResponsesDeltaInput`): the prefix/option check now compares via a structural equality that ignores symbol-keyed properties (own string keys only), so the transient decode-time streaming symbols (`block-symbols.ts`) that live request items carry — but the deep-cloned baseline does not — no longer make a semantically identical item read as a history mutation and needlessly break the chain (forcing a full-transcript replay). Genuine differences, including an option toggled from unset to a value, still break the chain.
-- Resolved the Codex WebSocket `PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY`, `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`, `PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS`, and `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS` environment variables once at module load instead of re-parsing them on every request/connection. Set these in the environment before launch; they are no longer re-read mid-process.
+
+### Fixed
+
+- Preserved OpenAI Responses assistant message `phase` values across auth-gateway request parsing, response encoding, streamed output items, native history replay, and stateful delta-prefix checks so GPT-5.4/GPT-5.5 intermediate updates and final answers replay with their original phase labels.
+- Fixed stateful delta chaining to correctly ignore transient streaming bookkeeping symbols
+- Improved recovery and rendering of demoted cross-provider reasoning blocks
+- Enhanced reliability of transient error classification during provider stream processing
+- Improved error message consistency across all providers with structured error formatting
+- Corrected error classification for rate-limit vs transient failures in auth retry logic
+- Fixed OAuth token refresh error handling with proper error type discrimination
+- Enhanced thinking-loop error detection with flag-based classification
 
 ### Removed
 
@@ -51,16 +61,6 @@
 - Removed `rate-limit-utils.ts` from root (moved to `error/rate-limit.ts`)
 - Removed generic `Error` constructor calls throughout codebase in favor of typed error classes
 - Removed Pi dialect support and related serialization/parsing logic
-
-### Fixed
-
-- Fixed stateful delta chaining to correctly ignore transient streaming bookkeeping symbols
-- Improved recovery and rendering of demoted cross-provider reasoning blocks
-- Enhanced reliability of transient error classification during provider stream processing
-- Improved error message consistency across all providers with structured error formatting
-- Corrected error classification for rate-limit vs transient failures in auth retry logic
-- Fixed OAuth token refresh error handling with proper error type discrimination
-- Enhanced thinking-loop error detection with flag-based classification
 
 ## [16.2.0] - 2026-06-27
 

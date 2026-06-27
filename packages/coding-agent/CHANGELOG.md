@@ -5,21 +5,17 @@
 ### Added
 
 - Added new `tiny` model role for consolidated online task handling
+- Added a `textVerbosity` setting for OpenAI Responses/Codex response detail.
 
 ### Changed
 
 - Simplified status line subagent display by removing running state and hub hint indicators
 - Updated online title, memory, and classification tasks to prioritize the `tiny` model role
 
-### Removed
-
-- Removed Pi model dialect support from settings
-
 ### Fixed
 
 - Improved robustness of MCP authentication error detection and header-based server discovery
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs
-
 - Prevented auto-generated session titles from accidentally re-shouting user all-caps text
 - Fixed auto-generated session titles re-shouting emphatic ALL-CAPS from the user's message. `reconcileTitleCasing` (`packages/coding-agent/src/tiny/text.ts`) restored any source token with interior/repeated uppercase, so shouting like "unify ALL ERROR HANDLING" turned the model's clean sentence case ("Unify error handling…") back into "Unify ERROR HANDLING…". Casing is now restored only from mixed-case identifiers the user typed deliberately (`TinyVMM`, `iOS`, `IDs`); pure all-caps is left to the model's own output.
 - Fixed Tavily web search with recency filters to retry once without `time_range` when Tavily returns HTTP 200 with no renderable content. ([#3633](https://github.com/can1357/oh-my-pi/issues/3633))
