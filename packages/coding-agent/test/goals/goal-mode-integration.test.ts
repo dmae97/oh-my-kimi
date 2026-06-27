@@ -11,6 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 function createToolSession(cwd: string, settings: Settings, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -230,6 +231,36 @@ describe("InteractiveMode goal mode integration", () => {
 		streaming = false;
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
 		await waiter.inputPromise;
+	});
+
+	it("includes live todo state in hidden goal context during continuations", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		const phases: TodoPhase[] = [
+			{
+				name: "Planning",
+				tasks: [
+					{ content: "Identify gaps", status: "completed" },
+					{ content: "Choose next slice", status: "in_progress" },
+				],
+			},
+			{
+				name: "Verification",
+				tasks: [{ content: "Run focused checks", status: "pending" }],
+			},
+		];
+		harness.session.setTodoPhases(phases);
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+
+		const message = sendCustomMessage.mock.calls[0]?.[0];
+		expect(message?.customType).toBe("goal-mode-context");
+		expect(message?.content).toContain("<todo_context>");
+		expect(message?.content).toContain("Overall: 1/3 done, 2 open.");
+		expect(message?.content).toContain("- [completed] Identify gaps");
+		expect(message?.content).toContain("- [in_progress] Choose next slice");
+		expect(message?.content).toContain("- [pending] Run focused checks");
+		expect(message?.content).toContain("call the `todo` tool first");
 	});
 
 	it("drops a goal continuation tick while the agent is streaming", async () => {

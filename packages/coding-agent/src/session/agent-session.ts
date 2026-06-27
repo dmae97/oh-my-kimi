@@ -6468,14 +6468,48 @@ export class AgentSession {
 	#buildGoalModeMessage(): CustomMessage | null {
 		const content = this.#goalRuntime.buildActivePrompt();
 		if (!content) return null;
+		const todoContext = this.#buildGoalTodoContext();
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content,
+			content: todoContext ? `${content}\n\n${todoContext}` : content,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	#buildGoalTodoContext(): string | undefined {
+		if (!this.settings.get("todo.enabled")) return undefined;
+		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
+		if (phases.length === 0) return undefined;
+
+		let total = 0;
+		let closed = 0;
+		let open = 0;
+		const lines: string[] = [];
+		for (const phase of phases) {
+			const taskLines: string[] = [];
+			for (const task of phase.tasks) {
+				total++;
+				if (task.status === "completed" || task.status === "abandoned") {
+					closed++;
+				} else {
+					open++;
+				}
+				taskLines.push(`  - [${task.status}] ${task.content}`);
+			}
+			lines.push(`- ${phase.name}\n${taskLines.join("\n")}`);
+		}
+
+		return (
+			"<todo_context>\n" +
+			"Current persisted todo state for this goal follows. Goal continuations do not get a visible user nudge, so treat this as live progress state, not old transcript decoration.\n" +
+			"Before continuing substantial work, compare your next action with these todos. If an item is stale, already finished, or no longer the active pointer, call the `todo` tool first to mark it done or rewrite the list. Do not leave a stale in_progress item while working on later phases.\n\n" +
+			`Overall: ${closed}/${total} done, ${open} open.\n` +
+			lines.join("\n") +
+			"\n</todo_context>"
+		);
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
