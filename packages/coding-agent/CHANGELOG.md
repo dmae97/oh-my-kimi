@@ -20,13 +20,16 @@
 
 ### Changed
 
+- Redesigned the persistent Todo HUD as a compact connector tree with fixed-budget stage previews
+- Anchored status and HUD containers to prevent redundant UI elements in terminal scrollback
+- Redesigned the persistent Todo HUD to render active stages as a connector tree, capping the number of displayed stages and tasks to keep the plan overview concise and stable.
+- Anchored the status row container directly between the HUD and the editor to prevent redundant UI elements from piling up in terminal scrollback.
 - Optimized edit tool UI: delete and single-file move operations now render as compact status rows
 - Improved terminal output for file-level edits (delete/move) to display accurate paths and state
 - Refined edit renderer to prevent misleading "No changes" messages in multi-file operations
 - Changed the `inlineToolDescriptors` setting from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto` to inline descriptors only for Gemini models.
 - Added caching for successful document conversions (PDFs, Office documents, EPUBs) to avoid redundant conversions on repeated reads.
 - Moved the `Working…` activity indicator below the sticky todo and subagent HUDs so it sits just above the editor instead of floating atop the todo panel.
-- Lightened the persistent Todo HUD: dropped the bracketing rules and, in the collapsed view, added a dimmed preview of the upcoming phases (marked with a distinct glyph) so the next stages stay visible without expanding.
 
 ### Fixed
 

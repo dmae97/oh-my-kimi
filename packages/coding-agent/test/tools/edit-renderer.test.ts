@@ -4,13 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { InMemorySnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { renderGalleryState, resolveFixture } from "@oh-my-pi/pi-coding-agent/cli/gallery-cli";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { editToolRenderer } from "@oh-my-pi/pi-coding-agent/edit/renderer";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { Text, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
-import { renderGalleryState, resolveFixture } from "@oh-my-pi/pi-coding-agent/cli/gallery-cli";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -456,7 +456,10 @@ describe("editToolRenderer", () => {
 			{
 				expanded: false,
 				isPartial: false,
-				renderContext: { editMode: "hashline", editDiffPreview: { error: "No changes would be made to other.ts." } },
+				renderContext: {
+					editMode: "hashline",
+					editDiffPreview: { error: "No changes would be made to other.ts." },
+				},
 			},
 			uiTheme,
 			{ input: "[a.ts#1a2b]\nMV b.ts" },

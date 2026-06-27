@@ -202,8 +202,8 @@
     "*.{js,ts,jsx,tsx,json,jsonc,css}": "biome check --write --no-errors-on-unmatched"
   },
   "dependencies": {
-    "sherpa-onnx": "1.12.37",
-    "sherpa-onnx-darwin-arm64": "1.12.37",
-    "sherpa-onnx-node": "1.12.37"
+    "sherpa-onnx": "1.13.2",
+    "sherpa-onnx-darwin-arm64": "1.13.3",
+    "sherpa-onnx-node": "1.13.2"
   }
 }

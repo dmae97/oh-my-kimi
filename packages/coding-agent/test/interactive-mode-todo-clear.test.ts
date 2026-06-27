@@ -4,11 +4,12 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import type { NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -149,7 +150,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 		resetSettingsForTest();
 	});
 
-	it("brackets the panel with horizontal rules and a progress header", () => {
+	it("renders a Todos tree: stage progression header, active stage expanded, others collapsed", () => {
 		mode.setTodos([
 			{
 				name: "Foundation",
@@ -165,17 +166,29 @@ describe("InteractiveMode todo HUD anchor", () => {
 			},
 		]);
 
-		const lines = mode.todoContainer.render(80).flatMap(line => line.split("\n"));
-		const stripped = lines.map(line => Bun.stripANSI(line));
-		// Top + bottom rules — full-width horizontal rules render as ─ repeated.
-		expect(stripped[0]).toBe("─".repeat(80));
-		expect(stripped[stripped.length - 1]).toBe("─".repeat(80));
-		// Header shows progress and active-phase pointer so the HUD is
-		// self-describing without scrolling back to the tool result.
-		const header = stripped[1] ?? "";
-		expect(header).toContain("Todos");
-		expect(header).toContain("1/4 done");
-		expect(header).toContain("I/II Foundation");
+		const lines = mode.todoContainer
+			.render(80)
+			.flatMap(line => line.split("\n"))
+			.map(line => Bun.stripANSI(line));
+
+		// Lightened: no boxed top/bottom rules.
+		expect(lines.some(line => line === "─".repeat(80))).toBe(false);
+		// Root header carries overall stage progression (on stage 1 of 2).
+		const root = lines.find(line => line.includes("Todos"));
+		expect(root).toContain("1/2");
+		// Active stage: highlighted header with its own task progress, expanded as a
+		// connector tree; the completed task slid out of the open-task window.
+		expect(lines.some(line => line.includes("I. Foundation") && line.includes("1/3"))).toBe(true);
+		const secondLine = lines.find(line => line.includes("second task"));
+		expect(secondLine).toContain(theme.tree.branch);
+		expect(secondLine).toContain(theme.checkbox.unchecked);
+		expect(lines.some(line => line.includes("third task"))).toBe(true);
+		expect(lines.some(line => line.includes("first task"))).toBe(false);
+		// Upcoming stage: header with its own progress, but collapsed (no task rows).
+		expect(lines.some(line => line.includes("II. Verification") && line.includes("0/1"))).toBe(true);
+		expect(lines.some(line => line.includes("run tests"))).toBe(false);
+		// No overflow rows — the header/progress counts imply what is hidden.
+		expect(lines.some(line => line.includes("more"))).toBe(false);
 	});
 
 	it("renders nothing when there are no todos", () => {
@@ -183,7 +196,7 @@ describe("InteractiveMode todo HUD anchor", () => {
 		expect(mode.todoContainer.render(80)).toHaveLength(0);
 	});
 
-	it("omits the phase pointer in the header for a single-phase list", () => {
+	it("omits the stage count and roman numeral for a single-phase list", () => {
 		mode.setTodos([
 			{
 				name: "Tasks",
@@ -193,10 +206,53 @@ describe("InteractiveMode todo HUD anchor", () => {
 				],
 			},
 		]);
-		const header = Bun.stripANSI(mode.todoContainer.render(80)[1] ?? "");
-		expect(header).toContain("Todos");
-		expect(header).toContain("0/2 done");
-		expect(header).toContain("Tasks");
-		expect(header).not.toContain("/I ");
+		const lines = mode.todoContainer
+			.render(80)
+			.flatMap(line => line.split("\n"))
+			.map(line => Bun.stripANSI(line));
+		// One stage → no redundant "1/1" stage count on the root.
+		const root = lines.find(line => line.includes("Todos"));
+		expect(root).not.toContain("/");
+		// The stage keeps its task progress; no roman numeral for a lone stage.
+		expect(lines.some(line => line.includes("Tasks") && line.includes("0/2"))).toBe(true);
+		expect(lines.some(line => line.includes("I. Tasks"))).toBe(false);
+		expect(lines.some(line => line.includes("alpha"))).toBe(true);
+	});
+
+	it("caps the visible stage list and leaves the hidden ones to the header count", () => {
+		const stage = (name: string): TodoPhase => ({ name, tasks: [{ content: `${name} task`, status: "pending" }] });
+		mode.setTodos([
+			stage("Discovery"),
+			stage("Two"),
+			stage("Three"),
+			stage("Four"),
+			stage("Five"),
+			stage("Six"),
+			stage("Seven"),
+		]);
+		const lines = mode.todoContainer
+			.render(80)
+			.flatMap(line => line.split("\n"))
+			.map(line => Bun.stripANSI(line));
+		// Active stage + four following stages render; the rest are dropped.
+		expect(lines.some(line => line.includes("II. Two"))).toBe(true);
+		expect(lines.some(line => line.includes("V. Five"))).toBe(true);
+		expect(lines.some(line => line.includes("Six"))).toBe(false);
+		// No overflow row — the header's "1/7" implies the hidden stages.
+		expect(lines.some(line => line.includes("more"))).toBe(false);
+		const root = lines.find(line => line.includes("Todos"));
+		expect(root).toContain("1/7");
+	});
+
+	it("anchors the todo HUD as a native-scrollback live region while populated", () => {
+		// The loader sits below this HUD, so the HUD must report its own seam or
+		// its rows commit to scrollback as stale duplicates on short terminals.
+		const seam = () =>
+			(mode.todoContainer as Partial<NativeScrollbackLiveRegion>).getNativeScrollbackLiveRegionStart?.();
+		expect(seam()).toBeUndefined();
+		mode.setTodos([{ name: "Tasks", tasks: [{ content: "alpha", status: "pending" }] }]);
+		expect(seam()).toBe(0);
+		mode.setTodos([]);
+		expect(seam()).toBeUndefined();
 	});
 });

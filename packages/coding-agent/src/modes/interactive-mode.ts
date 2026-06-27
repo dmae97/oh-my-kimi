@@ -105,14 +105,10 @@ import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
-import {
-	formatPhaseDisplayName,
-	phaseRomanNumeral,
-	selectStickyTodoWindow,
-	todoMatchesAnyDescription,
-} from "../tools/todo";
+import { formatPhaseDisplayName, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { vocalizer } from "../tts/vocalizer";
+import { renderTreeList } from "../tui/tree-list";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
@@ -316,13 +312,15 @@ export interface InteractiveModeOptions {
 }
 
 /**
- * Hosts the working loader and transient status rows. While anything is
- * mounted, every row is live: report a seam at 0 so the engine never commits
- * a still-animating loader to native scrollback (stale `Working…` rows would
- * otherwise pile up above the live one). The transcript's own seam, when
- * present, sits higher and wins (topmost-seam merge in TUI.render).
+ * Anchored live-region container for the HUD/status rows between the transcript
+ * and the editor (working loader, todo + subagent HUDs, transient notification
+ * panels). While it has content every row is live: it reports a seam at 0 so the
+ * engine never commits these anchored, rebuilt-in-place rows to native
+ * scrollback — otherwise stale duplicates pile up above the live copy on short
+ * terminals once the loader sits below a tall HUD. The transcript's own seam,
+ * when present, sits higher and wins (topmost-seam merge in TUI.render).
  */
-class StatusContainer extends Container implements NativeScrollbackLiveRegion {
+class AnchoredLiveContainer extends Container implements NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.children.length > 0 ? 0 : undefined;
 	}
@@ -616,13 +614,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		setTerminalTextSizing(settings.get("tui.textSizing") && TERMINAL.textSizing);
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new Container();
-		this.statusContainer = new StatusContainer();
-		this.todoContainer = new Container();
-		this.subagentContainer = new Container();
-		this.btwContainer = new Container();
-		this.omfgContainer = new Container();
-		this.errorBannerContainer = new Container();
-		this.modelCycleContainer = new Container();
+		this.statusContainer = new AnchoredLiveContainer();
+		this.todoContainer = new AnchoredLiveContainer();
+		this.subagentContainer = new AnchoredLiveContainer();
+		this.btwContainer = new AnchoredLiveContainer();
+		this.omfgContainer = new AnchoredLiveContainer();
+		this.errorBannerContainer = new AnchoredLiveContainer();
+		this.modelCycleContainer = new AnchoredLiveContainer();
 		this.editor = new CustomEditor(getEditorTheme());
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setAutocompleteMaxVisible(settings.get("autocompleteMaxVisible"));
@@ -836,13 +834,16 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.subagentContainer);
 		this.ui.addChild(this.btwContainer);
 		this.ui.addChild(this.omfgContainer);
 		this.ui.addChild(this.errorBannerContainer);
 		this.ui.addChild(this.modelCycleContainer);
+		// Working loader / transient status sits below the sticky todo + subagent
+		// HUDs, just above the editor's hook-widget top margin — so it reads next to
+		// the prompt while keeping the one-line gap above the editor.
+		this.ui.addChild(this.statusContainer);
 		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
 		this.ui.addChild(this.hookWidgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -1526,9 +1527,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			case "abandoned":
 				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
 			default:
-				if (matched) {
-					return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-				}
+				if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		}
 	}
@@ -1669,60 +1668,67 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.clear();
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return;
-		const indent = "  ";
-		const hook = theme.tree.hook;
-
-		// Header progress so the persistent HUD reads at a glance:
-		// "Todos · 2/7 done · I/III Foundation" (collapsed) or "· 2/7 done" (expanded).
-		const allTasks = phases.flatMap(p => p.tasks);
-		const doneCount = allTasks.filter(t => t.status === "completed").length;
-		const stats = `${doneCount}/${allTasks.length} done`;
+		const expanded = this.todoExpanded;
+		const multiPhase = phases.length > 1;
 		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
-		const activePhase = phases[activeIdx];
-		let phaseSuffix = "";
-		if (!this.todoExpanded && activePhase) {
-			phaseSuffix =
-				phases.length > 1
-					? ` · ${phaseRomanNumeral(activeIdx + 1)}/${phaseRomanNumeral(phases.length)} ${activePhase.name}`
-					: ` · ${activePhase.name}`;
-		}
-		const header = `${indent}${theme.bold(theme.fg("accent", "Todos"))}${theme.fg("muted", ` · ${stats}${phaseSuffix}`)}`;
-		const lines: string[] = [header];
+		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
+		const subsequentStageCap = 4; // stages shown after the active one (header count implies the rest)
+		const activeTaskCap = 5; // open tasks previewed for the active stage
 
 		const activeDescs = this.#getActiveSubagentDescriptions();
-		// A pending todo "lights up" (accent + running glyph) when an in-flight
-		// subagent is doing its work, matched by normalized content overlap.
+		// A pending todo "lights up" (accent) when an in-flight subagent is doing
+		// its work, matched by normalized content overlap.
 		const isMatched = (todo: TodoItem): boolean =>
 			activeDescs.length > 0 && todoMatchesAnyDescription(todo.content, activeDescs);
 
-		if (!this.todoExpanded) {
-			if (!activePhase) return;
-			const { visible, hiddenOpenCount } = selectStickyTodoWindow(activePhase.tasks, 5);
-			visible.forEach((todo, index) => {
-				const prefix = `${indent}${index === 0 ? hook : " "} `;
-				lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
-			});
-			if (hiddenOpenCount > 0) {
-				lines.push(theme.fg("muted", `${indent}  ${hook} +${hiddenOpenCount} more`));
-			}
-		} else {
-			phases.forEach((phase, phaseIndex) => {
-				lines.push(
-					`${indent}${theme.fg("accent", `${hook} ${formatPhaseDisplayName(phase.name, phaseIndex + 1)}`)}`,
-				);
-				phase.tasks.forEach((todo, index) => {
-					const prefix = `${indent}${index === 0 ? hook : " "} `;
-					lines.push(this.#formatTodoLine(todo, prefix, isMatched(todo)));
-				});
-			});
-		}
+		// Task subtree for a phase. Collapsed previews the first open tasks — the
+		// stage's `done/total` makes the hidden count obvious, so there is no
+		// "… more" row; expanded lists every task.
+		const renderTasks = (phase: TodoPhase): string[] => {
+			const open = phase.tasks.filter(t => t.status === "pending" || t.status === "in_progress");
+			const base = expanded ? phase.tasks : open.length > 0 ? open : phase.tasks;
+			const items = expanded ? base : base.slice(0, activeTaskCap);
+			return renderTreeList(
+				{ items, expanded: true, renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)) },
+				theme,
+			);
+		};
 
-		// Dim horizontal rules bracket the panel so the persistent HUD is
-		// visually distinct from chat scrollback above and any in-flight
-		// subagent/status rows below — mirrors `BtwPanel` / `OmfgPanel`.
-		this.todoContainer.addChild(new DynamicBorder(str => theme.fg("dim", str)));
+		// One phase node. The active stage is highlighted with normal-brightness task
+		// progress; other stages render their whole row (name + progress) in the
+		// brighter muted gray. The root header carries overall stage progression.
+		const renderPhase = (phase: TodoPhase, oneBased: number, isActive: boolean): string | string[] => {
+			const label = multiPhase ? formatPhaseDisplayName(phase.name, oneBased) : phase.name;
+			const done = phase.tasks.filter(t => t.status === "completed").length;
+			const progress = ` · ${done}/${phase.tasks.length}`;
+			if (!isActive) {
+				const header = theme.fg("muted", label) + theme.fg("dim", progress);
+				return expanded ? [header, ...renderTasks(phase)] : header;
+			}
+			const header = theme.bold(theme.fg("accent", label)) + theme.fg("dim", progress);
+			return [header, ...renderTasks(phase)];
+		};
+
+		// Collapsed: active stage + a bounded number of following stages (the
+		// header's "n/total" count implies any not shown). Expanded: every stage
+		// from the top. Roman numerals stay tied to the real phase index.
+		const baseIdx = expanded ? 0 : activeIdx;
+		const phaseSlice = expanded ? phases.slice(baseIdx) : phases.slice(baseIdx, baseIdx + 1 + subsequentStageCap);
+		const phaseTreeLines = renderTreeList(
+			{
+				items: phaseSlice,
+				expanded: true,
+				renderItem: (phase, ctx) => renderPhase(phase, baseIdx + ctx.index + 1, baseIdx + ctx.index === activeIdx),
+			},
+			theme,
+		);
+
+		// Header carries overall stage progression, e.g. "Todos · 1/8".
+		const root =
+			theme.bold(theme.fg("accent", "Todos")) +
+			(multiPhase ? theme.fg("dim", ` · ${activeIdx + 1}/${phases.length}`) : "");
+		const lines = ["", root, ...phaseTreeLines.map(line => ` ${line}`)];
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
-		this.todoContainer.addChild(new DynamicBorder(str => theme.fg("dim", str)));
 	}
 
 	/**
