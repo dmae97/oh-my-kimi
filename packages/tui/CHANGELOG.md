@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed VTE-based terminals such as Ptyxis and GNOME Terminal resolving `completion.notify` and `ask.notify` to BEL instead of OSC 9, restoring desktop notifications on VTE 6800+ ([#3685](https://github.com/can1357/oh-my-pi/issues/3685)).
-
 ## [16.2.0] - 2026-06-27
 
 ### Added

@@ -150,7 +150,7 @@ function notifyProtocolLabel(): string {
 		case NotifyProtocol.Osc99:
 			return "OSC 99 (kitty)";
 		case NotifyProtocol.Osc9:
-			return "OSC 9 (iTerm2/WezTerm/VTE)";
+			return "OSC 9 (iTerm2/WezTerm)";
 		default:
 			return "BEL";
 	}

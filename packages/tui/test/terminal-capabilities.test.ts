@@ -16,16 +16,10 @@ describe("detectTerminalId", () => {
 		expect(detectTerminalId({ TERM_PROGRAM: "WarpTerminal", COLORTERM: "truecolor" })).toBe("warp");
 	});
 
-	it("recognizes VTE before the true-color fallback for OSC 9 notifications", () => {
+	it("falls back to trueColor on VTE/Ptyxis environments — VTE OSC 9 is ConEmu progress, not a notification protocol", () => {
 		const env = { TERM: "xterm-256color", TERM_PROGRAM: "", COLORTERM: "truecolor", VTE_VERSION: "8400" };
 
-		expect(detectTerminalId(env)).toBe("vte");
-		expect(getTerminalInfo("vte").notifyProtocol).toBe(NotifyProtocol.Osc9);
-		expect(getTerminalInfo("vte").formatNotification("ping")).toBe("\x1b]9;ping\x1b\\");
-	});
-
-	it("leaves pre-OSC 9 VTE builds on the true-color fallback", () => {
-		expect(detectTerminalId({ COLORTERM: "truecolor", VTE_VERSION: "6799" })).toBe("trueColor");
+		expect(detectTerminalId(env)).toBe("trueColor");
 	});
 });
 

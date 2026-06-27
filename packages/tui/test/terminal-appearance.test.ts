@@ -701,7 +701,7 @@ describe("OSC 66 text-sizing capability", () => {
 		// OSC 66 is a Kitty-only protocol; any other terminal must report the
 		// capability as false so the renderer never emits raw escape bytes there.
 		expect(getTerminalInfo("kitty").textSizing).toBe(true);
-		for (const id of ["ghostty", "wezterm", "iterm2", "vscode", "alacritty", "vte", "base", "trueColor"] as const) {
+		for (const id of ["ghostty", "wezterm", "iterm2", "vscode", "alacritty", "base", "trueColor"] as const) {
 			expect(getTerminalInfo(id).textSizing).toBe(false);
 		}
 	});

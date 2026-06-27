@@ -50,7 +50,7 @@ const IMAGE_PROTOCOL_NAMES: Record<ImageProtocol, string> = {
 const NOTIFY_PROTOCOL_NAMES: Record<NotifyProtocol, string> = {
 	[NotifyProtocol.Bell]: "BEL (\\a)",
 	[NotifyProtocol.Osc99]: "OSC 99 (kitty desktop notifications)",
-	[NotifyProtocol.Osc9]: "OSC 9 (iTerm2/WezTerm/VTE)",
+	[NotifyProtocol.Osc9]: "OSC 9 (iTerm2/WezTerm)",
 };
 
 /** Identify the multiplexer wrapping the session, if any (mirrors the renderer's gate). */
