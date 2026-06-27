@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed auto-snapcompact on text-only active models by downgrading automatic maintenance to context-full compaction instead of failing the session when the active model cannot read snapcompact frames. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
+- Fixed auto-snapcompact failing the session on any local blocker (text-only active model, high non-ASCII transcript, kept history exceeding the context budget, or post-render overflow) by downgrading automatic maintenance to context-full compaction. Manual `/compact snapcompact` keeps the local-only failure contract. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
 
 ## [16.2.2] - 2026-06-27
 
