@@ -48,6 +48,78 @@ describe("YieldTool", () => {
 		expect(result.details).toEqual({ data: undefined, status: "aborted", error: "blocked" });
 	});
 
+	it("accepts typed success without data as a last-turn result", async () => {
+		const tool = new YieldTool(createSession());
+		const result = await tool.execute("call-last-turn", { type: "summary", result: {} } as never);
+		expect(result.details).toEqual({
+			data: undefined,
+			status: "success",
+			error: undefined,
+			type: "summary",
+			useLastTurn: true,
+		});
+	});
+
+	it("passes array-typed success through as an incremental result", async () => {
+		const tool = new YieldTool(createSession());
+		const result = await tool.execute("call-incremental", {
+			type: ["notes", "plan"],
+			result: { data: { step: 1 } },
+		} as never);
+		expect(result.details).toEqual({
+			data: { step: 1 },
+			status: "success",
+			error: undefined,
+			type: ["notes", "plan"],
+		});
+	});
+
+	it("rejects missing success data unless a yield type requests last-turn mode", async () => {
+		const tool = new YieldTool(createSession());
+		await expect(tool.execute("call-untyped-empty", { result: {} } as never)).rejects.toThrow(
+			"result must contain either `data` or `error`",
+		);
+		await expect(tool.execute("call-empty-type", { type: [], result: {} } as never)).rejects.toThrow(
+			"type must be a string or non-empty array of strings",
+		);
+		await expect(
+			tool.execute("call-null-data", { type: "summary", result: { data: null } } as never),
+		).rejects.toThrow("data is required when yield indicates success");
+	});
+
+	it("exposes typed last-turn mode in the argument schema without weakening untyped yield", () => {
+		const tool = new YieldTool(createSession());
+		const parameters = tool.parameters as unknown as Record<string, unknown>;
+		const typeSchema = toRecord(toRecord(parameters.properties).type);
+		const variants = Array.isArray(typeSchema.anyOf) ? typeSchema.anyOf.map(toRecord) : [];
+
+		expect(variants.map(variant => variant.type)).toEqual(["string", "array"]);
+		expect(variants[1]?.minItems).toBe(1);
+		expect(toRecord(variants[1]?.items).type).toBe("string");
+
+		const toolDefinition: Tool = {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		};
+		expect(
+			validateToolArguments(toolDefinition, {
+				type: "toolCall",
+				id: "call-schema-typed",
+				name: tool.name,
+				arguments: { type: "summary", result: {} },
+			}),
+		).toEqual({ type: "summary", result: {} });
+		expect(() =>
+			validateToolArguments(toolDefinition, {
+				type: "toolCall",
+				id: "call-schema-untyped",
+				name: tool.name,
+				arguments: { result: {} },
+			}),
+		).toThrow();
+	});
+
 	it("accepts arbitrary data when outputSchema is null", async () => {
 		const tool = new YieldTool(createSession({ outputSchema: null }));
 		expect(tool.strict).toBe(false);

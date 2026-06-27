@@ -133,4 +133,55 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		});
 		expect(text).toContain("correct");
 	});
+
+	it("renders typed yield sections compactly in the result branch", async () => {
+		const text = await renderResultText({
+			yield: [
+				{ type: ["summary"], data: "first note", status: "success" },
+				{ type: ["summary", "details"], data: { ok: true }, status: "success" },
+				{ type: "final", data: "done", status: "success" },
+			],
+		});
+
+		expect(text).toContain("yield+[summary]");
+		expect(text).toContain("yield+[summary, details]");
+		expect(text).toContain("yield[final]");
+		expect(text).toContain("done");
+	});
+
+	it("renders typed yield sections compactly in the progress branch", async () => {
+		const text = await renderProgressText({
+			yield: { type: ["notes"], useLastTurn: true, status: "success" },
+		});
+
+		expect(text).toContain("yield+[notes]");
+		expect(text).toContain("last assistant turn");
+	});
+
+	it("renders reviewer results assembled from incremental yield sections", async () => {
+		const text = await renderResultText({
+			yield: [
+				{
+					type: ["findings"],
+					data: {
+						title: "Handle null response",
+						body: "Null response reaches the formatter and crashes rendering.",
+						priority: 1,
+						confidence: 0.8,
+						file_path: "src/review.ts",
+						line_start: 42,
+						line_end: 42,
+					},
+					status: "success",
+				},
+				{ type: ["overall_correctness"], data: "incorrect", status: "success" },
+				{ type: ["explanation"], data: "One bug blocks approval.", status: "success" },
+				{ type: ["confidence"], data: 0.8, status: "success" },
+			],
+		});
+
+		expect(text).toContain("Patch is incorrect");
+		expect(text).toContain("Findings:");
+		expect(text).toContain("Handle null response");
+	});
 });

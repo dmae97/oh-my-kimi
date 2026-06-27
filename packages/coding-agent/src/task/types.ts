@@ -257,6 +257,23 @@ export interface AgentDefinition {
 	filePath?: string;
 }
 
+/** Details extracted from a subagent `yield` tool call for final-result assembly and task rendering. */
+export interface YieldItem {
+	data?: unknown;
+	status?: "success" | "aborted";
+	error?: string;
+	/** A string label is terminal; a non-empty array of labels is incremental. */
+	type?: string | string[];
+	/** Resolve this yield's payload from the latest durable assistant text instead of `data`. */
+	useLastTurn?: boolean;
+	/**
+	 * Set by the in-tool yield validator when it exhausted its retry budget and
+	 * accepted schema-invalid data anyway. The executor preserves that override
+	 * during post-mortem validation.
+	 */
+	schemaOverridden?: boolean;
+}
+
 /** Progress tracking for a single agent */
 export interface AgentProgress {
 	index: number;

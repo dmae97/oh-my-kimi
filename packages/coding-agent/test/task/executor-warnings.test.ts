@@ -191,4 +191,110 @@ describe("subagent warning injection", () => {
 		expect(JSON.parse(result.rawOutput)).toEqual({ verdict: "looks good" });
 		expect(result.stderr.startsWith("invalid output schema:")).toBe(true);
 	});
+
+	it("assembles incremental typed yield sections on idle", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [
+				{ status: "success", type: ["summary"], data: "first" },
+				{ status: "success", type: ["summary", "notes"], data: { detail: "second" } },
+			],
+			outputSchema: {
+				type: "object",
+				required: ["summary", "notes"],
+				properties: {
+					summary: { type: "array", minItems: 2 },
+					notes: { type: "object", required: ["detail"], properties: { detail: { type: "string" } } },
+				},
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.hasYield).toBe(true);
+		expect(JSON.parse(result.rawOutput)).toEqual({
+			summary: ["first", { detail: "second" }],
+			notes: { detail: "second" },
+		});
+	});
+
+	it("validates assembled typed yield data against the output schema", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", type: ["summary"], data: "text only" }],
+			outputSchema: {
+				type: "object",
+				required: ["summary", "notes"],
+				properties: {
+					summary: { type: "string" },
+					notes: { type: "string" },
+				},
+			},
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain("schema_violation");
+		expect(JSON.parse(result.rawOutput)).toMatchObject({
+			error: "schema_violation",
+			missingRequired: ["notes"],
+		});
+	});
+
+	it("uses last assistant text as the raw result for terminal string-typed yields without data", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", type: "final" }],
+			outputSchema: undefined,
+			lastAssistantText: "final answer from the assistant",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.rawOutput).toBe("final answer from the assistant");
+	});
+
+	it("lets a terminal string-typed last-turn result override earlier incremental sections", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [
+				{ status: "success", type: ["summary"], data: "first" },
+				{ status: "success", type: "final" },
+			],
+			outputSchema: undefined,
+			lastAssistantText: "plain final answer",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.rawOutput).toBe("plain final answer");
+	});
+
+	it("serializes untyped useLastTurn yield as raw text", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [{ status: "success", useLastTurn: true }],
+			outputSchema: undefined,
+			lastAssistantText: "plain final answer",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.rawOutput).toBe("plain final answer");
+	});
 });

@@ -1,9 +1,10 @@
 /**
- * Review tools - report_finding for structured code review.
+ * Legacy hidden review-finding tool for agents that have not migrated to
+ * incremental `yield` sections.
  *
- * Used by the reviewer agent to report findings in a structured way.
- * Hidden by default - only enabled when explicitly listed in agent's tools.
- * Reviewers finish via `yield` tool with SubmitReviewDetails schema.
+ * Hidden by default - only enabled when explicitly listed in an agent's tools.
+ * Reviewers now finish via incremental `yield`; this tool remains for
+ * compatibility with older or custom review agents.
  */
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -72,8 +73,13 @@ interface ReportFindingDetails {
 	line_end: number;
 }
 
-function isFindingPriority(value: unknown): value is FindingPriority {
-	return value === "P0" || value === "P1" || value === "P2" || value === "P3";
+function normalizeFindingPriority(value: unknown): FindingPriority | undefined {
+	if (isFindingPriority(value)) return value;
+	if (value === 0) return "P0";
+	if (value === 1) return "P1";
+	if (value === 2) return "P2";
+	if (value === 3) return "P3";
+	return undefined;
 }
 
 export function parseReportFindingDetails(value: unknown): ReportFindingDetails | undefined {
@@ -81,7 +87,7 @@ export function parseReportFindingDetails(value: unknown): ReportFindingDetails 
 
 	const title = typeof value.title === "string" ? value.title : undefined;
 	const body = typeof value.body === "string" ? value.body : undefined;
-	const priority = isFindingPriority(value.priority) ? value.priority : undefined;
+	const priority = normalizeFindingPriority(value.priority);
 	const confidence =
 		typeof value.confidence === "number" &&
 		Number.isFinite(value.confidence) &&

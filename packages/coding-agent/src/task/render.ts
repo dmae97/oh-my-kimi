@@ -32,6 +32,7 @@ import {
 	type SubmitReviewDetails,
 } from "../tools/review";
 import { framedBlock, renderStatusLine } from "../tui";
+import { assembleYieldResult } from "./executor";
 import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
@@ -143,6 +144,44 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
 	return findings;
 }
 
+function extractIncrementalReviewResult(value: unknown): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
+	const yieldItems = normalizeYieldData(value).map(item => ({
+		data: item.data,
+		type: item.type,
+		status: item.status === "aborted" ? "aborted" : item.status === "success" ? "success" : undefined,
+		useLastTurn: item.useLastTurn,
+	}));
+	const assembled = assembleYieldResult(yieldItems);
+	const data = assembled?.data;
+	if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+	const record = data as Record<string, unknown>;
+	const overallCorrectness = record.overall_correctness;
+	const explanation = record.explanation;
+	const confidence = record.confidence;
+	if (
+		(overallCorrectness !== "correct" && overallCorrectness !== "incorrect") ||
+		typeof explanation !== "string" ||
+		typeof confidence !== "number"
+	) {
+		return undefined;
+	}
+	return {
+		summary: {
+			overall_correctness: overallCorrectness,
+			explanation,
+			confidence,
+		},
+		findings: normalizeReportFindings(record.findings),
+	};
+}
+
+interface RenderYieldItem {
+	data?: unknown;
+	type?: string | string[];
+	status?: string;
+	useLastTurn?: boolean;
+}
+
 /**
  * Normalize the `yield` slot of `extractedToolData` into an array of
  * yield-detail records. The subprocess executor always populates this slot as
@@ -153,14 +192,82 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
  * A single object is wrapped as a 1-element array so the review verdict still
  * renders; non-object primitives drop out.
  */
-function normalizeYieldData(value: unknown): Array<{ data: unknown }> {
-	if (Array.isArray(value)) {
-		return value.filter((item): item is { data: unknown } => item !== null && typeof item === "object");
+function normalizeYieldData(value: unknown): RenderYieldItem[] {
+	const items = Array.isArray(value) ? value : value !== null && typeof value === "object" ? [value] : [];
+	const normalized: RenderYieldItem[] = [];
+	for (const item of items) {
+		if (item === null || typeof item !== "object") continue;
+		const record = item as Record<string, unknown>;
+		const typeValue = record.type;
+		let type: RenderYieldItem["type"];
+		if (typeof typeValue === "string") {
+			type = typeValue;
+		} else if (Array.isArray(typeValue)) {
+			const labels: string[] = [];
+			let allLabels = true;
+			for (const label of typeValue) {
+				if (typeof label !== "string") {
+					allLabels = false;
+					break;
+				}
+				labels.push(label);
+			}
+			if (allLabels) type = labels;
+		}
+		normalized.push({
+			data: record.data,
+			type,
+			status: typeof record.status === "string" ? record.status : undefined,
+			useLastTurn: record.useLastTurn === true ? true : undefined,
+		});
 	}
-	if (value !== null && typeof value === "object") {
-		return [value as { data: unknown }];
+	return normalized;
+}
+
+function getRenderYieldLabels(type: RenderYieldItem["type"]): string[] {
+	if (typeof type === "string") {
+		const label = type.trim();
+		return label ? [label] : [];
 	}
-	return [];
+	if (!Array.isArray(type)) return [];
+	const labels: string[] = [];
+	for (const value of type) {
+		const label = value.trim();
+		if (label) labels.push(label);
+	}
+	return labels;
+}
+
+function formatYieldPreview(item: RenderYieldItem): string {
+	if (item.useLastTurn === true && item.data === undefined) return "last assistant turn";
+	if (item.data === undefined) return "last assistant turn";
+	if (typeof item.data === "string") return previewLine(replaceTabs(item.data), 70);
+	try {
+		return previewLine(replaceTabs(JSON.stringify(item.data) ?? "null"), 70);
+	} catch {
+		return previewLine(replaceTabs(String(item.data)), 70);
+	}
+}
+
+function renderTypedYieldSections(value: unknown, continuePrefix: string, expanded: boolean, theme: Theme): string[] {
+	const typedItems: Array<{ item: RenderYieldItem; labels: string[] }> = [];
+	for (const item of normalizeYieldData(value)) {
+		const labels = getRenderYieldLabels(item.type);
+		if (labels.length === 0) continue;
+		typedItems.push({ item, labels });
+	}
+	const displayCount = expanded ? typedItems.length : 3;
+	const lines: string[] = [];
+	for (const { item, labels } of typedItems.slice(-displayCount)) {
+		const terminal = !Array.isArray(item.type);
+		const prefix = terminal ? "yield" : "yield+";
+		const label = `${prefix}[${labels.join(", ")}]`;
+		lines.push(`${continuePrefix}${theme.fg("dim", label)}: ${theme.fg("dim", formatYieldPreview(item))}`);
+	}
+	if (typedItems.length > displayCount) {
+		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(typedItems.length - displayCount, "yield"))}`);
+	}
+	return lines;
 }
 
 function formatJsonScalar(value: unknown, _theme: Theme): string {
@@ -808,10 +915,18 @@ function renderAgentProgress(
 
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
-		// For completed tasks, check for review verdict from yield tool
+		// For completed tasks, prefer review verdicts assembled from incremental
+		// yield sections. Fall back to the legacy `report_finding` side-channel.
 		if (progress.status === "completed") {
 			const completeData = normalizeYieldData(progress.extractedToolData.yield);
+			const incrementalReview = extractIncrementalReviewResult(progress.extractedToolData.yield);
 			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
+			if (incrementalReview) {
+				lines.push(
+					...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
+				);
+				return lines; // Review result handles its own rendering
+			}
 			const reviewData = completeData
 				.map(c => c.data as SubmitReviewDetails)
 				.filter(d => d && typeof d === "object" && "overall_correctness" in d);
@@ -825,6 +940,11 @@ function renderAgentProgress(
 
 		for (const toolName in progress.extractedToolData) {
 			const dataArray = progress.extractedToolData[toolName];
+			if (toolName === "yield") {
+				lines.push(...renderTypedYieldSections(dataArray, continuePrefix, expanded, theme));
+				continue;
+			}
+
 			// Handle report_finding with tree formatting
 			if (toolName === "report_finding") {
 				const findings = normalizeReportFindings(dataArray);
@@ -1068,23 +1188,28 @@ function renderAgentResult(
 			`${continuePrefix}${theme.fg("error", theme.status.aborted)} ${theme.fg("dim", previewLine(result.abortReason, 80))}`,
 		);
 	}
-	// Check for review result (yield with review schema + report_finding)
-	// Check for review result (yield with review schema + report_finding).
+	// Check for review result, preferring incremental yield sections and falling
+	// back to the legacy `report_finding` side-channel.
 	// `normalizeYieldData` guards against a stray non-array `yield` slot —
 	// optional chaining on `.map` only short-circuits on null/undefined and
 	// would otherwise crash the renderer with `TypeError: completeData?.map
 	// is not a function` when the slot is a plain object (see issue #1987).
 	const completeData = normalizeYieldData(result.extractedToolData?.yield);
 	const reportFindingData = normalizeReportFindings(result.extractedToolData?.report_finding);
+	const incrementalReview = extractIncrementalReviewResult(result.extractedToolData?.yield);
 
-	// Extract review verdict from yield tool's data field if it matches SubmitReviewDetails
+	if (incrementalReview) {
+		lines.push(...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme));
+		return lines;
+	}
+
+	// Extract review verdict from legacy yield summary objects if present.
 	const reviewData = completeData
 		.map(c => c.data as SubmitReviewDetails)
 		.filter(d => d && typeof d === "object" && "overall_correctness" in d);
 	const submitReviewData = reviewData.length > 0 ? reviewData : undefined;
 
 	if (submitReviewData) {
-		// Use combined review renderer
 		const summary = submitReviewData[submitReviewData.length - 1];
 		const findings = reportFindingData;
 		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
@@ -1092,9 +1217,7 @@ function renderAgentResult(
 	}
 	if (reportFindingData.length > 0) {
 		const hasCompleteData = completeData.length > 0;
-		const message = hasCompleteData
-			? "Review verdict missing expected fields"
-			: "Review incomplete (yield not called)";
+		const message = hasCompleteData ? "Review verdict missing expected fields" : "Review incomplete (yield not called)";
 		lines.push(`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg("dim", message)}`);
 		lines.push(`${continuePrefix}${formatFindingSummary(reportFindingData, theme)}`);
 		lines.push(...renderFindings(reportFindingData, continuePrefix, expanded, theme));
@@ -1105,9 +1228,18 @@ function renderAgentResult(
 	let hasCustomRendering = false;
 	const deferredToolLines: string[] = [];
 	if (result.extractedToolData) {
-		for (const [toolName, dataArray] of Object.entries(result.extractedToolData)) {
+		for (const toolName in result.extractedToolData) {
+			const dataArray = result.extractedToolData[toolName];
+			if (toolName === "yield") {
+				const yieldLines = renderTypedYieldSections(dataArray, continuePrefix, expanded, theme);
+				if (yieldLines.length > 0) {
+					hasCustomRendering = true;
+					lines.push(...yieldLines);
+				}
+				continue;
+			}
 			// Skip review tools - handled above
-			if (toolName === "yield" || toolName === "report_finding") continue;
+			if (toolName === "report_finding") continue;
 
 			const isTaskTool = toolName === "task";
 			if (isTaskTool && (dataArray as unknown[]).length > 0) {

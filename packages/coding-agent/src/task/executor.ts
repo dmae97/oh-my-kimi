@@ -71,7 +71,10 @@ import {
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 	type TaskToolDetails,
+	type YieldItem,
 } from "./types";
+
+export type { YieldItem } from "./types";
 
 const MCP_CALL_TIMEOUT_MS = 60_000;
 
@@ -517,19 +520,152 @@ function resolveFallbackCompletion(rawOutput: string, outputSchema: unknown): { 
 	return { data: candidate };
 }
 
-export interface YieldItem {
-	data?: unknown;
-	status?: "success" | "aborted";
-	error?: string;
-	/**
-	 * Set by the in-tool yield validator when it exhausted its retry budget
-	 * (MAX_SCHEMA_RETRIES) and accepted a schema-invalid payload anyway.
-	 * `finalizeSubprocessOutput` honors this by serializing the payload and
-	 * surfacing a stderr warning, instead of re-emitting `schema_violation`
-	 * — which would silently swap the subagent's "accepted" view for a
-	 * different, opaque error blob in the parent's view of the result.
-	 */
-	schemaOverridden?: boolean;
+interface AssembledYieldResult {
+	data: unknown;
+	schemaOverridden: boolean;
+	rawText: boolean;
+	missingData: boolean;
+}
+
+function isIncrementalYieldType(type: YieldItem["type"]): type is string[] {
+	return Array.isArray(type) && type.length > 0;
+}
+
+function getYieldLabels(type: YieldItem["type"]): string[] {
+	if (typeof type === "string") {
+		const label = type.trim();
+		return label ? [label] : [];
+	}
+	if (!Array.isArray(type)) return [];
+	const labels: string[] = [];
+	for (const value of type) {
+		if (typeof value !== "string") continue;
+		const label = value.trim();
+		if (label) labels.push(label);
+	}
+	return labels;
+}
+
+function resolveYieldPayload(
+	item: YieldItem,
+	lastAssistantText: string | undefined,
+	labels: string[],
+): { value: unknown; fromLastAssistantText: boolean; missingData: boolean } {
+	const hasData = item.data !== undefined;
+	const shouldUseLastTurn = item.useLastTurn === true || (labels.length > 0 && !hasData);
+	if (shouldUseLastTurn && lastAssistantText !== undefined) {
+		return {
+			value: lastAssistantText,
+			fromLastAssistantText: true,
+			missingData: lastAssistantText.length === 0,
+		};
+	}
+	return {
+		value: item.data,
+		fromLastAssistantText: false,
+		missingData: item.data === undefined || item.data === null,
+	};
+}
+
+function appendYieldSection(
+	sections: Record<string, unknown>,
+	sectionCounts: Map<string, number>,
+	label: string,
+	value: unknown,
+): void {
+	const count = sectionCounts.get(label) ?? 0;
+	if (count === 0) {
+		sections[label] = value;
+	} else if (count === 1) {
+		sections[label] = [sections[label], value];
+	} else {
+		(sections[label] as unknown[]).push(value);
+	}
+	sectionCounts.set(label, count + 1);
+}
+
+/**
+ * Assemble typed yield calls into the final payload consumed by schema validation.
+ *
+ * A non-empty array `type` contributes an incremental section and never decides
+ * termination by itself. A string `type` with omitted `data` makes the last
+ * assistant turn the raw terminal result. Other string-typed yields contribute
+ * the terminal labelled section. Untyped terminal yields keep the historical
+ * "last yield wins" behavior unless no terminal yield exists, in which case
+ * accumulated typed sections finalize on idle.
+ */
+export function assembleYieldResult(
+	yieldItems: YieldItem[],
+	lastAssistantText?: string,
+): AssembledYieldResult | undefined {
+	if (yieldItems.length === 0) return undefined;
+	let terminalItem: YieldItem | undefined;
+	for (let index = yieldItems.length - 1; index >= 0; index--) {
+		const item = yieldItems[index];
+		if (!item) continue;
+		if (!isIncrementalYieldType(item.type)) {
+			terminalItem = item;
+			break;
+		}
+	}
+	let hasTypedSections = false;
+	for (const item of yieldItems) {
+		if (getYieldLabels(item.type).length > 0) {
+			hasTypedSections = true;
+			break;
+		}
+	}
+	if (terminalItem && typeof terminalItem.type === "string" && terminalItem.data === undefined) {
+		const resolved = resolveYieldPayload(terminalItem, lastAssistantText, getYieldLabels(terminalItem.type));
+		return {
+			data: resolved.value,
+			schemaOverridden: terminalItem.schemaOverridden === true,
+			rawText: resolved.fromLastAssistantText && typeof resolved.value === "string",
+			missingData: resolved.missingData,
+		};
+	}
+	if (!hasTypedSections && terminalItem) {
+		const resolved = resolveYieldPayload(terminalItem, lastAssistantText, []);
+		return {
+			data: resolved.value,
+			schemaOverridden: terminalItem.schemaOverridden === true,
+			rawText: resolved.fromLastAssistantText && typeof resolved.value === "string",
+			missingData: resolved.missingData,
+		};
+	}
+
+	const sections: Record<string, unknown> = {};
+	const sectionCounts = new Map<string, number>();
+	let schemaOverridden = false;
+	let missingData = false;
+	let hasSections = false;
+
+	for (const item of yieldItems) {
+		if (item.status === "aborted") continue;
+		schemaOverridden ||= item.schemaOverridden === true;
+		const labels = getYieldLabels(item.type);
+		if (labels.length === 0) continue;
+		const resolved = resolveYieldPayload(item, lastAssistantText, labels);
+		missingData ||= resolved.missingData;
+		for (const label of labels) {
+			appendYieldSection(sections, sectionCounts, label, resolved.value);
+			hasSections = true;
+		}
+		if (!isIncrementalYieldType(item.type)) break;
+	}
+
+	if (hasSections) {
+		return { data: sections, schemaOverridden, rawText: false, missingData };
+	}
+
+	if (!terminalItem) return undefined;
+	const resolved = resolveYieldPayload(terminalItem, lastAssistantText, []);
+	return {
+		data: resolved.value,
+		schemaOverridden: terminalItem.schemaOverridden === true,
+		rawText: resolved.fromLastAssistantText && typeof resolved.value === "string",
+		missingData: resolved.missingData,
+	};
 }
 
 interface FinalizeSubprocessOutputArgs {
@@ -541,6 +677,7 @@ interface FinalizeSubprocessOutputArgs {
 	yieldItems?: YieldItem[];
 	reportFindings?: ReviewFinding[];
 	outputSchema: unknown;
+	lastAssistantText?: string;
 }
 
 interface FinalizeSubprocessOutputResult {
@@ -583,7 +720,7 @@ function buildSchemaViolationOutcome(
 
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
-	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema } = args;
+	const { yieldItems, reportFindings, doneAborted, signalAborted, outputSchema, lastAssistantText } = args;
 	let abortedViaYield = false;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
@@ -600,15 +737,16 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				rawOutput = `{"aborted":true,"error":"${lastYield.error || "Unknown error"}"}`;
 			}
 		} else {
-			const submitData = lastYield?.data;
-			if (submitData === null || submitData === undefined) {
+			const assembled = assembleYieldResult(yieldItems, lastAssistantText);
+			if (!assembled || assembled.missingData) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {
 				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
-				const overridden = lastYield?.schemaOverridden === true;
-				const completeData = normalizeCompleteData(submitData, reportFindings, validator);
+				const completeData = assembled.rawText
+					? assembled.data
+					: normalizeCompleteData(assembled.data, reportFindings, validator);
 				const result =
-					schemaError || overridden
+					schemaError || assembled.schemaOverridden
 						? { success: true as const }
 						: (validator?.validate(completeData) ?? { success: true as const });
 				if (!result.success) {
@@ -619,14 +757,17 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 					exitCode = outcome.exitCode;
 				} else {
 					try {
-						rawOutput = JSON.stringify(completeData, null, 2) ?? "null";
+						rawOutput =
+							assembled.rawText && typeof completeData === "string"
+								? completeData
+								: (JSON.stringify(completeData, null, 2) ?? "null");
 					} catch (err) {
 						const errorMessage = err instanceof Error ? err.message : String(err);
 						rawOutput = `{"error":"Failed to serialize yield data: ${errorMessage}"}`;
 					}
 					if (!hadFailureBeforeYield) {
 						exitCode = 0;
-						stderr = overridden
+						stderr = assembled.schemaOverridden
 							? SUBAGENT_WARNING_SCHEMA_OVERRIDDEN
 							: schemaError
 								? `invalid output schema: ${schemaError}`
@@ -1665,6 +1806,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			yieldItems,
 			reportFindings,
 			outputSchema: args.outputSchema,
+			lastAssistantText: monitor.lastAssistantSalvageText(),
 		});
 	} finally {
 		popLoopPhase();

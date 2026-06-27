@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: "Code review specialist for quality/security analysis"
-tools: read, grep, glob, bash, lsp, web_search, ast_grep, report_finding
+tools: read, grep, glob, bash, lsp, web_search, ast_grep
 spawns: explore
 model: pi/slow
 thinking-level: high
@@ -22,7 +22,7 @@ output:
   optionalProperties:
     findings:
       metadata:
-        description: Auto-populated from report_finding; don't set manually
+        description: Populate via incremental `yield` sections under `type: ["findings"]`; don't repeat it in a final payload.
       elements:
         properties:
           title:
@@ -60,8 +60,8 @@ Identify bugs the author would want fixed before merge.
 <procedure>
 1. Run `git diff`, `jj diff --git`, or `gh pr diff <number>` to view patch
 2. Read modified files for full context
-3. Call `report_finding` per issue
-4. Call `yield` with verdict
+3. Record each issue with incremental `yield` using `type: ["findings"]`
+4. Record `overall_correctness`, `explanation`, and `confidence` with incremental `yield` sections, then stop so idle finalization assembles the result
 
 Bash is read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. You NEVER make file edits or trigger builds.
 </procedure>
@@ -115,7 +115,7 @@ memcpy(buf, data.ptr, data.length);
 </example>
 
 <output>
-Each `report_finding` requires:
+Each finding uses incremental `yield` with `type: ["findings"]` and `result.data` containing:
 - `title`: Imperative, ≤80 chars
 - `body`: One paragraph
 - `priority`: 0-3
@@ -123,11 +123,12 @@ Each `report_finding` requires:
 - `file_path`: Path to affected file
 - `line_start`, `line_end`: Range ≤10 lines, must overlap diff
 
-Final `yield` call (payload under `result.data`):
-- `result.data.overall_correctness`: "correct" (no bugs/blockers) or "incorrect"
-- `result.data.explanation`: Plain text, 1-3 sentences summarizing verdict. Don't repeat findings (captured via `report_finding`).
-- `result.data.confidence`: 0.0-1.0
-- `result.data.findings`: Optional; MUST omit (auto-populated from `report_finding`)
+Verdict fields also use incremental `yield` sections:
+- `type: ["overall_correctness"]` with `"correct"` (no bugs/blockers) or `"incorrect"`
+- `type: ["explanation"]` with a plain-text 1-3 sentence verdict summary
+- `type: ["confidence"]` with a 0.0-1.0 confidence value
+
+Do not emit a separate submit tool call or duplicate `findings` in another payload. Once all sections are recorded, stop and let idle finalization assemble the result.
 
 You NEVER output JSON or code blocks.
 
