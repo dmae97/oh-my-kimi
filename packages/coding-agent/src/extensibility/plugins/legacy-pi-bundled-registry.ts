@@ -128,6 +128,7 @@ import * as bundledPiAiUsageShared from "@oh-my-pi/pi-ai/usage/shared";
 import * as bundledPiAiUsageZai from "@oh-my-pi/pi-ai/usage/zai";
 import * as bundledPiAiUtilsAbort from "@oh-my-pi/pi-ai/utils/abort";
 import * as bundledPiAiUtilsAnthropicAuth from "@oh-my-pi/pi-ai/utils/anthropic-auth";
+import * as bundledPiAiUtilsBlockSymbols from "@oh-my-pi/pi-ai/utils/block-symbols";
 import * as bundledPiAiUtilsDeterministicId from "@oh-my-pi/pi-ai/utils/deterministic-id";
 import * as bundledPiAiUtilsEmptyCompletionRetry from "@oh-my-pi/pi-ai/utils/empty-completion-retry";
 import * as bundledPiAiUtilsEventStream from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -164,7 +165,6 @@ import * as bundledPiAiUtilsSchemaZodDecontaminate from "@oh-my-pi/pi-ai/utils/s
 import * as bundledPiAiUtilsSdkStreamTimeout from "@oh-my-pi/pi-ai/utils/sdk-stream-timeout";
 import * as bundledPiAiUtilsSseDebug from "@oh-my-pi/pi-ai/utils/sse-debug";
 import * as bundledPiAiUtilsStreamMarkupHealing from "@oh-my-pi/pi-ai/utils/stream-markup-healing";
-import * as bundledPiAiUtilsStrip from "@oh-my-pi/pi-ai/utils/strip";
 import * as bundledPiAiUtilsThinkingLoop from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import * as bundledPiAiUtilsToolChoice from "@oh-my-pi/pi-ai/utils/tool-choice";
 import * as bundledPiAiUtilsValidation from "@oh-my-pi/pi-ai/utils/validation";
@@ -724,6 +724,7 @@ import * as bundledPiCodingAgentSessionSessionMigrations from "@oh-my-pi/pi-codi
 import * as bundledPiCodingAgentSessionSessionPaths from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import * as bundledPiCodingAgentSessionSessionPersistence from "@oh-my-pi/pi-coding-agent/session/session-persistence";
 import * as bundledPiCodingAgentSessionSessionStorage from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import * as bundledPiCodingAgentSessionSettingsStreamFn from "@oh-my-pi/pi-coding-agent/session/settings-stream-fn";
 import * as bundledPiCodingAgentSessionShakeTypes from "@oh-my-pi/pi-coding-agent/session/shake-types";
 import * as bundledPiCodingAgentSessionSnapcompactInline from "@oh-my-pi/pi-coding-agent/session/snapcompact-inline";
 import * as bundledPiCodingAgentSessionSnapcompactSavingsJournal from "@oh-my-pi/pi-coding-agent/session/snapcompact-savings-journal";
@@ -1221,6 +1222,7 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 	"@oh-my-pi/pi-ai/utils/anthropic-auth": bundledPiAiUtilsAnthropicAuth as unknown as Readonly<
 		Record<string, unknown>
 	>,
+	"@oh-my-pi/pi-ai/utils/block-symbols": bundledPiAiUtilsBlockSymbols as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-ai/utils/deterministic-id": bundledPiAiUtilsDeterministicId as unknown as Readonly<
 		Record<string, unknown>
 	>,
@@ -1255,7 +1257,6 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 	"@oh-my-pi/pi-ai/utils/stream-markup-healing": bundledPiAiUtilsStreamMarkupHealing as unknown as Readonly<
 		Record<string, unknown>
 	>,
-	"@oh-my-pi/pi-ai/utils/strip": bundledPiAiUtilsStrip as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-ai/utils/thinking-loop": bundledPiAiUtilsThinkingLoop as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-ai/utils/tool-choice": bundledPiAiUtilsToolChoice as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-ai/utils/validation": bundledPiAiUtilsValidation as unknown as Readonly<Record<string, unknown>>,
@@ -2695,6 +2696,8 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		bundledPiCodingAgentSessionSessionPersistence as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/session/session-storage":
 		bundledPiCodingAgentSessionSessionStorage as unknown as Readonly<Record<string, unknown>>,
+	"@oh-my-pi/pi-coding-agent/session/settings-stream-fn":
+		bundledPiCodingAgentSessionSettingsStreamFn as unknown as Readonly<Record<string, unknown>>,
 	"@oh-my-pi/pi-coding-agent/session/shake-types": bundledPiCodingAgentSessionShakeTypes as unknown as Readonly<
 		Record<string, unknown>
 	>,
