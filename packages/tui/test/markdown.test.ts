@@ -601,9 +601,9 @@ describe("Markdown component", () => {
 			tui.addChild(component);
 			tui.start();
 			// The first render is scheduled on the setImmediate hop; drain it before flushing.
-			await new Promise<void>(resolve => {
-				setImmediate(resolve);
-			});
+			const firstRender = Promise.withResolvers<void>();
+			setImmediate(firstRender.resolve);
+			await firstRender.promise;
 			await terminal.flush();
 
 			expect(component.markdownLineCount > 0).toBeTruthy();

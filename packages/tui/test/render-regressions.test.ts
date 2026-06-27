@@ -125,9 +125,9 @@ async function settle(term: VirtualTerminal): Promise<void> {
 	// The render scheduler defers its immediate hop with setImmediate (so queued
 	// stdin such as Esc is read before an ordinary render). Drain that hop so the
 	// throttled setTimeout(0) render is scheduled, let it fire, then flush.
-	await new Promise<void>(resolve => {
-		setImmediate(resolve);
-	});
+	const immediate = Promise.withResolvers<void>();
+	setImmediate(immediate.resolve);
+	await immediate.promise;
 	await Bun.sleep(1);
 	await term.flush();
 }

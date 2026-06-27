@@ -10,7 +10,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
-// Exercises the real per-tool approval gate (ExtensionToolWrapper) for read/search/write,
+// Exercises the real per-tool approval gate (ExtensionToolWrapper) for read/grep/write,
 // proving an `ssh://` target is exec-tier (prompts / is denied without a UI) while the
 // equivalent local-path call runs. ssh:// calls are rejected at the approval gate before any
 // connection, so this suite needs no live ssh.
@@ -46,7 +46,7 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "search", "write"],
+			toolNames: ["read", "grep", "write"],
 		});
 		session = created.session;
 	});
@@ -60,7 +60,7 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 		}
 	});
 
-	function tool(name: "read" | "search" | "write") {
+	function tool(name: "read" | "grep" | "write") {
 		const found = session.getToolByName(name);
 		if (!found) throw new Error(`Expected ${name} tool`);
 		return found;
@@ -86,10 +86,10 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 		expect(JSON.stringify(ok.content)).toContain("hello-local");
 	});
 
-	it("search: a delimited ssh:// entry requires approval before path expansion", async () => {
+	it("grep: a delimited ssh:// entry requires approval before path expansion", async () => {
 		// The wrapper sees `paths` verbatim (pre-expansion), so the substring scan must trip exec here.
 		await expect(
-			tool("search").execute(
+			tool("grep").execute(
 				"s-ssh",
 				{ pattern: "x", paths: "local.txt,ssh://localhost/etc/hosts" },
 				undefined,
@@ -97,7 +97,7 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 				ctx("always-ask"),
 			),
 		).rejects.toThrow(APPROVAL_RE);
-		const ok = await tool("search").execute(
+		const ok = await tool("grep").execute(
 			"s-local",
 			{ pattern: "hello", paths: ["."] },
 			undefined,

@@ -128,7 +128,7 @@ describe("compaction prefers the current session model over modelRoles.default",
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "compaction.keepRecentTokens": 1 }),
+			settings: Settings.isolated({ "compaction.keepRecentTokens": 1, "compaction.strategy": "context-full" }),
 			modelRegistry,
 		});
 		session.subscribe(() => {});
