@@ -36,7 +36,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		contextWindow: 0,
 		autoCompactEnabled: false,
 		subagentCount: 0,
-		sessionStartTime: Date.now(),
+		activeMs: 0,
 		activeRepo: null,
 		git: { branch: null, status: null, pr: null },
 		usage: null,

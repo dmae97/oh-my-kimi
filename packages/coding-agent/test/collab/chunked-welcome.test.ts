@@ -208,7 +208,7 @@ function makeFailingGuestContext(failure: Error): InteractiveModeContext {
 		statusLine: {
 			setCollabStatus: () => {},
 			invalidate: () => {},
-			setSessionStartTime: () => {},
+			resetActiveTime: () => {},
 		},
 		ui: { requestRender: () => {} },
 		chatContainer: { clear: () => {} },

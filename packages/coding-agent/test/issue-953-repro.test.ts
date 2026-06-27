@@ -36,7 +36,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 		contextWindow: 0,
 		autoCompactEnabled: false,
 		subagentCount: 0,
-		sessionStartTime: Date.now(),
+		activeMs: 0,
 		activeRepo: null,
 		git: {
 			branch: null,

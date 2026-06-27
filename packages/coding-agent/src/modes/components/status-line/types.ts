@@ -79,7 +79,14 @@ export interface SegmentContext {
 	contextWindow: number;
 	autoCompactEnabled: boolean;
 	subagentCount: number;
-	sessionStartTime: number;
+	/**
+	 * Active processing time accumulated this session, in ms — the union of
+	 * every `agent_start`→`agent_end` window plus the currently-streaming
+	 * window if the agent is running. Idle wall-clock never contributes, so
+	 * this is what {@link StatusLineSegmentId.time_spent} renders instead of
+	 * `Date.now() - sessionStart`.
+	 */
+	activeMs: number;
 	git: {
 		branch: string | null;
 		status: { staged: number; unstaged: number; untracked: number } | null;
