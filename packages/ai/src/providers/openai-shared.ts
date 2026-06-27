@@ -1927,7 +1927,11 @@ export async function processResponsesStream<TApi extends Api>(
 				registerOpenItem(event.output_index, item.id, { item, block });
 				stream.push({ type: "thinking_start", contentIndex: contentIndexOf(block), partial: output });
 			} else if (item.type === "message") {
-				const block: TextContent = { type: "text", text: "" };
+				const block: TextContent = {
+					type: "text",
+					text: "",
+					textSignature: encodeTextSignatureV1(item.id, item.phase ?? undefined),
+				};
 				output.content.push(block);
 				registerOpenItem(event.output_index, item.id, { item, block });
 				stream.push({ type: "text_start", contentIndex: contentIndexOf(block), partial: output });

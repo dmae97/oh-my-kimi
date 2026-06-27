@@ -222,6 +222,7 @@ const incrementalItems1 = [
 		content: [{ type: "output_text", text: "First response" }],
 		status: "completed",
 		id: "msg_1",
+		phase: "commentary",
 	},
 ];
 
@@ -232,6 +233,7 @@ const incrementalItems2 = [
 		content: [{ type: "output_text", text: "Second response" }],
 		status: "completed",
 		id: "msg_2",
+		phase: "final_answer",
 	},
 ];
 

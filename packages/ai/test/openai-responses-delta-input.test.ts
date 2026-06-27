@@ -85,4 +85,29 @@ describe("buildResponsesDeltaInput streaming-symbol scrub", () => {
 		};
 		expect(buildResponsesDeltaInput(previous, [items[1]], current)).toBeNull();
 	});
+
+	it("treats assistant message phase as part of chained-prefix equality", () => {
+		const user = baselineItems()[0]!;
+		const previousAssistant: ResponseInputItem = {
+			type: "message",
+			role: "assistant",
+			content: "intermediate update",
+			phase: "commentary",
+		};
+		const appended: ResponseInputItem = {
+			type: "message",
+			role: "user",
+			content: [{ type: "input_text", text: "follow-up" }],
+		};
+		const previous = { input: [user] };
+
+		expect(
+			buildResponsesDeltaInput(previous, [previousAssistant], { input: [user, previousAssistant, appended] }),
+		).toEqual([appended]);
+
+		const wrongPhaseAssistant: ResponseInputItem = { ...previousAssistant, phase: "final_answer" };
+		expect(
+			buildResponsesDeltaInput(previous, [previousAssistant], { input: [user, wrongPhaseAssistant, appended] }),
+		).toBeNull();
+	});
 });
