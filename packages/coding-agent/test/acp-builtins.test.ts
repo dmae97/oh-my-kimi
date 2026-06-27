@@ -12,7 +12,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
-import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { removeWithRetries, setProjectDir } from "@oh-my-pi/pi-utils";
 
 interface FakeAcpBuiltinSession {
 	fastMode: boolean;
@@ -743,6 +743,33 @@ describe("wave 3 commands", () => {
 		const result = await executeAcpBuiltinSlashCommand("/move /no/such/path/xyz", runtime);
 		expect(result).toEqual({ consumed: true });
 		expect(output[0]).toContain("does not exist");
+	});
+
+	it("/move: relocates the current session instead of switching to an empty target session", async () => {
+		const { output, runtime, session, fakeSessionManager } = createRuntime();
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-move-target-"));
+		const originalProjectDir = process.cwd();
+		const reloadForCwd = spyOn(runtime.settings, "reloadForCwd");
+		let configNotified = 0;
+		runtime.notifyConfigChanged = () => {
+			configNotified++;
+		};
+
+		try {
+			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(fakeSessionManager._movedTo).toBe(targetDir);
+			expect(fakeSessionManager.getCwd()).toBe(targetDir);
+			expect(session._switchedTo).toBeUndefined();
+			expect(session._movedFromEmptySessionFile).toBeUndefined();
+			expect(reloadForCwd).toHaveBeenCalledWith(targetDir);
+			expect(configNotified).toBe(1);
+			expect(output[0]).toContain(`Moved to ${targetDir}.`);
+		} finally {
+			setProjectDir(originalProjectDir);
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
 	});
 
 	// /memory
