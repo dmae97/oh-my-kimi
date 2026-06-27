@@ -35,8 +35,8 @@ const appSchema = type({
 	"target?": type("string").describe("substring to pick a window"),
 });
 
-const browserSchema = type({
-	action: type("'open' | 'close' | 'run'").describe("operation"),
+const browserOpenSchema = type({
+	action: type("'open'").describe("operation"),
 	"name?": type("string").describe("tab id (default 'main')"),
 	"url?": type("string").describe("url to open"),
 	"app?": appSchema,
@@ -54,6 +54,48 @@ const browserSchema = type({
 	"all?": type("boolean").describe("close every tab"),
 	"kill?": type("boolean").describe("also kill spawned-app browsers"),
 });
+
+const browserCloseSchema = type({
+	action: type("'close'").describe("operation"),
+	"name?": type("string").describe("tab id (default 'main')"),
+	"url?": type("string").describe("url to open"),
+	"app?": appSchema,
+	"viewport?": {
+		width: "number",
+		height: "number",
+		"scale?": "number",
+	},
+	"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
+		"navigation wait condition",
+	),
+	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
+	"code?": type("string").describe("js body to run in tab"),
+	"timeout?": type("number").describe("timeout in seconds"),
+	"all?": type("boolean").describe("close every tab"),
+	"kill?": type("boolean").describe("also kill spawned-app browsers"),
+});
+
+const browserRunSchema = type({
+	action: type("'run'").describe("operation"),
+	"name?": type("string").describe("tab id (default 'main')"),
+	"url?": type("string").describe("url to open"),
+	"app?": appSchema,
+	"viewport?": {
+		width: "number",
+		height: "number",
+		"scale?": "number",
+	},
+	"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
+		"navigation wait condition",
+	),
+	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
+	code: type("string").describe("js body to run in tab"),
+	"timeout?": type("number").describe("timeout in seconds"),
+	"all?": type("boolean").describe("close every tab"),
+	"kill?": type("boolean").describe("also kill spawned-app browsers"),
+});
+
+const browserSchema = browserOpenSchema.or(browserCloseSchema).or(browserRunSchema);
 
 /** Input schema for the browser tool. */
 export type BrowserParams = typeof browserSchema.infer;
