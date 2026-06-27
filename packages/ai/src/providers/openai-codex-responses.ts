@@ -55,6 +55,7 @@ import {
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
+import { stripVariant } from "../utils/strip";
 import { compactGrammarDefinition } from "./grammar";
 import {
 	type CodexReasoningContext,
@@ -1199,7 +1200,7 @@ function handleCodexStreamEvent(
 
 	if (eventType === "response.output_item.added") {
 		runtime.whitespaceToolCallArgumentsDelta = undefined;
-		if (!firstTokenTime) firstTokenTime = Date.now();
+		if (!firstTokenTime) firstTokenTime = performance.now();
 		const item = rawEvent.item as CodexEventItem;
 		runtime.currentItem = item;
 		runtime.currentBlock = createOutputBlockForItem(item);
@@ -1510,8 +1511,8 @@ function handleOutputItemDone(
 			// Persist the authoritative final args on the stored block; the throttled
 			// delta parser may have left block.arguments stale (often `{}`).
 			block.arguments = toolCall.arguments;
-			delete (block as { partialJson?: string }).partialJson;
-			delete (block as { lastParseLen?: number }).lastParseLen;
+			stripVariant<{ partialJson?: string }>(block, "partialJson");
+			stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
 		}
 		// Detach so a late/duplicate arguments.delta cannot append to the
 		// finished block or trip the whitespace-loop guard against it.
@@ -1534,7 +1535,7 @@ function handleOutputItemDone(
 		};
 		if (block?.type === "toolCall") {
 			block.arguments = { input: rawInput };
-			delete (block as { partialJson?: string }).partialJson;
+			stripVariant<{ partialJson?: string }>(block, "partialJson");
 		}
 		closeCodexOpenItem(runtime, entry);
 		runtime.canSafelyReplayWebsocketOverSse = false;
@@ -1980,7 +1981,7 @@ function finalizeCodexResponse(
 	}
 
 	output.providerPayload = createOpenAIResponsesHistoryPayload(context.model.provider, runtime.nativeOutputItems);
-	output.duration = Date.now() - context.startTime;
+	output.duration = performance.now() - context.startTime;
 	if (completion.firstTokenTime) {
 		output.ttft = completion.firstTokenTime - context.startTime;
 	}
@@ -1993,7 +1994,7 @@ async function handleCodexStreamFailure(
 ): Promise<AssistantMessage> {
 	const { output } = context;
 	for (const block of output.content) {
-		delete (block as { index?: number }).index;
+		stripVariant<{ index?: number }>(block, "index");
 	}
 	if (context.requestContext.websocketState) {
 		resetCodexWebSocketAppendState(context.requestContext.websocketState);
@@ -2003,7 +2004,7 @@ async function handleCodexStreamFailure(
 	output.stopReason = context.options?.signal?.aborted ? "aborted" : "error";
 	output.errorStatus = extractHttpStatusFromError(error);
 	output.errorMessage = await finalizeErrorMessage(error, context.requestContext.rawRequestDump);
-	output.duration = Date.now() - context.startTime;
+	output.duration = performance.now() - context.startTime;
 	if (context.firstTokenTime) {
 		output.ttft = context.firstTokenTime - context.startTime;
 	}
@@ -2018,7 +2019,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],

@@ -40,6 +40,7 @@ import {
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
+import { stripVariant } from "../utils/strip";
 import {
 	isForcedToolChoice,
 	mapToOpenAIResponsesToolChoice,
@@ -362,7 +363,7 @@ const streamOpenAIResponsesOnce = (
 
 	// Start async processing
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
@@ -665,7 +666,7 @@ const streamOpenAIResponsesOnce = (
 			});
 			await processResponsesStream(timedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
-					if (!firstTokenTime) firstTokenTime = Date.now();
+					if (!firstTokenTime) firstTokenTime = performance.now();
 				},
 				onOutputItemDone: item => {
 					// `processResponsesStream` hands over a private clone already; no
@@ -725,12 +726,12 @@ const streamOpenAIResponsesOnce = (
 				}
 			}
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as { index?: number }).index;
+			for (const block of output.content) stripVariant<{ index?: number }>(block, "index");
 			if (chainState) resetOpenAIResponsesChainState(chainState);
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
@@ -743,7 +744,7 @@ const streamOpenAIResponsesOnce = (
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
 			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();

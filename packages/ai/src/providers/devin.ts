@@ -78,7 +78,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = {
@@ -109,7 +109,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 		let latestStopReason = StopReason.UNSPECIFIED;
 
 		const markFirstToken = () => {
-			if (firstTokenTime === undefined) firstTokenTime = Date.now();
+			if (firstTokenTime === undefined) firstTokenTime = performance.now();
 		};
 
 		const endTextBlock = () => {
@@ -318,7 +318,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 			output.stopReason = doneReason;
 
 			calculateCost(model, output.usage);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 
 			stream.push({ type: "done", reason: doneReason, message: output });
@@ -329,7 +329,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 			output.stopReason = errorReason;
 			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = formatErrorMessageWithRetryAfter(error);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: errorReason, error: output });
 			stream.end();

@@ -41,6 +41,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump } from "../utils/http-inspector";
 import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { toolWireSchema } from "../utils/schema/wire";
+import { stripVariant } from "../utils/strip";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream } from "./aws-eventstream";
 import { signRequest } from "./aws-sigv4";
@@ -289,7 +290,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = {
@@ -463,12 +464,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 						break;
 					}
 					case "contentBlockStart": {
-						if (!firstTokenTime) firstTokenTime = Date.now();
+						if (!firstTokenTime) firstTokenTime = performance.now();
 						handleContentBlockStart(payload as ContentBlockStartEvent, blocks, output, stream, sentinelInjected);
 						break;
 					}
 					case "contentBlockDelta": {
-						if (!firstTokenTime) firstTokenTime = Date.now();
+						if (!firstTokenTime) firstTokenTime = performance.now();
 						handleContentBlockDelta(payload as ContentBlockDeltaEvent, blocks, output, stream);
 						break;
 					}
@@ -503,14 +504,14 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
-				delete (block as Block).index;
-				delete (block as Block).partialJson;
+				stripVariant<Block>(block, "index");
+				stripVariant<Block>(block, "partialJson");
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
@@ -536,7 +537,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				}
 			}
 			output.errorMessage = await appendRawHttpRequestDumpFor400(baseMessage + diagnostics, error, rawRequestDump);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
@@ -666,7 +667,7 @@ function handleContentBlockStop(
 	const index = blocks.findIndex(b => b.index === event.contentBlockIndex);
 	const block = blocks[index];
 	if (!block) return;
-	delete (block as Block).index;
+	stripVariant<Block>(block, "index");
 
 	switch (block.type) {
 		case "text":
@@ -677,8 +678,8 @@ function handleContentBlockStop(
 			break;
 		case "toolCall":
 			block.arguments = parseStreamingJson(block.partialJson);
-			delete (block as Block).partialJson;
-			delete (block as Block).lastParseLen;
+			stripVariant<Block>(block, "partialJson");
+			stripVariant<Block>(block, "lastParseLen");
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;
 	}

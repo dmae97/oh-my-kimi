@@ -20,6 +20,7 @@ import {
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
+import { stripVariant } from "../utils/strip";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	applyOpenAIReasoningEffortFallback,
@@ -85,7 +86,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 
 	// Start async processing
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 		const deploymentName = resolveDeploymentName(model, options);
 
@@ -203,7 +204,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			let sawTerminalResponseEvent = false;
 			await processResponsesStream(timedOpenaiStream, output, stream, model, {
 				onFirstToken: () => {
-					if (!firstTokenTime) firstTokenTime = Date.now();
+					if (!firstTokenTime) firstTokenTime = performance.now();
 				},
 				onCompleted: () => {
 					sawTerminalResponseEvent = true;
@@ -227,17 +228,17 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) delete (block as { index?: number }).index;
+			for (const block of output.content) stripVariant<{ index?: number }>(block, "index");
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = firstEventTimeoutError?.message ?? (await finalizeErrorMessage(error, rawRequestDump));
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();

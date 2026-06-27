@@ -62,6 +62,7 @@ import {
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
+import { stripVariant } from "../utils/strip";
 import { isForcedToolChoice } from "../utils/tool-choice";
 import {
 	buildCopilotDynamicHeaders,
@@ -1720,8 +1721,8 @@ export function accumulateToolCallArgumentsDelta(
 export function finalizeToolCallArgumentsDone(block: ResponsesToolCallBlock, args: string): void {
 	block.partialJson = args;
 	block.arguments = parseStreamingJson(block.partialJson);
-	delete (block as { partialJson?: string }).partialJson;
-	delete (block as { lastParseLen?: number }).lastParseLen;
+	stripVariant<{ partialJson?: string }>(block, "partialJson");
+	stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
 }
 
 export function accumulateCustomToolCallInputDelta(
@@ -2117,9 +2118,9 @@ export async function processResponsesStream<TApi extends Api>(
 					// leaving block.arguments stale (often `{}`); the emitted toolCall
 					// and the persisted block must agree.
 					block.arguments = args;
-					delete (block as { partialJson?: string }).partialJson;
-					delete (block as { lastParseLen?: number }).lastParseLen;
-					delete (block as { argumentsDone?: boolean }).argumentsDone;
+					stripVariant<{ partialJson?: string }>(block, "partialJson");
+					stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
+					stripVariant<{ argumentsDone?: boolean }>(block, "argumentsDone");
 					contentIndex = contentIndexOf(block);
 				} else {
 					// `output_item.added` never arrived (lossy proxy) — synthesize the
@@ -2145,8 +2146,8 @@ export async function processResponsesStream<TApi extends Api>(
 					// Persist the final input on the stored block and drop the transient
 					// accumulation buffer, mirroring the function_call branch above.
 					block.arguments = { input: rawInput };
-					delete (block as { partialJson?: string }).partialJson;
-					delete (block as { lastParseLen?: number }).lastParseLen;
+					stripVariant<{ partialJson?: string }>(block, "partialJson");
+					stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
 					contentIndex = contentIndexOf(block);
 				} else {
 					output.content.push(toolCall);
@@ -2260,9 +2261,9 @@ export function finalizePendingResponsesToolCalls(output: AssistantMessage): voi
 					? { input: pending.partialJson }
 					: parseStreamingJson(pending.partialJson);
 		}
-		delete pending.partialJson;
-		delete pending.lastParseLen;
-		delete pending.argumentsDone;
+		stripVariant<{ partialJson?: string }>(pending, "partialJson");
+		stripVariant<{ lastParseLen?: number }>(pending, "lastParseLen");
+		stripVariant<{ argumentsDone?: boolean }>(pending, "argumentsDone");
 	}
 }
 

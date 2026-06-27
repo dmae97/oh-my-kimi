@@ -29,6 +29,7 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
+import { errorIdFromError } from "../utils/error-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import {
@@ -46,6 +47,7 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
+import { stripVariant } from "../utils/strip";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -560,7 +562,7 @@ const streamOpenAICompletionsOnce = (
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 		const policy = resolveOpenAICompatForRequest(model, options);
 
@@ -868,7 +870,7 @@ const streamOpenAICompletionsOnce = (
 
 			const appendTextDelta = (text: string): void => {
 				if (!text) return;
-				if (!firstTokenTime) firstTokenTime = Date.now();
+				if (!firstTokenTime) firstTokenTime = performance.now();
 				appendText(output, stream, text);
 			};
 			// Tracks the last full cumulative reasoning snapshot per signature (the
@@ -895,7 +897,7 @@ const streamOpenAICompletionsOnce = (
 					lastCumulativeReasoningBySignature.set(key, thinking);
 					if (!emittedThinking) return;
 				}
-				if (!firstTokenTime) firstTokenTime = Date.now();
+				if (!firstTokenTime) firstTokenTime = performance.now();
 				appendThinking(output, stream, emittedThinking, signature);
 			};
 
@@ -1069,7 +1071,7 @@ const streamOpenAICompletionsOnce = (
 
 					const normalizedDeltaText = normalizeStreamingContentText(choice.delta.content);
 					if (normalizedDeltaText.length > 0) {
-						if (!firstTokenTime) firstTokenTime = Date.now();
+						if (!firstTokenTime) firstTokenTime = performance.now();
 						const hasStructuredToolCalls =
 							Array.isArray(choice.delta.tool_calls) && choice.delta.tool_calls.length > 0;
 
@@ -1270,7 +1272,7 @@ const streamOpenAICompletionsOnce = (
 			}
 
 			output.errorMessage = undefined;
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
@@ -1281,11 +1283,12 @@ const streamOpenAICompletionsOnce = (
 			try {
 				finishOpenBlocksOnError();
 			} catch {}
-			for (const block of output.content) delete (block as OpenAICompletionsContentBlockWithIndex).index;
+			for (const block of output.content) stripVariant<OpenAICompletionsContentBlockWithIndex>(block, "index");
 			const firstEventTimeoutError = abortTracker.getLocalAbortReason();
 			output.stopReason = abortTracker.wasCallerAbort() ? "aborted" : "error";
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 			output.errorStatus = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
+			output.errorId = errorIdFromError(error, model.api);
 			output.errorMessage =
 				firstEventTimeoutError?.message ??
 				(await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse));
@@ -1293,7 +1296,7 @@ const streamOpenAICompletionsOnce = (
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
 			output.errorMessage = rewriteCopilotError(output.errorMessage, error, model.provider);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();

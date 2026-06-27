@@ -288,6 +288,7 @@ async function runMock(
 	options: SimpleStreamOptions | undefined,
 ): Promise<void> {
 	const startedAt = Date.now();
+	const perfStart = performance.now();
 
 	let handler: MockHandler | undefined;
 	try {
@@ -338,7 +339,7 @@ async function runMock(
 		try {
 			await sleep(response.delayMs, options?.signal);
 		} catch {
-			emitTerminalError(stream, model, startedAt, "aborted", "Mock aborted during delay.");
+			emitTerminalError(stream, model, startedAt, perfStart, "aborted", "Mock aborted during delay.");
 			return;
 		}
 	}
@@ -350,7 +351,7 @@ async function runMock(
 				: response.throw instanceof Error
 					? response.throw.message
 					: String(response.throw);
-		emitTerminalError(stream, model, startedAt, "error", message);
+		emitTerminalError(stream, model, startedAt, perfStart, "error", message);
 		return;
 	}
 
@@ -397,7 +398,7 @@ async function runMock(
 	partial.stopDetails = response.stopDetails;
 	partial.errorMessage = response.errorMessage;
 	partial.usage = mergeUsage(response.usage);
-	partial.duration = Date.now() - startedAt;
+	partial.duration = performance.now() - perfStart;
 
 	if (reason === "aborted" || reason === "error") {
 		stream.push({
@@ -460,6 +461,7 @@ function emitTerminalError(
 	stream: AssistantMessageEventStream,
 	model: Model<Api>,
 	startedAt: number,
+	perfStart: number,
 	reason: "aborted" | "error",
 	message: string,
 ): void {
@@ -473,7 +475,7 @@ function emitTerminalError(
 		stopReason: reason as StopReason,
 		errorMessage: message,
 		timestamp: startedAt,
-		duration: Date.now() - startedAt,
+		duration: performance.now() - perfStart,
 	};
 	stream.push({ type: "start", partial: failure });
 	stream.push({ type: "error", reason, error: failure });

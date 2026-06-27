@@ -136,6 +136,7 @@ import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "..
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
+import { stripVariant } from "../utils/strip";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
@@ -315,7 +316,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = {
@@ -427,7 +428,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					currentToolCall = t;
 				},
 				setFirstTokenTime: () => {
-					if (!firstTokenTime) firstTokenTime = Date.now();
+					if (!firstTokenTime) firstTokenTime = performance.now();
 				},
 			};
 
@@ -568,8 +569,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			if (state.currentToolCall) {
 				const idx = output.content.indexOf(state.currentToolCall);
 				state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson);
-				delete (state.currentToolCall as any).partialJson;
-				delete (state.currentToolCall as any).index;
+				stripVariant<ToolCallState>(state.currentToolCall, "partialJson");
+				stripVariant<ToolCallState>(state.currentToolCall, "index");
 				stream.push({
 					type: "toolcall_end",
 					contentIndex: idx,
@@ -580,7 +581,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			calculateCost(model, output.usage);
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({
 				type: "done",
@@ -592,7 +593,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = formatErrorMessageWithRetryAfter(error);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
@@ -757,7 +758,7 @@ async function handleShellStreamArgs(
 ): Promise<void> {
 	const normalizedWorkingDirectory = args.workingDirectory || process.cwd();
 	const normalizedArgs: ShellArgs = { ...args, workingDirectory: normalizedWorkingDirectory };
-	const startTs = Date.now();
+	const startTs = performance.now();
 	log("shellStream", "start", {
 		command: (args as any).command,
 		workingDirectory: normalizedWorkingDirectory,
@@ -895,7 +896,7 @@ async function handleShellStreamArgs(
 	sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
 	sendExecClientStreamClose(h2Request, execMsg);
 
-	log("shellStream", "done", { elapsed: Date.now() - startTs });
+	log("shellStream", "done", { elapsed: performance.now() - startTs });
 }
 
 function sendShellStreamExitFromResult(
@@ -1972,7 +1973,7 @@ function endCurrentTextBlock(output: AssistantMessage, stream: AssistantMessageE
 	const block = state.currentTextBlock;
 	if (!block) return;
 	const idx = output.content.indexOf(block);
-	delete (block as { index?: number }).index;
+	stripVariant<{ index?: number }>(block, "index");
 	stream.push({
 		type: "text_end",
 		contentIndex: idx,
@@ -1990,7 +1991,7 @@ function endCurrentThinkingBlock(
 	const block = state.currentThinkingBlock;
 	if (!block) return;
 	const idx = output.content.indexOf(block);
-	delete (block as { index?: number }).index;
+	stripVariant<{ index?: number }>(block, "index");
 	stream.push({
 		type: "thinking_end",
 		contentIndex: idx,
@@ -2118,9 +2119,9 @@ export function processInteractionUpdate(
 				}
 			}
 			const idx = output.content.indexOf(state.currentToolCall);
-			delete (state.currentToolCall as any).partialJson;
-			delete (state.currentToolCall as any).index;
-			delete (state.currentToolCall as any).kind;
+			stripVariant<ToolCallState>(state.currentToolCall, "partialJson");
+			stripVariant<ToolCallState>(state.currentToolCall, "index");
+			stripVariant<ToolCallState>(state.currentToolCall, "kind");
 			stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: state.currentToolCall, partial: output });
 			state.setToolCall(null);
 		}

@@ -1,5 +1,6 @@
 import { renderDemotedThinking } from "../dialect/demotion";
 import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
+import { stripVariant } from "../utils/strip";
 
 const enum ToolCallStatus {
 	/** A tool result has already been emitted for this tool call; later duplicates must be skipped. */
@@ -484,7 +485,7 @@ export function transformMessages<TApi extends Api>(
 
 					if (!isSameModel && toolCall.thoughtSignature) {
 						normalizedToolCall = { ...toolCall };
-						delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
+						stripVariant<{ thoughtSignature?: string }>(normalizedToolCall, "thoughtSignature");
 					}
 
 					if (isAnthropicTarget) {

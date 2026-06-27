@@ -11,6 +11,7 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 	type StopReason,
+	stripVariant,
 	type ToolCall,
 } from "@oh-my-pi/pi-ai";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
@@ -208,7 +209,7 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 function scrubPartialJson(partial: AssistantMessage): void {
 	for (const block of partial.content) {
 		if (block?.type === "toolCall") {
-			delete (block as ToolCall & { partialJson?: string }).partialJson;
+			stripVariant<ToolCall & { partialJson?: string }>(block, "partialJson");
 		}
 	}
 }
@@ -240,9 +241,10 @@ function processProxyEvent(
 				totalTokens: 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
-			delete (partial as { stopReason?: string }).stopReason;
-			delete (partial as { errorMessage?: string }).errorMessage;
-			delete (partial as { duration?: number }).duration;
+			stripVariant<AssistantMessage>(partial, "stopReason");
+			stripVariant<AssistantMessage>(partial, "errorMessage");
+			stripVariant<AssistantMessage>(partial, "errorId");
+			stripVariant<AssistantMessage>(partial, "duration");
 			return { type: "start", partial };
 
 		case "text_start":
@@ -341,7 +343,7 @@ function processProxyEvent(
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
 				partialJsonByIndex.delete(proxyEvent.contentIndex);
-				delete (content as ToolCall & { partialJson?: string }).partialJson;
+				stripVariant<ToolCall & { partialJson?: string }>(content, "partialJson");
 				return {
 					type: "toolcall_end",
 					contentIndex: proxyEvent.contentIndex,

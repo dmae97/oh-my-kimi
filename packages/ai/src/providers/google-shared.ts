@@ -25,6 +25,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
+import { stripVariant } from "../utils/strip";
 import type {
 	Content,
 	FinishReason,
@@ -863,7 +864,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = {
@@ -943,7 +944,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 					options,
 					retainTextSignature,
 					onFirstToken: () => {
-						firstTokenTime = Date.now();
+						firstTokenTime = performance.now();
 					},
 				});
 
@@ -962,20 +963,20 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 				body = await openStream();
 			}
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason as "length" | "stop" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
 				if ("index" in block) {
-					delete (block as { index?: number }).index;
+					stripVariant<{ index?: number }>(block, "index");
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorStatus = extractHttpStatusFromError(error);
 			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();

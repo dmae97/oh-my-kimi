@@ -35,6 +35,7 @@ import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/id
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
+import { stripVariant } from "../utils/strip";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
 import {
 	convertMessages,
@@ -517,7 +518,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const startTime = Date.now();
+		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
 		const output: AssistantMessage = {
@@ -646,7 +647,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			let lastResponseId: string | undefined;
 			const ensureStarted = () => {
 				if (!started) {
-					if (!firstTokenTime) firstTokenTime = Date.now();
+					if (!firstTokenTime) firstTokenTime = performance.now();
 					stream.push({ type: "start", partial: output });
 					started = true;
 				}
@@ -1020,14 +1021,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
 				if ("index" in block) {
-					delete (block as { index?: number }).index;
+					stripVariant<{ index?: number }>(block, "index");
 				}
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -1037,7 +1038,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				error,
 				rawRequestDump,
 			);
-			output.duration = Date.now() - startTime;
+			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
