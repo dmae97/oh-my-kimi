@@ -200,7 +200,6 @@ export class StatusLineComponent implements Component {
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
-	#subagentHubHint: string | undefined;
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: { enabled: boolean } | null = null;
@@ -304,12 +303,6 @@ export class StatusLineComponent implements Component {
 
 	setSubagentCount(count: number): void {
 		this.#subagentCount = count;
-	}
-
-	/** Hub key label shown in the forced running-subagents badge. */
-	setSubagentHubHint(hint: string | undefined): void {
-		const trimmed = hint?.trim();
-		this.#subagentHubHint = trimmed ? trimmed : undefined;
 	}
 
 	/** Active subagent count as currently displayed (collab state mirroring). */
@@ -925,8 +918,7 @@ export class StatusLineComponent implements Component {
 	#subagentBadgeText(): string | undefined {
 		if (this.#subagentCount === 0) return undefined;
 		const noun = this.#subagentCount === 1 ? "agent" : "agents";
-		const hubHint = this.#subagentHubHint ? ` — ${this.#subagentHubHint} hub` : " — Agent Hub";
-		return theme.fg("statusLineSubagents", `${theme.icon.agents} ${this.#subagentCount} ${noun} running${hubHint}`);
+		return theme.fg("statusLineSubagents", `${theme.icon.agents} ${this.#subagentCount} ${noun}`);
 	}
 
 	#buildStatusLine(width: number): string {
