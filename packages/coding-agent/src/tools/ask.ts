@@ -17,7 +17,17 @@
 
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample } from "@oh-my-pi/pi-ai";
-import { type Component, Markdown, type MarkdownTheme, renderInlineMarkdown, TERMINAL, Text } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Ellipsis,
+	Markdown,
+	type MarkdownTheme,
+	renderInlineMarkdown,
+	TERMINAL,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import { type as arkType } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
@@ -143,20 +153,39 @@ interface CustomInputContext {
 }
 
 /** Hard caps for the editor title rendered while the user types an `Other`
- *  custom answer. Without these the title is one `Text` child stacked above the
- *  prompt editor (no `maxVisible` windowing), so a question with many options
- *  or paragraph-long descriptions hides the input row and hint. */
+ *  custom answer. {@link HookEditorComponent} renders the title via a single
+ *  `Text` child stacked above the prompt editor with no `maxVisible` windowing,
+ *  so the title MUST fit a normal terminal:
+ *  - {@link MAX_CUSTOM_INPUT_OPTION_ROWS}: at most this many option-row entries
+ *    survive {@link pickCustomInputOptionWindow}, regardless of total options.
+ *  - {@link MAX_CUSTOM_INPUT_TITLE_ROWS}: hard cap on rendered title rows after
+ *    every line is pre-truncated to one row at the live terminal width. Sized
+ *    so a 24-row terminal still has space for the input row, hint, and chrome.
+ */
 const MAX_CUSTOM_INPUT_OPTION_ROWS = 8;
-const MAX_CUSTOM_INPUT_DESCRIPTION_CHARS = 120;
+const MAX_CUSTOM_INPUT_TITLE_ROWS = 16;
+const MIN_CUSTOM_INPUT_CONTENT_WIDTH = 20;
+/** Subtracted from the terminal width to leave room for the surrounding
+ *  `Text(... padX=1)` padding + DynamicBorder vertical chrome. */
+const CUSTOM_INPUT_CHROME_COLUMNS = 4;
+const CUSTOM_INPUT_DESCRIPTION_INDENT = "    ";
+
+function customInputContentWidth(): number {
+	const cols = process.stdout.columns ?? 80;
+	return Math.max(MIN_CUSTOM_INPUT_CONTENT_WIDTH, cols - CUSTOM_INPUT_CHROME_COLUMNS);
+}
+
+function clampLineToWidth(line: string, width: number): string {
+	if (visibleWidth(line) <= width) return line;
+	return truncateToWidth(line, width, Ellipsis.Unicode);
+}
+
+function flattenDescription(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
 
 function getSelectOptionDescription(option: ExtensionUISelectItem): string | undefined {
 	return typeof option === "string" ? undefined : option.description;
-}
-
-function truncateCustomInputDescription(text: string): string {
-	const flattened = text.replace(/\s+/g, " ").trim();
-	if (flattened.length <= MAX_CUSTOM_INPUT_DESCRIPTION_CHARS) return flattened;
-	return `${flattened.slice(0, MAX_CUSTOM_INPUT_DESCRIPTION_CHARS - 1).trimEnd()}…`;
 }
 
 interface CustomInputOptionGap {
@@ -228,19 +257,37 @@ function pickCustomInputOptionWindow(
 	return { indices, gapBefore };
 }
 
-function formatCustomInputTitle(
+interface CustomInputRow {
+	text: string;
+	/** Lower priority drops first when over budget; negative values are pinned
+	 *  and never dropped (question, blank, option labels, gap markers, prompt). */
+	priority: number;
+}
+
+function buildCustomInputRows(
 	question: string,
 	options: ExtensionUISelectItem[],
 	context: CustomInputContext,
-): string {
+	contentWidth: number,
+): CustomInputRow[] {
 	const selectedIndex = options.findIndex(option => getSelectOptionLabel(option) === OTHER_OPTION);
 	const checked = new Set(context.checkedIndices ?? []);
 	const window = pickCustomInputOptionWindow(options.length, selectedIndex, checked);
-	const lines: string[] = [question, ""];
+	const rows: CustomInputRow[] = [];
+	rows.push({ text: clampLineToWidth(question, contentWidth), priority: -1 });
+	rows.push({ text: "", priority: -1 });
+
 	const emitGap = (gap: CustomInputOptionGap) => {
 		const checkedSuffix = gap.checked > 0 ? `, ${gap.checked} checked` : "";
-		lines.push(`    … ${gap.total} more option${gap.total === 1 ? "" : "s"}${checkedSuffix} …`);
+		rows.push({
+			text: clampLineToWidth(
+				`    … ${gap.total} more option${gap.total === 1 ? "" : "s"}${checkedSuffix} …`,
+				contentWidth,
+			),
+			priority: -1,
+		});
 	};
+
 	for (const index of window.indices) {
 		const gap = window.gapBefore.get(index);
 		if (gap !== undefined) emitGap(gap);
@@ -256,14 +303,54 @@ function formatCustomInputTitle(
 					: isSelected
 						? `${theme.nav.cursor} `
 						: "  ";
-		lines.push(prefix + label);
+		rows.push({ text: clampLineToWidth(prefix + label, contentWidth), priority: -1 });
 		const description = getSelectOptionDescription(option);
-		if (description) lines.push(`    ${truncateCustomInputDescription(description)}`);
+		if (description) {
+			const flat = flattenDescription(description);
+			if (flat) {
+				rows.push({
+					text: clampLineToWidth(`${CUSTOM_INPUT_DESCRIPTION_INDENT}${flat}`, contentWidth),
+					// Selected (Other) carries no description; favor checked rows
+					// when budget pressure forces description rows to be dropped.
+					priority: isSelected ? 2 : checked.has(index) ? 1 : 0,
+				});
+			}
+		}
 	}
+
 	const trailingGap = window.gapBefore.get(options.length);
 	if (trailingGap !== undefined) emitGap(trailingGap);
-	lines.push("", "Enter your response:");
-	return lines.join("\n");
+	rows.push({ text: "", priority: -1 });
+	rows.push({ text: "Enter your response:", priority: -1 });
+	return rows;
+}
+
+function applyCustomInputRowBudget(rows: CustomInputRow[], budget: number): CustomInputRow[] {
+	if (rows.length <= budget) return rows;
+	// Drop droppable rows lowest priority first; on ties, drop later rows first
+	// so the user still sees the earliest options' descriptions.
+	const droppable = rows
+		.map((row, index) => ({ row, index }))
+		.filter(entry => entry.row.priority >= 0)
+		.sort((a, b) => a.row.priority - b.row.priority || b.index - a.index);
+	const removed = new Set<number>();
+	for (const { index } of droppable) {
+		if (rows.length - removed.size <= budget) break;
+		removed.add(index);
+	}
+	return rows.filter((_, i) => !removed.has(i));
+}
+
+function formatCustomInputTitle(
+	question: string,
+	options: ExtensionUISelectItem[],
+	context: CustomInputContext,
+): string {
+	const contentWidth = customInputContentWidth();
+	const rows = buildCustomInputRows(question, options, context, contentWidth);
+	return applyCustomInputRowBudget(rows, MAX_CUSTOM_INPUT_TITLE_ROWS)
+		.map(row => row.text)
+		.join("\n");
 }
 
 // =============================================================================

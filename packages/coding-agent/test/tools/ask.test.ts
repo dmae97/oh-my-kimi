@@ -682,6 +682,48 @@ describe("AskTool custom input", () => {
 		expect(title).toContain("Enter your response:");
 	});
 
+	it("enforces total title row budget under narrow terminals", async () => {
+		const originalColumns = process.stdout.columns;
+		// Force an 80-wide terminal so long descriptions would wrap to multiple
+		// rendered rows without per-line width truncation + total row budget.
+		Object.defineProperty(process.stdout, "columns", { value: 80, configurable: true });
+		try {
+			const tool = new AskTool(createSession());
+			const editor = vi.fn(async (_title: string) => "custom");
+			const longDescription = "x".repeat(400);
+			const options = Array.from({ length: 8 }, (_, i) => ({
+				label: `option-${i}`,
+				description: longDescription,
+			}));
+			const questions = [{ id: "pick", question: "Pick one", options }];
+			const context = createContext({
+				select: async () => "Other (type your own)",
+				editor,
+			});
+
+			await tool.execute("call-editor-row-budget", { questions }, undefined, undefined, context);
+
+			const title = editor.mock.calls[0]?.[0] ?? "";
+			const lines = title.split("\n");
+			// 16-row hard budget keeps the input row + hint reachable on 80x24.
+			expect(lines.length).toBeLessThanOrEqual(16);
+			// Every emitted line must fit on a single 80-cell row after truncation.
+			for (const line of lines) {
+				expect(stripAnsi(line).length).toBeLessThanOrEqual(80);
+			}
+			expect(title).toContain("Pick one");
+			expect(title).toContain("Other (type your own)");
+			expect(title).toContain("Enter your response:");
+			expect(title).not.toContain("x".repeat(400));
+		} finally {
+			if (originalColumns === undefined) {
+				Object.defineProperty(process.stdout, "columns", { value: undefined, configurable: true });
+			} else {
+				Object.defineProperty(process.stdout, "columns", { value: originalColumns, configurable: true });
+			}
+		}
+	});
+
 	it("returns to the option selector when custom input is dismissed in single-question flow", async () => {
 		const tool = new AskTool(createSession());
 		const abort = vi.fn();
