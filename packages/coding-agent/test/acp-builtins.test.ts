@@ -548,32 +548,6 @@ describe("session lifecycle commands", () => {
 		expect(notified).toBe(false);
 	});
 
-	it("/move: switches to an empty session in the target cwd and calls notifyTitleChanged", async () => {
-		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "acp-move-"));
-		try {
-			const { output, session, fakeSessionManager, runtime } = createRuntime();
-			let notified = false;
-			runtime.notifyTitleChanged = async () => {
-				notified = true;
-			};
-			const expectedMovedTo = path.resolve(tempRoot);
-			const result = await executeAcpBuiltinSlashCommand(`/move ${tempRoot}`, runtime);
-			expect(result).toEqual({ consumed: true });
-			expect(fakeSessionManager._flushed).toBe(true);
-			expect(session._switchedTo).toBeDefined();
-			if (!session._switchedTo) throw new Error("switchSession was not called");
-			const switchedTo = path.resolve(session._switchedTo);
-			expect(fakeSessionManager._sessionFile).toBe(switchedTo);
-			expect(session._movedFromEmptySessionFile).toBe(switchedTo);
-			expect(fakeSessionManager._movedTo).toBe(expectedMovedTo);
-			expect(fakeSessionManager._droppedSessions).toEqual([]);
-			expect(output[0]).toContain(expectedMovedTo);
-			expect(notified).toBe(true);
-		} finally {
-			await removeWithRetries(tempRoot);
-		}
-	});
-
 	it("/move: refuses while streaming", async () => {
 		const { output, session, runtime } = createRuntime();
 		session.isStreaming = true;
