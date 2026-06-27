@@ -9,8 +9,11 @@
 ### Changed
 
 - Simplified status line subagent display by removing running state and hub hint indicators
-
 - Updated online title, memory, and classification tasks to prioritize the `tiny` model role
+
+### Removed
+
+- Removed Pi model dialect support from settings
 
 ### Fixed
 

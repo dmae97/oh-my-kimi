@@ -6,10 +6,13 @@
 
 - Demote cross-vendor reasoning to plain text when the target does not natively support it
 - Refine cross-model reasoning preservation to prevent leaking inert context into structured fields
-
 - Rendered demoted cross-model reasoning blocks in the target model's canonical thinking dialect
 - Improved reliability of AI model responses by implementing automatic retry logic for detected thinking-loop stalls
 - Changed cross-provider/cross-model thinking demotion to render the prior turn's reasoning in the target model's canonical inline thinking dialect (a ```` ```thinking ```` fence for Gemini, `<think>`/`<thinking>` tags for others) instead of bare prose, with a neutral `<think>` fallback for control-token dialects (Harmony, Gemma) so chat-template tokens never leak into history. Replaying it as a native `thought` block was ruled out: end-to-end testing against Gemini 3 confirmed an unsigned `thought` part is schema-accepted but silently discarded — neither recalled nor influencing generation.
+
+### Removed
+
+- Removed Pi dialect support and related serialization/parsing logic
 
 ## [16.2.0] - 2026-06-27
 

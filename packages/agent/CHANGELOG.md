@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed support for Pi dialect integration
+
 ## [16.2.0] - 2026-06-27
 
 ### Added
