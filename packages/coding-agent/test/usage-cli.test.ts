@@ -223,7 +223,7 @@ describe("formatUsageBreakdown", () => {
 				metadata: { email: "future@example.test" },
 				resetCredits: {
 					availableCount: 1,
-					credits: [{ id: "future-reset", expiresAt: "2026-01-03T00:00:00.000Z" }],
+					credits: [{ expiresAt: "2026-01-03T00:00:00.000Z" }],
 				},
 			},
 			{
@@ -233,7 +233,7 @@ describe("formatUsageBreakdown", () => {
 				metadata: { email: "expired@example.test" },
 				resetCredits: {
 					availableCount: 1,
-					credits: [{ id: "expired-reset", expiresAt: "2025-12-30T00:00:00.000Z" }],
+					credits: [{ expiresAt: "2025-12-30T00:00:00.000Z" }],
 				},
 			},
 		];

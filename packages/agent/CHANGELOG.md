@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an optional `cwdResolver` to `Agent` (and a `getCwd` per-call resolver on `AgentLoopConfig`) that is read once per LLM call to resolve the working directory, overriding the static `cwd` (falling back to it when the resolver returns `undefined`). Lets a host reflect a session move into provider options without reconstructing the agent — workspace-scoped provider discovery (e.g. GitLab Duo Agent namespace/project) now follows the live directory instead of the directory captured at construction.
+
 ### Fixed
 
 - Fixed API-level provider refusals being replayed as assistant dialogue on later requests, which could anchor repeated refusals after a single blocked turn. ([#3592](https://github.com/can1357/oh-my-pi/issues/3592))
 - Fixed `streamProxy` leaking internal `partialJson` streaming state onto the final `AssistantMessage` when the stream ended without a `toolcall_end` event. The field is now accumulated in a side-channel `Map` (eliminating `as any` casts on the accumulation path), written onto the content object via a typed `ToolCall & { partialJson: string }` intersection so downstream renderers can still read it during streaming, and scrubbed from all content blocks at `toolcall_end`, `done`, and `error` — guaranteeing it never appears on the final message.
+- Fixed `Agent` forwarding the working directory (`cwd`) into provider stream options so the GitLab Duo Agent provider can scope local tool execution to the workspace.
+- Allowed configured custom OpenAI-compatible providers to use native remote compaction instead of falling back to local summarization. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
 
 ## [16.1.23] - 2026-06-26
 
@@ -28,9 +34,6 @@
 ### Fixed
 
 - Hardened the agent-loop cooperative yield against backward wall-clock jumps. A stale future timestamp left in the shared yield gate (NTP step, or a fake-timer test mocking `Date.now`) could make `yieldIfDue()` gate forever and stop yielding to the event loop; the gate now treats a backward clock delta as due and re-anchors. The gate is exposed as an injectable `YieldGate` (with `yieldIfDue()` retained as the shared singleton) so it can be exercised without mocking process-global timers.
-### Added
-
-- Added an optional `cwdResolver` to `Agent` (and a `getCwd` per-call resolver on `AgentLoopConfig`) that is read once per LLM call to resolve the working directory, overriding the static `cwd` (falling back to it when the resolver returns `undefined`). Lets a host reflect a session move into provider options without reconstructing the agent — workspace-scoped provider discovery (e.g. GitLab Duo Agent namespace/project) now follows the live directory instead of the directory captured at construction.
 
 ## [16.1.16] - 2026-06-23
 
@@ -42,10 +45,6 @@
 ### Changed
 
 - Updated `buildSideRequestContext` to allow pinning custom system prompts
-
-### Fixed
-
-- Fixed `Agent` forwarding the working directory (`cwd`) into provider stream options so the GitLab Duo Agent provider can scope local tool execution to the workspace.
 
 ## [16.1.10] - 2026-06-21
 
@@ -67,10 +66,6 @@
 ### Changed
 
 - Exported helper functions `normalizeMessagesForProvider` and `resolveOwnedDialectFromEnv` from `packages/agent/src/agent-loop.ts`.
-
-### Fixed
-
-- Allowed configured custom OpenAI-compatible providers to use native remote compaction instead of falling back to local summarization. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
 
 ## [16.1.5] - 2026-06-19
 
@@ -169,6 +164,7 @@
 ### Fixed
 
 - Fixed `pruneToolOutputs` blanking tiny tool results during overflow pruning: results below `50` tokens (`MIN_PRUNE_TOKENS`) are no longer replaced with the `[Output truncated - N tokens]` placeholder, which cost more tokens than the result itself and churned the prompt cache for zero savings.
+
 ## [15.13.2] - 2026-06-15
 
 ### Breaking Changes

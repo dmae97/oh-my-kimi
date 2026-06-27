@@ -5,6 +5,26 @@
 ### Added
 
 - Added `OpenAICompat.supportsNamedToolChoice` so string-only OpenAI-compatible chat servers can keep forced tool use without emitting the named function-object `tool_choice` shape. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
+- Added GitLab Duo Agent catalog discovery for `gitlab-duo-agent`, including namespace selection and live `aiChatAvailableModels` model mapping.
+- Added model metadata for provider-native remote compaction and compaction-only model selection. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+
+### Changed
+
+- Changed GitLab Duo Agent model specs to `reasoning: false`. The Duo Agent Platform path exposes no client-controllable thinking knob (the underlying Anthropic model params are server-fixed), so OMP no longer shows a thinking-effort selector for these models.
+
+### Fixed
+
+- Fixed built-in LiteLLM discovery to prefer rich proxy metadata from LiteLLM management endpoints before falling back to /models, with a versioned cache namespace so stale bare-id cache rows do not hide capability data.
+- Fixed the bundled catalog omitting the GitLab Duo Agent provider so a fresh install (before any credentialed dynamic discovery populates the cache) could not surface its default model. The generator now seeds the `gitlab-duo-agent` fallback model (`claude_sonnet_4_6_vertex`) into `models.json`, deduped behind live `aiChatAvailableModels` discovery when generation has credentials.
+- Fixed GitLab Duo Agent namespace discovery only inspecting the first page of top-level groups, so a token belonging to more than 100 top-level groups could miss a usable Duo namespace on a later page and fail or select the wrong group. Discovery now follows GitLab's `x-next-page` pagination (bounded) and validates candidates across all pages.
+- Fixed GitLab Duo Agent namespace discovery rejecting a workspace SSH remote whose port differs from the configured web `baseUrl` (self-managed GitLab commonly exposes SSH on a dedicated port, e.g. `ssh://git@host:2222/group/project.git` against `https://host`). SSH and SCP-style remotes now compare on the bare hostname; HTTP(S) remotes still compare host:port strictly so a different service on the same host is not adopted.
+- Fixed GitLab Duo Workflow runtime namespace discovery so agent startup can resolve a root namespace without requiring live `aiChatAvailableModels` results.
+- Fixed GitLab Duo Workflow runtime namespace discovery to preserve namespace paths for Workflow creation, including numeric/GID namespace overrides that must be resolved through GitLab group metadata.
+- Fixed GitLab Duo Workflow project namespace discovery to fall back to the GraphQL `rootAncestor` query whenever a REST project payload exposes no explicit root (the normal payload only carries the immediate `namespace`), including numeric `projectId`/`GITLAB_DUO_PROJECT_ID` values: the fallback now keys off the project's `path_with_namespace` from the REST payload instead of being blocked by the missing slash, so a numeric id pinning a leaf subgroup project resolves the correct root namespace instead of falling through to remotes or top-level groups.
+- Fixed GitLab Duo Workflow model specs to resolve a static `contextWindow` from the model ref family (Claude/Gemini → 1,000,000, default 200,000) instead of leaving it null, so OMP's context panel, usage percentage, and long-context auto-compaction work; GitLab exposes the real window only at runtime in each checkpoint's `agent_context_usage`, which the catalog ModelSpec cannot backfill.
+- Fixed GitLab Duo Workflow catalog discovery ignoring `GITLAB_DUO_PROJECT_PATH`: namespace discovery now resolves the configured project from a `projectPath` config field and the `GITLAB_DUO_PROJECT_PATH` env var (in addition to `projectId`/`GITLAB_DUO_PROJECT_ID`), so workspaces that pin a project by path no longer fall through to the wrong group or fail before runtime project handling applies.
+- Fixed GitLab Duo Workflow remote project discovery missing the current GitLab project in linked Git worktree checkouts: a worktree's `.git` points at `.git/worktrees/<name>`, whose own `config` holds no remotes — those live in the common directory named by the gitdir's `commondir` file. Discovery now follows `commondir` to read the common `config`, so workspaces in a worktree resolve the correct namespace instead of falling back to top-level group candidates.
+- Fixed GitLab Duo Workflow remote project discovery on self-managed GitLab installed under a relative path (e.g. `https://host/gitlab`): HTTPS remotes look like `https://host/gitlab/group/project.git` but project full paths stay `group/project`, so discovery previously queried `/api/v4/projects/gitlab%2Fgroup%2Fproject` and missed the project. The parser now strips the install base path from the remote before deriving the project full path.
 
 ## [16.1.23] - 2026-06-26
 
@@ -18,9 +38,6 @@
 ### Added
 
 - Added `OpenAICompat.replayReasoningContent` — auto-enabled for the built-in local OpenAI-compatible providers (`llama.cpp`, `lm-studio`, `vllm`, `ollama` on `openai-completions`) and for any provider pointed at a loopback / RFC1918 / `*.local` baseUrl. NOT gated on `spec.reasoning`: the runtime discovery paths for `llama.cpp` / `lm-studio` / `openai-models-list` hardcode `reasoning: false` because the upstream `/models` endpoints don't advertise the capability, while the stream parser still records incoming `reasoning_content` deltas as thinking blocks — gating on the spec flag would leave every discovered local Qwen / DeepSeek model re-triggering #3528. The encoder only writes `reasoning_content` when a thinking block actually exists on the turn, so the flag is a no-op on pure-text histories. Built-in proxy providers (currently `litellm`) are excluded from both checks because they forward to an unrelated upstream that gains no KV-cache benefit and may 400 on the extra field; users running a custom proxy in front of a llama.cpp-style backend can opt in via the sparse `compat.replayReasoningContent: true` override. Signals to the `openai-completions` encoder that preserved `thinking` blocks must be re-emitted as `reasoning_content` on every assistant turn so chat templates that reconstruct `<think>…</think>` from the field (Qwen3, DeepSeek-R1, GLM-5.x) keep the prior turn's tokens byte-stable and llama.cpp's prefix KV cache survives. ([#3528](https://github.com/can1357/oh-my-pi/issues/3528))
-### Fixed
-
-- Fixed built-in LiteLLM discovery to prefer rich proxy metadata from LiteLLM management endpoints before falling back to /models, with a versioned cache namespace so stale bare-id cache rows do not hide capability data.
 
 ## [16.1.20] - 2026-06-25
 
@@ -35,11 +52,6 @@
 - Fixed the Umans GLM-5.2 thinking-level picker collapsing to a single `high` tier after dynamic discovery: the `max` upstream level now resolves to the internal `xhigh` effort, the picker shows both `high` and `xhigh`, and the metadata maps `xhigh` back to Umans's native `max` wire tier. ([#3192](https://github.com/can1357/oh-my-pi/issues/3192))
 - Fixed GitHub Copilot business and enterprise endpoints accepting image inputs that they reject with `400 vision is not supported`. The Copilot `/models` response advertises `capabilities.supports.vision = true` for Claude/GPT chat models on every host, but only the canonical personal endpoint (`https://api.githubcopilot.com`) actually serves them; `githubCopilotModelManagerOptions` now forces `input: ["text"]` whenever discovery resolves to a non-personal base URL, and `mergeDynamicModel` honours the dynamic value (instead of OR-upgrading) when the merged endpoint differs from the bundled reference. ([#3387](https://github.com/can1357/oh-my-pi/issues/3387))
 - Fixed OpenRouter Anthropic compat to strip Responses reasoning history during replay so signed thinking blocks are not sent back to routed Anthropic providers. ([#3399](https://github.com/can1357/oh-my-pi/issues/3399))
-### Fixed
-
-- Fixed the bundled catalog omitting the GitLab Duo Agent provider so a fresh install (before any credentialed dynamic discovery populates the cache) could not surface its default model. The generator now seeds the `gitlab-duo-agent` fallback model (`claude_sonnet_4_6_vertex`) into `models.json`, deduped behind live `aiChatAvailableModels` discovery when generation has credentials.
-- Fixed GitLab Duo Agent namespace discovery only inspecting the first page of top-level groups, so a token belonging to more than 100 top-level groups could miss a usable Duo namespace on a later page and fail or select the wrong group. Discovery now follows GitLab's `x-next-page` pagination (bounded) and validates candidates across all pages.
-- Fixed GitLab Duo Agent namespace discovery rejecting a workspace SSH remote whose port differs from the configured web `baseUrl` (self-managed GitLab commonly exposes SSH on a dedicated port, e.g. `ssh://git@host:2222/group/project.git` against `https://host`). SSH and SCP-style remotes now compare on the bare hostname; HTTP(S) remotes still compare host:port strictly so a different service on the same host is not adopted.
 
 ## [16.1.14] - 2026-06-22
 
@@ -87,27 +99,6 @@
 
 - Fixed Fireworks-hosted Qwen turns (e.g. `fireworks/qwen3.7-plus`) failing with `400 Extra inputs are not permitted, field: 'enable_thinking'`. Fireworks serves Qwen3 with controllable thinking via OpenAI-style `reasoning_effort` and rejects the top-level `enable_thinking` boolean that Alibaba DashScope speaks; `buildOpenAICompat` was selecting `thinkingFormat: "qwen"` from the `qwen` id pattern regardless of host. Fireworks-hosted Qwen models now resolve to `thinkingFormat: "openai"`.
 - Fixed MiMo models on OpenAI-compatible gateways to expose only accepted `low`, `medium`, and `high` reasoning tiers and map unsupported raw `minimal`/`xhigh` requests to safe wire values. ([#2864](https://github.com/can1357/oh-my-pi/issues/2864))
-### Added
-
-- Added GitLab Duo Agent catalog discovery for `gitlab-duo-agent`, including namespace selection and live `aiChatAvailableModels` model mapping.
-
-### Changed
-
-- Changed GitLab Duo Agent model specs to `reasoning: false`. The Duo Agent Platform path exposes no client-controllable thinking knob (the underlying Anthropic model params are server-fixed), so OMP no longer shows a thinking-effort selector for these models.
-
-### Fixed
-
-- Fixed GitLab Duo Workflow runtime namespace discovery so agent startup can resolve a root namespace without requiring live `aiChatAvailableModels` results.
-- Fixed GitLab Duo Workflow runtime namespace discovery to preserve namespace paths for Workflow creation, including numeric/GID namespace overrides that must be resolved through GitLab group metadata.
-- Fixed GitLab Duo Workflow project namespace discovery to fall back to the GraphQL `rootAncestor` query whenever a REST project payload exposes no explicit root (the normal payload only carries the immediate `namespace`), including numeric `projectId`/`GITLAB_DUO_PROJECT_ID` values: the fallback now keys off the project's `path_with_namespace` from the REST payload instead of being blocked by the missing slash, so a numeric id pinning a leaf subgroup project resolves the correct root namespace instead of falling through to remotes or top-level groups.
-- Fixed GitLab Duo Workflow model specs to resolve a static `contextWindow` from the model ref family (Claude/Gemini → 1,000,000, default 200,000) instead of leaving it null, so OMP's context panel, usage percentage, and long-context auto-compaction work; GitLab exposes the real window only at runtime in each checkpoint's `agent_context_usage`, which the catalog ModelSpec cannot backfill.
-- Fixed GitLab Duo Workflow catalog discovery ignoring `GITLAB_DUO_PROJECT_PATH`: namespace discovery now resolves the configured project from a `projectPath` config field and the `GITLAB_DUO_PROJECT_PATH` env var (in addition to `projectId`/`GITLAB_DUO_PROJECT_ID`), so workspaces that pin a project by path no longer fall through to the wrong group or fail before runtime project handling applies.
-- Fixed GitLab Duo Workflow remote project discovery missing the current GitLab project in linked Git worktree checkouts: a worktree's `.git` points at `.git/worktrees/<name>`, whose own `config` holds no remotes — those live in the common directory named by the gitdir's `commondir` file. Discovery now follows `commondir` to read the common `config`, so workspaces in a worktree resolve the correct namespace instead of falling back to top-level group candidates.
-- Fixed GitLab Duo Workflow remote project discovery on self-managed GitLab installed under a relative path (e.g. `https://host/gitlab`): HTTPS remotes look like `https://host/gitlab/group/project.git` but project full paths stay `group/project`, so discovery previously queried `/api/v4/projects/gitlab%2Fgroup%2Fproject` and missed the project. The parser now strips the install base path from the remote before deriving the project full path.
-
-### Added
-
-- Added model metadata for provider-native remote compaction and compaction-only model selection. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
 
 ## [16.1.7] - 2026-06-20
 
@@ -259,6 +250,7 @@
 - Folded the `azure-openai-responses` API into the OpenAI Responses thinking-inference branches so Azure reasoning models (o-series, GPT-5, Codex) resolve the discrete effort vocabulary (including `xhigh`) and effort-control mode instead of falling through to generic defaults.
 - Fixed `ollama-cloud` discovery inheriting an unsafe cross-provider `contextWindow`/`maxTokens` when `/api/show` returns no size metadata; it now falls back to the safe 128K context / 8K output caps.
 - Dropped internal Fireworks control-plane resource ids (`accounts/fireworks/{models,routers}/…`) from the bundle; only the public request ids ship.
+
 ## [15.13.2] - 2026-06-15
 
 ### Added

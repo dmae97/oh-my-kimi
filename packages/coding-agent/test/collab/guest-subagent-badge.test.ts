@@ -120,7 +120,7 @@ function makeState(): Extract<CollabFrame, { t: "welcome" }>["state"] {
 		queuedMessageCount: 0,
 		sessionName: "host session",
 		cwd: "/tmp",
-		participants: [{ id: "host", name: "Host", role: "host" }],
+		participants: [{ name: "Host", role: "host" }],
 	};
 }
 

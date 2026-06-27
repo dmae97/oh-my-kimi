@@ -1,12 +1,20 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added Loop Guard "Tool-Call Reminder" to automatically interrupt Gemini reasoning loops that generate excessive planning headers without acting
 - Added support for file deletion and moving within file editing operations
 - Added `providers.maxInFlightRequests` to cap concurrent LLM requests per provider across local OMP processes from settings.
-
+- The `/usage` display (TUI, ACP text, and `omp usage` CLI) now shows expiry dates for banked Codex rate-limit resets, so users can plan when to redeem them before they expire ([#3339](https://github.com/can1357/oh-my-pi/issues/3339)).
+- Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); POSIX remotes only (Linux/macOS/BSD; Windows hosts are rejected — use the `ssh` tool), UTF-8 text only, up to 1 MiB. Requires the same approval as the `ssh` tool, rejects argument-injecting hosts/usernames (leading `-`), validates the entire file as UTF-8, peels read selectors so `write` targets the same file `read` does, and replaces (rather than writes through) a non-directory symlinked write destination via a uniquely named remote temp. `read` also lists an `ssh://` directory one level deep (dotfiles included, directories first; `ssh://host/` lists the remote root), while `search` refuses an `ssh://` directory and `write` refuses to overwrite one. Bare `ssh://` lists the configured hosts, which are also offered as autocompletions after typing `ssh://`.
+- Added an interactive `/move` overlay: typing `/move` with no argument opens a path autocomplete picker (type to filter, ↑↓ to navigate, Tab to accept, Enter to confirm). `/move <path>` still works for direct invocation. The command now starts a fresh empty session in the target directory instead of relocating the current session file, leaving the previous session resumable via `/resume`. If the target directory does not exist, a confirmation prompt offers to create it. Empty move sessions (no user/assistant messages) are automatically cleaned up on shutdown so they don't accumulate.
+- Added Tab completion for `/move` destination directories. Typing `/move <path>` now offers directory suggestions relative to the current working directory, including support for `~`, absolute, and relative paths.
+- Added TinyFish, DuckDuckGo, xAI, and Firecrawl web_search providers.
+- Added `models.yml` `remoteCompaction` and `compactionModel` config so custom providers can opt into provider-native compaction and run compaction on a separate model without changing the active session model. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+- Added project/user/plugin `dap.json` and `dap.yaml` support for defining or overriding debugger adapters used by the `debug` tool. ([#2999](https://github.com/can1357/oh-my-pi/issues/2999))
+- Added an Appearance setting for OSC 9;4 native terminal progress indicators during active agent turns and context maintenance.
 
 ### Changed
 
@@ -16,22 +24,9 @@
 - Automatically migrated existing user settings for `search` and `find` to `grep` and `glob` configs
 - Changed the `inlineToolDescriptors` setting ("Inline Tool Descriptors") from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto`. `auto` inlines tool descriptors into the system prompt (and strips them from provider tool schemas) only for Gemini models, leaving them in the schemas otherwise; `on`/`off` force the behavior regardless of model. Existing `true`/`false` configs migrate to `on`/`off`.
 - Replaced `as string | undefined` inline casts with `typeof` guards in the TUI usage renderer's account identity resolution (`formatAccountLabel`, `formatUnlimitedReportLabel`, reset-credits label, and unlimited-plan tier), so empty-string metadata values fall through to the next fallback instead of being displayed
-
-### Added
-
-- The `/usage` display (TUI, ACP text, and `omp usage` CLI) now shows expiry dates for banked Codex rate-limit resets, so users can plan when to redeem them before they expire ([#3339](https://github.com/can1357/oh-my-pi/issues/3339)).
-
-### Added
-
-- Added `ssh://host/path` support to `read`, `search`, and `write` for single text files on pre-configured SSH hosts (or `~/.ssh/config` aliases); POSIX remotes only (Linux/macOS/BSD; Windows hosts are rejected — use the `ssh` tool), UTF-8 text only, up to 1 MiB. Requires the same approval as the `ssh` tool, rejects argument-injecting hosts/usernames (leading `-`), validates the entire file as UTF-8, peels read selectors so `write` targets the same file `read` does, and replaces (rather than writes through) a non-directory symlinked write destination via a uniquely named remote temp. `read` also lists an `ssh://` directory one level deep (dotfiles included, directories first; `ssh://host/` lists the remote root), while `search` refuses an `ssh://` directory and `write` refuses to overwrite one. Bare `ssh://` lists the configured hosts, which are also offered as autocompletions after typing `ssh://`.
-
-### Added
-
-- Added an interactive `/move` overlay: typing `/move` with no argument opens a path autocomplete picker (type to filter, ↑↓ to navigate, Tab to accept, Enter to confirm). `/move <path>` still works for direct invocation. The command now starts a fresh empty session in the target directory instead of relocating the current session file, leaving the previous session resumable via `/resume`. If the target directory does not exist, a confirmation prompt offers to create it. Empty move sessions (no user/assistant messages) are automatically cleaned up on shutdown so they don't accumulate.
-
-### Added
-
-- Added Tab completion for `/move` destination directories. Typing `/move <path>` now offers directory suggestions relative to the current working directory, including support for `~`, absolute, and relative paths.
+- Reused shared TUI mouse-routing helpers across fullscreen overlay selectors.
+- Cached successful document conversions so repeated reads of unchanged PDFs, Office documents, and EPUBs reuse converted markdown instead of rerunning markit conversion.
+- Hardened the document conversion cache: random-suffixed temp filenames, orphaned `.tmp` sweeping during prune, and regression coverage for the sweep.
 
 ### Fixed
 
@@ -62,12 +57,20 @@
 - `ssh://` now strips IPv6 URL brackets before invoking OpenSSH (so `ssh://[::1]/path` targets `::1` instead of failing to resolve), rejects a malformed or out-of-range port (`ssh://host:abc`, `ssh://host:65536`) before connecting instead of treating the bad authority as an opaque default-port host, and `search` no longer drains a remote directory listing only to reject it (it requests directory metadata via `skipDirectoryListing`).
 - `ssh://` `read`/`search`/`write` now reject a URL query string or fragment (e.g. `ssh://host/tmp/a?draft`, `ssh://host/tmp/a#draft`) instead of silently operating on the path truncated before the `?`/`#`; a literal `?`/`#` in a remote filename must be percent-encoded (`%3F`/`%23`).
 - `ssh://` `read`/`search`/`write` now restrict transfers to remotes whose login shell is `sh`, `bash`, or `zsh`. A non-POSIX login shell (fish, csh/tcsh) can't parse the POSIX transfer snippets — and csh/tcsh apply `!` history expansion to the command line — so it is refused with a clear error (use the `ssh` tool) instead of running a broken remote command; host-shell detection no longer misclassifies `fish`/`csh`/`tcsh` as `sh`.
+- Added models.yml discovery.type: litellm so custom LiteLLM gateways can discover context windows, output caps, vision, and reasoning metadata from LiteLLM before falling back to OpenAI-compatible /models.
+- Fixed the main TUI status line hiding live subagents unless users already enabled the `subagents` segment; running subagents now force a hub-key badge into the editor border, and advisor rows in Agent Hub are labeled read-only. ([#3499](https://github.com/can1357/oh-my-pi/issues/3499))
+- Fixed Ctrl+Z hanging the terminal after any tool call had run: the TUI tore down (`ui.stop()`) but the process kept running in `Sl+` state, leaving the user with a dead terminal recoverable only via `kill -9`. The embedded `brush-core` shell behind every bash tool call installs a tokio SIGTSTP listener on `Process::wait` (`crates/brush-core-vendored/src/sys/unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::signal(SIGTSTP)`); per tokio's contract, the first call for a SignalKind permanently replaces the kernel-default handler for the lifetime of the process. So the first bash invocation — even `/usr/bin/true` — silently overrode SIGTSTP's "stop" default, and `InputController.handleCtrlZ`'s subsequent `process.kill(0, "SIGTSTP")` was swallowed by tokio. The handler now sends `SIGSTOP` (uncatchable, unblockable, unignorable) to the foreground process group, so the kernel parks omp regardless of installed handlers and the shell sees the whole job stop even when omp runs behind a wrapper (`npx`, `pnpm exec`, `bunx`, …) or as one stage of a pipeline. MCP stdio servers now spawn detached into their own session — they're insulated both from terminal job-control signals (which used to stop their process trees and leave the JSONL read loop blocked on silent pipes) and from the new pgid=0 suspend itself ([#3461](https://github.com/can1357/oh-my-pi/issues/3461)).
+- Fixed streaming Esc handling so the first Esc arms a 2s cancel hint and only a second Esc in that window aborts the active response ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+- Migrated 203 test files from `fs.rm`/`fs.rmSync` to `removeWithRetries`/`removeSyncWithRetries` (356 call sites) to reduce EBUSY test failures on Windows. `removeWithRetries` is now exported from `@oh-my-pi/pi-utils`
+- Fixed GitLab Duo Agent namespace/project discovery reading the original repo's git remote after a `/move`. The session's working directory is now resolved live (per LLM call) from the `SessionManager` instead of being captured when the agent was constructed, so moving the session re-scopes Duo workspace discovery to the new repository.
+- Fixed `omp auth-broker login gitlab-duo-agent` (and `--via`) hanging until timeout: the provider uses GitLab's fixed `vscode://` OAuth redirect, which never reaches the broker's local callback server, and `runLocalLogin` supplied no `onManualCodeInput` fallback. The broker login now offers the same paste-the-redirect-URL prompt the interactive sign-in uses, so credentials can be saved.
+- Fixed the persistent todo HUD above the editor reading as ambient status text rather than an anchored panel — the small "Todos" block now sits inside dim horizontal rules (matching `BtwPanel` / `OmfgPanel`) and the header inlines progress and the active-phase pointer (`Todos · 2/7 done · I/III Foundation`), so the list stays self-describing without scrolling back to the tool-result block in chat ([#3213](https://github.com/can1357/oh-my-pi/issues/3213)).
+- Fixed advisor and status-line context when the session cwd is a parent of a single child git repo, so nested-repo work is surfaced before missing parent-cwd paths are treated as destroyed. ([#3130](https://github.com/can1357/oh-my-pi/issues/3130))
 
 ## [16.1.23] - 2026-06-26
 
 ### Added
 
-- Added TinyFish, DuckDuckGo, xAI, and Firecrawl web_search providers.
 - Added `compaction.midTurnEnabled` for mid-turn threshold auto-compaction before the next tool-loop provider request. ([#3525](https://github.com/can1357/oh-my-pi/issues/3525))
 - Added `grep -q`/`--quiet`/`--silent` and `-x`/`--line-regexp` to the in-process `grep` builtin used by the bash tool. `-q` suppresses all stdout and exits 0 on the first match (short-circuiting, with match status taking precedence over read errors per GNU); `-x` anchors each pattern to whole lines. Unblocks shell conditionals such as `grep -qx "$applet" <(strings bin)`.
 - Added plan-mode guidance (hashline edit mode only) steering the agent to revise the plan file section-by-section with `SWAP.BLK`/`DEL.BLK`/`INS.BLK.POST` anchored on markdown headings — a heading resolves its whole section (through nested deeper headings), so the agent can rewrite, drop, or append sections without rewriting the file.
@@ -108,16 +111,12 @@
 - Fixed compiled-binary validation for legacy `pi.extensions` packages whose source imports worker-only coding-agent subpaths or extension-local package subpaths such as `typebox/value`; `omp install @charmland/pi-hyper-provider`, `omp plugin doctor`, and runtime provider discovery now use a main-thread-safe load path. ([#3508](https://github.com/can1357/oh-my-pi/issues/3508))
 - Fixed repeated todo updates in one TUI turn stacking full todo panels; superseded todo snapshots now stay live until the next todo update replaces them or the turn ends. ([#3516](https://github.com/can1357/oh-my-pi/issues/3516))
 - Fixed MCP OAuth authorization failing with `Authorization failed: An unexpected error occurred` against authorization servers (Plane is the live example) that reject redundant fallback `resource` indicators. OMP now drops same-origin resources only when it synthesized them from the server URL fallback (e.g. `https://mcp.plane.so/http/mcp`). Provider-advertised resources from OAuth/protected-resource discovery or an embedded authorization-URL `resource` query parameter are preserved even when they are same-origin or origin-only, so gateway-hosted MCP services can still request the audience they advertised. The refresh-token path uses the same policy, filtered against the authorization-server origin persisted on the credential as `authorizationUrl`, with `tokenUrl`'s origin as the legacy fallback when that field is absent. ([#3502](https://github.com/can1357/oh-my-pi/issues/3502))
-- Added models.yml discovery.type: litellm so custom LiteLLM gateways can discover context windows, output caps, vision, and reasoning metadata from LiteLLM before falling back to OpenAI-compatible /models.
 
 ## [16.1.20] - 2026-06-25
 
 ### Fixed
 
 - Fixed Ctrl+Z hanging the terminal after any tool call had run: the TUI tore down (`ui.stop()`) but the process kept running in `Sl+` state, leaving the user with a dead terminal recoverable only via `kill -9`. The embedded `brush-core` shell behind every bash tool call installs a tokio SIGTSTP listener on `Process::wait` (`crates/vendor/brush-core/src/sys/unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::signal(SIGTSTP)`); per tokio's contract, the first call for a SignalKind permanently replaces the kernel-default handler for the lifetime of the process. So the first bash invocation — even `/usr/bin/true` — silently overrode SIGTSTP's "stop" default, and `InputController.handleCtrlZ`'s subsequent `process.kill(0, "SIGTSTP")` was swallowed by tokio. The handler now sends `SIGSTOP` (uncatchable, unblockable, unignorable) to the foreground process group, so the kernel parks omp regardless of installed handlers and the shell sees the whole job stop even when omp runs behind a wrapper (`npx`, `pnpm exec`, `bunx`, …) or as one stage of a pipeline. MCP stdio servers now spawn detached into their own session — they're insulated both from terminal job-control signals (which used to stop their process trees and leave the JSONL read loop blocked on silent pipes) and from the new pgid=0 suspend itself ([#3461](https://github.com/can1357/oh-my-pi/issues/3461)).
-- Fixed the main TUI status line hiding live subagents unless users already enabled the `subagents` segment; running subagents now force a hub-key badge into the editor border, and advisor rows in Agent Hub are labeled read-only. ([#3499](https://github.com/can1357/oh-my-pi/issues/3499))
-
-- Fixed Ctrl+Z hanging the terminal after any tool call had run: the TUI tore down (`ui.stop()`) but the process kept running in `Sl+` state, leaving the user with a dead terminal recoverable only via `kill -9`. The embedded `brush-core` shell behind every bash tool call installs a tokio SIGTSTP listener on `Process::wait` (`crates/brush-core-vendored/src/sys/unix/signal.rs::tstp_signal_listener` → `tokio::signal::unix::signal(SIGTSTP)`); per tokio's contract, the first call for a SignalKind permanently replaces the kernel-default handler for the lifetime of the process. So the first bash invocation — even `/usr/bin/true` — silently overrode SIGTSTP's "stop" default, and `InputController.handleCtrlZ`'s subsequent `process.kill(0, "SIGTSTP")` was swallowed by tokio. The handler now sends `SIGSTOP` (uncatchable, unblockable, unignorable) to the foreground process group, so the kernel parks omp regardless of installed handlers and the shell sees the whole job stop even when omp runs behind a wrapper (`npx`, `pnpm exec`, `bunx`, …) or as one stage of a pipeline. MCP stdio servers now spawn detached into their own session — they're insulated both from terminal job-control signals (which used to stop their process trees and leave the JSONL read loop blocked on silent pipes) and from the new pgid=0 suspend itself ([#3461](https://github.com/can1357/oh-my-pi/issues/3461)).
 - Fixed image-only composer submissions while the agent is streaming being treated as empty input, which dropped the image or aborted the active turn when another message was queued. Pending pasted images now count as submit content for Enter and Ctrl+Enter follow-ups. ([#3467](https://github.com/can1357/oh-my-pi/issues/3467))
 - Fixed `omp gallery --state` accepting lifecycle tokens that did not match displayed state labels and rendering unknown state values as `· undefined`; displayed labels now work as aliases, invalid values fail with a valid-token list, and failed gallery fixtures visibly render failures. ([#3473](https://github.com/can1357/oh-my-pi/issues/3473))
 - Fixed the bash tool's snapshotted `mise()` shell function dying with `command: command not found:` because `$__MISE_EXE` was empty in the replay shell. `generateSnapshotScript` captured the function via `declare -f`/`typeset -f` but only ever re-exported `PATH`, so every other env var the rc file set (notably the `*_EXE` sidecar `mise activate` exports) was lost; the function body then expanded `command "$__MISE_EXE" "$@"` to `command "" …` and died with exit 127. The snapshot script now scans captured function bodies for `$VAR` / `${VAR…}` references and re-emits `export NAME='value'` for each referenced var that is currently set (with a denylist for shell-internal names like `PATH`/`HOME`/`BASH_*`/`LC_*` plus a likely-secret denylist for `*TOKEN*`/`*SECRET*`/`*API_KEY*`/`*PASSWORD*`/`*PRIVATE_KEY*`/`*ACCESS_KEY*`/`*CREDENTIAL*`/`*SESSION_KEY*`), the snapshot script `umask 077`s itself and the JS caller chmods the snapshot file/dir to `0600`/`0700` so the new export pass can't leak secrets into a shared tmp dir. Fixes mise, asdf shims, direnv-style helpers, and other activation idioms that pair a function with a helper env var. `getShellConfigFile` now also honours `env.HOME` (falling back to `os.homedir()`) so sandboxed callers can target a non-default rc. ([#3470](https://github.com/can1357/oh-my-pi/issues/3470))
@@ -127,10 +126,6 @@
 - Fixed the per-provider subagent concurrency limiter (e.g. `providers.ollama-cloud.maxConcurrency`) being replaced with a fresh semaphore whenever the configured limit changed, which orphaned the in-flight slots on the old instance and let a runtime or mixed limit value exceed the cap. The limiter now resizes a single shared semaphore in place — raising the ceiling admits queued waiters immediately, lowering it drains in-flight holders without admitting past the new cap. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed a background-task spawn slot leaking from the `task.maxConcurrency` limiter when progress reporting threw between acquiring the slot and entering the guarded run: `markRunning`/`reportProgress` now run inside the try whose `finally` releases the semaphore, so a failed progress report can no longer permanently shrink subagent concurrency. ([#3464](https://github.com/can1357/oh-my-pi/issues/3464))
 - Fixed active goal runs that successfully call `yield` and then receive a trailing empty assistant `stop` skipping threshold compaction; post-yield empty-stop suppression now still anchors active-goal compaction on the yield-bearing assistant turn, so long-running tasks continue after maintenance instead of settling early.
-
-### Fixed
-
-- Fixed streaming Esc handling so the first Esc arms a 2s cancel hint and only a second Esc in that window aborts the active response ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
 
 ## [16.1.19] - 2026-06-25
 
@@ -172,7 +167,6 @@
 - Fixed the `ask` tool's "Other (type your own)" free-text editor (prompt-style `HookEditorComponent`) ignoring Ctrl+Q and Ctrl+Enter, so Windows Terminal users who learned the `app.message.followUp` chord from the main editor (#1903 / fixed by #1905) got zero feedback on submit. The hook-style and main-editor surfaces honored `matchesAppFollowUp`; the prompt-style handler did not, leaving plain Enter as the sole submit path and Ctrl+Enter falling through to Editor as a newline (silently swallowed by WT). `#handlePromptStyleInput` now checks `matchesAppFollowUp` first — mirroring `#handleHookStyleInput` — and the hint reads `enter or ctrl+q submit` so the chord is discoverable. ([#3353](https://github.com/can1357/oh-my-pi/issues/3353))
 - Fixed the TUI freezing when a tool approval prompt fires while `/settings` (or the Extensions/Agents dashboard) is open. The fullscreen overlay's close handler restored focus to the editor it had captured at open time, but `ExtensionUiController` had since swapped the editor out of the editor slot for the approval prompt — so on exit the visible prompt sat unreachable while keystrokes routed to the now-unmounted editor (no Enter/Up/Down/Esc response, only Ctrl+C escaped). `SelectorController` now restores focus to whatever currently owns the editor slot via a `focusActiveEditorArea()` helper, applied to settings, extensions dashboard, and agents dashboard close paths. ([#3349](https://github.com/can1357/oh-my-pi/issues/3349))
 - Fixed `/settings` coercing enum/text values to display strings before handing them to the TUI list, preventing YAML numeric enum values from reaching native truncation ([#3338](https://github.com/can1357/oh-my-pi/issues/3338)).
-- Migrated 203 test files from `fs.rm`/`fs.rmSync` to `removeWithRetries`/`removeSyncWithRetries` (356 call sites) to reduce EBUSY test failures on Windows. `removeWithRetries` is now exported from `@oh-my-pi/pi-utils`
 - Fixed all extension loading silently failing on the cross-compiled `omp-darwin-arm64` release binary (downloaded directly or via a Homebrew tap wrapper) because `__computeBunfsPackageRoot` mis-handled `import.meta.dir = "//root/omp-darwin-arm64"`. Bun 1.3.14 reports `<bunfs-root>/<binary-name>` for the compiled entry's `import.meta.dir`, but the pre-fix function joined `metaDir + "packages"` and produced `/root/omp-darwin-arm64/packages` — the binary basename was baked into every bunfs path, so the TypeBox/legacy-pi shims and every `@oh-my-pi/pi-*` package-root override failed `existsSync` validation and `resolveCanonicalPiSpecifier` fell through to a bunfs `Bun.resolveSync` that also could not find the module. The function now detects the bunfs-root + binary-basename shape (`path.basename(path.dirname(metaDir)) === "root"`) and strips the trailing binary segment by slicing the original `metaDir`; the production bunfs shim join path also preserves Bun's bunfs-native `//root` / `B:\~BUN\root` prefix that `path.join` would otherwise collapse. ([#3329](https://github.com/can1357/oh-my-pi/issues/3329))
 - Fixed llama.cpp discovery to prefer per-model `/v1/models` `meta.n_ctx`/`meta.n_ctx_train` values, refresh selected models after lazy load, and bypass fresh-cache reuse so server restarts update context windows. ([#3310](https://github.com/can1357/oh-my-pi/issues/3310))
 - Fixed `task.maxConcurrency: 0` serializing subagent spawns instead of running them unbounded. The settings UI labels `0` as "Unlimited", but the session-scoped spawn `Semaphore` clamped `max` via `Math.max(1, max)`, so the second subagent body in a batch always waited for the first to release the seat. The constructor now treats `max <= 0` (and any non-finite input) as unbounded via `Number.POSITIVE_INFINITY`, matching the eval `parallel()`/`pipeline()` worker-pool semantics ([#3305](https://github.com/can1357/oh-my-pi/issues/3305)).
@@ -190,13 +184,6 @@
 - Fixed extension `tool_call`/`tool_result` events for hashline `edit` calls to expose `event.input.path` for single-file edits and `event.input.paths` for every parsed target, so planning-mode gates can allow one markdown plan edit but still block multi-file hashline calls that cannot be represented by one path ([#1678](https://github.com/can1357/oh-my-pi/issues/1678)).
 - Fixed scripted `eval` `agent()` subagents continuing after a successful `yield` when a trailing empty assistant `stop` arrived after the executor's yield-triggered abort. The session's `agent_end` maintenance compared `#assistantEndedWithSuccessfulYield(msg)` against the trailing empty-stop message — not the prior yield-bearing one — so the empty-stop recovery path appended a retry reminder and scheduled `agent.continue()`, reviving the already-yielded child. The yield handler now sets a sticky `#yieldTerminationPending` flag (cleared on the next `prompt()`) that short-circuits empty-stop / unexpected-stop / compaction continuations for the rest of the run, so a successful yield is terminal regardless of trailing stops ([#3389](https://github.com/can1357/oh-my-pi/issues/3389)).
 - Fixed snapcompact rasterizing transcript frames into requests bound for GitHub Copilot business and enterprise endpoints, which then rejected the session permanently with `400 vision is not supported`. The snapcompact vision gate now also short-circuits whenever `model.provider === "github-copilot"` and the resolved `baseUrl` is not the canonical personal-Copilot host, protecting cached/stale Model specs that still advertise `["text","image"]` on a non-personal endpoint. ([#3387](https://github.com/can1357/oh-my-pi/issues/3387))
-- Fixed GitLab Duo Agent namespace/project discovery reading the original repo's git remote after a `/move`. The session's working directory is now resolved live (per LLM call) from the `SessionManager` instead of being captured when the agent was constructed, so moving the session re-scopes Duo workspace discovery to the new repository.
-- Fixed `omp auth-broker login gitlab-duo-agent` (and `--via`) hanging until timeout: the provider uses GitLab's fixed `vscode://` OAuth redirect, which never reaches the broker's local callback server, and `runLocalLogin` supplied no `onManualCodeInput` fallback. The broker login now offers the same paste-the-redirect-URL prompt the interactive sign-in uses, so credentials can be saved.
-
-### Changed
-
-- Reused shared TUI mouse-routing helpers across fullscreen overlay selectors.
-
 
 ## [16.1.16] - 2026-06-23
 
@@ -266,10 +253,6 @@
 - Fixed configured model discovery caches to refresh when `models.yml`/`models.json` is newer than the cached row, so updated local model metadata is not shadowed by fresh `models.db` entries. ([#3242](https://github.com/can1357/oh-my-pi/issues/3242))
 - Fixed hide-secrets handling so advisor session updates are redacted before the advisor model sees them and opaque assistant thinking blocks are no longer deobfuscated.
 - Filtered alias definitions brush's whitespace-only expander cannot execute (`(`, `)`, `|`, `&`, `;`, `<`, `>`, `` ` ``) from the bash-tool shell snapshot, so user rc-files containing compound aliases like Fedora's default `which='(alias; declare -f) | /usr/bin/which …'` no longer poison the brush session with `error: command not found: (alias;` ([#3234](https://github.com/can1357/oh-my-pi/issues/3234)).
-### Changed
-
-- Cached successful document conversions so repeated reads of unchanged PDFs, Office documents, and EPUBs reuse converted markdown instead of rerunning markit conversion.
-- Hardened the document conversion cache: random-suffixed temp filenames, orphaned `.tmp` sweeping during prune, and regression coverage for the sweep.
 
 ## [16.1.14] - 2026-06-22
 
@@ -311,11 +294,6 @@
 
 - Fixed secret obfuscation corrupting Codex image reads (and other provider requests) with `Invalid 'input[N].content[].image_url'. Expected a base64-encoded data URL ... but got an invalid base64-encoded value`. The obfuscator deep-walked every string in the outbound request — including inline image base64 and opaque provider replay/signature fields — so a configured secret that happened to be a substring of the base64 (or of an ordinary word like `response`) injected `#HASH#` placeholders mid-payload. Obfuscation is now opt-in and fully typed: only user messages, tool-result messages, and user-attributed developer messages (`@file` mentions) are redacted; system prompts and tool schemas pass through untouched; image bytes and signature/encrypted-reasoning fields are never rewritten; and tool-call arguments are the only JSON walked. Configured plain secrets and regex matches shorter than 8 characters are now ignored to stop false matches on short words.
 - Fixed RPC/ACP startup clobbering explicit caller/project/global configuration for `task.isolation.{mode,merge,commits}`, `task.eager`, `task.batch`, `task.maxConcurrency`, `task.maxRecursionDepth`, `task.disabledAgents`, `task.agentModelOverrides`, `memory.backend`, `memories.enabled`, `advisor.{enabled,subagents,syncBacklog,immuneTurns}`, plus the RPC-only `async.{enabled,maxJobs}` and `bash.autoBackground.{enabled,thresholdMs}`. `applyDefaultSettingOverrides` re-asserted the schema default as a runtime override after settings load, regressing the `isConfigured()` guard added for #2598 and ignoring every explicit value the embedder, project, `--config` overlay, or global config had set. The guard is restored, so the host default now only fills holes ([#3207](https://github.com/can1357/oh-my-pi/issues/3207)).
-
-
-### Fixed
-
-- Fixed the persistent todo HUD above the editor reading as ambient status text rather than an anchored panel — the small "Todos" block now sits inside dim horizontal rules (matching `BtwPanel` / `OmfgPanel`) and the header inlines progress and the active-phase pointer (`Todos · 2/7 done · I/III Foundation`), so the list stays self-describing without scrolling back to the tool-result block in chat ([#3213](https://github.com/can1357/oh-my-pi/issues/3213)).
 
 ## [16.1.11] - 2026-06-21
 
@@ -388,10 +366,6 @@
 - Removed `/debug dump-next-request` command
 - Removed Wafer Pass from CLI credential help; Wafer Serverless remains available.
 
-### Fixed
-
-- Fixed advisor and status-line context when the session cwd is a parent of a single child git repo, so nested-repo work is surfaced before missing parent-cwd paths are treated as destroyed. ([#3130](https://github.com/can1357/oh-my-pi/issues/3130))
-
 ## [16.1.8] - 2026-06-20
 
 ### Added
@@ -438,10 +412,6 @@
 - Fixed auto-compaction being suppressed when a `before_provider_request` extension shrinks the outgoing request below the real stored conversation (e.g. a context-compression proxy such as Headroom, or an aggressive obfuscator). The provider then reports deflated prompt tokens, so the threshold check never fired and the stored history grew unbounded until it overflowed the context window and could no longer be compacted at all. The compaction decision (both the pre-prompt and post-response paths) now floors the provider-reported context tokens by the agent's own local estimate of the stored conversation, so on-wire compression can no longer hide a too-large history from the auto-compactor. Context display and cost accounting still use the exact provider usage; only the compaction trigger takes the floor.
 - Fixed mnemopi proactive linking being configurable only through the `MNEMOPI_PROACTIVE_LINKING` environment variable, unlike the sibling `mnemopi.polyphonicRecall` / `mnemopi.enhancedRecall` settings: added a `mnemopi.proactiveLinking` config.yml setting (off by default, `/settings` → Memory → Mnemopi) that ingests new memories into the episodic graph as they are stored, linking them to related entities and memories; `MNEMOPI_PROACTIVE_LINKING` still overrides the configured value when set ([#2440](https://github.com/can1357/oh-my-pi/issues/2440)).
 
-### Added
-
-- Added `models.yml` `remoteCompaction` and `compactionModel` config so custom providers can opt into provider-native compaction and run compaction on a separate model without changing the active session model. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
-
 ## [16.1.7] - 2026-06-20
 
 ### Fixed
@@ -454,9 +424,6 @@
 
 - Enabled inline prompts with `/loop` commands (e.g., `/loop 10 fix the bug`)
 - Added support for compound duration formats in `/loop` (e.g., `1h30m`)
-### Added
-
-- Added project/user/plugin `dap.json` and `dap.yaml` support for defining or overriding debugger adapters used by the `debug` tool. ([#2999](https://github.com/can1357/oh-my-pi/issues/2999))
 
 ## [16.1.5] - 2026-06-19
 
@@ -477,10 +444,6 @@
 - Deferred status-line usage refreshes off the render path and timeboxed the startup fetch so slow Anthropic quota lookups no longer block interactive startup. ([#3057](https://github.com/can1357/oh-my-pi/issues/3057))
 - Fixed image paste placeholders falling through to terminal hyperlink settings before `Settings.init()`, so early editor rendering falls back to plain text instead of crashing. ([#3064](https://github.com/can1357/oh-my-pi/issues/3064))
 - Fixed `omp plugin install github:owner/repo` silently keeping the user on a stale commit when re-run on an already-installed GitHub plugin. `bun install <spec>` respects the existing `bun.lock` pin when the spec is unchanged and never re-resolves the remote ref, so the manager now follows a git re-install with `bun update <name>` to refresh the lockfile pin against the upstream. The install transaction also snapshots `bun.lock` up front and routes feature validation, extension validation, and runtime-config save through one rollback path so a failed install can never leave the rejected commit pinned in the active tree or lockfile. First-time installs are unaffected. ([#3063](https://github.com/can1357/oh-my-pi/issues/3063))
-
-### Added
-
-- Added an Appearance setting for OSC 9;4 native terminal progress indicators during active agent turns and context maintenance.
 
 ## [16.1.3] - 2026-06-19
 

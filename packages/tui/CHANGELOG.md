@@ -7,6 +7,8 @@
 - Added support for rendering HTML `<code>` tags as theme-styled inline code blocks
 - Added support for rendering HTML `<hr>` tags as horizontal rules
 - Added support for rendering HTML `<blockquote>` tags with appropriate quote styling
+- Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal. Inline images now negotiate the Kitty graphics protocol on macOS/Linux (direct placement — Warp has no Unicode-placeholder support); the protocol is dropped on Windows, where Warp ships without Kitty support and the APC sequences would render as visible garbage. True color is enabled. OSC 8 hyperlinks stay off by default because Warp's renderer prints the escape as literal text rather than a clickable link (opt in with `PI_FORCE_HYPERLINKS=1` once Warp lands real support), and synchronized output remains gated on the runtime DECRQM probe ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
+- Added shared SGR mouse input routing helpers and `SelectList.routeMouse()` support for fullscreen overlay hit-testing.
 
 ### Fixed
 
@@ -14,6 +16,7 @@
 - Fixed stray or unmatched HTML tags leaking into rendered output
 - Improved layout consistency by correctly handling HTML block-level tags in various contexts
 - Markdown renderer now handles inline `<code>…</code>` (rendered as themed inline code, identical to a backtick codespan, with HTML entities like `&amp;` decoded), block `<hr>` (rendered as a horizontal rule), and balanced single-line `<blockquote>…</blockquote>` (rendered with the quote border) instead of leaking the raw tags as literal text. Applies to the transcript renderer, table cells, list items, and the inline `renderInlineMarkdown` helper used for option labels; fenced code blocks keep such markup verbatim.
+- Fixed ordinary render scheduling to yield behind already-queued terminal input, preventing delayed Esc delivery during heavy streaming paints ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
 
 ## [16.1.20] - 2026-06-25
 
@@ -21,14 +24,6 @@
 
 - Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal, enabling Kitty inline images on macOS/Linux while keeping Warp's unsafe OSC 8 hyperlinks and Windows Kitty graphics disabled ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
 - Kept queued interrupt keys ahead of ordinary repaints so a slow long-transcript frame cannot consume the Ctrl+C/Esc double-press window before the second key is handled.
-
-### Added
-
-- Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal. Inline images now negotiate the Kitty graphics protocol on macOS/Linux (direct placement — Warp has no Unicode-placeholder support); the protocol is dropped on Windows, where Warp ships without Kitty support and the APC sequences would render as visible garbage. True color is enabled. OSC 8 hyperlinks stay off by default because Warp's renderer prints the escape as literal text rather than a clickable link (opt in with `PI_FORCE_HYPERLINKS=1` once Warp lands real support), and synchronized output remains gated on the runtime DECRQM probe ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
-
-### Fixed
-
-- Fixed ordinary render scheduling to yield behind already-queued terminal input, preventing delayed Esc delivery during heavy streaming paints ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
 
 ## [16.1.19] - 2026-06-25
 
@@ -49,9 +44,6 @@
 - Fixed `@`-path autocomplete failing on Windows for paths outside the cwd. Windows absolute paths (e.g. `C:\\Users\\...`) were not detected as absolute — only `/` was checked — so they were incorrectly joined with the base directory, producing invalid search paths and empty suggestions. Path-join calls also introduced backslashes into suggestion values, breaking round-trip insertion. Absolute path detection now uses `path.isAbsolute()` (handles drive letters) and suggestion paths are normalized to forward slashes (valid on all platforms).
 - Fixed settings rows crashing native text truncation when a malformed config value reaches the renderer as a non-string ([#3338](https://github.com/can1357/oh-my-pi/issues/3338)).
 - Fixed desktop notifications being silently lost under tmux on the common stack of tmux + kitty/ghostty/wezterm/iTerm2. `TERMINAL_ID` resolves to the inner terminal (whose markers leak into the tmux session env), which maps to `NotifyProtocol.Osc9` / `NotifyProtocol.Osc99`, and `sendNotification()` wrote that raw OSC straight to stdout — tmux dropped it on the floor and `monitor-bell` / `monitor-activity` never fired, so a backgrounded omp pane had no way to flag completion or `ask` blockage. Under `TMUX`, OSC-protocol notifications are now wrapped in tmux's `\x1bPtmux;…\x1b\\` DCS passthrough envelope (so users with `set -g allow-passthrough on` still get the real toast on the outer terminal) and followed by a `\x07` BEL (so `set -g monitor-bell on` reliably flags the window otherwise). The OSC 99 capability probe in `terminal.ts` is wrapped the same way so rich notifications keep working across tmux. `NotifyProtocol.Bell` paths are unchanged. ([#3395](https://github.com/can1357/oh-my-pi/issues/3395))
-### Added
-
-- Added shared SGR mouse input routing helpers and `SelectList.routeMouse()` support for fullscreen overlay hit-testing.
 
 ## [16.1.10] - 2026-06-21
 

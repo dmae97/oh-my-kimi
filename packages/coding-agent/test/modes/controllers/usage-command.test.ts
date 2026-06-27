@@ -88,10 +88,7 @@ describe("CommandController /usage", () => {
 				metadata: { email: "user@example.com" },
 				resetCredits: {
 					availableCount: 2,
-					credits: [
-						{ id: "future-reset", expiresAt: futureIso },
-						{ id: "expired-reset", expiresAt: expiredIso },
-					],
+					credits: [{ expiresAt: futureIso }, { expiresAt: expiredIso }],
 				},
 			},
 		];

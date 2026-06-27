@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added dedicated renderers for `glob` and `grep` tools to improve result readability
