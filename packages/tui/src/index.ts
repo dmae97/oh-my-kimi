@@ -19,6 +19,8 @@ export * from "./components/text";
 export * from "./components/truncated-text";
 // DECCARA rectangular-SGR background-fill optimizer
 export * from "./deccara";
+// Desktop notifications via D-Bus (Linux freedesktop notifications)
+export * from "./desktop-notify";
 // Editor component interface (for custom editors)
 export type * from "./editor-component";
 // Fuzzy matching
