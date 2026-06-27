@@ -8,13 +8,7 @@ import {
 	filterProviderReplayMessages,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import {
-	type Context,
-	type CredentialDisabledEvent,
-	type Message,
-	type Model,
-	type SimpleStreamOptions,
-} from "@oh-my-pi/pi-ai";
+import type { Context, CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import {
 	getOpenAICodexTransportDetails,
