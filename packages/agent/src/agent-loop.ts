@@ -535,6 +535,7 @@ export function normalizeMessagesForProvider(
 }
 
 const INTENT_FIELD_DESCRIPTION = "concise intent";
+const INTENT_SCHEMA_COMBINATORS = ["anyOf", "oneOf", "allOf"] as const;
 
 function injectIntentIntoSchema(
 	schema: unknown,
@@ -542,7 +543,15 @@ function injectIntentIntoSchema(
 	describeIntent = true,
 ): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
-	const schemaRecord = schema as Record<string, unknown>;
+	let schemaRecord = schema as Record<string, unknown>;
+	for (const key of INTENT_SCHEMA_COMBINATORS) {
+		const variants = schemaRecord[key];
+		if (!Array.isArray(variants)) continue;
+		schemaRecord = {
+			...schemaRecord,
+			[key]: variants.map(variant => injectIntentIntoSchema(variant, mode, describeIntent)),
+		};
+	}
 	const propertiesValue = schemaRecord.properties;
 	const properties =
 		propertiesValue && typeof propertiesValue === "object" && !Array.isArray(propertiesValue)

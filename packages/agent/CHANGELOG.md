@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed intent tracing injection for closed union tool schemas so provider validation accepts `i` inside each variant. ([#3645](https://github.com/can1357/oh-my-pi/issues/3645))
+
 ### Removed
 
 - Removed support for Pi dialect integration
