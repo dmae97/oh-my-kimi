@@ -189,8 +189,8 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			const reason = options.signal?.aborted ? "aborted" : "error";
 			partial.stopReason = reason;
-			scrubPartialJson(partial);
 			partial.errorMessage = errorMessage;
+			scrubPartialJson(partial);
 			stream.push({
 				type: "error",
 				reason,
@@ -209,13 +209,12 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 
 /**
  * Clear the `partialJson` streaming symbol from any tool-call content blocks
- * that still carry it (e.g. when the stream ended without a `toolcall_end`).
+ * that still carry it (e.g. when the stream ended without a `toolcall_end`), so
+ * the finalized `AssistantMessage` no longer reads as still-streaming.
  */
 function scrubPartialJson(partial: AssistantMessage): void {
 	for (const block of partial.content) {
-		if (block?.type === "toolCall" && kStreamingPartialJson in block) {
-			block[kStreamingPartialJson] = undefined;
-		}
+		if (block?.type === "toolCall") clearStreamingPartialJson(block);
 	}
 }
 
@@ -225,9 +224,9 @@ function scrubPartialJson(partial: AssistantMessage): void {
  * Streaming `partialJson` for in-progress tool calls is accumulated in a
  * side-channel map keyed by `contentIndex` and also written onto the content
  * object as a symbol-keyed field so downstream renderers can read it
- * during streaming. The field is cleared at `toolcall_end` and scrubbed from
- * any remaining blocks at `done`/`error` to guarantee it never leaks into the
- * final `AssistantMessage`.
+ * during streaming. The field is cleared at `toolcall_end` and scrubbed from any
+ * remaining blocks at `done`/`error` so the finalized `AssistantMessage` never
+ * reads as still-streaming.
  */
 function processProxyEvent(
 	model: Model,
