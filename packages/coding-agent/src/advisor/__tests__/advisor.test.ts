@@ -1013,9 +1013,7 @@ describe("advisor", () => {
 				prompt: async input => {
 					promptInputs.push(input);
 					if (shouldFail) {
-						throw new Error(
-							"404 No endpoints available matching your guardrail restrictions and data policy.",
-						);
+						throw new Error("404 No endpoints available matching your guardrail restrictions and data policy.");
 					}
 				},
 				abort: () => {},

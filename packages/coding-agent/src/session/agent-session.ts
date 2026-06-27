@@ -2051,7 +2051,11 @@ export class AgentSession {
 			beginAdvisorUpdate: () => this.#advisorEmissionGuard.beginUpdate(),
 			notifyFailure: error => {
 				const message = error instanceof Error ? error.message : String(error);
-				this.emitNotice("warning", `Advisor unavailable for ${formatModelString(advisorSel.model)}: ${message}`, "advisor");
+				this.emitNotice(
+					"warning",
+					`Advisor unavailable for ${formatModelString(advisorSel.model)}: ${message}`,
+					"advisor",
+				);
 			},
 		});
 		if (seedToCurrent) {
