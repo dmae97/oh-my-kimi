@@ -1005,6 +1005,68 @@ describe("advisor", () => {
 			expect(runtime.backlog).toBe(0);
 		});
 
+		it("notifies the host once when consecutive prompt failures make the advisor unavailable", async () => {
+			const promptInputs: string[] = [];
+			const failures: unknown[] = [];
+			let shouldFail = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (shouldFail) {
+						throw new Error(
+							"404 No endpoints available matching your guardrail restrictions and data policy.",
+						);
+					}
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				notifyFailure: error => failures.push(error),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(failures).toHaveLength(1);
+			const failure = failures[0];
+			expect(failure).toBeInstanceOf(Error);
+			if (!(failure instanceof Error)) throw new Error("expected advisor failure error");
+			expect(failure.message).toContain("No endpoints available");
+
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(promptInputs).toHaveLength(6);
+			expect(failures).toHaveLength(1);
+
+			shouldFail = false;
+			messages.push({ role: "user", content: "ccc", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			expect(failures).toHaveLength(1);
+
+			shouldFail = true;
+			messages.push({ role: "user", content: "ddd", timestamp: 4 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(failures).toHaveLength(2);
+		});
+
 		it("drops the in-flight batch when a reset aborts the advisor prompt", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();

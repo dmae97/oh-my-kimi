@@ -2049,6 +2049,10 @@ export class AgentSession {
 			maintainContext: incomingTokens => this.#maintainAdvisorContext(incomingTokens),
 			obfuscator: this.#obfuscator,
 			beginAdvisorUpdate: () => this.#advisorEmissionGuard.beginUpdate(),
+			notifyFailure: error => {
+				const message = error instanceof Error ? error.message : String(error);
+				this.emitNotice("warning", `Advisor unavailable for ${formatModelString(advisorSel.model)}: ${message}`, "advisor");
+			},
 		});
 		if (seedToCurrent) {
 			this.#advisorRuntime.seedTo(this.agent.state.messages.length);
