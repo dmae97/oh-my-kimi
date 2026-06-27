@@ -78,6 +78,9 @@
 
 - Fixed live ACP `generate_image` updates resolving OMP-internal image blob refs before sending renderable image content to clients. ([#3623](https://github.com/can1357/oh-my-pi/issues/3623))
 - Fixed Claude marketplace plugin `.mcp.json` MCP servers to expand environment variables in `url` and `headers` before connecting. ([#3621](https://github.com/can1357/oh-my-pi/issues/3621))
+### Fixed
+
+- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
 
 ## [16.2.0] - 2026-06-27
 
