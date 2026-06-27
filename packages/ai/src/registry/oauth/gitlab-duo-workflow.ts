@@ -1,3 +1,4 @@
+import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 import { OAuthCallbackFlow } from "./callback-server";
 import { generatePKCE } from "./pkce";
@@ -20,7 +21,10 @@ function mapTokenResponse(payload: {
 	created_at?: number;
 }): OAuthCredentials {
 	if (!payload.access_token || !payload.refresh_token || typeof payload.expires_in !== "number") {
-		throw new Error("GitLab Duo Workflow OAuth token response missing required fields");
+		throw new AIError.OAuthError("GitLab Duo Workflow OAuth token response missing required fields", {
+			kind: "validation",
+			provider: "gitlab-duo-workflow",
+		});
 	}
 
 	const createdAtMs =
@@ -82,8 +86,9 @@ class GitLabDuoWorkflowOAuthFlow extends OAuthCallbackFlow {
 		});
 
 		if (!response.ok) {
-			throw new Error(
+			throw new AIError.OAuthError(
 				`GitLab Duo Workflow OAuth token exchange failed: ${response.status} ${await response.text()}`,
+				{ kind: "token-exchange", provider: "gitlab-duo-workflow", status: response.status },
 			);
 		}
 
@@ -120,7 +125,11 @@ export async function refreshGitLabDuoWorkflowToken(
 	});
 
 	if (!response.ok) {
-		throw new Error(`GitLab Duo Workflow OAuth refresh failed: ${response.status} ${await response.text()}`);
+		throw new AIError.OAuthError(`GitLab Duo Workflow OAuth refresh failed: ${response.status} ${await response.text()}`, {
+			kind: "token-refresh",
+			provider: "gitlab-duo-workflow",
+			status: response.status,
+		});
 	}
 
 	return mapTokenResponse(

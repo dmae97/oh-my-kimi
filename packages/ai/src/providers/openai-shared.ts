@@ -85,6 +85,7 @@ import type {
 	ResponseStatus,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
+import * as AIError from "../error";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 
@@ -170,7 +171,8 @@ export function resolveOpenAIRequestSetup(
 	let apiKey = options.apiKey;
 	if (!apiKey) {
 		if (!$env.OPENAI_API_KEY) {
-			throw new Error(
+			throw new AIError.MissingApiKeyError(
+				undefined,
 				"OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument.",
 			);
 		}
@@ -763,7 +765,7 @@ export function resolveOpenAICompatPolicy<TApi extends Api>(
 	) {
 		const minEffort = getSupportedEfforts(model)[0];
 		if (minEffort === undefined) {
-			throw new Error(`Model ${model.provider}/${model.id} has no supported reasoning efforts`);
+			throw new AIError.ConfigurationError(`Model ${model.provider}/${model.id} has no supported reasoning efforts`);
 		}
 		wireEffort = mapOpenAIReasoningEffort(model, compat, minEffort);
 	}
@@ -2182,13 +2184,16 @@ export async function processResponsesStream<TApi extends Api>(
 						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
 							? `status_details: ${statusDetailsReason}`
 							: "Unknown error (no error details in response)";
-				throw new Error(message);
+				throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 			}
 			if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
 				// A content-filtered turn is a failure, not a token-cap truncation —
 				// mapping it to "length" would route the agent loop into "shorten your
 				// output" recovery against a filtered prompt.
-				throw new Error("incomplete: content_filter");
+				throw new AIError.ProviderResponseError("incomplete: content_filter", {
+					provider: model.provider,
+					kind: "content-blocked",
+				});
 			}
 			promoteResponsesToolUseStopReason(output, (response as { end_turn?: boolean } | undefined)?.end_turn);
 			options?.onCompleted?.();
@@ -2204,7 +2209,10 @@ export async function processResponsesStream<TApi extends Api>(
 			const err = (event as any).error ?? event;
 			const code = err.code ?? "unknown";
 			const message = err.message ?? "no message";
-			throw new Error(`Error Code ${code}: ${message}`);
+			throw new AIError.ProviderResponseError(`Error Code ${code}: ${message}`, {
+				provider: model.provider,
+				kind: "output",
+			});
 		} else if (event.type === "response.failed") {
 			populateResponsesUsageFromResponse(output, event.response?.usage);
 			const error = event.response?.error ?? (event.response as any)?.status_details?.error;
@@ -2214,7 +2222,7 @@ export async function processResponsesStream<TApi extends Api>(
 				: details?.reason
 					? `incomplete: ${details.reason}`
 					: "Unknown error (no error details in response)";
-			throw new Error(message);
+			throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 		}
 	}
 }

@@ -146,11 +146,11 @@ export function resolveAssistantErrorMessage(
 	message: AssistantAgentMessage,
 	retryAttempt = 0,
 ): { hasErrorStop: boolean; errorMessage: string | null } {
-	const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message.errorMessage);
+	const isAbortedSilently = message.stopReason === "aborted" && isSilentAbort(message);
 	const hasErrorStop = !isAbortedSilently && (message.stopReason === "aborted" || message.stopReason === "error");
 	const errorMessage = hasErrorStop
 		? message.stopReason === "aborted"
-			? resolveAbortLabel(message.errorMessage, retryAttempt)
+			? resolveAbortLabel(message, retryAttempt)
 			: message.errorMessage || "Error"
 		: null;
 	return { hasErrorStop, errorMessage };

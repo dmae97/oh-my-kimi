@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel, type MockContent, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { complete, completeSimple, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
@@ -359,6 +360,7 @@ describe("gemini thinking-loop guard (stream wrapper)", () => {
 			expect(result.stopReason).toBe("error");
 			expect(result.content).toEqual([]);
 			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+			expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
 			// Empty content + transient phrasing is what makes the turn auto-retry.
 			expect(result.errorMessage).toContain("stream stall");
 			expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
@@ -449,6 +451,7 @@ describe("gemini thinking-loop guard (stream wrapper)", () => {
 			expect(result.stopReason).toBe("error");
 			expect(result.content).toEqual([]);
 			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+			expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
 			expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
 		} finally {
 			clearCustomApis();
@@ -478,6 +481,7 @@ describe("withGeminiThinkingLoopGuard (Vertex transport)", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.content.length).toBe(0);
 		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
 		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
 	});
 });
@@ -530,6 +534,7 @@ describe("loop guard assistant prose/text loops", () => {
 		// drop it so AgentSession can retry with a clean assistant turn.
 		expect(result.content).toEqual([]);
 		expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		expect(AIError.is(result.errorId, AIError.Flag.ThinkingLoop)).toBe(true);
 		expect(result.errorMessage).toContain("stream stall");
 		expect(isRetryableError(new Error(result.errorMessage))).toBe(true);
 	});

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type } from "arktype";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
+import * as AIError from "../error";
 /**
  * Parsed inbound OpenAI chat-completions request, ready to feed into pi-ai
  * `stream(model, context, options)`.
@@ -53,7 +54,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 	// vendor-neutral headers when the body doesn't carry one.
 	const parsed = openaiChatRequestSchema(body);
 	if (parsed instanceof type.errors) {
-		throw new Error(`openai-chat: ${parsed.summary}`);
+		throw new AIError.ValidationError(`openai-chat: ${parsed.summary}`);
 	}
 	const data = parsed;
 

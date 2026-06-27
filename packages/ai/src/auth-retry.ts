@@ -1,6 +1,6 @@
-import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
 import type { OAuthAccess } from "./auth-storage";
-import { isUsageLimitOutcome } from "./rate-limit-utils";
+import * as AIError from "./error";
+import { isAuthRetryableError } from "./error/auth-classify";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -70,23 +70,8 @@ export function seedApiKeyResolver(seed: string | undefined, resolver: ApiKeyRes
 	};
 }
 
-/**
- * Classifies whether an error should trigger a credential refresh/rotation
- * retry: a hard `401`, body-classified usage limit (Codex
- * `usage_limit_reached`, Anthropic account rate-limit, Google
- * `resource_exhausted`, OpenAI `insufficient_quota`, …), or a bare `429`
- * whose payload did not preserve a richer quota code. Transient 429s
- * (`Too many requests`, per-minute caps) classify as `RATE_LIMIT_EXCEEDED`
- * via {@link parseRateLimitReason} and stay in the upstream-backoff lane.
- */
-export function isAuthRetryableError(error: unknown): boolean {
-	const status = extractHttpStatusFromError(error);
-	if (status === 401) return true;
-	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-	const embeddedStatus = message ? extractHttpStatusFromError({ message }) : undefined;
-	if (embeddedStatus === 401) return true;
-	return isUsageLimitOutcome(status ?? embeddedStatus, message);
-}
+// Re-exported from the error module (its new home); see error/auth-classify.ts.
+export { isAuthRetryableError };
 
 /**
  * The ordered `lastChance` values for the retry steps after the initial
@@ -130,7 +115,7 @@ export async function withAuth<T>(
 	opts?: { isAuthError?: (error: unknown) => boolean; signal?: AbortSignal; missingKeyMessage?: string },
 ): Promise<T> {
 	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
-	const missingKey = (): Error => new Error(opts?.missingKeyMessage ?? "No API key available");
+	const missingKey = (): Error => new AIError.MissingApiKeyError(undefined, opts?.missingKeyMessage);
 
 	if (!isApiKeyResolver(key)) {
 		if (key === undefined) throw missingKey();
@@ -225,7 +210,10 @@ export async function withOAuthAccess<T>(
 
 	let lastAccess = opts?.seed ?? (await storage.getOAuthAccess(provider, sessionId, { signal }));
 	if (!lastAccess) {
-		throw new Error(opts?.missingAccessMessage ?? `No OAuth credential available for provider: ${provider}`);
+		throw new AIError.MissingApiKeyError(
+			provider,
+			opts?.missingAccessMessage ?? `No OAuth credential available for provider: ${provider}`,
+		);
 	}
 
 	const resolveStep = async (lastChance: boolean, error: unknown): Promise<OAuthAccess | undefined> => {

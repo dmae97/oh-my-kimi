@@ -4,6 +4,7 @@ import {
 	discoverGitLabDuoWorkflowRuntimeNamespace,
 	type GitLabDuoWorkflowNamespaceSelection,
 } from "@oh-my-pi/pi-catalog/discovery/gitlab-duo-workflow";
+import * as AIError from "../error";
 import type {
 	Api,
 	AssistantMessage,
@@ -109,7 +110,7 @@ const GITLAB_DUO_WORKFLOW_GOAL_SOFT_OVERFLOW_BYTES = 1_048_576;
 const GITLAB_DUO_WORKFLOW_GOAL_HARD_OVERFLOW_BYTES = 2_000_000;
 
 // An overflow-pattern message for an oversized goal. The "prompt is too long" prefix
-// is one of the shared `OVERFLOW_PATTERNS` (packages/ai/src/utils/overflow.ts), so
+// is one of the shared overflow classifier patterns, so
 // `isContextOverflow` recognizes it and the session triggers auto-compaction instead
 // of surfacing a hard failure. Byte counts (not tokens) are reported because the
 // budget is a byte budget.
@@ -953,7 +954,7 @@ async function runGitLabDuoWorkflow(
 	state: GitLabDuoWorkflowStreamState,
 ): Promise<void> {
 	const apiKey = options.apiKey;
-	if (!apiKey) throw new Error("No API key for provider: gitlab-duo-agent");
+	if (!apiKey) throw new AIError.MissingApiKeyError("gitlab-duo-agent");
 	const baseUrl = normalizeGitLabBaseUrl(model.baseUrl || DEFAULT_GITLAB_BASE_URL);
 	const fetchImpl = options.fetch ?? fetch;
 	const providerSessionState = getGitLabDuoWorkflowProviderSessionState(
@@ -1604,16 +1605,20 @@ async function requestGitLabDuoWorkflowDirectAccess(
 		// when the assistant error exposes `errorStatus` or the message embeds an
 		// `HTTP <status>` token. A 401 `{"message":"Unauthorized"}` or a 429 quota
 		// body would otherwise surface as a hard failure with no recoverable status.
-		throw new Error(
+		throw new AIError.GitLabDuoWorkflowApiError(
 			message
 				? `GitLab Duo Workflow direct_access failed with HTTP ${response.status}: ${message}`
 				: `GitLab Duo Workflow direct_access failed with HTTP ${response.status}`,
+			response.status,
 		);
 	}
 	const payload = (await response.json()) as GitLabDirectAccessResponse;
 	const token = extractGitLabWorkflowToken(payload);
 	if (!token) {
-		throw new Error("GitLab Duo Workflow direct_access did not return credentials");
+		throw new AIError.ProviderResponseError("GitLab Duo Workflow direct_access did not return credentials", {
+			provider: "gitlab-duo-agent",
+			kind: "empty-body",
+		});
 	}
 	traceGitLabDuoWorkflow("direct_access.token", { hasToken: true });
 	const serviceEndpoint = !payload.gitlab_rails?.token && Boolean(payload.duo_workflow_service?.base_url);
@@ -1658,12 +1663,18 @@ async function createGitLabDuoWorkflow(
 		hasProjectId: Boolean(projectId),
 	});
 	if (!response.ok) {
-		throw new Error(`GitLab Duo Workflow create failed with HTTP ${response.status}`);
+		throw new AIError.GitLabDuoWorkflowApiError(
+			`GitLab Duo Workflow create failed with HTTP ${response.status}`,
+			response.status,
+		);
 	}
 	const payload = (await response.json()) as GitLabCreateWorkflowResponse;
 	const workflowId = payload.id ?? payload.workflow_id ?? payload.workflowId;
 	if (workflowId === undefined) {
-		throw new Error(`GitLab Duo Workflow create response missing workflow id (HTTP ${response.status})`);
+		throw new AIError.ProviderResponseError(
+			`GitLab Duo Workflow create response missing workflow id (HTTP ${response.status})`,
+			{ provider: "gitlab-duo-agent", kind: "empty-body" },
+		);
 	}
 	traceGitLabDuoWorkflow("workflow.create.id", { workflowId });
 	return String(workflowId);
@@ -1815,7 +1826,7 @@ export function runGitLabDuoWorkflowSocket(
 	};
 	const abort = (): void => {
 		close();
-		settle("closed", new Error("GitLab Duo Workflow request aborted"));
+		settle("closed", new AIError.AbortError("GitLab Duo Workflow request aborted"));
 	};
 	if (options.signal?.aborted) {
 		abort();
@@ -1856,7 +1867,13 @@ export function runGitLabDuoWorkflowSocket(
 	ws.onerror = event => {
 		const detail = describeGitLabDuoWorkflowSocketEvent(event);
 		traceGitLabDuoWorkflow("websocket.error", { event: detail });
-		settle("closed", new Error(`GitLab Duo Workflow WebSocket error: ${detail}`));
+		settle(
+			"closed",
+			new AIError.ProviderResponseError(`GitLab Duo Workflow WebSocket error: ${detail}`, {
+				provider: "gitlab-duo-agent",
+				kind: "runtime",
+			}),
+		);
 	};
 	ws.onclose = event => {
 		traceGitLabDuoWorkflow("websocket.close", { code: event.code, reason: event.reason });
@@ -2775,7 +2792,10 @@ export async function resolveGitLabDuoWorkflowNamespaceSelection(
 			cwd: options.cwd,
 		});
 	} catch (error) {
-		throw new Error(`GitLab Duo Workflow runtime namespace resolution failed: ${gitLabDuoWorkflowErrorText(error)}`);
+		throw new AIError.ProviderResponseError(
+			`GitLab Duo Workflow runtime namespace resolution failed: ${gitLabDuoWorkflowErrorText(error)}`,
+			{ provider: "gitlab-duo-agent", kind: "runtime" },
+		);
 	}
 }
 
@@ -3008,7 +3028,7 @@ function requireGitLabDuoWorkflowRequestID(
 	source: Record<string, unknown>,
 ): string {
 	if (requestID) return requestID;
-	throw new Error(
+	throw new AIError.ValidationError(
 		`GitLab Duo Workflow action "${actionName}" missing requestID (keys: ${Object.keys(source).slice(0, 20).join(", ")})`,
 	);
 }

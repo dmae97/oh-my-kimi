@@ -12,6 +12,7 @@ import {
 	validateOpenAICompatibleApiKey,
 } from "./api-key-validation";
 import type { OAuthController } from "./oauth/types";
+import * as AIError from "../error";
 
 type ChatCompletionsValidation = {
 	kind: "chat-completions";
@@ -52,7 +53,7 @@ export type ApiKeyLoginConfig = {
 export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthController) => Promise<string> {
 	return async function login(options: OAuthController): Promise<string> {
 		if (!options.onPrompt) {
-			throw new Error(`${config.providerLabel} login requires onPrompt callback`);
+			throw new AIError.OnPromptRequiredError(config.providerLabel);
 		}
 
 		options.onAuth?.({
@@ -66,12 +67,12 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 		});
 
 		if (options.signal?.aborted) {
-			throw new Error("Login cancelled");
+			throw new AIError.LoginCancelledError();
 		}
 
 		const trimmed = apiKey.trim();
 		if (!trimmed) {
-			throw new Error("API key is required");
+			throw new AIError.ApiKeyRequiredError();
 		}
 
 		if (config.validation) {

@@ -131,7 +131,7 @@ export function isUsageLimitStatus(status: number | undefined): boolean {
  *     credentials.
  */
 export function isUsageLimitOutcome(status: number | undefined, message: string | undefined): boolean {
-	if (message && isUsageLimitError(message)) return true;
+	if (message && matchesUsageLimitText(message)) return true;
 	if (!isUsageLimitStatus(status)) return false;
 	if (!message || isOpaqueStatusBody(message)) return true;
 	return parseRateLimitReason(message) === "QUOTA_EXHAUSTED";
@@ -150,6 +150,12 @@ function isOpaqueStatusBody(message: string): boolean {
 	return !/[a-z\d]{3,}/i.test(cleaned);
 }
 
-export function isUsageLimitError(errorMessage: string): boolean {
+/**
+ * Internal text matcher for usage/quota-limit phrasing. NOT part of the public
+ * API — callers classify through {@link import("./flags").isUsageLimit} (the
+ * flag accessor). `flags.ts` consumes this to populate `Flag.UsageLimit`, and
+ * {@link isUsageLimitOutcome} uses it for the account-rotation decision.
+ */
+export function matchesUsageLimitText(errorMessage: string): boolean {
 	return USAGE_LIMIT_PATTERN.test(errorMessage) || ACCOUNT_RATE_LIMIT_PATTERN.test(errorMessage);
 }

@@ -11,6 +11,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentTranscriptViewer } from "@oh-my-pi/pi-coding-agent/modes/components/agent-transcript-viewer";
 import type { ObservableSession } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
@@ -137,6 +138,58 @@ describe("Agent hub silent-abort regression", () => {
 		expect(renderedText).not.toContain(SILENT_ABORT_MARKER);
 		// No error line at all for a silent abort
 		expect(renderedText).not.toContain("Error:");
+	});
+
+	it("renders no error line for bit-classified silent aborts without marker text", () => {
+		const sessionFile = makeJsonlSessionFile(tmpDir, [
+			{ type: "session", version: 3, id: SESSION_ID, timestamp: new Date().toISOString() },
+			{
+				type: "message",
+				id: "msg-user-bit",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: "hello", timestamp: Date.now() },
+			},
+			{
+				type: "message",
+				id: "msg-assistant-bit",
+				parentId: "msg-user-bit",
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "assistant",
+					content: [],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					stopReason: "aborted",
+					errorId: AIError.create(AIError.Flag.SilentAbort),
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					timestamp: Date.now(),
+				},
+			},
+		]);
+
+		const viewer = makeViewer(sessionFile, [
+			{
+				id: SESSION_ID,
+				kind: "subagent",
+				label: "Test Subagent",
+				status: "active",
+				sessionFile,
+				lastUpdate: Date.now(),
+			},
+		]);
+
+		const rendered = viewer.render(120);
+		viewer.dispose();
+		expect(rendered.join("\n")).not.toContain("Error:");
 	});
 
 	it("renders normal error messages with an Error: line", () => {

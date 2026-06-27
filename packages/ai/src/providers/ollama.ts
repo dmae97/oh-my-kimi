@@ -1,5 +1,5 @@
-import { extractHttpStatusFromError, fetchWithRetry, parseStreamingJson } from "@oh-my-pi/pi-utils";
-import { ProviderHttpError } from "../errors";
+import { fetchWithRetry, parseStreamingJson } from "@oh-my-pi/pi-utils";
+import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
 import type {
 	Api,
@@ -16,7 +16,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { type CapturedHttpErrorResponse, finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
 	getOpenAIStreamFirstEventTimeoutMs,
@@ -32,11 +32,6 @@ import {
 import { stripVariant } from "../utils/strip";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
-
-/** Non-2xx response from the Ollama `/api/chat` endpoint. */
-export class OllamaApiError extends ProviderHttpError {
-	override readonly name = "OllamaApiError";
-}
 
 export interface OllamaChatOptions extends StreamOptions {
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -559,7 +554,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 		try {
 			const apiKey = options.apiKey || getEnvApiKey(model.provider);
 			if (!apiKey) {
-				throw new Error(`No API key for provider: ${model.provider}`);
+				throw new AIError.MissingApiKeyError(model.provider);
 			}
 			const baseUrl = normalizeBaseUrl(model.baseUrl);
 			let body = createChatBody(model, context, options);
@@ -607,12 +602,14 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			}
 			if (!response.ok) {
 				capturedErrorResponse = await captureHttpErrorResponse(response);
-				throw new OllamaApiError(`HTTP ${response.status} from ${baseUrl}/api/chat`, response.status, {
+				throw new AIError.OllamaApiError(`HTTP ${response.status} from ${baseUrl}/api/chat`, response.status, {
 					headers: response.headers,
 				});
 			}
 			if (!response.body) {
-				throw new Error("Ollama returned an empty response body");
+				throw new AIError.OllamaApiError("Ollama returned an empty response body", response.status, {
+					headers: response.headers,
+				});
 			}
 			stream.push({ type: "start", partial: output });
 			for await (const chunk of iterateNdjson(response.body)) {
@@ -743,9 +740,16 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 					stripVariant<InternalToolCallBlock>(block, "partialJson");
 				}
 			}
-			output.stopReason = options.signal?.aborted ? "aborted" : "error";
-			output.errorStatus = extractHttpStatusFromError(error);
-			output.errorMessage = await finalizeErrorMessage(error, rawRequestDump, capturedErrorResponse);
+			const result = await AIError.finalize(error, {
+				api: model.api,
+				signal: options.signal,
+				rawRequestDump,
+				capturedErrorResponse,
+			});
+			output.stopReason = result.stopReason;
+			output.errorStatus = result.status;
+			output.errorId = result.id;
+			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) {
 				output.ttft = firstTokenTime - startTime;

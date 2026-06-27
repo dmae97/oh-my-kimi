@@ -102,13 +102,8 @@ import {
 	WriteSuccessSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import {
-	$env,
-	extractHttpStatusFromError,
-	parseJsonWithRepair,
-	parseStreamingJson,
-	sanitizeText,
-} from "@oh-my-pi/pi-utils";
+import { $env, parseJsonWithRepair, parseStreamingJson, sanitizeText } from "@oh-my-pi/pi-utils";
+import * as AIError from "../error";
 import type {
 	Api,
 	AssistantMessage,
@@ -134,7 +129,6 @@ import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
-import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 import { toolWireSchema } from "../utils/schema/wire";
 import { stripVariant } from "../utils/strip";
 
@@ -195,11 +189,11 @@ function parseConnectEndStream(data: Uint8Array): Error | null {
 		if (error) {
 			const code = typeof error.code === "string" ? error.code : "unknown";
 			const message = typeof error.message === "string" ? error.message : "Unknown error";
-			return new Error(`Connect error ${code}: ${message}`);
+			return new AIError.ProviderResponseError(`Connect error ${code}: ${message}`, { kind: "envelope" });
 		}
 		return null;
 	} catch {
-		return new Error("Failed to parse Connect end stream");
+		return new AIError.ProviderResponseError("Failed to parse Connect end stream", { kind: "envelope" });
 	}
 }
 
@@ -345,7 +339,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		try {
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
-				throw new Error("Cursor API key (access token) is required");
+				throw new AIError.MissingApiKeyError(undefined, "Cursor API key (access token) is required");
 			}
 
 			const conversationId = options?.conversationId ?? options?.sessionId ?? crypto.randomUUID();
@@ -532,7 +526,12 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					const msg = trailers["grpc-message"];
 					if (status && status !== "0") {
 						void closeDebugLog().finally(() => {
-							reject(new Error(`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`));
+							reject(
+								new AIError.ProviderResponseError(
+									`gRPC error ${status}: ${decodeURIComponent(String(msg || ""))}`,
+									{ kind: "envelope" },
+								),
+							);
 						});
 					}
 				});
@@ -558,7 +557,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					options.signal.addEventListener("abort", () => {
 						h2Request?.close();
 						void closeDebugLog().finally(() => {
-							reject(new Error("Request was aborted"));
+							reject(new AIError.AbortError());
 						});
 					});
 				}
@@ -590,9 +589,11 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			});
 			stream.end();
 		} catch (error) {
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorStatus = extractHttpStatusFromError(error);
-			output.errorMessage = formatErrorMessageWithRetryAfter(error);
+			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal });
+			output.stopReason = result.stopReason;
+			output.errorStatus = result.status;
+			output.errorId = result.id;
+			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -2168,7 +2169,7 @@ function storeCursorBlob(blobStore: Map<string, Uint8Array>, data: Uint8Array): 
 function readCursorBlob(blobStore: Map<string, Uint8Array>, blobId: Uint8Array): Uint8Array {
 	const data = blobStore.get(Buffer.from(blobId).toString("hex"));
 	if (!data) {
-		throw new Error("Cursor blob not found");
+		throw new AIError.ValidationError("Cursor blob not found");
 	}
 	return data;
 }

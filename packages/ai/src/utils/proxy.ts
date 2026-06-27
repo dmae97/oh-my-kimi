@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as tls from "node:tls";
+import * as AIError from "../error";
 import type { FetchImpl } from "../types";
 
 /**
@@ -228,7 +229,7 @@ export async function connectProxiedSocket(proxyUrlStr: string, targetUrlStr: st
 					tlsSocket.once("error", reject);
 				} else {
 					rawSocket.destroy();
-					reject(new Error(`Proxy tunnel failed: ${firstLine}`));
+					reject(new AIError.ValidationError(`Proxy tunnel failed: ${firstLine}`));
 				}
 			}
 		};

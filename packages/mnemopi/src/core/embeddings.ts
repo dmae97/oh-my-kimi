@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
-import { type ApiKey, getOpenRouterHeaders, ProviderHttpError, withAuth } from "@oh-my-pi/pi-ai";
+import { type ApiKey, getOpenRouterHeaders, withAuth } from "@oh-my-pi/pi-ai";
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
 	$env,

@@ -21,7 +21,11 @@
  *   with up to 25% jitter).
  */
 import { scheduler } from "node:timers/promises";
-import { ProviderHttpError } from "../errors";
+import * as AIError from "../error";
+import { AnthropicApiError, AnthropicConnectionError, AnthropicConnectionTimeoutError } from "../error";
+
+export { AnthropicApiError, AnthropicConnectionError, AnthropicConnectionTimeoutError };
+
 import type { FetchImpl } from "../types";
 import type { MessageCreateParamsStreaming } from "./anthropic-wire";
 
@@ -77,42 +81,8 @@ export interface AnthropicClientOptions {
 	fetchOptions?: AnthropicFetchOptions;
 }
 
-/** Non-2xx response from the Anthropic API. */
-export class AnthropicApiError extends ProviderHttpError {
-	declare readonly headers: Headers;
-	readonly requestId: string | null;
-
-	constructor(status: number, message: string, headers: Headers) {
-		super(message, status, { headers });
-		this.name = "AnthropicApiError";
-		this.requestId = headers.get("request-id");
-	}
-
-	static async fromResponse(response: Response): Promise<AnthropicApiError> {
-		const body = await response.text().catch(() => "");
-		const detail = body.trim() || "status code (no body)";
-		return new AnthropicApiError(response.status, `${response.status} ${detail}`, response.headers);
-	}
-}
-
-/** Network-level failure (DNS, TLS, socket reset) after retries were exhausted. */
-export class AnthropicConnectionError extends Error {
-	constructor(cause: unknown) {
-		super("Connection error.", { cause });
-		this.name = "AnthropicConnectionError";
-	}
-}
-
-/** No response headers arrived within the configured request timeout. */
-export class AnthropicConnectionTimeoutError extends Error {
-	constructor() {
-		super("Request timed out.");
-		this.name = "AnthropicConnectionTimeoutError";
-	}
-}
-
 function createAbortError(): Error {
-	return new Error("Request was aborted.");
+	return new AIError.AbortError("Request was aborted.");
 }
 
 /** `x-should-retry` override, then 408/409/429/5xx. */
@@ -260,8 +230,8 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 					await this.#backoff(attempt, undefined, callerSignal);
 					continue;
 				}
-				if (error instanceof AnthropicConnectionTimeoutError) throw error;
-				throw new AnthropicConnectionError(error);
+				if (error instanceof AIError.AnthropicConnectionTimeoutError) throw error;
+				throw new AIError.AnthropicConnectionError(error);
 			}
 
 			if (response.ok) return response;
@@ -271,7 +241,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 				await this.#backoff(attempt, response.headers, callerSignal);
 				continue;
 			}
-			throw await AnthropicApiError.fromResponse(response);
+			throw await AIError.AnthropicApiError.fromResponse(response);
 		}
 	}
 
@@ -300,7 +270,7 @@ export class AnthropicMessagesClient implements AnthropicMessagesClientLike {
 				signal: controller.signal,
 			});
 		} catch (error) {
-			if (timedOut && !callerSignal?.aborted) throw new AnthropicConnectionTimeoutError();
+			if (timedOut && !callerSignal?.aborted) throw new AIError.AnthropicConnectionTimeoutError();
 			throw error;
 		} finally {
 			clearTimeout(timer);

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, AgentBusyError, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { KeybindingsManager } from "@oh-my-pi/pi-coding-agent/config/keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -1456,6 +1457,17 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(rendered).not.toContain(USER_INTERRUPT_LABEL);
 		// The marker itself MUST NOT leak into rendered output either.
 		expect(rendered).not.toContain(SILENT_ABORT_MARKER);
+	});
+
+	it("D1b: Replay of an assistant message with silent-abort errorId contains no abort line", () => {
+		const message = buildAbortedAssistantMessage({
+			content: [],
+			errorId: AIError.create(AIError.Flag.SilentAbort),
+			errorMessage: undefined,
+		});
+		const rendered = renderAssistant(message);
+		expect(rendered).not.toContain("Operation aborted");
+		expect(rendered).not.toContain("Error:");
 	});
 
 	it("D2: Replay of an aborted message with no threaded reason + empty content: rendered component DOES contain the generic label", () => {

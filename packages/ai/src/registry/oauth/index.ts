@@ -2,6 +2,7 @@
 // High-level API
 // ============================================================================
 
+import * as AIError from "../../error";
 import { getProviderDefinition, PROVIDER_REGISTRY } from "../registry";
 import type {
 	OAuthCredentials,
@@ -46,14 +47,14 @@ async function abortableDeviceFlowSleep(ms: number, signal: AbortSignal | undefi
 		return;
 	}
 	if (signal.aborted) {
-		throw new Error(DEVICE_FLOW_CANCEL_MESSAGE);
+		throw new AIError.LoginCancelledError(DEVICE_FLOW_CANCEL_MESSAGE);
 	}
 
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	let timer: Timer | undefined;
 	const onAbort = () => {
 		if (timer) clearTimeout(timer);
-		reject(new Error(DEVICE_FLOW_CANCEL_MESSAGE));
+		reject(new AIError.LoginCancelledError(DEVICE_FLOW_CANCEL_MESSAGE));
 	};
 	timer = setTimeout(() => {
 		signal.removeEventListener("abort", onAbort);
@@ -77,14 +78,14 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodeFlowOpt
 
 	while (Date.now() < deadline) {
 		if (options.signal?.aborted) {
-			throw new Error(DEVICE_FLOW_CANCEL_MESSAGE);
+			throw new AIError.LoginCancelledError(DEVICE_FLOW_CANCEL_MESSAGE);
 		}
 		const result = await options.poll();
 		if (result.status === "complete") {
 			return result.value;
 		}
 		if (result.status === "failed") {
-			throw new Error(result.message);
+			throw new AIError.OAuthError(result.message, { kind: "polling" });
 		}
 		if (result.status === "slow_down") {
 			slowDownResponses += 1;
@@ -98,7 +99,10 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodeFlowOpt
 		await abortableDeviceFlowSleep(Math.min(intervalMs, remainingMs), options.signal);
 	}
 
-	throw new Error(slowDownResponses > 0 ? DEVICE_FLOW_SLOW_DOWN_TIMEOUT_MESSAGE : DEVICE_FLOW_TIMEOUT_MESSAGE);
+	throw new AIError.OAuthError(
+		slowDownResponses > 0 ? DEVICE_FLOW_SLOW_DOWN_TIMEOUT_MESSAGE : DEVICE_FLOW_TIMEOUT_MESSAGE,
+		{ kind: "timeout" },
+	);
 }
 
 const builtInOAuthProviders: OAuthProviderInfo[] = PROVIDER_REGISTRY.filter(
@@ -146,11 +150,17 @@ export async function refreshOAuthToken(
 	credentials: OAuthCredentials,
 ): Promise<OAuthCredentials> {
 	if (!credentials) {
-		throw new Error(`No OAuth credentials found for ${provider}`);
+		throw new AIError.OAuthError(`No OAuth credentials found for ${provider}`, {
+			kind: "validation",
+			provider,
+		});
 	}
 	const def = getProviderDefinition(provider);
 	if (!def?.login) {
-		throw new Error(`Unknown OAuth provider: ${provider}`);
+		throw new AIError.OAuthError(`Unknown OAuth provider: ${provider}`, {
+			kind: "validation",
+			provider,
+		});
 	}
 	// Providers without a real refresher (static bearer tokens / API keys that
 	// don't expire) return the credentials unchanged.
@@ -219,8 +229,9 @@ export async function getOAuthApiKey(
 				return { newCredentials: fallbackCredentials, apiKey: fallbackCredentials.access };
 			}
 		}
-		throw new Error(
+		throw new AIError.OAuthError(
 			`OAuth credential for ${provider} is expired and must be refreshed via AuthStorage before getOAuthApiKey is called`,
+			{ kind: "validation", provider },
 		);
 	}
 	// For providers that need request-time credential metadata, return JSON.

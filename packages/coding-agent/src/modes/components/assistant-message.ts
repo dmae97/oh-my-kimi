@@ -581,11 +581,11 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "toolCall") return false;
 		}
 		if (this.#toolImagesByCallId.size > 0) return false;
-		if (message.stopReason === "aborted" && shouldRenderAbortReason(message.errorMessage)) return false;
+		if (message.stopReason === "aborted" && shouldRenderAbortReason(message)) return false;
 		if (message.stopReason === "error" && !this.#errorPinned) return false;
 		if (
 			message.errorMessage &&
-			shouldRenderAbortReason(message.errorMessage) &&
+			shouldRenderAbortReason(message) &&
 			message.stopReason !== "aborted" &&
 			message.stopReason !== "error"
 		)
@@ -779,8 +779,8 @@ export class AssistantMessageComponent extends Container {
 		// But only if there are no tool calls (tool execution components will show the error)
 		const hasToolCalls = message.content.some(c => c.type === "toolCall");
 		if (!hasToolCalls) {
-			if (message.stopReason === "aborted" && shouldRenderAbortReason(message.errorMessage)) {
-				const abortMessage = resolveAbortLabel(message.errorMessage);
+			if (message.stopReason === "aborted" && shouldRenderAbortReason(message)) {
+				const abortMessage = resolveAbortLabel(message);
 				if (hasVisibleContent) {
 					this.#contentContainer.addChild(new Spacer(1));
 				} else {
@@ -793,7 +793,7 @@ export class AssistantMessageComponent extends Container {
 		}
 		if (
 			message.errorMessage &&
-			shouldRenderAbortReason(message.errorMessage) &&
+			shouldRenderAbortReason(message) &&
 			message.stopReason !== "aborted" &&
 			message.stopReason !== "error"
 		) {

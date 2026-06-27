@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
-import { AnthropicApiError, type AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
+import type { AnthropicMessagesClientLike } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { waitForDelayOrAbort } from "./helpers";
@@ -436,7 +437,7 @@ describe("anthropic provider retry delays", () => {
 			attempt += 1;
 			if (attempt === 1) {
 				return createRejectedAnthropicRequest(
-					new AnthropicApiError(
+					new AIError.AnthropicApiError(
 						529,
 						'529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
 						new Headers({ "retry-after": "30" }),
@@ -511,7 +512,7 @@ describe("anthropic provider retry delays", () => {
 			attempt += 1;
 			if (attempt <= 10) {
 				return createRejectedAnthropicRequest(
-					new AnthropicApiError(502, "502 Bad Gateway", new Headers()),
+					new AIError.AnthropicApiError(502, "502 Bad Gateway", new Headers()),
 				) as never;
 			}
 			return createAnthropicMockStream({

@@ -1,3 +1,4 @@
+import * as AIError from "../error";
 import { validateOpenAICompatibleApiKey } from "./api-key-validation";
 import type { OAuthController, OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
@@ -9,7 +10,7 @@ const PROVIDER_ID = "nvidia";
 
 export async function loginNvidia(options: OAuthController): Promise<string> {
 	if (!options.onPrompt) {
-		throw new Error("NVIDIA login requires onPrompt callback");
+		throw new AIError.OnPromptRequiredError("NVIDIA");
 	}
 
 	options.onAuth?.({
@@ -23,12 +24,12 @@ export async function loginNvidia(options: OAuthController): Promise<string> {
 	});
 
 	if (options.signal?.aborted) {
-		throw new Error("Login cancelled");
+		throw new AIError.LoginCancelledError();
 	}
 
 	const trimmed = apiKey.trim();
 	if (!trimmed) {
-		throw new Error("API key is required");
+		throw new AIError.ApiKeyRequiredError();
 	}
 
 	options.onProgress?.("Validating API key (optional)...");

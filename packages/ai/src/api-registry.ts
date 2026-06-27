@@ -13,6 +13,7 @@ import type {
 	SimpleStreamOptions,
 	StreamOptions,
 } from "./types";
+import * as AIError from "./error";
 
 const BUILTIN_API_IDS = [
 	"openai-completions",
@@ -60,7 +61,7 @@ const customApiRegistry = new Map<string, RegisteredCustomApi>();
 
 function assertCustomApiName(api: string): void {
 	if (BUILTIN_APIS.has(api as KnownApi)) {
-		throw new Error(`Cannot register custom API "${api}": built-in API names are reserved.`);
+		throw new AIError.ConfigurationError(`Cannot register custom API "${api}": built-in API names are reserved.`);
 	}
 }
 

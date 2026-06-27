@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { THINKING_LOOP_ERROR_MARKER } from "@oh-my-pi/pi-ai/utils/thinking-loop";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ErrorBannerComponent } from "@oh-my-pi/pi-coding-agent/modes/components/error-banner";
@@ -137,8 +137,12 @@ describe("EventController error banner", () => {
 	});
 
 	it("clears retryable thinking-loop banners without restoring the dropped inline error", async () => {
-		const errorMessage = `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content. Treating as a stream stall and retrying.`;
-		const message = makeAssistantMessage({ stopReason: "error", errorMessage });
+		const errorMessage = "loop guard stopped repeated reasoning";
+		const message = makeAssistantMessage({
+			stopReason: "error",
+			errorMessage,
+			errorId: AIError.create(AIError.Flag.ThinkingLoop),
+		});
 		const { controller, clearPinnedError, streamingComponent } = createFixture(message);
 
 		await controller.handleEvent({ type: "message_end", message } as Extract<
@@ -154,6 +158,7 @@ describe("EventController error banner", () => {
 			maxAttempts: 2,
 			delayMs: 0,
 			errorMessage,
+			errorId: AIError.create(AIError.Flag.ThinkingLoop),
 		} as Extract<AgentSessionEvent, { type: "auto_retry_start" }>);
 
 		expect(clearPinnedError).toHaveBeenCalledTimes(1);

@@ -287,5 +287,4 @@ describe("in-band tool dialects", () => {
 			.join("");
 		expect(deltas).toBe("line1\nconst x = `a`;");
 	});
-
 });

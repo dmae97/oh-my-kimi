@@ -10,10 +10,9 @@
  *
  * This guard watches the streamed `thinking` deltas and, on a match, terminates
  * the stream with a synthetic `error` {@link AssistantMessage} that carries
- * **no observable content**. An empty-content `stopReason: "error"` whose message
- * hits the transient-transport pattern is what {@link isThinkingLoopStall} and
- * `AgentSession` classify as a *retryable* stop, so the turn is discarded and
- * re-sampled instead of committing the garbage transcript.
+ * **no observable content**. An empty-content `stopReason: "error"` message tagged
+ * with `AIError.Flag.ThinkingLoop` lets result consumers and `AgentSession` discard
+ * the runaway and re-sample instead of committing garbage transcript.
  *
  * Three failure shapes are detected:
  * 1. **Verbatim tail repetition** — a short unit repeated back-to-back (e.g.
@@ -38,6 +37,7 @@
  * through one unguarded pass. Disable detection with `PI_NO_THINKING_LOOP_GUARD=1`.
  */
 import { logger } from "@oh-my-pi/pi-utils";
+import * as AIError from "../error";
 import type { Api, AssistantMessage, Model, StreamOptions } from "../types";
 import { AssistantMessageEventStream } from "./event-stream";
 
@@ -45,21 +45,6 @@ import { AssistantMessageEventStream } from "./event-stream";
  *  message also carries "stream stall" so the session + transport retry
  *  classifiers treat it as a transient (retryable) stop without bespoke rules. */
 export const THINKING_LOOP_ERROR_MARKER = "Thinking loop detected";
-
-/**
- * True when a completed message is the guard's thinking-loop stall: an empty
- * `stopReason: "error"` message carrying {@link THINKING_LOOP_ERROR_MARKER}. The
- * empty content is load-bearing — it marks the discarded runaway as safe to
- * re-sample. A *contentful* marker error already streamed visible output and is
- * replay-unsafe, so it is deliberately excluded (re-sampling would duplicate it).
- */
-export function isThinkingLoopStall(message: AssistantMessage): boolean {
-	return (
-		message.stopReason === "error" &&
-		message.content.length === 0 &&
-		(message.errorMessage?.includes(THINKING_LOOP_ERROR_MARKER) ?? false)
-	);
-}
 
 /** Rolling tail (chars) inspected for verbatim back-to-back repetition. */
 const VERBATIM_TAIL_WINDOW = 250;
@@ -417,7 +402,9 @@ export function guardThinkingLoopStream(
 						provider: model.provider,
 						detail,
 					});
-					controller.abort(new Error(THINKING_LOOP_ERROR_MARKER));
+					controller.abort(
+						AIError.attach(new Error(THINKING_LOOP_ERROR_MARKER), AIError.create(AIError.Flag.ThinkingLoop)),
+					);
 					outer.push({
 						type: "error",
 						reason: "error",
@@ -449,7 +436,7 @@ export function guardThinkingLoopStream(
  * guard abort signal into the provider call so a detected loop tears down the
  * upstream, then wraps the returned stream. The guard only raises the retryable
  * stall; bounding the re-samples and the final cook pass lives in the
- * result-awaiting callers (the {@link isThinkingLoopStall} consumers).
+ * result-awaiting caller.
  */
 export function withGeminiThinkingLoopGuard<
 	O extends { signal?: AbortSignal; loopGuard?: { enabled?: boolean; checkAssistantContent?: boolean } },
@@ -490,6 +477,7 @@ function buildThinkingLoopError(model: Model<Api>, detail: string): AssistantMes
 		// "stream stall" makes the transport/session retry classifiers treat this
 		// as a transient (retryable) failure with no bespoke rule.
 		errorMessage: `${THINKING_LOOP_ERROR_MARKER}: the model repeated near-identical content (${detail}). Treating as a stream stall and retrying.`,
+		errorId: AIError.create(AIError.Flag.ThinkingLoop),
 		timestamp: Date.now(),
 	};
 }

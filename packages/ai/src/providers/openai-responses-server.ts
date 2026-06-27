@@ -11,6 +11,7 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
+import * as AIError from "../error";
 import { resolvePromptCacheKey } from "../auth-gateway/http";
 import type { AuthGatewayStreamControl, AuthGatewayParsedRequest as ParsedRequest } from "../auth-gateway/types";
 import type {
@@ -266,7 +267,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 
 	const data = openaiResponsesRequestSchema(body);
 	if (data instanceof type.errors) {
-		throw new Error(`openai-responses: ${data.summary}`);
+		throw new AIError.ValidationError(`openai-responses: ${data.summary}`);
 	}
 
 	const now = Date.now();
@@ -345,7 +346,7 @@ export function parseRequest(body: unknown, headers?: Headers): ParsedRequest {
 					const parsedArgs: unknown = JSON.parse(argsRaw);
 					args = isObj(parsedArgs) ? parsedArgs : {};
 				} catch {
-					throw new Error(`openai-responses: function_call ${call.call_id} has invalid JSON arguments`);
+					throw new AIError.ValidationError(`openai-responses: function_call ${call.call_id} has invalid JSON arguments`);
 				}
 				const toolCall: ToolCall = {
 					type: "toolCall",

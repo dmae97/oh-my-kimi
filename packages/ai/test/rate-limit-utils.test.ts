@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { isUsageLimit } from "@oh-my-pi/pi-ai/error/flags";
 import {
 	calculateRateLimitBackoffMs,
-	isUsageLimitError,
 	isUsageLimitOutcome,
 	isUsageLimitStatus,
 	parseRateLimitReason,
-} from "@oh-my-pi/pi-ai/rate-limit-utils";
+} from "@oh-my-pi/pi-ai/error/rate-limit";
 
 describe("parseRateLimitReason", () => {
 	it("classifies Google Quota exceeded as QUOTA_EXHAUSTED", () => {
@@ -80,10 +80,10 @@ describe("parseRateLimitReason", () => {
 	});
 });
 
-describe("isUsageLimitError", () => {
+describe("isUsageLimit", () => {
 	it("detects account rate limits as credential-rotatable usage limits", () => {
 		expect(
-			isUsageLimitError(
+			isUsageLimit(
 				'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
 			),
 		).toBe(true);
@@ -91,7 +91,7 @@ describe("isUsageLimitError", () => {
 
 	it("detects OpenCode Go insufficient balance as a credential-rotatable usage limit", () => {
 		expect(
-			isUsageLimitError("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),
+			isUsageLimit("401 Insufficient balance. Manage your billing here: https://opencode.ai/workspace/demo"),
 		).toBe(true);
 	});
 
@@ -100,7 +100,7 @@ describe("isUsageLimitError", () => {
 		// session sticks to the exhausted OAuth account instead of rotating —
 		// see `agent-session.ts` line 8314 and `auth-storage.ts` line 3457.
 		expect(
-			isUsageLimitError(
+			isUsageLimit(
 				"Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 3h6m38s.",
 			),
 		).toBe(true);
@@ -114,20 +114,20 @@ describe("isUsageLimitError", () => {
 	// account (see issue #2198).
 	it("detects Antigravity 'Individual quota reached' as a credential-rotatable usage limit", () => {
 		expect(
-			isUsageLimitError(
+			isUsageLimit(
 				"Cloud Code Assist API error (429): Individual quota reached. Contact your administrator to enable overages.",
 			),
 		).toBe(true);
 	});
 
 	it("detects bare 'quota reached' phrasing", () => {
-		expect(isUsageLimitError("quota reached")).toBe(true);
-		expect(isUsageLimitError("quota_reached")).toBe(true);
+		expect(isUsageLimit("quota reached")).toBe(true);
+		expect(isUsageLimit("quota_reached")).toBe(true);
 	});
 
 	it("detects OpenAI quota payload codes as credential-rotatable usage limits", () => {
 		for (const message of ["insufficient_quota", "usage_limit_exceeded", "usage_limit_reached"]) {
-			expect(isUsageLimitError(message)).toBe(true);
+			expect(isUsageLimit(message)).toBe(true);
 		}
 		expect(isUsageLimitStatus(429)).toBe(true);
 		expect(isUsageLimitStatus(400)).toBe(false);

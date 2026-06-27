@@ -13,10 +13,11 @@ import {
 	resolveWireModelId,
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
-import { $env, $pickenv, extractHttpStatusFromError, getConfigRootDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { $env, $pickenv, getConfigRootDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { AUTH_RETRY_STEPS, isApiKeyResolver, resolveRetryKey } from "./auth-retry";
-import { ProviderHttpError } from "./errors";
+import * as AIError from "./error";
+import { ProviderHttpError } from "./error";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -54,7 +55,7 @@ import {
 	streamOpenAIResponses,
 } from "./providers/register-builtins";
 import { isSyntheticModel, streamSynthetic } from "./providers/synthetic";
-import { isUsageLimitOutcome } from "./rate-limit-utils";
+import { isUsageLimitOutcome } from "./error/rate-limit";
 import { PROVIDER_REGISTRY } from "./registry";
 import type {
 	Api,
@@ -72,7 +73,7 @@ import type {
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { wrapFetchForProxy } from "./utils/proxy";
 import { withRequestDebugFetch } from "./utils/request-debug";
-import { isThinkingLoopStall, withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
+import { withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
 
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
@@ -270,7 +271,7 @@ async function acquireProviderInFlightLock(provider: string, signal?: AbortSigna
 	await fs.mkdir(path.dirname(lockDir), { recursive: true });
 
 	while (true) {
-		if (signal?.aborted) throw signal.reason ?? new Error("Provider request aborted before dispatch");
+		if (signal?.aborted) throw signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 		try {
 			await fs.mkdir(lockDir);
 			const lockIdentity = await readProviderInFlightLockIdentity(lockDir);
@@ -375,7 +376,8 @@ async function signalProviderInFlightWaiters(provider: string): Promise<void> {
 }
 
 function waitForProviderInFlightSignal(provider: string, signal?: AbortSignal): Promise<void> {
-	if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("Provider request aborted before dispatch"));
+	if (signal?.aborted)
+		return Promise.reject(signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch"));
 	const signalPath = providerInFlightSignalPath(provider);
 	const waitStarted = Date.now();
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
@@ -391,7 +393,7 @@ function waitForProviderInFlightSignal(provider: string, signal?: AbortSignal): 
 		settle();
 	};
 	const onAbort = () => {
-		finish(() => reject(signal?.reason ?? new Error("Provider request aborted before dispatch")));
+		finish(() => reject(signal?.reason ?? new AIError.AbortError("Provider request aborted before dispatch")));
 	};
 	signal?.addEventListener("abort", onAbort, { once: true });
 	try {
@@ -447,7 +449,7 @@ async function acquireProviderInFlightSlot(
 	if (limit === undefined) return async () => {};
 	let loggedWait = false;
 	while (true) {
-		if (signal?.aborted) throw signal.reason ?? new Error("Provider request aborted before dispatch");
+		if (signal?.aborted) throw signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 		const lease = await tryAcquireProviderInFlightLease(provider, limit, signal);
 		if (lease) return () => releaseProviderInFlightLease(provider, lease);
 		if (!loggedWait) {
@@ -509,7 +511,7 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 				logger.debug("Provider in-flight limit wait completed", { provider: model.provider, limit });
 			}
 			if (options?.signal?.aborted) {
-				throw options.signal.reason ?? new Error("Provider request aborted before dispatch");
+				throw options.signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 			}
 			const inner = dispatch();
 			try {
@@ -711,7 +713,7 @@ function streamDispatch<TApi extends Api>(
 	if (isGitLabDuoModel(model)) {
 		const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
-			throw new Error(`No API key for provider: ${model.provider}`);
+			throw new AIError.MissingApiKeyError(model.provider);
 		}
 		return streamGitLabDuo(model, context, {
 			...(requestOptions as SimpleStreamOptions),
@@ -722,7 +724,7 @@ function streamDispatch<TApi extends Api>(
 	if (model.api === "gitlab-duo-agent") {
 		const apiKey = (requestOptions as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
-			throw new Error(`No API key for provider: ${model.provider}`);
+			throw new AIError.MissingApiKeyError(model.provider);
 		}
 		return streamGitLabDuoWorkflow(model as Model<"gitlab-duo-agent">, context, {
 			...(requestOptions as StreamOptions | undefined),
@@ -740,7 +742,7 @@ function streamDispatch<TApi extends Api>(
 
 	const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
 	if (!apiKey) {
-		throw new Error(`No API key for provider: ${model.provider}`);
+		throw new AIError.MissingApiKeyError(model.provider);
 	}
 	const providerOptions = isGoogleVertexAuthenticatedModel(model)
 		? {
@@ -824,7 +826,7 @@ function streamDispatch<TApi extends Api>(
 			return streamDevin(model as Model<"devin-agent">, context, providerOptions as DevinOptions);
 
 		default:
-			throw new Error(`Unhandled API: ${api}`);
+			throw new AIError.ConfigurationError(`Unhandled API: ${api}`);
 	}
 }
 
@@ -849,7 +851,8 @@ async function resolveWithThinkingLoopCook(
 	cook: () => AssistantMessageEventStream,
 ): Promise<AssistantMessage> {
 	let message = await dispatch().result();
-	for (let attempt = 0; isThinkingLoopStall(message) && attempt < THINKING_LOOP_MAX_ABORTS - 1; attempt += 1) {
+	let thinkingLoopRetry = AIError.is(message.errorId, AIError.Flag.ThinkingLoop);
+	for (let attempt = 0; thinkingLoopRetry && attempt < THINKING_LOOP_MAX_ABORTS - 1; attempt += 1) {
 		// A caller abort surfaces as a thrown abort (never the stall, which would
 		// misclassify as a 502): throwIfAborted before backoff, and scheduler.wait
 		// rejects if the abort lands mid-delay.
@@ -857,8 +860,12 @@ async function resolveWithThinkingLoopCook(
 		const delay = Math.min(THINKING_LOOP_RETRY_BASE_DELAY_MS * 2 ** attempt, THINKING_LOOP_RETRY_MAX_DELAY_MS);
 		await scheduler.wait(delay, { signal });
 		message = await dispatch().result();
+		thinkingLoopRetry =
+			message.stopReason === "error" &&
+			message.content.length === 0 &&
+			AIError.is(message.errorId, AIError.Flag.ThinkingLoop);
 	}
-	if (!isThinkingLoopStall(message)) return message;
+	if (!thinkingLoopRetry) return message;
 	signal?.throwIfAborted();
 	// Abort budget spent and still looping: let it cook with the guard disabled.
 	return cook().result();
@@ -885,7 +892,7 @@ type AuthRetryFailure = {
 function extractStatusFromAssistantError(message: AssistantMessage): number | undefined {
 	if (message.errorStatus !== undefined) return message.errorStatus;
 	if (!message.errorMessage) return undefined;
-	return extractHttpStatusFromError({ message: message.errorMessage });
+	return AIError.status({ message: message.errorMessage });
 }
 
 function isRetryableUpstreamError(error: unknown, status: number | undefined, message: string | undefined): boolean {
@@ -908,7 +915,9 @@ function isRetryableUpstreamError(error: unknown, status: number | undefined, me
 function createAssistantAuthError(message: AssistantMessage): Error {
 	const text = message.errorMessage ?? "Provider authentication failed";
 	const status = extractStatusFromAssistantError(message);
-	return status === undefined ? new Error(text) : new ProviderHttpError(text, status);
+	return status === undefined
+		? new AIError.ProviderResponseError(text, { kind: "runtime" })
+		: new ProviderHttpError(text, status);
 }
 
 function emitBufferedEvents(stream: AssistantMessageEventStream, events: AssistantMessageEvent[]): void {
@@ -977,7 +986,7 @@ export function streamSimple<TApi extends Api>(
 					captureAuthFailure &&
 					isRetryableUpstreamError(
 						error,
-						extractHttpStatusFromError(error),
+						AIError.status(error),
 						error instanceof Error ? error.message : undefined,
 					)
 				) {
@@ -1005,7 +1014,7 @@ export function streamSimple<TApi extends Api>(
 				// A thrown resolver is a broker/OAuth/network failure, not a missing
 				// key — surface the cause instead of masking it as "No API key".
 				outer.fail(
-					new Error(
+					new AIError.ConfigurationError(
 						`Failed to resolve API key for provider ${model.provider}: ${error instanceof Error ? error.message : String(error)}`,
 						{ cause: error },
 					),
@@ -1013,7 +1022,7 @@ export function streamSimple<TApi extends Api>(
 				return;
 			}
 			if (lastKey === undefined) {
-				outer.fail(new Error(`No API key for provider: ${model.provider}`));
+				outer.fail(new AIError.MissingApiKeyError(model.provider));
 				return;
 			}
 			let failure = await runAttempt(lastKey, true);
@@ -1074,7 +1083,7 @@ export function streamSimple<TApi extends Api>(
 	const apiKey =
 		(typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) || getEnvApiKey(model.provider);
 	if (!apiKey) {
-		throw new Error(`No API key for provider: ${model.provider}`);
+		throw new AIError.MissingApiKeyError(model.provider);
 	}
 
 	// GitLab Duo - wraps Anthropic/OpenAI behind GitLab AI Gateway direct access tokens
@@ -1708,7 +1717,7 @@ function mapOptionsForApi<TApi extends Api>(
 			});
 		}
 		default:
-			throw new Error(`Unhandled API in mapOptionsForApi: ${model.api}`);
+			throw new AIError.ConfigurationError(`Unhandled API in mapOptionsForApi: ${model.api}`);
 	}
 }
 

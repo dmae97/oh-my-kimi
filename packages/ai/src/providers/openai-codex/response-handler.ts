@@ -1,5 +1,5 @@
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
-import { ProviderHttpError } from "../../errors";
+import { ProviderHttpError } from "../../error";
 
 export type CodexRateLimit = {
 	used_percent?: number;

@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { runPrintMode } from "@oh-my-pi/pi-coding-agent/modes/print-mode";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SILENT_ABORT_MARKER } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -87,6 +88,21 @@ describe("Print-mode silent-abort regression", () => {
 		const stderrText = stderrOutput.join("");
 		expect(stderrText).not.toContain(SILENT_ABORT_MARKER);
 		// process.exit MUST NOT have been called (clean termination)
+		expect(exitSpy).not.toHaveBeenCalled();
+	});
+
+	it("does not write bit-classified silent aborts to stderr or exit non-zero", async () => {
+		const silentAbortMsg = makeAssistantMessage({
+			stopReason: "aborted",
+			errorId: AIError.create(AIError.Flag.SilentAbort),
+			errorMessage: undefined,
+			content: [],
+		});
+
+		const session = createMockSession([silentAbortMsg]);
+		await runPrintMode(session, { mode: "text" });
+
+		expect(stderrOutput.join("")).toBe("");
 		expect(exitSpy).not.toHaveBeenCalled();
 	});
 

@@ -43,6 +43,7 @@
  */
 
 import { registerCustomApi } from "../api-registry";
+import * as AIError from "../error";
 import type {
 	Api,
 	AssistantMessage,
@@ -242,7 +243,7 @@ export function streamMock(
 	if (!isMockModel(model)) {
 		queueMicrotask(() => {
 			stream.fail(
-				new Error(
+				new AIError.ValidationError(
 					"streamMock called with a model not produced by createMockModel(). " + "Pass a MockModel instance.",
 				),
 			);
@@ -300,7 +301,7 @@ async function runMock(
 
 	if (handler === undefined) {
 		stream.fail(
-			new Error(
+			new AIError.ValidationError(
 				`Mock model "${model.id}" received call ${model.calls.length} but no response or handler is configured.`,
 			),
 		);
@@ -490,7 +491,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	const onAbort = () => {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
-		reject(signal?.reason ?? new Error("aborted"));
+		reject(signal?.reason ?? new AIError.AbortError("aborted"));
 	};
 	const timer = setTimeout(() => {
 		signal?.removeEventListener("abort", onAbort);

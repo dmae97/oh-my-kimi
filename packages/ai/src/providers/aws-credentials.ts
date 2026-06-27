@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import * as AIError from "../error";
 import type { FetchImpl } from "../types";
 import { raceWithSignal } from "../utils/abort";
 import type { AwsCredentials } from "./aws-sigv4";
@@ -111,9 +112,10 @@ async function resolveFresh(
 		if (imdsCreds) return imdsCreds;
 	}
 
-	throw new Error(
+	throw new AIError.AwsCredentialsError(
 		`Unable to resolve AWS credentials. Set AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY, ` +
 			`or configure profile '${profile}' in ~/.aws/credentials (or ~/.aws/config for SSO).`,
+		"resolution",
 	);
 }
 
@@ -245,11 +247,17 @@ async function readSsoCredentials(
 
 	const token = await loadSsoCachedToken(startUrl, sessionName);
 	if (!token?.accessToken) {
-		throw new Error(`AWS SSO token for ${startUrl} not found in ~/.aws/sso/cache. Run 'aws sso login' first.`);
+		throw new AIError.AwsCredentialsError(
+			`AWS SSO token for ${startUrl} not found in ~/.aws/sso/cache. Run 'aws sso login' first.`,
+			"sso-token-missing",
+		);
 	}
 	const expiresAt = token.expiresAt ? Date.parse(token.expiresAt) : Number.POSITIVE_INFINITY;
 	if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-		throw new Error(`AWS SSO token for ${startUrl} has expired. Run 'aws sso login' to refresh.`);
+		throw new AIError.AwsCredentialsError(
+			`AWS SSO token for ${startUrl} has expired. Run 'aws sso login' to refresh.`,
+			"sso-token-expired",
+		);
 	}
 
 	const url =
@@ -263,13 +271,17 @@ async function readSsoCredentials(
 	});
 	if (!response.ok) {
 		const body = await response.text().catch(() => "");
-		throw new Error(`AWS SSO GetRoleCredentials failed: ${response.status} ${body.slice(0, 200)}`);
+		throw new AIError.AwsCredentialsError(
+			`AWS SSO GetRoleCredentials failed: ${response.status} ${body.slice(0, 200)}`,
+			"sso-role",
+		);
 	}
 	const json = (await response.json()) as {
 		roleCredentials?: { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration: number };
 	};
 	const role = json.roleCredentials;
-	if (!role) throw new Error("AWS SSO GetRoleCredentials: missing roleCredentials in response");
+	if (!role)
+		throw new AIError.AwsCredentialsError("AWS SSO GetRoleCredentials: missing roleCredentials in response", "sso-role");
 
 	// region is honored at the caller; we only consume defaultRegion to keep the
 	// param wired for symmetry with other resolution paths.
@@ -359,23 +371,32 @@ async function readCredentialProcess(
 	]);
 	if (exitCode !== 0) {
 		const tail = stderr.trim().slice(-512) || stdout.trim().slice(-512) || "(no output)";
-		throw new Error(`AWS credential_process for profile '${profile}' exited ${exitCode}: ${tail}`);
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' exited ${exitCode}: ${tail}`,
+			"credential-process",
+		);
 	}
 
 	let parsed: CredentialProcessEnvelope;
 	try {
 		parsed = JSON.parse(stdout) as CredentialProcessEnvelope;
 	} catch (err) {
-		throw new Error(`AWS credential_process for profile '${profile}' did not emit valid JSON: ${String(err)}`);
+		throw new AIError.AwsCredentialsError(
+			`AWS credential_process for profile '${profile}' did not emit valid JSON: ${String(err)}`,
+			"credential-process",
+			{ cause: err },
+		);
 	}
 	if (parsed.Version !== 1) {
-		throw new Error(
+		throw new AIError.AwsCredentialsError(
 			`AWS credential_process for profile '${profile}' returned unsupported Version ${parsed.Version ?? "<missing>"}; expected 1.`,
+			"credential-process",
 		);
 	}
 	if (!parsed.AccessKeyId || !parsed.SecretAccessKey) {
-		throw new Error(
+		throw new AIError.AwsCredentialsError(
 			`AWS credential_process for profile '${profile}' returned envelope without AccessKeyId/SecretAccessKey.`,
+			"credential-process",
 		);
 	}
 
@@ -397,7 +418,7 @@ async function readCredentialProcess(
 function buildCredentialProcessArgv(profile: string, command: string): string[] {
 	const tokens = tokenizeCredentialProcessCommand(command);
 	if (tokens.length === 0) {
-		throw new Error(`AWS credential_process for profile '${profile}' is empty.`);
+		throw new AIError.AwsCredentialsError(`AWS credential_process for profile '${profile}' is empty.`, "credential-process");
 	}
 	if (process.platform === "win32" && isBatchScript(tokens[0])) {
 		return ["cmd.exe", "/d", "/s", "/c", command];
@@ -479,7 +500,7 @@ export function tokenizeCredentialProcessCommand(cmd: string): string[] {
 		current += ch;
 	}
 	if (mode !== "normal") {
-		throw new Error("AWS credential_process command has an unterminated quote.");
+		throw new AIError.AwsCredentialsError("AWS credential_process command has an unterminated quote.", "credential-process");
 	}
 	if (hasToken) tokens.push(current);
 	return tokens;

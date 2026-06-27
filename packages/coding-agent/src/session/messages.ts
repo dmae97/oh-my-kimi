@@ -18,6 +18,7 @@ import type {
 	TextContent,
 	UserMessage,
 } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { prompt } from "@oh-my-pi/pi-utils";
 import userInterjectionTemplate from "../prompts/steering/user-interjection.md" with { type: "text" };
 
@@ -70,11 +71,10 @@ export interface SkillPromptDetails {
  *  (fallback error emission) read it via `isSilentAbort`. */
 export const SILENT_ABORT_MARKER = "__omp.silent_abort__";
 
-/** Type-guard for `SILENT_ABORT_MARKER`. Renderers MUST branch on this rather
- *  than string-comparing inline so refactors to the marker constant (e.g.,
- *  namespacing changes) propagate through every consumer in lockstep. */
-export function isSilentAbort(errorMessage: string | undefined): boolean {
-	return errorMessage === SILENT_ABORT_MARKER;
+/** Type-guard for silent aborts. Renderers MUST call this helper so structured
+ *  `errorId` and legacy persisted marker messages stay in lockstep. */
+export function isSilentAbort(message: Pick<AssistantMessage, "errorId" | "errorMessage">): boolean {
+	return AIError.is(message.errorId, AIError.Flag.SilentAbort) || message.errorMessage === SILENT_ABORT_MARKER;
 }
 
 /** Reason threaded through `AbortController.abort(reason)` when the user aborts
@@ -84,12 +84,12 @@ export function isSilentAbort(errorMessage: string | undefined): boolean {
  *  abort, but interactive renderers suppress this redundant transcript line. */
 export const USER_INTERRUPT_LABEL = "Interrupted by user";
 
-export function isUserInterruptAbort(errorMessage: string | undefined): boolean {
-	return errorMessage === USER_INTERRUPT_LABEL;
+export function isUserInterruptAbort(message: Pick<AssistantMessage, "errorId" | "errorMessage">): boolean {
+	return AIError.is(message.errorId, AIError.Flag.UserInterrupt) || message.errorMessage === USER_INTERRUPT_LABEL;
 }
 
-export function shouldRenderAbortReason(errorMessage: string | undefined): boolean {
-	return !isSilentAbort(errorMessage) && !isUserInterruptAbort(errorMessage);
+export function shouldRenderAbortReason(message: Pick<AssistantMessage, "errorId" | "errorMessage">): boolean {
+	return !isSilentAbort(message) && !isUserInterruptAbort(message);
 }
 
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
@@ -101,9 +101,17 @@ export const GENERIC_ABORT_SENTINEL = "Request was aborted";
  *  no threaded reason fall back to the retry-aware generic label. Call
  *  `shouldRenderAbortReason` before rendering when user interrupts should stay
  *  visually quiet. */
-export function resolveAbortLabel(errorMessage: string | undefined, retryAttempt = 0): string {
-	if (errorMessage && errorMessage !== GENERIC_ABORT_SENTINEL && !isSilentAbort(errorMessage)) {
-		return errorMessage;
+export function resolveAbortLabel(
+	message: Pick<AssistantMessage, "errorId" | "errorMessage">,
+	retryAttempt = 0,
+): string {
+	const genericAbort =
+		AIError.is(message.errorId, AIError.Flag.Abort) ||
+		!message.errorMessage ||
+		message.errorMessage === GENERIC_ABORT_SENTINEL ||
+		isSilentAbort(message);
+	if (!genericAbort) {
+		return message.errorMessage!;
 	}
 	if (retryAttempt > 0) {
 		return `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`;

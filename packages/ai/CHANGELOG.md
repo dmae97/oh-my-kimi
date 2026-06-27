@@ -2,10 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+
+- Comprehensive error module with structured error classification system supporting multiple error types and providers
+- `AIError.finalize()` function for standardized error finalization with status, id, and message generation
+- `AIError.classifyGatewayError()` for gateway-level error classification into HTTP status codes
+- OAuth-specific error types (`OAuthError`) with kind discrimination for different failure stages
+- AWS credentials error types (`AwsCredentialsError`, `EventStreamFrameError`) with specific failure modes
+- Provider-specific HTTP error classes (`AnthropicApiError`, `OpenAIHttpError`, `GeminiCliApiError`, etc.)
+- Auth-specific errors (`MissingApiKeyError`, `LoginCancelledError`, `AuthBrokerError`)
+- Structured error flags system for classifying errors by trait (timeout, transient, rate-limit, thinking-loop, etc.)
+- Rate-limit utilities in error module including `RateLimitReason` classification and backoff calculation
+- Stream-specific error types (`StreamTimeoutError`) with timeout + transient flag combination
+- Validation and configuration error types with non-retryable classification
+- Error retryability predicates including provider-specific transient detection hooks
+
 ### Changed
 
-- Enhanced cross-model reasoning recovery to support additional thinking dialects and leakage patterns
+- Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
+- Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
+- Unified error classification via `AIError.classify()` and `AIError.classifyMessage()` replacing scattered `classifyError()` implementations
+- All provider implementations now use structured `AIError.*` exceptions instead of generic `Error` or `ProviderHttpError`
+- Error finalization refactored from inline `extractHttpStatusFromError()` + `errorIdFromError()` to single `AIError.finalize()` call
+- Gateway error classification moved from `auth-gateway/server.ts` to `error/gateway.ts` with string-based input
+- Exported error module as public API via package.json `"./error"` export path
+- OAuth error constructors now accept structured options with `kind`, `provider`, `status`, and `cause` fields
+- Registry login functions now use `AIError.OnPromptRequiredError` instead of generic errors
 
+- Enhanced cross-model reasoning recovery to support additional thinking dialects and leakage patterns
 - Demote cross-vendor reasoning to plain text when the target does not natively support it
 - Refine cross-model reasoning preservation to prevent leaking inert context into structured fields
 - Rendered demoted cross-model reasoning blocks in the target model's canonical thinking dialect
@@ -15,7 +39,19 @@
 
 ### Removed
 
+- Deleted legacy `src/errors.ts` (replaced by error module)
+- Deleted `src/utils/error-id.ts` (migrated to `error/flags.ts`)
+- Removed `rate-limit-utils.ts` from root (moved to `error/rate-limit.ts`)
+- Removed generic `Error` constructor calls throughout codebase in favor of typed error classes
+
 - Removed Pi dialect support and related serialization/parsing logic
+
+### Fixed
+
+- Improved error message consistency across all providers with structured error formatting
+- Corrected error classification for rate-limit vs transient failures in auth retry logic
+- Fixed OAuth token refresh error handling with proper error type discrimination
+- Enhanced thinking-loop error detection with flag-based classification
 
 ## [16.2.0] - 2026-06-27
 

@@ -10,9 +10,10 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { extractHttpStatusFromError, getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "./auth-retry";
-import { isUsageLimitOutcome } from "./rate-limit-utils";
+import * as AIError from "./error";
+import { isUsageLimitOutcome } from "./error/rate-limit";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "./registry";
 import { getOAuthApiKey, getOAuthProvider, refreshOAuthToken } from "./registry/oauth";
 import type { OAuthController, OAuthCredentials, OAuthProvider, OAuthProviderId } from "./registry/oauth/types";
@@ -558,36 +559,9 @@ const OAUTH_REFRESH_SKEW_MS = 60_000;
  */
 const MAX_PENDING_DISABLED_EVENTS = 32;
 
-/**
- * Classify an OAuth refresh error as a definitive credential failure (the
- * refresh token is dead — re-login required) versus a transient blip
- * (network/5xx — retry next sweep).
- *
- * Anchored at module scope so all three refresh sites — in-stream
- * {@link AuthStorage.getApiKey}, the usage probe in
- * {@link AuthStorage.fetchUsageReports}, and the auth-broker background
- * refresher — disable rows on the same criteria. A drifting classifier
- * between sites would let stale last-good usage reports surface indefinitely
- * while streaming requests correctly tear the row down.
- */
-const OAUTH_DEFINITIVE_FAILURE_REGEX =
-	/invalid_grant|invalid_token|unauthorized_client|\brevoked\b|refresh[\s_]?token.*expired/i;
-// Transient: network blips, rate limits, gateway/5xx, and infra denials
-// (WAF / egress 403, permission / account-verification) — block-and-retry,
-// never tear the credential down for these.
-const OAUTH_TRANSIENT_FAILURE_REGEX =
-	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable|forbidden|permission_denied|cloudflare|captcha/i;
-// A bare 401 from an OAuth token endpoint means the stored grant/client is
-// dead. 403 is deliberately excluded: it is overwhelmingly WAF / egress
-// rate-limit / permission / account-verification — none of which mean the
-// refresh token itself is invalid.
-const OAUTH_HTTP_AUTH_REGEX = /\b401\b/;
-
-export function isDefinitiveOAuthFailure(errorMsg: string): boolean {
-	if (OAUTH_DEFINITIVE_FAILURE_REGEX.test(errorMsg)) return true;
-	if (OAUTH_HTTP_AUTH_REGEX.test(errorMsg) && !OAUTH_TRANSIENT_FAILURE_REGEX.test(errorMsg)) return true;
-	return false;
-}
+// Re-exported from the error module (its new home) to preserve the public
+// `@oh-my-pi/pi-ai` entrypoint and the in-module call sites below.
+export { isDefinitiveOAuthFailure } from "./error/auth-classify";
 
 /**
  * Outcome of {@link AuthStorage.markUsageLimitReached}.
@@ -811,11 +785,11 @@ function parseUsageCacheEntry<T>(raw: string): UsageCacheEntry<T> | undefined {
  */
 function raceUsageWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
 	if (!signal) return promise;
-	if (signal.aborted) return Promise.reject(new Error("usage fetch aborted"));
+	if (signal.aborted) return Promise.reject(new AIError.AbortError("usage fetch aborted"));
 	return new Promise<T>((resolve, reject) => {
 		const onAbort = (): void => {
 			signal.removeEventListener("abort", onAbort);
-			reject(new Error("usage fetch aborted"));
+			reject(new AIError.AbortError("usage fetch aborted"));
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		promise.then(
@@ -837,9 +811,9 @@ function raceCredentialRefreshWithSignal<T>(
 	message = "credential refresh aborted",
 ): Promise<T> {
 	if (!signal) return promise;
-	if (signal.aborted) return Promise.reject(new Error(message));
+	if (signal.aborted) return Promise.reject(new AIError.AbortError(message));
 	const abort = Promise.withResolvers<never>();
-	const onAbort = (): void => abort.reject(new Error(message));
+	const onAbort = (): void => abort.reject(new AIError.AbortError(message));
 	signal.addEventListener("abort", onAbort, { once: true });
 	return Promise.race([promise, abort.promise]).finally(() => {
 		signal.removeEventListener("abort", onAbort);
@@ -1901,7 +1875,7 @@ export class AuthStorage {
 		// Built-in registry first, then runtime-registered extension providers.
 		const def = getProviderDefinition(provider) ?? getOAuthProvider(provider);
 		if (!def?.login) {
-			throw new Error(`Unknown OAuth provider: ${provider}`);
+			throw new AIError.ConfigurationError(`Unknown OAuth provider: ${provider}`);
 		}
 		const result = await def.login({
 			onAuth: ctrl.onAuth,
@@ -2177,7 +2151,7 @@ export class AuthStorage {
 					// (including its already-elapsed `resetsAt`). CAS-disable the row and
 					// clear the cache so the credential drops out of the report instead of
 					// freezing in place until the user notices and re-logs in.
-					if (isDefinitiveOAuthFailure(errorMsg)) {
+					if (AIError.isDefinitiveOAuthFailure(errorMsg)) {
 						const credentialId = this.#findStoredCredentialIdForUsageCredential(
 							request.provider,
 							request.credential,
@@ -3464,7 +3438,10 @@ export class AuthStorage {
 			const customProvider = getOAuthProvider(provider);
 			if (customProvider) {
 				if (!customProvider.refreshToken) {
-					throw new Error(`OAuth provider "${provider}" does not support token refresh`);
+					throw new AIError.OAuthError(`OAuth provider "${provider}" does not support token refresh`, {
+						kind: "configuration",
+						provider,
+					});
 				}
 				refreshPromise = customProvider.refreshToken(credential);
 			} else {
@@ -3478,14 +3455,20 @@ export class AuthStorage {
 		let onAbort: (() => void) | undefined;
 		const cancellation = Promise.withResolvers<never>();
 		timeout = setTimeout(
-			() => cancellation.reject(new Error(`OAuth token refresh timed out for provider: ${provider}`)),
+			() =>
+				cancellation.reject(
+					new AIError.OAuthError(`OAuth token refresh timed out for provider: ${provider}`, {
+						kind: "timeout",
+						provider,
+					}),
+				),
 			DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
 		);
 		if (signal) {
 			if (signal.aborted) {
-				cancellation.reject(new Error("OAuth token refresh aborted by caller"));
+				cancellation.reject(new AIError.AbortError("OAuth token refresh aborted by caller"));
 			} else {
-				onAbort = () => cancellation.reject(new Error("OAuth token refresh aborted by caller"));
+				onAbort = () => cancellation.reject(new AIError.AbortError("OAuth token refresh aborted by caller"));
 				signal.addEventListener("abort", onAbort, { once: true });
 			}
 		}
@@ -3691,7 +3674,7 @@ export class AuthStorage {
 			const errorMsg = String(error);
 			// Only remove credentials for definitive auth failures
 			// Keep credentials for transient errors (network, 5xx) and block temporarily
-			const isDefinitiveFailure = isDefinitiveOAuthFailure(errorMsg);
+			const isDefinitiveFailure = AIError.isDefinitiveOAuthFailure(errorMsg);
 
 			logger.warn("OAuth token refresh failed", {
 				provider,
@@ -4251,7 +4234,7 @@ export class AuthStorage {
 		if (!sessionCredential) return false;
 
 		const error = options?.error;
-		const status = extractHttpStatusFromError(error);
+		const status = AIError.status(error);
 		const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
 		if (isUsageLimitOutcome(status, message)) {
 			return (
@@ -4388,7 +4371,9 @@ export class AuthStorage {
 			if (index === -1) continue;
 			const target = entries[index];
 			if (target.credential.type !== "oauth") {
-				throw new Error(`Credential ${id} is not OAuth (provider=${provider}, type=${target.credential.type})`);
+				throw new AIError.ValidationError(
+					`Credential ${id} is not OAuth (provider=${provider}, type=${target.credential.type})`,
+				);
 			}
 			// The exact credential we are about to refresh — captured before the
 			// await so a definitive failure can CAS-disable the row against the
@@ -4404,7 +4389,7 @@ export class AuthStorage {
 				// A definitively-dead grant tears the row down here, where the
 				// attempted credential is known. CAS on the persisted credential so a
 				// peer/login rotation in flight leaves the freshly-rotated row intact.
-				if (isDefinitiveOAuthFailure(String(error))) {
+				if (AIError.isDefinitiveOAuthFailure(String(error))) {
 					// CAS-loss (false) means a peer/login rotated the row mid-refresh, so
 					// our #data copy is stale — reload so the next caller serves the
 					// freshly-rotated credential rather than the dead token we attempted.
@@ -4437,7 +4422,7 @@ export class AuthStorage {
 			// -1 means the row was disabled/removed mid-refresh — surface that as a
 			// miss rather than implying a live row the snapshot won't contain.
 			if (this.#replaceCredentialById(provider, id, updated) === -1) {
-				throw new Error(`No credential with id=${id}`);
+				throw new AIError.ValidationError(`No credential with id=${id}`);
 			}
 			return {
 				id,
@@ -4446,7 +4431,7 @@ export class AuthStorage {
 				identityKey: resolveCredentialIdentityKey(provider, updated),
 			};
 		}
-		throw new Error(`No credential with id=${id}`);
+		throw new AIError.ValidationError(`No credential with id=${id}`);
 	}
 
 	/**
@@ -4869,7 +4854,7 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				}
 			}
 		}
-		throw new Error(
+		throw new AIError.ConfigurationError(
 			`Failed to open auth database at '${dbPath}' after ${maxAttempts} attempts: ${lastBusyError?.message}`,
 			{ cause: lastBusyError },
 		);

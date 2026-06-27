@@ -25,6 +25,7 @@ import {
 	renderToolExamples,
 	wrapInbandToolStream,
 } from "@oh-my-pi/pi-ai/dialect";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import {
 	createHarmonyAuditEvent,
 	detectHarmonyLeakInAssistantMessage,
@@ -1556,8 +1557,12 @@ function emitAbortedAssistantMessage(
 	requestSignal: AbortSignal | undefined,
 ): AssistantMessage {
 	const errorMessage = abortReasonText(requestSignal);
+	const errorId =
+		errorMessage === "Request was aborted"
+			? AIError.create(AIError.Flag.Abort)
+			: AIError.classify(requestSignal?.reason) || undefined;
 	const base: AssistantMessage = partialMessage
-		? { ...partialMessage, stopReason: "aborted", errorMessage }
+		? { ...partialMessage, stopReason: "aborted", errorMessage, errorId }
 		: {
 				role: "assistant",
 				content: [],
@@ -1574,6 +1579,7 @@ function emitAbortedAssistantMessage(
 				},
 				stopReason: "aborted",
 				errorMessage,
+				errorId,
 				timestamp: Date.now(),
 			};
 	// Only tool calls that reached `toolcall_end` survive abort/error replay. A

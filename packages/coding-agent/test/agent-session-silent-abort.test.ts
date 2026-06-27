@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -115,6 +116,7 @@ describe("AgentSession silent-abort marker stamping", () => {
 		await Promise.resolve();
 
 		expect(message.errorMessage).toBe(SILENT_ABORT_MARKER);
+		expect(AIError.is(message.errorId, AIError.Flag.SilentAbort)).toBe(true);
 		expect(session.isPlanInternalAbortPending).toBe(false);
 	});
 
@@ -200,6 +202,7 @@ describe("AgentSession silent-abort marker stamping", () => {
 		// `event.message` (the persistence-side reference) carries the marker via the
 		// in-place stamp.
 		expect(message.errorMessage).toBe(SILENT_ABORT_MARKER);
+		expect(AIError.is(message.errorId, AIError.Flag.SilentAbort)).toBe(true);
 
 		// The emitted display event ALSO carries the marker because the spread copy
 		// happened AFTER the stamp.
@@ -218,6 +221,7 @@ describe("AgentSession silent-abort marker stamping", () => {
 			throw new Error("expected emitted message_end to be an assistant message");
 		}
 		expect(emittedMessage.errorMessage).toBe(SILENT_ABORT_MARKER);
+		expect(AIError.is(emittedMessage.errorId, AIError.Flag.SilentAbort)).toBe(true);
 
 		// Prove the obfuscator branch actually ran by asserting the emitted message
 		// is a distinct object (post-spread) AND its content was deobfuscated back to

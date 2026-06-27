@@ -24,6 +24,7 @@
  */
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { type Type, type } from "arktype";
+import * as AIError from "../error";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import type { Tool, ToolCall } from "../types";
@@ -1365,7 +1366,7 @@ const MAX_COERCION_PASSES = 5;
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): ToolCall["arguments"] {
 	const tool = tools.find(t => t.name === toolCall.name);
 	if (!tool) {
-		throw new Error(`Tool "${toolCall.name}" not found`);
+		throw new AIError.ToolNotFoundError(toolCall.name);
 	}
 	return validateToolArguments(tool, toolCall);
 }
@@ -1405,7 +1406,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 			rawJson.length <= maxLen
 				? rawJson
 				: `${rawJson.slice(0, maxLen)}… [truncated ${rawJson.length - maxLen} chars]`;
-		throw new Error(
+		throw new AIError.ValidationError(
 			`Validation failed for tool "${toolCall.name}": Tool call arguments are not valid JSON.\nParse Error: ${parseError}\nRaw JSON:\n${truncatedRawJson}`,
 		);
 	}
@@ -1501,5 +1502,5 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 		toolCall.name
 	}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(receivedArgs, null, 2)}`;
 
-	throw new Error(errorMessage);
+	throw new AIError.ValidationError(errorMessage);
 }
