@@ -162,9 +162,9 @@ import {
 	getModelMatchPreferences,
 	parseModelString,
 	type ResolvedModelRoleValue,
+	resolveAdvisorRoleSelection,
 	resolveModelOverride,
 	resolveModelRoleValue,
-	resolveRoleSelection,
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
@@ -1882,8 +1882,7 @@ export class AgentSession {
 		if (!this.#advisorEnabled) return false;
 		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
 
-		const advisorSel = resolveRoleSelection(
-			["advisor"],
+		const advisorSel = resolveAdvisorRoleSelection(
 			this.settings,
 			this.#modelRegistry.getAvailable(),
 			this.#modelRegistry,
@@ -2108,8 +2107,7 @@ export class AgentSession {
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
 		if (!targetModel) return false;
 
-		const advisorSel = resolveRoleSelection(
-			["advisor"],
+		const advisorSel = resolveAdvisorRoleSelection(
 			this.settings,
 			this.#modelRegistry.getAvailable(),
 			this.#modelRegistry,
