@@ -406,7 +406,9 @@ describe("AgentSession handoff", () => {
 		if (!lastEntryId) throw new Error("Expected a seeded entry id");
 		const fixedPreparation: compactionModule.CompactionPreparation = {
 			firstKeptEntryId: lastEntryId,
-			messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "中文内容".repeat(100) }], timestamp: 1 }],
+			messagesToSummarize: [
+				{ role: "user", content: [{ type: "text", text: "中文内容".repeat(100) }], timestamp: 1 },
+			],
 			turnPrefixMessages: [],
 			recentMessages: [],
 			isSplitTurn: false,
