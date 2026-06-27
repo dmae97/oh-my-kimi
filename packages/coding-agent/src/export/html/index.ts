@@ -9,7 +9,7 @@ import { SessionManager } from "../../session/session-manager";
 import templateCss from "./template.css" with { type: "text" };
 import templateHtml from "./template.html" with { type: "text" };
 import templateJs from "./template.js" with { type: "text" };
-// Pre-built React tool renderers: built by `bun --cwd=packages/collab-web run build:tool-views`,
+// Pre-built React tool renderers: built by `gen:tool-views` (`bun run gen:tool-views`),
 // run automatically by root `prepare` on install and by `prepack` at publish.
 import toolViewsJs from "./tool-views.generated.js" with { type: "text" };
 import { webExportThemeVars } from "./web-palette";

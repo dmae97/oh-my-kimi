@@ -4,8 +4,7 @@
 
 ### Added
 
-- Added dedicated renderers for `glob` and `grep` tools to improve result readability
-- Enabled display support for legacy `find` and `search` tool outputs via new renderers
+- Added dedicated renderers for glob, grep, and legacy find and search tools to improve the readability of search and file discovery results.
 
 ## [16.1.23] - 2026-06-26
 

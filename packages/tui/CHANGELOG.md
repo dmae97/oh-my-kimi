@@ -4,19 +4,14 @@
 
 ### Added
 
-- Added support for rendering HTML `<code>` tags as theme-styled inline code blocks
-- Added support for rendering HTML `<hr>` tags as horizontal rules
-- Added support for rendering HTML `<blockquote>` tags with appropriate quote styling
-- Recognized Warp (`TERM_PROGRAM=WarpTerminal`) as a first-class terminal. Inline images now negotiate the Kitty graphics protocol on macOS/Linux (direct placement — Warp has no Unicode-placeholder support); the protocol is dropped on Windows, where Warp ships without Kitty support and the APC sequences would render as visible garbage. True color is enabled. OSC 8 hyperlinks stay off by default because Warp's renderer prints the escape as literal text rather than a clickable link (opt in with `PI_FORCE_HYPERLINKS=1` once Warp lands real support), and synchronized output remains gated on the runtime DECRQM probe ([#3471](https://github.com/can1357/oh-my-pi/issues/3471)).
-- Added shared SGR mouse input routing helpers and `SelectList.routeMouse()` support for fullscreen overlay hit-testing.
+- Added support for rendering HTML <code>, <hr>, and <blockquote> tags with proper theme styling, entity decoding, and layout consistency across Markdown transcripts, table cells, list items, and option labels.
+- Added first-class support for Warp terminal (TERM_PROGRAM=WarpTerminal), enabling true color, platform-specific Kitty graphics protocol negotiation for inline images, and safe defaults for OSC 8 hyperlinks and synchronized output.
+- Added SelectList.routeMouse() and shared SGR mouse input routing helpers to support fullscreen overlay hit-testing.
 
 ### Fixed
 
-- Fixed HTML entity decoding within HTML-based inline code blocks
-- Fixed stray or unmatched HTML tags leaking into rendered output
-- Improved layout consistency by correctly handling HTML block-level tags in various contexts
-- Markdown renderer now handles inline `<code>…</code>` (rendered as themed inline code, identical to a backtick codespan, with HTML entities like `&amp;` decoded), block `<hr>` (rendered as a horizontal rule), and balanced single-line `<blockquote>…</blockquote>` (rendered with the quote border) instead of leaking the raw tags as literal text. Applies to the transcript renderer, table cells, list items, and the inline `renderInlineMarkdown` helper used for option labels; fenced code blocks keep such markup verbatim.
-- Fixed ordinary render scheduling to yield behind already-queued terminal input, preventing delayed Esc delivery during heavy streaming paints ([#3493](https://github.com/can1357/oh-my-pi/issues/3493)).
+- Fixed issues where stray, unmatched, or raw HTML tags would leak into the rendered output.
+- Fixed render scheduling to yield behind queued terminal input, preventing delayed Escape key delivery during heavy streaming paints.
 
 ## [16.1.20] - 2026-06-25
 

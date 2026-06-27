@@ -1066,7 +1066,7 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
  * Single source of truth for the curated to Model fan-in, consumed by both
  * - {@link xaiOAuthModelManagerOptions} (runtime static seed handed to the model
  *   manager so the picker is populated on a fresh login), and
- * - `packages/ai/scripts/generate-models.ts` (bundles the same entries into
+ * - \`packages/catalog/scripts/generate-models.ts\` (bundles the same entries into
  *   `models.json`, so the synchronous `ModelRegistry.#loadModels()` boot path
  *   sees `xai-oauth` without waiting for a refresh — fixes the boot-time
  *   default-model reset when `modelRoles.default = "xai-oauth/<id>"`).
@@ -1115,7 +1115,7 @@ export function xaiOAuthModelManagerOptions(
 	// Static seed handed to the runtime model manager so the picker populates on
 	// a fresh login even before `fetchDynamicModels` fires (it is gated on
 	// `config.apiKey` at construction time, and OAuth tokens resolve later via
-	// AuthStorage). `generate-models.ts` calls the same builder so `models.json`
+	// AuthStorage). \`generate-models.ts\` calls the same builder so \`models.json\`
 	// carries these entries too — making the synchronous `#loadModels()` boot
 	// path honor `modelRoles.default = "xai-oauth/<id>"` without `await refresh()`.
 	const staticModels = buildXaiOAuthStaticSeed(resolvedBaseUrl);

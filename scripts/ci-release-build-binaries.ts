@@ -96,11 +96,11 @@ async function runCommand(command: string[], cwd: string, env: NodeJS.ProcessEnv
 
 async function embedNative(target: BinaryTarget): Promise<void> {
 	if (isDryRun) {
-		console.log(`DRY RUN bun --cwd=packages/natives run embed:native [${target.platform}/${target.arch}]`);
+		console.log(`DRY RUN bun run gen:native [${target.platform}/${target.arch}]`);
 		return;
 	}
 
-	await runCommand(["bun", "--cwd=packages/natives", "run", "embed:native"], repoRoot, {
+	await runCommand(["bun", "run", "gen:native"], repoRoot, {
 		...Bun.env,
 		TARGET_PLATFORM: target.platform,
 		TARGET_ARCH: target.arch,
@@ -151,28 +151,28 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 
 async function generateBundle(): Promise<void> {
 	if (isDryRun) {
-		console.log("DRY RUN bun --cwd=packages/stats scripts/generate-client-bundle.ts --generate");
-		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/generate-docs-index.ts --generate");
-		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/embed-mupdf-wasm.ts --generate");
+		console.log("DRY RUN bun run gen:stats");
+		console.log("DRY RUN bun run gen:docs");
+		console.log("DRY RUN bun run gen:mupdf");
 		return;
 	}
-	await runCommand(["bun", "--cwd=packages/stats", "scripts/generate-client-bundle.ts", "--generate"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/generate-docs-index.ts", "--generate"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/embed-mupdf-wasm.ts", "--generate"], repoRoot);
+	await runCommand(["bun", "run", "gen:stats"], repoRoot);
+	await runCommand(["bun", "run", "gen:docs"], repoRoot);
+	await runCommand(["bun", "run", "gen:mupdf"], repoRoot);
 }
 
 async function resetArtifacts(): Promise<void> {
 	if (isDryRun) {
-		console.log("DRY RUN bun --cwd=packages/natives run embed:native --reset");
-		console.log("DRY RUN bun --cwd=packages/stats scripts/generate-client-bundle.ts --reset");
-		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/generate-docs-index.ts --reset");
-		console.log("DRY RUN bun --cwd=packages/coding-agent scripts/embed-mupdf-wasm.ts --reset");
+		console.log("DRY RUN bun run gen:native:reset");
+		console.log("DRY RUN bun run gen:stats:reset");
+		console.log("DRY RUN bun run gen:docs:reset");
+		console.log("DRY RUN bun run gen:mupdf:reset");
 		return;
 	}
-	await runCommand(["bun", "--cwd=packages/natives", "run", "embed:native", "--reset"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/stats", "scripts/generate-client-bundle.ts", "--reset"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/generate-docs-index.ts", "--reset"], repoRoot);
-	await runCommand(["bun", "--cwd=packages/coding-agent", "scripts/embed-mupdf-wasm.ts", "--reset"], repoRoot);
+	await runCommand(["bun", "run", "gen:native:reset"], repoRoot);
+	await runCommand(["bun", "run", "gen:stats:reset"], repoRoot);
+	await runCommand(["bun", "run", "gen:docs:reset"], repoRoot);
+	await runCommand(["bun", "run", "gen:mupdf:reset"], repoRoot);
 }
 
 async function main(): Promise<void> {

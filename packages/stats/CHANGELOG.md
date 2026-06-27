@@ -4,7 +4,7 @@
 
 ### Added
 
-- Gain tab in `omp stats` dashboard (`/#/gain`) — surfaces snapcompact token-savings with project scoping from synced session folders ([#3543](https://github.com/can1357/oh-my-pi/pull/3543)).
+- Added a Gain tab to the `omp stats` dashboard (`/#/gain`) to display snapcompact token-savings with project scoping from synced session folders.
 
 ## [16.1.17] - 2026-06-24
 

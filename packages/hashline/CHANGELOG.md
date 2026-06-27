@@ -4,9 +4,7 @@
 
 ### Added
 
-- Added `REM` section op to delete files
-- Added `MV` section op to rename or move files, including snapshot history migration
-- Added whole-file `REM` and `MV DEST` section ops so a hashline patch can delete or rename/move files (optionally after line edits) without leaving the edit tool. `MV` relocates read/snapshot history to the destination path.
+- Added `REM` (remove) and `MV` (move/rename) section operations to hashline patches, allowing files to be deleted or relocated (with snapshot history migration) directly within the edit tool.
 
 ## [16.1.23] - 2026-06-26
 

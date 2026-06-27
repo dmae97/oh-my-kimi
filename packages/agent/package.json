@@ -1,77 +1,77 @@
 {
-	"type": "module",
-	"name": "@oh-my-pi/pi-agent-core",
-	"version": "16.1.23",
-	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
-	"homepage": "https://omp.sh",
-	"author": "Can Boluk",
-	"contributors": [
-		"Mario Zechner"
-	],
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/can1357/oh-my-pi.git",
-		"directory": "packages/agent"
-	},
-	"bugs": {
-		"url": "https://github.com/can1357/oh-my-pi/issues"
-	},
-	"keywords": [
-		"ai",
-		"agent",
-		"llm",
-		"transport",
-		"state-management"
-	],
-	"main": "./src/index.ts",
-	"types": "./src/index.ts",
-	"scripts": {
-		"check": "biome check . && bun run check:types",
-		"check:types": "tsgo -p tsconfig.json --noEmit",
-		"lint": "biome lint .",
-		"test": "bun test --parallel",
-		"fix": "biome check --write --unsafe .",
-		"fmt": "biome format --write ."
-	},
-	"dependencies": {
-		"@oh-my-pi/pi-ai": "catalog:",
-		"@oh-my-pi/pi-catalog": "catalog:",
-		"@oh-my-pi/pi-natives": "catalog:",
-		"@oh-my-pi/pi-utils": "catalog:",
-		"@oh-my-pi/pi-wire": "catalog:",
-		"@oh-my-pi/snapcompact": "catalog:",
-		"@opentelemetry/api": "catalog:"
-	},
-	"devDependencies": {
-		"@opentelemetry/context-async-hooks": "catalog:",
-		"@opentelemetry/sdk-trace-base": "catalog:",
-		"@types/bun": "catalog:"
-	},
-	"engines": {
-		"bun": ">=1.3.14"
-	},
-	"files": [
-		"src",
-		"README.md",
-		"CHANGELOG.md"
-	],
-	"exports": {
-		".": {
-			"types": "./src/index.ts",
-			"import": "./src/index.ts"
-		},
-		"./compaction": {
-			"types": "./src/compaction.ts",
-			"import": "./src/compaction.ts"
-		},
-		"./compaction/*": {
-			"types": "./src/compaction/*.ts",
-			"import": "./src/compaction/*.ts"
-		},
-		"./*": {
-			"types": "./src/*.ts",
-			"import": "./src/*.ts"
-		}
-	}
+  "type": "module",
+  "name": "@oh-my-pi/pi-agent-core",
+  "version": "16.1.23",
+  "description": "General-purpose agent with transport abstraction, state management, and attachment support",
+  "homepage": "https://omp.sh",
+  "author": "Can Boluk",
+  "contributors": [
+    "Mario Zechner"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/can1357/oh-my-pi.git",
+    "directory": "packages/agent"
+  },
+  "bugs": {
+    "url": "https://github.com/can1357/oh-my-pi/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "transport",
+    "state-management"
+  ],
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "check": "biome check . && bun run check:types",
+    "check:types": "tsgo -p tsconfig.json --noEmit",
+    "lint": "biome lint .",
+    "test": "bun test --parallel",
+    "fix": "biome check --write --unsafe .",
+    "fmt": "biome format --write ."
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-ai": "catalog:",
+    "@oh-my-pi/pi-catalog": "catalog:",
+    "@oh-my-pi/pi-natives": "catalog:",
+    "@oh-my-pi/pi-utils": "catalog:",
+    "@oh-my-pi/pi-wire": "catalog:",
+    "@oh-my-pi/snapcompact": "catalog:",
+    "@opentelemetry/api": "catalog:"
+  },
+  "devDependencies": {
+    "@opentelemetry/context-async-hooks": "catalog:",
+    "@opentelemetry/sdk-trace-base": "catalog:",
+    "@types/bun": "catalog:"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./compaction": {
+      "types": "./src/compaction.ts",
+      "import": "./src/compaction.ts"
+    },
+    "./compaction/*": {
+      "types": "./src/compaction/*.ts",
+      "import": "./src/compaction/*.ts"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "import": "./src/*.ts"
+    }
+  }
 }

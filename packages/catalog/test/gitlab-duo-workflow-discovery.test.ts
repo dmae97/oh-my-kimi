@@ -531,7 +531,7 @@ describe("GitLab Duo Workflow discovery", () => {
 	it("keeps the gitlab-duo-agent descriptor out of catalog generation discovery", () => {
 		// The descriptor must NOT carry `catalogDiscovery`: that field is the sole gate
 		// for the generator's discovery loop (`isCatalogDescriptor`). Were it present,
-		// `generate-models` running on a machine with GitLab credentials would fetch the
+		// \`gen:models\` running on a machine with GitLab credentials would fetch the
 		// account's namespace-scoped `aiChatAvailableModels` and bundle one private
 		// namespace's pinned/selectable catalog into models.json as authoritative for
 		// every fresh install. Only the generic, namespace-free fallback may be bundled;

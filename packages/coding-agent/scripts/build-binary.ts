@@ -49,8 +49,8 @@ async function main(): Promise<void> {
 	// Generate inside the try so the finally always restores the empty checked-in
 	// placeholders (stats client archive, docs index) even on failure.
 	try {
-		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--generate"]);
-		await runCommand(["bun", "scripts/generate-docs-index.ts", "--generate"]);
+		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
+		await runCommand(["bun", "run", "gen:docs"]);
 		// `legacy-pi-bundled-registry.ts` static-imports
 		// `@oh-my-pi/pi-coding-agent/export/html` (one of pi-coding-agent's
 		// named subpath exports, see scripts/generate-legacy-pi-bundled-registry.ts),
@@ -61,14 +61,14 @@ async function main(): Promise<void> {
 		// resolving the missing generated bundle. Rebuilding the tool views
 		// here makes the compile self-contained and matches what `prepack`
 		// does for the npm bundle.
-		await runCommand(["bun", "--cwd=../collab-web", "run", "build:tool-views"]);
+		await runCommand(["bun", "--cwd=../collab-web", "run", "gen:tool-views"]);
 		await runCommand(
-			["bun", "--cwd=../natives", "run", "embed:native"],
+			["bun", "--cwd=../natives", "run", "gen:native"],
 			crossTarget
 				? { ...Bun.env, TARGET_PLATFORM: crossPlatform as string, TARGET_ARCH: crossArch as string }
 				: Bun.env,
 		);
-		await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--generate"]);
+		await runCommand(["bun", "run", "gen:mupdf"]);
 		// Regenerate the bundled-pi registry + key set before the compile so any
 		// new pi-* subpath export added under `packages/*/package.json` is served
 		// from the host's in-process copy. Without this, `bun build --compile`
@@ -123,12 +123,12 @@ async function main(): Promise<void> {
 				await runCommand(["codesign", "--force", "--sign", "-", outputPath]);
 			}
 		} finally {
-			await runCommand(["bun", "scripts/embed-mupdf-wasm.ts", "--reset"]);
-			await runCommand(["bun", "--cwd=../natives", "run", "embed:native", "--reset"]);
+			await runCommand(["bun", "run", "gen:mupdf:reset"]);
+			await runCommand(["bun", "--cwd=../natives", "run", "gen:native:reset"]);
 		}
 	} finally {
-		await runCommand(["bun", "--cwd=../stats", "scripts/generate-client-bundle.ts", "--reset"]);
-		await runCommand(["bun", "scripts/generate-docs-index.ts", "--reset"]);
+		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		await runCommand(["bun", "run", "gen:docs:reset"]);
 	}
 }
 

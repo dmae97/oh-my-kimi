@@ -4,27 +4,19 @@
 
 ### Added
 
-- Added `OpenAICompat.supportsNamedToolChoice` so string-only OpenAI-compatible chat servers can keep forced tool use without emitting the named function-object `tool_choice` shape. ([#3593](https://github.com/can1357/oh-my-pi/issues/3593))
-- Added GitLab Duo Agent catalog discovery for `gitlab-duo-agent`, including namespace selection and live `aiChatAvailableModels` model mapping.
-- Added model metadata for provider-native remote compaction and compaction-only model selection. ([#3104](https://github.com/can1357/oh-my-pi/issues/3104))
+- Added GitLab Duo Agent catalog discovery, including namespace selection, live model mapping, and a bundled fallback model for fresh installs.
+- Added OpenAICompat.supportsNamedToolChoice to support forced tool use on string-only OpenAI-compatible chat servers without emitting the named function-object tool_choice shape.
+- Added model metadata support for provider-native remote compaction and compaction-only model selection.
 
 ### Changed
 
-- Changed GitLab Duo Agent model specs to `reasoning: false`. The Duo Agent Platform path exposes no client-controllable thinking knob (the underlying Anthropic model params are server-fixed), so OMP no longer shows a thinking-effort selector for these models.
+- Disabled the thinking-effort selector for GitLab Duo Agent models since the underlying platform parameters are server-fixed.
 
 ### Fixed
 
-- Fixed built-in LiteLLM discovery to prefer rich proxy metadata from LiteLLM management endpoints before falling back to /models, with a versioned cache namespace so stale bare-id cache rows do not hide capability data.
-- Fixed the bundled catalog omitting the GitLab Duo Agent provider so a fresh install (before any credentialed dynamic discovery populates the cache) could not surface its default model. The generator now seeds the `gitlab-duo-agent` fallback model (`claude_sonnet_4_6_vertex`) into `models.json`, deduped behind live `aiChatAvailableModels` discovery when generation has credentials.
-- Fixed GitLab Duo Agent namespace discovery only inspecting the first page of top-level groups, so a token belonging to more than 100 top-level groups could miss a usable Duo namespace on a later page and fail or select the wrong group. Discovery now follows GitLab's `x-next-page` pagination (bounded) and validates candidates across all pages.
-- Fixed GitLab Duo Agent namespace discovery rejecting a workspace SSH remote whose port differs from the configured web `baseUrl` (self-managed GitLab commonly exposes SSH on a dedicated port, e.g. `ssh://git@host:2222/group/project.git` against `https://host`). SSH and SCP-style remotes now compare on the bare hostname; HTTP(S) remotes still compare host:port strictly so a different service on the same host is not adopted.
-- Fixed GitLab Duo Workflow runtime namespace discovery so agent startup can resolve a root namespace without requiring live `aiChatAvailableModels` results.
-- Fixed GitLab Duo Workflow runtime namespace discovery to preserve namespace paths for Workflow creation, including numeric/GID namespace overrides that must be resolved through GitLab group metadata.
-- Fixed GitLab Duo Workflow project namespace discovery to fall back to the GraphQL `rootAncestor` query whenever a REST project payload exposes no explicit root (the normal payload only carries the immediate `namespace`), including numeric `projectId`/`GITLAB_DUO_PROJECT_ID` values: the fallback now keys off the project's `path_with_namespace` from the REST payload instead of being blocked by the missing slash, so a numeric id pinning a leaf subgroup project resolves the correct root namespace instead of falling through to remotes or top-level groups.
-- Fixed GitLab Duo Workflow model specs to resolve a static `contextWindow` from the model ref family (Claude/Gemini → 1,000,000, default 200,000) instead of leaving it null, so OMP's context panel, usage percentage, and long-context auto-compaction work; GitLab exposes the real window only at runtime in each checkpoint's `agent_context_usage`, which the catalog ModelSpec cannot backfill.
-- Fixed GitLab Duo Workflow catalog discovery ignoring `GITLAB_DUO_PROJECT_PATH`: namespace discovery now resolves the configured project from a `projectPath` config field and the `GITLAB_DUO_PROJECT_PATH` env var (in addition to `projectId`/`GITLAB_DUO_PROJECT_ID`), so workspaces that pin a project by path no longer fall through to the wrong group or fail before runtime project handling applies.
-- Fixed GitLab Duo Workflow remote project discovery missing the current GitLab project in linked Git worktree checkouts: a worktree's `.git` points at `.git/worktrees/<name>`, whose own `config` holds no remotes — those live in the common directory named by the gitdir's `commondir` file. Discovery now follows `commondir` to read the common `config`, so workspaces in a worktree resolve the correct namespace instead of falling back to top-level group candidates.
-- Fixed GitLab Duo Workflow remote project discovery on self-managed GitLab installed under a relative path (e.g. `https://host/gitlab`): HTTPS remotes look like `https://host/gitlab/group/project.git` but project full paths stay `group/project`, so discovery previously queried `/api/v4/projects/gitlab%2Fgroup%2Fproject` and missed the project. The parser now strips the install base path from the remote before deriving the project full path.
+- Improved GitLab Duo Agent and Duo Workflow namespace and project discovery to robustly handle paginated groups, SSH remotes with custom ports, Git worktrees, self-managed GitLab instances with relative paths, and configuration via GITLAB_DUO_PROJECT_PATH or GITLAB_DUO_PROJECT_ID.
+- Fixed built-in LiteLLM discovery to prefer rich proxy metadata from management endpoints and avoid caching stale capability data.
+- Fixed GitLab Duo Workflow model specifications to resolve correct static context windows, enabling accurate context usage tracking and auto-compaction.
 
 ## [16.1.23] - 2026-06-26
 
