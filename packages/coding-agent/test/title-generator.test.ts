@@ -374,8 +374,8 @@ describe("title generator", () => {
 		expect(request?.systemPrompt?.[1]).toContain("<title>");
 	});
 
-	it("resolves the model roles in precedence order: title -> commit -> smol", async () => {
-		const titleModel = getModelOrThrow("claude-haiku-4-5");
+	it("resolves the model roles in precedence order: tiny -> commit -> smol", async () => {
+		const tinyModel = getModelOrThrow("claude-haiku-4-5");
 		const commitModel = getModelOrThrow("claude-sonnet-4-5");
 		const smolModel = getModelOrThrow("claude-opus-4-8");
 
@@ -384,14 +384,14 @@ describe("title generator", () => {
 			content: [{ type: "text", text: "<title>Test Title</title>" }],
 		} as never);
 
-		// Case 1: All three roles configured. 'title' should be used.
+		// Case 1: All three roles configured. 'tiny' should be used.
 		let currentSettings = {
 			get(path: string) {
 				if (path === "providers.tinyModel") return "online";
 				return undefined;
 			},
 			getModelRole(role: string) {
-				if (role === "title") return `${titleModel.provider}/${titleModel.id}`;
+				if (role === "tiny") return `${tinyModel.provider}/${tinyModel.id}`;
 				if (role === "commit") return `${commitModel.provider}/${commitModel.id}`;
 				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
 				return undefined;
@@ -402,7 +402,7 @@ describe("title generator", () => {
 		} as never;
 
 		const registry = {
-			getAvailable: () => [titleModel, commitModel, smolModel],
+			getAvailable: () => [tinyModel, commitModel, smolModel],
 			getApiKey: async () => "test-key",
 			getApiKeyForProvider: async () => "test-key",
 			authStorage: { rotateSessionCredential: async () => false },
@@ -411,11 +411,11 @@ describe("title generator", () => {
 
 		await generateSessionTitle("Some message", registry, currentSettings);
 		expect(mockComplete).toHaveBeenCalled();
-		expect(mockComplete.mock.calls[0]?.[0]).toBe(titleModel);
+		expect(mockComplete.mock.calls[0]?.[0]).toBe(tinyModel);
 
 		mockComplete.mockClear();
 
-		// Case 2: 'title' role not configured, 'commit' and 'smol' configured. 'commit' should be used.
+		// Case 2: 'tiny' role not configured, 'commit' and 'smol' configured. 'commit' should be used.
 		currentSettings = {
 			get(path: string) {
 				if (path === "providers.tinyModel") return "online";

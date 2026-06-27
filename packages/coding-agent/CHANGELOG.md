@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added new `tiny` model role for consolidated online task handling
+
+### Changed
+
+- Updated online title, memory, and classification tasks to prioritize the `tiny` model role
+
 ## [16.2.1] - 2026-06-27
 
 ### Added

@@ -308,7 +308,7 @@ enabledModels:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `modelRoles` | record | `{}` | Map of role name -> model id. Built-in roles: `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `title`, `task`, `advisor`. Per-role env/flags exist only for `--model`/`--smol`/`--slow`/`--plan`; configure the advisor with `modelRoles.advisor`. |
+| `modelRoles` | record | `{}` | Map of role name -> model id. Built-in roles: `default`, `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `task`, `advisor`. The `tiny` role overrides the online model for lightweight background tasks (titles, memory, auto-thinking, unexpected-stop), else `pi/smol`. Per-role env/flags exist only for `--model`/`--smol`/`--slow`/`--plan`; configure the advisor with `modelRoles.advisor`. |
 | `modelTags` | record | `{}` | Custom role/tag metadata; can introduce additional roles. |
 | `modelProviderOrder` | array | `[]` | Preferred provider order when a model id is ambiguous. |
 | `cycleOrder` | array | `["smol","default","slow"]` | Roles cycled by the model switcher. |

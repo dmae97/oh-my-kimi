@@ -2440,11 +2440,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
-			description: "Use no LLM, the configured smol model, or a remote OpenAI-compatible endpoint",
+			description:
+				"Use no LLM, the online tiny model (the TINY role from /models, else pi/smol), or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
 			options: [
 				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
-				{ value: "smol", label: "Smol", description: "Use the configured pi-ai smol model" },
+				{
+					value: "smol",
+					label: "Online (tiny)",
+					description: "Use the online tiny model (the TINY role from /models, else pi/smol)",
+				},
 				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 			],
 		},
@@ -4342,7 +4347,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "providers",
 			group: "Tiny Model",
 			label: "Tiny Model",
-			description: "Session-title model: online pi/smol by default, or a local on-device model",
+			description:
+				"Session-title model: online (the TINY role from /models, else pi/smol) by default, or a local on-device model",
 			options: TINY_TITLE_MODEL_OPTIONS,
 		},
 	},
@@ -4381,7 +4387,7 @@ export const SETTINGS_SCHEMA = {
 			group: "General",
 			label: "Memory Model",
 			description:
-				"Mnemopi LLM for fact extraction + consolidation: online (smol/remote) by default, or a local on-device model",
+				"Mnemopi LLM for fact extraction + consolidation: online (the TINY role from /models, else smol/remote) by default, or a local on-device model",
 			condition: "mnemopiActive",
 			options: TINY_MEMORY_MODEL_OPTIONS,
 		},
@@ -4396,7 +4402,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Thinking",
 			label: "Auto Thinking Model",
 			description:
-				"Difficulty classifier for the `auto` thinking level: online smol by default, or a local on-device model",
+				"Difficulty classifier for the `auto` thinking level: online (the TINY role from /models, else smol) by default, or a local on-device model",
 			condition: "autoThinkingActive",
 			options: AUTO_THINKING_MODEL_OPTIONS,
 		},
@@ -4420,7 +4426,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "providers",
 			group: "Tiny Model",
 			label: "Unexpected Stop Model",
-			description: "Classifier for unexpected-stop detection: online smol by default, or a local on-device model.",
+			description:
+				"Classifier for unexpected-stop detection: online (the TINY role from /models, else smol) by default, or a local on-device model.",
 			condition: "unexpectedStopDetection",
 			options: TINY_MEMORY_MODEL_OPTIONS,
 		},
