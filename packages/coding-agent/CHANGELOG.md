@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed marketplace-installed plugins appearing in both the npm plugin list and the OMP extension-package status provider. ([#3628](https://github.com/can1357/oh-my-pi/issues/3628))
+
 ## [16.2.1] - 2026-06-27
 
 ### Added

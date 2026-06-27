@@ -1,13 +1,16 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { listOmpExtensionRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import {
 	MarketplaceManager,
 	readInstalledPluginsRegistry,
 } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
+import * as piUtils from "@oh-my-pi/pi-utils";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 // Minimal marketplace fixture, built once into a temp dir (see beforeAll). It carries only
@@ -253,6 +256,48 @@ describe("MarketplaceManager", () => {
 			const enabled = await getEnabledPlugins(ctx.tmpDir, { home: tmpHome });
 			expect(enabled.map(plugin => plugin.name)).toEqual(["hello-plugin"]);
 			expect(enabled[0].path).toBe(path.join(pluginsDir, "node_modules", "hello-plugin"));
+		} finally {
+			fs.rmSync(tmpHome, { recursive: true, force: true });
+		}
+	});
+
+	it("installPlugin keeps marketplace packages out of the npm plugin list", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const spies = [
+			spyOn(piUtils, "getPluginsDir").mockReturnValue(ctx.tmpDir),
+			spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(ctx.tmpDir, "node_modules")),
+			spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(ctx.tmpDir, "package.json")),
+			spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(ctx.tmpDir, "omp-plugins.lock.json")),
+			spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(
+				path.join(ctx.tmpDir, "plugin-overrides.json"),
+			),
+		];
+		try {
+			const plugins = await new PluginManager(ctx.tmpDir).list();
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
+	it("installPlugin keeps marketplace packages out of OMP extension roots", async () => {
+		const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omp-mgr-home-"));
+		try {
+			const pluginsDir = path.join(tmpHome, ".omp", "plugins");
+			const manager = new MarketplaceManager({
+				marketplacesRegistryPath: path.join(tmpHome, ".omp", "marketplaces.json"),
+				installedRegistryPath: path.join(pluginsDir, "installed_plugins.json"),
+				marketplacesCacheDir: path.join(pluginsDir, "cache", "marketplaces"),
+				pluginsCacheDir: path.join(pluginsDir, "cache", "plugins"),
+			});
+
+			await manager.addMarketplace(FIXTURE_DIR);
+			await manager.installPlugin("hello-plugin", "test-marketplace");
+
+			const roots = await listOmpExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
+			expect(roots.map(root => root.name)).toEqual([]);
 		} finally {
 			fs.rmSync(tmpHome, { recursive: true, force: true });
 		}

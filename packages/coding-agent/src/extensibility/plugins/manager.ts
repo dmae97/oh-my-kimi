@@ -14,6 +14,7 @@ import {
 import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
+import { getInstalledPluginsRegistryPath, readInstalledPluginsRegistry } from "./marketplace/registry";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type {
@@ -106,6 +107,9 @@ interface PluginPackageSnapshot {
 	readonly backupPath: string;
 }
 
+interface RuntimePackageJson {
+	name?: unknown;
+}
 // =============================================================================
 // Plugin Manager
 // =============================================================================
@@ -214,6 +218,31 @@ export class PluginManager {
 			installedNames.add(name);
 		}
 		return installedNames;
+	}
+	async #collectMarketplaceRuntimePackageNames(): Promise<Set<string>> {
+		const registry = await readInstalledPluginsRegistry(getInstalledPluginsRegistryPath());
+		const packageNames = new Set<string>();
+		await Promise.all(
+			Object.values(registry.plugins)
+				.flat()
+				.map(async entry => {
+					if (entry.scope !== "user") return;
+					const packageJsonPath = path.join(entry.installPath, "package.json");
+					try {
+						const pkg: RuntimePackageJson = await Bun.file(packageJsonPath).json();
+						if (typeof pkg.name === "string" && pkg.name.length > 0) {
+							packageNames.add(pkg.name);
+						}
+					} catch (err) {
+						if (isEnoent(err)) return;
+						logger.debug("Failed to inspect marketplace plugin package name", {
+							path: packageJsonPath,
+							error: String(err),
+						});
+					}
+				}),
+		);
+		return packageNames;
 	}
 
 	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
@@ -569,12 +598,15 @@ export class PluginManager {
 			if (!isEnoent(err)) throw err;
 		}
 
-		const projectOverrides = await this.#loadProjectOverrides();
-		const config = await this.#ensureConfigLoaded();
+		const [projectOverrides, config, marketplaceRuntimeNames] = await Promise.all([
+			this.#loadProjectOverrides(),
+			this.#ensureConfigLoaded(),
+			this.#collectMarketplaceRuntimePackageNames(),
+		]);
 		const plugins: InstalledPlugin[] = [];
 		const installedNames = this.#collectInstalledNames(deps, config);
-
 		for (const name of installedNames) {
+			if (!(name in deps) && marketplaceRuntimeNames.has(name)) continue;
 			const pluginPath = path.join(getPluginsNodeModules(), name);
 			const pluginPkgPath = path.join(pluginPath, "package.json");
 			let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
@@ -816,10 +848,14 @@ export class PluginManager {
 		});
 
 		const deps = pkg.dependencies || {};
-		const config = await this.#ensureConfigLoaded();
+		const [config, marketplaceRuntimeNames] = await Promise.all([
+			this.#ensureConfigLoaded(),
+			this.#collectMarketplaceRuntimePackageNames(),
+		]);
 		const installedNames = this.#collectInstalledNames(deps, config);
 
 		for (const name of installedNames) {
+			if (!(name in deps) && marketplaceRuntimeNames.has(name)) continue;
 			const pluginPath = path.join(nodeModulesPath, name);
 			const pluginPkgPath = path.join(pluginPath, "package.json");
 			const fromDependencies = name in deps;
