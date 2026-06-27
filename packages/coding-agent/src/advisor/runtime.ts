@@ -5,12 +5,17 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { obfuscateToolArguments, type SecretObfuscator } from "../secrets/obfuscator";
 import { formatSessionHistoryMarkdown, PRIMARY_CONTEXT_CUSTOM_TYPES } from "../session/session-history-format";
 
-/** Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core `Agent`. */
+/**
+ * Minimal slice of `Agent` the runtime drives — satisfied by pi-agent-core
+ * `Agent`. `state.error` mirrors `Agent.state.error`: provider/stream failures
+ * the loop catches internally never reject `prompt()`, so the runtime reads
+ * this field after every prompt to detect a failed turn.
+ */
 export interface AdvisorAgent {
 	prompt(input: string): Promise<void>;
 	abort(reason?: unknown): void;
 	reset(): void;
-	readonly state: { messages: AgentMessage[] };
+	readonly state: { messages: AgentMessage[]; error?: string };
 }
 
 export interface AdvisorRuntimeHost {
@@ -293,6 +298,14 @@ export class AdvisorRuntime {
 					// fresh budget. Dedupe history persists across cycles.
 					this.host.beginAdvisorUpdate?.();
 					await this.agent.prompt(batch);
+					// `Agent.#runLoop` catches provider/stream failures internally and
+					// resolves `prompt()` cleanly with the assistant turn ending in
+					// `stopReason: "error"` and the message recorded on `state.error`.
+					// Treat that as a failed turn so OpenRouter ZDR-style endpoint
+					// rejections trip the retry/notify path instead of looking like a
+					// successful empty cycle.
+					const promptError = this.agent.state.error;
+					if (promptError) throw new Error(promptError);
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;

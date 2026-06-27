@@ -1065,6 +1065,65 @@ describe("advisor", () => {
 			expect(failures).toHaveLength(2);
 		});
 
+		it("treats a clean prompt resolution with state.error as a failed turn (real Agent contract)", async () => {
+			// `Agent.#runLoop` catches provider/stream failures internally — it resolves
+			// `prompt()` cleanly and stores the message on `state.error` (e.g. the
+			// OpenRouter ZDR `404 No endpoints available` case from #3635). The runtime
+			// must surface that as a failed turn even though the awaited promise did
+			// not reject.
+			const promptInputs: string[] = [];
+			const failures: unknown[] = [];
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			let shouldFail = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					state.error = shouldFail
+						? "404 No endpoints available matching your guardrail restrictions and data policy."
+						: undefined;
+				},
+				abort: () => {},
+				reset: () => {
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				notifyFailure: error => failures.push(error),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(failures).toHaveLength(1);
+			const failure = failures[0];
+			if (!(failure instanceof Error)) throw new Error("expected advisor failure error");
+			expect(failure.message).toContain("No endpoints available");
+			expect(runtime.backlog).toBe(0);
+
+			shouldFail = false;
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			expect(failures).toHaveLength(1);
+
+			shouldFail = true;
+			messages.push({ role: "user", content: "ccc", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(failures).toHaveLength(2);
+		});
+
 		it("drops the in-flight batch when a reset aborts the advisor prompt", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();
