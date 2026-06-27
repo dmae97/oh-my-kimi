@@ -15,6 +15,7 @@ import { type GitSource, parseGitUrl } from "./git-url";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
 import { getInstalledPluginsRegistryPath, readInstalledPluginsRegistry } from "./marketplace/registry";
+import { parsePluginId } from "./marketplace/types";
 import { extractPackageName, parsePluginSpec } from "./parser";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
 import type {
@@ -223,26 +224,38 @@ export class PluginManager {
 		const registry = await readInstalledPluginsRegistry(getInstalledPluginsRegistryPath());
 		const packageRealpaths = new Map<string, Set<string>>();
 		await Promise.all(
-			Object.values(registry.plugins)
-				.flat()
-				.map(async entry => {
+			Object.entries(registry.plugins).flatMap(([pluginId, entries]) =>
+				entries.map(async entry => {
 					if (entry.scope !== "user") return;
 					const packageJsonPath = path.join(entry.installPath, "package.json");
+					const parsedId = parsePluginId(pluginId);
+					let packageName = parsedId?.name ?? pluginId;
 					try {
 						const pkg: RuntimePackageJson = await Bun.file(packageJsonPath).json();
+						if (typeof pkg.name === "string" && pkg.name.length > 0) {
+							packageName = pkg.name;
+						}
+					} catch (err) {
+						if (!isEnoent(err)) {
+							logger.debug("Failed to inspect marketplace plugin package path", {
+								path: entry.installPath,
+								error: String(err),
+							});
+							return;
+						}
+					}
+
+					try {
 						const installRealpath = await fs.promises.realpath(entry.installPath);
-						if (typeof pkg.name !== "string" || pkg.name.length === 0) return;
-						const realpaths = packageRealpaths.get(pkg.name) ?? new Set<string>();
+						const realpaths = packageRealpaths.get(packageName) ?? new Set<string>();
 						realpaths.add(installRealpath);
-						packageRealpaths.set(pkg.name, realpaths);
+						packageRealpaths.set(packageName, realpaths);
 					} catch (err) {
 						if (isEnoent(err)) return;
-						logger.debug("Failed to inspect marketplace plugin package path", {
-							path: entry.installPath,
-							error: String(err),
-						});
+						throw err;
 					}
 				}),
+			),
 		);
 		return packageRealpaths;
 	}

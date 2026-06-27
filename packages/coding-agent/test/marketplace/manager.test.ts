@@ -427,6 +427,18 @@ describe("MarketplaceManager", () => {
 				},
 			},
 		});
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+			expect(checks.filter(check => check.name.includes("csharp-lsp"))).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
 	});
 
 	it("installPlugin embeds config-only marketplace DAP metadata", async () => {
