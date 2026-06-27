@@ -392,6 +392,53 @@ describe("ACP event mapper", () => {
 		expect(update.locations).toEqual([{ path: "single.ts" }]);
 	});
 
+	it("resolves live image blob refs for ACP content without expanding rawOutput", () => {
+		const blobRef = "blob:sha256:77467fcfe2bbdc034e0eabb4778c9d7de521c0d7c3e0d0a62566468e4d7da3a5";
+		const resolvedImageData = "resolved-webp-base64";
+		const events: AgentSessionEvent[] = [
+			{
+				type: "tool_execution_update",
+				toolCallId: "tc-image-update",
+				toolName: "generate_image",
+				args: {},
+				partialResult: {
+					content: [{ type: "image", data: blobRef, mimeType: "image/webp" }],
+					details: { images: [{ data: blobRef, mimeType: "image/webp" }] },
+				},
+			} as AgentSessionEvent,
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-image-end",
+				toolName: "generate_image",
+				isError: false,
+				result: {
+					content: [{ type: "text", text: "Generated image saved." }],
+					details: { images: [{ data: blobRef, mimeType: "image/webp" }] },
+				},
+			} as AgentSessionEvent,
+		];
+
+		for (const event of events) {
+			const updates = mapAgentSessionEventToAcpSessionUpdates(event, "session-1", {
+				resolveImageData: data => (data === blobRef ? resolvedImageData : data),
+			});
+			const update = updates[0]!.update as {
+				content?: Array<{
+					type: string;
+					content?: { type: string; data?: string; mimeType?: string; text?: string };
+				}>;
+				rawOutput?: unknown;
+			};
+			const images = update.content?.filter(item => item.type === "content" && item.content?.type === "image") ?? [];
+
+			expect(images).toEqual([
+				{ type: "content", content: { type: "image", data: resolvedImageData, mimeType: "image/webp" } },
+			]);
+			expect(JSON.stringify(update.content)).not.toContain("blob:sha256:");
+			expect(JSON.stringify(update.rawOutput)).toContain(blobRef);
+		}
+	});
+
 	it("emits locations on tool_execution_update from args", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{
