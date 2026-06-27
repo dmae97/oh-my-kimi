@@ -14,6 +14,9 @@
 
 ### Fixed
 
+- Improved reliability of auto-retry logic for aborted requests by standardizing error classification across different model adapters
+
+- Fixed retry classification for provider turns with generic or missing assistant metadata so stale OpenAI Responses replay errors reset provider session state before retrying.
 - Improved robustness of MCP authentication error detection and header-based server discovery
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs
 - Prevented auto-generated session titles from accidentally re-shouting user all-caps text

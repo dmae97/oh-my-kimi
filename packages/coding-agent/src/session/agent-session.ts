@@ -11253,6 +11253,31 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
+	 * Classify retry decisions against the active session model. Test stream
+	 * shims and provider adapters can emit generic assistant metadata, but retry
+	 * policy belongs to the model that was actually requested for this turn.
+	 */
+	#classifyRetryMessage(message: AssistantMessage): number {
+		const activeModel = this.model;
+		if (!activeModel || message.api === activeModel.api) {
+			return AIError.classifyMessage(message);
+		}
+
+		const id = AIError.classifyMessage({
+			api: activeModel.api,
+			errorId: message.errorId,
+			errorMessage: message.errorMessage,
+			errorStatus: message.errorStatus,
+		});
+		message.errorId = id;
+		return id;
+	}
+
+	#isGenericAbortSentinel(message: AssistantMessage): boolean {
+		return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
+	}
+
+	/**
 	 * Retry an empty, reason-less provider abort: a turn that ended `aborted`
 	 * with no content and the generic sentinel (bare `abort()`), but only while
 	 * the session is neither aborting nor tearing down. A user/lifecycle abort
@@ -11264,14 +11289,22 @@ export class AgentSession {
 	 * `prompt()`) or silently undo the guard's intended abort.
 	 */
 	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
-		return (
-			message.stopReason === "aborted" &&
-			message.content.length === 0 &&
-			AIError.is(message.errorId, AIError.Flag.Abort) &&
-			!this.#abortInProgress &&
-			!this.#isDisposed &&
-			!this.#streamingEditAbortTriggered
-		);
+		if (
+			message.stopReason !== "aborted" ||
+			message.content.length !== 0 ||
+			this.#abortInProgress ||
+			this.#isDisposed ||
+			this.#streamingEditAbortTriggered
+		) {
+			return false;
+		}
+
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.Abort)) return true;
+		if (!this.#isGenericAbortSentinel(message)) return false;
+
+		message.errorId = AIError.create(AIError.Flag.Abort);
+		return true;
 	}
 
 	/**
@@ -11282,7 +11315,7 @@ export class AgentSession {
 	#isRetryableError(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 
-		const id = AIError.classifyMessage(message);
+		const id = this.#classifyRetryMessage(message);
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
@@ -11543,7 +11576,7 @@ export class AgentSession {
 		// A content refusal/sensitivity stop is the model's decision, not a route
 		// failure — switching to the base model would just re-trigger it.
 		if (this.#isClassifierRefusal(message)) return false;
-		const id = AIError.classifyMessage(message);
+		const id = this.#classifyRetryMessage(message);
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
 		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
@@ -11712,7 +11745,7 @@ export class AgentSession {
 		}
 
 		const errorMessage = message.errorMessage || "Unknown error";
-		const id = AIError.classifyMessage(message);
+		const id = this.#classifyRetryMessage(message);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
