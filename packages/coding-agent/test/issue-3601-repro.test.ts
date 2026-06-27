@@ -176,6 +176,44 @@ describe("CustomEditor empty bracketed paste (issue #3601)", () => {
 		expect(pasteText).toHaveBeenCalledTimes(1);
 		expect(pasteText).toHaveBeenCalledWith("hello world");
 	});
+
+	it("defers a trailing keystroke after a Cmd+V empty paste until the image attach settles (Codex PR #3602 review)", async () => {
+		// Codex review: the empty bracketed paste plus a follow-up key (the
+		// user hits Enter right after Cmd+V) used to race — `onPasteImage`
+		// was fire-and-forget, so `\r` dispatched synchronously and submit
+		// ran against an empty `pendingImages`. The post-fix path queues
+		// trailing bytes behind the in-flight paste; the trailing key only
+		// dispatches after the paste promise settles.
+		const { editor } = createCtx();
+		const { promise: imageAttached, resolve: completePaste } = Promise.withResolvers<boolean>();
+		const callOrder: string[] = [];
+		editor.onPasteImage = () => {
+			callOrder.push("paste:start");
+			return imageAttached;
+		};
+		// Spy a custom key handler for `enter` so we can observe submit ordering
+		// without standing up the full submit machinery.
+		const onEnter = vi.fn(() => callOrder.push("enter"));
+		editor.setCustomKeyHandler("enter", onEnter);
+
+		// Single read carrying both the empty bracketed paste AND the trailing CR.
+		editor.handleInput(`${BRACKETED_PASTE_START}${BRACKETED_PASTE_END}\r`);
+
+		// Paste started, Enter MUST NOT have fired yet (it would submit pre-image).
+		expect(callOrder).toEqual(["paste:start"]);
+		expect(onEnter).not.toHaveBeenCalled();
+
+		// Settle the clipboard image read; the queued Enter should now drain through.
+		completePaste(true);
+		await imageAttached;
+		// Two microtasks: one for `Promise.resolve(onPasteImage()).then(#onPasteSettled)`,
+		// one for the synchronous drain that runs inside `#onPasteSettled`.
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(callOrder).toEqual(["paste:start", "enter"]);
+		expect(onEnter).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("InputController + empty bracketed paste end-to-end (issue #3601)", () => {

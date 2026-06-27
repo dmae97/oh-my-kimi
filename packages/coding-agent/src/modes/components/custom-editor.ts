@@ -439,6 +439,14 @@ export class CustomEditor extends Editor {
 	 *  assembled payload here; the empty-paste / image-path branches must see the full content,
 	 *  not the raw single-chunk byte sequence. */
 	#pasteHandler = new BracketedPasteHandler();
+	/** Number of async pastes (clipboard-image reads / image-path attachments) currently in flight.
+	 *  While > 0, `handleInput` queues subsequent keystrokes into {@link #pendingInput} instead of
+	 *  dispatching them so a trailing `Enter` after `Cmd+V` can't submit before the image lands on
+	 *  `pendingImages` (Codex PR #3602 review). */
+	#pasteInFlight = 0;
+	/** Input chunks deferred behind an in-flight paste, drained in FIFO order once the paste
+	 *  count returns to zero. */
+	#pendingInput: string[] = [];
 	/** Spaces actually inserted in the current run; tracked back out when a hold is recognized. */
 	#spaceRunInserted = 0;
 	/** Consecutive "mechanical" deltas (fast + steady); a sustained run of these confirms a held bar. */
@@ -592,7 +600,34 @@ export class CustomEditor extends Editor {
 		this.onSpaceHoldEnd?.();
 	}
 
+	/** Decrement {@link #pasteInFlight} once an async paste settles and, when the count returns
+	 *  to zero, drain {@link #pendingInput} through `handleInput` so requeueing still works if a
+	 *  drained chunk triggers another async paste. Bound member so it can be passed straight to
+	 *  `Promise.then(callback, callback)`. */
+	#onPasteSettled = (): void => {
+		this.#pasteInFlight--;
+		if (this.#pasteInFlight > 0) return;
+		const drained = this.#pendingInput.splice(0);
+		for (const chunk of drained) this.handleInput(chunk);
+	};
+
+	/** Track `promise` as an in-flight paste so subsequent `handleInput` calls queue behind it,
+	 *  then drain the queue once it settles. Codex PR #3602 review: without this, a trailing
+	 *  keystroke (Enter most painfully) in the same stdin read processes synchronously while the
+	 *  clipboard read is still pending — submit fires with the text but `pendingImages` is still
+	 *  empty and the image lands on the *next* draft instead. */
+	#trackAsyncPaste(promise: Promise<unknown>): void {
+		this.#pasteInFlight++;
+		void promise.then(this.#onPasteSettled, this.#onPasteSettled);
+	}
+
 	handleInput(data: string): void {
+		// Serialize behind any in-flight async paste so a trailing Enter / follow-up key can't
+		// submit before the clipboard image reaches `pendingImages` (Codex PR #3602 review).
+		if (this.#pasteInFlight > 0) {
+			this.#pendingInput.push(data);
+			return;
+		}
 		const kittyParsed = parseKittySequence(data);
 		if (kittyParsed && (kittyParsed.modifier & 64) !== 0 && this.onCapsLock) {
 			// Caps Lock is modifier bit 64
@@ -617,19 +652,27 @@ export class CustomEditor extends Editor {
 			if (paste.pasteContent === undefined) return; // still buffering — wait for end marker
 			const content = paste.pasteContent;
 			const remaining = paste.remaining;
+			// Queue any trailing bytes from the same read (typically a follow-up keystroke such as
+			// Enter that the user pressed right after Cmd+V) so they only fire *after* the paste
+			// completes — fixes the race where submit runs against an empty `pendingImages`.
+			if (remaining.length > 0) this.#pendingInput.push(remaining);
 			if (content.length === 0 && this.onPasteImage) {
-				void this.onPasteImage();
-			} else {
-				const imagePaths = extractImagePastePathsFromText(content);
-				if (imagePaths && this.onPasteImagePath) {
-					void (async () => {
-						for (const p of imagePaths) await this.onPasteImagePath?.(p);
-					})();
-				} else {
-					this.pasteText(content);
-				}
+				this.#trackAsyncPaste(Promise.resolve(this.onPasteImage()));
+				return;
 			}
-			if (remaining.length > 0) this.handleInput(remaining);
+			const imagePaths = extractImagePastePathsFromText(content);
+			if (imagePaths && this.onPasteImagePath) {
+				this.#trackAsyncPaste(
+					(async () => {
+						for (const p of imagePaths) await this.onPasteImagePath?.(p);
+					})(),
+				);
+				return;
+			}
+			this.pasteText(content);
+			// No async paste was started; drain the queued trailing bytes ourselves.
+			const drained = this.#pendingInput.splice(0);
+			for (const chunk of drained) this.handleInput(chunk);
 			return;
 		}
 
