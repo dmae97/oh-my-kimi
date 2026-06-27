@@ -643,6 +643,17 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 */
 	matcherPaths?: (args: unknown) => readonly string[] | undefined;
 
+	/**
+	 * Per-file projection of a (potentially partial) streamed call, pairing each
+	 * touched file path with the digest of only the lines added to that file.
+	 * Path-scoped stream matchers (TTSR) evaluate each entry in isolation, so a
+	 * scoped rule like `tool:edit(*.ts)` never fires on text that actually
+	 * belongs to a sibling Markdown hunk in a multi-file payload. Takes
+	 * precedence over {@link matcherDigest} + {@link matcherPaths} when present;
+	 * returns `undefined` (or empty) to fall back to the combined hooks.
+	 */
+	matcherEntries?: (args: unknown) => readonly { path: string; digest: string }[] | undefined;
+
 	/** Capability tier declaration used by approval gates. Omitted means "exec". */
 	approval?: ToolApproval;
 

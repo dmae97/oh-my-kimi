@@ -3808,6 +3808,14 @@ export class AgentSession {
 		if (!manager) {
 			return [];
 		}
+		const entries = this.#resolveTtsrMatcherEntries(toolCall);
+		if (entries) {
+			const matches: Rule[] = [];
+			for (const entry of entries) {
+				matches.push(...manager.checkSnapshot(entry.digest, this.#perFileTtsrContext(matchContext, entry.path)));
+			}
+			return matches;
+		}
 		const digest = this.#resolveTtsrMatcherDigest(toolCall);
 		if (digest !== undefined) {
 			return manager.checkSnapshot(digest, matchContext);
@@ -3817,14 +3825,44 @@ export class AgentSession {
 
 	/** Reconstruct the tool's normalized source snapshot via its `matcherDigest`, if any. */
 	#resolveTtsrMatcherDigest(toolCall: ToolCall | undefined): string | undefined {
-		if (!toolCall) {
-			return undefined;
-		}
+		const tool = this.#resolveTtsrTool(toolCall);
+		return tool?.matcherDigest?.(toolCall?.arguments ?? {});
+	}
+
+	/**
+	 * Per-file split of a streamed call (one entry per touched file paired with
+	 * the digest of only that file's added lines). Lets {@link #checkTtsrStream}
+	 * and {@link #checkTtsrAstStream} evaluate each file in isolation so a
+	 * path-scoped rule like `tool:edit(*.ts)` never fires on text that belongs
+	 * to a sibling Markdown hunk in a multi-file payload.
+	 */
+	#resolveTtsrMatcherEntries(toolCall: ToolCall | undefined): readonly { path: string; digest: string }[] | undefined {
+		const tool = this.#resolveTtsrTool(toolCall);
+		const entries = tool?.matcherEntries?.(toolCall?.arguments ?? {});
+		return entries && entries.length > 0 ? entries : undefined;
+	}
+
+	#resolveTtsrTool(toolCall: ToolCall | undefined) {
+		if (!toolCall) return undefined;
 		const tools = this.agent.state.tools;
-		const tool =
+		return (
 			tools.find(t => t.name === toolCall.name) ??
-			tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
-		return tool?.matcherDigest?.(toolCall.arguments ?? {});
+			tools.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name)
+		);
+	}
+
+	/**
+	 * Replace `matchContext`'s `filePaths` + `streamKey` so a per-file entry
+	 * gets its own glob-eligible path and its own TTSR buffer/repeat tracking
+	 * (each file's stream is independent inside the same tool call).
+	 */
+	#perFileTtsrContext(base: TtsrMatchContext, filePath: string): TtsrMatchContext {
+		const filePaths = this.#normalizeTtsrPathCandidates(filePath);
+		return {
+			...base,
+			filePaths: filePaths.length > 0 ? filePaths : [filePath],
+			streamKey: base.streamKey ? `${base.streamKey}#${filePath}` : undefined,
+		};
 	}
 
 	/**
@@ -3838,6 +3876,16 @@ export class AgentSession {
 		const manager = this.#ttsrManager;
 		if (!manager) {
 			return [];
+		}
+		const entries = this.#resolveTtsrMatcherEntries(toolCall);
+		if (entries) {
+			const matches: Rule[] = [];
+			for (const entry of entries) {
+				matches.push(
+					...(await manager.checkAstSnapshot(entry.digest, this.#perFileTtsrContext(matchContext, entry.path))),
+				);
+			}
+			return matches;
 		}
 		const digest = this.#resolveTtsrMatcherDigest(toolCall);
 		if (digest === undefined) {

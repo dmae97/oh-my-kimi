@@ -109,6 +109,64 @@ describe("EDIT_MODE_STRATEGIES.matcherPaths", () => {
 	});
 });
 
+describe("EDIT_MODE_STRATEGIES.matcherEntries", () => {
+	it("replace + patch return one (path, digest) entry from the top-level path", () => {
+		expect(
+			EDIT_MODE_STRATEGIES.replace.matcherEntries({ path: "src/foo.ts", edits: [{ new_text: "x = 1" }] }),
+		).toEqual([{ path: "src/foo.ts", digest: "x = 1" }]);
+		expect(
+			EDIT_MODE_STRATEGIES.patch.matcherEntries({ path: "src/bar.ts", edits: [{ op: "update", diff: "@@\n+y" }] }),
+		).toEqual([{ path: "src/bar.ts", digest: "y" }]);
+	});
+
+	it("hashline splits multi-section payloads into one entry per file", () => {
+		const input = [
+			"[src/a.ts#ABCD]",
+			"SWAP 1.=1:",
+			"+const a = 1;",
+			"[README.md#EF01]",
+			"SWAP 1.=1:",
+			"+# Heading",
+			"[src/a.ts#1234]",
+			"SWAP 2.=2:",
+			"+const c = 3;",
+			"",
+		].join("\n");
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input })).toEqual([
+			// Same-path sections are merged into one entry, preserving order.
+			{ path: "src/a.ts", digest: "const a = 1;\nconst c = 3;" },
+			{ path: "README.md", digest: "# Heading" },
+		]);
+	});
+
+	it("apply_patch splits multi-hunk payloads into one entry per file", () => {
+		const input = [
+			"*** Begin Patch",
+			"*** Update File: src/a.ts",
+			"@@",
+			"-foo",
+			"+const a = 1;",
+			"*** Update File: README.md",
+			"@@",
+			"-old",
+			"+# Heading",
+			"*** End Patch",
+			"",
+		].join("\n");
+		const entries = EDIT_MODE_STRATEGIES.apply_patch.matcherEntries({ input });
+		expect(entries).toEqual([
+			{ path: "src/a.ts", digest: "const a = 1;" },
+			{ path: "README.md", digest: "# Heading" },
+		]);
+	});
+
+	it("returns undefined when no entries are recoverable yet", () => {
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input: "" })).toBeUndefined();
+		expect(EDIT_MODE_STRATEGIES.apply_patch.matcherEntries({ input: "*** Begin Patch\n" })).toBeUndefined();
+		expect(EDIT_MODE_STRATEGIES.replace.matcherEntries({})).toBeUndefined();
+	});
+});
+
 /**
  * Integration: a hashline edit payload whose only path lives in the
  * `[demo.ts#TAG]` section header must trigger the bundled `ts-no-any` rule
@@ -183,5 +241,96 @@ describe("hashline edit + path-scoped TTSR (regression: #3646)", () => {
 			// filePaths intentionally omitted — pre-fix behavior.
 		});
 		expect(matches).toEqual([]);
+	});
+
+	it("multi-file hashline isolates a .md hunk's `: any` from a sibling .ts entry", async () => {
+		// PR review (#3648): a multi-file payload that adds `: any` only to a
+		// Markdown hunk MUST NOT trip the TS-only `tool:edit(*.ts)` rule. Per-file
+		// matchers pair each path with its own digest.
+		const manager = await makeManager();
+		const input = [
+			"[README.md#ABCD]",
+			"SWAP 1.=1:",
+			`+${VIOLATING_LINE}`,
+			"[src/ok.ts#EF01]",
+			"SWAP 1.=1:",
+			"+export const ok = 1;",
+			"",
+		].join("\n");
+
+		const entries = EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input });
+		expect(entries?.map(e => e.path)).toEqual(["README.md", "src/ok.ts"]);
+
+		const allMatches: string[] = [];
+		for (const entry of entries ?? []) {
+			const matches = manager.checkSnapshot(entry.digest, {
+				source: "tool",
+				toolName: "edit",
+				filePaths: [entry.path],
+				streamKey: `toolcall:test#${entry.path}`,
+			});
+			allMatches.push(...matches.map(r => r.name));
+		}
+		expect(allMatches).toEqual([]);
+	});
+
+	it("multi-file hashline fires only on the .ts entry when the .ts entry carries `: any`", async () => {
+		const manager = await makeManager();
+		const input = [
+			"[README.md#ABCD]",
+			"SWAP 1.=1:",
+			"+# Heading",
+			"[src/bad.ts#EF01]",
+			"SWAP 1.=1:",
+			`+${VIOLATING_LINE}`,
+			"",
+		].join("\n");
+
+		const entries = EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input });
+		const matchesByPath = new Map<string, string[]>();
+		for (const entry of entries ?? []) {
+			const matches = manager.checkSnapshot(entry.digest, {
+				source: "tool",
+				toolName: "edit",
+				filePaths: [entry.path],
+				streamKey: `toolcall:test2#${entry.path}`,
+			});
+			matchesByPath.set(
+				entry.path,
+				matches.map(r => r.name),
+			);
+		}
+		expect(matchesByPath.get("README.md")).toEqual([]);
+		expect(matchesByPath.get("src/bad.ts")).toEqual(["ts-no-any"]);
+	});
+
+	it("multi-file apply_patch isolates a .md hunk's `: any` from a sibling .ts hunk", async () => {
+		const manager = await makeManager();
+		const input = [
+			"*** Begin Patch",
+			"*** Update File: README.md",
+			"@@",
+			"-old",
+			`+${VIOLATING_LINE}`,
+			"*** Update File: src/ok.ts",
+			"@@",
+			"-old",
+			"+export const ok = 1;",
+			"*** End Patch",
+			"",
+		].join("\n");
+
+		const entries = EDIT_MODE_STRATEGIES.apply_patch.matcherEntries({ input });
+		const allMatches: string[] = [];
+		for (const entry of entries ?? []) {
+			const matches = manager.checkSnapshot(entry.digest, {
+				source: "tool",
+				toolName: "edit",
+				filePaths: [entry.path],
+				streamKey: `toolcall:test3#${entry.path}`,
+			});
+			allMatches.push(...matches.map(r => r.name));
+		}
+		expect(allMatches).toEqual([]);
 	});
 });

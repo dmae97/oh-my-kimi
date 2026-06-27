@@ -52,6 +52,17 @@ export interface StreamingDiffContext {
 	isStreaming?: boolean;
 }
 
+/**
+ * Per-file projection of a streamed edit payload. Pairs one target file path
+ * with the digest of only the lines added to that file, so path-scoped stream
+ * matchers (TTSR) evaluate each file in isolation — a `tool:edit(*.ts)` rule
+ * never fires on text that actually belongs to a sibling `README.md` hunk.
+ */
+export interface EditMatcherEntry {
+	readonly path: string;
+	readonly digest: string;
+}
+
 export interface EditStreamingStrategy<Args = unknown> {
 	/**
 	 * Return the args restricted to edits that are "complete enough" to
@@ -85,6 +96,18 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 * Returns `undefined` (or an empty list) when no paths are recoverable.
 	 */
 	matcherPaths(args: Args): readonly string[] | undefined;
+	/**
+	 * Per-file projection of the (potentially partial) args: one entry per
+	 * touched file pairing the path with the digest of only the lines added to
+	 * that file. Multi-file payloads (multi-section hashline / multi-hunk
+	 * apply_patch) MUST split here so callers can evaluate each file under its
+	 * own path scope instead of leaking added lines from one file into the
+	 * other's match context. Same-path sections / hunks are merged into one
+	 * entry. Returns `undefined` (or empty) when no per-file split is
+	 * recoverable yet — the caller falls back to {@link matcherDigest} +
+	 * {@link matcherPaths}.
+	 */
+	matcherEntries(args: Args): readonly EditMatcherEntry[] | undefined;
 }
 
 // -----------------------------------------------------------------------------
@@ -237,6 +260,65 @@ function extractApplyPatchEnvelopePaths(input: string): string[] {
 	return paths;
 }
 
+/**
+ * Split a (possibly partial) hashline buffer into one matcher entry per
+ * touched file: pair the section header path with the added lines from that
+ * section's body, merging sections that target the same file into one entry.
+ * Header-line regex (not `Patch.parse`) so a mid-typed trailing op still
+ * yields entries for completed sections.
+ */
+function splitHashlinePerFile(input: string): EditMatcherEntry[] {
+	const headerRe = /^\s*\[([^\]\r\n]+?)(?:#[0-9a-fA-F]{4})?\]\s*$/gm;
+	const sections: { path: string; headerStart: number; bodyStart: number }[] = [];
+	let match: RegExpExecArray | null = headerRe.exec(input);
+	while (match !== null) {
+		const candidate = stripApplyPatchPathNoise(match[1]).trim();
+		if (candidate.length > 0) {
+			sections.push({ path: candidate, headerStart: match.index, bodyStart: headerRe.lastIndex });
+		}
+		match = headerRe.exec(input);
+	}
+	if (sections.length === 0) return [];
+
+	const byPath = new Map<string, string>();
+	for (let i = 0; i < sections.length; i++) {
+		const { path: sectionPath, bodyStart } = sections[i];
+		const bodyEnd = i + 1 < sections.length ? sections[i + 1].headerStart : input.length;
+		const added = extractAddedLines(input.slice(bodyStart, bodyEnd), false);
+		if (added.length === 0) continue;
+		const existing = byPath.get(sectionPath);
+		byPath.set(sectionPath, existing === undefined ? added : `${existing}\n${added}`);
+	}
+	return Array.from(byPath, ([path, digest]) => ({ path, digest }));
+}
+
+/**
+ * Split a (possibly partial) apply_patch envelope into one matcher entry per
+ * touched file. Same-path hunks are merged into one entry. Falls back to the
+ * streaming-tolerant parser when the envelope hasn't reached `*** End Patch`.
+ */
+function splitApplyPatchPerFile(input: string): EditMatcherEntry[] {
+	let entries: ApplyPatchEntry[];
+	try {
+		entries = expandApplyPatchToEntries({ input });
+	} catch {
+		try {
+			entries = expandApplyPatchToPreviewEntries({ input });
+		} catch {
+			return [];
+		}
+	}
+	const byPath = new Map<string, string>();
+	for (const entry of entries) {
+		if (typeof entry.diff !== "string") continue;
+		const added = extractAddedLines(entry.diff, false);
+		if (added.length === 0) continue;
+		const existing = byPath.get(entry.path);
+		byPath.set(entry.path, existing === undefined ? added : `${existing}\n${added}`);
+	}
+	return Array.from(byPath, ([path, digest]) => ({ path, digest }));
+}
+
 // -----------------------------------------------------------------------------
 // Strategies
 // -----------------------------------------------------------------------------
@@ -285,6 +367,12 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	matcherPaths(args) {
 		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
 	},
+	matcherEntries(args) {
+		const path = args?.path;
+		if (typeof path !== "string" || path.length === 0) return undefined;
+		const digest = replaceStrategy.matcherDigest(args);
+		return digest === undefined ? undefined : [{ path, digest }];
+	},
 };
 
 interface PatchArgs {
@@ -329,6 +417,12 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 	},
 	matcherPaths(args) {
 		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
+	},
+	matcherEntries(args) {
+		const path = args?.path;
+		if (typeof path !== "string" || path.length === 0) return undefined;
+		const digest = patchStrategy.matcherDigest(args);
+		return digest === undefined ? undefined : [{ path, digest }];
 	},
 };
 
@@ -495,6 +589,12 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		const paths = extractHashlineHeaderPaths(input);
 		return paths.length > 0 ? paths : undefined;
 	},
+	matcherEntries(args) {
+		const input = args?.input;
+		if (typeof input !== "string" || input.length === 0) return undefined;
+		const entries = splitHashlinePerFile(input);
+		return entries.length > 0 ? entries : undefined;
+	},
 };
 
 interface ApplyPatchArgs {
@@ -558,6 +658,12 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 		if (typeof input !== "string" || input.length === 0) return undefined;
 		const paths = extractApplyPatchEnvelopePaths(input);
 		return paths.length > 0 ? paths : undefined;
+	},
+	matcherEntries(args) {
+		const input = args?.input;
+		if (typeof input !== "string" || input.length === 0) return undefined;
+		const entries = splitApplyPatchPerFile(input);
+		return entries.length > 0 ? entries : undefined;
 	},
 };
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {

@@ -5,6 +5,7 @@
 ### Added
 
 - Added optional `AgentTool.matcherPaths(args)` hook: tools whose streamed arguments embed target file paths inside the wire payload (patch envelope markers, hashline section headers) can surface those paths so path-scoped stream matchers (e.g. TTSR `tool:edit(*.ts)` globs) match without a top-level `path` / `paths` argument. Returns `undefined` (or an empty list) to fall back to the caller's existing top-level argument scan.
+- Added optional `AgentTool.matcherEntries(args)` hook: returns one `{ path, digest }` entry per file a (potentially partial) streamed call touches, so path-scoped stream matchers evaluate each file in isolation. Multi-file payloads (multi-section hashline, multi-hunk apply_patch) MUST split here — otherwise a combined digest from a sibling Markdown hunk would leak into the `.ts` path scope and trip rules like `tool:edit(*.ts)` `ts-no-any` on text that does not belong to a TypeScript file. Takes precedence over `matcherDigest` + `matcherPaths` when present; returns `undefined` (or empty) to fall back to the combined hooks.
 
 ### Removed
 
