@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed TUI thought stream stalling and `ui.loop-blocked` warnings during subagent-heavy runs by replacing the mid-run compaction persistence check's O(n²) branch rebuild + per-pair `JSON.stringify` content compare with a one-shot persistence-key snapshot. Content equality is preserved as the rare collision tiebreaker. ([#3629](https://github.com/can1357/oh-my-pi/issues/3629))
+
 ## [16.2.1] - 2026-06-27
 
 ### Added

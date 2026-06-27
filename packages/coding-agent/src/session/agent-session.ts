@@ -324,6 +324,7 @@ import { formatSessionHistoryMarkdown } from "./session-history-format";
 import { cleanupEmptyMoveSession, type SessionManager } from "./session-manager";
 import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
+import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import { YieldQueue } from "./yield-queue";
 
@@ -2586,82 +2587,8 @@ export class AgentSession {
 		}
 	};
 
-	#messageValueSignature(value: unknown): string {
-		return JSON.stringify(value) ?? "undefined";
-	}
-
-	#sessionMessagesReferToSameTurn(left: AgentMessage, right: AgentMessage): boolean {
-		if (left === right) return true;
-		if (left.role !== right.role) return false;
-		switch (left.role) {
-			case "assistant":
-				if (right.role !== "assistant") return false;
-				return (
-					left.timestamp === right.timestamp &&
-					left.provider === right.provider &&
-					left.model === right.model &&
-					left.responseId === right.responseId &&
-					left.stopReason === right.stopReason &&
-					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
-				);
-			case "toolResult":
-				if (right.role !== "toolResult") return false;
-				return (
-					left.timestamp === right.timestamp &&
-					left.toolCallId === right.toolCallId &&
-					left.toolName === right.toolName &&
-					left.isError === right.isError &&
-					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
-				);
-			case "user":
-				if (right.role !== "user") return false;
-				return (
-					left.timestamp === right.timestamp &&
-					left.attribution === right.attribution &&
-					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
-				);
-			case "developer":
-				if (right.role !== "developer") return false;
-				return (
-					left.timestamp === right.timestamp &&
-					left.attribution === right.attribution &&
-					this.#messageValueSignature(left.content) === this.#messageValueSignature(right.content)
-				);
-			case "fileMention":
-				if (right.role !== "fileMention") return false;
-				return (
-					left.timestamp === right.timestamp &&
-					this.#messageValueSignature(left.files) === this.#messageValueSignature(right.files)
-				);
-			default:
-				return false;
-		}
-	}
-
-	#sessionMessagePersistenceKey(message: AgentMessage): string | undefined {
-		switch (message.role) {
-			case "assistant":
-				return [
-					"assistant",
-					message.timestamp,
-					message.provider,
-					message.model,
-					message.responseId ?? "",
-					message.stopReason,
-				].join(":");
-			case "toolResult":
-				return `toolResult:${message.timestamp}:${message.toolCallId}:${message.toolName}`;
-			case "user":
-			case "developer":
-			case "fileMention":
-				return `${message.role}:${message.timestamp}`;
-			default:
-				return undefined;
-		}
-	}
-
 	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
-		const key = this.#sessionMessagePersistenceKey(message);
+		const key = sessionMessagePersistenceKey(message);
 		if (!key) return undefined;
 		const previous = this.#messageEndPersistenceTail;
 		const { promise, resolve } = Promise.withResolvers<void>();
@@ -2691,31 +2618,61 @@ export class AgentSession {
 	}
 
 	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
-		const key = this.#sessionMessagePersistenceKey(message);
+		const key = sessionMessagePersistenceKey(message);
 		if (!key) return;
 		await this.#pendingMessageEndPersistence.get(key);
 	}
 
-	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
-		const branch = this.sessionManager.getBranch();
-		for (let index = branch.length - 1; index >= 0; index--) {
-			const entry = branch[index];
-			if (entry.type === "message" && this.#sessionMessagesReferToSameTurn(entry.message, message)) return true;
+	/**
+	 * Index every message entry on the current branch by persistence key, so
+	 * the mid-run-compaction planner can ask "is this turn message already on
+	 * the branch?" in O(1) instead of re-walking the branch per check.
+	 *
+	 * The Map's value is the list of branch messages that share a key — almost
+	 * always one. We only need the LIST when content equality matters (rare
+	 * collision tiebreaker via {@link sameMessageContent}); the empty/single-
+	 * entry common case lets the caller's lookup short-circuit at presence.
+	 *
+	 * Pre-#3629 the equivalent was `sessionManager.getBranch()` called twice
+	 * per turn message, each call rebuilding the path via O(n²) `unshift` and
+	 * structurally JSON-comparing every entry — seconds of synchronous work
+	 * per `onTurnEnd` on a long session and the load-bearing source of the
+	 * `ui.loop-blocked` warnings in the bug report.
+	 */
+	#indexPersistedMessagesByKey(): Map<string, AgentMessage[]> {
+		const index = new Map<string, AgentMessage[]>();
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message") continue;
+			const key = sessionMessagePersistenceKey(entry.message);
+			if (key === undefined) continue;
+			const existing = index.get(key);
+			if (existing) existing.push(entry.message);
+			else index.set(key, [entry.message]);
 		}
-		return false;
+		return index;
 	}
 
-	#hasPersistedLaterTurnMessage(turnMessages: AgentMessage[], messageIndex: number): boolean {
+	/**
+	 * True when {@link message} is structurally identical to a message already
+	 * appended to the current branch. Pairs a fast persistence-key lookup with
+	 * a content-equality fallback so two logically distinct messages that
+	 * happen to collide on the cheap key (e.g. two assistant turns at the same
+	 * millisecond with `undefined` responseId) still count as DISTINCT.
+	 */
+	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
+		const key = sessionMessagePersistenceKey(message);
+		if (key === undefined) return false;
 		const branch = this.sessionManager.getBranch();
-		for (let index = messageIndex + 1; index < turnMessages.length; index++) {
-			const message = turnMessages[index];
-			if (
-				branch.some(
-					entry => entry.type === "message" && this.#sessionMessagesReferToSameTurn(entry.message, message),
-				)
-			) {
-				return true;
-			}
+		// Reverse walk: recently-appended entries are at the tail, so the common
+		// "is the message I just emitted already in the branch?" lookup short-
+		// circuits in O(1) hot, O(branch) cold. Cheap-key compare for every
+		// entry; content compare only when the cheap check matches, so the
+		// expensive `JSON.stringify(content)` path stays off the hot loop.
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index];
+			if (entry.type !== "message") continue;
+			if (sessionMessagePersistenceKey(entry.message) !== key) continue;
+			if (sameMessageContent(entry.message, message)) return true;
 		}
 		return false;
 	}
@@ -2756,17 +2713,36 @@ export class AgentSession {
 		for (const message of turnMessages) {
 			await this.#waitForSessionMessagePersistence(message);
 		}
+		// One branch snapshot + one persistence-key index drives the entire
+		// planning pass. Pre-#3629 this re-walked the branch and structurally
+		// JSON-compared every entry per turn message, which on long sessions
+		// turned each `onTurnEnd` into a seconds-long sync block (the
+		// `ui.loop-blocked` warnings tagged `subagent:*` in the bug report).
+		const branchIndex = this.#indexPersistedMessagesByKey();
+		const turnKeys = turnMessages.map(sessionMessagePersistenceKey);
+		const persistedKeys = new Set<string>();
 		for (let index = 0; index < turnMessages.length; index++) {
-			const message = turnMessages[index];
-			if (this.#sessionMessageAlreadyPersisted(message)) continue;
-			if (this.#hasPersistedLaterTurnMessage(turnMessages, index)) {
-				logger.debug("Skipping mid-run compaction because turn persistence is out of order", {
-					role: message.role,
-					timestamp: message.timestamp,
-				});
-				return false;
+			const key = turnKeys[index];
+			if (key === undefined) continue;
+			const candidates = branchIndex.get(key);
+			if (!candidates) continue;
+			// Key match only counts when content also matches — two distinct
+			// messages that collided on the cheap key must STILL be persisted.
+			if (candidates.some(persisted => sameMessageContent(persisted, turnMessages[index]))) {
+				persistedKeys.add(key);
 			}
-			this.#persistSessionMessageIfMissing(message);
+		}
+		const plan = planTurnPersistence(turnKeys, persistedKeys);
+		if (plan.kind === "out-of-order") {
+			const message = turnMessages[plan.messageIndex];
+			logger.debug("Skipping mid-run compaction because turn persistence is out of order", {
+				role: message.role,
+				timestamp: message.timestamp,
+			});
+			return false;
+		}
+		for (const index of plan.toPersist) {
+			this.#persistSessionMessageIfMissing(turnMessages[index]);
 		}
 		return true;
 	}
