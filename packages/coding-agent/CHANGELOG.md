@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Breaking Changes
 
 - Renamed the `search` tool to `grep` and the `find` tool to `glob`. Existing user settings are automatically migrated to the new configuration keys.
@@ -21,8 +20,13 @@
 
 ### Changed
 
+- Optimized edit tool UI: delete and single-file move operations now render as compact status rows
+- Improved terminal output for file-level edits (delete/move) to display accurate paths and state
+- Refined edit renderer to prevent misleading "No changes" messages in multi-file operations
 - Changed the `inlineToolDescriptors` setting from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto` to inline descriptors only for Gemini models.
 - Added caching for successful document conversions (PDFs, Office documents, EPUBs) to avoid redundant conversions on repeated reads.
+- Moved the `Working…` activity indicator below the sticky todo and subagent HUDs so it sits just above the editor instead of floating atop the todo panel.
+- Lightened the persistent Todo HUD: dropped the bracketing rules and, in the collapsed view, added a dimmed preview of the upcoming phases (marked with a distinct glyph) so the next stages stay visible without expanding.
 
 ### Fixed
 

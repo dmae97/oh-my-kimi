@@ -154,6 +154,7 @@ async function executeApplyPatchPerFile(
 				diagnostics: details?.diagnostics,
 				op: details?.op,
 				move: details?.move,
+				sourcePath: details?.sourcePath,
 				meta: details?.meta,
 				oldText: details?.oldText,
 				newText: details?.newText,

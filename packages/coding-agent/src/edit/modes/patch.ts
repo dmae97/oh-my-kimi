@@ -1849,12 +1849,21 @@ export async function executePatchSingle(
 		diff: "",
 		firstChangedLine: undefined,
 	};
-	if (result.change.type === "update" && result.change.oldContent && result.change.newContent) {
+	if (
+		result.change.type === "update" &&
+		result.change.oldContent !== undefined &&
+		result.change.newContent !== undefined
+	) {
 		const normalizedOld = normalizeToLF(stripBom(result.change.oldContent).text);
 		const normalizedNew = normalizeToLF(stripBom(result.change.newContent).text);
 		diffResult = generateUnifiedDiffString(normalizedOld, normalizedNew, undefined, {
 			path: result.change.newPath ?? result.change.path,
 		});
+	} else if (result.change.type === "create" && result.change.newContent !== undefined) {
+		// The result is authoritative for rendering, so emit the added-content
+		// diff here rather than relying on the call-phase streaming preview.
+		const normalizedNew = normalizeToLF(stripBom(result.change.newContent).text);
+		diffResult = generateUnifiedDiffString("", normalizedNew, undefined, { path: result.change.path });
 	}
 
 	let resultText: string;
@@ -1896,6 +1905,7 @@ export async function executePatchSingle(
 			diagnostics: mergedDiagnostics,
 			op,
 			move: effectiveRename,
+			sourcePath: result.change.newPath ? resolvedPath : undefined,
 			meta,
 			oldText,
 			newText,

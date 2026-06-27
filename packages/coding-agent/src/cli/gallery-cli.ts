@@ -138,14 +138,26 @@ export async function renderGalleryState(
 		return await fixture.renderState(state, width, expanded);
 	}
 
-	const tool = fakeToolFor(name, fixture);
+	// A non-customRendered fixture may borrow another tool's built-in renderer
+	// (e.g. `edit_delete` → `edit`): drive the component under that real tool
+	// name so the sample exercises the exact production branch, not the
+	// custom-tool one (which tints/pads non-framed result rows).
+	const componentName = fixture.customRendered ? name : (fixture.renderer ?? name);
+	const tool = fakeToolFor(componentName, fixture);
 	const streamingArgs = state === "streaming" ? (fixture.streamingArgs ?? fixture.args) : fixture.args;
 	// The component only calls `requestRender`/`requestComponentRender` (via
 	// its loader) during a static render; `imageBudget` is consulted solely
 	// when images render, which the gallery disables. A cast avoids
 	// constructing a real terminal.
 	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
-	const component = new ToolExecutionComponent(name, streamingArgs, { showImages: false }, tool, ui, getProjectDir());
+	const component = new ToolExecutionComponent(
+		componentName,
+		streamingArgs,
+		{ showImages: false },
+		tool,
+		ui,
+		getProjectDir(),
+	);
 	component.setExpanded(expanded);
 
 	if (state !== "streaming") {
