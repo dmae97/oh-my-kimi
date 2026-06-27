@@ -420,10 +420,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#sessionsWithDisplayableThinkingContent.has(this.viewSession);
 	}
 	/** Record received reasoning content so Ctrl+T can reveal it even when model metadata says thinking is off. */
-	noteDisplayableThinkingContent(message: AgentMessage): void {
-		if (messageHasDisplayableThinking(message, this.proseOnlyThinking)) {
-			this.#sessionsWithDisplayableThinkingContent.add(this.viewSession);
+	noteDisplayableThinkingContent(message: AgentMessage): boolean {
+		if (this.hasDisplayableThinkingContent || !messageHasDisplayableThinking(message, this.proseOnlyThinking)) {
+			return false;
 		}
+		this.#sessionsWithDisplayableThinkingContent.add(this.viewSession);
+		return true;
 	}
 	/**
 	 * Effective thinking-block visibility: hidden when the user's setting is on,

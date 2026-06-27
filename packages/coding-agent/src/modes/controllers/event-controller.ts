@@ -554,7 +554,11 @@ export class EventController {
 		this.#ensureWorkingLoaderWhileStreaming();
 		this.#vocalizeDelta(event);
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
-			this.ctx.noteDisplayableThinkingContent(event.message);
+			const unlockedThinkingVisibility = this.ctx.noteDisplayableThinkingContent(event.message);
+			if (unlockedThinkingVisibility) {
+				this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+				this.#streamingReveal.resyncVisibility();
+			}
 			this.ctx.streamingMessage = event.message;
 			this.#streamingReveal.setTarget(this.ctx.streamingMessage);
 
@@ -682,8 +686,11 @@ export class EventController {
 
 	async #handleMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): Promise<void> {
 		if (event.message.role === "user") return;
-		if (event.message.role === "assistant") {
-			this.ctx.noteDisplayableThinkingContent(event.message);
+		const unlockedThinkingVisibility =
+			event.message.role === "assistant" && this.ctx.noteDisplayableThinkingContent(event.message);
+		if (unlockedThinkingVisibility && this.ctx.streamingComponent) {
+			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+			this.#streamingReveal.resyncVisibility();
 		}
 		if (event.message.role === "assistant" && settings.get("speech.enabled")) {
 			if (event.message.stopReason === "aborted") {

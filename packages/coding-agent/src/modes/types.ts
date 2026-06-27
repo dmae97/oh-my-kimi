@@ -167,8 +167,8 @@ export interface InteractiveModeContext {
 	readonly effectiveHideThinkingBlock: boolean;
 	/** Whether this visible session has produced thinking content the user can reveal. */
 	readonly hasDisplayableThinkingContent: boolean;
-	/** Record a message whose thinking content makes Ctrl+T meaningful even at thinking level "off". */
-	noteDisplayableThinkingContent(message: AgentMessage): void;
+	/** Record a message whose thinking content makes Ctrl+T meaningful even at thinking level "off"; returns true on first observation. */
+	noteDisplayableThinkingContent(message: AgentMessage): boolean;
 	proseOnlyThinking: boolean;
 	compactionQueuedMessages: CompactionQueuedMessage[];
 	pendingTools: Map<string, ToolExecutionHandle>;
