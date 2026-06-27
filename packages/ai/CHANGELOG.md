@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Improved reliability of AI model responses by implementing automatic retry logic for detected thinking-loop stalls
+
 ## [16.2.0] - 2026-06-27
 
 ### Breaking Changes

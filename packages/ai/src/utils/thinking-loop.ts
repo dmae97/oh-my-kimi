@@ -10,11 +10,10 @@
  *
  * This guard watches the streamed `thinking` deltas and, on a match, terminates
  * the stream with a synthetic `error` {@link AssistantMessage} that carries
- * **no observable content**. An empty-content `stopReason: "error"` whose
- * message hits the transient-transport pattern is what `AgentSession`
- * classifies as a *retryable* stop (a contentful error stop is treated as
- * replay-unsafe and is never retried), so the turn is discarded and re-sampled
- * instead of committing the garbage transcript.
+ * **no observable content**. An empty-content `stopReason: "error"` whose message
+ * hits the transient-transport pattern is what {@link isThinkingLoopStall} and
+ * `AgentSession` classify as a *retryable* stop, so the turn is discarded and
+ * re-sampled instead of committing the garbage transcript.
  *
  * Three failure shapes are detected:
  * 1. **Verbatim tail repetition** — a short unit repeated back-to-back (e.g.
@@ -33,10 +32,10 @@
  *
  * Scope is narrow: guarded Gemini/DeepSeek streams before any tool call. Native
  * thinking is checked first; assistant text can also be checked for providers
- * that surface reasoning as visible prose. On a hit, the failed turn is emitted
- * as an empty retryable stream-stall error so the session drops and re-samples
- * it instead of committing the runaway transcript. Disable with
- * `PI_NO_THINKING_LOOP_GUARD=1`.
+ * that surface reasoning as visible prose. On a hit the failed turn is emitted as
+ * an empty retryable stream-stall error; result-awaiting callers (`complete`,
+ * `completeSimple`) re-sample it a few times and then let a stubborn loop cook
+ * through one unguarded pass. Disable detection with `PI_NO_THINKING_LOOP_GUARD=1`.
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Api, AssistantMessage, Model, StreamOptions } from "../types";
@@ -46,6 +45,21 @@ import { AssistantMessageEventStream } from "./event-stream";
  *  message also carries "stream stall" so the session + transport retry
  *  classifiers treat it as a transient (retryable) stop without bespoke rules. */
 export const THINKING_LOOP_ERROR_MARKER = "Thinking loop detected";
+
+/**
+ * True when a completed message is the guard's thinking-loop stall: an empty
+ * `stopReason: "error"` message carrying {@link THINKING_LOOP_ERROR_MARKER}. The
+ * empty content is load-bearing — it marks the discarded runaway as safe to
+ * re-sample. A *contentful* marker error already streamed visible output and is
+ * replay-unsafe, so it is deliberately excluded (re-sampling would duplicate it).
+ */
+export function isThinkingLoopStall(message: AssistantMessage): boolean {
+	return (
+		message.stopReason === "error" &&
+		message.content.length === 0 &&
+		(message.errorMessage?.includes(THINKING_LOOP_ERROR_MARKER) ?? false)
+	);
+}
 
 /** Rolling tail (chars) inspected for verbatim back-to-back repetition. */
 const VERBATIM_TAIL_WINDOW = 250;
@@ -433,7 +447,9 @@ export function guardThinkingLoopStream(
  * Apply the loop guard around a provider dispatch. For non-guarded models
  * (or when disabled) this is a transparent pass-through. For guarded models it injects a
  * guard abort signal into the provider call so a detected loop tears down the
- * upstream, then wraps the returned stream.
+ * upstream, then wraps the returned stream. The guard only raises the retryable
+ * stall; bounding the re-samples and the final cook pass lives in the
+ * result-awaiting callers (the {@link isThinkingLoopStall} consumers).
  */
 export function withGeminiThinkingLoopGuard<
 	O extends { signal?: AbortSignal; loopGuard?: { enabled?: boolean; checkAssistantContent?: boolean } },

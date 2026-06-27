@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { isVertexExpressOpenAIUrl, isVertexRawPredictUrl } from "@oh-my-pi/pi-catalog/hosts";
 import {
@@ -71,7 +72,7 @@ import type {
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { wrapFetchForProxy } from "./utils/proxy";
 import { withRequestDebugFetch } from "./utils/request-debug";
-import { withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
+import { isThinkingLoopStall, withGeminiThinkingLoopGuard } from "./utils/thinking-loop";
 
 function isGoogleVertexAuthenticatedModel(model: Model<Api>): boolean {
 	return (
@@ -827,13 +828,52 @@ function streamDispatch<TApi extends Api>(
 	}
 }
 
+/** Thinking-loop re-samples spent before {@link resolveWithThinkingLoopCook} cooks. */
+const THINKING_LOOP_MAX_ABORTS = 3;
+const THINKING_LOOP_RETRY_BASE_DELAY_MS = 500;
+const THINKING_LOOP_RETRY_MAX_DELAY_MS = 8_000;
+
+/**
+ * Resolve a completion, re-sampling a thinking-loop stall up to
+ * {@link THINKING_LOOP_MAX_ABORTS} times before letting it cook. The loop guard
+ * raises an empty `stopReason: "error"` stall on each guarded attempt; this
+ * result-path consumer re-dispatches a fresh request per stall and, once the abort
+ * budget is spent, runs one final pass with the guard disabled so a stubborn loop
+ * returns the model's raw output instead of a fatal stall. Non-stall results —
+ * including genuine errors — return immediately; a caller abort during backoff
+ * propagates so cancellation surfaces as an abort, never a stale stall result.
+ */
+async function resolveWithThinkingLoopCook(
+	signal: AbortSignal | undefined,
+	dispatch: () => AssistantMessageEventStream,
+	cook: () => AssistantMessageEventStream,
+): Promise<AssistantMessage> {
+	let message = await dispatch().result();
+	for (let attempt = 0; isThinkingLoopStall(message) && attempt < THINKING_LOOP_MAX_ABORTS - 1; attempt += 1) {
+		// A caller abort surfaces as a thrown abort (never the stall, which would
+		// misclassify as a 502): throwIfAborted before backoff, and scheduler.wait
+		// rejects if the abort lands mid-delay.
+		signal?.throwIfAborted();
+		const delay = Math.min(THINKING_LOOP_RETRY_BASE_DELAY_MS * 2 ** attempt, THINKING_LOOP_RETRY_MAX_DELAY_MS);
+		await scheduler.wait(delay, { signal });
+		message = await dispatch().result();
+	}
+	if (!isThinkingLoopStall(message)) return message;
+	signal?.throwIfAborted();
+	// Abort budget spent and still looping: let it cook with the guard disabled.
+	return cook().result();
+}
+
 export async function complete<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
 	options?: OptionsForApi<TApi>,
 ): Promise<AssistantMessage> {
-	const s = stream(model, context, options);
-	return s.result();
+	return resolveWithThinkingLoopCook(
+		options?.signal,
+		() => stream(model, context, options),
+		() => stream(model, context, { ...options, loopGuard: { ...options?.loopGuard, enabled: false } }),
+	);
 }
 
 type AuthRetryFailure = {
@@ -1087,8 +1127,11 @@ export async function completeSimple<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): Promise<AssistantMessage> {
-	const s = streamSimple(model, context, options);
-	return s.result();
+	return resolveWithThinkingLoopCook(
+		options?.signal,
+		() => streamSimple(model, context, options),
+		() => streamSimple(model, context, { ...options, loopGuard: { ...options?.loopGuard, enabled: false } }),
+	);
 }
 
 const MIN_OUTPUT_TOKENS = 1024;

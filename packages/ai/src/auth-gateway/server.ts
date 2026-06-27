@@ -27,7 +27,7 @@ import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { isUsageLimitError, isUsageLimitOutcome } from "../rate-limit-utils";
-import { streamSimple } from "../stream";
+import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
@@ -525,20 +525,10 @@ async function handleFormatEndpoint(
 		peer,
 	});
 
-	let events: AssistantMessageEventStream;
-	try {
-		if (controller.signal.aborted) return clientClosedResponse(route);
-		events = streamSimple(model, parsed.context, streamOpts);
-	} catch (error) {
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
-		return route.module.formatError(classified.status, classified.type, classified.message);
-	}
-
 	if (!parsed.stream) {
 		try {
 			if (controller.signal.aborted) return clientClosedResponse(route);
-			const message = await events.result();
+			const message = await completeSimple(model, parsed.context, streamOpts);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
 					message.errorMessage ??
@@ -566,6 +556,16 @@ async function handleFormatEndpoint(
 			});
 			return route.module.formatError(classified.status, classified.type, classified.message);
 		}
+	}
+
+	let events: AssistantMessageEventStream;
+	try {
+		if (controller.signal.aborted) return clientClosedResponse(route);
+		events = streamSimple(model, parsed.context, streamOpts);
+	} catch (error) {
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway streamSimple threw", { format: route.label, error: classified.message, peer });
+		return route.module.formatError(classified.status, classified.type, classified.message);
 	}
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
@@ -700,20 +700,10 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 		peer,
 	});
 
-	let events: AssistantMessageEventStream;
-	try {
-		if (controller.signal.aborted) return aborted();
-		events = streamSimple(model, parsed.context, streamOpts);
-	} catch (error) {
-		const classified = classifyGatewayError(error);
-		logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
-		return piNative.formatError(classified.status, classified.type, classified.message);
-	}
-
 	if (!parsed.stream) {
 		try {
 			if (controller.signal.aborted) return aborted();
-			const message = await events.result();
+			const message = await completeSimple(model, parsed.context, streamOpts);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
 					message.errorMessage ??
@@ -737,6 +727,16 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 			logger.warn("auth-gateway non-streaming aborted", { format: "pi-native", error: classified.message, peer });
 			return piNative.formatError(classified.status, classified.type, classified.message);
 		}
+	}
+
+	let events: AssistantMessageEventStream;
+	try {
+		if (controller.signal.aborted) return aborted();
+		events = streamSimple(model, parsed.context, streamOpts);
+	} catch (error) {
+		const classified = classifyGatewayError(error);
+		logger.warn("auth-gateway streamSimple threw", { format: "pi-native", error: classified.message, peer });
+		return piNative.formatError(classified.status, classified.type, classified.message);
 	}
 	if (controller.signal.aborted) return aborted();
 

@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { scheduler } from "node:timers/promises";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, type MockContent, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
-import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
+import { complete, completeSimple, stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Api, AssistantMessage, AssistantMessageEvent, Context, Model } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import {
@@ -652,5 +653,99 @@ describe("isGeminiThinkingModel", () => {
 		// DeepSeek is still loop-guarded for the similarity guard, just not the header guard.
 		expect(isLoopGuardedModel(deepseek)).toBe(true);
 		expect(isLoopGuardedModel(gemini)).toBe(true);
+	});
+});
+
+describe("thinking-loop cook fallback (result path)", () => {
+	function loopResponse(): { content: MockContent[] } {
+		return { content: [{ type: "thinking", thinking: nearDuplicateLoop(12) }] };
+	}
+
+	test("completeSimple re-samples a loop then cooks through with the guard disabled", async () => {
+		registerMockApi();
+		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		try {
+			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
+			for (let i = 0; i < 4; i++) mock.push(loopResponse());
+
+			const result = await completeSimple(mock.model, context());
+
+			// Three guarded attempts raise the stall; the fourth (guard disabled) cooks through.
+			expect(mock.calls).toHaveLength(4);
+			expect(result.stopReason).toBe("stop");
+			expect(result.content.some(block => block.type === "thinking")).toBe(true);
+			expect(result.errorMessage).toBeUndefined();
+			// First three dispatches are guarded; only the final cook pass disables it.
+			expect(mock.calls[0]?.options?.loopGuard?.enabled).toBeUndefined();
+			expect(mock.calls[3]?.options?.loopGuard?.enabled).toBe(false);
+		} finally {
+			waitSpy.mockRestore();
+			clearCustomApis();
+		}
+	});
+
+	test("complete (non-simple) also cooks through after the abort budget", async () => {
+		registerMockApi();
+		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		try {
+			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
+			for (let i = 0; i < 4; i++) mock.push(loopResponse());
+
+			const result = await complete(mock.model, context());
+
+			expect(mock.calls).toHaveLength(4);
+			expect(result.stopReason).toBe("stop");
+			expect(result.errorMessage).toBeUndefined();
+			expect(mock.calls[0]?.options?.loopGuard?.enabled).toBeUndefined();
+			expect(mock.calls[3]?.options?.loopGuard?.enabled).toBe(false);
+		} finally {
+			waitSpy.mockRestore();
+			clearCustomApis();
+		}
+	});
+
+	test("a caller abort during backoff rejects instead of returning the stall", async () => {
+		registerMockApi();
+		const controller = new AbortController();
+		const waitSpy = spyOn(scheduler, "wait").mockImplementation(async (_delay, opts) => {
+			controller.abort(new Error("user cancelled"));
+			opts?.signal?.throwIfAborted();
+		});
+		try {
+			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
+			mock.push(loopResponse());
+
+			await expect(completeSimple(mock.model, context(), { signal: controller.signal })).rejects.toThrow(
+				"user cancelled",
+			);
+			// Only the first guarded attempt ran; the abort pre-empted re-sampling.
+			expect(mock.calls).toHaveLength(1);
+		} finally {
+			waitSpy.mockRestore();
+			clearCustomApis();
+		}
+	});
+
+	test("does not retry a contentful marker error (replay-unsafe output)", async () => {
+		registerMockApi();
+		const waitSpy = spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		try {
+			const mock = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" });
+			mock.push({
+				content: ["Looping visible reasoning garbage."],
+				stopReason: "error",
+				errorMessage: `${THINKING_LOOP_ERROR_MARKER}: already streamed, non-retryable`,
+			});
+
+			const result = await completeSimple(mock.model, context());
+
+			// Visible content already escaped: the marker error is returned as-is, never re-sampled.
+			expect(mock.calls).toHaveLength(1);
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain(THINKING_LOOP_ERROR_MARKER);
+		} finally {
+			waitSpy.mockRestore();
+			clearCustomApis();
+		}
 	});
 });
