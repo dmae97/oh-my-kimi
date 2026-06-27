@@ -7,6 +7,9 @@
 - Included project context files (AGENTS.md, etc.) in the advisor's system prompt to ensure adherence to user-defined project rules
 
 - Added project context files (AGENTS.md and the like) to the advisor's system prompt, so the read-only reviewer judges against the user's standing project rules the same way the main agent does.
+### Fixed
+
+- Fixed live ACP `generate_image` updates resolving OMP-internal image blob refs before sending renderable image content to clients. ([#3623](https://github.com/can1357/oh-my-pi/issues/3623))
 
 ## [16.2.0] - 2026-06-27
 
