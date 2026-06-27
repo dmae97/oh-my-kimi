@@ -141,7 +141,7 @@ const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
 const CODEX_WEBSOCKET_PING_INTERVAL_MS = 10_000;
 const CODEX_WEBSOCKET_PONG_TIMEOUT_MS = 60_000;
-const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = 4096;
+const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = Number($env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY || 4096);
 /**
  * Maximum quiet period (no inbound frames AND no observed pong) we'll trust a
  * reused WebSocket for before forcing a fresh handshake. Codex backends and
@@ -164,7 +164,7 @@ const CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = 30_000;
  * states and trigger the WS→SSE fallback. Only applies AFTER the first event
  * has arrived — slow first-token paths wait as long as the caller permits.
  */
-const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300_000;
+const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = Number($env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS || 300_000);
 /**
  * Maximum wait for the first WebSocket event before falling back to SSE.
  * Unlike a stream watchdog, this triggers a transport switch (not a request
@@ -172,8 +172,9 @@ const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = 300_000;
  * SSE. Generous default so legitimately slow first-token providers still get
  * a chance on the WS transport before falling through.
  */
-const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = 60_000;
+const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 60_000);
 const CODEX_WEBSOCKET_RETRY_BUDGET = CODEX_MAX_RETRIES;
+const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS || CODEX_RETRY_DELAY_MS);
 const CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX = "Codex websocket transport error";
 const CODEX_RETRYABLE_EVENT_CODES = new Set(["model_error", "server_error", "internal_error"]);
 const CODEX_RETRYABLE_EVENT_MESSAGE =
@@ -382,13 +383,6 @@ function parseCodexNonNegativeInteger(value: string | undefined, fallback: numbe
 	if (!value) return fallback;
 	const parsed = Number(value);
 	if (!Number.isFinite(parsed) || parsed < 0) return fallback;
-	return Math.trunc(parsed);
-}
-
-function parseCodexPositiveInteger(value: string | undefined, fallback: number): number {
-	if (!value) return fallback;
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
 	return Math.trunc(parsed);
 }
 
@@ -643,13 +637,9 @@ function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): C
 		? AbortSignal.any([options.signal, requestAbortController.signal])
 		: requestAbortController.signal;
 	const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs();
-	const websocketIdleTimeoutMs =
-		options?.streamIdleTimeoutMs ??
-		parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS, CODEX_WEBSOCKET_IDLE_TIMEOUT_MS);
+	const websocketIdleTimeoutMs = options?.streamIdleTimeoutMs ?? CODEX_WEBSOCKET_IDLE_TIMEOUT_MS;
 	const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs);
-	const websocketFirstEventTimeoutMs =
-		options?.streamFirstEventTimeoutMs ??
-		parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS, CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS);
+	const websocketFirstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS;
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,
 	): AsyncGenerator<Record<string, unknown>> =>
@@ -829,13 +819,9 @@ async function openInitialCodexEventStream(
 					});
 				if (!activateFallback) {
 					websocketRetries += 1;
-					await scheduler.wait(
-						parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS, CODEX_RETRY_DELAY_MS) *
-							Math.max(1, websocketRetries),
-						{
-							signal: requestSetup.requestSignal,
-						},
-					);
+					await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, websocketRetries), {
+						signal: requestSetup.requestSignal,
+					});
 					continue;
 				}
 				break;
@@ -1779,13 +1765,9 @@ async function tryReconnectCodexWebSocketOnConnectionLimit(
 		return true;
 	}
 	runtime.websocketStreamRetries += 1;
-	await scheduler.wait(
-		parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS, CODEX_RETRY_DELAY_MS) *
-			Math.max(1, runtime.websocketStreamRetries),
-		{
-			signal: context.requestSetup.requestSignal,
-		},
-	);
+	await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, runtime.websocketStreamRetries), {
+		signal: context.requestSetup.requestSignal,
+	});
 	await reopenCodexWebSocketRuntimeStream(context, runtime, websocketState);
 	return true;
 }
@@ -1886,13 +1868,9 @@ async function tryReplayWebsocketFailureOverSse(
 		// web_search_call) may already have accumulated.
 		resetCodexStreamAccumulators(runtime);
 		context.firstTokenTime = undefined;
-		await scheduler.wait(
-			parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS, CODEX_RETRY_DELAY_MS) *
-				Math.max(1, runtime.websocketStreamRetries),
-			{
-				signal: context.requestSetup.requestSignal,
-			},
-		);
+		await scheduler.wait(CODEX_WEBSOCKET_RETRY_DELAY_MS * Math.max(1, runtime.websocketStreamRetries), {
+			signal: context.requestSetup.requestSignal,
+		});
 		await reopenCodexWebSocketRuntimeStream(context, runtime, state);
 		return true;
 	}
@@ -2944,17 +2922,10 @@ class CodexWebSocketConnection {
 			this.#wakeWaiters();
 			return;
 		}
-		if (
-			item !== null &&
-			this.#queue.length >=
-				parseCodexPositiveInteger(
-					$env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
-					CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY,
-				)
-		) {
+		if (item !== null && this.#queue.length >= CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY) {
 			this.#failQueue(
 				new CodexWebSocketTransportError(
-					`websocket message queue exceeded ${parseCodexPositiveInteger($env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY, CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY)} items`,
+					`websocket message queue exceeded ${CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY} items`,
 				),
 				"queue-overflow",
 			);
