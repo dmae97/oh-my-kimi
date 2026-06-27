@@ -1183,6 +1183,23 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	textVerbosity: {
+		type: "enum",
+		values: ["low", "medium", "high"] as const,
+		default: "high",
+		ui: {
+			tab: "model",
+			group: "Sampling",
+			label: "Text Verbosity",
+			description: "OpenAI Responses and Codex response verbosity (low, medium, or high)",
+			options: [
+				{ value: "low", label: "Low", description: "Prefer concise responses" },
+				{ value: "medium", label: "Medium", description: "Balance brevity and detail" },
+				{ value: "high", label: "High", description: "Prefer detailed responses (default)" },
+			],
+		},
+	},
+
 	serviceTier: {
 		type: "enum",
 		values: SERVICE_TIER_SETTING_VALUES,

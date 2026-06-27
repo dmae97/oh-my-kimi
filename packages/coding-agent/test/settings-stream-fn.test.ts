@@ -1,10 +1,11 @@
 /**
  * Contract: `createSettingsAwareStreamFn` layers session provider settings
  * (`providers.openrouterVariant`, `providers.antigravityEndpoint`,
- * `providers.maxInFlightRequests`, `model.loopGuard.*`) onto every call while
- * letting caller-supplied options win — the same wiring the main agent and the
- * advisor agent share so OpenRouter sticky-routing / response caching behaves
- * the same on advisor turns (can1357/oh-my-pi#3639).
+ * `providers.maxInFlightRequests`, `model.loopGuard.*`, `textVerbosity` for
+ * Responses-family requests) onto every call while letting caller-supplied
+ * options win — the same wiring the main agent and the advisor agent share so
+ * OpenRouter sticky-routing / response caching behaves the same on advisor turns
+ * (can1357/oh-my-pi#3639).
  */
 import { describe, expect, it } from "bun:test";
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
@@ -23,6 +24,8 @@ function captureBase(): { fn: StreamFn; calls: Array<{ options?: SimpleStreamOpt
 }
 
 const stubModel = {} as unknown as Model;
+const stubCodexModel = { api: "openai-codex-responses" } as unknown as Model;
+const stubResponsesModel = { api: "openai-responses" } as unknown as Model;
 const stubContext = { messages: [], tools: [], systemPrompt: [] } as unknown as Context;
 
 describe("createSettingsAwareStreamFn", () => {
@@ -46,6 +49,20 @@ describe("createSettingsAwareStreamFn", () => {
 		expect(options?.loopGuard).toEqual({ enabled: true, checkAssistantContent: true });
 		// caller's own option is preserved
 		expect(options?.apiKey).toBe("k");
+	});
+
+	it("applies Responses-family text verbosity from settings while preserving caller overrides", () => {
+		const settings = Settings.isolated({ textVerbosity: "low" });
+		const { fn: base, calls } = captureBase();
+		const wrapped = createSettingsAwareStreamFn(settings, base);
+
+		wrapped(stubCodexModel, stubContext, undefined);
+		wrapped(stubResponsesModel, stubContext, undefined);
+		wrapped(stubResponsesModel, stubContext, { textVerbosity: "medium" });
+
+		expect(calls[0]?.options?.textVerbosity).toBe("low");
+		expect(calls[1]?.options?.textVerbosity).toBe("low");
+		expect(calls[2]?.options?.textVerbosity).toBe("medium");
 	});
 
 	it("treats the default openrouterVariant as absent so the base call carries no variant", () => {
