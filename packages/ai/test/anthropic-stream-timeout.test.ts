@@ -237,7 +237,7 @@ describe("anthropic first-event timeout retries", () => {
 		expect(requestTimeouts).toEqual([1, 1]);
 		expect(requestMaxRetries).toEqual([0, 0]);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "retry recovered" }]);
 		expect(result.responseId).toBe("msg_retry_success");
 	});
 
@@ -286,7 +286,7 @@ describe("anthropic first-event timeout retries", () => {
 
 		expect(attempt).toBe(2);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "retry recovered" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "retry recovered" }]);
 	});
 
 	it("does not arm the Anthropic first-event watchdog before the stream connects", async () => {
@@ -314,7 +314,7 @@ describe("anthropic first-event timeout retries", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(seenRequestTimeout).toBe(20);
 		expect(seenRequestMaxRetries).toBe(0);
-		expect(result.content).toEqual([{ type: "text", text: "delayed connect" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "delayed connect" }]);
 	});
 
 	it("times out before the Anthropic stream connects and forwards the budget to the SDK request", async () => {
@@ -419,7 +419,7 @@ describe("anthropic first-event timeout retries", () => {
 		expect(providerRetryWait).not.toHaveBeenCalled();
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("Anthropic stream stalled while waiting for the next event");
-		expect(result.content).toEqual([
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([
 			{
 				type: "toolCall",
 				id: "toolu_stalled_todo",
@@ -458,7 +458,7 @@ describe("anthropic provider retry delays", () => {
 		expect(attempt).toBe(2);
 		expect(providerRetryWait).toHaveBeenCalledWith(30_000, undefined);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "after backoff" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "after backoff" }]);
 	});
 
 	it("retries transient TLS server errors before surfacing them to the session", async () => {
@@ -485,7 +485,7 @@ describe("anthropic provider retry delays", () => {
 		expect(attempt).toBe(2);
 		expect(providerRetryWait).toHaveBeenCalledTimes(1);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "recovered from tls retry" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "recovered from tls retry" }]);
 	});
 
 	it("does not retry permanent TLS configuration failures", async () => {
@@ -530,6 +530,6 @@ describe("anthropic provider retry delays", () => {
 			500, 1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000, 8000,
 		]);
 		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "recovered from 502" }]);
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "recovered from 502" }]);
 	});
 });

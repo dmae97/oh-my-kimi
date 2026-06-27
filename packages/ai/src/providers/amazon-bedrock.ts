@@ -30,11 +30,16 @@ import type {
 	ToolResultMessage,
 } from "../types";
 import { normalizeToolCallId, resolveCacheRetention } from "../utils";
+import {
+	clearStreamingPartialJson,
+	kStreamingBlockIndex,
+	kStreamingLastParseLen,
+	kStreamingPartialJson,
+} from "../utils/block-symbols";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
 import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
 import { toolWireSchema } from "../utils/schema/wire";
-import { stripVariant } from "../utils/strip";
 import { invalidateAwsCredentialCache, resolveAwsCredentials } from "./aws-credentials";
 import { decodeEventStream } from "./aws-eventstream";
 import { signRequest } from "./aws-sigv4";
@@ -154,9 +159,9 @@ function resolveBedrockRegion(modelId: string, options: BedrockOptions): string 
 }
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
-	index?: number;
-	partialJson?: string;
-	lastParseLen?: number;
+	[kStreamingBlockIndex]?: number;
+	[kStreamingPartialJson]?: string;
+	[kStreamingLastParseLen]?: number;
 };
 
 // ---------- Bedrock wire-format types ----------
@@ -503,8 +508,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
-				stripVariant<Block>(block, "index");
-				stripVariant<Block>(block, "partialJson");
+				if (block.type === "toolCall") clearStreamingPartialJson(block);
 			}
 			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			// Enrich error with thinking block diagnostics for signature-related failures
@@ -572,8 +576,8 @@ function handleContentBlockStart(
 			id: normalizeToolCallId(start.toolUse.toolUseId || ""),
 			name: start.toolUse.name || "",
 			arguments: {},
-			partialJson: "",
-			index,
+			[kStreamingPartialJson]: "",
+			[kStreamingBlockIndex]: index,
 		};
 		output.content.push(block);
 		stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
@@ -588,13 +592,13 @@ function handleContentBlockDelta(
 ): void {
 	const contentBlockIndex = event.contentBlockIndex;
 	const delta = event.delta;
-	let index = blocks.findIndex(b => b.index === contentBlockIndex);
+	let index = blocks.findIndex(b => b[kStreamingBlockIndex] === contentBlockIndex);
 	let block = blocks[index];
 
 	if (delta?.text !== undefined) {
 		// If no text block exists yet, create one — `handleContentBlockStart` is not sent for text blocks
 		if (!block) {
-			const newBlock: Block = { type: "text", text: "", index: contentBlockIndex };
+			const newBlock: Block = { type: "text", text: "", [kStreamingBlockIndex]: contentBlockIndex };
 			output.content.push(newBlock);
 			index = blocks.length - 1;
 			block = blocks[index];
@@ -605,11 +609,11 @@ function handleContentBlockDelta(
 			stream.push({ type: "text_delta", contentIndex: index, delta: delta.text, partial: output });
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall") {
-		block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-		const throttled = parseStreamingJsonThrottled(block.partialJson, block.lastParseLen ?? 0);
+		block[kStreamingPartialJson] = (block[kStreamingPartialJson] || "") + (delta.toolUse.input || "");
+		const throttled = parseStreamingJsonThrottled(block[kStreamingPartialJson], block[kStreamingLastParseLen] ?? 0);
 		if (throttled) {
 			block.arguments = throttled.value;
-			block.lastParseLen = throttled.parsedLen;
+			block[kStreamingLastParseLen] = throttled.parsedLen;
 		}
 		stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
 	} else if (delta?.reasoningContent) {
@@ -617,7 +621,12 @@ function handleContentBlockDelta(
 		let thinkingIndex = index;
 
 		if (!thinkingBlock) {
-			const newBlock: Block = { type: "thinking", thinking: "", thinkingSignature: "", index: contentBlockIndex };
+			const newBlock: Block = {
+				type: "thinking",
+				thinking: "",
+				thinkingSignature: "",
+				[kStreamingBlockIndex]: contentBlockIndex,
+			};
 			output.content.push(newBlock);
 			thinkingIndex = blocks.length - 1;
 			thinkingBlock = blocks[thinkingIndex];
@@ -659,10 +668,9 @@ function handleContentBlockStop(
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 ): void {
-	const index = blocks.findIndex(b => b.index === event.contentBlockIndex);
+	const index = blocks.findIndex(b => b[kStreamingBlockIndex] === event.contentBlockIndex);
 	const block = blocks[index];
 	if (!block) return;
-	stripVariant<Block>(block, "index");
 
 	switch (block.type) {
 		case "text":
@@ -672,9 +680,8 @@ function handleContentBlockStop(
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
 			break;
 		case "toolCall":
-			block.arguments = parseStreamingJson(block.partialJson);
-			stripVariant<Block>(block, "partialJson");
-			stripVariant<Block>(block, "lastParseLen");
+			block.arguments = parseStreamingJson(block[kStreamingPartialJson]);
+			clearStreamingPartialJson(block);
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;
 	}

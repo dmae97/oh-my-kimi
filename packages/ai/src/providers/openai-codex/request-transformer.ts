@@ -1,7 +1,6 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import type { Api, Model } from "../../types";
-import { stripVariant } from "../../utils/strip";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
@@ -196,8 +195,13 @@ function stripImageDetails(input: InputItem[]): void {
 		for (const collection of [item.content, item.output]) {
 			if (!Array.isArray(collection)) continue;
 			for (const part of collection) {
-				if (part && typeof part === "object" && (part as { type?: unknown }).type === "input_image") {
-					stripVariant<{ detail?: unknown }>(part, "detail");
+				if (
+					part &&
+					typeof part === "object" &&
+					(part as { type?: unknown }).type === "input_image" &&
+					"detail" in part
+				) {
+					part.detail = undefined;
 				}
 			}
 		}

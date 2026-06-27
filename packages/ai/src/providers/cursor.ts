@@ -125,12 +125,17 @@ import type {
 	ToolResultMessage,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
+import {
+	clearStreamingPartialJson,
+	kStreamingBlockIndex,
+	kStreamingBlockKind,
+	kStreamingPartialJson,
+} from "../utils/block-symbols";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { toolWireSchema } from "../utils/schema/wire";
-import { stripVariant } from "../utils/strip";
 
 export const CURSOR_API_URL = "https://api2.cursor.sh";
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
@@ -394,8 +399,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let pendingBuffer = Buffer.alloc(0);
 			let endStreamError: Error | null = null;
-			let currentTextBlock: (TextContent & { index: number }) | null = null;
-			let currentThinkingBlock: (ThinkingContent & { index: number }) | null = null;
+			let currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null = null;
+			let currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null = null;
 			let currentToolCall: ToolCallState | null = null;
 			const usageState: UsageState = { sawTokenDelta: false };
 
@@ -567,9 +572,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			endCurrentThinkingBlock(output, stream, state);
 			if (state.currentToolCall) {
 				const idx = output.content.indexOf(state.currentToolCall);
-				state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson);
-				stripVariant<ToolCallState>(state.currentToolCall, "partialJson");
-				stripVariant<ToolCallState>(state.currentToolCall, "index");
+				state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall[kStreamingPartialJson]);
+				clearStreamingPartialJson(state.currentToolCall);
 				stream.push({
 					type: "toolcall_end",
 					contentIndex: idx,
@@ -613,15 +617,19 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 	return stream;
 };
 
-export type ToolCallState = ToolCall & { index: number; partialJson?: string; kind: "mcp" | "todo" };
+export type ToolCallState = ToolCall & {
+	[kStreamingBlockIndex]: number;
+	[kStreamingPartialJson]?: string;
+	[kStreamingBlockKind]: "mcp" | "todo";
+};
 
 export interface BlockState {
-	currentTextBlock: (TextContent & { index: number }) | null;
-	currentThinkingBlock: (ThinkingContent & { index: number }) | null;
+	currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null;
+	currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null;
 	currentToolCall: ToolCallState | null;
 	firstTokenTime: number | undefined;
-	setTextBlock: (b: (TextContent & { index: number }) | null) => void;
-	setThinkingBlock: (b: (ThinkingContent & { index: number }) | null) => void;
+	setTextBlock: (b: (TextContent & { [kStreamingBlockIndex]: number }) | null) => void;
+	setThinkingBlock: (b: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null) => void;
 	setToolCall: (t: ToolCallState | null) => void;
 	setFirstTokenTime: () => void;
 }
@@ -1974,7 +1982,6 @@ function endCurrentTextBlock(output: AssistantMessage, stream: AssistantMessageE
 	const block = state.currentTextBlock;
 	if (!block) return;
 	const idx = output.content.indexOf(block);
-	stripVariant<{ index?: number }>(block, "index");
 	stream.push({
 		type: "text_end",
 		contentIndex: idx,
@@ -1992,7 +1999,6 @@ function endCurrentThinkingBlock(
 	const block = state.currentThinkingBlock;
 	if (!block) return;
 	const idx = output.content.indexOf(block);
-	stripVariant<{ index?: number }>(block, "index");
 	stream.push({
 		type: "thinking_end",
 		contentIndex: idx,
@@ -2018,10 +2024,10 @@ export function processInteractionUpdate(
 		state.setFirstTokenTime();
 		const delta = update.message.value.text || "";
 		if (!state.currentTextBlock) {
-			const block: TextContent & { index: number } = {
+			const block: TextContent & { [kStreamingBlockIndex]: number } = {
 				type: "text",
 				text: "",
-				index: output.content.length,
+				[kStreamingBlockIndex]: output.content.length,
 			};
 			output.content.push(block);
 			state.setTextBlock(block);
@@ -2034,10 +2040,10 @@ export function processInteractionUpdate(
 		state.setFirstTokenTime();
 		const delta = update.message.value.text || "";
 		if (!state.currentThinkingBlock) {
-			const block: ThinkingContent & { index: number } = {
+			const block: ThinkingContent & { [kStreamingBlockIndex]: number } = {
 				type: "thinking",
 				thinking: "",
-				index: output.content.length,
+				[kStreamingBlockIndex]: output.content.length,
 			};
 			output.content.push(block);
 			state.setThinkingBlock(block);
@@ -2061,9 +2067,9 @@ export function processInteractionUpdate(
 					id: args.toolCallId || crypto.randomUUID(),
 					name: args.name || args.toolName || "",
 					arguments: {},
-					index: output.content.length,
-					partialJson: "",
-					kind: "mcp",
+					[kStreamingBlockIndex]: output.content.length,
+					[kStreamingPartialJson]: "",
+					[kStreamingBlockKind]: "mcp",
 				};
 				output.content.push(block);
 				state.setToolCall(block);
@@ -2079,8 +2085,8 @@ export function processInteractionUpdate(
 					id: callId,
 					name: "todo",
 					arguments: todoArgs,
-					index: output.content.length,
-					kind: "todo",
+					[kStreamingBlockIndex]: output.content.length,
+					[kStreamingBlockKind]: "todo",
 				};
 				output.content.push(block);
 				state.setToolCall(block);
@@ -2088,41 +2094,39 @@ export function processInteractionUpdate(
 			}
 		}
 	} else if (updateCase === "toolCallDelta" || updateCase === "partialToolCall") {
-		if (state.currentToolCall?.kind === "mcp") {
+		if (state.currentToolCall?.[kStreamingBlockKind] === "mcp") {
 			// Cursor's `args_text_delta` is "aggregated args text so far" per agent.proto: each
 			// delta is a cumulative snapshot of the JSON-text args. Strip the prefix we already
 			// have to recover the new suffix; fall back to treating the value as an incremental
 			// fragment when it doesn't extend the buffer.
 			const snapshot: string = update.message.value.argsTextDelta || "";
-			const current = state.currentToolCall.partialJson ?? "";
+			const current = state.currentToolCall[kStreamingPartialJson] ?? "";
 			const chunk = snapshot.startsWith(current) ? snapshot.slice(current.length) : snapshot;
 			if (chunk.length === 0) {
 				return;
 			}
-			state.currentToolCall.partialJson = current + chunk;
-			state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall.partialJson);
+			state.currentToolCall[kStreamingPartialJson] = current + chunk;
+			state.currentToolCall.arguments = parseStreamingJson(state.currentToolCall[kStreamingPartialJson]);
 			const idx = output.content.indexOf(state.currentToolCall);
 			stream.push({ type: "toolcall_delta", contentIndex: idx, delta: chunk, partial: output });
 		}
 	} else if (updateCase === "toolCallCompleted") {
 		if (state.currentToolCall) {
 			const toolCall = update.message.value.toolCall;
-			if (state.currentToolCall.kind === "mcp") {
+			if (state.currentToolCall[kStreamingBlockKind] === "mcp") {
 				const decodedArgs = decodeMcpArgsMap(toolCall?.mcpToolCall?.args?.args);
 				state.currentToolCall.arguments = mergeCursorMcpToolCallArgs(
 					state.currentToolCall.arguments as Record<string, unknown> | undefined,
 					decodedArgs,
 				);
-			} else if (state.currentToolCall.kind === "todo" && toolCall) {
+			} else if (state.currentToolCall[kStreamingBlockKind] === "todo" && toolCall) {
 				const todoArgs = buildTodoArgs(toolCall);
 				if (todoArgs) {
 					state.currentToolCall.arguments = todoArgs;
 				}
 			}
 			const idx = output.content.indexOf(state.currentToolCall);
-			stripVariant<ToolCallState>(state.currentToolCall, "partialJson");
-			stripVariant<ToolCallState>(state.currentToolCall, "index");
-			stripVariant<ToolCallState>(state.currentToolCall, "kind");
+			clearStreamingPartialJson(state.currentToolCall);
 			stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: state.currentToolCall, partial: output });
 			state.setToolCall(null);
 		}

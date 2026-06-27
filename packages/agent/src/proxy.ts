@@ -11,9 +11,14 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 	type StopReason,
-	stripVariant,
 	type ToolCall,
 } from "@oh-my-pi/pi-ai";
+import {
+	clearStreamingPartialJson,
+	kStreamingPartialJson,
+	type StreamingPartialJsonCarrier,
+	setStreamingPartialJson,
+} from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { parseStreamingJson, readSseJson } from "@oh-my-pi/pi-utils";
 
@@ -203,13 +208,13 @@ export function streamProxy(model: Model, context: Context, options: ProxyStream
 }
 
 /**
- * Remove the `partialJson` streaming field from any tool-call content blocks
+ * Clear the `partialJson` streaming symbol from any tool-call content blocks
  * that still carry it (e.g. when the stream ended without a `toolcall_end`).
  */
 function scrubPartialJson(partial: AssistantMessage): void {
 	for (const block of partial.content) {
-		if (block?.type === "toolCall") {
-			stripVariant<ToolCall & { partialJson?: string }>(block, "partialJson");
+		if (block?.type === "toolCall" && kStreamingPartialJson in block) {
+			block[kStreamingPartialJson] = undefined;
 		}
 	}
 }
@@ -219,8 +224,8 @@ function scrubPartialJson(partial: AssistantMessage): void {
  *
  * Streaming `partialJson` for in-progress tool calls is accumulated in a
  * side-channel map keyed by `contentIndex` and also written onto the content
- * object (as a typed intersection field) so downstream renderers can read it
- * during streaming. The field is deleted at `toolcall_end` and scrubbed from
+ * object as a symbol-keyed field so downstream renderers can read it
+ * during streaming. The field is cleared at `toolcall_end` and scrubbed from
  * any remaining blocks at `done`/`error` to guarantee it never leaks into the
  * final `AssistantMessage`.
  */
@@ -241,10 +246,10 @@ function processProxyEvent(
 				totalTokens: 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
-			stripVariant<AssistantMessage>(partial, "stopReason");
-			stripVariant<AssistantMessage>(partial, "errorMessage");
-			stripVariant<AssistantMessage>(partial, "errorId");
-			stripVariant<AssistantMessage>(partial, "duration");
+			partial.errorMessage = undefined;
+			partial.errorId = undefined;
+			partial.duration = undefined;
+			(partial as { stopReason?: string }).stopReason = undefined;
 			return { type: "start", partial };
 
 		case "text_start":
@@ -317,8 +322,8 @@ function processProxyEvent(
 				id: proxyEvent.id,
 				name: proxyEvent.toolName,
 				arguments: {},
-				partialJson: "",
-			} as ToolCall & { partialJson: string };
+				[kStreamingPartialJson]: "",
+			} as ToolCall & StreamingPartialJsonCarrier;
 			partialJsonByIndex.set(proxyEvent.contentIndex, "");
 			return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
 		case "toolcall_delta": {
@@ -327,7 +332,7 @@ function processProxyEvent(
 				const acc = (partialJsonByIndex.get(proxyEvent.contentIndex) ?? "") + proxyEvent.delta;
 				partialJsonByIndex.set(proxyEvent.contentIndex, acc);
 				content.arguments = parseStreamingJson(acc) || {};
-				(content as ToolCall & { partialJson: string }).partialJson = acc;
+				setStreamingPartialJson(content, acc);
 				partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
 				return {
 					type: "toolcall_delta",
@@ -343,7 +348,7 @@ function processProxyEvent(
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
 				partialJsonByIndex.delete(proxyEvent.contentIndex);
-				stripVariant<ToolCall & { partialJson?: string }>(content, "partialJson");
+				clearStreamingPartialJson(content);
 				return {
 					type: "toolcall_end",
 					contentIndex: proxyEvent.contentIndex,

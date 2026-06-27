@@ -29,6 +29,7 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import { kStreamingLastParseLen } from "../utils/block-symbols";
 import { hasVisibleAssistantContent, withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
@@ -47,7 +48,6 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
-import { stripVariant } from "../utils/strip";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type {
 	ChatCompletionAssistantMessageParam,
@@ -127,10 +127,6 @@ type OpenAICompletionsAssistantMessageParam = ChatCompletionAssistantMessagePara
 
 type OpenAICompletionsToolMessageParam = ChatCompletionToolMessageParam & {
 	name?: string;
-};
-
-type OpenAICompletionsContentBlockWithIndex = AssistantMessage["content"][number] & {
-	index?: unknown;
 };
 
 type OpenAICompletionsUsageLike = {
@@ -751,7 +747,7 @@ const streamOpenAICompletionsOnce = (
 			type ToolCallStreamBlock = ToolCall & {
 				partialArgs?: string | Record<string, unknown>;
 				streamIndex?: number;
-				lastParseLen?: number;
+				[kStreamingLastParseLen]?: number;
 			};
 			type OpenAIStreamBlock = TextContent | ThinkingContent | ToolCallStreamBlock;
 			const pendingToolCallBlocks: ToolCallStreamBlock[] = [];
@@ -782,7 +778,6 @@ const streamOpenAICompletionsOnce = (
 				block.arguments =
 					typeof block.partialArgs === "string" ? parseStreamingJson(block.partialArgs) : block.partialArgs;
 				delete block.partialArgs;
-				delete block.lastParseLen;
 				if (block.streamIndex !== undefined) {
 					toolCallBlockByIndex.delete(block.streamIndex);
 					delete block.streamIndex;
@@ -1150,10 +1145,13 @@ const streamOpenAICompletionsOnce = (
 									delta = rawArgs;
 									const prev = typeof block.partialArgs === "string" ? block.partialArgs : "";
 									block.partialArgs = prev + rawArgs;
-									const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);
+									const throttled = parseStreamingJsonThrottled(
+										block.partialArgs,
+										block[kStreamingLastParseLen] ?? 0,
+									);
 									if (throttled) {
 										block.arguments = throttled.value;
-										block.lastParseLen = throttled.parsedLen;
+										block[kStreamingLastParseLen] = throttled.parsedLen;
 									}
 								}
 							} else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
@@ -1288,7 +1286,6 @@ const streamOpenAICompletionsOnce = (
 			try {
 				finishOpenBlocksOnError();
 			} catch {}
-			for (const block of output.content) stripVariant<OpenAICompletionsContentBlockWithIndex>(block, "index");
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 			const result = await AIError.finalize(error, {
 				api: model.api,

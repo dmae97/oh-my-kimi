@@ -35,7 +35,6 @@ import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/id
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
-import { stripVariant } from "../utils/strip";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
 import {
 	convertMessages,
@@ -1019,11 +1018,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				if ("index" in block) {
-					stripVariant<{ index?: number }>(block, "index");
-				}
-			}
 			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal, rawRequestDump });
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;

@@ -10,6 +10,7 @@ import { describe, expect, it } from "bun:test";
 import type { ProxyAssistantMessageEvent } from "@oh-my-pi/pi-agent-core/proxy";
 import { type ProxyMessageEventStream, streamProxy } from "@oh-my-pi/pi-agent-core/proxy";
 import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model, ToolCall } from "@oh-my-pi/pi-ai";
+import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 const mockModel: Model = buildModel({
@@ -106,7 +107,7 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 	});
 
 	it("exposes partialJson on content during streaming for renderers", async () => {
-		// Downstream renderers (event-controller.ts) read content.partialJson
+		// Downstream renderers (event-controller.ts) read getStreamingPartialJson(content)
 		// during toolcall_delta to pace streaming previews. The field must be
 		// present on the partial snapshot while streaming is in progress.
 		// Note: partial is a shared mutable reference, so we snapshot the
@@ -147,8 +148,8 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 			if (result.value.type === "toolcall_delta") {
 				const content = result.value.partial.content[0];
 				deltaSnapshots.push({
-					hasPartialJson: "partialJson" in (content ?? {}),
-					value: (content as (ToolCall & { partialJson?: string }) | undefined)?.partialJson,
+					hasPartialJson: getStreamingPartialJson(content) !== undefined,
+					value: getStreamingPartialJson(content),
 				});
 			}
 		}
@@ -162,7 +163,7 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 		// After completion, partialJson must be gone
 		const result = await stream.result();
 		const toolCall = extractToolCall(result);
-		expect("partialJson" in toolCall).toBe(false);
+		expect(getStreamingPartialJson(toolCall)).toBeUndefined();
 	});
 
 	it("does not leak partialJson field into the final ToolCall object", async () => {
@@ -188,7 +189,7 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 		const toolCall = extractToolCall(result);
 		// partialJson is internal streaming state that must never appear on the
 		// typed ToolCall — its presence would corrupt downstream serialization.
-		expect("partialJson" in toolCall).toBe(false);
+		expect(getStreamingPartialJson(toolCall)).toBeUndefined();
 		expect(toolCall.arguments).toEqual({ path: "/tmp/x" });
 	});
 
@@ -215,7 +216,7 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 		await collectEvents(stream);
 		const result = await stream.result();
 		const toolCall = extractToolCall(result);
-		expect("partialJson" in toolCall).toBe(false);
+		expect(getStreamingPartialJson(toolCall)).toBeUndefined();
 		expect(toolCall.arguments).toEqual({ path: "/a" });
 	});
 
@@ -248,7 +249,7 @@ describe("streamProxy — tool-call streaming and partialJson isolation", () => 
 		expect(toolCalls[0].arguments).toEqual({ path: "a" });
 		expect(toolCalls[1].arguments).toEqual({ command: "ls" });
 		for (const tc of toolCalls) {
-			expect("partialJson" in tc).toBe(false);
+			expect(getStreamingPartialJson(tc)).toBeUndefined();
 		}
 	});
 });

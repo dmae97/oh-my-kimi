@@ -41,7 +41,6 @@ import {
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
-import { stripVariant } from "../utils/strip";
 import {
 	isForcedToolChoice,
 	mapToOpenAIResponsesToolChoice,
@@ -271,7 +270,7 @@ function buildOpenAIResponsesChainedParams(
 			? { ...params, input: params.input.slice(0, params.input.length - trailingScaffoldingItems) }
 			: params;
 	const deltaInput = chain.canAppend
-		? buildResponsesDeltaInput<ResponseInput[number]>(chain.lastParams, chain.lastResponseItems, historyParams)
+		? buildResponsesDeltaInput(chain.lastParams, chain.lastResponseItems, historyParams)
 		: null;
 	if (deltaInput && deltaInput.length > 0 && chain.lastResponseId) {
 		const scaffolding =
@@ -738,7 +737,6 @@ const streamOpenAIResponsesOnce = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) stripVariant<{ index?: number }>(block, "index");
 			if (chainState) resetOpenAIResponsesChainState(chainState);
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 			const result = await AIError.finalize(error, {

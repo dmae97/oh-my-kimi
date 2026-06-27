@@ -6,7 +6,8 @@ import {
 	type ToolCallState,
 	type UsageState,
 } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { AssistantMessage, AssistantMessageEvent, TextContent, ThinkingContent } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, AssistantMessageEvent } from "@oh-my-pi/pi-ai/types";
+import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 interface Harness {
@@ -43,8 +44,8 @@ function newHarness(): Harness {
 		origPush(event);
 	};
 
-	let textBlock: (TextContent & { index: number }) | null = null;
-	let thinkingBlock: (ThinkingContent & { index: number }) | null = null;
+	let textBlock: BlockState["currentTextBlock"] = null;
+	let thinkingBlock: BlockState["currentThinkingBlock"] = null;
 	let toolCall: ToolCallState | null = null;
 	const state: BlockState = {
 		get currentTextBlock() {
@@ -211,7 +212,7 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 		}
 
 		const block = h.state.currentToolCall!;
-		expect(block.partialJson).toBe(cumulative[cumulative.length - 1]);
+		expect(getStreamingPartialJson(block)).toBe(cumulative[cumulative.length - 1]);
 		expect(block.arguments).toEqual({
 			agent: "task",
 			tasks: [{ assignment: "do A" }, { assignment: "do B" }],
@@ -232,7 +233,7 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 			pushArgsTextDelta(h, fragment);
 		}
 
-		expect(h.state.currentToolCall!.partialJson).toBe(fragments.join(""));
+		expect(getStreamingPartialJson(h.state.currentToolCall!)).toBe(fragments.join(""));
 		expect(h.state.currentToolCall!.arguments).toEqual({ agent: "task", items: [1, 2, 3] });
 	});
 
@@ -244,7 +245,7 @@ describe("processInteractionUpdate args_text_delta handling", () => {
 		pushArgsTextDelta(h, `{"agent":"task"}`);
 		pushArgsTextDelta(h, "");
 
-		expect(h.state.currentToolCall!.partialJson).toBe(`{"agent":"task"}`);
+		expect(getStreamingPartialJson(h.state.currentToolCall!)).toBe(`{"agent":"task"}`);
 		const deltas = h.captured.filter(e => e.type === "toolcall_delta");
 		expect(deltas).toHaveLength(1);
 	});

@@ -25,7 +25,6 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
-import { stripVariant } from "../utils/strip";
 import type {
 	Content,
 	FinishReason,
@@ -974,11 +973,6 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			stream.push({ type: "done", reason: output.stopReason as "length" | "stop" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				if ("index" in block) {
-					stripVariant<{ index?: number }>(block, "index");
-				}
-			}
 			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal, rawRequestDump });
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;

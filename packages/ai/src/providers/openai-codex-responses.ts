@@ -44,6 +44,7 @@ import {
 	getOpenAIResponsesHistoryPayload,
 	normalizeSystemPrompts,
 } from "../utils";
+import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
 import {
@@ -55,7 +56,6 @@ import {
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
-import { stripVariant } from "../utils/strip";
 import { compactGrammarDefinition } from "./grammar";
 import {
 	type CodexReasoningContext,
@@ -238,7 +238,10 @@ function createCodexWebSocketTimeoutMessage(reason: string, details: CodexWebSoc
 
 type CodexTransport = "sse" | "websocket";
 type CodexEventItem = ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall;
-type CodexOutputBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string; lastParseLen?: number });
+type CodexOutputBlock =
+	| ThinkingContent
+	| TextContent
+	| (ToolCall & { [kStreamingPartialJson]: string; [kStreamingLastParseLen]?: number });
 
 /**
  * Per-session request-shape counters. Despite the name, these cover both
@@ -1371,7 +1374,7 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 			id: encodeResponsesToolCallId(item.call_id, item.id),
 			name: item.name,
 			arguments: {},
-			partialJson: item.arguments || "",
+			[kStreamingPartialJson]: item.arguments || "",
 		};
 	}
 	if (item.type === "custom_tool_call") {
@@ -1384,7 +1387,7 @@ function createOutputBlockForItem(item: CodexEventItem): CodexOutputBlock | null
 			name: item.name,
 			arguments: { input: item.input ?? "" },
 			customWireName: item.name,
-			partialJson: item.input ?? "",
+			[kStreamingPartialJson]: item.input ?? "",
 		};
 	}
 	return null;
@@ -1511,8 +1514,7 @@ function handleOutputItemDone(
 			// Persist the authoritative final args on the stored block; the throttled
 			// delta parser may have left block.arguments stale (often `{}`).
 			block.arguments = toolCall.arguments;
-			stripVariant<{ partialJson?: string }>(block, "partialJson");
-			stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
+			clearStreamingPartialJson(block);
 		}
 		// Detach so a late/duplicate arguments.delta cannot append to the
 		// finished block or trip the whitespace-loop guard against it.
@@ -1523,8 +1525,7 @@ function handleOutputItemDone(
 	}
 
 	if (item.type === "custom_tool_call") {
-		const partial =
-			block?.type === "toolCall" ? (block as ToolCall & { partialJson?: string }).partialJson : undefined;
+		const partial = block?.type === "toolCall" ? block[kStreamingPartialJson] : undefined;
 		const rawInput = partial && partial.length > 0 ? partial : (item.input ?? "");
 		const toolCall: ToolCall = {
 			type: "toolCall",
@@ -1535,7 +1536,7 @@ function handleOutputItemDone(
 		};
 		if (block?.type === "toolCall") {
 			block.arguments = { input: rawInput };
-			stripVariant<{ partialJson?: string }>(block, "partialJson");
+			clearStreamingPartialJson(block);
 		}
 		closeCodexOpenItem(runtime, entry);
 		runtime.canSafelyReplayWebsocketOverSse = false;
@@ -1993,9 +1994,6 @@ async function handleCodexStreamFailure(
 	error: unknown,
 ): Promise<AssistantMessage> {
 	const { output } = context;
-	for (const block of output.content) {
-		stripVariant<{ index?: number }>(block, "index");
-	}
 	if (context.requestContext.websocketState) {
 		resetCodexWebSocketAppendState(context.requestContext.websocketState);
 		context.requestContext.websocketState.turnState = undefined;
@@ -2349,7 +2347,7 @@ function buildCodexChainedRequestBody(
 ): RequestBody {
 	const chainable = state?.canAppend === true;
 	const appendInput = chainable
-		? buildResponsesDeltaInput<InputItem>(state.lastRequest, state.lastResponseItems, requestBody)
+		? buildResponsesDeltaInput(state.lastRequest, state.lastResponseItems, requestBody)
 		: null;
 	if (appendInput && appendInput.length > 0 && state?.lastResponseId) {
 		const body: RequestBody = { ...requestBody, previous_response_id: state.lastResponseId, input: appendInput };

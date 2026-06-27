@@ -37,6 +37,7 @@ import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
+import type { kStreamingPartialJson } from "./utils/block-symbols";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
 export type { StopDetails } from "./providers/anthropic-wire";
@@ -457,6 +458,7 @@ export interface ToolCall {
 	id: string;
 	name: string;
 	arguments: Record<string, unknown>;
+	[kStreamingPartialJson]?: string;
 	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
 	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
 	/**

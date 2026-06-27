@@ -1,5 +1,6 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
@@ -609,9 +610,9 @@ export class EventController {
 				// reveal (write/edit/bash previews grow smoothly when a slow provider
 				// delivers large batches); once it closes, the final args render
 				// as-is — mirroring how assistant text snaps at message_end.
-				const partialJson = "partialJson" in content ? content.partialJson : undefined;
 				let renderArgs: Record<string, unknown>;
-				if (typeof partialJson === "string") {
+				const partialJson = getStreamingPartialJson(content);
+				if (partialJson) {
 					renderArgs = this.#toolArgsReveal.setTarget(
 						content.id,
 						partialJson,

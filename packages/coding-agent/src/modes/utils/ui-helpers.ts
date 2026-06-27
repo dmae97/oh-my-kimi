@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Usage } from "@oh-my-pi/pi-ai";
+import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Spacer, Text, TruncatedText } from "@oh-my-pi/pi-tui";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";
@@ -409,10 +410,10 @@ export class UiHelpers {
 					readGroup?.seal();
 					readGroup = null;
 					const tool = this.ctx.viewSession.getToolByName(content.name);
-					const renderArgs =
-						"partialJson" in content
-							? { ...content.arguments, __partialJson: content.partialJson }
-							: content.arguments;
+					const partialJson = getStreamingPartialJson(content);
+					const renderArgs = partialJson
+						? { ...content.arguments, __partialJson: partialJson }
+						: content.arguments;
 					const component = new ToolExecutionComponent(
 						content.name,
 						renderArgs,

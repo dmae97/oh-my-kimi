@@ -20,7 +20,6 @@
 ### Changed
 
 - Unified transient status code checks across providers using standardized retry logic
-
 - Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
 - Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
 - Unified error classification via `AIError.classify()` and `AIError.classifyMessage()` replacing scattered `classifyError()` implementations
@@ -37,6 +36,7 @@
 - Improved reliability of AI model responses by implementing automatic retry logic for detected thinking-loop stalls
 - Changed cross-provider/cross-model thinking demotion to render the prior turn's reasoning in the target model's canonical inline thinking dialect (a ```` ```thinking ```` fence for Gemini, `<think>`/`<thinking>` tags for others) instead of bare prose, with a neutral `<think>` fallback for control-token dialects (Harmony, Gemma) so chat-template tokens never leak into history. Replaying it as a native `thought` block was ruled out: end-to-end testing against Gemini 3 confirmed an unsigned `thought` part is schema-accepted but silently discarded — neither recalled nor influencing generation.
 - Broadened the leaked-thinking stream healer (`StreamMarkupHealing`'s `thinking` pattern) to recover reasoning emitted in any dialect's canonical idiom — Gemini's ` ```thinking ` fence, Gemma's `<|channel>thought` channel, Harmony's `analysis` message, and `<scratchpad>` — not just `<think>`/`<thinking>` tags, so leaked chain-of-thought is routed to thinking events for every dialect instead of rendered as raw markup
+- Hardened stateful `previous_response_id` delta chaining (`buildResponsesDeltaInput`): the append-baseline prefix check compares a deep-cloned (symbol-free) baseline against the live current request input, so a transient decode-time block symbol (`block-symbols.ts`) lingering on a current item would make `Bun.deepEquals` read a semantically identical item as a history mutation and needlessly break the chain. Current items are now stripped of those streaming symbols before comparison.
 
 ### Removed
 
@@ -47,6 +47,8 @@
 - Removed Pi dialect support and related serialization/parsing logic
 
 ### Fixed
+
+- Fixed stateful delta chaining to correctly ignore transient streaming bookkeeping symbols
 
 - Improved recovery and rendering of demoted cross-provider reasoning blocks
 - Enhanced reliability of transient error classification during provider stream processing

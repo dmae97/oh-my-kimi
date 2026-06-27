@@ -44,6 +44,5 @@ export * from "./utils/event-stream";
 export * from "./utils/openrouter-headers";
 export * from "./utils/retry";
 export * from "./utils/schema";
-export * from "./utils/strip";
 export * from "./utils/thinking-loop";
 export * from "./utils/validation";

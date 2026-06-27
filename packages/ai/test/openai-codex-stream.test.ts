@@ -723,13 +723,12 @@ describe("openai-codex streaming", () => {
 
 		expect(result.stopReason).toBe("aborted");
 		expect(result.errorMessage).not.toBe("OpenAI Codex SSE stream stalled while waiting for the next event");
-		expect(result.content as unknown[]).toEqual([
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([
 			{
 				type: "toolCall",
 				id: "call_stalled|fc_stalled",
 				name: "todo",
 				arguments: {},
-				partialJson: "",
 			},
 		]);
 	});

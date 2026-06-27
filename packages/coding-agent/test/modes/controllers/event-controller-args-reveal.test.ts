@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -96,7 +97,7 @@ describe("EventController paces streamed tool args", () => {
 		const content = "x".repeat(400);
 		const target = `{"path":"/tmp/a.ts","content":"${content}"}`;
 		const streaming = makeStreamingMessage([
-			{ type: "toolCall", id: "tc-1", name: "write", arguments: {}, partialJson: target } as never,
+			{ type: "toolCall", id: "tc-1", name: "write", arguments: {}, [kStreamingPartialJson]: target },
 		]);
 		const { controller, pendingTools } = createFixture(streaming);
 
@@ -144,8 +145,8 @@ describe("EventController paces streamed tool args", () => {
 				id: "tc-1",
 				name: "write",
 				arguments: { path: "/tmp/a.ts" },
-				partialJson: target,
-			} as never,
+				[kStreamingPartialJson]: target,
+			},
 		]);
 		const { controller } = createFixture(streaming);
 
@@ -165,7 +166,7 @@ describe("EventController paces streamed tool args", () => {
 		const content = "y".repeat(50);
 		const target = `{"path":"/tmp/exec.ts","content":"${content}"}`;
 		const streaming = makeStreamingMessage([
-			{ type: "toolCall", id: "tc-1", name: "write", arguments: {}, partialJson: target } as never,
+			{ type: "toolCall", id: "tc-1", name: "write", arguments: {}, [kStreamingPartialJson]: target },
 		]);
 		const { controller, pendingTools } = createFixture(streaming);
 

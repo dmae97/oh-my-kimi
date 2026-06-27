@@ -15,6 +15,7 @@ import type {
 	ToolChoice,
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
+import { clearStreamingPartialJson, kStreamingPartialJson } from "../utils/block-symbols";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
 import {
@@ -29,7 +30,6 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
-import { stripVariant } from "../utils/strip";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
@@ -86,7 +86,7 @@ type OllamaChatChunk = {
 
 type InternalToolCallBlock = AssistantMessage["content"][number] & {
 	type: "toolCall";
-	partialJson?: string;
+	[kStreamingPartialJson]?: string;
 };
 
 function normalizeBaseUrl(baseUrl?: string): string {
@@ -412,9 +412,9 @@ function endToolCallBlock(stream: AssistantMessageEventStream, output: Assistant
 		return;
 	}
 	const toolCall = block as InternalToolCallBlock;
-	if (toolCall.partialJson) {
-		toolCall.arguments = parseStreamingJson<Record<string, unknown>>(toolCall.partialJson);
-		stripVariant<InternalToolCallBlock>(toolCall, "partialJson");
+	if (toolCall[kStreamingPartialJson]) {
+		toolCall.arguments = parseStreamingJson<Record<string, unknown>>(toolCall[kStreamingPartialJson]);
+		clearStreamingPartialJson(toolCall);
 	}
 	stream.push({ type: "toolcall_end", contentIndex: index, toolCall, partial: output });
 }
@@ -523,7 +523,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 				id: call.id,
 				name: call.name,
 				arguments: parseStreamingJson<Record<string, unknown>>(call.arguments),
-				partialJson: call.arguments,
+				[kStreamingPartialJson]: call.arguments,
 			};
 			output.content.push(toolCall);
 			const index = output.content.length - 1;
@@ -660,7 +660,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 							id: `ollama:${output.content.length}:${name}`,
 							name,
 							arguments: parseStreamingJson<Record<string, unknown>>(partialJson),
-							partialJson,
+							[kStreamingPartialJson]: partialJson,
 						};
 						output.content.push(toolCall);
 						const index = output.content.length - 1;
@@ -737,7 +737,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 		} catch (error) {
 			for (const block of output.content) {
 				if (block.type === "toolCall") {
-					stripVariant<InternalToolCallBlock>(block, "partialJson");
+					clearStreamingPartialJson(block);
 				}
 			}
 			const result = await AIError.finalize(error, {

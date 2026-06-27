@@ -21,7 +21,6 @@ import {
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
-import { stripVariant } from "../utils/strip";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
 import {
 	applyOpenAIReasoningEffortFallback,
@@ -242,7 +241,6 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) stripVariant<{ index?: number }>(block, "index");
 			const result = await AIError.finalize(error, { api: model.api, abortTracker, rawRequestDump });
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;

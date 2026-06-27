@@ -46,6 +46,12 @@ import type {
 import { resolveServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
+import {
+	clearStreamingPartialJson,
+	kStreamingBlockIndex,
+	kStreamingLastParseLen,
+	kStreamingPartialJson,
+} from "../utils/block-symbols";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
@@ -56,7 +62,6 @@ import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
-import { stripVariant } from "../utils/strip";
 import {
 	AnthropicApiError,
 	AnthropicConnectionTimeoutError,
@@ -1696,15 +1701,14 @@ const streamAnthropicOnce = (
 				| ThinkingContent
 				| RedactedThinkingContent
 				| TextContent
-				| (ToolCall & { partialJson: string; lastParseLen?: number })
-			) & { index: number };
+				| (ToolCall & { [kStreamingPartialJson]: string; [kStreamingLastParseLen]?: number })
+			) & { [kStreamingBlockIndex]: number };
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const blocks = output.content as Block[];
 			const finalizeStreamBlock = (block: Block, contentIndex: number): void => {
-				stripVariant<{ index?: number }>(block, "index");
 				if (block.type === "text") {
 					stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
 				} else if (block.type === "thinking") {
@@ -1716,7 +1720,9 @@ const streamAnthropicOnce = (
 					stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
 				} else if (block.type === "toolCall") {
 					const finalJson =
-						block.partialJson.length > 0 ? block.partialJson : JSON.stringify(block.arguments ?? {});
+						block[kStreamingPartialJson].length > 0
+							? block[kStreamingPartialJson]
+							: JSON.stringify(block.arguments ?? {});
 					try {
 						block.arguments = parseJsonWithRepair(finalJson) as ToolCall["arguments"];
 					} catch (parseError) {
@@ -1738,8 +1744,7 @@ const streamAnthropicOnce = (
 							};
 						}
 					}
-					stripVariant<{ partialJson?: string }>(block, "partialJson");
-					stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
+					clearStreamingPartialJson(block);
 					stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
 				}
 			};
@@ -1905,7 +1910,7 @@ const streamAnthropicOnce = (
 								const block: Block = {
 									type: "text",
 									text: "",
-									index: event.index,
+									[kStreamingBlockIndex]: event.index,
 								};
 								output.content.push(block);
 								const contentIndex = output.content.length - 1;
@@ -1921,7 +1926,7 @@ const streamAnthropicOnce = (
 									type: "thinking",
 									thinking: "",
 									thinkingSignature: "",
-									index: event.index,
+									[kStreamingBlockIndex]: event.index,
 								};
 								output.content.push(block);
 								const contentIndex = output.content.length - 1;
@@ -1936,7 +1941,7 @@ const streamAnthropicOnce = (
 								const block: Block = {
 									type: "redactedThinking",
 									data: event.content_block.data,
-									index: event.index,
+									[kStreamingBlockIndex]: event.index,
 								};
 								output.content.push(block);
 								openBlocks.set(event.index, {
@@ -1954,8 +1959,8 @@ const streamAnthropicOnce = (
 										model.compat.escapeBuiltinToolNames,
 									),
 									arguments: event.content_block.input ?? {},
-									partialJson: "",
-									index: event.index,
+									[kStreamingPartialJson]: "",
+									[kStreamingBlockIndex]: event.index,
 								};
 								output.content.push(block);
 								const contentIndex = output.content.length - 1;
@@ -2018,11 +2023,14 @@ const streamAnthropicOnce = (
 									continue;
 								}
 								streamedReplayUnsafeContent = true;
-								block.partialJson += event.delta.partial_json;
-								const throttled = parseStreamingJsonThrottled(block.partialJson, block.lastParseLen ?? 0);
+								block[kStreamingPartialJson] += event.delta.partial_json;
+								const throttled = parseStreamingJsonThrottled(
+									block[kStreamingPartialJson],
+									block[kStreamingLastParseLen] ?? 0,
+								);
 								if (throttled) {
 									block.arguments = throttled.value;
-									block.lastParseLen = throttled.parsedLen;
+									block[kStreamingLastParseLen] = throttled.parsedLen;
 								}
 								stream.push({
 									type: "toolcall_delta",
@@ -2258,9 +2266,7 @@ const streamAnthropicOnce = (
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
-				stripVariant<{ index?: number }>(block, "index");
-				stripVariant<{ partialJson?: string }>(block, "partialJson");
-				stripVariant<{ lastParseLen?: number }>(block, "lastParseLen");
+				if (block.type === "toolCall") clearStreamingPartialJson(block);
 			}
 			const result = await AIError.finalize(error, {
 				api: model.api,
