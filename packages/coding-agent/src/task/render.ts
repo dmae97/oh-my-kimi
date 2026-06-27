@@ -1685,13 +1685,7 @@ function renderNestedTaskTree(
 	return lines;
 }
 
-export const taskToolRenderer = {
-	renderCall,
-	renderResult,
-	mergeCallAndResult: true,
-};
-
-// Register after export to avoid circular dependency issues
+// Register task tool subprocess handler
 subprocessToolRegistry.register<TaskToolDetails>("task", {
 	extractData: event => {
 		const details = event.result?.details;

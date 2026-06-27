@@ -9,7 +9,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { goalToolRenderer } from "../goals/tools/goal-tool";
 import { lspToolRenderer } from "../lsp/render";
 import type { Theme } from "../modes/theme/theme";
-import { taskToolRenderer } from "../task/render";
+import { taskToolRenderer } from "../task/renderer";
 import { webSearchToolRenderer } from "../web/search/render";
 import { askToolRenderer } from "./ask";
 import { astEditToolRenderer } from "./ast-edit";
