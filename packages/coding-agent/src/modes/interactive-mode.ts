@@ -3303,6 +3303,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#omfgController.dispose();
 		this.#focusController.dispose();
 
+		// Surface an explicit "Closing session…" line so the user sees a reason
+		// for the pause while `session.dispose()` flushes memory consolidate and
+		// other cleanups (issue #3641). The await on the next line yields the
+		// event loop, giving requestRender() a tick to paint the status before
+		// dispose blocks.
+		this.showStatus("Closing session…");
+
 		// Persist the draft and dispose the session through the shared teardown
 		// so a signal that arrives mid-shutdown cannot fire a second dispose.
 		// The teardown is a promise-memoized singleton; whichever path calls it

@@ -433,19 +433,55 @@ export class MnemopiSessionState {
 	 * e.g. `mnemopiBackend.clear` — pass `{ consolidate: false }` to skip the
 	 * extraction/sleep pass, since spending tokens on memories that will be
 	 * wiped on the next line is wasted work (PR #2327 review).
+	 *
+	 * `timeoutMs` caps how long the consolidate await blocks the caller
+	 * (the user-visible `/quit` / `/exit` shutdown path passes this so
+	 * dispose returns within a UX budget — issue #3641). When the cap is
+	 * hit, dispose returns immediately and detaches the still-in-flight
+	 * consolidate; the SQLite handles are closed in the background once
+	 * the consolidate settles so writes never race a closed handle, and
+	 * any pending embeddings are SIGKILL'd along with the embed worker
+	 * (a tolerable loss — working memory rows are durable; only the
+	 * episodic promotion / embedding for the LAST few turns is skipped,
+	 * and `maybeRetainOnAgentEnd` has already retained earlier turns).
 	 */
-	async dispose(options: { consolidate?: boolean } = {}): Promise<void> {
+	async dispose(options: { consolidate?: boolean; timeoutMs?: number } = {}): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		if (this.aliasOf) return;
-		if (options.consolidate !== false) {
-			try {
-				await this.consolidate();
-			} catch (error) {
-				logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
-			}
+		const closeOwned = (): void => {
+			for (const memory of this.scoped.owned) memory.close();
+		};
+		if (options.consolidate === false) {
+			closeOwned();
+			return;
 		}
-		for (const memory of this.scoped.owned) memory.close();
+		const consolidatePromise = this.consolidate().catch((error: unknown) => {
+			logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
+		});
+		const { timeoutMs } = options;
+		if (timeoutMs !== undefined && timeoutMs > 0) {
+			const TIMED_OUT = Symbol("mnemopi.dispose.timedOut");
+			const winner = await Promise.race([
+				consolidatePromise.then(() => undefined as unknown),
+				Bun.sleep(timeoutMs).then(() => TIMED_OUT as unknown),
+			]);
+			if (winner === TIMED_OUT) {
+				logger.warn("Mnemopi: consolidate-on-dispose exceeded shutdown budget; detaching to background.", {
+					timeoutMs,
+				});
+				// Defer close until the in-flight consolidate settles so SQLite
+				// writes don't race a closed handle. The process is on the way
+				// to `postmortem.quit(0)`; if it exits first, the OS reclaims
+				// the handles (and a still-pending embed() goes down with the
+				// embed worker the caller is about to SIGKILL).
+				void consolidatePromise.finally(closeOwned);
+				return;
+			}
+		} else {
+			await consolidatePromise;
+		}
+		closeOwned();
 	}
 }
 

@@ -445,6 +445,18 @@ const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
 const RETRY_BACKOFF_MAX_DELAY_MS = 8_000;
+/**
+ * Cap how long {@link AgentSession.dispose} waits for
+ * `MnemopiSessionState.dispose()` to finish its consolidate pass on the
+ * user-visible `/quit` / `/exit` shutdown path. Consolidate fires fresh
+ * LLM fact extractions, each a 1–3 s round-trip, so an unbounded await
+ * stalled `/quit` for many seconds even on minimal-activity sessions
+ * (issue #3641). Anything still in flight when the budget elapses is
+ * detached to the background; the SQLite handles close once it settles.
+ * Per-turn `maybeRetainOnAgentEnd` already retained earlier turns, so
+ * the worst case is losing episodic promotion for the LAST few turns.
+ */
+const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
 
 type CompactionCheckResult = Readonly<{
 	deferredHandoff: boolean;
@@ -5437,7 +5449,7 @@ export class AgentSession {
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
-		await mnemopiState?.dispose();
+		await mnemopiState?.dispose({ timeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 		// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
 		// consolidate-on-dispose may still call `embed()` to store the final
 		// memories, and that round-trips through the worker we are about to

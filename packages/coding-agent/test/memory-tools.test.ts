@@ -574,6 +574,61 @@ describe("Mnemopi backend lifecycle", () => {
 		registeredMnemopiState = undefined;
 	});
 
+	it("dispose({ timeoutMs }) returns within the budget when consolidate stalls (#3641)", async () => {
+		const state = registerMnemopiState();
+		const retainMemory = state.getScopedRetainTarget().memory;
+		// Hold flushExtractions hostage longer than any reasonable shutdown budget
+		// so the race exclusively settles via the timeout branch.
+		const flushStall = Promise.withResolvers<void>();
+		let flushCalls = 0;
+		const flushSpy = vi.spyOn(retainMemory, "flushExtractions").mockImplementation(async () => {
+			flushCalls++;
+			await flushStall.promise;
+		});
+		const closeSpy = vi.spyOn(retainMemory, "close");
+
+		const BUDGET_MS = 100;
+		const start = Bun.nanoseconds();
+		await state.dispose({ timeoutMs: BUDGET_MS });
+		const elapsedMs = (Bun.nanoseconds() - start) / 1_000_000;
+
+		// Dispose must surrender within the budget (plus a generous slack); the
+		// in-flight consolidate is detached, not awaited.
+		expect(elapsedMs).toBeLessThan(BUDGET_MS * 5);
+		expect(elapsedMs).toBeGreaterThanOrEqual(BUDGET_MS - 10);
+		expect(flushSpy).toHaveBeenCalled();
+		expect(flushCalls).toBe(1);
+		// `close()` is deferred so SQLite writes don't race a closed handle.
+		expect(closeSpy).not.toHaveBeenCalled();
+
+		// Release the stall and confirm the deferred close runs once consolidate
+		// settles — i.e. the SQLite handle still ends up released eventually.
+		flushStall.resolve();
+		await Bun.sleep(50);
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+
+		registeredMnemopiState = undefined;
+	});
+
+	it("dispose with no timeoutMs awaits consolidate to completion (#3641 — preserves #2320 contract)", async () => {
+		const state = registerMnemopiState();
+		const retainMemory = state.getScopedRetainTarget().memory;
+		const flushSpy = vi.spyOn(retainMemory, "flushExtractions").mockResolvedValue();
+		const sleepSpy = vi.spyOn(retainMemory, "sleepAllSessions");
+		const closeSpy = vi.spyOn(retainMemory, "close");
+
+		await state.dispose();
+
+		// Unbounded dispose still runs the full consolidate-then-close pipeline,
+		// matching the #2320 contract for non-shutdown callers (state replacement
+		// during `mnemopiBackend.start`, etc.).
+		expect(flushSpy).toHaveBeenCalledTimes(1);
+		expect(sleepSpy).toHaveBeenCalledTimes(1);
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+
+		registeredMnemopiState = undefined;
+	});
+
 	it("skips consolidation when disposing an aliased subagent state (#2320)", async () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
 		const parentState = registerMnemopiState();
