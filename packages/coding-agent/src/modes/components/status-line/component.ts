@@ -162,6 +162,17 @@ interface ActiveRepoCache {
 	effectiveGitCwd: string;
 }
 
+/**
+ * Per-{@link AgentSession} active-processing meter for the `time_spent`
+ * segment. `activeMs` is the union of every completed `agent_start`→
+ * `agent_end` window; `activeStartedAt` is the start timestamp of the
+ * currently-running window, or `null` when idle.
+ */
+interface ActiveMeter {
+	activeMs: number;
+	activeStartedAt: number | null;
+}
+
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
 const STATUS_USAGE_START_DELAY_MS = 0;
 const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
@@ -201,20 +212,24 @@ export class StatusLineComponent implements Component {
 	#hookStatuses: Map<string, string> = new Map();
 	#subagentCount: number = 0;
 	/**
-	 * Active-processing accounting for the `time_spent` segment.
+	 * Active-processing accounting for the `time_spent` segment, keyed per
+	 * {@link AgentSession} so the focus-controller mid-turn attach path
+	 * cannot leak an unmatched synthesized `agent_start` from a subagent
+	 * into the main session's meter.
 	 *
-	 * `#activeMs` is the union of every completed `agent_start`→`agent_end`
-	 * window since `resetActiveTime` last reset the counters; `#activeStartedAt`
-	 * holds the start timestamp of the currently-running window (or `null` when
-	 * idle). The segment displays `#activeMs + (now - #activeStartedAt)` so the
-	 * counter ticks live during a turn and freezes the instant the agent yields.
+	 * Each meter is `{ activeMs, activeStartedAt }`: `activeMs` is the union
+	 * of every completed `agent_start`→`agent_end` window since
+	 * {@link resetActiveTime} last reset it; `activeStartedAt` is the start
+	 * timestamp of the currently-running window (or `null` when idle).
+	 * `getActiveMs()` returns `activeMs + (now - activeStartedAt)` for the
+	 * currently-attached session, so the counter ticks live during a turn
+	 * and freezes the instant the agent yields.
 	 *
-	 * Reset by {@link resetActiveTime} so /clear and fresh-session flows
-	 * start the meter at zero, matching the previous segment's session-reset
-	 * behaviour without ticking through idle time.
+	 * WeakMap so meters die with their session (e.g. a parked subagent
+	 * dropped from the registry); the main session's meter survives focus
+	 * round-trips because the same {@link AgentSession} ref is reused.
 	 */
-	#activeMs: number = 0;
-	#activeStartedAt: number | null = null;
+	#activeMeters: WeakMap<AgentSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: { enabled: boolean } | null = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
@@ -297,8 +312,28 @@ export class StatusLineComponent implements Component {
 		if (!sessionChanged && this.#focusedAgentId === focusedAgentId) return;
 		this.session = session;
 		this.#focusedAgentId = focusedAgentId;
-		if (sessionChanged) this.#invalidateSessionCaches();
+		if (sessionChanged) {
+			this.#invalidateSessionCaches();
+			this.#closeStaleActiveWindow();
+		}
 		this.invalidate();
+	}
+
+	/**
+	 * Drop a meter's in-flight window when the newly-attached session is no
+	 * longer streaming. Handles the case where the focus controller
+	 * synthesized an `agent_start` on a mid-turn attach but the matching
+	 * real `agent_end` never reached us — the user detached before it
+	 * fired, and re-focusing later (after the agent finished) would
+	 * otherwise tick over the entire detached gap. Crediting that gap to
+	 * `activeMs` would be wrong (the agent finished at some point we never
+	 * observed), so the window is dropped rather than folded in.
+	 */
+	#closeStaleActiveWindow(): void {
+		const meter = this.#activeMeters.get(this.session);
+		if (!meter || meter.activeStartedAt === null) return;
+		if (this.session.isStreaming) return;
+		meter.activeStartedAt = null;
 	}
 
 	updateSettings(settings: StatusLineSettings): void {
@@ -325,45 +360,63 @@ export class StatusLineComponent implements Component {
 	}
 
 	/**
-	 * Reset the per-session active-time accumulators so the `time_spent`
-	 * segment starts from zero. Called from `/clear`, fresh-session, and
-	 * joined-collab paths; both the completed accumulator and any in-flight
-	 * window are dropped, so a reset mid-turn ignores the running window
-	 * (the matching `markActivityEnd` will see an idle meter and no-op).
+	 * Reset the currently-attached session's active-time accumulators so
+	 * the `time_spent` segment starts from zero. Called from `/clear`,
+	 * fresh-session, and joined-collab paths; both the completed
+	 * accumulator and any in-flight window are dropped, so a reset
+	 * mid-turn ignores the running window (the matching `markActivityEnd`
+	 * will see an idle meter and no-op).
 	 */
 	resetActiveTime(): void {
-		this.#activeMs = 0;
-		this.#activeStartedAt = null;
+		const meter = this.#meter();
+		meter.activeMs = 0;
+		meter.activeStartedAt = null;
 	}
 
 	/**
-	 * Mark the agent as having started a unit of active processing. Idempotent:
-	 * a second start while a window is already open is a no-op, so reentrant
-	 * `agent_start` events (e.g. nested auto-compaction loops) do not double-count.
+	 * Mark the currently-attached session as having started a unit of
+	 * active processing. Idempotent: a second start while a window is
+	 * already open is a no-op, so reentrant `agent_start` events (e.g.
+	 * nested auto-compaction loops, focus-controller mid-turn attach onto
+	 * an already-running window) do not double-count.
 	 */
 	markActivityStart(): void {
-		if (this.#activeStartedAt !== null) return;
-		this.#activeStartedAt = Date.now();
+		const meter = this.#meter();
+		if (meter.activeStartedAt !== null) return;
+		meter.activeStartedAt = Date.now();
 	}
 
 	/**
-	 * Close the currently-open active-processing window, folding its elapsed
-	 * time into the accumulator. Idempotent when the meter is already idle so
-	 * callers can fire it on every `agent_end` without guarding.
+	 * Close the currently-attached session's open active-processing
+	 * window, folding its elapsed time into the accumulator. Idempotent
+	 * when the meter is already idle so callers can fire it on every
+	 * `agent_end` without guarding.
 	 */
 	markActivityEnd(): void {
-		if (this.#activeStartedAt === null) return;
-		this.#activeMs += Date.now() - this.#activeStartedAt;
-		this.#activeStartedAt = null;
+		const meter = this.#meter();
+		if (meter.activeStartedAt === null) return;
+		meter.activeMs += Date.now() - meter.activeStartedAt;
+		meter.activeStartedAt = null;
 	}
 
 	/**
-	 * Snapshot of total active-processing time including the in-flight window.
-	 * Exposed for the segment context builder; tests assert against this too.
+	 * Snapshot of total active-processing time for the currently-attached
+	 * session, including any in-flight window. Exposed for the segment
+	 * context builder; tests assert against this too.
 	 */
 	getActiveMs(): number {
-		if (this.#activeStartedAt === null) return this.#activeMs;
-		return this.#activeMs + Date.now() - this.#activeStartedAt;
+		const meter = this.#meter();
+		if (meter.activeStartedAt === null) return meter.activeMs;
+		return meter.activeMs + Date.now() - meter.activeStartedAt;
+	}
+
+	/** Return (lazily creating) the meter for the currently-attached session. */
+	#meter(): ActiveMeter {
+		let meter = this.#activeMeters.get(this.session);
+		if (meter) return meter;
+		meter = { activeMs: 0, activeStartedAt: null };
+		this.#activeMeters.set(this.session, meter);
+		return meter;
 	}
 
 	setPlanModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed the `time_spent` status-line segment ticking on wall-clock since session start, so an idle session displayed hours of "time spent" while the agent did nothing. The segment now accumulates only the union of `agent_start`→`agent_end` windows, ticking live during a turn and freezing the instant the agent yields; `/clear` and fresh-session flows zero the meter via the renamed `resetActiveTime` boundary hook. ([#3681](https://github.com/can1357/oh-my-pi/issues/3681))
+- Fixed the `time_spent` status-line segment ticking on wall-clock since session start, so an idle session displayed hours of "time spent" while the agent did nothing. The segment now accumulates only the union of `agent_start`→`agent_end` windows, ticking live during a turn and freezing the instant the agent yields; `/clear` and fresh-session flows zero the meter via the renamed `resetActiveTime` boundary hook. Meters are kept per-session (WeakMap keyed on `AgentSession`) so the focus-controller's mid-turn synthesized `agent_start` cannot leak into the main session's meter on unfocus, and a re-focus onto a now-idle subagent drops the stale window rather than crediting the detached gap. ([#3681](https://github.com/can1357/oh-my-pi/issues/3681))
 
 ## [16.2.2] - 2026-06-27
 
