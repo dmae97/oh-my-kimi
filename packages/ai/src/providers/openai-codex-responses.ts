@@ -139,8 +139,8 @@ const CODEX_DEBUG = $flag("PI_CODEX_DEBUG");
 const CODEX_MAX_RETRIES = 5;
 const CODEX_RETRY_DELAY_MS = 500;
 const CODEX_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
-const CODEX_WEBSOCKET_PING_INTERVAL_MS = 10_000;
-const CODEX_WEBSOCKET_PONG_TIMEOUT_MS = 60_000;
+const CODEX_WEBSOCKET_PING_INTERVAL_MS = Number($env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS || 10_000);
+const CODEX_WEBSOCKET_PONG_TIMEOUT_MS = Number($env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS || 60_000);
 const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = Number($env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY || 4096);
 /**
  * Maximum quiet period (no inbound frames AND no observed pong) we'll trust a
@@ -155,7 +155,7 @@ const CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = Number($env.PI_CODEX_WEBSOCKET_ME
  * execution, user typing, etc.). Set `PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS=0`
  * to disable.
  */
-const CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = 30_000;
+const CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS = Number($env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS || 30_000);
 /**
  * Steady-state liveness ceiling for the Codex WebSocket transport. Distinct from
  * the OMP-wide stream watchdog removed in #1392: a WebSocket can stay TCP-open
@@ -173,7 +173,7 @@ const CODEX_WEBSOCKET_IDLE_TIMEOUT_MS = Number($env.PI_CODEX_WEBSOCKET_IDLE_TIME
  * a chance on the WS transport before falling through.
  */
 const CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS = Number($env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS || 60_000);
-const CODEX_WEBSOCKET_RETRY_BUDGET = CODEX_MAX_RETRIES;
+const CODEX_WEBSOCKET_RETRY_BUDGET = Number($env.PI_CODEX_WEBSOCKET_RETRY_BUDGET || CODEX_MAX_RETRIES);
 const CODEX_WEBSOCKET_RETRY_DELAY_MS = Number($env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS || CODEX_RETRY_DELAY_MS);
 const CODEX_WEBSOCKET_TRANSPORT_ERROR_PREFIX = "Codex websocket transport error";
 const CODEX_RETRYABLE_EVENT_CODES = new Set(["model_error", "server_error", "internal_error"]);
@@ -377,13 +377,6 @@ interface CodexStreamProcessingContext {
 
 interface CodexStreamCompletion {
 	firstTokenTime?: number;
-}
-
-function parseCodexNonNegativeInteger(value: string | undefined, fallback: number): number {
-	if (!value) return fallback;
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed) || parsed < 0) return fallback;
-	return Math.trunc(parsed);
 }
 
 function createCodexProviderSessionState(): CodexProviderSessionState {
@@ -785,10 +778,7 @@ async function openInitialCodexEventStream(
 }> {
 	const { transformedBody, websocketState } = requestContext;
 	if (websocketState && shouldUseCodexWebSocket(model, websocketState, options?.preferWebsockets)) {
-		const websocketRetryBudget = parseCodexNonNegativeInteger(
-			$env.PI_CODEX_WEBSOCKET_RETRY_BUDGET,
-			CODEX_WEBSOCKET_RETRY_BUDGET,
-		);
+		const websocketRetryBudget = CODEX_WEBSOCKET_RETRY_BUDGET;
 		let websocketRetries = 0;
 		while (true) {
 			try {
@@ -883,7 +873,7 @@ async function openCodexWebSocketTransport(
 			sentModelsEtagHeader: websocketHeaders.has(X_MODELS_ETAG_HEADER),
 			requestType: websocketRequest.type,
 			retry,
-			retryBudget: parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_RETRY_BUDGET, CODEX_WEBSOCKET_RETRY_BUDGET),
+			retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 		});
 	const websocketConnection = await getOrCreateCodexWebSocketConnection(
 		websocketState,
@@ -1756,10 +1746,7 @@ async function tryReconnectCodexWebSocketOnConnectionLimit(
 	// hammer the endpoint with zero backoff.
 	resetCodexStreamAccumulators(runtime);
 	context.firstTokenTime = undefined;
-	if (
-		runtime.websocketStreamRetries >=
-		parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_RETRY_BUDGET, CODEX_WEBSOCKET_RETRY_BUDGET)
-	) {
+	if (runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET) {
 		recordCodexWebSocketFailure(websocketState, true);
 		await reopenCodexSseRuntimeStream(context, runtime, websocketState);
 		return true;
@@ -1846,16 +1833,13 @@ async function tryReplayWebsocketFailureOverSse(
 		fatalWebSocketMessage.includes(pattern.toLowerCase()),
 	);
 	const activateFallback =
-		replayingBufferedOutputOverSse ||
-		isFatal ||
-		runtime.websocketStreamRetries >=
-			parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_RETRY_BUDGET, CODEX_WEBSOCKET_RETRY_BUDGET);
+		replayingBufferedOutputOverSse || isFatal || runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 	recordCodexWebSocketFailure(state, activateFallback);
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex websocket stream fallback", {
 			error: streamError.message,
 			retry: runtime.websocketStreamRetries,
-			retryBudget: parseCodexNonNegativeInteger($env.PI_CODEX_WEBSOCKET_RETRY_BUDGET, CODEX_WEBSOCKET_RETRY_BUDGET),
+			retryBudget: CODEX_WEBSOCKET_RETRY_BUDGET,
 			activated: activateFallback,
 			fatal: isFatal,
 			replayedBufferedOutput: replayingBufferedOutputOverSse,
@@ -2434,10 +2418,7 @@ class CodexWebSocketConnection {
 	 */
 	isHealthyForReuse(): boolean {
 		if (!this.isOpen()) return false;
-		const maxIdleMs = parseCodexNonNegativeInteger(
-			$env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS,
-			CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS,
-		);
+		const maxIdleMs = CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS;
 		if (maxIdleMs <= 0) return true;
 		// Initial connect sets #lastInboundAt; any later message or pong refreshes
 		// it. A zero value means the field was never initialized, which itself is
@@ -2798,10 +2779,7 @@ class CodexWebSocketConnection {
 
 	#startHeartbeat(socket: Bun.WebSocket): void {
 		this.#stopHeartbeat();
-		const intervalMs = parseCodexNonNegativeInteger(
-			$env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS,
-			CODEX_WEBSOCKET_PING_INTERVAL_MS,
-		);
+		const intervalMs = CODEX_WEBSOCKET_PING_INTERVAL_MS;
 		if (intervalMs <= 0) return;
 
 		this.#lastPingAt = 0;
@@ -2832,10 +2810,7 @@ class CodexWebSocketConnection {
 			// finally fired. Instead, trigger on inbound silence: if we sent a
 			// ping at least `pongTimeoutMs` ago and have received no traffic of
 			// any kind (data frame or pong) since, the socket is unhealthy.
-			const pongTimeoutMs = parseCodexNonNegativeInteger(
-				$env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS,
-				CODEX_WEBSOCKET_PONG_TIMEOUT_MS,
-			);
+			const pongTimeoutMs = CODEX_WEBSOCKET_PONG_TIMEOUT_MS;
 			if (
 				pongTimeoutMs > 0 &&
 				this.#lastPingAt > 0 &&

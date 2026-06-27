@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Updated OpenAI Codex WebSocket transport to resolve configuration from environment variables at runtime
+
 - Unified transient status code checks across providers using standardized retry logic
 - Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
 - Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
@@ -50,7 +52,6 @@
 ### Fixed
 
 - Fixed stateful delta chaining to correctly ignore transient streaming bookkeeping symbols
-
 - Improved recovery and rendering of demoted cross-provider reasoning blocks
 - Enhanced reliability of transient error classification during provider stream processing
 - Improved error message consistency across all providers with structured error formatting
