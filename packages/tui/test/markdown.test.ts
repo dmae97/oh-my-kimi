@@ -600,6 +600,10 @@ describe("Markdown component", () => {
 			const component = new MarkdownWithInput(markdown);
 			tui.addChild(component);
 			tui.start();
+			// The first render is scheduled on the setImmediate hop; drain it before flushing.
+			await new Promise<void>(resolve => {
+				setImmediate(resolve);
+			});
 			await terminal.flush();
 
 			expect(component.markdownLineCount > 0).toBeTruthy();

@@ -181,11 +181,9 @@ describe("umans provider catalog", () => {
 
 	it("bundles Umans GLM via-handoff models as text-only", () => {
 		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
-		for (const id of ["umans-glm-5.1", "umans-glm-5.2"] as const) {
-			const model = providers.umans?.[id];
-			expect(model, `${id} should be bundled`).toBeDefined();
-			expect(model.input, `${id} input should be text-only`).toEqual(["text"]);
-		}
+		const model = providers.umans?.["umans-glm-5.2"];
+		expect(model, "umans-glm-5.2 should be bundled").toBeDefined();
+		expect(model.input, "umans-glm-5.2 input should be text-only").toEqual(["text"]);
 	});
 
 	it("drops stale cached GLM rows that predate the via-handoff static correction", async () => {

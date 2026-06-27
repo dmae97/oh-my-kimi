@@ -49,7 +49,7 @@ describe("advisor", () => {
 
 			const rendered = formatSessionHistoryMarkdown(messages);
 
-			expect(rendered).toContain("→ search(needle @ packages/coding-agent/src) ⇒ error");
+			expect(rendered).toContain("→ grep(needle @ packages/coding-agent/src) ⇒ error");
 			expect(rendered).not.toContain("paths[0]");
 			expect(advisorSystemPrompt).toContain("Arguments absent from the rendered transcript are UNKNOWN");
 			expect(advisorSystemPrompt).toContain("NEVER assert concrete values, array indexes");
