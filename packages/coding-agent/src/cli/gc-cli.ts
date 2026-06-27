@@ -434,17 +434,24 @@ function sessionIdFromSessionPath(sessionPath: string): string | undefined {
 }
 
 function sessionIdFromSessionText(text: string): string | undefined {
-	const line = text
-		.split(/\r?\n/)
-		.find(candidate => candidate.trim().length > 0)
-		?.trim();
-	if (!line) return undefined;
-	try {
-		const record = JSON.parse(line) as { type?: unknown; id?: unknown };
-		return record.type === "session" && typeof record.id === "string" && record.id.length > 0 ? record.id : undefined;
-	} catch {
-		return undefined;
+	let sawTitleSlot = false;
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		try {
+			const record = JSON.parse(line) as { type?: unknown; id?: unknown };
+			if (!sawTitleSlot && record.type === "title") {
+				sawTitleSlot = true;
+				continue;
+			}
+			return record.type === "session" && typeof record.id === "string" && record.id.length > 0
+				? record.id
+				: undefined;
+		} catch {
+			return undefined;
+		}
 	}
+	return undefined;
 }
 
 async function archivedSessionIdFromFile(file: string): Promise<string | undefined> {

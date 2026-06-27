@@ -22,7 +22,9 @@ import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
+import { previewLine, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import type { ResolveToolDetails } from "../../tools/resolve";
+import { nextActionableTask } from "../../tools/todo";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { interruptHint } from "../shared";
@@ -43,6 +45,8 @@ const IRC_MESSAGE_VISIBLE_TTL_MS = 10_000;
  * oldest live-region card retires as soon as a new one would exceed the cap.
  */
 const MAX_LIVE_IRC_CARDS = 4;
+const IDLE_RECAP_MIN_SECONDS = 1;
+const IDLE_RECAP_MAX_SECONDS = 3600;
 
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
@@ -69,6 +73,7 @@ export class EventController {
 	// #handleMessageEnd / #handleAgentStart).
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
+	#idleRecapTimer?: NodeJS.Timeout;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
@@ -157,6 +162,7 @@ export class EventController {
 		this.#streamingReveal.stop();
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
+		this.#cancelIdleRecap();
 		this.#setTerminalProgress(false);
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
@@ -248,6 +254,7 @@ export class EventController {
 		this.#lastAssistantComponent = undefined;
 		this.#pinnedErrorComponent = undefined;
 		this.#cancelIdleCompaction();
+		this.#cancelIdleRecap();
 		for (const timer of this.#ircExpiryTimers.values()) {
 			clearTimeout(timer);
 		}
@@ -302,6 +309,7 @@ export class EventController {
 			this.ctx.statusContainer.clear();
 		}
 		this.#cancelIdleCompaction();
+		this.#cancelIdleRecap();
 		this.#setTerminalProgress(true);
 		this.ctx.ensureLoadingAnimation();
 		this.ctx.ui.requestRender();
@@ -1008,6 +1016,7 @@ export class EventController {
 		this.#lastAssistantComponent = undefined;
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
+		this.#scheduleIdleRecap();
 		this.sendCompletionNotification();
 	}
 
@@ -1053,6 +1062,7 @@ export class EventController {
 		event: Extract<AgentSessionEvent, { type: "auto_compaction_start" }>,
 	): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#cancelIdleRecap();
 		this.#setTerminalProgress(true);
 		this.#stopWorkingLoader();
 		this.ctx.statusContainer.clear();
@@ -1085,6 +1095,7 @@ export class EventController {
 
 	async #handleAutoCompactionEnd(event: Extract<AgentSessionEvent, { type: "auto_compaction_end" }>): Promise<void> {
 		this.#cancelIdleCompaction();
+		this.#cancelIdleRecap();
 		this.#setTerminalProgress(false);
 		if (this.ctx.autoCompactionLoader) {
 			this.ctx.autoCompactionLoader.stop();
@@ -1237,6 +1248,13 @@ export class EventController {
 		}
 	}
 
+	#cancelIdleRecap(): void {
+		if (this.#idleRecapTimer) {
+			clearTimeout(this.#idleRecapTimer);
+			this.#idleRecapTimer = undefined;
+		}
+	}
+
 	#scheduleIdleCompaction(): void {
 		this.#cancelIdleCompaction();
 		// Don't schedule idle work while context maintenance is already running; the
@@ -1265,6 +1283,45 @@ export class EventController {
 			void this.ctx.viewSession.runIdleCompaction();
 		}, timeoutMs);
 		this.#idleCompactionTimer.unref?.();
+	}
+
+	#scheduleIdleRecap(): void {
+		this.#cancelIdleRecap();
+		if (this.ctx.viewSession.isCompacting) return;
+
+		const recapSettings = settings.getGroup("recap");
+		if (!recapSettings.enabled) return;
+		if (this.ctx.editor.getText().trim()) return;
+
+		const timeoutMs =
+			Math.max(IDLE_RECAP_MIN_SECONDS, Math.min(IDLE_RECAP_MAX_SECONDS, recapSettings.idleSeconds)) * 1000;
+		this.#idleRecapTimer = setTimeout(() => {
+			this.#idleRecapTimer = undefined;
+			if (this.ctx.viewSession.isStreaming) return;
+			if (this.ctx.viewSession.isCompacting) return;
+			if (this.ctx.editor.getText().trim()) return;
+
+			const message = this.#buildIdleRecapMessage();
+			if (!message) return;
+			this.ctx.showStatus(theme.fg("dim", theme.italic(message)), { dim: false });
+		}, timeoutMs);
+		this.#idleRecapTimer.unref?.();
+	}
+
+	#buildIdleRecapMessage(): string | undefined {
+		const goal = this.#idleRecapGoalText();
+		const next = nextActionableTask(this.ctx.todoPhases)?.content;
+		const parts: string[] = [];
+		if (goal) parts.push(`Goal: ${previewLine(goal, TRUNCATE_LENGTHS.CONTENT)}`);
+		if (next) parts.push(`Next: ${previewLine(next, TRUNCATE_LENGTHS.CONTENT)}`);
+		return parts.length > 0 ? `※ recap: ${parts.join(" ")}` : undefined;
+	}
+
+	#idleRecapGoalText(): string | undefined {
+		const goal = this.ctx.viewSession.getGoalModeState?.()?.goal.objective.trim();
+		if (goal) return goal;
+		const title = this.ctx.sessionManager.getSessionName()?.trim();
+		return title || undefined;
 	}
 
 	#currentContextTokens(): number {
