@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed autoresearch's `before_agent_start` handler crashing when `event.systemPrompt` was undefined. The handler now coerces a missing system prompt to an empty string so the autoresearch block still renders. ([#3665](https://github.com/can1357/oh-my-pi/issues/3665))
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
