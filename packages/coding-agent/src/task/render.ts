@@ -541,7 +541,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 	if (idLabel || desc) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
 		if (desc) {
-			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
+			line += `: ${theme.fg("muted", previewLine(desc, 64))}`;
 		}
 		lines.push(line);
 	}
@@ -574,7 +574,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
 		const desc = typeof task?.description === "string" ? task.description.trim() : "";
 		if (desc) {
-			line += `: ${theme.fg("muted", truncateToWidth(replaceTabs(desc), 64))}`;
+			line += `: ${theme.fg("muted", previewLine(desc, 64))}`;
 		}
 		if (task?.isolated === true) {
 			line += theme.fg("dim", " [isolated]");
@@ -707,7 +707,8 @@ function renderAgentProgress(
 				: "accent";
 
 	// Main status line: id: description [status] · stats · ⟨agent⟩
-	const description = progress.description?.trim();
+	const trimmedDescription = progress.description?.trim();
+	const description = trimmedDescription ? previewLine(trimmedDescription, 64) : undefined;
 	const displayId = formatTaskId(progress.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
 	const indent = prefix ? `${prefix} ` : "";
@@ -1029,7 +1030,8 @@ function renderAgentResult(
 					: "failed";
 
 	// Main status line: id: description [status] · stats · ⟨agent⟩
-	const description = result.description?.trim();
+	const trimmedDescription = result.description?.trim();
+	const description = trimmedDescription ? previewLine(trimmedDescription, 64) : undefined;
 	const displayId = formatTaskId(result.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
 	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg(
