@@ -213,6 +213,38 @@ describe("formatUsageBreakdown", () => {
 		expect(disclaimerIdx).toBeLessThan(firstLimitIdx);
 	});
 
+	it("renders Antigravity weekly windows in the usage breakdown", () => {
+		const now = Date.parse("2026-01-01T00:00:00.000Z");
+		const reports: UsageReport[] = [
+			{
+				provider: "google-antigravity",
+				fetchedAt: now,
+				metadata: { email: "ag@example.test", projectId: "proj-1" },
+				limits: [
+					{
+						id: "google-antigravity:google:default:weekly",
+						label: "Usage (Google)",
+						scope: { provider: "google-antigravity", projectId: "proj-1", windowId: "weekly" },
+						window: {
+							id: "weekly",
+							label: "Weekly",
+							durationMs: SEVEN_DAYS,
+							resetsAt: now + SEVEN_DAYS,
+						},
+						amount: { unit: "percent", usedFraction: 0.6, remainingFraction: 0.4 },
+						status: "ok",
+					},
+				],
+			},
+		];
+
+		const text = stripVTControlCharacters(formatUsageBreakdown(reports, [], now));
+		expect(text).toContain("Google Antigravity");
+		expect(text).toContain("Usage (Google) (Weekly)");
+		expect(text).toContain("60.0% used");
+		expect(text).toContain("0.40× quota left");
+	});
+
 	it("renders saved reset expiry state for future and expired credits", () => {
 		const now = Date.parse("2026-01-01T00:00:00.000Z");
 		const reports: UsageReport[] = [

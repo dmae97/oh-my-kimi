@@ -6,6 +6,10 @@
 
 - Default reasoning context to `all_turns` for all Codex requests
 
+### Fixed
+
+- Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

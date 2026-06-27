@@ -188,6 +188,60 @@ describe("antigravity usage provider", () => {
 		expect(report!.limits.length).toBe(2);
 	});
 
+	it("surfaces named daily and weekly quota windows as separate limits", async () => {
+		const now = Date.now();
+		const dailyReset = new Date(now + 12 * 3600_000).toISOString();
+		const weeklyReset = new Date(now + 6 * 24 * 3600_000).toISOString();
+		const payload = {
+			models: {
+				gemini: {
+					displayName: "Gemini",
+					modelProvider: "MODEL_PROVIDER_GOOGLE",
+					quotaInfo: { remainingFraction: 0.8, resetTime: dailyReset, windowId: "WINDOW_DAILY" },
+					weeklyQuotaInfo: { remainingFraction: 0.4, resetTime: weeklyReset },
+				},
+			},
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fakeFetch(payload)),
+		);
+
+		const daily = report!.limits.find(limit => limit.scope.windowId === "daily");
+		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
+		expect(report!.limits.length).toBe(2);
+		expect(daily?.label).toBe("Usage (Google)");
+		expect(daily?.window?.label).toBe("Daily");
+		expect(daily?.window?.durationMs).toBe(24 * 60 * 60 * 1000);
+		expect(daily?.amount.remainingFraction).toBe(0.8);
+		expect(weekly?.label).toBe("Usage (Google)");
+		expect(weekly?.window?.label).toBe("Weekly");
+		expect(weekly?.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
+		expect(weekly?.amount.remainingFraction).toBe(0.4);
+	});
+
+	it("normalizes 7 Day window ids to the weekly usage window", async () => {
+		const payload = {
+			models: {
+				gemini: {
+					displayName: "Gemini",
+					modelProvider: "MODEL_PROVIDER_GOOGLE",
+					quotaInfoByWindow: {
+						WINDOW_7_DAY: { remainingFraction: 0.6 },
+					},
+				},
+			},
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fakeFetch(payload)),
+		);
+
+		expect(report!.limits).toHaveLength(1);
+		expect(report!.limits[0]!.scope.windowId).toBe("weekly");
+		expect(report!.limits[0]!.window?.label).toBe("Weekly");
+	});
+
 	it("includes email and projectId in report metadata", async () => {
 		const payload = { models: { m: makeApiModel("M", { remainingFraction: 1 }) } };
 		const report = await antigravityUsageProvider.fetchUsage!(
@@ -271,6 +325,24 @@ describe("antigravity ranking strategy", () => {
 		};
 		const { primary, secondary } = antigravityRankingStrategy.findWindowLimits(report);
 		expect(primary?.label).toBe("Anthropic");
+		expect(secondary).toBeUndefined();
+	});
+
+	it("lets a weekly Antigravity quota become the ranking bottleneck", () => {
+		const daily = makeLimit(0.8, "Google Daily");
+		const weekly = makeLimit(0.2, "Google Weekly");
+		daily.scope.windowId = "daily";
+		daily.window = { id: "daily", label: "Daily", durationMs: 24 * 60 * 60 * 1000 };
+		weekly.scope.windowId = "weekly";
+		weekly.window = { id: "weekly", label: "Weekly", durationMs: 7 * 24 * 60 * 60 * 1000 };
+		const report = {
+			provider: "google-antigravity" as const,
+			fetchedAt: Date.now(),
+			limits: [weekly, daily],
+		};
+
+		const { primary, secondary } = antigravityRankingStrategy.findWindowLimits(report);
+		expect(primary).toBe(weekly);
 		expect(secondary).toBeUndefined();
 	});
 
