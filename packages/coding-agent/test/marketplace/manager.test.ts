@@ -93,6 +93,16 @@ function createTestContext(): TestContext {
 	return { manager, tmpDir, clearCount: () => count };
 }
 
+function mockPluginManagerPaths(root: string) {
+	return [
+		spyOn(piUtils, "getPluginsDir").mockReturnValue(root),
+		spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(root, "node_modules")),
+		spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(root, "package.json")),
+		spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(root, "omp-plugins.lock.json")),
+		spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(path.join(root, "plugin-overrides.json")),
+	];
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("MarketplaceManager", () => {
@@ -265,18 +275,45 @@ describe("MarketplaceManager", () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
 
-		const spies = [
-			spyOn(piUtils, "getPluginsDir").mockReturnValue(ctx.tmpDir),
-			spyOn(piUtils, "getPluginsNodeModules").mockReturnValue(path.join(ctx.tmpDir, "node_modules")),
-			spyOn(piUtils, "getPluginsPackageJson").mockReturnValue(path.join(ctx.tmpDir, "package.json")),
-			spyOn(piUtils, "getPluginsLockfile").mockReturnValue(path.join(ctx.tmpDir, "omp-plugins.lock.json")),
-			spyOn(piUtils, "getProjectPluginOverridesPath").mockReturnValue(
-				path.join(ctx.tmpDir, "plugin-overrides.json"),
-			),
-		];
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
 		try {
 			const plugins = await new PluginManager(ctx.tmpDir).list();
 			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
+	it("installPlugin keeps same-name local runtime links visible", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const localPlugin = path.join(ctx.tmpDir, "local-dev-plugin");
+		await Bun.write(
+			path.join(localPlugin, "package.json"),
+			`${JSON.stringify({
+				name: "hello-plugin",
+				version: "9.9.9",
+				omp: { tools: "tools" },
+			})}\n`,
+		);
+		fs.mkdirSync(path.join(localPlugin, "tools"), { recursive: true });
+		const linkPath = path.join(ctx.tmpDir, "node_modules", "hello-plugin");
+		fs.rmSync(linkPath, { recursive: true, force: true });
+		fs.symlinkSync(localPlugin, linkPath, "dir");
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => `${plugin.name}@${plugin.version}`)).toEqual(["hello-plugin@9.9.9"]);
+			expect(checks).toContainEqual({
+				name: "plugin:hello-plugin",
+				status: "ok",
+				message: "v9.9.9",
+			});
 		} finally {
 			for (const spy of spies) spy.mockRestore();
 		}

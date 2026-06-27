@@ -219,9 +219,9 @@ export class PluginManager {
 		}
 		return installedNames;
 	}
-	async #collectMarketplaceRuntimePackageNames(): Promise<Set<string>> {
+	async #collectMarketplaceRuntimePackageRealpaths(): Promise<Map<string, Set<string>>> {
 		const registry = await readInstalledPluginsRegistry(getInstalledPluginsRegistryPath());
-		const packageNames = new Set<string>();
+		const packageRealpaths = new Map<string, Set<string>>();
 		await Promise.all(
 			Object.values(registry.plugins)
 				.flat()
@@ -230,19 +230,38 @@ export class PluginManager {
 					const packageJsonPath = path.join(entry.installPath, "package.json");
 					try {
 						const pkg: RuntimePackageJson = await Bun.file(packageJsonPath).json();
-						if (typeof pkg.name === "string" && pkg.name.length > 0) {
-							packageNames.add(pkg.name);
-						}
+						const installRealpath = await fs.promises.realpath(entry.installPath);
+						if (typeof pkg.name !== "string" || pkg.name.length === 0) return;
+						const realpaths = packageRealpaths.get(pkg.name) ?? new Set<string>();
+						realpaths.add(installRealpath);
+						packageRealpaths.set(pkg.name, realpaths);
 					} catch (err) {
 						if (isEnoent(err)) return;
-						logger.debug("Failed to inspect marketplace plugin package name", {
-							path: packageJsonPath,
+						logger.debug("Failed to inspect marketplace plugin package path", {
+							path: entry.installPath,
 							error: String(err),
 						});
 					}
 				}),
 		);
-		return packageNames;
+		return packageRealpaths;
+	}
+
+	async #isMarketplaceRuntimeLink(
+		name: string,
+		deps: Record<string, string>,
+		marketplaceRuntimeRealpaths: Map<string, Set<string>>,
+		pluginPath: string,
+	): Promise<boolean> {
+		if (name in deps) return false;
+		const realpaths = marketplaceRuntimeRealpaths.get(name);
+		if (!realpaths) return false;
+		try {
+			return realpaths.has(await fs.promises.realpath(pluginPath));
+		} catch (err) {
+			if (isEnoent(err)) return false;
+			throw err;
+		}
 	}
 
 	async #snapshotInstalledPackage(actualName: string | undefined): Promise<PluginPackageSnapshot | null> {
@@ -598,16 +617,16 @@ export class PluginManager {
 			if (!isEnoent(err)) throw err;
 		}
 
-		const [projectOverrides, config, marketplaceRuntimeNames] = await Promise.all([
+		const [projectOverrides, config, marketplaceRuntimeRealpaths] = await Promise.all([
 			this.#loadProjectOverrides(),
 			this.#ensureConfigLoaded(),
-			this.#collectMarketplaceRuntimePackageNames(),
+			this.#collectMarketplaceRuntimePackageRealpaths(),
 		]);
 		const plugins: InstalledPlugin[] = [];
 		const installedNames = this.#collectInstalledNames(deps, config);
 		for (const name of installedNames) {
-			if (!(name in deps) && marketplaceRuntimeNames.has(name)) continue;
 			const pluginPath = path.join(getPluginsNodeModules(), name);
+			if (await this.#isMarketplaceRuntimeLink(name, deps, marketplaceRuntimeRealpaths, pluginPath)) continue;
 			const pluginPkgPath = path.join(pluginPath, "package.json");
 			let pluginPkg: { version: string; omp?: PluginManifest; pi?: PluginManifest };
 			try {
@@ -848,15 +867,15 @@ export class PluginManager {
 		});
 
 		const deps = pkg.dependencies || {};
-		const [config, marketplaceRuntimeNames] = await Promise.all([
+		const [config, marketplaceRuntimeRealpaths] = await Promise.all([
 			this.#ensureConfigLoaded(),
-			this.#collectMarketplaceRuntimePackageNames(),
+			this.#collectMarketplaceRuntimePackageRealpaths(),
 		]);
 		const installedNames = this.#collectInstalledNames(deps, config);
 
 		for (const name of installedNames) {
-			if (!(name in deps) && marketplaceRuntimeNames.has(name)) continue;
 			const pluginPath = path.join(nodeModulesPath, name);
+			if (await this.#isMarketplaceRuntimeLink(name, deps, marketplaceRuntimeRealpaths, pluginPath)) continue;
 			const pluginPkgPath = path.join(pluginPath, "package.json");
 			const fromDependencies = name in deps;
 
