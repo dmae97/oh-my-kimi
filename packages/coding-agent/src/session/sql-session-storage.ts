@@ -3,6 +3,7 @@ import {
 	type SessionStorageBackend,
 	type SessionStorageIndexEntry,
 } from "./indexed-session-storage";
+import type { SessionTitleUpdate } from "./session-title-slot";
 
 /**
  * Supported `bun:sql` adapter dialects. `Bun.SQL` reports this string on
@@ -55,10 +56,14 @@ export interface SqlSessionStorageOptions {
 
 interface DialectQueries {
 	createTable: string;
+	/** Add title metadata columns to existing tables created before title fields existed. */
+	addTitleColumns: readonly string[];
 	/** Insert or replace the full content for `path`. Used for `writeText`/`flags="w"` truncate. */
 	upsertReplace: string;
 	/** Insert if missing; otherwise append the new chunk to existing content. Used for `writeLine`. */
 	upsertAppend: string;
+	/** Update indexed title metadata without rewriting the JSONL body. */
+	updateTitle: string;
 	/** Delete a single row by path. */
 	delete: string;
 	/** Move a row from one path to another (caller deletes any conflicting destination first). */
@@ -75,6 +80,9 @@ interface IndexRow {
 	path: string;
 	byte_len: number | bigint | string;
 	mtime_ms: number | bigint | string;
+	title?: string | null;
+	title_source?: string | null;
+	title_updated_at?: string | null;
 }
 
 interface ContentRow {
@@ -119,17 +127,26 @@ function buildQueries(adapter: SqlSessionStorageAdapter, table: string): Dialect
 				`CREATE TABLE IF NOT EXISTS ${table} (` +
 				`path VARCHAR(512) NOT NULL PRIMARY KEY, ` +
 				`content LONGTEXT NOT NULL, ` +
-				`mtime_ms BIGINT NOT NULL` +
+				`mtime_ms BIGINT NOT NULL, ` +
+				`title TEXT NULL, ` +
+				`title_source VARCHAR(16) NULL, ` +
+				`title_updated_at VARCHAR(64) NULL` +
 				`) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+			addTitleColumns: [
+				`ALTER TABLE ${table} ADD COLUMN title TEXT NULL`,
+				`ALTER TABLE ${table} ADD COLUMN title_source VARCHAR(16) NULL`,
+				`ALTER TABLE ${table} ADD COLUMN title_updated_at VARCHAR(64) NULL`,
+			],
 			upsertReplace:
-				`INSERT INTO ${table} (path, content, mtime_ms) VALUES (?, ?, ?) ` +
-				`ON DUPLICATE KEY UPDATE content = VALUES(content), mtime_ms = VALUES(mtime_ms)`,
+				`INSERT INTO ${table} (path, content, mtime_ms, title, title_source, title_updated_at) VALUES (?, ?, ?, ?, ?, ?) ` +
+				`ON DUPLICATE KEY UPDATE content = VALUES(content), mtime_ms = VALUES(mtime_ms), title = VALUES(title), title_source = VALUES(title_source), title_updated_at = VALUES(title_updated_at)`,
 			upsertAppend:
 				`INSERT INTO ${table} (path, content, mtime_ms) VALUES (?, ?, ?) ` +
 				`ON DUPLICATE KEY UPDATE content = CONCAT(content, VALUES(content)), mtime_ms = VALUES(mtime_ms)`,
+			updateTitle: `UPDATE ${table} SET title = ?, title_source = ?, title_updated_at = ?, mtime_ms = ? WHERE path = ?`,
 			delete: `DELETE FROM ${table} WHERE path = ?`,
 			rename: `UPDATE ${table} SET path = ?, mtime_ms = ? WHERE path = ?`,
-			loadIndex: `SELECT path, mtime_ms, length(content) AS byte_len FROM ${table}`,
+			loadIndex: `SELECT path, mtime_ms, length(content) AS byte_len, title, title_source, title_updated_at FROM ${table}`,
 			readFull: `SELECT content AS content FROM ${table} WHERE path = ?`,
 			readSlices:
 				`SELECT substring(cast(content AS binary), 1, ?) AS head, ` +
@@ -157,19 +174,28 @@ function buildQueries(adapter: SqlSessionStorageAdapter, table: string): Dialect
 			`CREATE TABLE IF NOT EXISTS ${table} (` +
 			`path TEXT PRIMARY KEY, ` +
 			`content TEXT NOT NULL, ` +
-			`mtime_ms ${mtimeType} NOT NULL` +
+			`mtime_ms ${mtimeType} NOT NULL, ` +
+			`title TEXT, ` +
+			`title_source TEXT, ` +
+			`title_updated_at TEXT` +
 			`)`,
+		addTitleColumns: [
+			`ALTER TABLE ${table} ADD COLUMN title TEXT`,
+			`ALTER TABLE ${table} ADD COLUMN title_source TEXT`,
+			`ALTER TABLE ${table} ADD COLUMN title_updated_at TEXT`,
+		],
 		upsertReplace:
-			`INSERT INTO ${table} (path, content, mtime_ms) ` +
-			`VALUES (${placeholder(1)}, ${placeholder(2)}, ${placeholder(3)}) ` +
-			`ON CONFLICT (path) DO UPDATE SET content = excluded.content, mtime_ms = excluded.mtime_ms`,
+			`INSERT INTO ${table} (path, content, mtime_ms, title, title_source, title_updated_at) ` +
+			`VALUES (${placeholder(1)}, ${placeholder(2)}, ${placeholder(3)}, ${placeholder(4)}, ${placeholder(5)}, ${placeholder(6)}) ` +
+			`ON CONFLICT (path) DO UPDATE SET content = excluded.content, mtime_ms = excluded.mtime_ms, title = excluded.title, title_source = excluded.title_source, title_updated_at = excluded.title_updated_at`,
 		upsertAppend:
 			`INSERT INTO ${table} (path, content, mtime_ms) ` +
 			`VALUES (${placeholder(1)}, ${placeholder(2)}, ${placeholder(3)}) ` +
 			`ON CONFLICT (path) DO UPDATE SET content = ${tableQualifier} || excluded.content, mtime_ms = excluded.mtime_ms`,
+		updateTitle: `UPDATE ${table} SET title = ${placeholder(1)}, title_source = ${placeholder(2)}, title_updated_at = ${placeholder(3)}, mtime_ms = ${placeholder(4)} WHERE path = ${placeholder(5)}`,
 		delete: `DELETE FROM ${table} WHERE path = ${placeholder(1)}`,
 		rename: `UPDATE ${table} SET path = ${placeholder(1)}, mtime_ms = ${placeholder(2)} WHERE path = ${placeholder(3)}`,
-		loadIndex: `SELECT path, mtime_ms, ${byteLengthExpr} AS byte_len FROM ${table}`,
+		loadIndex: `SELECT path, mtime_ms, ${byteLengthExpr} AS byte_len, title, title_source, title_updated_at FROM ${table}`,
 		readFull: `SELECT content AS content FROM ${table} WHERE path = ${placeholder(1)}`,
 		readSlices,
 	};
@@ -179,6 +205,13 @@ function rowNumber(value: number | bigint | string): number {
 	if (typeof value === "number") return value;
 	if (typeof value === "bigint") return Number(value);
 	return Number.parseInt(value, 10);
+}
+function rowTitleSource(value: string | null | undefined): SessionTitleUpdate["source"] | undefined {
+	return value === "auto" || value === "user" ? value : undefined;
+}
+function isDuplicateColumnError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+	return message.includes("duplicate column") || message.includes("already exists");
 }
 
 function decodeSqlBytes(value: unknown): string {
@@ -260,6 +293,13 @@ class SqlSessionStorageBackend implements SessionStorageBackend {
 	async init(): Promise<void> {
 		if (this.#createTable) {
 			await this.#client.unsafe(this.#q.createTable);
+			for (const query of this.#q.addTitleColumns) {
+				try {
+					await this.#client.unsafe(query);
+				} catch (err) {
+					if (!isDuplicateColumnError(err)) throw err;
+				}
+			}
 		}
 	}
 
@@ -269,6 +309,9 @@ class SqlSessionStorageBackend implements SessionStorageBackend {
 			path: row.path,
 			size: rowNumber(row.byte_len),
 			mtimeMs: rowNumber(row.mtime_ms),
+			title: row.title ?? undefined,
+			titleSource: rowTitleSource(row.title_source),
+			titleUpdatedAt: row.title_updated_at ?? undefined,
 		}));
 	}
 
@@ -289,8 +332,25 @@ class SqlSessionStorageBackend implements SessionStorageBackend {
 		return [decodeSqlBytes(row.head), decodeSqlBytes(row.tail)];
 	}
 
-	async writeFull(path: string, content: string, mtimeMs: number): Promise<void> {
-		await this.#client.unsafe(this.#q.upsertReplace, [path, content, mtimeMs]);
+	async writeFull(path: string, content: string, mtimeMs: number, title?: SessionTitleUpdate): Promise<void> {
+		await this.#client.unsafe(this.#q.upsertReplace, [
+			path,
+			content,
+			mtimeMs,
+			title?.title ?? null,
+			title?.source ?? null,
+			title?.updatedAt ?? null,
+		]);
+	}
+
+	async updateSessionTitle(path: string, title: SessionTitleUpdate, mtimeMs: number): Promise<void> {
+		await this.#client.unsafe(this.#q.updateTitle, [
+			title.title ?? null,
+			title.source ?? null,
+			title.updatedAt,
+			mtimeMs,
+			path,
+		]);
 	}
 
 	async append(path: string, line: string, mtimeMs: number): Promise<void> {

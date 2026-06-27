@@ -19,6 +19,8 @@ import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
 // =============================================================================
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
+/** Operation names accepted by the todo tool and echoed in successful result details. */
+export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "append" | "view";
 
 export interface TodoItem {
 	content: string;
@@ -36,6 +38,8 @@ export interface TodoCompletionTransition {
 }
 
 export interface TodoToolDetails {
+	/** Operation that produced this snapshot; absent on legacy transcript entries. */
+	op?: TodoOperation;
 	phases: TodoPhase[];
 	storage: "session" | "memory";
 	completedTasks?: TodoCompletionTransition[];
@@ -132,6 +136,18 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 
 	const firstPendingTask = orderedTasks.find(task => task.status === "pending");
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
+}
+
+/** Return the active todo task, preferring an in-progress item over the first pending item. */
+export function nextActionableTask(phases: readonly TodoPhase[]): TodoItem | undefined {
+	let firstPending: TodoItem | undefined;
+	for (const phase of phases) {
+		for (const task of phase.tasks) {
+			if (task.status === "in_progress") return task;
+			if (!firstPending && task.status === "pending") firstPending = task;
+		}
+	}
+	return firstPending;
 }
 
 export const USER_TODO_EDIT_CUSTOM_TYPE = "user_todo_edit";
@@ -626,7 +642,7 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		const completedTasks = readOnly || failed ? [] : getCompletionTransitions(previousPhases, updated);
 		if (!readOnly && !failed) this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
-		const details: TodoToolDetails = { phases: effective, storage };
+		const details: TodoToolDetails = { op: params.op, phases: effective, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
 
 		return {

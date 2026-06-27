@@ -77,6 +77,14 @@ export interface LabelEntry extends SessionEntryBase {
 	label: string | undefined;
 }
 
+export interface TitleChangeEntry extends SessionEntryBase {
+	type: "title_change";
+	title: string;
+	previousTitle?: string;
+	source: "auto" | "user";
+	trigger?: string;
+}
+
 export interface TtsrInjectionEntry extends SessionEntryBase {
 	type: "ttsr_injection";
 	/** Names of rules that were injected */
@@ -121,6 +129,7 @@ export type SessionEntry =
 	| CustomEntry
 	| CustomMessageEntry
 	| LabelEntry
+	| TitleChangeEntry
 	| TtsrInjectionEntry
 	| MCPToolSelectionEntry
 	| SessionInitEntry

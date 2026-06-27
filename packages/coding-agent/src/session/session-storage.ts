@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { hasFsCode, isEnoent, logger, peekFileEnds, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { overlayTitleSlotContent, type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -31,6 +32,14 @@ export interface SessionStorage {
 	ensureDirSync(dir: string): void;
 	existsSync(path: string): boolean;
 	writeTextSync(path: string, content: string): void;
+	/**
+	 * Update the current session title through the storage backend.
+	 *
+	 * File-like backends rewrite the fixed-width JSONL title slot; indexed
+	 * backends can store the semantic title fields and synthesize the slot when
+	 * reading.
+	 */
+	updateSessionTitle(path: string, update: SessionTitleUpdate): Promise<void>;
 	statSync(path: string): SessionStorageStat;
 	listFilesSync(dir: string, pattern: string): string[];
 
@@ -160,6 +169,25 @@ export class FileSessionStorage implements SessionStorage {
 				return;
 			}
 			throw toError(err);
+		}
+	}
+
+	async updateSessionTitle(fpath: string, update: SessionTitleUpdate): Promise<void> {
+		const fd = fs.openSync(fpath, "r+");
+		try {
+			const buf = Buffer.from(serializeTitleSlot(update), "utf-8");
+			let offset = 0;
+			while (offset < buf.length) {
+				const written = fs.writeSync(fd, buf, offset, buf.length - offset, offset);
+				if (written === 0) {
+					throw new Error("Short write");
+				}
+				offset += written;
+			}
+		} catch (err) {
+			throw toError(err);
+		} finally {
+			fs.closeSync(fd);
 		}
 	}
 
@@ -524,6 +552,14 @@ export class MemorySessionStorage implements SessionStorage {
 
 	writeTextSync(path: string, content: string): void {
 		this.#files.set(path, createMemoryFileEntry(content, Date.now()));
+	}
+
+	async updateSessionTitle(path: string, update: SessionTitleUpdate): Promise<void> {
+		const entry = this.#requireEntry(path);
+		this.#files.set(
+			path,
+			createMemoryFileEntry(overlayTitleSlotContent(materializeMemoryEntry(entry), update), Date.now()),
+		);
 	}
 
 	/**

@@ -270,37 +270,58 @@ interface SessionListHeader {
 	timestamp?: string;
 }
 
+function sessionListHeaderFromRecord(
+	record: Record<string, unknown> | undefined,
+	titleOverride?: string,
+): SessionListHeader | undefined {
+	if (record?.type !== "session" || typeof record.id !== "string") return undefined;
+	return {
+		type: "session",
+		id: record.id,
+		cwd: typeof record.cwd === "string" ? record.cwd : undefined,
+		title: titleOverride ?? (typeof record.title === "string" ? record.title : undefined),
+		parentSession: typeof record.parentSession === "string" ? record.parentSession : undefined,
+		timestamp: typeof record.timestamp === "string" ? record.timestamp : undefined,
+	};
+}
+
+function parseSessionListHeaderLine(line: string, titleOverride?: string): SessionListHeader | undefined {
+	if (extractStringProperty(line, "type") !== "session") return undefined;
+	const id = extractStringProperty(line, "id");
+	if (!id) return undefined;
+	return {
+		type: "session",
+		id,
+		cwd: extractStringProperty(line, "cwd"),
+		title: titleOverride ?? extractStringProperty(line, "title"),
+		parentSession: extractStringProperty(line, "parentSession"),
+		timestamp: extractStringProperty(line, "timestamp"),
+	};
+}
+
 function parseSessionListHeader(
 	content: string,
 	entries: Array<Record<string, unknown>>,
 ): SessionListHeader | undefined {
-	const parsedHeader = entries[0];
-	if (parsedHeader?.type === "session" && typeof parsedHeader.id === "string") {
-		return {
-			type: "session",
-			id: parsedHeader.id,
-			cwd: typeof parsedHeader.cwd === "string" ? parsedHeader.cwd : undefined,
-			title: typeof parsedHeader.title === "string" ? parsedHeader.title : undefined,
-			parentSession: typeof parsedHeader.parentSession === "string" ? parsedHeader.parentSession : undefined,
-			timestamp: typeof parsedHeader.timestamp === "string" ? parsedHeader.timestamp : undefined,
-		};
+	const firstEntry = entries[0];
+	const parsedSlotTitle =
+		firstEntry?.type === "title" && typeof firstEntry.title === "string" ? firstEntry.title : undefined;
+	const parsedHeader = sessionListHeaderFromRecord(entries[firstEntry?.type === "title" ? 1 : 0], parsedSlotTitle);
+	if (parsedHeader) return parsedHeader;
+
+	let slotTitle: string | undefined;
+	let firstNonEmpty = true;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (firstNonEmpty && extractStringProperty(line, "type") === "title") {
+			slotTitle = extractStringProperty(line, "title");
+			firstNonEmpty = false;
+			continue;
+		}
+		return parseSessionListHeaderLine(line, slotTitle);
 	}
-
-	const firstLineEnd = content.indexOf("\n");
-	const firstLine = firstLineEnd === -1 ? content : content.slice(0, firstLineEnd);
-	if (extractStringProperty(firstLine, "type") !== "session") return undefined;
-
-	const id = extractStringProperty(firstLine, "id");
-	if (!id) return undefined;
-
-	return {
-		type: "session",
-		id,
-		cwd: extractStringProperty(firstLine, "cwd"),
-		title: extractStringProperty(firstLine, "title"),
-		parentSession: extractStringProperty(firstLine, "parentSession"),
-		timestamp: extractStringProperty(firstLine, "timestamp"),
-	};
+	return undefined;
 }
 
 function getSessionListWorkerCount(fileCount: number): number {

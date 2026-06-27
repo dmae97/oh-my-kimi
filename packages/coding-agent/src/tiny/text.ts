@@ -43,6 +43,29 @@ export function formatTitleUserMessage(message: string): string {
 	return `<user-message>\n${prepareTitleInput(message)}\n</user-message>`;
 }
 
+/** Single recent conversation turn supplied to title refresh after replanning. */
+export interface TitleConversationTurn {
+	role: "user" | "assistant";
+	text?: string;
+	thinking?: string;
+}
+
+/** Format recent user/assistant context for title generation after a todo replan. */
+export function formatTitleConversationContext(turns: readonly TitleConversationTurn[]): string {
+	const formattedTurns: string[] = [];
+	for (const turn of turns) {
+		const sections: string[] = [];
+		const text = turn.text?.trim();
+		if (text) sections.push(text);
+		const thinking = turn.role === "assistant" ? turn.thinking?.trim() : undefined;
+		if (thinking) sections.push(`<thinking>\n${thinking}\n</thinking>`);
+		if (sections.length === 0) continue;
+		formattedTurns.push(`<${turn.role}>\n${sections.join("\n\n")}\n</${turn.role}>`);
+	}
+	if (formattedTurns.length === 0) return "";
+	return prepareTitleInput(`<conversation>\n${formattedTurns.join("\n\n")}\n</conversation>`);
+}
+
 /**
  * Greeting / acknowledgement / filler tokens. A first user message composed
  * entirely of these (or of bare numbers / punctuation / emoji) carries no
