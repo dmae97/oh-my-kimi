@@ -10791,15 +10791,21 @@ export class AgentSession {
 
 		// "overflow" forces context-full because the input itself is broken — a handoff
 		// LLM call would hit the same overflow. "incomplete" is an output-side problem,
-		// so a handoff request on the existing context is still viable. Snapcompact is
-		// a local-only strategy: if it cannot run, report the local blocker instead of
-		// silently swapping in a provider-backed summary.
+		// so a handoff request on the existing context is still viable.
 		let action: "context-full" | "handoff" | "snapcompact" =
 			compactionSettings.strategy === "snapcompact"
 				? "snapcompact"
 				: compactionSettings.strategy === "handoff" && reason !== "overflow" && !suppressHandoff
 					? "handoff"
 					: "context-full";
+		if (action === "snapcompact" && this.model && !this.model.input.includes("image")) {
+			this.emitNotice(
+				"warning",
+				`snapcompact needs a vision-capable active model (${this.model.id} is text-only); using context-full auto-compaction instead.`,
+				"compaction",
+			);
+			action = "context-full";
+		}
 		// Abort any older auto-compaction before installing this run's controller.
 		this.#autoCompactionAbortController?.abort();
 		const autoCompactionAbortController = new AbortController();
