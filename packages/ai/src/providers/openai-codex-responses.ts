@@ -104,7 +104,7 @@ import { transformMessages } from "./transform-messages";
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
-	/** `reasoning.context` replay scope. Defaults to `all_turns` under {@link OpenAICodexResponsesOptions.responsesLite}, otherwise omitted (server default is `current_turn`). */
+	/** `reasoning.context` replay scope; defaults to `all_turns` for every Codex request when unset. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
@@ -117,7 +117,7 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	 * `x-openai-internal-codex-responses-lite: true` on HTTP requests and on the
 	 * WebSocket upgrade (the marker is connection-scoped there, so lite and
 	 * non-lite turns never share a pooled socket), strips image detail from
-	 * input, and defaults `reasoning.context` to `all_turns` — mirroring codex-rs.
+	 * input, and disables parallel tool calling — mirroring codex-rs.
 	 */
 	responsesLite?: boolean;
 	/**

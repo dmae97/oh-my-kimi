@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Default reasoning context to `all_turns` for all Codex requests
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

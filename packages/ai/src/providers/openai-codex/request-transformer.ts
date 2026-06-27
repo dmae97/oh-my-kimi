@@ -14,11 +14,11 @@ export interface ReasoningConfig {
 export interface CodexRequestOptions {
 	reasoningEffort?: ReasoningConfig["effort"];
 	reasoningSummary?: ReasoningConfig["summary"] | null;
-	/** Explicit `reasoning.context` override. Defaults to `all_turns` under {@link CodexRequestOptions.responsesLite}, otherwise omitted (server default is `current_turn`). */
+	/** Explicit `reasoning.context` override; defaults to `all_turns` for every Codex request when unset. */
 	reasoningContext?: CodexReasoningContext;
 	textVerbosity?: "low" | "medium" | "high";
 	include?: string[];
-	/** Responses Lite transport contract: strips image detail and defaults `reasoning.context` to `all_turns`, mirroring codex-rs. */
+	/** Responses Lite transport contract: strips image detail and disables parallel tool calling, mirroring codex-rs. */
 	responsesLite?: boolean;
 }
 
@@ -254,13 +254,9 @@ export async function transformRequestBody(
 			...body.reasoning,
 			...reasoningConfig,
 		};
-		// Responses Lite keeps reasoning replay server-side; codex-rs requests
-		// `all_turns` there and otherwise omits context so the server default
-		// (currently `current_turn`) applies.
-		const reasoningContext = options.reasoningContext ?? "all_turns";
-		if (reasoningContext !== undefined) {
-			body.reasoning.context = reasoningContext;
-		}
+		// Default reasoning replay to `all_turns` for every Codex request,
+		// mirroring codex-rs; an explicit `reasoningContext` overrides it.
+		body.reasoning.context = options.reasoningContext ?? "all_turns";
 	} else {
 		delete body.reasoning;
 	}
