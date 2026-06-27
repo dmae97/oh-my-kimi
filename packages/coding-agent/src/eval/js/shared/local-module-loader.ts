@@ -29,6 +29,7 @@ export class LocalModuleLoader {
 	#externalModules = new Map<string, Promise<vm.Module>>();
 	#requireCache = new Map<string, NodeJS.Require>();
 	#modulePaths = new WeakMap<vm.Module, string>();
+	#linkChain: Promise<void> = Promise.resolve();
 
 	constructor(sessionId: string) {
 		this.#context = vm.createContext(globalThis);
@@ -147,7 +148,17 @@ export class LocalModuleLoader {
 	async #linkAndEvaluate(entry: LocalModuleEntry, modulePath: string): Promise<void> {
 		const { module } = entry;
 		try {
-			if (module.status === "unlinked") await module.link(this.#linkResolve);
+			// Serialize the link phase across every graph root. Bun's node:vm linker
+			// segfaults (getImportedModule on a null record) when two link passes
+			// instantiate overlapping module instances concurrently — e.g.
+			// Promise.all([import("./a"), import("./b")]) over a graph that shares
+			// dependencies. Holding the lock for the whole module.link() (including its
+			// async resolver callbacks) guarantees the linker is never re-entered
+			// mid-instantiation. The lock is released before evaluate(), so a dynamic
+			// import during evaluation can re-acquire it without deadlock.
+			await this.#serializeLink(async () => {
+				if (module.status === "unlinked") await module.link(this.#linkResolve);
+			});
 			if (module.status === "linked") await module.evaluate();
 		} catch (error) {
 			this.#invalidateFailedLoad(modulePath);
@@ -157,6 +168,17 @@ export class LocalModuleLoader {
 			this.#invalidateFailedLoad(modulePath);
 			throw module.error;
 		}
+	}
+
+	// Promise-chain mutex serializing node:vm link passes (see #linkAndEvaluate).
+	// #linkChain is kept non-rejecting so a failed link never wedges the queue.
+	#serializeLink<T>(run: () => Promise<T>): Promise<T> {
+		const result = this.#linkChain.then(run);
+		this.#linkChain = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
 	}
 
 	// Shared static-link resolver for `module.link()`. node:vm passes the referencing
