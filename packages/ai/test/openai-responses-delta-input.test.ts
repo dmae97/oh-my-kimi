@@ -63,4 +63,26 @@ describe("buildResponsesDeltaInput streaming-symbol scrub", () => {
 		};
 		expect(buildResponsesDeltaInput(previous, previousResponseItems, current)).toBeNull();
 	});
+
+	it("breaks the chain when a top-level request option changes (undefined → value)", () => {
+		// `deepEqualsWithout` must not treat a present-`undefined` option as equal
+		// to a defined one, or chaining would survive a real option change.
+		const items = baselineItems();
+		const appended: ResponseInputItem = {
+			type: "function_call",
+			id: "fc_2",
+			call_id: "call_2",
+			name: "bar",
+			arguments: "{}",
+		};
+		const previous: { input: ResponseInputItem[]; reasoning?: unknown } = {
+			input: [items[0]],
+			reasoning: undefined,
+		};
+		const current: { input: ResponseInputItem[]; reasoning?: unknown } = {
+			input: [items[0], items[1], appended],
+			reasoning: { effort: "high" },
+		};
+		expect(buildResponsesDeltaInput(previous, [items[1]], current)).toBeNull();
+	});
 });

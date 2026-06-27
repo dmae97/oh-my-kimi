@@ -2536,12 +2536,14 @@ export function populateResponsesUsageFromResponse(
  * Structural equality for the chain prefix/option check, equivalent to the
  * default {@link Bun.deepEquals} (own enumerable keys, `absent ≡ own-undefined`)
  * except for two deliberate exclusions:
- *  - **symbol-keyed properties are ignored** — `for…in` enumerates only own
- *    *string* keys (these are plain wire items with no enumerable prototype),
- *    which is how the transient streaming symbols (`block-symbols.ts`) stamped
- *    onto live request items are excluded (the deep-cloned baseline never
- *    carries them). Do NOT add an `Object.getOwnPropertySymbols` pass, or those
- *    symbols resurface and break chaining.
+ *  - **symbol-keyed properties are ignored** — `for…in` walks enumerable
+ *    *string* keys only (never symbols); these are plain wire items whose
+ *    prototype contributes no enumerable keys, so iteration is effectively
+ *    own-string-keyed. That is how the transient streaming symbols
+ *    (`block-symbols.ts`) stamped onto live request items are excluded (the
+ *    deep-cloned baseline never carries them). Do NOT add an
+ *    `Object.getOwnPropertySymbols` pass, or those symbols resurface and break
+ *    chaining.
  *  - keys listed in `omitKeys` are skipped (the option compare omits `input`
  *    and the per-turn `client_metadata`).
  * A defined value differing across sides IS a difference; a key undefined or

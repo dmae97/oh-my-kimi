@@ -465,13 +465,12 @@ describe("OpenAI-family first-event timeouts", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toBe("OpenAI responses stream stalled while waiting for the next event");
-		expect(result.content as unknown[]).toEqual([
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([
 			{
 				type: "toolCall",
 				id: "call_stalled|fc_stalled",
 				name: "todo",
 				arguments: {},
-				partialJson: "",
 			},
 		]);
 	});

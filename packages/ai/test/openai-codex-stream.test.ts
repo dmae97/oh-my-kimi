@@ -12,13 +12,9 @@ import { getAgentDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 const originalAgentDir = getAgentDir();
 const originalWebSocket = global.WebSocket;
 const originalCodexWebSocketRetryBudget = Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET;
-const originalCodexWebSocketRetryDelayMs = Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS;
 const originalCodexWebSocketV2 = Bun.env.PI_CODEX_WEBSOCKET_V2;
-const originalCodexWebSocketIdleTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS;
-const originalCodexWebSocketFirstEventTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS;
 const originalCodexWebSocketPingIntervalMs = Bun.env.PI_CODEX_WEBSOCKET_PING_INTERVAL_MS;
 const originalCodexWebSocketPongTimeoutMs = Bun.env.PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS;
-const originalCodexWebSocketMessageQueueCapacity = Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY;
 const originalCodexWebSocketMaxIdleReuseMs = Bun.env.PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS;
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -33,13 +29,9 @@ afterEach(() => {
 	global.WebSocket = originalWebSocket;
 	setAgentDir(originalAgentDir);
 	restoreEnv("PI_CODEX_WEBSOCKET_RETRY_BUDGET", originalCodexWebSocketRetryBudget);
-	restoreEnv("PI_CODEX_WEBSOCKET_RETRY_DELAY_MS", originalCodexWebSocketRetryDelayMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_V2", originalCodexWebSocketV2);
-	restoreEnv("PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS", originalCodexWebSocketIdleTimeoutMs);
-	restoreEnv("PI_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT_MS", originalCodexWebSocketFirstEventTimeoutMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_PING_INTERVAL_MS", originalCodexWebSocketPingIntervalMs);
 	restoreEnv("PI_CODEX_WEBSOCKET_PONG_TIMEOUT_MS", originalCodexWebSocketPongTimeoutMs);
-	restoreEnv("PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY", originalCodexWebSocketMessageQueueCapacity);
 	restoreEnv("PI_CODEX_WEBSOCKET_MAX_IDLE_REUSE_MS", originalCodexWebSocketMaxIdleReuseMs);
 	vi.restoreAllMocks();
 });
@@ -893,9 +885,7 @@ describe("openai-codex streaming", () => {
 	it("falls back to SSE when the websocket inbound queue overflows", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
-		Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY = "1";
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 		const token = createCodexTestToken();
 		const sse = createCompletedCodexSse("Recovered over SSE");
 		const fetchMock = vi.fn(async () => {
@@ -905,6 +895,10 @@ describe("openai-codex streaming", () => {
 			});
 		});
 
+		// Match the provider's Number($env || 4096) resolution so the burst is exactly
+		// one frame past whatever capacity the provider loaded.
+		const resolvedQueueCapacity = Number(Bun.env.PI_CODEX_WEBSOCKET_MESSAGE_QUEUE_CAPACITY || 4096);
+
 		class QueueOverflowWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
 				super(url, options);
@@ -912,11 +906,12 @@ describe("openai-codex streaming", () => {
 			}
 
 			send(): void {
-				this.sendJson({ type: "response.created", response: { id: "resp_overflow" } });
-				this.sendJson({
-					type: "response.output_item.added",
-					item: { type: "message", id: "msg_overflow", role: "assistant", status: "in_progress", content: [] },
-				});
+				// One synchronous burst one frame past the resolved queue capacity:
+				// the consumer can't drain between frames, so the overflow guard fails
+				// the queue and forces the WS→SSE fallback.
+				for (let i = 0; i <= resolvedQueueCapacity; i += 1) {
+					this.sendJson({ type: "response.output_text.delta", delta: "x" });
+				}
 			}
 		}
 		global.WebSocket = QueueOverflowWebSocket as unknown as typeof WebSocket;
@@ -1827,7 +1822,6 @@ describe("openai-codex streaming", () => {
 		).toBase64();
 		const token = `aaa.${payload}.bbb`;
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 		const sse = `${[
 			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
 			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
@@ -3245,7 +3239,6 @@ describe("openai-codex streaming", () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "2";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 		const token = createCodexTestToken();
 
 		const sse = `${[
@@ -3369,7 +3362,6 @@ describe("openai-codex streaming", () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "1";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -3443,7 +3435,6 @@ describe("openai-codex streaming", () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
@@ -3772,7 +3763,6 @@ describe("openai-codex streaming", () => {
 		).toBase64();
 		const token = `aaa.${payload}.bbb`;
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 
 		const sse = `${[
 			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_sse", role: "assistant", status: "in_progress", content: [] } })}`,
@@ -3839,7 +3829,6 @@ describe("openai-codex streaming", () => {
 		).toBase64();
 		const token = `aaa.${payload}.bbb`;
 		Bun.env.PI_CODEX_WEBSOCKET_RETRY_BUDGET = "0";
-		Bun.env.PI_CODEX_WEBSOCKET_RETRY_DELAY_MS = "1";
 
 		const sse = `${[
 			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_sse_replay", role: "assistant", status: "in_progress", content: [] } })}`,
