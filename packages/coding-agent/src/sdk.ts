@@ -8,14 +8,7 @@ import {
 	filterProviderReplayMessages,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import {
-	type Context,
-	type CredentialDisabledEvent,
-	type Message,
-	type Model,
-	type SimpleStreamOptions,
-	streamSimple,
-} from "@oh-my-pi/pi-ai";
+import type { Context, CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import {
 	getOpenAICodexTransportDetails,
@@ -49,7 +42,7 @@ import {
 	resolveModelRoleValue,
 } from "./config/model-resolver";
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
-import { Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "./config/settings";
+import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
 import "./discovery";
 import { initializeWithSettings } from "./discovery";
@@ -125,6 +118,7 @@ import {
 import { clampProviderContextImages } from "./session/provider-image-budget";
 import { getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
+import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { SnapcompactInlineTransformer } from "./session/snapcompact-inline";
 import { createSnapcompactSavingsRecorder } from "./session/snapcompact-savings-journal";
 import { closeAllConnections } from "./ssh/connection-manager";
@@ -2537,6 +2531,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// One-shot launch-latency marker: fired the first time the loop dispatches
 		// a chat request to the provider transport. See onFirstChatDispatch.
 		let notifyFirstChatDispatch = options.onFirstChatDispatch;
+		// Shared, settings-aware stream wrapper used by both the main agent and
+		// the advisor (via AgentSessionConfig.streamFn). Keeps OpenRouter
+		// sticky-routing variants, antigravity endpoint routing, in-flight caps,
+		// and the loop guard consistent across every agent the session drives.
+		const settingsAwareStreamFn = createSettingsAwareStreamFn(settings);
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2587,23 +2586,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						});
 					}
 				}
-				const openrouterRoutingPreset = settings.get("providers.openrouterVariant");
-				const openrouterVariant =
-					openrouterRoutingPreset && openrouterRoutingPreset !== "default" ? openrouterRoutingPreset : undefined;
-				const antigravityEndpointMode = settings.get("providers.antigravityEndpoint");
-				return streamSimple(streamModel, context, {
-					...streamOptions,
-					openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
-					antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
-					maxInFlightRequests: validateProviderMaxInFlightRequests(
-						streamOptions?.maxInFlightRequests ?? settings.get("providers.maxInFlightRequests"),
-					),
-					loopGuard: {
-						enabled: settings.get("model.loopGuard.enabled"),
-						checkAssistantContent: settings.get("model.loopGuard.checkAssistantContent"),
-						...streamOptions?.loopGuard,
-					},
-				});
+				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
 			transformToolCallArguments: (args, _toolName) => {
@@ -2719,8 +2702,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			toolRegistry,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
+			transformProviderContext,
 			onPayload,
 			onResponse,
+			advisorStreamFn: settingsAwareStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
 			reloadSshTool,

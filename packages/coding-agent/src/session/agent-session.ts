@@ -36,6 +36,7 @@ import {
 	type CompactionSummaryMessage,
 	countTokens,
 	resolveTelemetry,
+	type StreamFn,
 	ThinkingLevel,
 	type ToolChoiceDirective,
 } from "@oh-my-pi/pi-agent-core";
@@ -80,6 +81,7 @@ import type { ProtectedToolMatcher } from "@oh-my-pi/pi-agent-core/compaction/to
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
+	Context,
 	ImageContent,
 	Message,
 	MessageAttribution,
@@ -513,6 +515,21 @@ export interface AgentSessionConfig {
 	builtInToolNames?: Iterable<string>;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
+	/**
+	 * Per-request transform applied after `convertToLlm` and before the
+	 * provider call. Used for snapcompact, secret obfuscation, and image
+	 * clamping. When supplied via {@link createAgentSession}, the advisor agent
+	 * inherits this so its requests undergo the same shaping as the main turn.
+	 */
+	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
+	/**
+	 * Stream wrapper passed to the advisor agent so its requests apply the
+	 * session's `providers.openrouterVariant`, `providers.antigravityEndpoint`,
+	 * `providers.maxInFlightRequests`, and `model.loopGuard.*` settings —
+	 * keeping OpenRouter sticky-routing / response caching consistent with the
+	 * main agent. Defaults to plain `streamSimple` when omitted.
+	 */
+	advisorStreamFn?: StreamFn;
 	/** Provider payload hook used by the active session request path */
 	onPayload?: SimpleStreamOptions["onPayload"];
 	/** Provider response hook used by the active session request path */
@@ -1334,6 +1351,8 @@ export class AgentSession {
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
+	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
+	#advisorStreamFn: StreamFn | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt:
 		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
@@ -1659,6 +1678,8 @@ export class AgentSession {
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
+		this.#transformProviderContext = config.transformProviderContext;
+		this.#advisorStreamFn = config.advisorStreamFn;
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
 		// Avoid wrapping in an `async` closure when no user callback is configured: the
@@ -2005,6 +2026,25 @@ export class AgentSession {
 					conversationId: undefined,
 				}
 			: undefined;
+		// Mirror the provider-shaping options the SDK installs on the main agent
+		// so the advisor's requests cache, route, and obfuscate identically:
+		//
+		// - `streamFn`/`advisorStreamFn` carries the session's OpenRouter sticky
+		//   variant, antigravity endpoint mode, in-flight cap, and loop guard.
+		// - `onPayload`/`onResponse`/`onSseEvent` keep extension hooks plus the
+		//   per-session `RawSseDebugBuffer` recording advisor traffic too.
+		// - `providerSessionState` shares Codex websockets / Anthropic fast-mode
+		//   fallback state with the main agent so both turns reuse the same
+		//   transport caches.
+		// - `promptCacheKey` pins OpenAI Responses (and any provider that reads
+		//   `prompt_cache_key`) to the advisor session id so consecutive advisor
+		//   turns land on the same cache shard.
+		// - `transformProviderContext` applies snapcompact, secret obfuscation,
+		//   and image clamping to advisor requests like the main turn.
+		//
+		// Without this parity, OpenRouter advisor calls bypassed the variant
+		// suffix and prompt-cache key and produced inconsistent cache hits
+		// (see can1357/oh-my-pi#3639).
 		const advisorAgent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2014,7 +2054,14 @@ export class AgentSession {
 			},
 			appendOnlyContext,
 			sessionId: advisorSessionId,
+			promptCacheKey: advisorSessionId,
+			providerSessionState: this.#providerSessionState,
 			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+			streamFn: this.#advisorStreamFn,
+			onPayload: this.#onPayload,
+			onResponse: this.#onResponse,
+			onSseEvent: this.#onSseEvent,
+			transformProviderContext: this.#transformProviderContext,
 			intentTracing: false,
 			telemetry: advisorTelemetry,
 			serviceTier: advisorServiceTier,
@@ -13698,6 +13745,17 @@ export class AgentSession {
 	 */
 	isAdvisorActive(): boolean {
 		return this.#advisorAgent !== undefined;
+	}
+
+	/**
+	 * The live advisor `Agent`, or `undefined` when no advisor runtime is
+	 * attached. Surfaced for diagnostics (`/dump advisor` already serializes
+	 * its transcript via {@link formatAdvisorHistoryAsText}) and so callers can
+	 * verify the advisor inherits the session's provider-shaping options
+	 * (`streamFn`, `promptCacheKey`, `providerSessionState`, ...).
+	 */
+	getAdvisorAgent(): Agent | undefined {
+		return this.#advisorAgent;
 	}
 
 	/**
