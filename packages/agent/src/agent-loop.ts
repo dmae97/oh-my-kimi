@@ -535,7 +535,7 @@ export function normalizeMessagesForProvider(
 }
 
 const INTENT_FIELD_DESCRIPTION = "concise intent";
-const INTENT_SCHEMA_COMBINATORS = ["anyOf", "oneOf", "allOf"] as const;
+const INTENT_SCHEMA_UNION_KEYS = ["anyOf", "oneOf"] as const;
 
 function injectIntentIntoSchema(
 	schema: unknown,
@@ -543,20 +543,32 @@ function injectIntentIntoSchema(
 	describeIntent = true,
 ): unknown {
 	if (!schema || typeof schema !== "object" || Array.isArray(schema)) return schema;
-	let schemaRecord = schema as Record<string, unknown>;
-	for (const key of INTENT_SCHEMA_COMBINATORS) {
-		const variants = schemaRecord[key];
-		if (!Array.isArray(variants)) continue;
-		schemaRecord = {
-			...schemaRecord,
-			[key]: variants.map(variant => injectIntentIntoSchema(variant, mode, describeIntent)),
-		};
-	}
+	const schemaRecord = schema as Record<string, unknown>;
 	const propertiesValue = schemaRecord.properties;
-	const properties =
-		propertiesValue && typeof propertiesValue === "object" && !Array.isArray(propertiesValue)
-			? (propertiesValue as Record<string, unknown>)
-			: {};
+	const hasOwnProperties =
+		propertiesValue !== null && typeof propertiesValue === "object" && !Array.isArray(propertiesValue);
+
+	// Pure union root (anyOf/oneOf with no own properties): push `i` into each
+	// alternative branch so each closed shape keeps `additionalProperties: false`
+	// honest with intent tracing. Adding a sibling root `properties: { i }` /
+	// `required: [i]` would force every input to satisfy both root *and* a
+	// branch, leaving no satisfiable shape because each branch's
+	// `additionalProperties: false` rejects every other field — and OpenAI
+	// strict sanitization later promotes that sibling to a closed root
+	// `type: "object"` that rejects every non-`i` key outright. allOf is not
+	// alternation (its members are sub-constraints), so we don't recurse into it.
+	if (!hasOwnProperties) {
+		for (const key of INTENT_SCHEMA_UNION_KEYS) {
+			const variants = schemaRecord[key];
+			if (!Array.isArray(variants)) continue;
+			return {
+				...schemaRecord,
+				[key]: variants.map(variant => injectIntentIntoSchema(variant, mode, describeIntent)),
+			};
+		}
+	}
+
+	const properties = hasOwnProperties ? (propertiesValue as Record<string, unknown>) : {};
 	const requiredValue = schemaRecord.required;
 	const required = Array.isArray(requiredValue)
 		? requiredValue.filter((item): item is string => typeof item === "string")

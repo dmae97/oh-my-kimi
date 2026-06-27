@@ -123,3 +123,50 @@ describe("normalizeTools — omit-intent tools", () => {
 		expect(hasField(out?.parameters, "nested")).toBe(true);
 	});
 });
+
+describe("normalizeTools — union-shaped schemas", () => {
+	const variantOne = type({
+		action: type("'open'").describe("operation"),
+		"name?": "string",
+	});
+	const variantTwo = type({
+		action: type("'run'").describe("operation"),
+		code: "string",
+	});
+	const unionSchema = variantOne.or(variantTwo);
+
+	function unionTool(): AgentTool<typeof unionSchema, { ok: true }> {
+		return {
+			name: "discriminated",
+			label: "Discriminated",
+			description: "tool whose parameters union over an action discriminator",
+			parameters: unionSchema,
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+	}
+
+	it("injects the intent field into each anyOf branch", () => {
+		const out = normalizeTools([unionTool()], true)?.[0];
+		const params = out?.parameters as {
+			anyOf?: Array<{ properties?: Record<string, unknown>; required?: string[] }>;
+		};
+		const branches = params.anyOf ?? [];
+		expect(branches.length).toBeGreaterThan(0);
+		for (const branch of branches) {
+			expect(branch.properties?.[INTENT_FIELD]).toBeDefined();
+			expect(branch.required ?? []).toContain(INTENT_FIELD);
+		}
+	});
+
+	it("does not add root-sibling properties next to a pure anyOf", () => {
+		// Root must stay a pure union; adding sibling `properties: { i }` /
+		// `required: [i]` collides with each closed branch's
+		// `additionalProperties: false` and leaves no satisfiable input.
+		const out = normalizeTools([unionTool()], true)?.[0];
+		const params = out?.parameters as Record<string, unknown>;
+		expect(params.properties).toBeUndefined();
+		expect(params.required).toBeUndefined();
+	});
+});
