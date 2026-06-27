@@ -91,7 +91,9 @@ function shouldRetryResponse(response: Response): boolean {
 	if (shouldRetryHeader === "true") return true;
 	if (shouldRetryHeader === "false") return false;
 	const status = response.status;
-	return status === 408 || status === 409 || status === 429 || status >= 500;
+	// Canonical transient set (408/429/5xx) plus 409, which Anthropic's client
+	// also retries.
+	return AIError.isTransientStatus(status) || status === 409;
 }
 
 /** Server-suggested delay (`retry-after-ms`, then `retry-after` seconds or HTTP date). */

@@ -4,6 +4,7 @@
  * Automatically detects OAuth requirements from MCP server responses
  * and extracts authentication endpoints.
  */
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 export interface OAuthEndpoints {
@@ -23,8 +24,8 @@ export interface AuthDetectionResult {
 	message?: string;
 }
 
-function parseMcpAuthServerUrl(errorMessage: string, serverUrl?: string): string | undefined {
-	const match = errorMessage.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
+export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): string | undefined {
+	const match = error.message.match(/Mcp-Auth-Server:\s*([^;\]\s]+)/i);
 	if (!match?.[1]) return undefined;
 
 	try {
@@ -32,32 +33,6 @@ function parseMcpAuthServerUrl(errorMessage: string, serverUrl?: string): string
 	} catch {
 		return undefined;
 	}
-}
-
-export function extractMcpAuthServerUrl(error: Error, serverUrl?: string): string | undefined {
-	return parseMcpAuthServerUrl(error.message, serverUrl);
-}
-
-/**
- * Detect if an error indicates authentication is required.
- * Checks for common auth error patterns.
- */
-export function detectAuthError(error: Error): boolean {
-	const errorMsg = error.message.toLowerCase();
-
-	// Check for HTTP auth status codes
-	if (
-		errorMsg.includes("401") ||
-		errorMsg.includes("403") ||
-		errorMsg.includes("unauthorized") ||
-		errorMsg.includes("forbidden") ||
-		errorMsg.includes("authentication required") ||
-		errorMsg.includes("authentication failed")
-	) {
-		return true;
-	}
-
-	return false;
 }
 
 /**
@@ -200,7 +175,8 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
  * Returns structured info about what auth is needed.
  */
 export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectionResult {
-	if (!detectAuthError(error)) {
+	// No auth required unless the error carries an HTTP auth status / auth-failure phrasing.
+	if (!AIError.is(AIError.classify(error), AIError.Flag.AuthFailed)) {
 		return { requiresAuth: false };
 	}
 

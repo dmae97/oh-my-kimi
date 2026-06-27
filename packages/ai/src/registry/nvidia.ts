@@ -43,10 +43,9 @@ export async function loginNvidia(options: OAuthController): Promise<string> {
 			fetch: options.fetch,
 		});
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		const statusMatch = message.match(/\((\d{3})\)/);
-		const statusCode = statusMatch?.[1];
-		if (statusCode === "401" || statusCode === "403") {
+		// A real auth rejection (401/403) is fatal; any other validation-endpoint
+		// failure is non-fatal — skip validation and trust the supplied key.
+		if (AIError.is(AIError.classify(error), AIError.Flag.AuthFailed)) {
 			throw error;
 		}
 		options.onProgress?.("Skipping NVIDIA validation endpoint; continuing with provided API key.");

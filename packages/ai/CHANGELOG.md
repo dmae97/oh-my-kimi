@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Unified transient status code checks across providers using standardized retry logic
+
 - Migrated error handling from legacy `errors.ts` and `utils/error-id.ts` into comprehensive `src/error/` module
 - Reorganized `rate-limit-utils.ts` functions into `error/rate-limit.ts` with improved naming (`isUsageLimit`, `isUsageLimitOutcome`)
 - Unified error classification via `AIError.classify()` and `AIError.classifyMessage()` replacing scattered `classifyError()` implementations
@@ -48,7 +50,6 @@
 
 - Improved recovery and rendering of demoted cross-provider reasoning blocks
 - Enhanced reliability of transient error classification during provider stream processing
-
 - Improved error message consistency across all providers with structured error formatting
 - Corrected error classification for rate-limit vs transient failures in auth retry logic
 - Fixed OAuth token refresh error handling with proper error type discrimination

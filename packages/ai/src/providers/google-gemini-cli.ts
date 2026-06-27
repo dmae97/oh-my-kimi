@@ -895,7 +895,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					}
 
 					if (!response.ok) {
-						if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
+						if (AIError.isTransientStatus(response.status)) {
 							if (!isLastEndpoint) {
 								continue;
 							}
@@ -998,7 +998,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					break;
 				} catch (error) {
 					const status = extractHttpStatusFromError(error);
-					if (status === 429 || (status !== undefined && status >= 500 && status < 600)) {
+					if (AIError.isTransientStatus(status)) {
 						if (!isLastEndpoint && !started) {
 							continue;
 						}
