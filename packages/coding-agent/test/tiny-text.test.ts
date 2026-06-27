@@ -141,6 +141,28 @@ describe("normalizeGeneratedTitle source-aware casing", () => {
 			"Add retry to the for loop",
 		);
 	});
+
+	it("does not re-shout emphatic ALL-CAPS the model normalized to sentence case", () => {
+		// Reported regression: the user shouted "ALL ERROR HANDLING" / "IDIOTIC"
+		// for emphasis; the model returned clean sentence case and we must not
+		// restore the shouting over it ("error handling" stayed "ERROR HANDLING").
+		expect(
+			normalizeGeneratedTitle(
+				"Unify error handling with error IDs",
+				"unify ALL ERROR HANDLING instead of IDIOTIC substring checks",
+			),
+		).toBe("Unify error handling with error IDs");
+	});
+
+	it("never re-shouts emphatic all-caps over the model's sentence case", () => {
+		// Short shouts qualify too: FIX/THE/BUG must not be restored.
+		expect(normalizeGeneratedTitle("fix the bug now", "FIX the BUG NOW")).toBe("fix the bug now");
+	});
+
+	it("preserves an acronym the model itself produced", () => {
+		// All-caps restoration is dropped, but the model's own casing passes through.
+		expect(normalizeGeneratedTitle("fix the API timeout", "fix the api timeout")).toBe("fix the API timeout");
+	});
 });
 
 describe("isLowSignalTitleInput", () => {
