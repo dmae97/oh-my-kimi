@@ -284,6 +284,35 @@ describe("MarketplaceManager", () => {
 		}
 	});
 
+	it("hides legacy marketplace entries that pre-date the scope field", async () => {
+		await ctx.manager.addMarketplace(FIXTURE_DIR);
+		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+
+		const registryPath = path.join(ctx.tmpDir, "installed_plugins.json");
+		const registry = (await Bun.file(registryPath).json()) as {
+			version: number;
+			plugins: Record<string, Array<Record<string, unknown>>>;
+		};
+		for (const entries of Object.values(registry.plugins)) {
+			for (const entry of entries) {
+				delete entry.scope;
+			}
+		}
+		await Bun.write(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+		const spies = mockPluginManagerPaths(ctx.tmpDir);
+		try {
+			const manager = new PluginManager(ctx.tmpDir);
+			const plugins = await manager.list();
+			const checks = await manager.doctor();
+
+			expect(plugins.map(plugin => plugin.name)).toEqual([]);
+			expect(checks.filter(check => check.name.includes("hello-plugin"))).toEqual([]);
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+	});
+
 	it("installPlugin keeps same-name local runtime links visible", async () => {
 		await ctx.manager.addMarketplace(FIXTURE_DIR);
 		await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
