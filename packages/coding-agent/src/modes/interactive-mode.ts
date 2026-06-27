@@ -1478,11 +1478,47 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	rebuildChatFromMessages(): void {
+		// Mid-stream rebuilds (e.g. `/shake`, theme/setting changes that touch the
+		// transcript) replay only committed `state.messages`. The agent's in-flight
+		// `streamMessage` and its still-pending tool calls live OUTSIDE
+		// `state.messages` until `message_end`, so a plain clear+replay detaches
+		// their UI components while keeping the `streamingComponent` / `pendingTools`
+		// references — subsequent `message_update`/`message_end` events would then
+		// update orphaned components that never re-render and the live LLM output
+		// vanishes from the chat (#3656). Snapshot the in-flight components,
+		// clear+replay, then re-append them in their original chat-container order
+		// and restore the `pendingTools` map so streaming routes back into them.
+		const liveComponents: Component[] = [];
+		const livePendingTools = new Map<string, ToolExecutionHandle>();
+		if (this.session?.isStreaming) {
+			const liveSet = new Set<Component>();
+			if (this.streamingComponent) liveSet.add(this.streamingComponent);
+			for (const [id, component] of this.pendingTools) {
+				livePendingTools.set(id, component);
+				liveSet.add(component as unknown as Component);
+			}
+			if (liveSet.size > 0) {
+				for (const child of this.chatContainer.children) {
+					if (liveSet.has(child)) liveComponents.push(child);
+				}
+			}
+		}
 		this.chatContainer.clear();
 		// Live display uses the compacted transcript tail; export/resume callers
 		// can still request the full inline compaction history.
 		const context = this.viewSession.buildTranscriptSessionContext({ collapseCompactedHistory: true });
 		this.renderSessionContext(context);
+		for (const child of liveComponents) {
+			this.chatContainer.addChild(child);
+		}
+		// `renderSessionContext` clears `pendingTools` at start AND end so the
+		// reconstructed historical tool components don't leak into live tracking.
+		// Restore the in-flight entries afterwards so the next streamed tool-call
+		// delta is routed into the preserved component instead of stacking a
+		// duplicate ToolExecutionComponent below it.
+		for (const [id, component] of livePendingTools) {
+			this.pendingTools.set(id, component);
+		}
 		// During the pre-streaming window — after `startPendingSubmission` has
 		// optimistically rendered the user's message but before the user
 		// `message_start` event lands it in `session` entries — any rebuild
