@@ -1,3 +1,5 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+
 export function canonicalizeMessage(text: string | null | undefined): string {
 	if (!text) return "";
 	const trimmed = text.trim();
@@ -79,6 +81,7 @@ export function formatThinkingForDisplay(text: string, proseOnly: boolean): stri
 	return formatted;
 }
 
+/** Whether a formatted thinking block has non-placeholder content worth rendering. */
 export function hasDisplayableThinking(
 	text: string | null | undefined,
 	formattedText: string | null | undefined,
@@ -86,4 +89,16 @@ export function hasDisplayableThinking(
 	if (!text) return false;
 	if (!formattedText) return false;
 	return formattedText.length > 0 && canonicalizeMessage(text).length > 0;
+}
+
+/** Whether an assistant message contains thinking content the TUI can reveal. */
+export function messageHasDisplayableThinking(message: AgentMessage, proseOnly: boolean): boolean {
+	if (message.role !== "assistant") return false;
+	for (const content of message.content) {
+		if (content.type !== "thinking") continue;
+		if (hasDisplayableThinking(content.thinking, formatThinkingForDisplay(content.thinking, proseOnly))) {
+			return true;
+		}
+	}
+	return false;
 }

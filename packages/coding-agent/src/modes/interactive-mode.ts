@@ -112,6 +112,7 @@ import { renderTreeList } from "../tui/tree-list";
 import type { EventBus } from "../utils/event-bus";
 import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
+import { messageHasDisplayableThinking } from "../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
 import {
 	isSearchProviderId,
@@ -413,14 +414,27 @@ export class InteractiveMode implements InteractiveModeContext {
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
 	todoPhases: TodoPhase[] = [];
 	hideThinkingBlock = false;
+	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
+	/** Whether the visible session has produced thinking content the user can reveal. */
+	get hasDisplayableThinkingContent(): boolean {
+		return this.#sessionsWithDisplayableThinkingContent.has(this.viewSession);
+	}
+	/** Record received reasoning content so Ctrl+T can reveal it even when model metadata says thinking is off. */
+	noteDisplayableThinkingContent(message: AgentMessage): void {
+		if (messageHasDisplayableThinking(message, this.proseOnlyThinking)) {
+			this.#sessionsWithDisplayableThinkingContent.add(this.viewSession);
+		}
+	}
 	/**
-	 * Effective thinking-block visibility: hidden when the user's setting is on
-	 * OR the session thinking level is "off". Some providers (MiniMax, GLM,
-	 * DeepSeek) return thinking blocks even with reasoning disabled; this
-	 * respects the user's intent when they set thinking to "off" (#626).
+	 * Effective thinking-block visibility: hidden when the user's setting is on,
+	 * or while thinking is "off" before the session has actually produced
+	 * displayable thinking content. Some providers return thinking blocks without
+	 * advertising reasoning support, so observed content unlocks the visibility
+	 * toggle.
 	 */
 	get effectiveHideThinkingBlock(): boolean {
-		return this.hideThinkingBlock || (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		const thinkingOff = (this.viewSession?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
+		return this.hideThinkingBlock || (thinkingOff && !this.hasDisplayableThinkingContent);
 	}
 	proseOnlyThinking = true;
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
@@ -3583,6 +3597,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		sessionContext: SessionContext,
 		options?: { updateFooter?: boolean; populateHistory?: boolean },
 	): void {
+		for (const message of sessionContext.messages) {
+			this.noteDisplayableThinkingContent(message);
+		}
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
 	}
 

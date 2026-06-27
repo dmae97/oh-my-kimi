@@ -1739,14 +1739,14 @@ export class InputController {
 	}
 
 	toggleThinkingBlockVisibility(): void {
-		// When thinking is "off", thinking blocks are always hidden (some
-		// providers return them regardless). The toggle is meaningless in
-		// that state — inform the user instead of silently flipping the
-		// persisted value. When thinking is on, the toggle works normally
-		// even if blocks are already hidden (user may want to show them).
+		// When thinking is "off" and the session has not produced reasoning
+		// content, thinking blocks stay auto-hidden; the toggle would only corrupt
+		// the persisted preference. OpenAI-compatible servers can stream reasoning
+		// without advertising model support, so observed thinking content unlocks
+		// the display toggle.
 		const thinkingOff =
 			((this.ctx.viewSession ?? this.ctx.session)?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
-		if (thinkingOff) {
+		if (thinkingOff && !this.ctx.hasDisplayableThinkingContent) {
 			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
 			return;
 		}

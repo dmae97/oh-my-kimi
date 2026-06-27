@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Ctrl+T staying locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata. ([#3669](https://github.com/can1357/oh-my-pi/issues/3669))
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
