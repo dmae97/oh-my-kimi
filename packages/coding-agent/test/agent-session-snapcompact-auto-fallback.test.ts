@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { Message } from "@oh-my-pi/pi-ai";
+import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -19,15 +20,11 @@ interface Harness {
 }
 
 interface HarnessOptions {
-	activeModel: { provider: string; id: string };
-	seedMessages?: AgentMessage[];
+	activeModel: { provider: GeneratedProvider; id: string };
+	seedMessages?: Message[];
 }
 
-async function createHarness(
-	tempDir: TempDir,
-	authStorage: AuthStorage,
-	options: HarnessOptions,
-): Promise<Harness> {
+async function createHarness(tempDir: TempDir, authStorage: AuthStorage, options: HarnessOptions): Promise<Harness> {
 	const activeModel = getBundledModel(options.activeModel.provider, options.activeModel.id);
 	if (!activeModel) throw new Error(`Missing bundled model ${options.activeModel.provider}/${options.activeModel.id}`);
 	authStorage.setRuntimeApiKey(options.activeModel.provider, "test-key");
