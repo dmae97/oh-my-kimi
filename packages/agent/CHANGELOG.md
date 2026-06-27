@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added `title_change` session metadata to the compaction entry type union so hosts with title audit entries remain type-compatible.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

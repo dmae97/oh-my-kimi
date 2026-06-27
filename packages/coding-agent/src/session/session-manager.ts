@@ -39,13 +39,16 @@ import {
 	type SessionHeader,
 	type SessionInitEntry,
 	type SessionMessageEntry,
+	type SessionTitleSource,
 	type SessionTreeNode,
 	type ThinkingLevelChangeEntry,
+	TITLE_CHANGE_ENTRY_TYPE,
+	type TitleChangeEntry,
 	type TtsrInjectionEntry,
 	type UsageStatistics,
 } from "./session-entries";
 import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
-import { loadEntriesFromFile, resolveBlobRefsInEntries } from "./session-loader";
+import { loadEntriesFromFile, readTitleSlotFromFile, resolveBlobRefsInEntries } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -60,6 +63,7 @@ import {
 	type SessionStorage,
 	type SessionStorageWriter,
 } from "./session-storage";
+import { serializeTitleSlot } from "./session-title-slot";
 
 const JSONL_SUFFIX_LENGTH = ".jsonl".length;
 
@@ -298,8 +302,10 @@ interface SessionManagerStateSnapshot {
 	sessionDir: string;
 	sessionId: string;
 	sessionName: string | undefined;
-	titleSource: "auto" | "user" | undefined;
+	titleSource: SessionTitleSource | undefined;
 	sessionFile: string | undefined;
+	titleUpdatedAt: string;
+	hasTitleSlot: boolean;
 	onDisk: boolean;
 	needsRewrite: boolean;
 	header: SessionHeader;
@@ -334,9 +340,11 @@ export class SessionManager {
 
 	#sessionId = "";
 	#sessionName: string | undefined;
-	#titleSource: "auto" | "user" | undefined;
+	#titleSource: SessionTitleSource | undefined;
 	#sessionFile: string | undefined;
 	#header!: SessionHeader;
+	#titleUpdatedAt = "";
+	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
 
@@ -471,8 +479,17 @@ export class SessionManager {
 		return `${JSON.stringify(prepareEntryForPersistence(entry, this.#blobs))}\n`;
 	}
 
+	#titleSlotLine(): string {
+		return serializeTitleSlot({
+			title: this.#sessionName,
+			source: this.#titleSource,
+			updatedAt: this.#titleUpdatedAt || this.#header.timestamp,
+		});
+	}
+
 	#fileBody(): string {
-		let body = this.#lineFor(this.#header);
+		let body = this.#titleSlotLine();
+		body += this.#lineFor(this.#header);
 		for (const entry of this.#entries) body += this.#lineFor(entry);
 		return body;
 	}
@@ -501,6 +518,7 @@ export class SessionManager {
 			this.#storage.writeTextSync(this.#sessionFile, body);
 			this.#fileIsCurrent = true;
 			this.#rewriteRequired = false;
+			this.#hasTitleSlot = true;
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -523,6 +541,7 @@ export class SessionManager {
 				await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
 				this.#fileIsCurrent = true;
 				this.#rewriteRequired = false;
+				this.#hasTitleSlot = true;
 			},
 			{ epoch },
 		);
@@ -567,6 +586,8 @@ export class SessionManager {
 		this.#sessionId = mintSessionId();
 		this.#sessionName = undefined;
 		this.#titleSource = undefined;
+		this.#titleUpdatedAt = "";
+		this.#hasTitleSlot = true;
 
 		const timestamp = nowIso();
 		this.#header = {
@@ -577,6 +598,7 @@ export class SessionManager {
 			cwd: this.#cwd,
 			parentSession: options?.parentSession,
 		};
+		this.#titleUpdatedAt = timestamp;
 
 		this.#entries = [];
 		this.#index.clear();
@@ -611,6 +633,7 @@ export class SessionManager {
 		this.#sessionId = header.id;
 		this.#sessionName = header.title;
 		this.#titleSource = header.titleSource;
+		this.#titleUpdatedAt = header.timestamp;
 		this.#index.rebuild(entries);
 	}
 
@@ -693,6 +716,8 @@ export class SessionManager {
 			sessionId: this.#sessionId,
 			sessionName: this.#sessionName,
 			titleSource: this.#titleSource,
+			titleUpdatedAt: this.#titleUpdatedAt,
+			hasTitleSlot: this.#hasTitleSlot,
 			sessionFile: this.#sessionFile,
 			onDisk: this.#fileIsCurrent,
 			needsRewrite: this.#rewriteRequired,
@@ -717,6 +742,8 @@ export class SessionManager {
 		this.#applyEntries(snapshot.header, [...snapshot.entries]);
 		this.#sessionName = snapshot.sessionName;
 		this.#titleSource = snapshot.titleSource;
+		this.#titleUpdatedAt = snapshot.titleUpdatedAt;
+		this.#hasTitleSlot = snapshot.hasTitleSlot;
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
 		this.#adoptedArtifactManager = null;
@@ -733,6 +760,7 @@ export class SessionManager {
 		this.#sessionFile = resolvedSessionFile;
 		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 
+		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage);
 		if (fileEntries.length === 0) {
 			// Explicit but empty/missing path (e.g. --session flag): start fresh but
@@ -763,6 +791,8 @@ export class SessionManager {
 		}
 
 		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
+		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
+		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
 		this.#rewriteRequired = migrated;
 		this.#forceFileCreation = true;
@@ -815,6 +845,8 @@ export class SessionManager {
 		};
 		this.#sessionName = this.#header.title;
 		this.#titleSource = this.#header.titleSource;
+		this.#titleUpdatedAt = timestamp;
+		this.#hasTitleSlot = true;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = false;
 		this.#forceFileCreation = true;
@@ -1083,7 +1115,7 @@ export class SessionManager {
 	}
 
 	/** The source that set the session name: "user" (manual/RPC) or "auto" (generated title). */
-	get titleSource(): "auto" | "user" | undefined {
+	get titleSource(): SessionTitleSource | undefined {
 		return this.#titleSource;
 	}
 
@@ -1103,19 +1135,41 @@ export class SessionManager {
 	 * @param source "user" for explicit renames; "auto" for generated titles.
 	 *   Auto titles are ignored once the user has set a name.
 	 */
-	async setSessionName(name: string, source: "auto" | "user" = "auto"): Promise<boolean> {
+	async setSessionName(name: string, source: SessionTitleSource = "auto", trigger?: string): Promise<boolean> {
 		if (this.#titleSource === "user" && source === "auto") return false;
 
 		const title = SessionManager.#cleanTitle(name);
 		if (!title) return false;
 
+		const previousTitle = this.#sessionName;
+		const timestamp = nowIso();
 		this.#sessionName = title;
 		this.#titleSource = source;
+		this.#titleUpdatedAt = timestamp;
 		this.#header.title = title;
 		this.#header.titleSource = source;
 
+		const entry: TitleChangeEntry = {
+			type: TITLE_CHANGE_ENTRY_TYPE,
+			...this.#freshEntryFields(),
+			timestamp,
+			title,
+			source,
+		};
+		if (previousTitle) entry.previousTitle = previousTitle;
+		if (trigger) entry.trigger = trigger;
+		this.#recordEntry(entry);
+
 		if (this.#persist && this.#sessionFile && this.#storage.existsSync(this.#sessionFile)) {
-			await this.#rewriteAtomically();
+			if (this.#hasTitleSlot) {
+				try {
+					await this.#storage.updateSessionTitle(this.#sessionFile, { title, source, updatedAt: timestamp });
+				} catch {
+					await this.#rewriteAtomically();
+				}
+			} else {
+				await this.#rewriteAtomically();
+			}
 		}
 
 		this.#notifySessionNameListeners();
@@ -1484,6 +1538,8 @@ export class SessionManager {
 		this.#sessionId = newSessionId;
 		this.#sessionName = header.title;
 		this.#titleSource = header.titleSource;
+		this.#titleUpdatedAt = timestamp;
+		this.#hasTitleSlot = true;
 		this.#index.rebuild(this.#entries);
 		this.#artifactManager = null;
 		this.#artifactManagerSessionFile = null;
@@ -1542,7 +1598,7 @@ export class SessionManager {
 			cwd: path.resolve(cwd),
 		};
 		const file = path.join(sessionDir, `${fileSafeTimestamp(timestamp)}_${id}.jsonl`);
-		storage.writeTextSync(file, `${JSON.stringify(header)}\n`);
+		storage.writeTextSync(file, `${serializeTitleSlot({ updatedAt: timestamp })}${JSON.stringify(header)}\n`);
 		return file;
 	}
 
@@ -1577,6 +1633,8 @@ export class SessionManager {
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;
 		manager.#titleSource = manager.#header.titleSource;
+		manager.#titleUpdatedAt = nowIso();
+		manager.#hasTitleSlot = true;
 		manager.#entries = history;
 		manager.#index.rebuild(history);
 		manager.sanitizeLoadedOpenAIResponsesReplayMetadata();
