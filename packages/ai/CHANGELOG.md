@@ -6,6 +6,10 @@
 
 - Default reasoning context to `all_turns` for all Codex requests
 
+### Fixed
+
+- Fixed `/usage show` returning "No usage data available" when `providers.openai-codex.baseUrl` points at a `/responses`-only proxy (e.g. Headroom). `normalizeCodexBaseUrl` now falls back to the canonical ChatGPT origin for the `wham/usage` and `wham/rate-limit-reset-credits` account endpoints whenever the configured base URL is not on `chatgpt.com` / `chat.openai.com`, so streaming traffic keeps flowing through the proxy while usage requests go straight to OpenAI ([#3679](https://github.com/can1357/oh-my-pi/issues/3679)).
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
