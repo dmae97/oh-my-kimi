@@ -15,6 +15,7 @@
 ### Fixed
 
 - Improved robustness of MCP authentication error detection and header-based server discovery
+- Fixed `search` and AST tools accepting external read URLs by materializing fetched URL text through the read cache before path resolution. ([#3649](https://github.com/can1357/oh-my-pi/issues/3649))
 - Fixed reliable detection of 401/403 authorization failures during Smithery commands and HTTP RPCs
 - Prevented auto-generated session titles from accidentally re-shouting user all-caps text
 - Fixed auto-generated session titles re-shouting emphatic ALL-CAPS from the user's message. `reconcileTitleCasing` (`packages/coding-agent/src/tiny/text.ts`) restored any source token with interior/repeated uppercase, so shouting like "unify ALL ERROR HANDLING" turned the model's clean sentence case ("Unify error handling…") back into "Unify ERROR HANDLING…". Casing is now restored only from mixed-case identifiers the user typed deliberately (`TinyVMM`, `iOS`, `IDs`); pure all-caps is left to the model's own output.

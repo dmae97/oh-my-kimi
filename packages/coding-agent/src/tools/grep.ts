@@ -36,6 +36,7 @@ import {
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { type ArchiveReader, type ExtractedArchiveFile, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import type { ToolSession } from ".";
+import { materializeReadUrlToFile, parseReadUrlTarget } from "./fetch";
 import { createFileRecorder, formatResultPath } from "./file-recorder";
 import { classifyGroupedLines, formatGroupedFiles, groupLineIndicesByBlank } from "./grouped-file-output";
 import { formatMatchLine } from "./match-line-format";
@@ -971,6 +972,16 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
 						skills: this.session.skills,
+						resolveExternalUrl: async rawPath => {
+							const target = parseReadUrlTarget(rawPath);
+							if (!target) return undefined;
+							const materialized = await materializeReadUrlToFile(
+								this.session,
+								{ path: target.path, raw: target.raw },
+								signal,
+							);
+							return { sourcePath: materialized.path, immutable: true };
+						},
 					});
 					searchPath = scope.searchPath;
 					isDirectory = scope.isDirectory;
