@@ -1124,6 +1124,83 @@ describe("advisor", () => {
 			expect(failures).toHaveLength(2);
 		});
 
+		it("rolls advisor state back after each failed prompt so retries don't replay duplicate turns", async () => {
+			// The real `Agent` appends the user batch + a synthetic `stopReason: "error"`
+			// assistant turn before `state.error` is read. Without rollback, the runtime's
+			// retry/drop path would replay the failed batch on top of those orphans,
+			// duplicating session-update user turns and leaking dropped failures into the
+			// next successful run's context.
+			const state: { messages: AgentMessage[]; error?: string } = { messages: [] };
+			const rollbackCalls: number[] = [];
+			const lengthsBeforePrompt: number[] = [];
+			let shouldFail = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					lengthsBeforePrompt.push(state.messages.length);
+					state.messages.push({ role: "user", content: input, timestamp: Date.now() } as AgentMessage);
+					if (shouldFail) {
+						state.messages.push({
+							role: "assistant",
+							content: [{ type: "text", text: "" }],
+							stopReason: "error",
+							errorMessage: "404 No endpoints available",
+							timestamp: Date.now(),
+						} as unknown as AgentMessage);
+						state.error = "404 No endpoints available";
+					} else {
+						state.messages.push({
+							role: "assistant",
+							content: [{ type: "text", text: "ok" }],
+							timestamp: Date.now(),
+						} as unknown as AgentMessage);
+						state.error = undefined;
+					}
+				},
+				abort: () => {},
+				reset: () => {
+					state.messages.length = 0;
+					state.error = undefined;
+				},
+				rollbackTo: count => {
+					rollbackCalls.push(count);
+					if (count < state.messages.length) state.messages.length = count;
+					state.error = undefined;
+				},
+				state,
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			// Three failed prompts each rolled back to the empty baseline, so every retry
+			// saw a clean state.messages instead of stacked failed turns.
+			expect(lengthsBeforePrompt).toEqual([0, 0, 0]);
+			expect(rollbackCalls).toEqual([0, 0, 0]);
+			// The drop-after-3 path also left state.messages empty — no orphan failed
+			// turns leak into the next successful run's context.
+			expect(state.messages).toHaveLength(0);
+			expect(state.error).toBeUndefined();
+
+			// A subsequent successful run starts from the clean baseline and is NOT
+			// rolled back.
+			shouldFail = false;
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+
+			expect(lengthsBeforePrompt[lengthsBeforePrompt.length - 1]).toBe(0);
+			expect(rollbackCalls).toHaveLength(3);
+			expect(state.messages).toHaveLength(2);
+		});
+
 		it("drops the in-flight batch when a reset aborts the advisor prompt", async () => {
 			const promptInputs: string[] = [];
 			const { promise: firstPromptStarted, resolve: startFirstPrompt } = Promise.withResolvers<void>();

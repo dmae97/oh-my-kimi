@@ -2029,6 +2029,19 @@ export class AgentSession {
 				advisorAgent.reset();
 				appendOnlyContext.log.clear();
 			},
+			rollbackTo: count => {
+				// Drop the failed user batch + synthetic assistant-error turn
+				// `Agent.#runLoop` appended for a turn ending in `stopReason: "error"`.
+				// The append-only context auto-resyncs on the next prompt's
+				// `syncMessages` shrink path, but reset the sync cursor so the log
+				// can't carry the dropped tail forward if no further turn ever runs.
+				const messages = advisorAgent.state.messages;
+				if (count < messages.length) {
+					messages.length = count;
+				}
+				appendOnlyContext.resetSyncCursor();
+				advisorAgent.state.error = undefined;
+			},
 			state: advisorAgent.state,
 		};
 

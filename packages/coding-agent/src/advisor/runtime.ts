@@ -15,6 +15,12 @@ export interface AdvisorAgent {
 	prompt(input: string): Promise<void>;
 	abort(reason?: unknown): void;
 	reset(): void;
+	/**
+	 * Drop messages appended past `count`. Called after a failed `prompt()` so a
+	 * retry doesn't replay the failed user batch + synthetic assistant-error
+	 * turn `Agent.#runLoop` records on its internal state.
+	 */
+	rollbackTo?(count: number): void;
 	readonly state: { messages: AgentMessage[]; error?: string };
 }
 
@@ -244,6 +250,28 @@ export class AdvisorRuntime {
 		}
 	}
 
+	/**
+	 * Drop the user batch + synthetic assistant-error turn `Agent.#runLoop`
+	 * appended for a failed prompt so a retry replays a clean baseline and the
+	 * dropped-after-3 path never leaks orphan failures into the next successful
+	 * run. Prefers the agent's own `rollbackTo` (which also re-syncs its
+	 * append-only context); falls back to truncating `state.messages` for tests
+	 * that hand-roll a minimal facade.
+	 */
+	#rollbackFailedTurn(snapshot: number): void {
+		const messages = this.agent.state.messages;
+		if (messages.length <= snapshot) return;
+		try {
+			if (this.agent.rollbackTo) {
+				this.agent.rollbackTo(snapshot);
+				return;
+			}
+			messages.length = snapshot;
+		} catch (err) {
+			logger.debug("advisor rollback failed", { err: String(err) });
+		}
+	}
+
 	async #drain(): Promise<void> {
 		if (this.#busy) return;
 		this.#busy = true;
@@ -292,6 +320,12 @@ export class AdvisorRuntime {
 				}
 
 				let success = false;
+				// Capture the advisor's message count BEFORE the prompt so a failure can
+				// roll back the user batch + synthetic assistant-error turn `Agent.#runLoop`
+				// appends to internal state. Without this, a retry would replay the
+				// failed batch on top of the stale turns and the dropped-after-3 path
+				// would leak orphan failures into the next successful run's context.
+				const messageSnapshot = this.agent.state.messages.length;
 				try {
 					// Reset the host's per-update advisor state (one-advise-per-update
 					// gate) before each model cycle, so the new batch starts with a
@@ -315,6 +349,7 @@ export class AdvisorRuntime {
 					// (reset already cleared #pending and rewound the cursor) instead of
 					// requeuing it into the post-reset conversation.
 					if (this.#epoch !== epoch) continue;
+					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
 					this.#consecutiveFailures++;
 					if (this.#consecutiveFailures >= 3) {
