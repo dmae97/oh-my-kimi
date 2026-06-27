@@ -590,6 +590,12 @@ export interface AgentSessionConfig {
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/**
+	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
+	 * block for the advisor — the same standing instructions the primary agent
+	 * receives, so the reviewer holds the agent to them.
+	 */
+	advisorContextPrompt?: string;
+	/**
 	 * Strip tool descriptions from provider-bound tool specs on side requests
 	 * (handoff). Must match the session-start value used to build the system
 	 * prompt so inline descriptors are not also sent through provider schemas.
@@ -1220,6 +1226,7 @@ export class AgentSession {
 	#advisorAdviseTool?: AdviseTool;
 	#advisorReadOnlyTools?: AgentTool[];
 	#advisorWatchdogPrompt?: string;
+	#advisorContextPrompt?: string;
 	#advisorYieldQueueUnsubscribe?: () => void;
 	/** Persists the advisor agent's turns to `<session>/__advisor.jsonl` for stats
 	 *  attribution and Agent Hub observability. Undefined when no advisor is active. */
@@ -1643,6 +1650,7 @@ export class AgentSession {
 		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
 		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
+		this.#advisorContextPrompt = config.advisorContextPrompt;
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
@@ -1960,6 +1968,9 @@ export class AgentSession {
 		const appendOnlyContext = new AppendOnlyContextManager();
 		const advisorThinkingLevel = advisorSel.thinkingLevel ?? ThinkingLevel.Medium;
 		const systemPrompt = [advisorSystemPrompt];
+		if (this.#advisorContextPrompt) {
+			systemPrompt.push(this.#advisorContextPrompt);
+		}
 		if (this.#advisorWatchdogPrompt) {
 			systemPrompt.push(this.#advisorWatchdogPrompt);
 		}

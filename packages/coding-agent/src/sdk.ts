@@ -25,7 +25,12 @@ import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identit
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
-import { ADVISOR_READONLY_TOOL_NAMES, discoverWatchdogFiles, formatActiveRepoWatchdogPrompt } from "./advisor";
+import {
+	ADVISOR_READONLY_TOOL_NAMES,
+	discoverWatchdogFiles,
+	formatActiveRepoWatchdogPrompt,
+	formatAdvisorContextPrompt,
+} from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { loadCapability } from "./capability";
@@ -2678,11 +2683,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			advisorWatchdogPrompts.push(formatActiveRepoWatchdogPrompt(activeRepoContext));
 		}
 		const advisorWatchdogPrompt = advisorWatchdogPrompts.length > 0 ? advisorWatchdogPrompts.join("\n\n") : undefined;
+		// Hand the advisor the same project context files (AGENTS.md, etc.) the
+		// primary agent gets in its system prompt, so the read-only reviewer judges
+		// against the user's standing project rules instead of advising blind.
+		const advisorContextPrompt = formatAdvisorContextPrompt(contextFiles);
 		// Owned only when this session created the manager; subagents receive a
 		// parent's manager via `options.mcpManager` and MUST NOT disconnect it.
 		const ownedMcpManager = options.mcpManager ? undefined : mcpManager;
 		session = new AgentSession({
 			advisorWatchdogPrompt,
+			advisorContextPrompt,
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
