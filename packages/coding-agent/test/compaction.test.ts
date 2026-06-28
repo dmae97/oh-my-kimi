@@ -1173,8 +1173,10 @@ describe("buildSessionContext", () => {
 			collapseCompactedHistory: true,
 		});
 
-		expect(transcript.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
-		expect((transcript.messages[0] as { summary: string }).summary).toContain("Second summary");
+		expect(transcript.messages.map(m => m.role)).toEqual(["user", "compactionSummary", "user"]);
+		const summaryMsg = transcript.messages[1];
+		if (summaryMsg?.role !== "compactionSummary") throw new Error("Expected compaction summary at index 1");
+		expect(summaryMsg.summary).toContain("Second summary");
 		expect(transcript.cacheMissExplainedAt).toEqual([false, false, false]);
 	});
 
@@ -1204,7 +1206,7 @@ describe("buildSessionContext", () => {
 		// The provider payload is attached to the summary for LLM replay only; the
 		// collapsed display must still emit the kept SessionEntry rows so a
 		// remotely-compacted session keeps its recent turns visible.
-		expect(transcript.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "assistant", "user"]);
+		expect(transcript.messages.map(m => m.role)).toEqual(["user", "assistant", "compactionSummary", "user"]);
 		const dump = JSON.stringify(transcript.messages);
 		expect(dump).toContain("kept-user");
 		expect(dump).toContain("kept-assistant");
