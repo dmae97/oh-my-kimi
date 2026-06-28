@@ -28,6 +28,9 @@
 ### Fixed
 
 - Fixed OMP exiting silently during startup when `~/.codex/hooks/*.{ts,js}` contained standalone Codex hook scripts: untyped scripts are no longer treated as OMP hooks, and dynamic imports of extension/hook modules are wrapped in a `process.exit` guard so a top-level exit raises a recoverable load error instead of terminating the host. ([#3680](https://github.com/can1357/oh-my-pi/issues/3680))
+### Fixed
+
+- Fixed the HTML session export's "toggle thinking" and "toggle tools" keyboard shortcuts being unreachable in a web browser: `Ctrl+T` and `Ctrl+O` are reserved by every major browser (new tab / open file), so the page never saw the keystroke. The shortcuts are now bare `T` / `O` (suppressed while focus is in the search input) and the in-page help bar reads `T toggle thinking · O toggle tools` ([#3670](https://github.com/can1357/oh-my-pi/issues/3670)).
 
 ## [16.2.2] - 2026-06-27
 
