@@ -104,6 +104,20 @@ describe("CombinedAutocompleteProvider", () => {
 
 			expect(result).toBeNull();
 		});
+
+		it("falls back to path suggestions for an unmatched mid-prompt slash token", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[{ name: "skill:security-scan", description: "Security scan" }],
+				"/tmp",
+			);
+			const line = "see /tmp";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).not.toBeNull();
+			expect(result?.prefix).toBe("/tmp");
+			expect(result?.items.map(item => item.value)).toContain("/tmp/");
+		});
 	});
 	describe("applyCompletion", () => {
 		it("replaces the live slash command prefix when rendered suggestions are stale", () => {

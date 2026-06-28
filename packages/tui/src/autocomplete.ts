@@ -439,16 +439,19 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					? buildMidPromptSkillCompletions(this.#commands, lowerPrefix)
 					: buildSlashCommandCompletions(this.#commands, lowerPrefix);
 
-				if (matches.length === 0) return null;
-
-				return {
-					items: matches,
-					// Preserve the full text-before-cursor for submitted slash
-					// commands so the editor's Enter-staleness check still applies
-					// completion for `  /sk`. Mid-prompt skill lookup keeps only
-					// the slash token because accepting it replaces the whole draft.
-					prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
-				};
+				if (matches.length > 0) {
+					return {
+						items: matches,
+						// Preserve the full text-before-cursor for submitted slash
+						// commands so the editor's Enter-staleness check still applies
+						// completion for `  /sk`. Mid-prompt skill lookup keeps only
+						// the slash token because accepting it replaces the whole draft.
+						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
+					};
+				}
+				if (!isMidPromptSkillLookup) return null;
+				// A mid-prompt slash token with no matching skill may still be an
+				// absolute path (`see /tmp`); fall through to file-path completion.
 			} else if (!isMidPromptSkillLookup) {
 				// Space found - complete command arguments
 				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
@@ -469,7 +472,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					prefix: argumentText,
 				};
 			}
-			return null;
+			if (!isMidPromptSkillLookup) return null;
 		}
 
 		// Check for file paths - triggered by Tab or if we detect a path pattern

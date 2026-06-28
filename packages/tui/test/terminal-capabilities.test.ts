@@ -166,7 +166,7 @@ console.log(JSON.stringify({ id: TERMINAL_ID, imageProtocol: TERMINAL.imageProto
 		expect(warp.imageProtocol).toBe(ImageProtocol.Kitty);
 		expect(warp.trueColor).toBe(true);
 		expect(warp.hyperlinks).toBe(false);
-		expect(warp.notifyProtocol).toBe(NotifyProtocol.Bell);
+		expect(warp.notifyProtocol).toBe(NotifyProtocol.Osc9);
 		expect(warp.textSizing).toBe(false);
 	});
 
