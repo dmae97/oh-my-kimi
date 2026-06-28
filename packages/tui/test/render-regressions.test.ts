@@ -118,7 +118,11 @@ class CountingViewportTerminal extends VirtualTerminal {
 }
 
 class LegacyKeyboardVirtualTerminal extends VirtualTerminal {
-	get keyboardEnhancementSequence(): string | null {
+	get keyboardEnhancementEnterSequence(): string | null {
+		return undefined as unknown as string | null;
+	}
+
+	get keyboardEnhancementExitSequence(): string | null {
 		return undefined as unknown as string | null;
 	}
 }

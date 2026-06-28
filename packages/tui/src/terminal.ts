@@ -336,10 +336,15 @@ export interface Terminal {
 	// so the TUI re-pushes this after entering the alternate screen.
 	get kittyEnableSequence(): string | null;
 
-	// The active modified-key reporting sequence to reassert after terminal buffer
-	// switches, or null when no enhanced keyboard mode is active. Optional so
-	// custom Terminals built against older pi-tui versions keep working.
-	readonly keyboardEnhancementSequence?: string | null;
+	// The active modified-key reporting sequence to reassert on alternate-screen
+	// entry, or null when no enhanced keyboard mode is active. Optional so custom
+	// Terminals built against older pi-tui versions keep working.
+	readonly keyboardEnhancementEnterSequence?: string | null;
+
+	// The sequence that cleanly disables the active enhanced keyboard mode on
+	// alternate-screen exit, or null when no exit handshake is required. Optional
+	// so custom Terminals built against older pi-tui versions keep working.
+	readonly keyboardEnhancementExitSequence?: string | null;
 
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
@@ -477,9 +482,18 @@ export class ProcessTerminal implements Terminal {
 		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
 	}
 
-	get keyboardEnhancementSequence(): string | null {
+	get keyboardEnhancementEnterSequence(): string | null {
 		if (this.#kittyProtocolActive) return this.#kittyEnableSeq;
 		return this.#modifyOtherKeysActive ? "\x1b[>4;2m" : null;
+	}
+
+	get keyboardEnhancementExitSequence(): string | null {
+		// kitty is a stack push (per-screen), so the matching pop balances alt-screen
+		// entry. xterm modifyOtherKeys is a single global flag with no per-screen
+		// stack — emitting `>4;0m` here would clear it on the normal screen too,
+		// breaking the composer between overlays. terminal.stop() still disables it
+		// globally on graceful exit; the emergency-restore path mirrors that.
+		return this.#kittyProtocolActive ? "\x1b[<u" : null;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
