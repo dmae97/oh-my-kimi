@@ -303,14 +303,81 @@ function resolveConfigValue(valueConfig: string): string | undefined {
 	return valueConfig;
 }
 
-function resolveConfigHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
-	if (!headers) return undefined;
+type HeaderSource = Record<string, string> | undefined;
+
+interface HeaderResolutionOptions {
+	authHeader?: boolean;
+	apiKeyConfig?: string;
+}
+
+function materializeConfigHeaderSources(
+	sources: readonly HeaderSource[],
+	options?: HeaderResolutionOptions,
+): Record<string, string> | undefined {
 	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(headers)) {
-		const next = resolveConfigValue(value);
-		if (next) resolved[key] = next;
+	for (const source of sources) {
+		if (!source) continue;
+		for (const [key, value] of Object.entries(source)) {
+			const next = resolveConfigValue(value);
+			if (next) resolved[key] = next;
+		}
+	}
+	if (options?.authHeader && options.apiKeyConfig) {
+		const resolvedKey = resolveConfigValue(options.apiKeyConfig);
+		if (resolvedKey) resolved.Authorization = `Bearer ${resolvedKey}`;
 	}
 	return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
+function createLiveConfigHeaders(
+	sources: readonly HeaderSource[],
+	options?: HeaderResolutionOptions,
+): Record<string, string> | undefined {
+	const liveSources = sources.filter((source): source is Record<string, string> => source !== undefined);
+	if (liveSources.length === 0 && (!options?.authHeader || !options.apiKeyConfig)) return undefined;
+
+	const localHeaders: Record<string, string> = {};
+	const allSources = [...liveSources, localHeaders];
+	const current = () => materializeConfigHeaderSources(allSources, options) ?? {};
+	return new Proxy(localHeaders, {
+		get(target, property, receiver) {
+			if (typeof property !== "string") return Reflect.get(target, property, receiver);
+			return current()[property];
+		},
+		set(target, property, value) {
+			if (typeof property !== "string" || typeof value !== "string") return false;
+			target[property] = value;
+			return true;
+		},
+		deleteProperty(target, property) {
+			if (typeof property !== "string") return false;
+			delete target[property];
+			return true;
+		},
+		has(_target, property) {
+			if (typeof property !== "string") return false;
+			return Object.hasOwn(current(), property);
+		},
+		ownKeys() {
+			return Reflect.ownKeys(current());
+		},
+		getOwnPropertyDescriptor(_target, property) {
+			if (typeof property !== "string") return undefined;
+			const headers = current();
+			if (!Object.hasOwn(headers, property)) return undefined;
+			return {
+				configurable: true,
+				enumerable: true,
+				value: headers[property],
+				writable: true,
+			};
+		},
+	});
+}
+
+
+function resolveConfigHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
+	return materializeConfigHeaderSources([headers]);
 }
 
 function extractGoogleOAuthToken(value: string | undefined): string | undefined {
@@ -495,21 +562,15 @@ function mergeCustomModelHeaders(
 	authHeader: boolean | undefined,
 	apiKeyConfig: string | undefined,
 ): Record<string, string> | undefined {
-	const resolvedModelHeaders = resolveConfigHeaders(modelHeaders);
-	return mergeAuthHeader({ ...providerHeaders, ...resolvedModelHeaders }, authHeader, apiKeyConfig);
+	return createLiveConfigHeaders([providerHeaders, modelHeaders], { authHeader, apiKeyConfig });
 }
 
-function mergeAuthHeader(
-	headers: Record<string, string> | undefined,
+function mergeAuthHeaderSources(
+	sources: readonly HeaderSource[],
 	authHeader: boolean | undefined,
 	apiKeyConfig: string | undefined,
 ): Record<string, string> | undefined {
-	const nextHeaders = headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
-	if (!authHeader || !apiKeyConfig) {
-		return nextHeaders;
-	}
-	const resolvedKey = resolveConfigValue(apiKeyConfig);
-	return resolvedKey ? { ...nextHeaders, Authorization: `Bearer ${resolvedKey}` } : nextHeaders;
+	return createLiveConfigHeaders(sources, { authHeader, apiKeyConfig });
 }
 
 /**
@@ -1661,7 +1722,7 @@ export class ModelRegistry {
 			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
 			apiKey: override.apiKey ?? baseOverride?.apiKey,
 			authHeader: override.authHeader ?? baseOverride?.authHeader,
-			headers: override.headers ? { ...(baseOverride?.headers ?? {}), ...override.headers } : baseOverride?.headers,
+			headers: override.headers ? createLiveConfigHeaders([baseOverride?.headers, override.headers]) : baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 			remoteCompaction: mergeRemoteCompactionConfig(baseOverride?.remoteCompaction, override.remoteCompaction),
 			transport: override.transport ?? baseOverride?.transport,
@@ -1676,8 +1737,8 @@ export class ModelRegistry {
 			"baseUrl" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
 		>,
 	): T {
-		const headers = mergeAuthHeader(
-			override.headers ? { ...entry.headers, ...override.headers } : entry.headers,
+		const headers = mergeAuthHeaderSources(
+			override.headers ? [entry.headers, override.headers] : [entry.headers],
 			override.authHeader,
 			override.apiKey,
 		);
