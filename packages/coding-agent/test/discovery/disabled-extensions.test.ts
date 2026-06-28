@@ -5,19 +5,40 @@ import * as path from "node:path";
 import { type ContextFile, contextFileCapability } from "@oh-my-pi/pi-coding-agent/capability/context-file";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initializeWithSettings, loadCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import {
+	__resetProfileSnapshotForTests,
+	getActiveProfile,
+	refreshDirsFromEnv,
+	removeWithRetries,
+	setAgentDir,
+	setProfile,
+} from "@oh-my-pi/pi-utils";
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+	if (value === undefined) {
+		delete process.env[key];
+		delete Bun.env[key];
+		return;
+	}
+	process.env[key] = value;
+	Bun.env[key] = value;
+}
 
 describe("disabledExtensions runtime filtering", () => {
 	let tempDir = "";
 	let tempHomeDir = "";
 	let originalHome: string | undefined;
-	let originalAgentDir: string;
+	let originalActiveProfile: string | undefined;
 	let originalAgentDirEnv: string | undefined;
+	let originalOmpProfileEnv: string | undefined;
+	let originalPiProfileEnv: string | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
-		originalAgentDir = getAgentDir();
+		originalActiveProfile = getActiveProfile();
 		originalAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+		originalOmpProfileEnv = process.env.OMP_PROFILE;
+		originalPiProfileEnv = process.env.PI_PROFILE;
 		originalHome = process.env.HOME;
 		tempHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-disabled-ext-home-"));
 		process.env.HOME = tempHomeDir;
@@ -40,16 +61,15 @@ describe("disabledExtensions runtime filtering", () => {
 	afterEach(async () => {
 		resetSettingsForTest();
 		vi.restoreAllMocks();
-		if (originalHome === undefined) {
-			delete process.env.HOME;
+		restoreEnvValue("HOME", originalHome);
+		restoreEnvValue("OMP_PROFILE", originalOmpProfileEnv);
+		restoreEnvValue("PI_PROFILE", originalPiProfileEnv);
+		restoreEnvValue("PI_CODING_AGENT_DIR", originalAgentDirEnv);
+		if (originalActiveProfile !== undefined) {
+			setProfile(originalActiveProfile);
 		} else {
-			process.env.HOME = originalHome;
-		}
-		setAgentDir(originalAgentDir);
-		if (originalAgentDirEnv === undefined) {
-			delete process.env.PI_CODING_AGENT_DIR;
-		} else {
-			process.env.PI_CODING_AGENT_DIR = originalAgentDirEnv;
+			refreshDirsFromEnv();
+			__resetProfileSnapshotForTests();
 		}
 		await removeWithRetries(tempHomeDir);
 		await removeWithRetries(tempDir);

@@ -854,6 +854,38 @@ describe("github tool", () => {
 			// Existing URL is preserved — we never overwrote it.
 			expect(runGit(remoteFixture.repoRoot, ["remote", "get-url", "forksrc"])).toBe(remoteFixture.forkBare);
 		});
+		it("does not depend on localized git remote-add stderr for existing remotes", async () => {
+			const originalPath = process.env.PATH;
+			const fakeBin = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fake-git-"));
+			const realGitResult = Bun.spawnSync(["which", "git"], { stdout: "pipe", stderr: "pipe" });
+			expect(realGitResult.exitCode).toBe(0);
+			const realGit = new TextDecoder().decode(realGitResult.stdout).trim();
+			const fakeGit = path.join(fakeBin, "git");
+			await fs.writeFile(
+				fakeGit,
+				`#!/usr/bin/env bash
+while [[ "$1" == "-c" ]]; do shift 2; done
+if [[ "$1" == "remote" && "$2" == "add" && "$3" == "forksrc" ]]; then
+	echo "本地化错误：远程 forksrc 已经存在。" >&2
+	exit 3
+fi
+exec ${JSON.stringify(realGit)} "$@"
+`,
+			);
+			await fs.chmod(fakeGit, 0o755);
+
+			try {
+				process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+				await git.remote.add(remoteFixture.repoRoot, "forksrc", remoteFixture.forkBare);
+			} finally {
+				if (originalPath === undefined) {
+					delete process.env.PATH;
+				} else {
+					process.env.PATH = originalPath;
+				}
+				await removeWithRetries(fakeBin);
+			}
+		});
 	});
 
 	it("serializes concurrent git mutations through withRepoLock so callers don't race git's internal locks", async () => {

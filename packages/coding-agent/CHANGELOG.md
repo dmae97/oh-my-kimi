@@ -338,6 +338,11 @@
 ### Fixed
 
 - Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
+- Fixed `/shake` and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
+- Fixed the `time_spent` status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
+### Fixed
+
+- Fixed local coding-agent CI checks leaking user agent state into discovery tests and depending on English Git stderr for remote idempotency.
 
 ## [16.2.2] - 2026-06-27
 
