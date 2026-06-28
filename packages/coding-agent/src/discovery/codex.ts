@@ -342,12 +342,20 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 	const codexDir = getProjectCodexDir(ctx);
 	const projectHooksDir = path.join(codexDir, "hooks");
 
+	// OMP hooks must be named `pre-<tool>.<ts|js>` or `post-<tool>.<ts|js>`.
+	// Files without that prefix are not OMP hooks (e.g. the standalone Codex
+	// hook scripts users keep alongside) — silently dropping the prefix and
+	// defaulting to `pre:<basename>` caused those scripts to be imported as
+	// extension factories and any top-level `process.exit()` killed startup
+	// (#3680).
 	const transformHook =
-		(level: "user" | "project") => (name: string, _content: string, path: string, source: SourceMeta) => {
+		(level: "user" | "project") =>
+		(name: string, _content: string, path: string, source: SourceMeta): Hook | null => {
 			const baseName = name.replace(/\.(ts|js)$/, "");
 			const match = baseName.match(/^(pre|post)-(.+)$/);
-			const hookType = (match?.[1] as "pre" | "post") || "pre";
-			const toolName = match?.[2] || baseName;
+			if (!match) return null;
+			const hookType = match[1] as "pre" | "post";
+			const toolName = match[2];
 			return {
 				name,
 				path,
@@ -359,11 +367,11 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 		};
 
 	const results = await Promise.all([
-		loadFilesFromDir(ctx, userHooksDir, PROVIDER_ID, "user", {
+		loadFilesFromDir<Hook>(ctx, userHooksDir, PROVIDER_ID, "user", {
 			extensions: ["ts", "js"],
 			transform: transformHook("user"),
 		}),
-		loadFilesFromDir(ctx, projectHooksDir, PROVIDER_ID, "project", {
+		loadFilesFromDir<Hook>(ctx, projectHooksDir, PROVIDER_ID, "project", {
 			extensions: ["ts", "js"],
 			transform: transformHook("project"),
 		}),

@@ -24,7 +24,7 @@ import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/leg
 import { getAllPluginExtensionPaths } from "../plugins/loader";
 import * as TypeBox from "../typebox";
 
-import { resolvePath } from "../utils";
+import { resolvePath, withExitGuard } from "../utils";
 import type {
 	AssistantThinkingRenderer,
 	Extension,
@@ -290,7 +290,7 @@ async function loadExtension(
 ): Promise<{ extension: Extension | null; error: string | null }> {
 	const resolvedPath = resolvePath(extensionPath, cwd);
 	try {
-		const module = (await loadLegacyPiModule(resolvedPath)) as LoadedExtensionModule;
+		const module = (await withExitGuard(() => loadLegacyPiModule(resolvedPath))) as LoadedExtensionModule;
 		const factory = getExtensionFactory(module);
 
 		if (typeof factory !== "function") {

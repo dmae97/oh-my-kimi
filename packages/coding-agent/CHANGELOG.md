@@ -25,6 +25,9 @@
 ### Fixed
 
 - Fixed autoresearch's `before_agent_start` handler crashing when `event.systemPrompt` was undefined. The handler now coerces a missing system prompt to an empty string so the autoresearch block still renders. ([#3665](https://github.com/can1357/oh-my-pi/issues/3665))
+### Fixed
+
+- Fixed OMP exiting silently during startup when `~/.codex/hooks/*.{ts,js}` contained standalone Codex hook scripts: untyped scripts are no longer treated as OMP hooks, and dynamic imports of extension/hook modules are wrapped in a `process.exit` guard so a top-level exit raises a recoverable load error instead of terminating the host. ([#3680](https://github.com/can1357/oh-my-pi/issues/3680))
 
 ## [16.2.2] - 2026-06-27
 
