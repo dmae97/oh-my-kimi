@@ -39,8 +39,8 @@ struct Cli {
 	#[arg(short = 'e', long = "regexp", value_name = "PATTERN")]
 	patterns: Vec<String>,
 
-	/// PATTERN is an extended regular expression (the default behaviour).
-	#[allow(dead_code)]
+	/// Treat PATTERN as a strict extended regular expression: a pattern that
+	/// fails to parse is reported as an error rather than matched literally.
 	#[arg(short = 'E', long = "extended-regexp")]
 	extended: bool,
 
@@ -158,7 +158,15 @@ fn escape_literal(pat: &str) -> String {
 	out
 }
 
-/// Build the ripgrep regex matcher from the collected patterns and flags.
+/// Build the regex matcher from the collected patterns and flags.
+///
+/// In the default mode, any pattern that is not valid extended-regex syntax is
+/// matched literally instead of rejected — so `grep "fail)"` finds the text
+/// `fail)` the way GNU basic grep does, rather than erroring on the unbalanced
+/// `)`. The fallback is per-pattern: in a multi-`-e` search, valid alternatives
+/// keep their regex meaning and only the offending pattern is escaped. `-E`
+/// opts into strict extended-regex syntax (no fallback); `-F` escapes every
+/// pattern up front.
 fn build_matcher(patterns: &[String], cli: &Cli) -> Result<RegexMatcher, grep_regex::Error> {
 	let mut builder = RegexMatcherBuilder::new();
 	builder.case_insensitive(cli.ignore_case);
@@ -170,9 +178,20 @@ fn build_matcher(patterns: &[String], cli: &Cli) -> Result<RegexMatcher, grep_re
 	}
 	if cli.fixed {
 		let escaped: Vec<String> = patterns.iter().map(|p| escape_literal(p)).collect();
-		builder.build_many(&escaped)
-	} else {
-		builder.build_many(patterns)
+		return builder.build_many(&escaped);
+	}
+	match builder.build_many(patterns) {
+		Ok(matcher) => Ok(matcher),
+		Err(err) if !cli.extended => {
+			// Escape only the patterns that fail to compile so valid regex
+			// alternatives keep their meaning.
+			let sanitized: Vec<String> = patterns
+				.iter()
+				.map(|p| if builder.build(p).is_ok() { p.clone() } else { escape_literal(p) })
+				.collect();
+			builder.build_many(&sanitized).map_err(|_| err)
+		},
+		Err(err) => Err(err),
 	}
 }
 
