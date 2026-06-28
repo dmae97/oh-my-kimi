@@ -1745,8 +1745,8 @@ export class TUI extends Container {
 			this.terminal.write(this.#leaveResizeAltSequence());
 		}
 		if (this.#altActive) {
-			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
+			const enhancementExit = this.#keyboardEnhancementExit();
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
 			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
@@ -2492,7 +2492,7 @@ export class TUI extends Container {
 			// modified-key reporting sequence on the freshly entered alternate
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
-			this.terminal.write(`\x1b[?1049h${this.terminal.keyboardEnhancementSequence ?? ""}${MOUSE_TRACKING_ON}`);
+			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${MOUSE_TRACKING_ON}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
@@ -2502,8 +2502,8 @@ export class TUI extends Container {
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
-			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
+			const enhancementExit = this.#keyboardEnhancementExit();
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
@@ -3339,23 +3339,42 @@ export class TUI extends Container {
 		return { window: this.#prepareLinesArray(window, width), contentRows: count };
 	}
 
-	/** Enter or leave the alternate screen borrowed for transient resize frames. */
+	/**
+	 * Resolve the active keyboard-enhancement enter sequence. Falls back to the
+	 * legacy `kittyEnableSequence` when a custom Terminal predates the
+	 * `keyboardEnhancementEnterSequence` property.
+	 */
+	#keyboardEnhancementEnter(): string {
+		return this.terminal.keyboardEnhancementEnterSequence ?? this.terminal.kittyEnableSequence ?? "";
+	}
+
+	/**
+	 * Resolve the active keyboard-enhancement exit sequence. Falls back to popping
+	 * kitty whenever a custom Terminal exposes its push sequence but predates the
+	 * `keyboardEnhancementExitSequence` property.
+	 */
+	#keyboardEnhancementExit(): string {
+		const exit = this.terminal.keyboardEnhancementExitSequence;
+		if (exit !== undefined) return exit ?? "";
+		return this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+	}
+
 	#enterResizeAltSequence(): string {
 		if (this.#resizeAltActive || this.#altActive) return "";
 		this.#resizeAltActive = true;
 		setAltScreenActive(true);
 		this.#forgetHardwareCursorState();
 		this.#recordHardwareCursorHidden();
-		return `${ALT_SCREEN_ENTER}${this.terminal.keyboardEnhancementSequence ?? ""}`;
+		return `${ALT_SCREEN_ENTER}${this.#keyboardEnhancementEnter()}`;
 	}
 
 	#leaveResizeAltSequence(): string {
 		if (!this.#resizeAltActive) return "";
-		const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+		const enhancementExit = this.#keyboardEnhancementExit();
 		this.#resizeAltActive = false;
 		setAltScreenActive(false);
 		this.#forgetHardwareCursorState();
-		return `${kittyPop}${ALT_SCREEN_EXIT}`;
+		return `${enhancementExit}${ALT_SCREEN_EXIT}`;
 	}
 
 	/**
