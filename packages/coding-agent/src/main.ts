@@ -361,6 +361,13 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 		const nextSettings = await args.settings.cloneForCwd(cwd);
 		const nextSessionManager = SessionManager.create(cwd, args.sessionDir);
 		const agentId = `acp:${nextSessionManager.getSessionId()}`;
+		// `baseOptions.titleSystemPrompt` is resolved from the launch cwd; an ACP
+		// host can open `session/new` for any client-supplied workspace, so
+		// re-discover `TITLE_SYSTEM.md` against THIS session's `cwd` to keep the
+		// replan-driven title refresh consistent with the target project's
+		// policy (PR #3736 follow-up).
+		const titleSystemPromptSource = discoverTitleSystemPromptFile(cwd);
+		const titleSystemPrompt = await resolvePromptInput(titleSystemPromptSource, "title system prompt");
 		const { session: nextSession } = await args.createSession({
 			...args.baseOptions,
 			cwd,
@@ -371,6 +378,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 			agentId,
 			hasUI: false,
 			enableMCP: false,
+			titleSystemPrompt,
 		});
 		if (args.parsedArgs.apiKey && !args.baseOptions.model && nextSession.model) {
 			args.authStorage.setRuntimeApiKey(nextSession.model.provider, args.parsedArgs.apiKey);

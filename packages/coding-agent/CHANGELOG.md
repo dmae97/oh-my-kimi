@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed replan-driven session title refresh (`title.refreshOnReplan`, triggered after `todo init`) ignoring the user's `TITLE_SYSTEM.md` override and silently falling back to the bundled prompt — most visible in Plan Mode, where early todo init replans would overwrite the auto title against the configured policy. `AgentSession` now owns the resolved title prompt (threaded through `CreateAgentSessionOptions.titleSystemPrompt`) and both first-input titling and replan refresh read from the same source ([#3734](https://github.com/can1357/oh-my-pi/issues/3734)).
+- Fixed replan-driven session title refresh (`title.refreshOnReplan`, triggered after `todo init`) ignoring the user's `TITLE_SYSTEM.md` override and silently falling back to the bundled prompt — most visible in Plan Mode, where early todo init replans would overwrite the auto title against the configured policy. `AgentSession` now owns the resolved title prompt (threaded through `CreateAgentSessionOptions.titleSystemPrompt`), the ACP per-`session/new` factory re-resolves `TITLE_SYSTEM.md` against each client-supplied workspace cwd, and both first-input titling and replan refresh read from the same source ([#3734](https://github.com/can1357/oh-my-pi/issues/3734)).
 
 ## [16.2.3] - 2026-06-28
 
