@@ -26,6 +26,7 @@ interface ParsedSkillCommand {
 
 interface InvokeSkillCommandOptions {
 	propagateErrors?: boolean;
+	queueOnly?: boolean;
 }
 
 /** Built custom-message payload and delivery options for a `/skill:` command. */
@@ -97,7 +98,8 @@ export async function invokeSkillCommandFromText(
 	try {
 		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior);
 		if (!built) return false;
-		await ctx.session.promptCustomMessage(built.message, built.options);
+		const promptOptions = options?.queueOnly ? { ...built.options, queueOnly: true } : built.options;
+		await ctx.session.promptCustomMessage(built.message, promptOptions);
 		return true;
 	} catch (err) {
 		if (options?.propagateErrors) {

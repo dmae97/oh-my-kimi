@@ -668,7 +668,12 @@ export class UiHelpers {
 	}
 
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
-		if (await invokeSkillCommandFromText(this.ctx, message.text, message.mode, { propagateErrors: true })) {
+		if (
+			await invokeSkillCommandFromText(this.ctx, message.text, message.mode, {
+				propagateErrors: true,
+				queueOnly: true,
+			})
+		) {
 			return;
 		}
 		if (this.ctx.isKnownSlashCommand(message.text)) {

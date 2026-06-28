@@ -42,7 +42,7 @@ type PromptCustomMessage = Mock<
 			attribution?: string;
 			details: SkillPromptDetails;
 		},
-		options?: { streamingBehavior?: "steer" | "followUp"; queueChipText?: string },
+		options?: { streamingBehavior?: "steer" | "followUp"; queueChipText?: string; queueOnly?: boolean },
 	) => Promise<void>
 >;
 
@@ -287,6 +287,24 @@ describe("compaction skill re-invocation", () => {
 		expect(prompt).not.toHaveBeenCalled();
 		expect(steer).not.toHaveBeenCalled();
 		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it("queues retry-drained skills without appending them to session history", async () => {
+		const fixture = await createRealSession();
+		try {
+			const { ctx } = createCompactionDrainContext([{ text: "/skill:test-skill retry args", mode: "followUp" }]);
+			ctx.session = fixture.session;
+			const uiHelpers = new UiHelpers(ctx);
+
+			await uiHelpers.flushCompactionQueue({ willRetry: true });
+
+			expect(fixture.session.getQueuedMessages().followUp).toEqual(["/skill:test-skill retry args"]);
+			expect(fixture.session.messages).toEqual([]);
+		} finally {
+			await fixture.session.dispose();
+			fixture.authStorage.close();
+			fixture.tempDir.removeSync();
+		}
 	});
 });
 
