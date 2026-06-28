@@ -5,7 +5,6 @@
 ### Added
 
 - Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph (replacing the model icon) instead of a separate ` · <level>` suffix.
-
 - Added support for tracking reasoning tokens in session and advisor statistics
 - Added `compaction.remoteStreamingV2Enabled` setting to toggle V2 streaming for remote compaction
 - Added `compaction.v2RetainedMessageBudget` setting to control token budget for V2 compaction
@@ -16,6 +15,10 @@
 - Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
 - Added `remoteCompaction` V2 streaming schema fields and compaction settings for Responses-stream remote compaction.
 - Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph (replacing the model icon) instead of a separate ` · <level>` suffix.
+
+### Changed
+
+- Refined interrupted thinking system instructions to encourage smoother continuation
 
 ### Fixed
 
