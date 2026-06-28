@@ -48,7 +48,14 @@ interface BenchmarkClient {
 	prompt(text: string): Promise<void>;
 	followUp(text: string): Promise<void>;
 	getSessionStats(): Promise<{
-		tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+		tokens: {
+			input: number;
+			output: number;
+			reasoning: number;
+			cacheRead: number;
+			cacheWrite: number;
+			total: number;
+		};
 		assistantMessages: number;
 	}>;
 	getLastAssistantText(): Promise<string | null>;
@@ -766,6 +773,7 @@ function buildBenchmarkRpcArgs(config: BenchmarkConfig, multiFile: boolean, prov
 export interface TokenStats {
 	input: number;
 	output: number;
+	reasoning: number;
 	total: number;
 }
 
@@ -1002,7 +1010,7 @@ async function runSingleTask(
 	let indentScore: number | undefined;
 	let formattedEquivalent: boolean | undefined;
 	let diffStats: { linesChanged: number; charsChanged: number } | undefined;
-	let tokens: TokenStats = { input: 0, output: 0, total: 0 };
+	let tokens: TokenStats = { input: 0, output: 0, reasoning: 0, total: 0 };
 	let agentResponse: string | undefined;
 	let diff: string | undefined;
 	const editFailures: EditFailure[] = [];
@@ -1171,6 +1179,7 @@ async function runSingleTask(
 				tokens = {
 					input: tokens.input + attemptTokens.input,
 					output: tokens.output + attemptTokens.output,
+					reasoning: tokens.reasoning + attemptTokens.reasoning,
 					total: tokens.total + attemptTokens.total,
 				};
 				await logEvent({ type: "stats", before: statsBefore, after: statsAfter, attempt: attempt + 1 });
@@ -1713,12 +1722,13 @@ function diffTokenStats(before: SessionTokenStats, after: SessionTokenStats, sys
 	const afterPrompt = after.tokens.input + after.tokens.cacheRead + after.tokens.cacheWrite;
 	const input = Math.max(0, afterPrompt - beforePrompt - overhead);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
+	const reasoning = Math.max(0, after.tokens.reasoning - before.tokens.reasoning);
 	const total = input + output;
-	return { input, output, total };
+	return { input, output, reasoning, total };
 }
 
 type SessionTokenStats = {
-	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number };
 	assistantMessages: number;
 };
 
@@ -1781,7 +1791,7 @@ function summarizeTaskRuns(task: EditTask, runs: TaskRunResult[]): TaskResult {
 	const bestIdx = pickBestRunIndex(orderedRuns);
 	const best = bestIdx === -1 ? undefined : orderedRuns[bestIdx]!;
 
-	const tokens: TokenStats = best ? { ...best.tokens } : { input: 0, output: 0, total: 0 };
+	const tokens: TokenStats = best ? { ...best.tokens } : { input: 0, output: 0, reasoning: 0, total: 0 };
 	const duration = best?.duration ?? 0;
 	const indentScore = typeof best?.indentScore === "number" ? best.indentScore : 0;
 	const toolCalls: ToolCallStats = best ? { ...best.toolCalls } : { ...EMPTY_TOOL_CALL_STATS };
@@ -1812,7 +1822,7 @@ function buildFailureResult(item: TaskRunItem, error: string): TaskRunResult {
 		patchApplied: false,
 		verificationPassed: false,
 		error,
-		tokens: { input: 0, output: 0, total: 0 },
+		tokens: { input: 0, output: 0, reasoning: 0, total: 0 },
 		duration: 0,
 		toolCalls: {
 			read: 0,
@@ -1879,10 +1889,12 @@ export interface TokenDistribution {
 export function summarizeTokenDistribution(runs: readonly TaskRunResult[]): TokenDistribution {
 	const input = runs.map(r => r.tokens.input).sort((a, b) => a - b);
 	const output = runs.map(r => r.tokens.output).sort((a, b) => a - b);
+	const reasoning = runs.map(r => r.tokens.reasoning).sort((a, b) => a - b);
 	const total = runs.map(r => r.tokens.total).sort((a, b) => a - b);
 	const at = (p: number): TokenStats => ({
 		input: Math.round(percentile(input, p)),
 		output: Math.round(percentile(output, p)),
+		reasoning: Math.round(percentile(reasoning, p)),
 		total: Math.round(percentile(total, p)),
 	});
 	return { median: at(50), p1: at(1), p99: at(99) };
@@ -1946,6 +1958,7 @@ export function buildBenchmarkResult(params: {
 	const totalTokens: TokenStats = {
 		input: bestRuns.reduce((sum, r) => sum + r.tokens.input, 0),
 		output: bestRuns.reduce((sum, r) => sum + r.tokens.output, 0),
+		reasoning: bestRuns.reduce((sum, r) => sum + r.tokens.reasoning, 0),
 		total: bestRuns.reduce((sum, r) => sum + r.tokens.total, 0),
 	};
 	const tokenDistribution = summarizeTokenDistribution(bestRuns);
@@ -1986,6 +1999,7 @@ export function buildBenchmarkResult(params: {
 	const totalOneShotSuccessTokens: TokenStats = {
 		input: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.input, 0),
 		output: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.output, 0),
+		reasoning: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.reasoning, 0),
 		total: oneShotSuccessRuns.reduce((sum, r) => sum + r.tokens.total, 0),
 	};
 	const oneShotTokenDistribution = summarizeTokenDistribution(oneShotSuccessRuns);
@@ -1997,6 +2011,7 @@ export function buildBenchmarkResult(params: {
 		avgOneShotSuccessTokensPerTask: {
 			input: Math.round(totalOneShotSuccessTokens.input / oneShotDenom),
 			output: Math.round(totalOneShotSuccessTokens.output / oneShotDenom),
+			reasoning: Math.round(totalOneShotSuccessTokens.reasoning / oneShotDenom),
 			total: Math.round(totalOneShotSuccessTokens.total / oneShotDenom),
 		},
 		medianOneShotSuccessTokensPerTask: oneShotTokenDistribution.median,
@@ -2013,6 +2028,7 @@ export function buildBenchmarkResult(params: {
 		avgTokensPerTask: {
 			input: Math.round(totalTokens.input / taskDenom),
 			output: Math.round(totalTokens.output / taskDenom),
+			reasoning: Math.round(totalTokens.reasoning / taskDenom),
 			total: Math.round(totalTokens.total / taskDenom),
 		},
 		medianTokensPerTask: tokenDistribution.median,

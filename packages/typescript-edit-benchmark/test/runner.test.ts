@@ -45,7 +45,7 @@ function createRun(runIndex: number, success: boolean, overrides: Partial<TaskRu
 		success,
 		patchApplied: success,
 		verificationPassed: success,
-		tokens: { input: 12, output: 8, total: 20 },
+		tokens: { input: 12, output: 8, reasoning: 0, total: 20 },
 		duration: 100,
 		toolCalls: {
 			read: 1,
@@ -185,9 +185,9 @@ describe("buildBenchmarkResult", () => {
 
 	it("picks the successful run with the lowest tokens as the task best", () => {
 		const task = createTask("best");
-		const losing = createRun(0, false, { tokens: { input: 5, output: 5, total: 10 } });
-		const winning = createRun(1, true, { tokens: { input: 100, output: 50, total: 150 } });
-		const expensive = createRun(2, true, { tokens: { input: 500, output: 250, total: 750 } });
+		const losing = createRun(0, false, { tokens: { input: 5, output: 5, reasoning: 0, total: 10 } });
+		const winning = createRun(1, true, { tokens: { input: 100, output: 50, reasoning: 0, total: 150 } });
+		const expensive = createRun(2, true, { tokens: { input: 500, output: 250, reasoning: 0, total: 750 } });
 		const result = buildBenchmarkResult({
 			tasks: [task],
 			config: {
@@ -216,8 +216,8 @@ describe("buildBenchmarkResult", () => {
 
 	it("falls back to the cheapest failure when no run succeeded", () => {
 		const task = createTask("none");
-		const expensiveFail = createRun(0, false, { tokens: { input: 200, output: 100, total: 300 } });
-		const cheapFail = createRun(1, false, { tokens: { input: 20, output: 10, total: 30 } });
+		const expensiveFail = createRun(0, false, { tokens: { input: 200, output: 100, reasoning: 0, total: 300 } });
+		const cheapFail = createRun(1, false, { tokens: { input: 20, output: 10, reasoning: 0, total: 30 } });
 		const result = buildBenchmarkResult({
 			tasks: [task],
 			config: {
@@ -243,7 +243,7 @@ describe("buildBenchmarkResult", () => {
 	it("ignores ghost runs when picking the best non-successful run", () => {
 		const task = createTask("ghost");
 		const ghostRun = createRun(0, false, {
-			tokens: { input: 0, output: 0, total: 0 },
+			tokens: { input: 0, output: 0, reasoning: 0, total: 0 },
 			toolCalls: {
 				read: 0,
 				edit: 0,
@@ -255,7 +255,7 @@ describe("buildBenchmarkResult", () => {
 				totalInputChars: 0,
 			},
 		});
-		const realFailure = createRun(1, false, { tokens: { input: 40, output: 20, total: 60 } });
+		const realFailure = createRun(1, false, { tokens: { input: 40, output: 20, reasoning: 0, total: 60 } });
 		const result = buildBenchmarkResult({
 			tasks: [task],
 			config: {
@@ -283,7 +283,7 @@ describe("buildBenchmarkResult", () => {
 		const resultsByTask = new Map(
 			totals.map((total, i) => [
 				tasks[i]!.id,
-				[createRun(0, true, { tokens: { input: (i + 1) * 100, output: (i + 1) * 10, total } })],
+				[createRun(0, true, { tokens: { input: (i + 1) * 100, output: (i + 1) * 10, reasoning: 0, total } })],
 			]),
 		);
 
@@ -305,10 +305,10 @@ describe("buildBenchmarkResult", () => {
 		// Mean is unchanged by the new fields: total sum 1650 / 5 tasks = 330.
 		expect(summary.avgTokensPerTask.total).toBe(330);
 		// Median = the middle sample (linear interpolation at rank 2 of [110..550]).
-		expect(summary.medianTokensPerTask).toEqual({ input: 300, output: 30, total: 330 });
+		expect(summary.medianTokensPerTask).toEqual({ input: 300, output: 30, reasoning: 0, total: 330 });
 		// p1/p99 interpolate near the extremes (ranks 0.04 and 3.96 over 5 samples).
-		expect(summary.p1TokensPerTask).toEqual({ input: 104, output: 10, total: 114 });
-		expect(summary.p99TokensPerTask).toEqual({ input: 496, output: 50, total: 546 });
+		expect(summary.p1TokensPerTask).toEqual({ input: 104, output: 10, reasoning: 0, total: 114 });
+		expect(summary.p99TokensPerTask).toEqual({ input: 496, output: 50, reasoning: 0, total: 546 });
 	});
 
 	it("separates token stats for successfully one-shot tasks vs overall", () => {
@@ -317,15 +317,15 @@ describe("buildBenchmarkResult", () => {
 		// Task 3: Failed on run 0 (200 tokens).
 		const tasks = [createTask("t1"), createTask("t2"), createTask("t3")];
 		const resultsByTask = new Map([
-			["t1", [createRun(0, true, { tokens: { input: 80, output: 20, total: 100 } })]],
+			["t1", [createRun(0, true, { tokens: { input: 80, output: 20, reasoning: 0, total: 100 } })]],
 			[
 				"t2",
 				[
-					createRun(0, false, { tokens: { input: 120, output: 30, total: 150 } }),
-					createRun(1, true, { tokens: { input: 40, output: 10, total: 50 } }),
+					createRun(0, false, { tokens: { input: 120, output: 30, reasoning: 0, total: 150 } }),
+					createRun(1, true, { tokens: { input: 40, output: 10, reasoning: 0, total: 50 } }),
 				],
 			],
-			["t3", [createRun(0, false, { tokens: { input: 160, output: 40, total: 200 } })]],
+			["t3", [createRun(0, false, { tokens: { input: 160, output: 40, reasoning: 0, total: 200 } })]],
 		]);
 
 		const result = buildBenchmarkResult({

@@ -521,13 +521,13 @@ async function main(): Promise<void> {
 		`  Total tokens (best, overall): ${result.summary.totalTokens.input} in / ${result.summary.totalTokens.output} out`,
 	);
 	console.log(
-		`  Tokens/task (best, overall): mean=${result.summary.avgTokensPerTask.total} median=${result.summary.medianTokensPerTask.total} p1=${result.summary.p1TokensPerTask.total} p99=${result.summary.p99TokensPerTask.total}`,
+		`  Tokens/task (best, overall): mean=${result.summary.avgTokensPerTask.total} median=${result.summary.medianTokensPerTask.total} p1=${result.summary.p1TokensPerTask.total} p99=${result.summary.p99TokensPerTask.total} reasoning=${result.summary.avgTokensPerTask.reasoning}`,
 	);
 	console.log(
 		`  Total tokens (one-shot successes): ${result.summary.totalOneShotSuccessTokens.input} in / ${result.summary.totalOneShotSuccessTokens.output} out`,
 	);
 	console.log(
-		`  Tokens/task (one-shot successes): mean=${result.summary.avgOneShotSuccessTokensPerTask.total} median=${result.summary.medianOneShotSuccessTokensPerTask.total} p1=${result.summary.p1OneShotSuccessTokensPerTask.total} p99=${result.summary.p99OneShotSuccessTokensPerTask.total}`,
+		`  Tokens/task (one-shot successes): mean=${result.summary.avgOneShotSuccessTokensPerTask.total} median=${result.summary.medianOneShotSuccessTokensPerTask.total} p1=${result.summary.p1OneShotSuccessTokensPerTask.total} p99=${result.summary.p99OneShotSuccessTokensPerTask.total} reasoning=${result.summary.avgOneShotSuccessTokensPerTask.reasoning}`,
 	);
 	if (result.summary.ghostRuns > 0) {
 		console.log(`  Ghost runs (0/0/0): ${result.summary.ghostRuns}`);

@@ -183,6 +183,9 @@ export function generateReport(result: BenchmarkResult): string {
 		`| Output Tokens | ${formatNumber(summary.totalTokens.output)} | ${formatNumber(summary.avgTokensPerTask.output)} | ${formatNumber(summary.medianTokensPerTask.output)} | ${formatNumber(summary.p1TokensPerTask.output)} | ${formatNumber(summary.p99TokensPerTask.output)} |`,
 	);
 	lines.push(
+		`| Reasoning Tokens | ${formatNumber(summary.totalTokens.reasoning)} | ${formatNumber(summary.avgTokensPerTask.reasoning)} | ${formatNumber(summary.medianTokensPerTask.reasoning)} | ${formatNumber(summary.p1TokensPerTask.reasoning)} | ${formatNumber(summary.p99TokensPerTask.reasoning)} |`,
+	);
+	lines.push(
 		`| Total Tokens | ${formatNumber(summary.totalTokens.total)} | ${formatNumber(summary.avgTokensPerTask.total)} | ${formatNumber(summary.medianTokensPerTask.total)} | ${formatNumber(summary.p1TokensPerTask.total)} | ${formatNumber(summary.p99TokensPerTask.total)} |`,
 	);
 	lines.push(
@@ -199,6 +202,9 @@ export function generateReport(result: BenchmarkResult): string {
 	);
 	lines.push(
 		`| Output Tokens | ${formatNumber(summary.totalOneShotSuccessTokens.output)} | ${formatNumber(summary.avgOneShotSuccessTokensPerTask.output)} | ${formatNumber(summary.medianOneShotSuccessTokensPerTask.output)} | ${formatNumber(summary.p1OneShotSuccessTokensPerTask.output)} | ${formatNumber(summary.p99OneShotSuccessTokensPerTask.output)} |`,
+	);
+	lines.push(
+		`| Reasoning Tokens | ${formatNumber(summary.totalOneShotSuccessTokens.reasoning)} | ${formatNumber(summary.avgOneShotSuccessTokensPerTask.reasoning)} | ${formatNumber(summary.medianOneShotSuccessTokensPerTask.reasoning)} | ${formatNumber(summary.p1OneShotSuccessTokensPerTask.reasoning)} | ${formatNumber(summary.p99OneShotSuccessTokensPerTask.reasoning)} |`,
 	);
 	lines.push(
 		`| Total Tokens | ${formatNumber(summary.totalOneShotSuccessTokens.total)} | ${formatNumber(summary.avgOneShotSuccessTokensPerTask.total)} | ${formatNumber(summary.medianOneShotSuccessTokensPerTask.total)} | ${formatNumber(summary.p1OneShotSuccessTokensPerTask.total)} | ${formatNumber(summary.p99OneShotSuccessTokensPerTask.total)} |`,
