@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Enabled automatic content markup healing for all OpenAI-compatible streaming models
+
 - Updated pricing and context window limits for several catalog models.
 - Disabled reasoning capability for multiple providers in the catalog.
 

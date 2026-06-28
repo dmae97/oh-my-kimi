@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Enabled automatic removal of leaked reasoning tags for all models
+- Prevented reasoning text duplication when models emit both structured and inline thinking
+
 - Defaulted reasoning context to all turns for all Codex requests.
 
 ### Fixed

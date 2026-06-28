@@ -145,16 +145,88 @@ function mockNdjsonFetch(lines: ReadonlyArray<unknown>): FetchImpl {
 }
 
 describe("StreamMarkupHealing pattern selection", () => {
-	it("selects the requested grammar without creating provider-specific collectors", () => {
+	it("routes tool-call leaks to their grammar and everything else to thinking", () => {
 		expect(getStreamMarkupHealingPattern("openrouter", "moonshotai/kimi-k2")).toBe("kimi");
 		expect(getStreamMarkupHealingPattern("ollama-cloud", "deepseek-v4-pro")).toBe("dsml");
-		expect(getStreamMarkupHealingPattern("minimax-code", "MiniMax-M2.5", { parseThinkingTags: true })).toBe(
-			"thinking",
-		);
-		expect(getStreamMarkupHealingPattern("opencode-zen", "minimax-m3")).toBe("thinking");
 		expect(getStreamMarkupHealingPattern("nanogpt", "deepseek/deepseek-v4-pro")).toBe("dsml");
-		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBeUndefined();
-		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBeUndefined();
+		// Every other model heals leaked reasoning idioms by default.
+		expect(getStreamMarkupHealingPattern("opencode-zen", "minimax-m3")).toBe("thinking");
+		expect(getStreamMarkupHealingPattern("openrouter", "google/gemini-3.5-flash")).toBe("thinking");
+		expect(getStreamMarkupHealingPattern("ollama-cloud", "gpt-oss:120b")).toBe("thinking");
+		// A DeepSeek id on a non-DSML provider falls back to thinking, not the envelope grammar.
+		expect(getStreamMarkupHealingPattern("openai", "deepseek-v4-pro")).toBe("thinking");
+	});
+});
+
+describe("openai-completions leaked thinking healing", () => {
+	// Gemini on OpenRouter (chat-completions) leaks its canonical ` ```thinking `
+	// fence into `delta.content`. The default "thinking" healer must lift it back
+	// into a thinking block instead of leaving the fence as visible text (#bug).
+	const geminiModel = buildModel({
+		id: "google/gemini-3.5-flash",
+		name: "Gemini 3.5 Flash",
+		api: "openai-completions",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 8_192,
+	});
+
+	it("lifts a leaked gemini thinking fence out of the visible reply", async () => {
+		const leaked = "```thinking\nWeigh the options.\n```\nFinal answer.";
+		const fetchMock = mockFetch([
+			chunk(geminiModel.id, { content: leaked }),
+			chunk(geminiModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(geminiModel, baseContext(), {
+			apiKey: "test",
+			fetch: fetchMock,
+		}).result();
+
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => b.text)
+			.join("");
+		const thinking = result.content
+			.filter((b): b is ThinkingContent => b.type === "thinking")
+			.map(b => b.thinking)
+			.join("");
+
+		expect(thinking).toContain("Weigh the options.");
+		expect(text).not.toContain("```thinking");
+		expect(text.trim()).toBe("Final answer.");
+	});
+
+	it("keeps healed thinking from duplicating structured reasoning", async () => {
+		const fetchMock = mockFetch([
+			chunk(geminiModel.id, { reasoning_content: "structured reasoning" }),
+			chunk(geminiModel.id, { content: "```thinking\nleaked copy\n```visible" }),
+			chunk(geminiModel.id, {}, "stop"),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(geminiModel, baseContext(), {
+			apiKey: "test",
+			fetch: fetchMock,
+		}).result();
+
+		const text = result.content
+			.filter(b => b.type === "text")
+			.map(b => b.text)
+			.join("");
+		const thinking = result.content
+			.filter((b): b is ThinkingContent => b.type === "thinking")
+			.map(b => b.thinking)
+			.join("");
+
+		expect(thinking).toBe("structured reasoning");
+		expect(thinking).not.toContain("leaked copy");
+		expect(text.trim()).toBe("visible");
 	});
 });
 
@@ -245,6 +317,24 @@ describe("StreamMarkupHealing DSML envelope pattern", () => {
 			),
 		).toBe("");
 		expect(healing.drainCompleted()).toHaveLength(1);
+	});
+
+	it("heals a leaked thinking fence while still reconstructing the tool call", () => {
+		// The DSML grammar's xml scanner does not parse thinking; proving the fence
+		// is lifted shows the always-on thinking healer runs alongside it.
+		const healing = new StreamMarkupHealing({ pattern: "dsml" });
+		const events = [
+			...healing.feedEvents("```thinking\nplan\n```before "),
+			...healing.feedEvents(REPORTED_DSML_LEAK),
+			...healing.feedEvents(" after"),
+			...healing.flushEvents(),
+		];
+		const thinking = events.flatMap(e => (e.type === "thinking" ? [e.thinking] : [])).join("");
+		const text = events.flatMap(e => (e.type === "text" ? [e.text] : [])).join("");
+		const calls = events.filter(e => e.type === "toolCall");
+		expect(thinking).toBe("plan\n");
+		expect(text).toBe("before  after");
+		expect(calls).toHaveLength(1);
 	});
 });
 
