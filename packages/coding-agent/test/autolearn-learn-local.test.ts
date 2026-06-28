@@ -198,13 +198,15 @@ describe("learned-lesson read-back", () => {
 		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
 	});
 
-	it("refreshes consolidated summaries without rereading learned lessons from the active session", async () => {
+	it("uses the pre-session learned snapshot when startup refresh has no session cache yet", async () => {
 		const settings = Settings.isolated({ "memory.backend": "local" });
-		const session = sessionWithFile("session-consolidate.jsonl");
-		// First build (before background consolidation finishes) snapshots an empty learned.md.
-		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Prior-session lesson" });
+		const initial = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		expect(initial).toContain("Prior-session lesson");
 
-		// The active session learns while the background pipeline is still running.
+		const session = sessionWithFile("session-consolidate.jsonl");
+		// The active session learns while the background pipeline is still running,
+		// before any session-scoped prompt rebuild has populated the WeakMap.
 		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Active-session lesson" });
 		// Background pipeline writes the consolidated summary later.
 		const root = getMemoryRoot(agentDir, settings.getCwd());
@@ -213,6 +215,7 @@ describe("learned-lesson read-back", () => {
 		await refreshMemoryToolDeveloperInstructionsCacheAfterStartup(session, agentDir, settings);
 		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings, session);
 		expect(out).toContain("Consolidated guidance here.");
+		expect(out).toContain("Prior-session lesson");
 		expect(out).not.toContain("Active-session lesson");
 
 		const nextSession = sessionWithFile("session-after-consolidate.jsonl");

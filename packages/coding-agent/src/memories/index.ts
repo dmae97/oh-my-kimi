@@ -166,6 +166,11 @@ const memoryToolDeveloperInstructionsBySession = new WeakMap<
 	MemoryInstructionSession,
 	CachedMemoryToolDeveloperInstructions
 >();
+const memoryToolDeveloperInstructionsByRoot = new Map<string, MemoryToolDeveloperInstructionsSnapshot | undefined>();
+
+function getMemoryInstructionRoot(agentDir: string, settings: Settings): string {
+	return getMemoryRoot(agentDir, settings.getCwd());
+}
 
 function getMemoryInstructionSessionFile(session: MemoryInstructionSession): string | undefined {
 	return session.sessionManager.getSessionFile() ?? undefined;
@@ -177,7 +182,7 @@ async function readMemoryToolDeveloperInstructionsSnapshot(
 ): Promise<MemoryToolDeveloperInstructionsSnapshot | undefined> {
 	const cfg = loadMemoryConfig(settings);
 	if (!cfg.enabled) return undefined;
-	const memoryRoot = getMemoryRoot(agentDir, settings.getCwd());
+	const memoryRoot = getMemoryInstructionRoot(agentDir, settings);
 
 	let summary = "";
 	try {
@@ -255,8 +260,10 @@ export async function refreshMemoryToolDeveloperInstructionsCacheAfterStartup(
 	const sessionFile = getMemoryInstructionSessionFile(session);
 	const cached = memoryToolDeveloperInstructionsBySession.get(session);
 	const current = await readMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+	const root = getMemoryInstructionRoot(agentDir, settings);
+	const baseline = memoryToolDeveloperInstructionsByRoot.get(root);
 	const cachedLearned = cached && cached.sessionFile === sessionFile ? cached.snapshot?.learned : undefined;
-	const learned = cachedLearned ?? current?.learned ?? "";
+	const learned = cachedLearned ?? baseline?.learned ?? "";
 	const snapshot = current ? { summary: current.summary, learned } : undefined;
 	cacheMemoryToolDeveloperInstructions(session, sessionFile, snapshot, settings);
 }
@@ -271,6 +278,7 @@ export async function buildMemoryToolDeveloperInstructions(
 ): Promise<string | undefined> {
 	if (!session) {
 		const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+		memoryToolDeveloperInstructionsByRoot.set(getMemoryInstructionRoot(agentDir, settings), snapshot);
 		return renderMemoryToolDeveloperInstructionsSnapshot(snapshot, settings);
 	}
 
