@@ -158,9 +158,9 @@ function buildZaiWindow(parsed: ZaiUsageLimitItem): UsageWindow {
 			durationMs = count * MONTH_MS;
 			break;
 		case 6:
-			id = `${count}w`;
-			label = count === 1 ? "Weekly" : formatCountedUnit(count, "Week");
-			durationMs = count * WEEK_MS;
+			id = "1w";
+			label = "Weekly";
+			durationMs = WEEK_MS;
 			break;
 		default:
 			id = parsed.unit !== undefined ? `${count}u${parsed.unit}` : "quota";
