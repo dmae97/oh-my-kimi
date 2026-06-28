@@ -8,7 +8,9 @@ import {
 	buildHomebrewUpdateArgs,
 	buildMiseForceInstallArgs,
 	buildMiseUpgradeArgs,
+	pruneBunInstallCache,
 	replaceBinaryForUpdate,
+	resolveBunGlobalNodeModulesDirFromLocations,
 	resolveUpdateMethodForTest,
 	sweepStaleBackups,
 } from "@oh-my-pi/pi-coding-agent/cli/update-cli";
@@ -136,6 +138,87 @@ describe("update-cli bun install command", () => {
 		const args = buildBunInstallArgs("15.9.0", "linux-arm");
 		expect(args).toContain("@oh-my-pi/pi-natives@15.9.0");
 		expect(args.some(arg => arg.startsWith("@oh-my-pi/pi-natives-"))).toBe(false);
+	});
+
+	it("derives global node_modules from supported bun global locations", () => {
+		expect(resolveBunGlobalNodeModulesDirFromLocations(path.join("home", ".bun", "bin"), undefined)).toBe(
+			path.join("home", ".bun", "install", "global", "node_modules"),
+		);
+		expect(
+			resolveBunGlobalNodeModulesDirFromLocations(undefined, path.join("home", ".bun", "install", "cache")),
+		).toBe(path.join("home", ".bun", "install", "global", "node_modules"));
+	});
+});
+
+describe("update-cli bun cache pruning", () => {
+	it("keeps only the newest cached version for filtered global install packages", async () => {
+		const dir = await makeTempDir();
+		await Bun.write(path.join(dir, "react", "18.3.1@@@1"), "");
+		await Bun.write(path.join(dir, "react", "19.2.6@@@1"), "");
+		await Bun.write(
+			path.join(dir, "react@18.3.1@@@1", "package.json"),
+			JSON.stringify({ name: "react", version: "18.3.1" }),
+		);
+		await Bun.write(
+			path.join(dir, "react@19.2.6@@@1", "package.json"),
+			JSON.stringify({ name: "react", version: "19.2.6" }),
+		);
+		await Bun.write(path.join(dir, "@oh-my-pi", "pi-utils", "15.7.6@@@1"), "");
+		await Bun.write(path.join(dir, "@oh-my-pi", "pi-utils", "15.8.0@@@1"), "");
+		await Bun.write(
+			path.join(dir, "@oh-my-pi", "pi-utils@15.7.6@@@1", "package.json"),
+			JSON.stringify({ name: "@oh-my-pi/pi-utils", version: "15.7.6" }),
+		);
+		await Bun.write(
+			path.join(dir, "@oh-my-pi", "pi-utils@15.8.0@@@1", "package.json"),
+			JSON.stringify({ name: "@oh-my-pi/pi-utils", version: "15.8.0" }),
+		);
+		await Bun.write(path.join(dir, "chalk", "4.1.2@@@1"), "");
+		await Bun.write(path.join(dir, "chalk", "5.6.2@@@1"), "");
+		await Bun.write(
+			path.join(dir, "chalk@4.1.2@@@1", "package.json"),
+			JSON.stringify({ name: "chalk", version: "4.1.2" }),
+		);
+		await Bun.write(
+			path.join(dir, "chalk@5.6.2@@@1", "package.json"),
+			JSON.stringify({ name: "chalk", version: "5.6.2" }),
+		);
+
+		const result = await pruneBunInstallCache(dir, new Set(["react", "@oh-my-pi/pi-utils"]));
+
+		expect(result).toEqual({ scannedPackages: 2, removedEntries: 4 });
+		expect(await Bun.file(path.join(dir, "react", "18.3.1@@@1")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "react@18.3.1@@@1", "package.json")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "react", "19.2.6@@@1")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "react@19.2.6@@@1", "package.json")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "@oh-my-pi", "pi-utils", "15.7.6@@@1")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "@oh-my-pi", "pi-utils@15.7.6@@@1", "package.json")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "@oh-my-pi", "pi-utils", "15.8.0@@@1")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "@oh-my-pi", "pi-utils@15.8.0@@@1", "package.json")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "chalk", "4.1.2@@@1")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "chalk@4.1.2@@@1", "package.json")).exists()).toBe(true);
+	});
+
+	it("treats a stable release as newer than a matching prerelease", async () => {
+		const dir = await makeTempDir();
+		await Bun.write(path.join(dir, "pkg", "1.0.0-beta.1@@@1"), "");
+		await Bun.write(path.join(dir, "pkg", "1.0.0@@@1"), "");
+		await Bun.write(
+			path.join(dir, "pkg@1.0.0-beta.1@@@1", "package.json"),
+			JSON.stringify({ name: "pkg", version: "1.0.0-beta.1" }),
+		);
+		await Bun.write(
+			path.join(dir, "pkg@1.0.0@@@1", "package.json"),
+			JSON.stringify({ name: "pkg", version: "1.0.0" }),
+		);
+
+		const result = await pruneBunInstallCache(dir);
+
+		expect(result).toEqual({ scannedPackages: 1, removedEntries: 2 });
+		expect(await Bun.file(path.join(dir, "pkg", "1.0.0-beta.1@@@1")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "pkg@1.0.0-beta.1@@@1", "package.json")).exists()).toBe(false);
+		expect(await Bun.file(path.join(dir, "pkg", "1.0.0@@@1")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "pkg@1.0.0@@@1", "package.json")).exists()).toBe(true);
 	});
 });
 
