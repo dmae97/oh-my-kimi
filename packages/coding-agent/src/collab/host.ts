@@ -37,6 +37,7 @@ import {
 	parseCollabLink,
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
+import { shrinkForReplication } from "./replication-shrink";
 
 /** Events that change the footer state guests render. */
 const STATE_TRIGGER_EVENTS: Record<string, true> = {
@@ -212,7 +213,7 @@ export class CollabHost {
 		}
 
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			if (isWireAgentEvent(event)) this.#broadcast({ t: "event", event });
+			if (isWireAgentEvent(event)) this.#broadcast({ t: "event", event: shrinkForReplication(event) });
 			this.#onEventForState(event);
 		});
 		const bus = this.#ctx.eventBus;
@@ -223,7 +224,7 @@ export class CollabHost {
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
 		this.#ctx.sessionManager.onEntryAppended = entry => {
-			if (isWireSessionEntry(entry)) this.#broadcast({ t: "entry", entry });
+			if (isWireSessionEntry(entry)) this.#broadcast({ t: "entry", entry: shrinkForReplication(entry) });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
@@ -358,10 +359,13 @@ export class CollabHost {
 
 	/**
 	 * Slice {@link entries} into byte-bounded `snapshot-chunk` frames targeted
-	 * at {@link fromPeer}. Every batch carries at least one entry (a single
-	 * oversize entry ships alone), and the last batch is tagged `final: true`
-	 * so the guest can finalize the replica. An empty snapshot still emits one
-	 * `final` chunk so the guest never blocks on a missing terminator.
+	 * at {@link fromPeer}. Each entry is first run through
+	 * {@link shrinkForReplication} so a single oversized tool-result entry
+	 * cannot ship as an oversized chunk that trips the relay's per-frame
+	 * `maxPayloadLength` (issue #3739). Every batch carries at least one
+	 * entry, and the last batch is tagged `final: true` so the guest can
+	 * finalize the replica. An empty snapshot still emits one `final` chunk
+	 * so the guest never blocks on a missing terminator.
 	 */
 	#sendSnapshotChunks(entries: (StoredSessionEntry & WireSessionEntry)[], fromPeer: number): void {
 		const socket = this.#socket;
@@ -377,9 +381,10 @@ export class CollabHost {
 			while (i < entries.length) {
 				const entry = entries[i];
 				if (!entry) break;
-				const entryBytes = JSON.stringify(entry).length;
+				const shrunk = shrinkForReplication(entry);
+				const entryBytes = JSON.stringify(shrunk).length;
 				if (batch.length > 0 && batchBytes + entryBytes > SNAPSHOT_CHUNK_BYTES) break;
-				batch.push(entry);
+				batch.push(shrunk);
 				batchBytes += entryBytes;
 				i++;
 			}

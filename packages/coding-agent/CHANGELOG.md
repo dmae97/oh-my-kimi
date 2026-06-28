@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/collab` host disconnecting in a loop ("Collab relay connection lost (Connection ended), reconnecting…") when the live session held an oversized entry (typically a `read`/`bash`/`search` tool result that captured several megabytes of output). `CollabHost.#sendSnapshotChunks` packed entries into 512 KB-target batches but added the first entry of every batch unconditionally, so a single oversized entry shipped as its own oversized chunk; the relay closed the host's WebSocket with `1006 Received too big message`, `CollabSocket` reconnected on the non-fatal code, the next guest hello triggered the same oversized send, and the loop never broke. The host now runs every replicated entry and event through a `shrinkForReplication` helper that head-truncates long strings with an `[…N chars elided for collab session]` marker once a payload exceeds `MAX_REPLICATED_PAYLOAD_BYTES = 1 MB`; the snapshot chunk train, live `entry` broadcasts, and live `event` broadcasts (including large `tool_execution_end` results) all ride that cap, so single oversized entries no longer kill the host's WebSocket ([#3739](https://github.com/can1357/oh-my-pi/issues/3739)).
+
 ## [16.2.3] - 2026-06-28
 
 ### Added
