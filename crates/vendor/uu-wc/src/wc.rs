@@ -21,13 +21,13 @@ use std::{
 };
 
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::ValueParser};
+use pi_uutils_ctx::format_usage;
 use thiserror::Error;
 use unicode_width::UnicodeWidthChar;
 use utf8::{BufReadDecoder, BufReadDecoderError};
 use uucore::{
 	display::Quotable,
 	error::{FromIo, UError, UResult},
-	format_usage,
 	hardware::{HardwareFeature, HasHardwareFeatures as _, SimdPolicy},
 	parser::shortcut_value_parser::ShortcutValueParser,
 	quoting_style::{self, QuotingStyle},

@@ -15,12 +15,12 @@ use std::{
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use memchr::memchr2;
+use pi_uutils_ctx::format_usage;
 use thiserror::Error;
 use uucore::{
 	display::Quotable,
 	error::{UResult, strip_errno},
 	fast_inc::fast_inc_one,
-	format_usage,
 };
 
 // Allocate 32 digits for the line number.

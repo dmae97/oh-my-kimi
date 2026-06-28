@@ -12,6 +12,7 @@ use std::{
 };
 
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::ValueParser, parser::ValuesRef};
+use pi_uutils_ctx::format_usage;
 #[cfg(all(unix, target_os = "linux"))]
 use uucore::error::FromIo;
 #[cfg(not(windows))]
@@ -19,7 +20,6 @@ use uucore::mode;
 use uucore::{
 	display::Quotable,
 	error::{UResult, USimpleError},
-	format_usage,
 	fs::dir_strip_dot_for_creation,
 };
 

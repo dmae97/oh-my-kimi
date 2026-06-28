@@ -15,10 +15,10 @@ use clap::{
 	builder::ValueParser,
 	error::{ContextKind, Error, ErrorKind},
 };
+use pi_uutils_ctx::format_usage;
 use uucore::{
 	display::Quotable,
 	error::{FromIo, UResult, USimpleError},
-	format_usage,
 	parser::shortcut_value_parser::ShortcutValueParser,
 	posix::{OBSOLETE, posix_version},
 };

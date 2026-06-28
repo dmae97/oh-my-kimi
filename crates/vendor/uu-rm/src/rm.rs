@@ -23,11 +23,12 @@ use clap::{
 	parser::ValueSource,
 };
 use indicatif::{ProgressBar, ProgressStyle};
+use pi_uutils_ctx::format_usage;
 use thiserror::Error;
 use uucore::{
 	display::Quotable,
 	error::{FromIo, UError, UResult},
-	format_usage, os_str_as_bytes,
+	os_str_as_bytes,
 	parser::shortcut_value_parser::ShortcutValueParser,
 };
 

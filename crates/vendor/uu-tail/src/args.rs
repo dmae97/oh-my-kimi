@@ -8,9 +8,9 @@
 use std::{ffi::OsString, io::Write, time::Duration};
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
+use pi_uutils_ctx::format_usage;
 use uucore::{
 	error::{UError, UResult, USimpleError, UUsageError},
-	format_usage,
 	parser::{
 		parse_signed_num::{SignPrefix, parse_signed_num_max},
 		parse_size::ParseSizeError,

@@ -270,3 +270,40 @@ pub fn stderr() -> CtxStderr {
 pub fn stdin() -> CtxStdin {
 	CtxStdin
 }
+
+/// Generate the usage string for clap without evaluating argv-dependent
+/// statics.
+///
+/// This is a panic-safe, argv-independent replacement for
+/// `uucore::format_usage`. It indents all but the first line by 7 spaces to
+/// align with clap's "Usage: " prefix. Callers must provide explicit usage
+/// strings (with actual command names) and avoid `{}` placeholders.
+#[must_use]
+pub fn format_usage(s: &str) -> String {
+	debug_assert!(
+		!s.contains("{}"),
+		"format_usage shim does not support placeholder '{{}}' - use explicit command names instead"
+	);
+	s.replace('\n', "\n       ")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_format_usage_indentation() {
+		let usage = "cat [OPTION]... [FILE]...\nSome descriptive text\nAnother line";
+		let formatted = format_usage(usage);
+		assert_eq!(
+			formatted,
+			"cat [OPTION]... [FILE]...\n       Some descriptive text\n       Another line"
+		);
+	}
+
+	#[test]
+	fn test_format_usage_empty() {
+		let formatted = format_usage("");
+		assert_eq!(formatted, "");
+	}
+}

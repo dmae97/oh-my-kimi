@@ -45,6 +45,7 @@ use custom_str_cmp::custom_str_cmp;
 use ext_sort::ext_sort;
 use foldhash::{HashMap, SharedSeed, fast::FoldHasher};
 use numeric_str_cmp::{NumInfo, NumInfoParseSettings, human_numeric_str_cmp, numeric_str_cmp};
+use pi_uutils_ctx::format_usage;
 use rand::{RngExt as _, rng};
 #[cfg(not(target_os = "wasi"))]
 use rayon::slice::ParallelSliceMut;
@@ -55,7 +56,7 @@ use uucore::{
 	display::Quotable,
 	error::{FromIo, UError, UResult, USimpleError, UUsageError, strip_errno},
 	extendedbigdecimal::ExtendedBigDecimal,
-	format_usage, i18n,
+	i18n,
 	i18n::{datetime::get_locale_months, decimal::locale_decimal_separator},
 	line_ending::LineEnding,
 	parser::{

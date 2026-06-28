@@ -34,6 +34,7 @@ use std::{
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::ValueParser, error::ErrorKind};
 use fs_extra::dir::get_size as dir_get_size;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use pi_uutils_ctx::format_usage;
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "redox"))))]
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -52,7 +53,6 @@ use uucore::{
 	backup_control::{self, source_is_target_backup},
 	display::Quotable,
 	error::{FromIo, UError, UResult, USimpleError, UUsageError},
-	format_usage,
 	fs::{
 		MissingHandling, ResolveMode, are_hardlinks_or_one_way_symlink_to_same_file,
 		are_hardlinks_to_same_file, canonicalize, path_ends_with_terminator,

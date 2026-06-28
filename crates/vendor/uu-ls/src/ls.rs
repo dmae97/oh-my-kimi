@@ -25,7 +25,7 @@ use clap::{
 	builder::{NonEmptyStringValueParser, PossibleValue, ValueParser},
 };
 use lscolors::Colorable;
-use pi_uutils_ctx::CtxStdout;
+use pi_uutils_ctx::{CtxStdout, format_usage};
 #[cfg(unix)]
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
@@ -35,7 +35,6 @@ use uucore::libc::{S_IXGRP, S_IXOTH, S_IXUSR};
 use uucore::{
 	display::Quotable,
 	error::{UError, UResult},
-	format_usage,
 	fs::FileInformation,
 	fsext::metadata_get_time,
 	os_str_as_bytes_lossy,
