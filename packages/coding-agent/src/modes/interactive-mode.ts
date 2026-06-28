@@ -1506,7 +1506,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// and restore the `pendingTools` map so streaming routes back into them.
 		const liveComponents: Component[] = [];
 		const livePendingTools = new Map<string, ToolExecutionHandle>();
-		if (this.session?.isStreaming) {
+		if (this.viewSession?.isStreaming) {
 			const liveSet = new Set<Component>();
 			if (this.streamingComponent) liveSet.add(this.streamingComponent);
 			for (const [id, component] of this.pendingTools) {

@@ -1,12 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -26,6 +28,28 @@ import { TempDir } from "@oh-my-pi/pi-utils";
  * the historical replay, and restores the `pendingTools` map so streaming
  * continues into the same on-screen components.
  */
+const usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistantWithBash(command: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command } }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		stopReason: "toolUse",
+		usage,
+		timestamp: Date.now(),
+	};
+}
+
 describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn", () => {
 	let authStorage: AuthStorage;
 	let mode: InteractiveMode;
@@ -72,7 +96,7 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		resetSettingsForTest();
 	});
 
-	function makeStreamingFixture(): {
+	function makeStreamingFixture(streaming = true): {
 		streamingComponent: AssistantMessageComponent;
 		pendingTool: ToolExecutionComponent;
 	} {
@@ -89,8 +113,9 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		mode.chatContainer.addChild(streamingComponent);
 		mode.chatContainer.addChild(pendingTool);
 		mode.streamingComponent = streamingComponent;
+		mode.streamingMessage = assistantWithBash("echo hi");
 		mode.pendingTools.set("call-1", pendingTool);
-		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => true });
+		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
 		return { streamingComponent, pendingTool };
 	}
 
@@ -112,6 +137,20 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		expect(mode.pendingTools.get("call-1")).toBe(pendingTool);
 	});
 
+	it("routes later streamed tool-call deltas into the preserved on-screen component", async () => {
+		const { pendingTool } = makeStreamingFixture();
+		const updateArgs = vi.spyOn(pendingTool, "updateArgs");
+
+		mode.rebuildChatFromMessages();
+		await mode.eventController.handleEvent({
+			type: "message_update",
+			message: assistantWithBash("echo after"),
+		} as AgentSessionEvent);
+
+		expect(mode.pendingTools.get("call-1")).toBe(pendingTool);
+		expect(updateArgs).toHaveBeenCalledWith({ command: "echo after" }, "call-1");
+	});
+
 	it("re-appends in-flight components after the historical replay (live tail order)", () => {
 		const { streamingComponent, pendingTool } = makeStreamingFixture();
 
@@ -122,6 +161,26 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		const pendingIdx = children.indexOf(pendingTool);
 		expect(streamingIdx).toBeGreaterThanOrEqual(0);
 		expect(pendingIdx).toBeGreaterThan(streamingIdx);
+	});
+
+	it("uses the rendered view session when preserving a focused subagent stream", () => {
+		const { streamingComponent, pendingTool } = makeStreamingFixture(false);
+		Object.defineProperty(mode, "viewSession", {
+			configurable: true,
+			get: () => ({
+				isStreaming: true,
+				buildTranscriptSessionContext: () => ({ messages: [] }),
+				getToolByName: () => undefined,
+				sessionManager: { getCwd: () => tempDir.path() },
+				retryAttempt: undefined,
+			}),
+		});
+
+		mode.rebuildChatFromMessages();
+
+		expect(mode.chatContainer.children).toContain(streamingComponent);
+		expect(mode.chatContainer.children).toContain(pendingTool);
+		expect(mode.pendingTools.get("call-1")).toBe(pendingTool);
 	});
 
 	it("does not preserve in-flight tracking when the session is idle (post-stream rebuilds reset cleanly)", () => {
