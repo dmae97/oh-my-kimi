@@ -1433,6 +1433,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			sessionAccent: settings.get("statusLine.sessionAccent"),
 			transparent: settings.get("statusLine.transparent"),
 			segmentOptions: settings.get("statusLine.segmentOptions"),
+			compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 		});
 	}
 

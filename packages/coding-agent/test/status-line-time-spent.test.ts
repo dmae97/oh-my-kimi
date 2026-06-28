@@ -37,6 +37,7 @@ function createCtx(activeMs: number): SegmentContext {
 		// The segment under test never touches `session`; stub it.
 		session: {} as unknown as SegmentContext["session"],
 		width: 120,
+		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
 		loopMode: null,

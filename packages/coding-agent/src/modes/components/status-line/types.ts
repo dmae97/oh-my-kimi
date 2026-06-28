@@ -31,6 +31,9 @@ export interface StatusLineSettings {
 	/** Drop the theme's `statusLineBg` fill and powerline caps so the bar
 	 *  inherits the terminal's default background. */
 	transparent?: boolean;
+	/** Replace the model-segment icon with the thinking-level glyph and drop the
+	 *  " · <level>" suffix, so the thinking level reads as a single compact icon. */
+	compactThinkingLevel?: boolean;
 }
 
 export type EffectiveStatusLineSettings = Required<
@@ -51,6 +54,8 @@ export interface SegmentContext {
 	activeRepo: ActiveRepoContext | null;
 	width: number;
 	options: StatusLineSegmentOptions;
+	/** Render the model segment's thinking level as a compact leading glyph. */
+	compactThinkingLevel: boolean;
 	planMode: {
 		enabled: boolean;
 		paused: boolean;

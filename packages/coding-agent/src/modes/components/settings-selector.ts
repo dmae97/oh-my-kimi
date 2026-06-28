@@ -387,6 +387,7 @@ export interface StatusLinePreviewSettings {
 	separator?: StatusLineSeparatorStyle;
 	sessionAccent?: boolean;
 	transparent?: boolean;
+	compactThinkingLevel?: boolean;
 }
 
 export interface SettingsCallbacks {

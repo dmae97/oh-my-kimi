@@ -21,6 +21,7 @@ function createPathContext(): SegmentContext {
 			sessionManager: undefined,
 		} as unknown as SegmentContext["session"],
 		width: 120,
+		compactThinkingLevel: false,
 		options: {
 			path: {
 				abbreviate: false,

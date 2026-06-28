@@ -291,6 +291,7 @@ export class StatusLineComponent implements Component {
 			segmentOptions: settings.getGroup("statusLine").segmentOptions,
 			sessionAccent: settings.get("statusLine.sessionAccent"),
 			transparent: settings.get("statusLine.transparent"),
+			compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 		};
 	}
 	#gitEnabled(): boolean {
@@ -991,6 +992,7 @@ export class StatusLineComponent implements Component {
 			activeRepo: activeRepoCache.activeRepo,
 			width,
 			options: segmentOptions ?? {},
+			compactThinkingLevel: this.#resolveSettings().compactThinkingLevel ?? false,
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
 			goalMode: this.#goalModeStatus,

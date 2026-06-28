@@ -16,6 +16,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 			sessionManager: undefined,
 		} as unknown as SegmentContext["session"],
 		width: 120,
+		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
 		loopMode: null,
