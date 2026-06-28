@@ -3,12 +3,16 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
-import { getWorktreeDir, hashPath, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { getWorktreeDir, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import * as git from "../utils/git";
 import * as jj from "../utils/jj";
 import { mapWithConcurrencyLimit } from "./parallel";
 
 const { IsoBackendKind } = natives;
+
+const TASK_ISOLATION_DIR_PREFIX = "t";
+const TASK_ISOLATION_DIR_DIGEST_CHARS = 9;
+const TASK_ISOLATION_MOUNT_DIR = "m";
 type IsoBackendKind = natives.IsoBackendKind;
 
 /** Baseline state for a single git repository. */
@@ -389,15 +393,20 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function getTaskIsolationSegment(repoRoot: string, id: string): string {
+	const key = `${path.resolve(repoRoot)}\0${id}`;
+	const digest = Bun.hash(key).toString(16).padStart(16, "0").slice(-TASK_ISOLATION_DIR_DIGEST_CHARS);
+	return `${TASK_ISOLATION_DIR_PREFIX}${digest}`;
+}
+
 export async function ensureIsolation(
 	baseCwd: string,
 	id: string,
 	preferred?: IsoBackendKind,
 ): Promise<IsolationHandle> {
 	const repoRoot = await getRepoRoot(baseCwd);
-	const baseDir = getWorktreeDir(`${id}-${hashPath(repoRoot)}`);
-	const mergedDir = path.join(baseDir, "merged");
-
+	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
+	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
 	const resolution = natives.isoResolve(preferred ?? null);
 	const candidates = resolution.candidates.length > 0 ? resolution.candidates : [resolution.kind];
 	let fallbackReason = resolution.reason ?? null;
