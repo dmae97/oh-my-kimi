@@ -155,7 +155,7 @@ export class LegacySseTransport implements MCPTransport {
 		} finally {
 			operation.clear();
 			if (endpointReceived) {
-				this.#rejectPending(new Error("Legacy SSE stream closed"));
+				this.#rejectPending(new Error("Transport closed: legacy SSE stream closed"));
 			}
 		}
 	}

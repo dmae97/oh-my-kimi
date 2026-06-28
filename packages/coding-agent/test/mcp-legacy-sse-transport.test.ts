@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { connectToServer, listTools } from "@oh-my-pi/pi-coding-agent/mcp/client";
+import { isRetriableConnectionError } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import type { JsonRpcMessage } from "@oh-my-pi/pi-coding-agent/mcp/types";
 
 const encoder = new TextEncoder();
@@ -106,5 +107,70 @@ describe("legacy MCP HTTP+SSE transport", () => {
 				timeout: 1000,
 			}),
 		).rejects.toThrow("Legacy SSE endpoint origin mismatch");
+	});
+
+	it("surfaces stream drops during requests as retriable transport failures", async () => {
+		let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+		server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const url = new URL(req.url);
+				if (req.method === "GET" && url.pathname === "/mcp/sse") {
+					const stream = new ReadableStream<Uint8Array>({
+						start(controller) {
+							streamController = controller;
+							controller.enqueue(
+								encoder.encode("event: endpoint\ndata: /mcp/messages/?session_id=legacy-session\n\n"),
+							);
+						},
+					});
+					return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+				}
+
+				if (req.method === "POST" && url.pathname === "/mcp/messages/") {
+					const body = (await req.json()) as JsonRpcMessage;
+					if (!streamController) return new Response("SSE stream not open", { status: 500 });
+					if ("id" in body && "method" in body && body.method === "initialize") {
+						streamController.enqueue(
+							encoder.encode(
+								`event: message\ndata: ${JSON.stringify({
+									jsonrpc: "2.0",
+									id: body.id,
+									result: {
+										protocolVersion: "2024-11-05",
+										capabilities: { tools: {} },
+										serverInfo: { name: "legacy-sse", version: "1.0.0" },
+									},
+								})}\n\n`,
+							),
+						);
+					} else if ("id" in body && "method" in body && body.method === "tools/list") {
+						streamController.close();
+					}
+					return new Response(null, { status: 202 });
+				}
+
+				return new Response("not found", { status: 404 });
+			},
+		});
+
+		const connection = await connectToServer("legacy-sse", {
+			type: "sse",
+			url: `http://127.0.0.1:${server.port}/mcp/sse`,
+			timeout: 1000,
+		});
+		try {
+			await listTools(connection);
+			throw new Error("Expected listTools to fail after legacy SSE stream close");
+		} catch (error) {
+			expect(error).toBeInstanceOf(Error);
+			if (error instanceof Error) {
+				expect(error.message).toBe("Transport closed: legacy SSE stream closed");
+				expect(isRetriableConnectionError(error)).toBe(true);
+			}
+		} finally {
+			await connection.transport.close();
+		}
 	});
 });
