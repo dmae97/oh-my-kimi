@@ -40,13 +40,24 @@ export function buildHttp400DumpPayload(
 	};
 }
 
+/** HTTP statuses whose rejected request we persist for post-hoc diagnosis: the
+ *  request-content rejections that wedge a session. 400 (bad request) and 413
+ *  (payload too large — an oversized image / snapcompact frame payload that 413s
+ *  and empties the turn). Auth (401/403), not-found (404), rate limits and 5xx
+ *  are excluded: 429/5xx are retried, so persisting them here would write one
+ *  dump per attempt. */
+export function shouldDumpRejectedRequest(error: unknown): boolean {
+	const status = AIError.status(error);
+	return status === 400 || status === 413;
+}
+
 export async function appendRawHttpRequestDumpFor400(
 	message: string,
 	error: unknown,
 	dump: RawHttpRequestDump | undefined,
 ): Promise<string> {
 	// Never persist dumps under the test runner: providers exercise the 400 path
-	if (!dump || isBunTestRuntime() || AIError.status(error) !== 400) {
+	if (!dump || isBunTestRuntime() || !shouldDumpRejectedRequest(error)) {
 		return message;
 	}
 

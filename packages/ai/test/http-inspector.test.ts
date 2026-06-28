@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { buildHttp400DumpPayload, type RawHttpRequestDump } from "@oh-my-pi/pi-ai/utils/http-inspector";
+import {
+	buildHttp400DumpPayload,
+	type RawHttpRequestDump,
+	shouldDumpRejectedRequest,
+} from "@oh-my-pi/pi-ai/utils/http-inspector";
 
 class HttpError extends Error {
 	constructor(
@@ -36,5 +40,22 @@ describe("buildHttp400DumpPayload", () => {
 
 		expect(payload.headers?.["x-api-key"]).toBe("[redacted]");
 		expect(payload.headers?.["content-type"]).toBe("application/json");
+	});
+});
+
+describe("shouldDumpRejectedRequest", () => {
+	it("captures request-content rejections (400 bad request, 413 payload too large)", () => {
+		expect(shouldDumpRejectedRequest(new HttpError(400, "bad request"))).toBe(true);
+		expect(shouldDumpRejectedRequest(new HttpError(413, "payload too large"))).toBe(true);
+	});
+
+	it("skips auth, not-found, rate-limit, and retried 5xx errors that would spam dumps", () => {
+		for (const status of [401, 403, 404, 429, 500, 502, 503, 504]) {
+			expect(shouldDumpRejectedRequest(new HttpError(status, "x"))).toBe(false);
+		}
+	});
+
+	it("skips errors without an HTTP status", () => {
+		expect(shouldDumpRejectedRequest(new Error("network reset"))).toBe(false);
 	});
 });
