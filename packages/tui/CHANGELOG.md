@@ -9,6 +9,9 @@
 ### Fixed
 
 - Fixed slash skill autocomplete staying closed after existing prompt text; mid-prompt `/...` lookup now shows only `/skill:<name>` commands and accepting one replaces the draft with that skill command ([#3654](https://github.com/can1357/oh-my-pi/issues/3654)).
+### Fixed
+
+- Fixed modified Enter/keyboard shortcuts in fullscreen overlays on terminals using the xterm `modifyOtherKeys` fallback (including iTerm2 when Kitty keyboard negotiation does not complete) by reasserting the active fallback sequence after alternate-screen entry ([#3705](https://github.com/can1357/oh-my-pi/issues/3705)).
 
 ## [16.2.0] - 2026-06-27
 

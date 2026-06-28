@@ -208,6 +208,10 @@ export class VirtualTerminal implements Terminal {
 		return "\x1b[>1u";
 	}
 
+	get keyboardEnhancementSequence(): string | null {
+		return "\x1b[>1u";
+	}
+
 	get appearance(): TerminalAppearance | undefined {
 		return undefined;
 	}
