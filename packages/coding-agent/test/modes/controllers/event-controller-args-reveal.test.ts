@@ -52,6 +52,7 @@ function createFixture(streamingMessage: AssistantMessage) {
 		streamingComponent: { updateContent: vi.fn(), markTranscriptBlockFinalized: vi.fn() },
 		streamingMessage,
 		pendingTools,
+		noteDisplayableThinkingContent: vi.fn(() => false),
 		chatContainer: { addChild: vi.fn() },
 		toolOutputExpanded: false,
 		session: { getToolByName: () => undefined },

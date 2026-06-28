@@ -88,7 +88,13 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	reflect: reflectToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
-	task: taskToolRenderer as ToolRenderer,
+	// Lazy getter: `taskToolRenderer` lives in a module that closes an import
+	// cycle back here (task/renderer → task/render → … → tools/renderers), so
+	// reading it at init order-dependently hits its temporal dead zone. Deferring
+	// the read to first access (render time) sidesteps the cycle entirely.
+	get task(): ToolRenderer {
+		return taskToolRenderer as ToolRenderer;
+	},
 	todo: todoToolRenderer as ToolRenderer,
 	github: githubToolRenderer as ToolRenderer,
 	goal: goalToolRenderer as ToolRenderer,

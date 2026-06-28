@@ -2428,10 +2428,11 @@ export class AgentSession {
 			// No compaction candidates, fallback to re-prime
 			return true;
 		}
+		const advisorSessionId = this.#advisorSessionId(advisor.slug);
 		const preparation = prepareCompaction(
 			pathEntries,
 			compactionSettings,
-			candidates.filter(model => this.#modelRegistry.hasConfiguredAuth(model)),
+			await this.#runnableCompactionCandidates(candidates, advisorSessionId),
 		);
 		if (!preparation) {
 			// Cannot prepare compaction, fallback to re-prime
@@ -2449,7 +2450,6 @@ export class AgentSession {
 
 		let compactResult: CompactionResult | undefined;
 		let lastError: unknown;
-		const advisorSessionId = this.#advisorSessionId(advisor.slug);
 		// Instrument the advisor's overflow-compaction one-shot like the primary
 		// compaction path so the advisor model's maintenance call also emits spans.
 		const telemetry = resolveTelemetry(agent.telemetry, advisorSessionId);
@@ -8778,7 +8778,7 @@ export class AgentSession {
 			const preparation = prepareCompaction(
 				pathEntries,
 				effectiveSettings,
-				compactionCandidates.filter(model => this.#modelRegistry.hasConfiguredAuth(model)),
+				await this.#runnableCompactionCandidates(compactionCandidates, this.sessionId),
 			);
 			if (!preparation) {
 				// Check why we can't compact
@@ -10553,6 +10553,17 @@ export class AgentSession {
 		return this.#resolveCompactionModelCandidates(this.model, availableModels, filter);
 	}
 
+	/**
+	 * Compaction candidates that can actually run — those with a resolvable API
+	 * key, matching the per-candidate getApiKey gate the execution loop applies.
+	 * Re-expansion reusability (prepareCompaction) must judge remote-preserve
+	 * reuse against these, not against candidates the loop would skip at runtime.
+	 */
+	async #runnableCompactionCandidates(candidates: readonly Model[], sessionId: string | undefined): Promise<Model[]> {
+		const keys = await Promise.all(candidates.map(model => this.#modelRegistry.getApiKey(model, sessionId)));
+		return candidates.filter((_, index) => keys[index] !== undefined);
+	}
+
 	#resolveCompactionModelCandidates(
 		preferredModel: Model | null | undefined,
 		availableModels: Model[],
@@ -11064,8 +11075,9 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 
-			const autoCompactionCandidates = this.#getCompactionModelCandidates(availableModels).filter(model =>
-				this.#modelRegistry.hasConfiguredAuth(model),
+			const autoCompactionCandidates = await this.#runnableCompactionCandidates(
+				this.#getCompactionModelCandidates(availableModels),
+				this.sessionId,
 			);
 			const preparation = prepareCompaction(pathEntries, compactionSettings, autoCompactionCandidates);
 			if (!preparation) {

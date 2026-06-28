@@ -16,7 +16,7 @@ function createContext() {
 	const ctx = {
 		isInitialized: true,
 		settings: { get: () => false },
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		pendingTools,
 		hideThinkingBlock: false,

@@ -510,10 +510,6 @@ describe("remote compaction setting", () => {
 		);
 		const fetchSpy = mockFetch(fetchHandler);
 		const completeSimpleSpy = vi.spyOn(ai, "completeSimple");
-		completeSimpleSpy
-			.mockResolvedValueOnce(createAssistantMessage("History summary"))
-			.mockResolvedValueOnce(createAssistantMessage("Turn prefix summary"))
-			.mockResolvedValueOnce(createAssistantMessage("Short summary"));
 
 		const result = await compact(preparation, model, "test-api-key", undefined, undefined, {
 			fetch: fetchSpy,
@@ -534,7 +530,10 @@ describe("remote compaction setting", () => {
 				item => item.type === "reasoning" && item.encrypted_content === "encrypted_reasoning_turn_1",
 			),
 		).toBe(true);
-		expect(result.summary).toContain("History summary");
+		// V1 now matches V2: the provider-native replay is preserved and local
+		// summarization is skipped (no redundant LLM round), leaving the placeholder.
+		expect(result.summary).toContain("Remote compaction preserved provider-native history");
+		expect(completeSimpleSpy).not.toHaveBeenCalled();
 		expect(result.preserveData).toEqual({
 			openaiRemoteCompaction: {
 				provider: "openai",
