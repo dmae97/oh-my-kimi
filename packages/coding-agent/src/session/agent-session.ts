@@ -535,6 +535,13 @@ export interface AgentSessionConfig {
 	 */
 	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
 	/**
+	 * Stream wrapper passed to side-channel requests (`/btw`, `/omfg`, IRC
+	 * auto-replies, and handoff generation) so they apply the same provider
+	 * shaping and host-level request wrappers as normal agent turns. Defaults
+	 * to plain `streamSimple` when omitted.
+	 */
+	sideStreamFn?: StreamFn;
+	/**
 	 * Stream wrapper passed to the advisor agent so its requests apply the
 	 * session's `providers.openrouterVariant`, `providers.antigravityEndpoint`,
 	 * `providers.maxInFlightRequests`, and `model.loopGuard.*` settings —
@@ -1459,6 +1466,7 @@ export class AgentSession {
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
 	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
+	#sideStreamFn: StreamFn;
 	#advisorStreamFn: StreamFn | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt:
@@ -1788,6 +1796,7 @@ export class AgentSession {
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#transformProviderContext = config.transformProviderContext;
+		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#advisorStreamFn = config.advisorStreamFn;
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
@@ -9195,6 +9204,10 @@ export class AgentSession {
 				model,
 				{
 					streamOptions: handoffStreamOptions,
+					completeImpl: async (requestModel, requestContext, requestOptions) => {
+						const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
+						return stream.result();
+					},
 					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 					// Honor the user's /model thinking selection on the handoff path.
 					// Clamped per-model inside generateHandoffFromContext via
@@ -10747,6 +10760,18 @@ export class AgentSession {
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
+						// Route every summarization HTTP request through the
+						// session's side-stream transport so the provider
+						// concurrency cap (e.g. providers.ollama-cloud.maxConcurrency)
+						// brackets compaction the same way it brackets the live
+						// agent turn — without this, multiple ollama-cloud
+						// subagents auto/manually compacting issued uncapped
+						// summary requests in parallel (chatgpt-codex review on
+						// #3751).
+						completeImpl: async (requestModel, requestContext, requestOptions) => {
+							const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
+							return stream.result();
+						},
 					},
 				);
 			} catch (error) {
@@ -12957,7 +12982,7 @@ export class AgentSession {
 		let providerReplyText = "";
 		let emittedReplyText = "";
 		let assistantMessage: AssistantMessage | undefined;
-		const stream = streamSimple(model, obfuscateProviderContext(this.#obfuscator, context), options);
+		const stream = await this.#sideStreamFn(model, obfuscateProviderContext(this.#obfuscator, context), options);
 		for await (const event of stream) {
 			if (event.type === "text_delta") {
 				providerReplyText += event.delta;
@@ -13575,6 +13600,12 @@ export class AgentSession {
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+				// Same per-provider concurrency cap rationale as the compaction
+				// path above (chatgpt-codex review on #3751).
+				completeImpl: async (requestModel, requestContext, requestOptions) => {
+					const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
+					return stream.result();
+				},
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {

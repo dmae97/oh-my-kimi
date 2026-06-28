@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type StreamFn } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Model, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -154,6 +155,76 @@ describe("AgentSession handoff", () => {
 		expect(events.filter(event => event.type === "auto_compaction_start")).toHaveLength(0);
 		expect(events.filter(event => event.type === "auto_compaction_end")).toHaveLength(0);
 		expect(sessionManager.getEntries().filter(entry => entry.type === "compaction")).toHaveLength(0);
+	});
+
+	it("runs handoff generation through the configured side stream function", async () => {
+		const handoffText = "## Goal\nContinue via side stream";
+		let sideStreamCalls = 0;
+		let capturedSideSessionId: string | undefined;
+		const sideStreamFn: StreamFn = (requestModel, _context, options) => {
+			sideStreamCalls++;
+			capturedSideSessionId = options?.sessionId;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message: AssistantMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: handoffText }],
+					api: requestModel.api,
+					provider: requestModel.provider,
+					model: requestModel.id,
+					stopReason: "stop",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					timestamp: Date.now(),
+				};
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+		await session.dispose();
+		session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": false,
+			}),
+			modelRegistry,
+			obfuscator,
+			sideStreamFn,
+		});
+		const preHandoffSessionId = session.sessionId;
+
+		const generateHandoffSpy = vi
+			.spyOn(compactionModule, "generateHandoffFromContext")
+			.mockImplementation(async (context, requestModel, options) => {
+				expect(options.completeImpl).toBeDefined();
+				const message = await options.completeImpl!(requestModel, context, options.streamOptions);
+				return message.content
+					.filter(block => block.type === "text")
+					.map(block => block.text)
+					.join("\n");
+			});
+
+		const result = await session.handoff();
+
+		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
+		expect(result?.document).toBe(handoffText);
+		expect(sideStreamCalls).toBe(1);
+		expect(capturedSideSessionId).toStartWith(`${preHandoffSessionId}:side:`);
 	});
 
 	it("preserves queued steering and follow-up messages across the handoff reset", async () => {

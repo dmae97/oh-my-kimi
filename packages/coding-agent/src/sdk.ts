@@ -2536,13 +2536,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// One-shot launch-latency marker: fired the first time the loop dispatches
 		// a chat request to the provider transport. See onFirstChatDispatch.
 		let notifyFirstChatDispatch = options.onFirstChatDispatch;
-		// Shared, settings-aware stream wrapper used by both the main agent and
-		// the advisor (via AgentSessionConfig.streamFn). Keeps OpenRouter
-		// sticky-routing variants, antigravity endpoint routing, in-flight caps,
-		// and the loop guard consistent across every agent the session drives.
-		// Wrapped in a per-provider concurrency limiter so each LLM HTTP request
-		// — not the whole subagent lifecycle — holds the slot, preventing the
-		// nested-spawn deadlock from issue #3749.
+		// Shared, settings-aware stream wrapper used by the main agent, advisor,
+		// and side-channel requests (`/btw`, `/omfg`, IRC auto-replies, handoff).
+		// Keeps OpenRouter sticky-routing variants, antigravity endpoint routing,
+		// in-flight caps, and the loop guard consistent across every provider call
+		// the session drives. Wrapped in a per-provider concurrency limiter so
+		// each LLM HTTP request — not the whole subagent lifecycle — holds the
+		// slot, preventing the nested-spawn deadlock from issue #3749.
 		const settingsAwareStreamFn = wrapStreamFnWithProviderConcurrency(
 			settings,
 			createSettingsAwareStreamFn(settings),
@@ -2716,6 +2716,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			transformProviderContext,
 			onPayload,
 			onResponse,
+			sideStreamFn: settingsAwareStreamFn,
 			advisorStreamFn: settingsAwareStreamFn,
 			convertToLlm: convertToLlmFinal,
 			rebuildSystemPrompt,
