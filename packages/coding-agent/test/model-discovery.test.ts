@@ -716,6 +716,31 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("llama.cpp", "unloaded")?.contextWindow).toBe(128000);
 	});
 
+	test("llama.cpp discovery falls back to n_ctx_train before the global default", async () => {
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						data: [{ id: "ctx-train", meta: { n_ctx_train: 65536 } }, { id: "unloaded" }],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(JSON.stringify({ default_generation_settings: {} }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		expect(registry.find("llama.cpp", "ctx-train")?.contextWindow).toBe(65536);
+		expect(registry.find("llama.cpp", "unloaded")?.contextWindow).toBe(128000);
+	});
+
 	test("llama.cpp selected model refresh patches newly loaded meta n_ctx", async () => {
 		writeModelCache(
 			"llama.cpp",

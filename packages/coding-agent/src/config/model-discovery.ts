@@ -126,7 +126,8 @@ type LlamaCppDiscoveredServerMetadata = {
 
 type LlamaCppModelListEntry = {
 	id: string;
-	contextWindow?: number;
+	runtimeContextWindow?: number;
+	trainingContextWindow?: number;
 };
 
 function toPositiveNumberOrUndefined(value: unknown): number | undefined {
@@ -183,12 +184,17 @@ function extractLlamaCppContextWindow(payload: Record<string, unknown>): number 
 	return toPositiveNumberOrUndefined(payload.n_ctx);
 }
 
-function extractLlamaCppModelContextWindow(item: Record<string, unknown>): number | undefined {
+function extractLlamaCppModelContextWindows(
+	item: Record<string, unknown>,
+): Pick<LlamaCppModelListEntry, "runtimeContextWindow" | "trainingContextWindow"> {
 	const meta = item.meta;
 	if (!isRecord(meta)) {
-		return undefined;
+		return {};
 	}
-	return toPositiveNumberOrUndefined(meta.n_ctx);
+	return {
+		runtimeContextWindow: toPositiveNumberOrUndefined(meta.n_ctx),
+		trainingContextWindow: toPositiveNumberOrUndefined(meta.n_ctx_train),
+	};
 }
 
 function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
@@ -199,7 +205,7 @@ function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
 		if (!isRecord(item) || typeof item.id !== "string" || !item.id) {
 			return [];
 		}
-		return [{ id: item.id, contextWindow: extractLlamaCppModelContextWindow(item) }];
+		return [{ id: item.id, ...extractLlamaCppModelContextWindows(item) }];
 	});
 }
 
@@ -387,7 +393,11 @@ export async function discoverLlamaCppModels(
 	for (const item of models) {
 		const { id } = item;
 		if (!id) continue;
-		const contextWindow = item.contextWindow ?? serverMetadata?.contextWindow ?? DISCOVERY_DEFAULT_CONTEXT_WINDOW;
+		const contextWindow =
+			item.runtimeContextWindow ??
+			serverMetadata?.contextWindow ??
+			item.trainingContextWindow ??
+			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 		discovered.push(
 			buildModel({
 				id,
@@ -429,7 +439,8 @@ export async function discoverLlamaCppModelContextWindow(
 			return undefined;
 		}
 		const entries = parseLlamaCppModelList(await response.json());
-		return entries.find(entry => entry.id === model.id)?.contextWindow;
+		const entry = entries.find(entry => entry.id === model.id);
+		return entry?.runtimeContextWindow ?? entry?.trainingContextWindow;
 	};
 	try {
 		const apiKey = await ctx.getBearerApiKeyResolver(model.provider);
