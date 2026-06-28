@@ -105,6 +105,27 @@ export function demoteInterruptedThinking(
 	};
 }
 
+/**
+ * True when the assistant turn at `messages[index]` is immediately followed by
+ * its hidden `interrupted-thinking` continuity message — the marker that a
+ * trailing thinking run was demoted on user interrupt. The run stays on the
+ * persisted/displayed assistant message; this flag tells the LLM path to drop it.
+ */
+function followedByInterruptedThinking(messages: AgentMessage[], index: number): boolean {
+	const next = messages[index + 1];
+	return next !== undefined && next.role === "custom" && next.customType === INTERRUPTED_THINKING_MESSAGE_TYPE;
+}
+
+/**
+ * Drop the demoted trailing thinking run from an assistant message for the LLM
+ * view only. The run is incomplete and unsigned, so providers reject it; the
+ * continuity message that follows carries the reasoning instead.
+ */
+function stripDemotedThinkingForLlm(message: AssistantMessage): AssistantMessage {
+	const demoted = demoteInterruptedThinking(message);
+	return demoted ? { ...message, content: demoted.strippedContent } : message;
+}
+
 /** Details persisted on a `/tan` background-dispatch breadcrumb. */
 export interface BackgroundTanDispatchDetails {
 	jobId: string;
@@ -601,7 +622,7 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
  * - Custom extensions and tools
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.flatMap((m): Message[] => {
+	return messages.flatMap((m, index): Message[] => {
 		switch (m.role) {
 			case "bashExecution":
 				if (m.excludeFromContext) {
@@ -688,11 +709,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				const converted = convertMessageToLlm(m);
 				return converted ? [converted] : [];
 			}
+			case "assistant": {
+				// A user-interrupted turn keeps its trailing thinking run on the
+				// persisted/displayed message so reload and Ctrl+L rebuilds still
+				// show it. That run is incomplete/unsigned and gets rejected on
+				// resend, so strip it here — LLM path only — when the hidden
+				// interrupted-thinking continuity message follows.
+				const source = followedByInterruptedThinking(messages, index) ? stripDemotedThinkingForLlm(m) : m;
+				const converted = convertMessageToLlm(source);
+				return converted ? [converted] : [];
+			}
 			case "branchSummary":
 			case "compactionSummary":
 			case "user":
 			case "developer":
-			case "assistant":
 			case "toolResult": {
 				// Core roles share one transformer with agent-core —
 				// duplicating them here is how snapcompact frames once

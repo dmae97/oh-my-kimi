@@ -135,7 +135,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 		return { model, sessionManager, session };
 	}
 
-	it("demotes native thinking from a user-interrupted assistant into hidden durable context", async () => {
+	it("retains native thinking on a user-interrupted assistant for replay and demotes a copy into hidden context", async () => {
 		const harness = createSession();
 		await emitAssistantEnd(
 			harness.session,
@@ -147,7 +147,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 		const messages = harness.session.agent.state.messages;
 		const assistant = messages.find(isAssistantMessage);
 		expect(assistant).toBeDefined();
-		expect(assistant?.content.some(block => block.type === "thinking")).toBe(false);
+		expect(assistant?.content.some(block => block.type === "thinking")).toBe(true);
 		const hidden = messages.find(isInterruptedThinkingMessage);
 		expect(hidden).toBeDefined();
 		expect(hidden?.display).toBe(false);
@@ -175,7 +175,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 		if (assistantEntry?.type !== "message" || assistantEntry.message.role !== "assistant") {
 			throw new Error("assistant entry was not persisted");
 		}
-		expect(assistantEntry.message.content.some(block => block.type === "thinking")).toBe(false);
+		expect(assistantEntry.message.content.some(block => block.type === "thinking")).toBe(true);
 		const hiddenEntry = branch[hiddenEntryIndex];
 		if (hiddenEntry?.type !== "custom_message") throw new Error("interrupted-thinking entry was not persisted");
 		expect(hiddenEntry.display).toBe(false);
@@ -183,6 +183,18 @@ describe("AgentSession interrupted thinking persistence", () => {
 		expect(
 			typeof hiddenEntry.content === "string" ? hiddenEntry.content : JSON.stringify(hiddenEntry.content),
 		).toContain(REASONING_TEXT);
+
+		// The thinking is stripped from the provider request only: the LLM sees the
+		// assistant turn without the demoted run, plus the reasoning as a hidden
+		// developer continuity turn.
+		const llm = convertToLlm(messages);
+		const assistantLlm = llm.find(entry => entry.role === "assistant");
+		expect(assistantLlm).toBeDefined();
+		expect(Array.isArray(assistantLlm?.content) && assistantLlm.content.some(block => block.type === "thinking")).toBe(
+			false,
+		);
+		const developerLlm = llm.filter(entry => entry.role === "developer");
+		expect(developerLlm.some(entry => JSON.stringify(entry.content).includes(REASONING_TEXT))).toBe(true);
 	});
 
 	it("leaves native thinking on non-user aborts and does not append hidden context", async () => {

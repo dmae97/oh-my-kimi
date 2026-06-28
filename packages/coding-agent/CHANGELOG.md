@@ -21,12 +21,14 @@
 - Refactored debug log and raw SSE stream viewers to use a standard overlay component
 - Improved debug log viewer UI with clearer status indicators, controls, and dynamic layout
 - Updated raw SSE debug stream viewer with a consistent UI and improved footer documentation
-
 - Updated the idle recap to use an LLM-generated summary instead of a static status line
+- Moved the debug raw SSE stream and recent logs views onto fullscreen alternate-screen overlays with wider, bordered layouts.
 - Refined interrupted thinking system instructions to encourage smoother continuation
 - Changed the idle recap from a static "Goal/Next" line into an LLM-generated welcome-back recap: after the idle delay an abortable ephemeral side-channel turn (same pipeline as `/btw`) summarizes where things stand in one or two plain sentences, anchored by the live goal/title and active todo task; any activity cancels the in-flight turn and a late reply is discarded.
 
 ### Fixed
+
+- Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history
 
 - Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
 - Preserved interrupted assistant thinking as hidden durable context after user interrupts.
