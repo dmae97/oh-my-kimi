@@ -141,6 +141,36 @@ describe("ModelRegistry runtime provider registration", () => {
 		expectProviderHeader(registry, providerName, runtimeHeader, undefined);
 	});
 
+	test("registerProvider keeps runtime header objects live for request-time reads", () => {
+		const providerHeaders: Record<string, string> = { "X-Request-ID": "request-1" };
+		const modelHeaders: Record<string, string> = { "X-Message-ID": "message-1" };
+
+		registry.registerProvider(
+			"runtime-provider",
+			{
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "RUNTIME_KEY",
+				api: "openai-completions",
+				headers: providerHeaders,
+				models: [{ ...baseModel, headers: modelHeaders }],
+			},
+			"ext://runtime",
+		);
+
+		providerHeaders["X-Request-ID"] = "request-2";
+		providerHeaders["X-Turn-ID"] = "turn-2";
+		modelHeaders["X-Message-ID"] = "message-2";
+		modelHeaders["X-Model-Turn-ID"] = "model-turn-2";
+
+		const model = registry.find("runtime-provider", "runtime-model");
+		expect({ ...(model?.headers ?? {}) }).toEqual({
+			"X-Request-ID": "request-2",
+			"X-Turn-ID": "turn-2",
+			"X-Message-ID": "message-2",
+			"X-Model-Turn-ID": "model-turn-2",
+		});
+	});
+
 	test("registerProvider applies authHeader overrides to existing provider models across refresh", async () => {
 		const providerName = "anthropic";
 
