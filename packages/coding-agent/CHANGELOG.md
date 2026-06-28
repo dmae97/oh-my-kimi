@@ -39,7 +39,7 @@
 - Fixed reasoning streaming being locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata.
 - Fixed `/shake` and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
 - Fixed the `time_spent` status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
-- Fixed `ssh://` rejecting POSIX-capable remotes whose login-shell classification was ambiguous (`shell: "unknown"`), by verifying a working transfer shell directly (`sh -lc`/`bash -lc`/`zsh -lc`) and gating transfers on that capability instead of the self-reported login-shell name. The host probe is now marker-framed to ignore login-banner noise, and ambiguous non-Windows cache entries are treated as stale. ([#3719](https://github.com/can1357/oh-my-pi/issues/3719))
+- Fixed `ssh://` rejecting POSIX-capable remotes whose login-shell classification was ambiguous (`shell: "unknown"`), by verifying a working transfer shell directly (`sh -lc`/`bash -lc`/`zsh -lc`) and gating transfers on that capability instead of the self-reported login-shell name. Transfer commands are now dispatched through the verified shell (`<transferShell> -c '…'`) so a remote whose login shell is fish/csh/tcsh still parses the POSIX snippets correctly. The host probe is also marker-framed to ignore login-banner noise, and ambiguous non-Windows cache entries are treated as stale. ([#3719](https://github.com/can1357/oh-my-pi/issues/3719))
 
 ## [16.2.2] - 2026-06-27
 
