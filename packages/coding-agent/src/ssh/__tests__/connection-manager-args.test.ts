@@ -5,11 +5,13 @@ import { getRemoteHostDir } from "@oh-my-pi/pi-utils";
 import {
 	buildRemoteCommand,
 	extractProbePayload,
+	findProbeMarker,
 	getHostInfo,
 	HOST_PROBE_MARKER,
 	parseHostInfo,
 	type SSHConnectionTarget,
 	type SSHHostShell,
+	TRANSFER_PROBE_MARKER,
 } from "../connection-manager";
 import { buildSshTarget, sanitizeHostName } from "../utils";
 
@@ -98,6 +100,35 @@ describe("extractProbePayload (host probe framing)", () => {
 
 	it("returns null when no marker line is present", async () => {
 		expect(extractProbePayload("just login banner\n", "and stderr noise\n")).toBeNull();
+	});
+});
+
+describe("findProbeMarker (transfer-shell probe recovery)", () => {
+	it("returns the tail after the marker when it appears in stdout", () => {
+		// Happy path: `sh -lc 'printf "PI_TRANSFER_OK|"; uname -s'` lands in
+		// stdout. The tail is the uname output the caller uses to refine OS.
+		const stdout = `${TRANSFER_PROBE_MARKER}Linux\n`;
+		expect(findProbeMarker(stdout, "", TRANSFER_PROBE_MARKER)).toBe("Linux\n");
+	});
+
+	it("falls back to stderr when a broken dotfile swaps fd 1/2", () => {
+		// Some remotes have dotfiles that redirect every shell write to stderr.
+		// The transfer probe must still recognize the marker so ssh:// doesn't
+		// refuse a POSIX-capable host (#3722 review).
+		const stderr = `dotfile noise\n${TRANSFER_PROBE_MARKER}Darwin\n`;
+		expect(findProbeMarker("", stderr, TRANSFER_PROBE_MARKER)).toBe("Darwin\n");
+	});
+
+	it("prefers stdout over stderr when the marker is in both", () => {
+		// Order matters: stdout is the canonical path, stderr is the rescue.
+		// A reordering bug would silently use stale stderr fragments first.
+		const stdout = `${TRANSFER_PROBE_MARKER}Linux`;
+		const stderr = `${TRANSFER_PROBE_MARKER}stale`;
+		expect(findProbeMarker(stdout, stderr, TRANSFER_PROBE_MARKER)).toBe("Linux");
+	});
+
+	it("returns null when the marker is in neither stream", () => {
+		expect(findProbeMarker("noise", "more noise", TRANSFER_PROBE_MARKER)).toBeNull();
 	});
 });
 

@@ -288,7 +288,7 @@ async function persistHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): Pr
 export const HOST_PROBE_MARKER = "PI_HOST_PROBE=";
 
 /** Marker for the transfer-shell capability probe. */
-const TRANSFER_PROBE_MARKER = "PI_TRANSFER_OK|";
+export const TRANSFER_PROBE_MARKER = "PI_TRANSFER_OK|";
 
 /** sh / bash / zsh, in the order we'll try as `transferShell` candidates. */
 const TRANSFER_SHELL_CANDIDATES = ["sh", "bash", "zsh"] as const;
@@ -314,6 +314,25 @@ export function extractProbePayload(stdout: string, stderr: string, marker = HOS
 	return null;
 }
 
+/**
+ * Find `marker` anywhere in `stdout` or `stderr` and return everything that
+ * follows it, scanning stdout first. Returns `null` when the marker is in
+ * neither stream.
+ *
+ * Used by the transfer-shell capability probe. Some remotes have broken
+ * login dotfiles that swap fd 1/2, so the marker can land on stderr even
+ * though the probe ran the printf successfully (matches the host-info
+ * probe's stderr fallback). See #3719.
+ */
+export function findProbeMarker(stdout: string, stderr: string, marker: string): string | null {
+	for (const blob of [stdout, stderr]) {
+		if (!blob) continue;
+		const idx = blob.indexOf(marker);
+		if (idx !== -1) return blob.slice(idx + marker.length);
+	}
+	return null;
+}
+
 async function probeTransferShell(
 	host: SSHConnectionTarget,
 ): Promise<{ shell: SSHHostInfo["transferShell"]; uname: string }> {
@@ -323,12 +342,9 @@ async function probeTransferShell(
 		const remote = `${candidate} -lc 'printf "${TRANSFER_PROBE_MARKER}"; uname -s 2>/dev/null || true'`;
 		const probe = await runSshCaptureSync(await buildRemoteCommand(host, remote));
 		if (probe.exitCode !== 0) continue;
-		const idx = probe.stdout.indexOf(TRANSFER_PROBE_MARKER);
-		if (idx === -1) continue;
-		return {
-			shell: candidate,
-			uname: probe.stdout.slice(idx + TRANSFER_PROBE_MARKER.length).trim(),
-		};
+		const tail = findProbeMarker(probe.stdout, probe.stderr, TRANSFER_PROBE_MARKER);
+		if (tail === null) continue;
+		return { shell: candidate, uname: tail.trim() };
 	}
 	return { shell: undefined, uname: "" };
 }
