@@ -369,10 +369,14 @@ export const sshToolRenderer = {
 		});
 	},
 	mergeCallAndResult: true,
-	// Collapsed pending preview caps the command to a viewport-sized tail window
-	// that shifts while args stream. Expanded output is top-anchored enough for
-	// the transcript to commit its settled prefix.
-	provisionalPendingPreview: "collapsed",
+	// Pending call preview can re-anchor wholesale when the final result inserts
+	// the `Output` section, so no pending SSH rows may commit to native
+	// scrollback — even when expanded. The expanded pending shape was previously
+	// allowed to commit, which left two visible shapes in native scrollback once
+	// the result settled: a stale `⏳ SSH: [host]` header above the final frame,
+	// and the pending `╰──╯` footer reused in-place as the new `├── Output ──┤`
+	// separator with a fresh footer pushed below it.
+	provisionalPendingPreview: true,
 	// Partial-result chrome (pending icon and frame state) differs from the
 	// final SSH glyph/state, so the block stays commit-unstable while
 	// `options.isPartial` holds. Without this, a long-running SSH command's

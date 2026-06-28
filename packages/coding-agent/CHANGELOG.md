@@ -44,6 +44,7 @@
 - Fixed reasoning streaming being locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata.
 - Fixed `/shake` and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
 - Fixed the `time_spent` status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
+- Fixed expanded pending SSH previews committing provisional rows (`⏳ SSH: [host]` header or the framed `╰──╯` footer) to native scrollback before the result render inserted the `Output` section, leaving a stale pending header above the final frame or reusing the pending footer in-place as the new `├── Output ──┤` separator. The SSH renderer now opts out of pending-preview commits in every expansion state. ([#3714](https://github.com/can1357/oh-my-pi/issues/3714))
 
 ## [16.2.2] - 2026-06-27
 
