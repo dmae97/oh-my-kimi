@@ -9482,12 +9482,7 @@ export class AgentSession {
 		const errorIsFromBeforeCompaction =
 			compactionEntry !== null && assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
 		if (sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow)) {
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			await this.#discardRecoverableAssistantTurn(assistantMessage);
 
 			// Try context promotion first - switch to a larger model and retry without compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
@@ -9512,10 +9507,7 @@ export class AgentSession {
 		// otherwise compaction/handoff. Unlike overflow, the *input* is fine, so we
 		// allow the handoff strategy to actually run.
 		if (sameModel && !errorIsFromBeforeCompaction && assistantMessage.stopReason === "length") {
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			await this.#discardRecoverableAssistantTurn(assistantMessage);
 
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (promoted) {
@@ -9795,6 +9787,11 @@ export class AgentSession {
 		) {
 			this.agent.replaceMessages(messages.slice(0, -1));
 		}
+	}
+
+	async #discardRecoverableAssistantTurn(assistantMessage: AssistantMessage): Promise<void> {
+		await this.#waitForSessionMessagePersistence(assistantMessage);
+		this.#discardAssistantTurn(assistantMessage);
 	}
 
 	/**
