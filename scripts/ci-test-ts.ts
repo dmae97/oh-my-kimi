@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 
 type Mode =
@@ -27,10 +28,11 @@ const repoRoot = path.join(import.meta.dir, "..");
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
-// `--only-failures` is the default (CI and the root `test:ts` aggregate rely on
-// Bun's previous-failure cache). The package-level `test` script passes `--full`
-// so a direct `bun run test` is always a complete run; an explicit
-// `--only-failures` (appended by the aggregate) still wins over `--full`.
+// `--only-failures` is Bun's output filter — it hides passing tests, keeping the
+// log terse, and is the default here (CI and the root `test:ts` aggregate append
+// it). It does NOT skip tests or share any cross-process cache, so chunks are
+// safe to run concurrently. The package-level `test` script passes `--full` for
+// verbose output (every test line); an explicit `--only-failures` still wins.
 const onlyFailures = args.includes("--only-failures") || !args.includes("--full");
 const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
 
@@ -371,12 +373,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		return;
 	}
 
-	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "" };
-	for (const key of Object.keys(env)) {
-		if (isScrubbedEnvVar(key)) {
-			delete env[key];
-		}
-	}
+	const env = buildChildEnv();
 	const proc = Bun.spawn(testCommand.command, {
 		cwd,
 		env,
@@ -389,10 +386,111 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	}
 }
 
+// Child env shared by every spawned test process: the parent env with all CI
+// credential / cloud-config variables scrubbed (see SCRUBBED_ENV_* above) and
+// GITHUB_ACTIONS cleared so suites resolve only against their own fixtures.
+function buildChildEnv(): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "" };
+	for (const key of Object.keys(env)) {
+		if (isScrubbedEnvVar(key)) {
+			delete env[key];
+		}
+	}
+	return env;
+}
+
+// The standard `CI` signal is authoritative. In CI each bucket is its own
+// memory-capped runner job (a single fat invocation gets OOM-killed at 137), so
+// chunks run sequentially within a job and parallelism happens across jobs.
+// Locally we trade memory for wall-clock and fan the chunks out across cores.
+function isCI(): boolean {
+	const value = Bun.env.CI;
+	if (!value) return false;
+	const normalized = value.trim().toLowerCase();
+	return normalized !== "" && normalized !== "0" && normalized !== "false";
+}
+
+// Fan-out width for the local parallel path, clamped to the command count.
+// Defaults to the machine's available parallelism; `OMP_TEST_CONCURRENCY`
+// overrides it — a positive integer to pick an exact width (dial down on a
+// memory-constrained laptop), or `all`/`max` to launch every chunk at once.
+function testConcurrency(total: number): number {
+	const raw = Bun.env.OMP_TEST_CONCURRENCY?.trim().toLowerCase();
+	if (raw === "all" || raw === "max") {
+		return total;
+	}
+	const override = Number(raw);
+	if (Number.isFinite(override) && override >= 1) {
+		return Math.min(Math.floor(override), total);
+	}
+	return Math.min(Math.max(1, os.availableParallelism()), total);
+}
+
+// Run every command through a fixed-width worker pool. Each child's stdout and
+// stderr are drained concurrently (so a chatty test never deadlocks on a full
+// pipe) and flushed as one contiguous block on completion, keeping interleaved
+// processes readable. All failures are collected and reported together instead
+// of failing fast, so one run surfaces every broken chunk.
+async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+	const env = buildChildEnv();
+	const queue = [...commands];
+	const failures: { label: string; exitCode: number; command: string }[] = [];
+	let completed = 0;
+	console.log(
+		`Running ${commands.length} test command(s), up to ${concurrency} in parallel ` +
+			`(OMP_TEST_CONCURRENCY=<n>|all to change).`,
+	);
+
+	async function worker(): Promise<void> {
+		for (;;) {
+			const testCommand = queue.shift();
+			if (!testCommand) {
+				return;
+			}
+			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
+			const startedAt = performance.now();
+			const proc = Bun.spawn(testCommand.command, {
+				cwd: path.join(repoRoot, testCommand.cwd),
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+				proc.exited,
+			]);
+			completed += 1;
+			const seconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+			const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
+			process.stdout.write(
+				`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${seconds}s)\n$ ${renderedCommand}\n${stdout}${stderr}`,
+			);
+			if (exitCode !== 0) {
+				failures.push({ label: testCommand.label, exitCode, command: renderedCommand });
+			}
+		}
+	}
+
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+	if (failures.length > 0) {
+		const summary = failures.map(f => `  - ${f.label} (exit ${f.exitCode}): ${f.command}`).join("\n");
+		throw new Error(`${failures.length} of ${commands.length} test command(s) failed:\n${summary}`);
+	}
+}
+
 if (!validModes.has(requestedMode as Mode)) {
 	throw new Error(`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${[...validModes].join(", ")}`);
 }
 
-for (const testCommand of await commandsForMode(requestedMode as Mode)) {
-	await runTestCommand(testCommand);
+const testCommands = await commandsForMode(requestedMode as Mode);
+// Outside CI, fan the independent chunk processes out across cores; CI keeps the
+// sequential, fail-fast path so each memory-capped runner job stays bounded.
+if (!isDryRun && !isCI() && testCommands.length > 1) {
+	await runTestCommandsInParallel(testCommands, testConcurrency(testCommands.length));
+} else {
+	for (const testCommand of testCommands) {
+		await runTestCommand(testCommand);
+	}
 }
