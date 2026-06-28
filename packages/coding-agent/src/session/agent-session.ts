@@ -7863,17 +7863,24 @@ export class AgentSession {
 	/**
 	 * Set model directly.
 	 * Validates that a credential source is configured (synchronously, without
-	 * refreshing OAuth or running command-backed key programs). By default, the
-	 * active session switches immediately; callers may persist role settings
-	 * without touching the live session via `switchActiveModel: false`.
+	 * refreshing OAuth or running command-backed key programs). The active
+	 * session switches by default; when `currentContextTokens` is provided and
+	 * exceeds the refreshed candidate's context window, the live switch is
+	 * skipped while role persistence still runs. Returns whether the active
+	 * model actually switched, computed against the refreshed metadata so
+	 * dynamic providers (e.g. llama.cpp) honor their post-load contextWindow.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModel(
 		model: Model,
 		role: string = "default",
-		options?: { selector?: string; thinkingLevel?: ThinkingLevel; persist?: boolean; switchActiveModel?: boolean },
-	): Promise<void> {
-		const switchActiveModel = options?.switchActiveModel ?? true;
+		options?: {
+			selector?: string;
+			thinkingLevel?: ThinkingLevel;
+			persist?: boolean;
+			currentContextTokens?: number;
+		},
+	): Promise<{ switched: boolean }> {
 		const previousEditMode = this.#resolveActiveEditMode();
 		if (!this.#modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -7881,7 +7888,15 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
-		if (switchActiveModel) {
+		const currentContextTokens = options?.currentContextTokens ?? 0;
+		const targetContextWindow = targetModel.contextWindow ?? 0;
+		const switched = !(
+			currentContextTokens > 0 &&
+			targetContextWindow > 0 &&
+			currentContextTokens > targetContextWindow
+		);
+
+		if (switched) {
 			this.#clearActiveRetryFallback();
 			this.#setModelWithProviderSessionReset(targetModel);
 			this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
@@ -7892,8 +7907,8 @@ export class AgentSession {
 				this.#formatRoleModelValue(role, targetModel, options.selector, options.thinkingLevel),
 			);
 		}
-		if (!switchActiveModel) {
-			return;
+		if (!switched) {
+			return { switched: false };
 		}
 		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
@@ -7901,6 +7916,7 @@ export class AgentSession {
 		// configured defaultLevel; otherwise preserve the current level (or auto).
 		this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 		await this.#syncAfterModelChange(previousEditMode);
+		return { switched: true };
 	}
 
 	/**

@@ -540,25 +540,22 @@ export class SelectorController {
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {
-							const contextWindow = model.contextWindow ?? 0;
-							const switchActiveModel =
-								currentContextTokens <= 0 || contextWindow <= 0 || currentContextTokens <= contextWindow;
-							await this.ctx.session.setModel(model, role, {
+							const { switched } = await this.ctx.session.setModel(model, role, {
 								selector,
 								thinkingLevel: concreteThinking,
 								persist: true,
-								switchActiveModel,
+								currentContextTokens,
 							});
 							if (isAuto) {
-								if (switchActiveModel) {
+								if (switched) {
 									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
 								} else {
 									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
 								}
-							} else if (switchActiveModel && concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+							} else if (switched && concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
 								this.ctx.session.setThinkingLevel(concreteThinking);
 							}
-							if (switchActiveModel) {
+							if (switched) {
 								this.ctx.statusLine.invalidate();
 								this.ctx.updateEditorBorderColor();
 							}
