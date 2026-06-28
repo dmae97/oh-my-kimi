@@ -183,6 +183,19 @@ export function shouldRenderAbortReason(message: Pick<AssistantMessage, "errorId
 	return !isSilentAbort(message) && !isUserInterruptAbort(message);
 }
 
+/** A provider-rejection turn carrying nothing but the error flag: stopReason
+ *  "error" with no text content and no tool calls — e.g. a request the provider
+ *  rejected before any output (an oversized 413 payload). Persisting it writes an
+ *  empty assistant turn that replays on reload and re-sends the rejected context;
+ *  the error is surfaced live (pinned) instead. A turn that streamed partial text
+ *  or tool calls is NOT empty and stays in history. */
+export function isEmptyErrorTurn(message: Pick<AssistantMessage, "stopReason" | "content">): boolean {
+	if (message.stopReason !== "error") return false;
+	return !message.content.some(
+		block => (block.type === "text" && block.text.trim().length > 0) || block.type === "toolCall",
+	);
+}
+
 /** Sentinel `errorMessage` the agent stamps on any abort that carried no custom
  *  reason (bare `abort()`). Renderers treat it as "no specific reason given". */
 export const GENERIC_ABORT_SENTINEL = "Request was aborted";
