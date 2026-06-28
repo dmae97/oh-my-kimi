@@ -7863,16 +7863,17 @@ export class AgentSession {
 	/**
 	 * Set model directly.
 	 * Validates that a credential source is configured (synchronously, without
-	 * refreshing OAuth or running command-backed key programs) and saves to the
-	 * active session. Persists settings only when requested. The concrete key is
-	 * resolved lazily per request, so switching never blocks the event loop.
+	 * refreshing OAuth or running command-backed key programs). By default, the
+	 * active session switches immediately; callers may persist role settings
+	 * without touching the live session via `switchActiveModel: false`.
 	 * @throws Error if no API key available for the model
 	 */
 	async setModel(
 		model: Model,
 		role: string = "default",
-		options?: { selector?: string; thinkingLevel?: ThinkingLevel; persist?: boolean },
+		options?: { selector?: string; thinkingLevel?: ThinkingLevel; persist?: boolean; switchActiveModel?: boolean },
 	): Promise<void> {
+		const switchActiveModel = options?.switchActiveModel ?? true;
 		const previousEditMode = this.#resolveActiveEditMode();
 		if (!this.#modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
@@ -7880,14 +7881,19 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
-		this.#clearActiveRetryFallback();
-		this.#setModelWithProviderSessionReset(targetModel);
-		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
+		if (switchActiveModel) {
+			this.#clearActiveRetryFallback();
+			this.#setModelWithProviderSessionReset(targetModel);
+			this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
+		}
 		if (options?.persist) {
 			this.settings.setModelRole(
 				role,
 				this.#formatRoleModelValue(role, targetModel, options.selector, options.thinkingLevel),
 			);
+		}
+		if (!switchActiveModel) {
+			return;
 		}
 		this.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 
