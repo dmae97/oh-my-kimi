@@ -78,7 +78,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			sessionManager,
 			settings: settings(),
 			modelRegistry,
-			advisorReadOnlyTools: [],
+			advisorTools: [],
 			advisorStreamFn,
 		});
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
@@ -125,7 +125,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			sessionManager,
 			settings: settings(),
 			modelRegistry,
-			advisorReadOnlyTools: [],
+			advisorTools: [],
 			advisorStreamFn: captureStreamFn,
 			onPayload,
 			onResponse,

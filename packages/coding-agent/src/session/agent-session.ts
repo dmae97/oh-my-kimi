@@ -610,12 +610,13 @@ export interface AgentSessionConfig {
 	 */
 	providerSessionId?: string;
 	/**
-	 * Hard-isolated read-only tools (read/search/find) for the advisor agent,
-	 * pre-built in `createAgentSession` against a distinct `ToolSession` so the
-	 * advisor's reads never share the primary's snapshot/seen-lines/conflict
-	 * caches. Undefined when the advisor is disabled.
+	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
+	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
+	 * advisor's tool state stays isolated from the primary. The advisor is a full
+	 * agent; its config `tools` selects a subset (default read/grep/glob). Undefined
+	 * when the advisor is disabled.
 	 */
-	advisorReadOnlyTools?: AgentTool[];
+	advisorTools?: AgentTool[];
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
 	/** Preloaded YAML top-level `instructions` shared baseline, kept separate from
@@ -1345,7 +1346,7 @@ export class AgentSession {
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	#advisorEnabled = false;
-	#advisorReadOnlyTools?: AgentTool[];
+	#advisorTools?: AgentTool[];
 	#advisorWatchdogPrompt?: string;
 	#advisorSharedInstructions?: string;
 	#advisorContextPrompt?: string;
@@ -1774,7 +1775,7 @@ export class AgentSession {
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
 		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
-		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
+		this.#advisorTools = config.advisorTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
 		this.#advisorSharedInstructions = config.advisorSharedInstructions;
 		this.#advisorContextPrompt = config.advisorContextPrompt;
@@ -2094,7 +2095,7 @@ export class AgentSession {
 			if (config.instructions?.trim()) systemPrompt.push(config.instructions.trim());
 
 			const names = config.tools?.length ? new Set(config.tools) : ADVISOR_DEFAULT_TOOL_NAMES;
-			const tools = (this.#advisorReadOnlyTools ?? []).filter(t => names.has(t.name));
+			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
 
 			const advisorSessionId = this.#advisorSessionId(slug);
 			const appendOnlyContext = new AppendOnlyContextManager();
@@ -14225,13 +14226,13 @@ export class AgentSession {
 	}
 
 	/**
-	 * The names of the read-only tools available to advisors this session (the
-	 * pool a `/advisor configure` editor lists; the actual built set may be
-	 * smaller than {@link ADVISOR_READONLY_TOOL_NAMES} when a tool's optional
-	 * factory returns null, e.g. lsp with no servers).
+	 * The names of the tools available to advisors this session (the pool a
+	 * `/advisor configure` editor lists). The advisor is a full agent, so this is the
+	 * full built tool set; a tool whose optional factory returns null (e.g. lsp with
+	 * no servers) is absent.
 	 */
 	getAdvisorAvailableToolNames(): string[] {
-		return (this.#advisorReadOnlyTools ?? []).map(tool => tool.name);
+		return (this.#advisorTools ?? []).map(tool => tool.name);
 	}
 
 	/**

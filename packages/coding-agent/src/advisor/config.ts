@@ -4,7 +4,7 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { YAML } from "bun";
 import { expandAtImports } from "../discovery/at-imports";
-import { ADVISOR_READONLY_TOOL_NAMES } from "./advise-tool";
+import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
 import { collectConfigCandidates } from "./watchdog";
 
 /**
@@ -57,17 +57,21 @@ export function slugifyAdvisorName(name: string): string {
 	return slug || "advisor";
 }
 
+/** Built tool names, for validating an advisor's `tools` list. */
+const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
+
 /**
- * Keep only the read-only tool names the advisor is allowed to hold; unknown or
- * non-read-only names are dropped with a warning. The advisor is architecturally
- * hard-isolated to the read-only set, so `bash`/`edit`/`write` are never
- * permitted here. An empty result (or no list) means "all read-only tools".
+ * Keep only valid tool names from an advisor's `tools` list, dropping unknowns
+ * with a warning. The advisor is a full agent, so any built tool may be granted;
+ * the runtime further filters to what's actually available this session. An empty
+ * result (or no list) means "use the default subset" (read/grep/glob).
  */
 function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): string[] | undefined {
 	if (!tools || tools.length === 0) return undefined;
-	const filtered = tools.filter(name => {
-		if (ADVISOR_READONLY_TOOL_NAMES.has(name)) return true;
-		logger.warn("Advisor config: dropping unknown/non-read-only tool", { path: sourcePath, tool: name });
+	// Normalize legacy aliases (search→grep, find→glob) and dedupe before validating.
+	const filtered = normalizeToolNames(tools).filter(name => {
+		if (KNOWN_TOOL_NAMES.has(name)) return true;
+		logger.warn("Advisor config: dropping unknown tool", { path: sourcePath, tool: name });
 		return false;
 	});
 	return filtered.length > 0 ? filtered : undefined;

@@ -11,9 +11,9 @@ import advisorSystemPrompt from "../../prompts/advisor/system.md" with { type: "
 import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
 import { YieldQueue } from "../../session/yield-queue";
+import { BUILTIN_TOOL_NAMES } from "../../tools/builtin-names";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
-	ADVISOR_READONLY_TOOL_NAMES,
 	AdviseTool,
 	type AdvisorAgent,
 	type AdvisorNote,
@@ -1370,20 +1370,17 @@ describe("advisor", () => {
 		});
 	});
 
-	describe("read-only tool allowlist", () => {
-		it("exposes the read-only investigative pool and excludes mutating tools", () => {
-			// The available pool an advisor MAY be granted is all read-only.
-			for (const name of ["read", "grep", "glob", "lsp", "web_search"]) {
-				expect(ADVISOR_READONLY_TOOL_NAMES.has(name)).toBe(true);
-			}
-			// Mutating/active tools are never in the pool (read-only guarantee).
-			for (const name of ["edit", "bash", "write", "eval", "browser"]) {
-				expect(ADVISOR_READONLY_TOOL_NAMES.has(name)).toBe(false);
-			}
-			// The default subset (an advisor that omits `tools`) is read/grep/glob, a subset of the pool.
+	describe("advisor default tools", () => {
+		it("defaults to read/grep/glob, a subset of the full grantable tool pool", () => {
 			expect([...ADVISOR_DEFAULT_TOOL_NAMES]).toEqual(["read", "grep", "glob"]);
+			// The advisor is a full agent now: every built tool is grantable (no hard
+			// read-only restriction), including mutating ones like edit/bash/write.
+			const builtin = new Set<string>(BUILTIN_TOOL_NAMES);
+			for (const name of ["read", "grep", "glob", "edit", "bash", "write"]) {
+				expect(builtin.has(name)).toBe(true);
+			}
 			for (const name of ADVISOR_DEFAULT_TOOL_NAMES) {
-				expect(ADVISOR_READONLY_TOOL_NAMES.has(name)).toBe(true);
+				expect(builtin.has(name)).toBe(true);
 			}
 		});
 	});

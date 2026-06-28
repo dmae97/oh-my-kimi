@@ -138,13 +138,10 @@ export function deriveAdvisorTelemetry(
 }
 
 /**
- * Full set of read-only investigative tools an advisor may be granted. The SDK
- * builds tool instances for these against the advisor's isolated read-only
- * ToolSession; `lsp` and `web_search` are read-only and never mutate the
- * workspace.
+ * The tools an advisor receives by default when its config omits `tools` — the
+ * read-only investigative set. The full available pool is every built tool the
+ * session has (the advisor is a full agent); a config's `tools` selects from it.
  */
-export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob", "lsp", "web_search"]);
-/** The read-only tools an advisor receives by default when its config omits `tools`. A configurable subset of {@link ADVISOR_READONLY_TOOL_NAMES}. */
 export const ADVISOR_DEFAULT_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
 
 function advisorNoteDedupeKey(note: string): string {

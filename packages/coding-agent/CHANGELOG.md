@@ -4,10 +4,6 @@
 
 ### Added
 
-- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, read-only tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
-- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle the read-only tool set (read/grep/glob/lsp/web_search, defaulting to read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
-- Added the full unified edit diff to the advisor's transcript view so it sees what each edit changed without re-reading the file.
-
 - Added mouse support for scrolling and interaction in the debug log and raw SSE stream viewers.
 - Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph instead of a separate text suffix.
 - Added support for tracking reasoning tokens in session and advisor statistics.
@@ -15,15 +11,18 @@
 - Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source IDs, along with citation-marker unwrapping for hashline edit parsing, diff previews, and streaming matching.
 - Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
 - Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
-- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, read-only tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
-- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle the read-only tool set (read/grep/glob/lsp/web_search, defaulting to read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
+- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
+- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle which of the agent's tools the advisor may use (default read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
 - Added the full unified edit diff to the advisor's transcript view so it sees what each edit changed without re-reading the file.
 
 ### Changed
 
+- Advisors can now be granted any built-in agent tool, removing the read-only restriction
+
 - Refactored and improved the debug log and raw SSE stream viewers to use a standard, wider, bordered overlay component with clearer status indicators, controls, and dynamic layouts.
 - Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.
 - Refined interrupted thinking system instructions to encourage smoother continuation.
+- Advisors are no longer restricted to read-only tools: `/advisor configure` can grant any of the agent's tools (including `edit`/`write`/`bash`), so an advisor can act, not just review. New/default advisors still get read/grep/glob, and each runs in its own advisor-scoped tool session.
 
 ### Fixed
 
