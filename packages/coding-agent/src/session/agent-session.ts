@@ -10726,6 +10726,18 @@ export class AgentSession {
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
+						// Route every summarization HTTP request through the
+						// session's side-stream transport so the provider
+						// concurrency cap (e.g. providers.ollama-cloud.maxConcurrency)
+						// brackets compaction the same way it brackets the live
+						// agent turn — without this, multiple ollama-cloud
+						// subagents auto/manually compacting issued uncapped
+						// summary requests in parallel (chatgpt-codex review on
+						// #3751).
+						completeImpl: async (requestModel, requestContext, requestOptions) => {
+							const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
+							return stream.result();
+						},
 					},
 				);
 			} catch (error) {
@@ -13554,6 +13566,12 @@ export class AgentSession {
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+				// Same per-provider concurrency cap rationale as the compaction
+				// path above (chatgpt-codex review on #3751).
+				completeImpl: async (requestModel, requestContext, requestOptions) => {
+					const stream = await this.#sideStreamFn(requestModel, requestContext, requestOptions);
+					return stream.result();
+				},
 			});
 			this.#branchSummaryAbortController = undefined;
 			if (result.aborted) {

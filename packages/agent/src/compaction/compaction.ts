@@ -680,6 +680,19 @@ export interface SummaryOptions {
 	tools?: Tool[];
 	/** Optional fetch implementation threaded into remote compaction calls. */
 	fetch?: FetchImpl;
+	/**
+	 * Optional completion transport override for host-level request wrappers
+	 * (e.g. the coding-agent provider-concurrency limiter). When provided,
+	 * every local summarization oneshot (`generateSummary`,
+	 * `generateTurnPrefixSummary`, `generateShortSummary`) routes through it
+	 * instead of the default `completeSimple`, so cap policies enforced on
+	 * the live agent turn also bracket compaction HTTP requests.
+	 */
+	completeImpl?: <TApi extends Api>(
+		model: Model<TApi>,
+		ctx: Context,
+		options: SimpleStreamOptions,
+	) => Promise<AssistantMessage>;
 }
 
 function formatPreviousSnapcompactArchive(archiveText: string): string {
@@ -769,7 +782,7 @@ export async function generateSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
-		{ telemetry: options?.telemetry, oneshotKind: "compaction_summary" },
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_summary", completeImpl: options?.completeImpl },
 	);
 
 	if (response.stopReason === "error") {
@@ -960,7 +973,7 @@ async function generateShortSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
-		{ telemetry: options?.telemetry, oneshotKind: "compaction_short_summary" },
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_short_summary", completeImpl: options?.completeImpl },
 	);
 
 	if (response.stopReason === "error") {
@@ -1229,6 +1242,7 @@ export async function compact(
 		promptCacheKey: options?.promptCacheKey,
 		tools: options?.tools,
 		fetch: options?.fetch,
+		completeImpl: options?.completeImpl,
 	};
 
 	const previousSnapcompactArchive = snapcompact.getPreservedArchive(previousPreserveData);
@@ -1413,6 +1427,7 @@ export async function compact(
 				// resolves its own reasoning via resolveCompactionEffort.
 				thinkingLevel: options?.thinkingLevel,
 				fetch: summaryOptions.fetch,
+				completeImpl: summaryOptions.completeImpl,
 			});
 
 	// Compute file lists and append to summary
@@ -1476,7 +1491,7 @@ async function generateTurnPrefixSummary(
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
 		},
-		{ telemetry: options?.telemetry, oneshotKind: "compaction_turn_prefix" },
+		{ telemetry: options?.telemetry, oneshotKind: "compaction_turn_prefix", completeImpl: options?.completeImpl },
 	);
 
 	if (response.stopReason === "error") {
