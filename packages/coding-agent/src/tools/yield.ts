@@ -91,7 +91,9 @@ function isYieldType(value: unknown): value is string | string[] {
 }
 
 function parseYieldType(value: unknown): string | string[] | undefined {
-	if (value === undefined) return undefined;
+	// Strict-mode providers (OpenAI/Codex) make the optional `type` property
+	// required+nullable, so an untyped final yield arrives as `type: null`.
+	if (value === undefined || value === null) return undefined;
 	if (isYieldType(value)) return value;
 	throw new Error("type must be a string or non-empty array of strings");
 }
@@ -119,6 +121,10 @@ function wrapYieldParameters(dataSchema: Record<string, unknown>): Record<string
 		properties: {},
 		required: [],
 	};
+	// The "an empty `result` (last-turn) requires a `type`" invariant is enforced
+	// in `execute()` at runtime, NOT in this schema: a top-level combinator
+	// (`allOf`/`anyOf`/`oneOf`/...) makes OpenAI/Codex Responses reject the whole
+	// tool with `invalid_function_parameters`, so the wrapper stays a plain object.
 	return {
 		type: "object",
 		additionalProperties: false,
@@ -130,26 +136,6 @@ function wrapYieldParameters(dataSchema: Record<string, unknown>): Record<string
 			},
 		},
 		required: ["result"],
-		allOf: [
-			{
-				anyOf: [
-					{
-						type: "object",
-						properties: { type: yieldTypeSchema },
-						required: ["type"],
-					},
-					{
-						type: "object",
-						properties: {
-							result: {
-								anyOf: [successResultSchema, errorResultSchema],
-							},
-						},
-						required: ["result"],
-					},
-				],
-			},
-		],
 	};
 }
 
@@ -261,6 +247,10 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		const yieldType = parseYieldType(raw.type);
 		const useLastTurn =
 			errorMessage === undefined && data === undefined && yieldType !== undefined && !("error" in resultRecord);
+		// Incremental array-typed sections carry partial data (one finding, one
+		// field) that cannot satisfy the full output schema; the assembled result
+		// is validated as a whole at finalization (executor finalizeSubprocessOutput).
+		const isIncremental = Array.isArray(yieldType) && yieldType.length > 0;
 
 		if (errorMessage !== undefined && data !== undefined) {
 			throw new Error("result cannot contain both data and error");
@@ -277,7 +267,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			if (data === null) {
 				throw new Error("data is required when yield indicates success");
 			}
-			if (this.#validate) {
+			if (this.#validate && !isIncremental) {
 				const parsed = this.#validate(data);
 				if (!parsed.success) {
 					this.#schemaValidationFailures++;

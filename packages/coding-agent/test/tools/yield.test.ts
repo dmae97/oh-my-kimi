@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
+import { convertOpenAICodexResponsesTools } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import type { Model, Tool, ToolCall } from "@oh-my-pi/pi-ai/types";
 import { enforceStrictSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { validateToolArguments } from "@oh-my-pi/pi-ai/utils/validation";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
@@ -32,6 +34,21 @@ function getSuccessDataSchema(parameters: Record<string, unknown>): Record<strin
 		}
 	}
 	throw new Error("Missing success variant with data schema");
+}
+
+function makeCodexModel(): Model<"openai-codex-responses"> {
+	return buildModel({
+		id: "gpt-5.1-codex",
+		name: "GPT-5.1 Codex",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://api.openai.com/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 272000,
+		maxTokens: 128000,
+	});
 }
 
 describe("YieldTool", () => {
@@ -74,6 +91,36 @@ describe("YieldTool", () => {
 		});
 	});
 
+	it("does not validate incremental array-typed sections against the full output schema", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					type: "object",
+					properties: {
+						overall_correctness: { type: "string" },
+						explanation: { type: "string" },
+						confidence: { type: "number" },
+					},
+					required: ["overall_correctness", "explanation", "confidence"],
+				},
+			}),
+		);
+		// A single finding cannot satisfy the full schema, but an incremental
+		// (array-typed) section is a partial and must be accepted without retry.
+		const result = await tool.execute("call-incremental-partial", {
+			type: ["findings"],
+			result: { data: { title: "bug", body: "details" } },
+		} as never);
+		expect(result.details).toEqual({
+			data: { title: "bug", body: "details" },
+			status: "success",
+			error: undefined,
+			type: ["findings"],
+			useLastTurn: undefined,
+			schemaOverridden: undefined,
+		});
+	});
+
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {
 		const tool = new YieldTool(createSession());
 		await expect(tool.execute("call-untyped-empty", { result: {} } as never)).rejects.toThrow(
@@ -87,7 +134,7 @@ describe("YieldTool", () => {
 		).rejects.toThrow("data is required when yield indicates success");
 	});
 
-	it("exposes typed last-turn mode in the argument schema without weakening untyped yield", () => {
+	it("exposes typed last-turn mode in the argument schema", () => {
 		const tool = new YieldTool(createSession());
 		const parameters = tool.parameters as unknown as Record<string, unknown>;
 		const typeSchema = toRecord(toRecord(parameters.properties).type);
@@ -102,6 +149,9 @@ describe("YieldTool", () => {
 			description: tool.description,
 			parameters: tool.parameters,
 		};
+		// A typed yield may omit data (last-turn extraction). The untyped empty-result
+		// case is rejected at runtime by execute(), NOT the schema — a top-level
+		// combinator expressing that constraint would break OpenAI/Codex strict mode.
 		expect(
 			validateToolArguments(toolDefinition, {
 				type: "toolCall",
@@ -110,14 +160,58 @@ describe("YieldTool", () => {
 				arguments: { type: "summary", result: {} },
 			}),
 		).toEqual({ type: "summary", result: {} });
-		expect(() =>
-			validateToolArguments(toolDefinition, {
-				type: "toolCall",
-				id: "call-schema-untyped",
-				name: tool.name,
-				arguments: { result: {} },
+	});
+
+	it("emits Codex-valid yield parameters: no top-level combinator under strict mode", () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
 			}),
-		).toThrow();
+		);
+		expect(tool.strict).toBe(true);
+
+		const toolDefinition: Tool = {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+			strict: tool.strict,
+		};
+		const [converted] = convertOpenAICodexResponsesTools([toolDefinition], makeCodexModel());
+		if (converted.type !== "function") throw new Error("expected a function tool payload");
+		expect(converted.strict).toBe(true);
+
+		const params = converted.parameters;
+		expect(params.type).toBe("object");
+		// OpenAI/Codex Responses reject a function whose parameters carry any of these
+		// at the top level (the bug this guards against).
+		for (const combinator of ["allOf", "anyOf", "oneOf", "enum", "const", "not"]) {
+			expect(params[combinator]).toBeUndefined();
+		}
+		// Strict enforcement makes the optional `type` property required + nullable,
+		// so the model signals "no type" with `type: null`.
+		const typeProp = toRecord(toRecord(params.properties).type);
+		const typeVariants = Array.isArray(typeProp.anyOf) ? typeProp.anyOf.map(toRecord) : [];
+		expect(typeVariants.some(variant => variant.type === "null")).toBe(true);
+	});
+
+	it("accepts a strict null `type` as an untyped final success", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
+			}),
+		);
+		const result = await tool.execute("call-null-type", {
+			type: null,
+			result: { data: { answer: "ok" } },
+		} as never);
+		expect(result.details).toEqual({
+			data: { answer: "ok" },
+			status: "success",
+			error: undefined,
+			type: undefined,
+			useLastTurn: undefined,
+			schemaOverridden: undefined,
+		});
 	});
 
 	it("accepts arbitrary data when outputSchema is null", async () => {

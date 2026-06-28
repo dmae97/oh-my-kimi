@@ -572,16 +572,54 @@ function appendYieldSection(
 	sectionCounts: Map<string, number>,
 	label: string,
 	value: unknown,
+	forceArray: boolean,
 ): void {
 	const count = sectionCounts.get(label) ?? 0;
+	const existing = sections[label];
 	if (count === 0) {
-		sections[label] = value;
-	} else if (count === 1) {
-		sections[label] = [sections[label], value];
+		sections[label] = forceArray ? [value] : value;
+	} else if (Array.isArray(existing)) {
+		existing.push(value);
 	} else {
-		(sections[label] as unknown[]).push(value);
+		sections[label] = [existing, value];
 	}
 	sectionCounts.set(label, count + 1);
+}
+
+/** True when `value` is a JSON-schema node whose instances are arrays. */
+function isArrayTypedSchema(value: unknown): boolean {
+	if (value === null || typeof value !== "object") return false;
+	const record = value as Record<string, unknown>;
+	if (record.type === "array") return true;
+	if (Array.isArray(record.type) && record.type.includes("array")) return true;
+	for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+		const variants = record[key];
+		if (Array.isArray(variants) && variants.some(isArrayTypedSchema)) return true;
+	}
+	return false;
+}
+
+/**
+ * Top-level output-schema property names declared as arrays (JTD `elements` →
+ * JSON `type: "array"`). An incremental yield section for such a label
+ * accumulates into a list even when the agent emits exactly one — otherwise a
+ * single `type: ["findings"]` yield would assemble as a bare object and fail
+ * array-typed schema validation.
+ */
+function arrayValuedLabels(outputSchema: unknown): ReadonlySet<string> {
+	const labels = new Set<string>();
+	// Use the JTD-converted JSON Schema (matches what validation runs against):
+	// JTD `optionalProperties.findings.elements` becomes `properties.findings`
+	// with `type: "array"`, which raw `normalizeSchema` would not expose.
+	const { jsonSchema } = buildOutputValidator(outputSchema);
+	if (jsonSchema === undefined) return labels;
+	const properties = jsonSchema.properties;
+	if (properties === null || typeof properties !== "object") return labels;
+	const propRecord = properties as Record<string, unknown>;
+	for (const key in propRecord) {
+		if (isArrayTypedSchema(propRecord[key])) labels.add(key);
+	}
+	return labels;
 }
 
 /**
@@ -597,6 +635,7 @@ function appendYieldSection(
 export function assembleYieldResult(
 	yieldItems: YieldItem[],
 	lastAssistantText?: string,
+	arrayLabels?: ReadonlySet<string>,
 ): AssembledYieldResult | undefined {
 	if (yieldItems.length === 0) return undefined;
 	let terminalItem: YieldItem | undefined;
@@ -647,8 +686,15 @@ export function assembleYieldResult(
 		if (labels.length === 0) continue;
 		const resolved = resolveYieldPayload(item, lastAssistantText, labels);
 		missingData ||= resolved.missingData;
+		const incremental = isIncrementalYieldType(item.type);
 		for (const label of labels) {
-			appendYieldSection(sections, sectionCounts, label, resolved.value);
+			appendYieldSection(
+				sections,
+				sectionCounts,
+				label,
+				resolved.value,
+				incremental && (arrayLabels?.has(label) ?? false),
+			);
 			hasSections = true;
 		}
 		if (!isIncrementalYieldType(item.type)) break;
@@ -737,7 +783,7 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				rawOutput = `{"aborted":true,"error":"${lastYield.error || "Unknown error"}"}`;
 			}
 		} else {
-			const assembled = assembleYieldResult(yieldItems, lastAssistantText);
+			const assembled = assembleYieldResult(yieldItems, lastAssistantText, arrayValuedLabels(outputSchema));
 			if (!assembled || assembled.missingData) {
 				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 			} else {

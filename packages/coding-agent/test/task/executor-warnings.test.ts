@@ -247,6 +247,44 @@ describe("subagent warning injection", () => {
 		});
 	});
 
+	it("assembles a single incremental array-typed section into a one-element list", () => {
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [
+				{ status: "success", type: ["findings"], data: { title: "Handle null response", body: "Crashes" } },
+				{ status: "success", type: ["overall_correctness"], data: "incorrect" },
+				{ status: "success", type: ["explanation"], data: "One bug blocks approval." },
+				{ status: "success", type: ["confidence"], data: 0.8 },
+			],
+			// JTD reviewer-style schema: only `findings` is array-valued (elements).
+			outputSchema: {
+				properties: {
+					overall_correctness: { enum: ["correct", "incorrect"] },
+					explanation: { type: "string" },
+					confidence: { type: "number" },
+				},
+				optionalProperties: {
+					findings: {
+						elements: { properties: { title: { type: "string" }, body: { type: "string" } } },
+					},
+				},
+			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe("");
+		expect(JSON.parse(result.rawOutput)).toEqual({
+			findings: [{ title: "Handle null response", body: "Crashes" }],
+			overall_correctness: "incorrect",
+			explanation: "One bug blocks approval.",
+			confidence: 0.8,
+		});
+	});
+
 	it("uses last assistant text as the raw result for terminal string-typed yields without data", () => {
 		const result = finalizeSubprocessOutput({
 			rawOutput: "",
