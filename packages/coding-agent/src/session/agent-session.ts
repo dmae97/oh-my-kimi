@@ -6637,7 +6637,10 @@ export class AgentSession {
 
 	async promptCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
-		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & { queueChipText?: string },
+		options?: Pick<PromptOptions, "streamingBehavior" | "toolChoice"> & {
+			queueChipText?: string;
+			queueOnly?: boolean;
+		},
 	): Promise<void> {
 		const textContent =
 			typeof message.content === "string"
@@ -6657,6 +6660,16 @@ export class AgentSession {
 			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
 		}
 
+		if (options?.queueOnly) {
+			if (!options.streamingBehavior) {
+				throw new AgentBusyError();
+			}
+			for (const notice of keywordNotices) {
+				await this.#queueCustomMessage(notice, options.streamingBehavior);
+			}
+			await this.#queueCustomMessage(message, options.streamingBehavior, options.queueChipText);
+			return;
+		}
 		if (this.isStreaming) {
 			if (!options?.streamingBehavior) {
 				throw new AgentBusyError();
@@ -7220,6 +7233,40 @@ export class AgentSession {
 		} finally {
 			this.#endInFlight();
 		}
+	}
+
+	/** Queue a custom message without starting a turn, matching steer/follow-up delivery. */
+	async #queueCustomMessage<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		deliverAs: "steer" | "followUp",
+		queueChipText?: string,
+	): Promise<void> {
+		const details =
+			queueChipText !== undefined
+				? ({
+						...((message.details && typeof message.details === "object" ? message.details : {}) as Record<
+							string,
+							unknown
+						>),
+						__queueChipText: queueChipText,
+					} as T)
+				: message.details;
+		const appMessage: CustomMessage<T> = {
+			role: "custom",
+			customType: message.customType,
+			content: message.content,
+			display: message.display,
+			details,
+			attribution: message.attribution ?? "agent",
+			timestamp: Date.now(),
+		};
+		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
+		if (deliverAs === "followUp") {
+			this.agent.followUp(normalizedAppMessage);
+		} else {
+			this.agent.steer(normalizedAppMessage);
+		}
+		this.#scheduleIdleQueueDrain();
 	}
 
 	/**

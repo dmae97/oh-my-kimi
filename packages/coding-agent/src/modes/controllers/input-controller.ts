@@ -13,9 +13,10 @@ import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
+import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails, USER_INTERRUPT_LABEL } from "../../session/messages";
+import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
 import { isLowSignalTitleInput } from "../../tiny/text";
@@ -715,11 +716,18 @@ export class InputController {
 			}
 
 			// Handle skill commands (/skill:name [args]). Enter ⇒ steer (matches the
-			// free-text Enter semantics applied a few lines below at the streaming
-			// branch). Ctrl+Enter routes through `handleFollowUp` and dispatches the
-			// same helper with `"followUp"`.
-			if (text && (await this.#invokeSkillCommand(text, "steer"))) {
-				return;
+			// free-text Enter semantics below); Ctrl+Enter routes through `handleFollowUp`.
+			// During compaction, queue immediately so bash/python/loop-mode branches do
+			// not consume the skill before the compaction-resume path re-parses it.
+			if (text && isKnownSkillCommand(this.ctx, text)) {
+				if (this.ctx.session.isCompacting) {
+					const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
+					this.ctx.queueCompactionMessage(text, "steer", images);
+					return;
+				}
+				if (await this.#invokeSkillCommand(text, "steer")) {
+					return;
+				}
 			}
 
 			// Handle bash command (! for normal, !! for excluded from context)
@@ -1086,47 +1094,15 @@ export class InputController {
 	 * ignores it.
 	 */
 	async #invokeSkillCommand(text: string, streamingBehavior: "steer" | "followUp"): Promise<boolean> {
-		if (!text.startsWith("/skill:")) return false;
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillPath = this.ctx.skillCommands?.get(commandName);
-		if (!skillPath) return false;
+		if (!isKnownSkillCommand(this.ctx, text)) return false;
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
-		try {
-			const content = await Bun.file(skillPath).text();
-			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-			const metaLines = [`Skill: ${skillPath}`];
-			if (args) {
-				metaLines.push(`User: ${args}`);
-			}
-			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-			const skillName = commandName.slice("skill:".length);
-			const details: SkillPromptDetails = {
-				name: skillName || commandName,
-				path: skillPath,
-				args: args || undefined,
-				lineCount: body ? body.split("\n").length : 0,
-			};
-			await this.ctx.session.promptCustomMessage(
-				{
-					customType: SKILL_PROMPT_MESSAGE_TYPE,
-					content: message,
-					display: true,
-					details,
-					attribution: "user",
-				},
-				{ streamingBehavior, queueChipText: text },
-			);
-			if (this.ctx.session.isStreaming) {
-				this.ctx.updatePendingMessagesDisplay();
-				this.ctx.ui.requestRender();
-			}
-		} catch (err) {
-			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+		const handled = await invokeSkillCommandFromText(this.ctx, text, streamingBehavior);
+		if (this.ctx.session.isStreaming) {
+			this.ctx.updatePendingMessagesDisplay();
+			this.ctx.ui.requestRender();
 		}
-		return true;
+		return handled;
 	}
 
 	async handleRetry(): Promise<void> {
@@ -1159,9 +1135,8 @@ export class InputController {
 		// Compaction first: while compacting, free text gets queued via
 		// `queueCompactionMessage`, and `/skill:*` rides the same queue so a
 		// skill typed during compaction is not lost or short-circuited through
-		// `promptCustomMessage`. The skill text is queued verbatim; whether
-		// the queued entry is later re-parsed into a skill invocation is a
-		// separate concern owned by the compaction-resume path.
+		// `promptCustomMessage`. The compaction-resume path re-parses the
+		// queued text into a user-attributed skill invocation before delivery.
 		if (this.ctx.session.isCompacting) {
 			const images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 			this.ctx.queueCompactionMessage(text, "followUp", images);

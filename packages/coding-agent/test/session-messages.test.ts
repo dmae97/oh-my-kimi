@@ -284,6 +284,58 @@ describe("convertToLlm custom message mapping", () => {
 		const text = converted[0].content.find(content => content.type === "text")?.text ?? "";
 		expect(text).toContain("Run this skill with my arguments");
 	});
+
+	it("keeps user-invoked skill prompt images in the user message", () => {
+		const image: ImageContent = { type: "image", data: "c2tpbGw=", mimeType: "image/png" };
+		const messages: AgentMessage[] = [
+			{
+				role: "custom",
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: [{ type: "text", text: "Skill body" }, image],
+				display: true,
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted).toHaveLength(1);
+		expect(converted[0]?.role).toBe("user");
+		expectAttribution(converted[0], "user");
+		if (converted[0]?.role !== "user" || !Array.isArray(converted[0].content)) {
+			throw new Error("Expected user skill content");
+		}
+		expect(converted[0].content).toEqual([{ type: "text", text: "Skill body" }, image]);
+	});
+
+	it("routes non-user custom-message images through a user message", () => {
+		const image: ImageContent = { type: "image", data: "YWR2aXNvcg==", mimeType: "image/png" };
+		const messages: AgentMessage[] = [
+			{
+				role: "custom",
+				customType: "advisor",
+				content: [{ type: "text", text: "Advisor body" }, image],
+				display: true,
+				attribution: "agent",
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted.map(message => message.role)).toEqual(["developer", "user"]);
+		expectAttribution(converted[0], "agent");
+		expectAttribution(converted[1], "agent");
+		if (converted[0]?.role !== "developer" || !Array.isArray(converted[0].content)) {
+			throw new Error("Expected developer custom text");
+		}
+		expect(converted[0].content).toEqual([{ type: "text", text: "Advisor body" }]);
+		if (converted[1]?.role !== "user" || !Array.isArray(converted[1].content)) {
+			throw new Error("Expected user custom images");
+		}
+		expect(converted[1].content.filter(content => content.type === "image")).toEqual([image])
+	});
 });
 
 function getUserText(message: AgentMessage | undefined): string {

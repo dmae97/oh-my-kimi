@@ -34,6 +34,9 @@
 ### Fixed
 
 - Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns. ([#3698](https://github.com/can1357/oh-my-pi/issues/3698))
+### Fixed
+
+- Fixed `/skill:` prompts submitted during compaction so they are re-invoked as user-attributed skill prompts instead of being dropped or treated as plain text.
 
 ## [16.2.2] - 2026-06-27
 
