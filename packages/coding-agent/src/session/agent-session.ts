@@ -9482,16 +9482,18 @@ export class AgentSession {
 		const errorIsFromBeforeCompaction =
 			compactionEntry !== null && assistantMessage.timestamp < new Date(compactionEntry.timestamp).getTime();
 		if (sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow)) {
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			// Clear the failed turn from active context so the retry (or the next
+			// user prompt) does not replay it. The persisted branch entry stays
+			// for now: when no recovery path runs, the user-facing transcript
+			// MUST keep the only assistant message explaining why the turn
+			// stopped. The branch entry is dropped further down, but only on the
+			// paths that actually schedule a retry/compaction.
+			this.#removeAssistantMessageFromActiveContext(assistantMessage);
 
 			// Try context promotion first - switch to a larger model and retry without compacting
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (promoted) {
+				await this.#dropPersistedAssistantTurn(assistantMessage);
 				// Retry on the promoted (larger) model without compacting
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				return COMPACTION_CHECK_CONTINUATION;
@@ -9500,6 +9502,7 @@ export class AgentSession {
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
+				await this.#dropPersistedAssistantTurn(assistantMessage);
 				return await this.#runAutoCompaction("overflow", true, false, allowDefer, { autoContinue });
 			}
 			return COMPACTION_CHECK_NONE;
@@ -9512,13 +9515,14 @@ export class AgentSession {
 		// otherwise compaction/handoff. Unlike overflow, the *input* is fine, so we
 		// allow the handoff strategy to actually run.
 		if (sameModel && !errorIsFromBeforeCompaction && assistantMessage.stopReason === "length") {
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			// Same active-context vs persisted-history split as the overflow path
+			// above: clear the dead turn from agent state so it cannot be replayed,
+			// but keep it on the branch unless promotion or compaction actually runs.
+			this.#removeAssistantMessageFromActiveContext(assistantMessage);
 
 			const promoted = await this.#tryContextPromotion(assistantMessage);
 			if (promoted) {
+				await this.#dropPersistedAssistantTurn(assistantMessage);
 				logger.debug("Context promotion triggered by response.incomplete (length stop)", {
 					from: `${assistantMessage.provider}/${assistantMessage.model}`,
 				});
@@ -9528,6 +9532,7 @@ export class AgentSession {
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
 			if (incompleteCompactionSettings.enabled && incompleteCompactionSettings.strategy !== "off") {
+				await this.#dropPersistedAssistantTurn(assistantMessage);
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
@@ -9795,6 +9800,20 @@ export class AgentSession {
 		) {
 			this.agent.replaceMessages(messages.slice(0, -1));
 		}
+	}
+
+	/**
+	 * Drop a recoverable assistant turn from the persisted session branch once a
+	 * recovery path (context promotion or compaction) is committed. Waits for the
+	 * in-flight `message_end` persistence slot first so the branch entry exists
+	 * before we reparent past it. Active context removal is the caller's
+	 * responsibility — recovery paths clear it eagerly so the retry never
+	 * replays the failed turn, while no-recovery paths leave the persisted entry
+	 * (and the user-visible transcript line) in place.
+	 */
+	async #dropPersistedAssistantTurn(assistantMessage: AssistantMessage): Promise<void> {
+		await this.#waitForSessionMessagePersistence(assistantMessage);
+		this.#discardAssistantTurn(assistantMessage);
 	}
 
 	/**
