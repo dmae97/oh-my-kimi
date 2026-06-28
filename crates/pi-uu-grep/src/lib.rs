@@ -187,7 +187,13 @@ fn build_matcher(patterns: &[String], cli: &Cli) -> Result<RegexMatcher, grep_re
 			// alternatives keep their meaning.
 			let sanitized: Vec<String> = patterns
 				.iter()
-				.map(|p| if builder.build(p).is_ok() { p.clone() } else { escape_literal(p) })
+				.map(|p| {
+					if builder.build(p).is_ok() {
+						p.clone()
+					} else {
+						escape_literal(p)
+					}
+				})
 				.collect();
 			builder.build_many(&sanitized).map_err(|_| err)
 		},
@@ -643,5 +649,97 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 		0
 	} else {
 		1
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		collections::HashMap,
+		io::Cursor,
+		sync::{Arc, Mutex, atomic::AtomicBool},
+	};
+
+	use pi_uutils_ctx::{ScopeIo, scope};
+
+	use super::*;
+
+	/// Sink that collects writes into a shared buffer for assertions.
+	struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+	impl Write for SharedBuf {
+		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+			self.0.lock().expect("buffer lock").extend_from_slice(buf);
+			Ok(buf.len())
+		}
+
+		fn flush(&mut self) -> io::Result<()> {
+			Ok(())
+		}
+	}
+
+	/// Run the `grep` builtin with `args` (no argv[0]) over `stdin`, returning
+	/// `(exit_code, stdout, stderr)`.
+	fn run_grep(args: &[&str], stdin: &str) -> (i32, String, String) {
+		let out = Arc::new(Mutex::new(Vec::new()));
+		let err = Arc::new(Mutex::new(Vec::new()));
+		let io = ScopeIo {
+			stdin:                 Box::new(Cursor::new(stdin.as_bytes().to_vec())),
+			stdin_fd:              None,
+			stdin_is_search_input: true,
+			stdout:                Box::new(SharedBuf(Arc::clone(&out))),
+			stderr:                Box::new(SharedBuf(Arc::clone(&err))),
+			cwd:                   std::env::temp_dir(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		};
+		let argv: Vec<OsString> = std::iter::once("grep")
+			.chain(args.iter().copied())
+			.map(OsString::from)
+			.collect();
+		let code = scope(io, || run(argv));
+		let stdout =
+			String::from_utf8(out.lock().expect("stdout lock").clone()).expect("utf8 stdout");
+		let stderr =
+			String::from_utf8(err.lock().expect("stderr lock").clone()).expect("utf8 stderr");
+		(code, stdout, stderr)
+	}
+
+	#[test]
+	fn unbalanced_paren_pattern_matches_literally() {
+		// Regression: `grep "fail)"` used to abort with `regex parse error:
+		// unopened group`. It must now match the literal text and exit 0.
+		let (code, stdout, stderr) = run_grep(&["-A", "1", "fail)"], "ok\n(1 fail)\nnext\n");
+		assert_eq!(code, 0, "stderr: {stderr}");
+		assert!(stderr.is_empty(), "no error expected, got: {stderr}");
+		assert!(stdout.contains("(1 fail)"), "matched line missing: {stdout}");
+		assert!(stdout.contains("next"), "after-context line missing: {stdout}");
+	}
+
+	#[test]
+	fn extended_flag_reports_parse_error() {
+		// -E opts into strict extended-regex syntax: the bad pattern is an error.
+		let (code, _stdout, stderr) = run_grep(&["-E", "fail)"], "fail)\n");
+		assert_eq!(code, 2);
+		assert!(stderr.contains("grep:"), "expected a grep error, got: {stderr}");
+	}
+
+	#[test]
+	fn valid_regex_still_applies() {
+		// A parseable pattern is used as a regex, not matched literally.
+		let (code, stdout, _err) = run_grep(&["fo+"], "foooo\nbar\n");
+		assert_eq!(code, 0);
+		assert!(stdout.contains("foooo"));
+		assert!(!stdout.contains("bar"));
+	}
+
+	#[test]
+	fn multi_pattern_keeps_valid_alternative_as_regex() {
+		// Per-pattern fallback: valid `fo+` stays a regex while `bar)` is escaped.
+		let (code, stdout, err) = run_grep(&["-e", "fo+", "-e", "bar)", "-h"], "foooo\nbar)\nbaz\n");
+		assert_eq!(code, 0, "stderr: {err}");
+		assert!(stdout.contains("foooo"), "regex alternative should match: {stdout}");
+		assert!(stdout.contains("bar)"), "literal alternative should match: {stdout}");
+		assert!(!stdout.contains("baz"), "non-matching line leaked: {stdout}");
 	}
 }

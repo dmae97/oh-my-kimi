@@ -934,20 +934,29 @@ fn build_matcher(
 	multiline: bool,
 ) -> Result<grep_regex::RegexMatcher> {
 	let sanitized = sanitize_braces(pattern);
-	match build_regex_matcher(sanitized.as_ref(), ignore_case, multiline) {
-		Ok(matcher) => Ok(matcher),
-		Err(err) => {
-			let message = err.to_string();
-			if message.contains("unclosed group") || message.contains("unopened group") {
-				let escaped = escape_unescaped_parentheses(sanitized.as_ref());
-				if escaped.as_ref() != sanitized.as_ref() {
-					return build_regex_matcher(escaped.as_ref(), ignore_case, multiline)
-						.map_err(|retry_err| Error::from_reason(format!("Regex error: {retry_err}")));
-				}
-			}
-			Err(Error::from_reason(format!("Regex error: {message}")))
-		},
+	let err = match build_regex_matcher(sanitized.as_ref(), ignore_case, multiline) {
+		Ok(matcher) => return Ok(matcher),
+		Err(err) => err,
+	};
+
+	// Targeted retry: a stray `(`/`)` in an otherwise valid regex (e.g.
+	// `fetchProvider(`) — escape the parentheses but keep the rest of the regex
+	// working.
+	let message = err.to_string();
+	if message.contains("unclosed group") || message.contains("unopened group") {
+		let escaped = escape_unescaped_parentheses(sanitized.as_ref());
+		if escaped.as_ref() != sanitized.as_ref()
+			&& let Ok(matcher) = build_regex_matcher(escaped.as_ref(), ignore_case, multiline)
+		{
+			return Ok(matcher);
+		}
 	}
+
+	// Final fallback: the pattern is not valid regex syntax at all (e.g. an
+	// unclosed character class or a dangling quantifier), so match it literally
+	// instead of failing the whole search.
+	build_regex_matcher(&regex::escape(pattern), ignore_case, multiline)
+		.map_err(|_| Error::from_reason(format!("Regex error: {message}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1971,6 +1980,44 @@ mod tests {
 			escape_unescaped_parentheses("fetchAnthropicProvider()").as_ref(),
 			r"fetchAnthropicProvider\(\)"
 		);
+	}
+
+	#[test]
+	fn invalid_regex_falls_back_to_literal() {
+		use grep_matcher::Matcher;
+		// Patterns that are not valid regex syntax (unclosed class, dangling
+		// quantifier, stray `)`) must degrade to a literal search rather than
+		// erroring.
+		for (pattern, hay, miss) in [
+			("foo[bar", &b"x foo[bar y"[..], &b"foobar"[..]),
+			("+++", &b"a+++b"[..], &b"ab"[..]),
+			("fail)", &b"(1 fail)"[..], &b"failure"[..]),
+		] {
+			let matcher = super::build_matcher(pattern, false, false)
+				.unwrap_or_else(|e| panic!("`{pattern}` should fall back to literal, got: {e}"));
+			assert!(matcher.is_match(hay).unwrap(), "`{pattern}` should match {hay:?}");
+			assert!(!matcher.is_match(miss).unwrap(), "`{pattern}` should not match {miss:?}");
+		}
+	}
+
+	#[test]
+	fn stray_parenthesis_preserves_surrounding_regex() {
+		use grep_matcher::Matcher;
+		// The targeted retry escapes the stray `(` but keeps `.*` as a regex.
+		let matcher =
+			super::build_matcher("foo.*(bar", false, false).expect("retry with escaped paren");
+		assert!(matcher.is_match(b"fooXYZ(bar").unwrap());
+		assert!(!matcher.is_match(b"foobar").unwrap());
+	}
+
+	#[test]
+	fn valid_regex_is_not_escaped() {
+		use grep_matcher::Matcher;
+		// A parseable pattern stays a regex: `fo+` matches repeats, which the
+		// literal `fo+` never would.
+		let matcher = super::build_matcher("fo+", false, false).expect("valid regex");
+		assert!(matcher.is_match(b"foooo").unwrap());
+		assert!(!matcher.is_match(b"bar").unwrap());
 	}
 
 	#[cfg(unix)]
