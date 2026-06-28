@@ -259,6 +259,34 @@ describe("convertToLlm custom message mapping", () => {
 		expectAttribution(converted[0], "user");
 		expect(inferCopilotInitiator(converted)).toBe("user");
 	});
+
+	it("routes custom-message images through a user message", () => {
+		const image: ImageContent = { type: "image", data: "c2tpbGw=", mimeType: "image/png" };
+		const messages: AgentMessage[] = [
+			{
+				role: "custom",
+				customType: "skill-prompt",
+				content: [{ type: "text", text: "Skill body" }, image],
+				display: true,
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		];
+
+		const converted = convertToLlm(messages);
+
+		expect(converted.map(message => message.role)).toEqual(["developer", "user"]);
+		expectAttribution(converted[0], "user");
+		expectAttribution(converted[1], "user");
+		if (converted[0]?.role !== "developer" || !Array.isArray(converted[0].content)) {
+			throw new Error("Expected developer skill text");
+		}
+		expect(converted[0].content).toEqual([{ type: "text", text: "Skill body" }]);
+		if (converted[1]?.role !== "user" || !Array.isArray(converted[1].content)) {
+			throw new Error("Expected user skill images");
+		}
+		expect(converted[1].content.filter(content => content.type === "image")).toEqual([image]);
+	});
 });
 
 function getUserText(message: AgentMessage | undefined): string {

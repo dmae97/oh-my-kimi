@@ -481,6 +481,30 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
 	};
 }
 
+function convertImageBearingCustomMessage(message: CustomMessage | HookMessage): Message[] | undefined {
+	if (typeof message.content === "string") return undefined;
+	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
+	const imageBlocks = message.content.filter((content): content is ImageContent => content.type === "image");
+	if (imageBlocks.length === 0) return undefined;
+
+	const converted: Message[] = [];
+	if (textBlocks.length > 0) {
+		converted.push({
+			role: "developer",
+			content: textBlocks,
+			attribution: message.attribution,
+			timestamp: message.timestamp,
+		});
+	}
+	converted.push({
+		role: "user",
+		content: [{ type: "text", text: `Images attached to ${message.customType}.` }, ...imageBlocks],
+		attribution: message.attribution,
+		timestamp: message.timestamp,
+	});
+	return converted;
+}
+
 /**
  * Transform AgentMessages (including custom types) to LLM-compatible Messages.
  *
@@ -556,7 +580,12 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				return out;
 			}
 			case "custom":
-			case "hookMessage":
+			case "hookMessage": {
+				const split = convertImageBearingCustomMessage(m);
+				if (split) return split;
+				const converted = convertMessageToLlm(m);
+				return converted ? [converted] : [];
+			}
 			case "branchSummary":
 			case "compactionSummary":
 			case "user":
