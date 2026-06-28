@@ -8,6 +8,7 @@ import {
 	findProbeMarker,
 	getHostInfo,
 	HOST_PROBE_MARKER,
+	osFromUname,
 	parseHostInfo,
 	type SSHConnectionTarget,
 	type SSHHostShell,
@@ -129,6 +130,28 @@ describe("findProbeMarker (transfer-shell probe recovery)", () => {
 
 	it("returns null when the marker is in neither stream", () => {
 		expect(findProbeMarker("noise", "more noise", TRANSFER_PROBE_MARKER)).toBeNull();
+	});
+});
+
+describe("osFromUname (transfer-shell probe OS recovery)", () => {
+	it("classifies common POSIX uname payloads", () => {
+		// The markerless host-info fallback uses the transfer-shell probe's
+		// uname output to avoid returning a durable `os: "unknown"` when csh/tcsh
+		// killed the first marker probe before it could echo anything (#3722 review).
+		expect(osFromUname("Linux")).toBe("linux");
+		expect(osFromUname("GNU/Linux")).toBe("linux");
+		expect(osFromUname("Darwin")).toBe("macos");
+	});
+
+	it("classifies Windows compat unames as windows so ssh:// still refuses them", () => {
+		expect(osFromUname("MINGW64_NT-10.0")).toBe("windows");
+		expect(osFromUname("MSYS_NT-10.0")).toBe("windows");
+		expect(osFromUname("CYGWIN_NT-10.0")).toBe("windows");
+	});
+
+	it("returns undefined when uname is not recognized", () => {
+		expect(osFromUname("")).toBeUndefined();
+		expect(osFromUname("SunOS")).toBeUndefined();
 	});
 });
 

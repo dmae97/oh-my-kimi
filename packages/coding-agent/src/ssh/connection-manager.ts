@@ -333,6 +333,17 @@ export function findProbeMarker(stdout: string, stderr: string, marker: string):
 	return null;
 }
 
+/** Classify a POSIX-ish `uname -s` payload from the transfer-shell probe. */
+export function osFromUname(value: string): SSHHostOs | undefined {
+	const uname = value.toLowerCase();
+	if (uname.includes("darwin")) return "macos";
+	if (uname.includes("linux") || uname.includes("gnu")) return "linux";
+	if (uname.includes("mingw") || uname.includes("msys") || uname.includes("cygwin") || uname.includes("windows")) {
+		return "windows";
+	}
+	return undefined;
+}
+
 async function probeTransferShell(
 	host: SSHConnectionTarget,
 ): Promise<{ shell: SSHHostInfo["transferShell"]; uname: string }> {
@@ -355,10 +366,12 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	const payload = extractProbePayload(result.stdout, result.stderr);
 	if (payload === null) {
 		logger.debug("SSH host probe failed", { host: host.name, error: result.stderr });
+		const transferProbe = await probeTransferShell(host);
 		const fallback: SSHHostInfo = {
 			version: HOST_INFO_VERSION,
-			os: "unknown",
+			os: transferProbe.shell ? (osFromUname(transferProbe.uname) ?? "unknown") : "unknown",
 			shell: "unknown",
+			transferShell: transferProbe.shell,
 			compatShell: undefined,
 			compatEnabled: false,
 		};
@@ -414,9 +427,7 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 		// `uname -s` from the same probe lets us recover the OS when the first
 		// probe couldn't classify it (e.g. the remote silently nuked `$OSTYPE`).
 		if (transferShell && os === "unknown") {
-			const uname = probe.uname.toLowerCase();
-			if (uname.includes("darwin")) os = "macos";
-			else if (uname.includes("linux") || uname.includes("gnu")) os = "linux";
+			os = osFromUname(probe.uname) ?? os;
 		}
 	}
 
