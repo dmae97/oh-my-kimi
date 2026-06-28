@@ -176,7 +176,6 @@ const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[]
 	["core.fsmonitor", "false"],
 	["core.untrackedCache", "false"],
 ];
-const REMOTE_ALREADY_EXISTS = /remote .* already exists/i;
 const AMBIENT_GIT_ENV = {
 	GIT_DIR: undefined,
 	GIT_COMMON_DIR: undefined,
@@ -1523,10 +1522,10 @@ export const remote = {
 	async add(cwd: string, name: string, url: string, signal?: AbortSignal): Promise<void> {
 		const result = await git(cwd, ["remote", "add", name, url], { signal });
 		if (result.exitCode === 0) return;
-		if (REMOTE_ALREADY_EXISTS.test(result.stderr)) {
-			const existing = await remote.url(cwd, name, signal);
+		const existing = await remote.url(cwd, name, signal);
+		if (existing !== undefined) {
 			if (existing === url) return;
-			throw new ToolError(`remote ${name} already exists with URL ${existing ?? "(unset)"}, expected ${url}`);
+			throw new ToolError(`remote ${name} already exists with URL ${existing}, expected ${url}`);
 		}
 		throw new GitCommandError(["remote", "add", name, url], result);
 	},
