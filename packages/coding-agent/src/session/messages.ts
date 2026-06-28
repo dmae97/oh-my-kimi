@@ -481,9 +481,7 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
 	};
 }
 
-function customMessageContentToLlmContent(
-	content: CustomMessage["content"],
-): (TextContent | ImageContent)[] {
+function customMessageContentToLlmContent(content: CustomMessage["content"]): (TextContent | ImageContent)[] {
 	return typeof content === "string" ? [{ type: "text", text: content }] : content;
 }
 

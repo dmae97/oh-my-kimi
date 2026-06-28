@@ -1,10 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { convertToLlm, SKILL_PROMPT_MESSAGE_TYPE, type CustomMessage, type SkillPromptDetails } from "./messages";
+import { type CustomMessage, convertToLlm, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "./messages";
 
-function customMessage(
-	customType: string,
-	attribution: "agent" | "user",
-): CustomMessage<SkillPromptDetails> {
+function customMessage(customType: string, attribution: "agent" | "user"): CustomMessage<SkillPromptDetails> {
 	return {
 		role: "custom",
 		customType,
