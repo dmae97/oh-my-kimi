@@ -247,7 +247,12 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	async bytes(): Promise<Uint8Array> {
-		return new Response(this.stdout).bytes();
+		// Bun's `Response(stream).bytes()` returns the raw `ArrayBuffer` once the
+		// stream emits more than one chunk (subprocess stdout chunks past ~128 KB).
+		// Normalize at the contract boundary so every caller — SSH read,
+		// `decodeUtf8Text`, callers slicing with `.subarray` — sees a `Uint8Array`.
+		const body = (await new Response(this.stdout).bytes()) as Uint8Array | ArrayBuffer;
+		return body instanceof Uint8Array ? body : new Uint8Array(body);
 	}
 
 	// ── Wait ─────────────────────────────────────────────────────────────
