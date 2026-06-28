@@ -5,6 +5,7 @@
 ### Fixed
 
 - Kept stats session sync on the serial parser path for `workers: 1` and macOS defaults, avoiding Bun worker re-entry aborts when launching `/stats` ([#3733](https://github.com/can1357/oh-my-pi/issues/3733)).
+- Replaced the native `Bun.JSONL.parseChunk` session parser path with a lenient JS line scanner, avoiding Bun aborts on large stats session files ([#3733](https://github.com/can1357/oh-my-pi/issues/3733)).
 
 ## [16.2.3] - 2026-06-28
 

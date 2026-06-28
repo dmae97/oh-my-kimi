@@ -164,54 +164,53 @@ function extractStats(
 }
 
 const LF = 0x0a;
+const CR = 0x0d;
+const jsonLineDecoder = new TextDecoder();
+
+function parseJsonLine(bytes: Uint8Array, start: number, end: number): SessionEntry | null {
+	while (end > start && bytes[end - 1] === CR) end--;
+	if (end <= start) return null;
+	try {
+		return JSON.parse(jsonLineDecoder.decode(bytes.subarray(start, end))) as SessionEntry;
+	} catch {
+		return null;
+	}
+}
+
+function visitSessionEntriesLenient(bytes: Uint8Array, visit: (entry: SessionEntry) => void): number {
+	let cursor = 0;
+	let read = 0;
+
+	while (cursor < bytes.length) {
+		const newline = bytes.indexOf(LF, cursor);
+		const hasNewline = newline !== -1;
+		const lineEnd = hasNewline ? newline : bytes.length;
+		const entry = parseJsonLine(bytes, cursor, lineEnd);
+		if (entry) {
+			visit(entry);
+			read = hasNewline ? newline + 1 : lineEnd;
+		} else if (hasNewline) {
+			read = newline + 1;
+		} else {
+			break;
+		}
+		cursor = hasNewline ? newline + 1 : lineEnd;
+	}
+
+	return read;
+}
 
 function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[]; read: number } {
 	const entries: SessionEntry[] = [];
-	let cursor = 0;
-
-	while (cursor < bytes.length) {
-		const { values, error, read, done } = Bun.JSONL.parseChunk(bytes, cursor, bytes.length);
-		if (values.length > 0) {
-			entries.push(...(values as SessionEntry[]));
-		}
-
-		if (error) {
-			const nextNewline = bytes.indexOf(LF, Math.max(read, cursor));
-			if (nextNewline === -1) break;
-			cursor = nextNewline + 1;
-			continue;
-		}
-
-		if (read <= cursor) break;
-		cursor = read;
-		if (done) break;
-	}
-
-	return { entries, read: cursor };
+	const read = visitSessionEntriesLenient(bytes, entry => entries.push(entry));
+	return { entries, read };
 }
 
 function scanLastServiceTier(bytes: Uint8Array): ServiceTier | undefined {
-	let cursor = 0;
 	let currentServiceTier: ServiceTier | undefined;
-
-	while (cursor < bytes.length) {
-		const { values, error, read, done } = Bun.JSONL.parseChunk(bytes, cursor, bytes.length);
-		for (const value of values as SessionEntry[]) {
-			if (isServiceTierChange(value)) currentServiceTier = value.serviceTier ?? undefined;
-		}
-
-		if (error) {
-			const nextNewline = bytes.indexOf(LF, Math.max(read, cursor));
-			if (nextNewline === -1) break;
-			cursor = nextNewline + 1;
-			continue;
-		}
-
-		if (read <= cursor) break;
-		cursor = read;
-		if (done) break;
-	}
-
+	visitSessionEntriesLenient(bytes, entry => {
+		if (isServiceTierChange(entry)) currentServiceTier = entry.serviceTier ?? undefined;
+	});
 	return currentServiceTier;
 }
 /**
