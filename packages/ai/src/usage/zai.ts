@@ -15,6 +15,15 @@ const DEFAULT_ENDPOINT = "https://api.z.ai";
 const QUOTA_PATH = "/api/monitor/usage/quota/limit";
 const MODEL_USAGE_PATH = "/api/monitor/usage/model-usage";
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const WEEK_MS = 7 * DAY_MS;
+const MONTH_MS = 30 * DAY_MS;
+
+interface ZaiUsageDetail {
+	modelCode?: string;
+	usage?: number;
+}
 
 function normalizeZaiBaseUrl(baseUrl?: string): string {
 	if (!baseUrl?.trim()) return DEFAULT_ENDPOINT;
@@ -32,6 +41,9 @@ interface ZaiUsageLimitItem {
 	percentage?: number;
 	remaining?: number;
 	nextResetTime?: number;
+	unit?: number;
+	number?: number;
+	usageDetails?: ZaiUsageDetail[];
 }
 
 interface ZaiQuotaPayload {
@@ -49,6 +61,21 @@ function parseMillis(value: unknown): number | undefined {
 	return parsed > 1_000_000_000_000 ? parsed : parsed * 1000;
 }
 
+function parseUsageDetails(value: unknown): ZaiUsageDetail[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const details: ZaiUsageDetail[] = [];
+	for (const item of value) {
+		if (!isRecord(item)) continue;
+		const modelCode = typeof item.modelCode === "string" && item.modelCode ? item.modelCode : undefined;
+		const usage = toNumber(item.usage);
+		details.push({
+			...(modelCode !== undefined ? { modelCode } : {}),
+			...(usage !== undefined ? { usage } : {}),
+		});
+	}
+	return details.length > 0 ? details : undefined;
+}
+
 function parseLimitItem(value: unknown): ZaiUsageLimitItem | null {
 	if (!isRecord(value)) return null;
 	const type = typeof value.type === "string" ? value.type : undefined;
@@ -60,6 +87,9 @@ function parseLimitItem(value: unknown): ZaiUsageLimitItem | null {
 		percentage: toNumber(value.percentage),
 		remaining: toNumber(value.remaining),
 		nextResetTime: parseMillis(value.nextResetTime),
+		unit: toNumber(value.unit),
+		number: toNumber(value.number),
+		usageDetails: parseUsageDetails(value.usageDetails),
 	};
 }
 
@@ -99,6 +129,59 @@ function formatDate(value: Date): string {
 	return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}+${pad(value.getHours())}:${pad(
 		value.getMinutes(),
 	)}:${pad(value.getSeconds())}`;
+}
+
+function formatCountedUnit(count: number, singular: string): string {
+	const suffix = count === 1 ? "" : "s";
+	return `${count} ${singular}${suffix}`;
+}
+
+function buildZaiWindow(parsed: ZaiUsageLimitItem): UsageWindow {
+	const count = parsed.number !== undefined && parsed.number > 0 ? parsed.number : 1;
+	let id: string;
+	let label: string;
+	let durationMs: number | undefined;
+	switch (parsed.unit) {
+		case 3:
+			id = `${count}h`;
+			label = formatCountedUnit(count, "Hour");
+			durationMs = count * HOUR_MS;
+			break;
+		case 4:
+			id = `${count}d`;
+			label = formatCountedUnit(count, "Day");
+			durationMs = count * DAY_MS;
+			break;
+		case 5:
+			id = `${count}mo`;
+			label = count === 1 ? "Monthly" : formatCountedUnit(count, "Month");
+			durationMs = count * MONTH_MS;
+			break;
+		case 6:
+			id = `${count}w`;
+			label = count === 1 ? "Weekly" : formatCountedUnit(count, "Week");
+			durationMs = count * WEEK_MS;
+			break;
+		default:
+			id = parsed.unit !== undefined ? `${count}u${parsed.unit}` : "quota";
+			label = "Quota";
+			break;
+	}
+	return {
+		id,
+		label,
+		...(durationMs !== undefined ? { durationMs } : {}),
+		...(parsed.nextResetTime !== undefined ? { resetsAt: parsed.nextResetTime } : {}),
+	};
+}
+
+function requestQuotaLabel(parsed: ZaiUsageLimitItem): string {
+	const detailCodes =
+		parsed.usageDetails?.map(detail => detail.modelCode).filter((code): code is string => !!code) ?? [];
+	if (detailCodes.includes("search-prime") && detailCodes.includes("web-reader") && detailCodes.includes("zread")) {
+		return "ZAI Web Search / Reader / Zread Quota";
+	}
+	return "ZAI Request Quota";
 }
 
 function buildModelUsageUrl(baseUrl: string, now: Date): string {
@@ -157,18 +240,13 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 				percentage: parsed.percentage,
 				unit: "tokens",
 			});
-			const window: UsageWindow = {
-				id: "quota",
-				label: "Quota",
-				durationMs: SEVEN_DAYS_MS,
-				resetsAt: parsed.nextResetTime,
-			};
+			const window = buildZaiWindow(parsed);
 			limits.push({
-				id: "zai:tokens",
-				label: "ZAI Token Quota",
+				id: `zai:tokens:${window.id}`,
+				label: `ZAI ${window.label} Token Quota`,
 				scope: {
 					provider: params.provider,
-					windowId: window?.id ?? "quota",
+					windowId: window.id,
 					shared: true,
 				},
 				window,
@@ -177,12 +255,7 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 			});
 		}
 		if (parsed.type === "TIME_LIMIT") {
-			const window: UsageWindow = {
-				id: "quota",
-				label: "Quota",
-				durationMs: SEVEN_DAYS_MS,
-				resetsAt: parsed.nextResetTime,
-			};
+			const window = buildZaiWindow(parsed);
 			const amount = buildUsageAmount({
 				used: parsed.currentValue,
 				limit: parsed.usage,
@@ -191,11 +264,11 @@ async function fetchZaiUsage(params: UsageFetchParams, ctx: UsageFetchContext): 
 				unit: "requests",
 			});
 			limits.push({
-				id: "zai:requests",
-				label: "ZAI Request Quota",
+				id: `zai:requests:${window.id}`,
+				label: requestQuotaLabel(parsed),
 				scope: {
 					provider: params.provider,
-					windowId: "quota",
+					windowId: window.id,
 					shared: true,
 				},
 				window,
