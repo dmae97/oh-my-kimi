@@ -707,7 +707,7 @@ function createEventControllerFixture() {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
 		ui: { requestRender },
-		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
+		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		addMessageToChat,
 		updatePendingMessagesDisplay,

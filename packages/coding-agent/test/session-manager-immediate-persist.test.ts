@@ -45,8 +45,7 @@ function readJsonl(file: string): Array<Record<string, unknown>> {
 		.trimEnd()
 		.split("\n")
 		.filter(Boolean)
-		.map(line => JSON.parse(line) as Record<string, unknown>)
-		.filter(entry => entry.type !== "title");
+		.map(line => JSON.parse(line) as Record<string, unknown>);
 }
 
 function messageRole(entry: Record<string, unknown>): string | undefined {

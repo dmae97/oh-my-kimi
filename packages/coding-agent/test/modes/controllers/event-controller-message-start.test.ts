@@ -44,7 +44,7 @@ function createContext(options: {
 	});
 	const ctx = {
 		isInitialized: true,
-		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
+		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		ui: { requestRender: vi.fn() },
 		editor,
@@ -193,7 +193,7 @@ function createIrcContext(options: { liveBlockAbove?: boolean } = {}) {
 	const requestRender = vi.fn();
 	const ctx = {
 		isInitialized: true,
-		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
+		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		ui: { requestRender },
 		chatContainer,

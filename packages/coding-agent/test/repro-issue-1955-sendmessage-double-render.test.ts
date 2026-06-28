@@ -109,7 +109,7 @@ function createHarness(): Harness {
 		ui: { requestRender: vi.fn() },
 		isBackgrounded: false,
 		initialChatRendered: false,
-		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
+		statusLine: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		settings: { get: () => false },
 		session: sessionMock,

@@ -9,8 +9,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { goalToolRenderer } from "../goals/tools/goal-tool";
 import { lspToolRenderer } from "../lsp/render";
 import type { Theme } from "../modes/theme/theme";
-import * as taskRenderer from "../task/renderer";
-import type { TaskParams, TaskToolDetails } from "../task/types";
+import { taskToolRenderer } from "../task/renderer";
 import { webSearchToolRenderer } from "../web/search/render";
 import { askToolRenderer } from "./ask";
 import { astEditToolRenderer } from "./ast-edit";
@@ -89,22 +88,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	reflect: reflectToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
-	task: {
-		renderCall: (args, options, theme) =>
-			taskRenderer.taskToolRenderer.renderCall(args as TaskParams, options, theme),
-		renderResult: (result, options, theme, args) =>
-			taskRenderer.taskToolRenderer.renderResult(
-				result as {
-					content: Array<{ type: string; text?: string }>;
-					details?: TaskToolDetails;
-					isError?: boolean;
-				},
-				options,
-				theme,
-				args as TaskParams | undefined,
-			),
-		mergeCallAndResult: true,
-	} as ToolRenderer,
+	task: taskToolRenderer as ToolRenderer,
 	todo: todoToolRenderer as ToolRenderer,
 	github: githubToolRenderer as ToolRenderer,
 	goal: goalToolRenderer as ToolRenderer,

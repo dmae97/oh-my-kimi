@@ -61,7 +61,7 @@ describe("/handoff command", () => {
 			ui: { requestRender, requestComponentRender: vi.fn() },
 			editor: { onEscape: originalOnEscape },
 			rebuildChatFromMessages: vi.fn(),
-			statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
+			statusLine: { invalidate: vi.fn() },
 			updateEditorTopBorder: vi.fn(),
 			updateEditorBorderColor: vi.fn(),
 			reloadTodos: vi.fn(async () => undefined),

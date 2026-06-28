@@ -377,44 +377,6 @@ function findLineIndex(starts: readonly number[], offset: number): number {
 	return Math.max(0, high);
 }
 
-function validateRegexPattern(pattern: string): void {
-	let inClass = false;
-	let escaped = false;
-	for (let i = 0; i < pattern.length; i++) {
-		const ch = pattern[i];
-		if (escaped) {
-			escaped = false;
-			if (!inClass && /[1-9]/.test(ch)) {
-				throw new ToolError("Invalid regex: backreferences are not supported");
-			}
-			continue;
-		}
-		if (ch === "\\") {
-			escaped = true;
-			continue;
-		}
-		if (ch === "[" && !inClass) {
-			inClass = true;
-			continue;
-		}
-		if (ch === "]" && inClass) {
-			inClass = false;
-			continue;
-		}
-		if (
-			!inClass &&
-			(pattern.startsWith("(?=", i) ||
-				pattern.startsWith("(?!", i) ||
-				pattern.startsWith("(?<=", i) ||
-				pattern.startsWith("(?<!", i))
-		) {
-			throw new ToolError("Invalid regex: look-around is not supported");
-		}
-	}
-	if (escaped) throw new ToolError("Invalid regex: dangling escape");
-	if (inClass) throw new ToolError("Invalid regex: unclosed character class");
-}
-
 /**
  * JS-`RegExp` fallback returning matched line indexes for a virtual resource too
  * large for native grep (>`NATIVE_GREP_MAX_FILE_BYTES`, which native grep silently
@@ -908,7 +870,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				throw new ToolError("Pattern must not be empty");
 			}
 			const normalizedPattern = pattern;
-			validateRegexPattern(normalizedPattern);
 
 			const normalizedSkip =
 				skip === undefined || skip === null ? 0 : Number.isFinite(skip) ? Math.floor(skip) : Number.NaN;
