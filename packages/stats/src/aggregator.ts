@@ -241,13 +241,15 @@ export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: 
 		report(sessionFile);
 	};
 
-	const poolSize = Math.max(1, Math.min(files.length, opts?.workers ?? defaultWorkerCount()));
-	if (poolSize === 1) {
+	const requestedWorkers = Math.max(1, Math.floor(opts?.workers ?? defaultWorkerCount()));
+	if (requestedWorkers === 1) {
 		for (const sessionFile of files) {
 			await processFile(sessionFile, parseSessionFile);
 		}
 		return { processed: totalProcessed, files: filesProcessed };
 	}
+
+	const poolSize = Math.min(files.length, requestedWorkers);
 
 	const handles: WorkerHandle[] = [];
 	for (let i = 0; i < poolSize; i++) handles.push(spawnWorker());

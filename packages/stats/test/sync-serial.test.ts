@@ -88,4 +88,15 @@ describe("stats sync serial mode", () => {
 		expect(overall.totalRequests).toBe(1);
 		expect(workerSpy).not.toHaveBeenCalled();
 	});
+
+	it("spawns a worker pool when callers explicitly request workers: 2 with a single file", async () => {
+		await writeSessionFile();
+		const workerProbe = new Error("worker probe");
+		const workerSpy = vi.spyOn(globalThis, "Worker").mockImplementation(() => {
+			throw workerProbe;
+		});
+
+		await expect(syncAllSessions({ workers: 2 })).rejects.toBe(workerProbe);
+		expect(workerSpy).toHaveBeenCalled();
+	});
 });
