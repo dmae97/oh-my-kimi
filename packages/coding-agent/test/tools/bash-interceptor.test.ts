@@ -94,6 +94,15 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("echo data > /devices/x", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 	});
 
+	it("keeps scanning after allowed /dev sink redirects", () => {
+		expect(
+			checkBashInterception("echo data > /dev/null > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block,
+		).toBe(true);
+		expect(
+			checkBashInterception("printf x > /dev/stdout >> real.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block,
+		).toBe(true);
+	});
+
 	it("does not block `>` inside quoted text or fd duplication", () => {
 		expect(checkBashInterception('echo "a -> b"', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 		expect(checkBashInterception('echo "<p>hi</p>"', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
