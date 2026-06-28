@@ -2895,24 +2895,25 @@ export class Editor implements Component, Focusable {
 		return new SelectList(items, this.#autocompleteMaxVisible, this.#theme.selectList, layout);
 	}
 
-	#handleTabCompletion(): void {
+	async #handleTabCompletion(): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 
 		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.#state.cursorCol);
 
-		// Check if we're in a slash command or mid-prompt skill lookup context
-		if (
-			(this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) ||
-			this.#isInMidPromptSkillSlashContext()
-		) {
-			this.#handleSlashCommandCompletion();
+		if (this.#isInSubmittedSlashCommandContext() && !beforeCursor.trimStart().includes(" ")) {
+			await this.#handleSlashCommandCompletion();
+		} else if (this.#isInMidPromptSkillSlashContext()) {
+			await this.#handleSlashCommandCompletion();
+			if (!this.#autocompleteState) {
+				await this.#forceFileAutocomplete(true);
+			}
 		} else {
-			this.#forceFileAutocomplete(true);
+			await this.#forceFileAutocomplete(true);
 		}
 	}
-	#handleSlashCommandCompletion(): void {
-		this.#tryTriggerAutocomplete();
+	async #handleSlashCommandCompletion(): Promise<void> {
+		await this.#tryTriggerAutocomplete();
 	}
 
 	/*

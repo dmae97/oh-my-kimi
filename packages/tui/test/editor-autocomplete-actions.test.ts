@@ -148,7 +148,7 @@ describe("Editor Enter handler sync slash completion", () => {
 
 		editor.setText("explain this\n");
 		editor.handleInput("/");
-		await Bun.sleep(0);
+		await Promise.resolve();
 
 		expect(editor.isShowingAutocomplete()).toBe(true);
 
@@ -156,6 +156,42 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.handleInput("\t");
 
 		expect(editor.getText()).toBe("/skill:security-scan");
+	});
+
+	it("preserves Tab file completion for an absolute path token after prose", async () => {
+		let forceFileCalls = 0;
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider({
+			async getSuggestions() {
+				return null;
+			},
+			applyCompletion(lines, cursorLine, cursorCol) {
+				return { lines, cursorLine, cursorCol };
+			},
+			async getForceFileSuggestions() {
+				forceFileCalls += 1;
+				return {
+					prefix: "/tmp",
+					items: [
+						{ value: "/tmp/", label: "tmp/" },
+						{ value: "/tmpfile", label: "tmpfile" },
+					],
+				};
+			},
+			shouldTriggerFileCompletion() {
+				return true;
+			},
+		});
+
+		editor.setText("see /tmp");
+		editor.handleInput("\t");
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(forceFileCalls).toBe(1);
+		expect(editor.isShowingAutocomplete()).toBe(true);
 	});
 
 	it("completes slash command synchronously before async resolves and submits", () => {

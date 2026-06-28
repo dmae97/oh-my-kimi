@@ -92,6 +92,18 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result?.prefix).toBe("/skill:");
 			expect(result?.items.map(item => item.value)).toEqual(["skill:security-scan"]);
 		});
+
+		it("does not suggest skills when the slash is inside a word", async () => {
+			const provider = new CombinedAutocompleteProvider(
+				[{ name: "skill:security-scan", description: "Security scan" }],
+				"/tmp",
+			);
+			const line = "word/security";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result).toBeNull();
+		});
 	});
 	describe("applyCompletion", () => {
 		it("replaces the live slash command prefix when rendered suggestions are stale", () => {
