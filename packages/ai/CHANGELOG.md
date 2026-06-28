@@ -19,6 +19,10 @@
 
 - Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
 
+### Fixed
+
+- Fixed OpenAI Responses `stream_read_error` provider events being classified as non-transient, which prevented the coding agent's auto-retry path from continuing after a recoverable stream read failure.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added

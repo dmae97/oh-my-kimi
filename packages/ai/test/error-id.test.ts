@@ -31,6 +31,18 @@ describe("error-id classification", () => {
 		expect(AIError.is(id, AIError.Flag.Class)).toBe(true);
 	});
 
+	it("classifies OpenAI stream_read_error as transient", () => {
+		const assistant = message({
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5",
+			errorMessage: "Error Code stream_read_error: stream_read_error",
+		});
+		const id = AIError.classifyMessage(assistant);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(id)).toBe(true);
+	});
+
 	it("keeps raw status fallback unclassified", () => {
 		const id = 503;
 		expect(AIError.is(id, AIError.Flag.Class)).toBe(false);

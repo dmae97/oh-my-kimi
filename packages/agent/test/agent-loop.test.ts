@@ -565,6 +565,143 @@ describe("agentLoop with AgentMessage", () => {
 		expect(toolStart.args.__parseError).toBeDefined(); // keeps __parseError for visibility of parse failure
 	});
 
+	it("runs completed tool calls after a transient stream_read_error", async () => {
+		const executedParams: Array<{ value: string }> = [];
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executedParams.push(params);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "Error Code stream_read_error: stream_read_error",
+				},
+				{ content: ["done after recovery"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("run echo")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executedParams).toEqual([{ value: "hello" }]);
+		expect(mock.calls).toHaveLength(2);
+		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		const recoveredTurn = messages[1] as AssistantMessage;
+		expect(recoveredTurn.stopReason).toBe("toolUse");
+		expect(recoveredTurn.stopDetails?.type).toBe("stream_interrupted_after_content");
+		const finalTurn = messages[3] as AssistantMessage;
+		expect(finalTurn.content).toContainEqual({ type: "text", text: "done after recovery" });
+	});
+
+	it("does not recover completed tool calls after non-stream transient errors", async () => {
+		const executedParams: Array<{ value: string }> = [];
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executedParams.push(params);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "rate_limit_error",
+				},
+				{ content: ["should not continue"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("run echo")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executedParams).toEqual([]);
+		expect(mock.calls).toHaveLength(1);
+		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "toolResult"]);
+		const errorTurn = messages[1] as AssistantMessage;
+		expect(errorTurn.stopReason).toBe("error");
+		expect(errorTurn.errorMessage).toBe("rate_limit_error");
+	});
+
+	it("recovers completed custom-wire tool calls after stream_read_error", async () => {
+		const executedParams: Array<{ value: string }> = [];
+		const toolSchema = type({ value: "string" });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			customWireName: "echo_wire",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executedParams.push(params);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [{ type: "toolCall", id: "tool-1", name: "echo_wire", arguments: { value: "hello" } }],
+					stopReason: "error",
+					errorMessage: "Error Code stream_read_error: stream_read_error",
+				},
+				{ content: ["done after custom recovery"] },
+			],
+		});
+		const config: AgentLoopConfig = { model: mock.model, convertToLlm: identityConverter };
+
+		const messages = await agentLoop(
+			[createUserMessage("run echo")],
+			context,
+			config,
+			undefined,
+			mock.stream,
+		).result();
+
+		expect(executedParams).toEqual([{ value: "hello" }]);
+		expect(mock.calls).toHaveLength(2);
+		expect(messages.map(message => message.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+		const finalTurn = messages[3] as AssistantMessage;
+		expect(finalTurn.content).toContainEqual({ type: "text", text: "done after custom recovery" });
+	});
+
 	it("injects and strips intent when intent tracing is enabled", async () => {
 		const toolSchema = type({ value: "string" });
 		const executedParams: Record<string, unknown>[] = [];

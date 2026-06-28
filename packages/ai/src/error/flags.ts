@@ -85,6 +85,7 @@ const OVERFLOW_NO_BODY_PATTERN = /\b4(00|13)\s*(status code)?\s*\(no body\)/i;
 const TIMEOUT_PATTERN = /\b(?:operation\s+)?timed?\s*out\b|\btimeout\b|\bstream stall\b/i;
 const TRANSIENT_ENVELOPE_PATTERN = /anthropic stream envelope error:/i;
 const TRANSIENT_ENVELOPE_BEFORE_START_PATTERN = /before message_start/i;
+export const STREAM_READ_ERROR_PATTERN = /stream[_ -]?read[_ -]?error/i;
 export const TRANSIENT_TRANSPORT_PATTERN =
 	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)|malformed.?function.?call/i;
 const AUTH_FAILURE_PATTERN =
@@ -240,9 +241,14 @@ function statusInternal(error: unknown, depth: number): number | undefined {
 	return undefined;
 }
 
+export function isStreamReadErrorText(text: string): boolean {
+	return STREAM_READ_ERROR_PATTERN.test(text);
+}
+
 function isTransientErrorText(text: string): boolean {
 	return (
 		isUnexpectedSocketCloseMessage(text) ||
+		isStreamReadErrorText(text) ||
 		(TRANSIENT_ENVELOPE_PATTERN.test(text) && TRANSIENT_ENVELOPE_BEFORE_START_PATTERN.test(text)) ||
 		TRANSIENT_TRANSPORT_PATTERN.test(text)
 	);
