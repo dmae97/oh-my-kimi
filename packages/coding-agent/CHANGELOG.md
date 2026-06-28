@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Reduced session file size by removing redundant thinking signatures already present in payloads
+
 - Advisors can now be granted any built-in agent tool (including edit, write, and bash), removing the previous read-only restriction.
 - Improved the debug log and raw SSE stream viewers with a wider, bordered overlay, clearer status indicators, dynamic layouts, and mouse support for scrolling and interaction.
 - Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.

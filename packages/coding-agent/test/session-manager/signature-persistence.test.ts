@@ -253,13 +253,63 @@ describe("SessionManager signature persistence", () => {
 		// GitHub Copilot rejects replayed assistant-side native history on a warmed
 		// session, so its replay metadata is stripped in memory after rehydration.
 		expect(assistant.providerPayload).toBeUndefined();
-		expect(assistant.content[0]).toMatchObject({
-			type: "thinking",
-			thinking: "reasoning",
-			thinkingSignature: undefined,
-		});
+		const thinking = assistant.content[0];
+		expect(thinking).toMatchObject({ type: "thinking", thinking: "reasoning" });
+		if (thinking?.type !== "thinking") throw new Error("Expected thinking block");
+		expect(thinking.thinkingSignature).toBeUndefined();
 		expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
 		expect((await fs.stat(sessionFile)).mtimeMs).toBe(initialMtimeMs);
+		await reloaded.close();
+	}, 15_000);
+
+	it("drops a reasoning signature duplicated by the provider payload and keeps the payload on reload", async () => {
+		using tempDir = TempDir.createSync("@pi-session-reasoning-dedup-e2e-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		const encrypted = "ENCRYPTED_REASONING_BLOB_UNIQUE_TOKEN";
+		const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: encrypted };
+
+		session.appendMessage({ role: "user", content: "continue", timestamp: 1 });
+		session.appendMessage({
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "reasoning", thinkingSignature: JSON.stringify(reasoning) },
+				{ type: "text", text: "done" },
+			],
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5.2-codex",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			providerPayload: { type: "openaiResponsesHistory", provider: "openai-codex", items: [reasoning] },
+			timestamp: 2,
+		} satisfies AssistantMessage);
+		await session.flush();
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persisted session file");
+		// The encrypted blob was stored twice (thinkingSignature + providerPayload);
+		// persistence drops the signature copy, so the session file carries it once.
+		const onDisk = await fs.readFile(sessionFile, "utf8");
+		expect(onDisk.split(encrypted).length - 1).toBe(1);
+		await session.close();
+
+		const reloaded = await SessionManager.open(sessionFile);
+		const assistant = getAssistantMessage(reloaded);
+		const thinking = assistant.content.find(block => block.type === "thinking");
+		if (thinking?.type !== "thinking") throw new Error("Expected thinking block");
+		expect(thinking.thinkingSignature).toBeUndefined();
+		// openai-codex (non-Copilot) keeps the replay payload, so the encrypted reasoning
+		// stays recoverable for native-history replay / remote compaction.
+		expect(assistant.providerPayload?.type).toBe("openaiResponsesHistory");
+		const items = assistant.providerPayload?.type === "openaiResponsesHistory" ? assistant.providerPayload.items : [];
+		expect(items[0]?.encrypted_content).toBe(encrypted);
 		await reloaded.close();
 	}, 15_000);
 });

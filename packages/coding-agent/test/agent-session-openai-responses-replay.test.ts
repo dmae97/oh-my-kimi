@@ -189,15 +189,24 @@ function expectAssistantReplayMetadataSanitized(message: AssistantMessage): void
 
 function expectAssistantReplayMetadataPreserved(message: AssistantMessage): void {
 	// Non-Copilot Responses-family turns (OpenAI, OpenAI-Codex, Azure) keep their
-	// native replay payload and encrypted reasoning across rehydration so remote
-	// compaction can rebuild faithful native history.
-	expect(message.providerPayload?.type).toBe("openaiResponsesHistory");
+	// native replay payload across rehydration so remote compaction can rebuild
+	// faithful native history. The encrypted reasoning lives in
+	// `providerPayload.items`; the per-block `thinkingSignature` was a byte-for-byte
+	// duplicate of that reasoning item, so persistence drops it — the payload is the
+	// durable copy replay actually reads.
+	const payload = message.providerPayload;
+	expect(payload?.type).toBe("openaiResponsesHistory");
+	const reasoning =
+		payload?.type === "openaiResponsesHistory"
+			? payload.items.find(item => "type" in item && item.type === "reasoning")
+			: undefined;
+	expect(reasoning?.encrypted_content).toBe("enc_stale");
 
 	const thinkingBlock = message.content.find(block => block.type === "thinking");
 	if (thinkingBlock?.type !== "thinking") {
 		throw new Error("Expected assistant thinking block");
 	}
-	expect(thinkingBlock.thinkingSignature).toBeDefined();
+	expect(thinkingBlock.thinkingSignature).toBeUndefined();
 }
 
 async function createPersistedSession(
