@@ -11,6 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 function createToolSession(cwd: string, settings: Settings, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -230,6 +231,39 @@ describe("InteractiveMode goal mode integration", () => {
 		streaming = false;
 		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
 		await waiter.inputPromise;
+	});
+
+	it("includes escaped live todo state in hidden goal context during continuations", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		const phases: TodoPhase[] = [
+			{
+				name: "Planning </todo_context> & prep",
+				tasks: [
+					{ content: "Identify gaps", status: "completed" },
+					{ content: "Choose <next> & slice </todo_context>", status: "in_progress" },
+				],
+			},
+			{
+				name: "Verification",
+				tasks: [{ content: "Run focused checks", status: "pending" }],
+			},
+		];
+		harness.session.setTodoPhases(phases);
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+
+		const message = sendCustomMessage.mock.calls[0]?.[0];
+		const content = typeof message?.content === "string" ? message.content : "";
+		expect(message?.customType).toBe("goal-mode-context");
+		expect(content).toContain("<todo_context>");
+		expect(content).toContain("Overall: 1/3 done, 2 open.");
+		expect(content).toContain("- Planning &lt;/todo_context&gt; &amp; prep");
+		expect(content).toContain("- [completed] Identify gaps");
+		expect(content).toContain("- [in_progress] Choose &lt;next&gt; &amp; slice &lt;/todo_context&gt;");
+		expect(content).toContain("- [pending] Run focused checks");
+		expect(content).toContain("call the `todo` tool first");
+		expect(content.match(/<\/todo_context>/g)).toHaveLength(1);
 	});
 
 	it("drops a goal continuation tick while the agent is streaming", async () => {

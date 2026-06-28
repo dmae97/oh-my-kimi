@@ -367,6 +367,12 @@ export class StatusLineComponent implements Component {
 		this.#subagentCount = count;
 	}
 
+	/**
+	 * Compatibility shim for callers predating the simplified subagent badge.
+	 * The status line now intentionally shows only the active count.
+	 */
+	setSubagentHubHint(_hint: string | undefined): void {}
+
 	/** Active subagent count as currently displayed (collab state mirroring). */
 	get subagentCount(): number {
 		return this.#subagentCount;

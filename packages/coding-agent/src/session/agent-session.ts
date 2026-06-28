@@ -231,6 +231,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
+import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -6468,14 +6469,44 @@ export class AgentSession {
 	#buildGoalModeMessage(): CustomMessage | null {
 		const content = this.#goalRuntime.buildActivePrompt();
 		if (!content) return null;
+		const todoContext = this.#buildGoalTodoContext();
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content,
+			content: todoContext ? `${content}\n\n${todoContext}` : content,
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
+	}
+
+	#buildGoalTodoContext(): string | undefined {
+		if (!this.settings.get("todo.enabled")) return undefined;
+		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
+		if (phases.length === 0) return undefined;
+
+		let total = 0;
+		let closed = 0;
+		let open = 0;
+		const promptPhases = phases.map(phase => ({
+			name: phase.name,
+			tasks: phase.tasks.map(task => {
+				total++;
+				if (task.status === "completed" || task.status === "abandoned") {
+					closed++;
+				} else {
+					open++;
+				}
+				return { content: task.content, status: task.status };
+			}),
+		}));
+
+		return prompt.render(goalTodoContextPrompt, {
+			closed: String(closed),
+			open: String(open),
+			phases: promptPhases,
+			total: String(total),
+		});
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {

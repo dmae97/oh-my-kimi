@@ -34,6 +34,8 @@
 - Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature.
 - Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
 - Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
+- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
+- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
 - Fixed resumed OpenAI and OpenAI-Codex sessions losing encrypted reasoning and native assistant turns during rehydration.
 - Fixed the ask tool's custom answer editor dropping the original question and option list while typing.
 - Fixed auto-snapcompact failing the session on local blockers (such as text-only active models, high non-ASCII transcripts, or context budget overflows) by gracefully downgrading automatic maintenance to context-full compaction.

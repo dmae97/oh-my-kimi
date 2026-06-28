@@ -953,9 +953,13 @@ export class EventController {
 		}
 		// Update todo display when todo tool completes
 		if (event.toolName === "todo" && !event.isError) {
+			const hadTodoReminder = (this.ctx.todoReminderContainer?.children.length ?? 0) > 0;
+			this.ctx.todoReminderContainer?.clear();
 			const details = event.result.details as { phases?: TodoPhase[] } | undefined;
 			if (details?.phases) {
 				this.ctx.setTodos(details.phases);
+			} else if (hadTodoReminder) {
+				this.ctx.ui.requestRender();
 			}
 		} else if (event.toolName === "todo" && event.isError) {
 			const textContent = event.result.content.find(
@@ -1252,7 +1256,9 @@ export class EventController {
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
 		const component = new TodoReminderComponent(event.todos, event.attempt, event.maxAttempts);
-		this.ctx.present(component);
+		this.ctx.todoReminderContainer.clear();
+		this.ctx.todoReminderContainer.addChild(component);
+		this.ctx.ui.requestRender();
 	}
 
 	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {
