@@ -206,7 +206,7 @@ fn tail_file(
 					&& file.is_seekable(if input.is_stdin() { offset } else { 0 })
 					&& (!st.is_file() || st.len() > blksize_limit)
 				{
-					bounded_tail(&mut file, settings);
+					bounded_tail(&mut file, settings)?;
 					reader = BufReader::new(file);
 				} else {
 					reader = BufReader::new(file);
@@ -438,7 +438,7 @@ fn backwards_thru_file(file: &mut File, num_delimiters: u64, delimiter: u8) {
 /// end of the file, and then read the file "backwards" in blocks of size
 /// `BLOCK_SIZE` until we find the location of the first line/byte. This ends up
 /// being a nice performance win for very large files.
-fn bounded_tail(file: &mut File, settings: &Settings) {
+fn bounded_tail(file: &mut File, settings: &Settings) -> UResult<()> {
 	debug_assert!(!settings.presume_input_pipe);
 	let mut limit = None;
 
@@ -471,7 +471,8 @@ fn bounded_tail(file: &mut File, settings: &Settings) {
 		_ => {},
 	}
 
-	print_target_section(file, limit);
+	print_target_section(file, limit)?;
+	Ok(())
 }
 
 fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UResult<()> {
@@ -552,7 +553,7 @@ fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UR
 	Ok(())
 }
 
-fn print_target_section<R>(file: &mut R, limit: Option<u64>)
+fn print_target_section<R>(file: &mut R, limit: Option<u64>) -> io::Result<()>
 where
 	R: Read + ?Sized,
 {
@@ -561,10 +562,11 @@ where
 	let mut stdout = stdout.lock();
 	if let Some(limit) = limit {
 		let mut reader = file.take(limit);
-		io::copy(&mut reader, &mut stdout).unwrap();
+		io::copy(&mut reader, &mut stdout)?;
 	} else {
-		io::copy(file, &mut stdout).unwrap();
+		io::copy(file, &mut stdout)?;
 	}
+	Ok(())
 }
 
 #[cfg(test)]
@@ -594,5 +596,71 @@ mod tests {
 		let mut reader = Cursor::new("x\n");
 		let i = forwards_thru_file(&mut reader, 2, b'\n').unwrap();
 		assert_eq!(i, 2);
+	}
+
+	#[test]
+	fn bounded_tail_broken_pipe_does_not_abort() {
+		use std::{
+			collections::HashMap,
+			ffi::OsString,
+			io::{self, ErrorKind, Seek, SeekFrom, Write},
+			sync::{Arc, atomic::AtomicBool},
+		};
+
+		// A stdout that mimics a consumer that closed the read end of the pipe:
+		// every write/flush fails with `BrokenPipe`, exactly like writing into a
+		// redirected fd whose reader is gone.
+		struct BrokenPipeWriter;
+		impl Write for BrokenPipeWriter {
+			fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+			fn flush(&mut self) -> io::Result<()> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+		}
+
+		// Size the file just past the filesystem's sane block size (computed
+		// exactly as `tail_file` does) so `tail_file` takes the seekable
+		// `bounded_tail` branch — the one that crashed — over streaming
+		// `unbounded_tail`, on any filesystem. The bulk is a sparse hole; only
+		// the trailing lines carry real content, which is all the reverse line
+		// scan and `print_target_section` ever read or write.
+		struct TempFile(std::path::PathBuf);
+		impl Drop for TempFile {
+			fn drop(&mut self) {
+				let _ = std::fs::remove_file(&self.0);
+			}
+		}
+		let path =
+			std::env::temp_dir().join(format!("uu_tail_brokenpipe_{}.txt", std::process::id()));
+		let _cleanup = TempFile(path.clone());
+		let mut file = std::fs::File::create(&path).expect("temp file should be created");
+		let blksize_limit =
+			uucore::fs::sane_blksize::sane_blksize_from_metadata(&file.metadata().expect("metadata"));
+		let lines = b"0123456789\n".repeat(64);
+		let len = blksize_limit + lines.len() as u64 + 1;
+		file.set_len(len).expect("extend file");
+		file.seek(SeekFrom::Start(len - lines.len() as u64)).expect("seek to tail");
+		file.write_all(&lines).expect("write tail lines");
+		file.flush().expect("flush");
+		drop(file);
+
+		let io = pi_uutils_ctx::ScopeIo {
+			stdin:                 Box::new(io::empty()),
+			stdin_fd:              None,
+			stdin_is_search_input: false,
+			stdout:                Box::new(BrokenPipeWriter),
+			stderr:                Box::new(io::sink()),
+			cwd:                   std::env::temp_dir(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		};
+
+		let code = pi_uutils_ctx::scope(io, || {
+			crate::run(vec![OsString::from("tail"), OsString::from(&path)])
+		});
+
+		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not a panic");
 	}
 }
