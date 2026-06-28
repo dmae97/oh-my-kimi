@@ -1525,15 +1525,19 @@ function retainCompletedToolCalls(
 
 function recoverTransientErrorToolTurn(
 	message: AssistantMessage,
-	availableTools: ReadonlyArray<Pick<AgentTool, "name">>,
+	availableTools: ReadonlyArray<Pick<AgentTool, "name" | "customWireName">>,
 ): AssistantMessage {
 	if (message.stopReason !== "error") return message;
 	const toolCalls = message.content.filter(block => block.type === "toolCall");
 	if (toolCalls.length === 0) return message;
-	const availableToolNames = new Set(availableTools.map(tool => tool.name));
+	const availableToolNames = new Set<string>();
+	for (const tool of availableTools) {
+		availableToolNames.add(tool.name);
+		if (tool.customWireName !== undefined) availableToolNames.add(tool.customWireName);
+	}
 	if (!toolCalls.every(toolCall => availableToolNames.has(toolCall.name))) return message;
-	const errorId = AIError.classifyMessage(message);
-	if (!AIError.is(errorId, AIError.Flag.Transient)) return message;
+	if (!AIError.isStreamReadErrorText(`${message.errorMessage ?? ""}\n${message.stopDetails?.explanation ?? ""}`))
+		return message;
 	return {
 		...message,
 		stopReason: "toolUse",
