@@ -10,6 +10,7 @@ import {
 	Container,
 	isNotificationSuppressed,
 	Loader,
+	type OverlayHandle,
 	type SelectItem,
 	SelectList,
 	Spacer,
@@ -327,18 +328,29 @@ export class DebugSelectorComponent extends Container {
 				return;
 			}
 
+			let overlay: OverlayHandle | undefined;
+			const close = (): void => {
+				overlay?.hide();
+				overlay = undefined;
+				void this.ctx.showDebugSelector();
+			};
 			const viewer = new DebugLogViewerComponent({
 				logs,
 				terminalRows: this.ctx.ui.terminal.rows,
-				onExit: () => this.ctx.showDebugSelector(),
+				onExit: close,
 				onStatus: message => this.ctx.showStatus(message, { dim: true }),
 				onError: message => this.ctx.showError(message),
 				onUpdate: () => this.ctx.ui.requestRender(),
 				logSource,
 			});
 
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(viewer);
+			overlay = this.ctx.ui.showOverlay(viewer, {
+				anchor: "top-left",
+				width: "100%",
+				maxHeight: "100%",
+				margin: 0,
+				fullscreen: true,
+			});
 			this.ctx.ui.setFocus(viewer);
 		} catch (err) {
 			this.ctx.showError(`Failed to read logs: ${err instanceof Error ? err.message : String(err)}`);
@@ -348,16 +360,29 @@ export class DebugSelectorComponent extends Container {
 	}
 
 	async #handleViewRawSse(): Promise<void> {
-		const viewer = new RawSseViewerComponent({
+		let overlay: OverlayHandle | undefined;
+		let viewer: RawSseViewerComponent | undefined;
+		const close = (): void => {
+			viewer?.dispose();
+			overlay?.hide();
+			overlay = undefined;
+			void this.ctx.showDebugSelector();
+		};
+		viewer = new RawSseViewerComponent({
 			buffer: resolveRawSseDebugBuffer(this.ctx.session),
 			terminalRows: this.ctx.ui.terminal.rows,
-			onExit: () => this.ctx.showDebugSelector(),
+			onExit: close,
 			onStatus: message => this.ctx.showStatus(message, { dim: true }),
 			onUpdate: () => this.ctx.ui.requestRender(),
 		});
 
-		this.ctx.editorContainer.clear();
-		this.ctx.editorContainer.addChild(viewer);
+		overlay = this.ctx.ui.showOverlay(viewer, {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+		});
 		this.ctx.ui.setFocus(viewer);
 		this.ctx.ui.requestRender();
 	}
