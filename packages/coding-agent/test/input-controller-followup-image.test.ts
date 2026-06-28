@@ -13,6 +13,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 interface StubEditor {
 	setText: (text: string) => void;
 	getText: () => string;
+	getExpandedText: () => string;
 	addToHistory: (text: string) => void;
 	imageLinks?: unknown;
 	pendingImages: ImageContent[];
@@ -35,6 +36,9 @@ function createContext(opts: {
 			editorText = text;
 		},
 		getText() {
+			return editorText;
+		},
+		getExpandedText() {
 			return editorText;
 		},
 		addToHistory: vi.fn(),
