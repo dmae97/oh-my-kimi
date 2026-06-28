@@ -413,6 +413,36 @@ describe("AgentSession auto-compaction progress guard", () => {
 		);
 	});
 
+	it("keeps the visible overflow error when no recovery path is available", async () => {
+		// When promotion is off and compaction is disabled there is no retry to run;
+		// the persisted assistant error MUST stay on the branch so the user (and the
+		// reloaded transcript) keeps the only explanation of why the turn stopped.
+		session.settings.set("contextPromotion.enabled", false);
+		session.settings.set("compaction.enabled", false);
+
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		const assistantMsg = overflowAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await session.waitForIdle();
+
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(sessionManager.getBranch()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: assistantMsg.errorMessage,
+				}),
+			}),
+		);
+	});
+
 	it("retries a small-window overflow when the default reserve exceeds the model window", async () => {
 		// Bundled 4k/8k models can be smaller than the default absolute reserve
 		// (16,384). Retry fit must clamp that reserve; otherwise the budget goes
