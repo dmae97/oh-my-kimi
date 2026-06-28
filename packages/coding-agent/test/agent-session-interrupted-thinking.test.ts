@@ -5,6 +5,8 @@ import type { Api, AssistantMessage, Model, ThinkingContent } from "@oh-my-pi/pi
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const REASONING_TEXT = "I have partly reasoned through the implementation and should preserve this.";
@@ -111,7 +114,11 @@ describe("AgentSession interrupted thinking persistence", () => {
 		}
 	});
 
-	function createSession(): { model: Model<Api>; sessionManager: SessionManager; session: AgentSession } {
+	function createSession(extensionRunner?: ExtensionRunner): {
+		model: Model<Api>;
+		sessionManager: SessionManager;
+		session: AgentSession;
+	} {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const agent = new Agent({
 			getApiKey: () => "anthropic-test-key",
@@ -131,6 +138,7 @@ describe("AgentSession interrupted thinking persistence", () => {
 			sessionManager,
 			settings,
 			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			extensionRunner,
 		});
 		return { model, sessionManager, session };
 	}
@@ -195,6 +203,50 @@ describe("AgentSession interrupted thinking persistence", () => {
 		).toBe(false);
 		const developerLlm = llm.filter(entry => entry.role === "developer");
 		expect(developerLlm.some(entry => JSON.stringify(entry.content).includes(REASONING_TEXT))).toBe(true);
+	});
+
+	it("makes hidden continuity available in agent state before awaited message_end delivery finishes", async () => {
+		const releaseExtension = Promise.withResolvers<void>();
+		const extensionEntered = Promise.withResolvers<void>();
+		const extensionRuntime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("message_end", async () => {
+					extensionEntered.resolve();
+					await releaseExtension.promise;
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionRuntime,
+			"delayed-message-end",
+		);
+		const extensionRunner = new ExtensionRunner(
+			[extension],
+			extensionRuntime,
+			tempDir.path(),
+			SessionManager.inMemory(),
+			new ModelRegistry(authStorage, path.join(tempDir.path(), "extension-models.yml")),
+		);
+		const harness = createSession(extensionRunner);
+		const persisted = Promise.withResolvers<void>();
+		const previous = harness.sessionManager.onEntryAppended;
+		harness.sessionManager.onEntryAppended = entry => {
+			previous?.(entry);
+			if (entry.type !== "custom_message" || entry.customType !== INTERRUPTED_THINKING_MESSAGE_TYPE) return;
+			harness.sessionManager.onEntryAppended = previous;
+			persisted.resolve();
+		};
+		const message = thinkingAssistant(harness.model, USER_INTERRUPT_LABEL);
+
+		harness.session.agent.emitExternalEvent({ type: "message_start", message });
+		harness.session.agent.emitExternalEvent({ type: "message_end", message });
+		await extensionEntered.promise;
+
+		expect(harness.session.agent.state.messages.some(isInterruptedThinkingMessage)).toBe(true);
+
+		releaseExtension.resolve();
+		await persisted.promise;
 	});
 
 	it("leaves native thinking on non-user aborts and does not append hidden context", async () => {

@@ -27,10 +27,12 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 type StubEditor = {
 	setText: (text: string) => void;
 	getText: () => string;
+	clearDraft: (historyText?: string) => void;
 	addToHistory: Mock<(...args: unknown[]) => unknown>;
 	onSubmit?: (text: string) => Promise<void>;
 	pendingImages: ImageContent[];
 	pendingImageLinks: (string | undefined)[];
+	imageLinks?: (string | undefined)[];
 };
 
 type PromptCustomMessage = Mock<
@@ -64,6 +66,13 @@ function createStubInputControllerContext(opts: {
 		},
 		getText() {
 			return editorText;
+		},
+		clearDraft(historyText?: string) {
+			if (historyText !== undefined) this.addToHistory(historyText);
+			this.setText("");
+			this.imageLinks = undefined;
+			this.pendingImages = [];
+			this.pendingImageLinks = [];
 		},
 		addToHistory: vi.fn(),
 		pendingImages: [] as ImageContent[],
@@ -214,6 +223,34 @@ describe("InputController skill queue chip metadata", () => {
 			queueChipText: "/skill:test-skill arg1 arg2",
 		});
 		expect(promptCustomMessage.mock.calls[0]?.[0].details.__queueChipText).toBeUndefined();
+	});
+
+	it("routes pending images through immediate skill submit and clears the draft", async () => {
+		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+		const { ctx, editor, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: false,
+		});
+		const controller = new InputController(ctx);
+
+		controller.setupEditorSubmitHandler();
+		editor.setText("/skill:test-skill inspect this");
+		editor.pendingImages = [image];
+		editor.pendingImageLinks = ["file:///tmp/skill-image.png"];
+		editor.imageLinks = editor.pendingImageLinks;
+		await editor.onSubmit?.("/skill:test-skill inspect this");
+
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		const message = promptCustomMessage.mock.calls[0]?.[0];
+		if (!message || !Array.isArray(message.content)) {
+			throw new Error("expected skill prompt to include image content blocks");
+		}
+		expect(message.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Do the thing.") });
+		expect(message.content[1]).toEqual(image);
+		expect(editor.getText()).toBe("");
+		expect(editor.pendingImages).toEqual([]);
+		expect(editor.pendingImageLinks).toEqual([]);
+		expect(editor.imageLinks).toBeUndefined();
 	});
 });
 
@@ -582,6 +619,13 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 		},
 		getText() {
 			return editorText;
+		},
+		clearDraft(historyText?: string) {
+			if (historyText !== undefined) this.addToHistory(historyText);
+			this.setText("");
+			this.imageLinks = undefined;
+			this.pendingImages = [];
+			this.pendingImageLinks = [];
 		},
 		addToHistory: vi.fn(),
 		pendingImages: [] as ImageContent[],

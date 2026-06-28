@@ -105,6 +105,19 @@ export function reconcileGuestIdleHostState(ctx: GuestIdleReconcilerCtx, isStrea
 	}
 }
 
+/** Reconcile a welcome/resync snapshot's host activity state into the guest meter. */
+export interface GuestSnapshotActivityReconcilerCtx extends GuestIdleReconcilerCtx {
+	statusLine: GuestIdleReconcilerCtx["statusLine"] & { markActivityStart: () => void };
+}
+
+export function reconcileGuestSnapshotHostState(ctx: GuestSnapshotActivityReconcilerCtx, isStreaming: boolean): void {
+	if (isStreaming) {
+		ctx.statusLine.markActivityStart();
+		return;
+	}
+	reconcileGuestIdleHostState(ctx, false);
+}
+
 export class CollabGuestLink {
 	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
@@ -382,6 +395,7 @@ export class CollabGuestLink {
 		this.#clearAgentMirror();
 		await this.#ctx.session.switchSession(replicaPath);
 		this.state = pending.state;
+		reconcileGuestSnapshotHostState(this.#ctx, pending.state.isStreaming);
 		this.#applyHostState(pending.state);
 		this.#ctx.resetObserverRegistry();
 		this.#applyAgentSnapshots(pending.agents);

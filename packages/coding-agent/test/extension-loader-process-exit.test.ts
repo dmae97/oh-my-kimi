@@ -62,6 +62,37 @@ describe("extension/hook loader process.exit guard (#3680)", () => {
 		expect(result.errors[0].error).toContain("process.exit(42)");
 	});
 
+	it("converts hard exits from extension and hook factories into load errors", async () => {
+		const extension = writeModule("factory-exit-extension.ts", "export default function(pi) { process.exit(31); }\n");
+		const hook = writeModule("factory-exit-hook.ts", "export default function(pi) { process.exit(32); }\n");
+		const reallyExitExtension = writeModule(
+			"factory-really-exit-extension.ts",
+			"export default function(pi) { process.reallyExit(33); }\n",
+		);
+		const cwd = project!.path();
+		const originalExit = process.exit;
+		const originalReallyExit = process.reallyExit;
+
+		const extensionResult = await loadExtensions([extension], cwd);
+		const hookResult = await loadHooks([hook], cwd);
+		const reallyExitResult = await loadExtensions([reallyExitExtension], cwd);
+
+		expect(process.exit).toBe(originalExit);
+		expect(process.reallyExit).toBe(originalReallyExit);
+		expect(extensionResult.extensions).toEqual([]);
+		expect(extensionResult.errors).toHaveLength(1);
+		expect(extensionResult.errors[0].path).toBe(extension);
+		expect(extensionResult.errors[0].error).toContain("process.exit(31)");
+		expect(hookResult.hooks).toEqual([]);
+		expect(hookResult.errors).toHaveLength(1);
+		expect(hookResult.errors[0].path).toBe(hook);
+		expect(hookResult.errors[0].error).toContain("process.exit(32)");
+		expect(reallyExitResult.extensions).toEqual([]);
+		expect(reallyExitResult.errors).toHaveLength(1);
+		expect(reallyExitResult.errors[0].path).toBe(reallyExitExtension);
+		expect(reallyExitResult.errors[0].error).toContain("process.reallyExit(33)");
+	});
+
 	it("loads sibling modules even when one of them tries to exit", async () => {
 		const bad = writeModule("rogue-extension.ts", "process.exit(0)\n");
 		const good = writeModule(

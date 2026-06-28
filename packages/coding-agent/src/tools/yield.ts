@@ -98,6 +98,46 @@ function parseYieldType(value: unknown): string | string[] | undefined {
 	throw new Error("type must be a string or non-empty array of strings");
 }
 
+/**
+ * Expand a plain-object `data` schema into a strict union that ALSO accepts each
+ * top-level section value (and array element) on its own. Agents that yield
+ * incrementally (`type: ["findings"]`, `type: ["confidence"]`, …) submit one
+ * section per call, so `data` is a single finding object or a lone verdict value
+ * — never the full output object. Without this, strict-mode providers constrain
+ * `data` to the whole schema and reject/—under constrained decoding—forbid the
+ * partial. Every branch is a typed sub-schema, so strict representability holds;
+ * the full-output object stays the first (terminal) branch. The assembled whole
+ * is still validated against the full schema at finalization. Non-object / loose
+ * schemas are returned unchanged.
+ */
+function withSectionVariants(dataSchema: Record<string, unknown>): Record<string, unknown> {
+	if (dataSchema.type !== "object") return dataSchema;
+	const props = dataSchema.properties;
+	if (props === null || typeof props !== "object") return dataSchema;
+	const propRecord = props as Record<string, unknown>;
+	const { description, ...fullWithoutDescription } = dataSchema;
+	const branches: unknown[] = [];
+	const seen = new Set<string>();
+	const add = (schema: unknown): void => {
+		if (schema === null || typeof schema !== "object") return;
+		const key = JSON.stringify(schema);
+		if (seen.has(key)) return;
+		seen.add(key);
+		branches.push(schema);
+	};
+	add(fullWithoutDescription);
+	for (const name in propRecord) {
+		const prop = propRecord[name];
+		add(prop);
+		if (prop !== null && typeof prop === "object") {
+			const propObj = prop as Record<string, unknown>;
+			if (propObj.type === "array") add(propObj.items);
+		}
+	}
+	if (branches.length <= 1) return dataSchema;
+	return description !== undefined ? { description, anyOf: branches } : { anyOf: branches };
+}
+
 function wrapYieldParameters(dataSchema: Record<string, unknown>): Record<string, unknown> {
 	const successResultSchema = {
 		type: "object",
@@ -206,7 +246,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				if (hasUnresolvedRefs(resolved)) {
 					throw new Error("schema contains unresolved $ref after dereferencing");
 				}
-				dataSchema = resolved;
+				dataSchema = withSectionVariants(resolved);
 			} else {
 				this.strict = false;
 				dataSchema = looseRecordSchema(

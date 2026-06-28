@@ -324,7 +324,9 @@ describe("YieldTool", () => {
 				},
 			}),
 		);
-		const dataSchema = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
+		const dataUnion = getSuccessDataSchema(tool.parameters as unknown as Record<string, unknown>);
+		// `data` is now a section-variant union; the full-output object is the first branch.
+		const dataSchema = toRecord(Array.isArray(dataUnion.anyOf) ? dataUnion.anyOf[0] : dataUnion);
 		const resultsSchema = toRecord(toRecord(dataSchema.properties).results);
 		const issueSchema = toRecord(toRecord(toRecord(resultsSchema.items).properties).issue);
 
@@ -339,6 +341,76 @@ describe("YieldTool", () => {
 		await expect(
 			tool.execute("call-mixed-invalid", { result: { data: { results: [{ issue: "185" }] } } } as never),
 		).rejects.toThrow("Output does not match schema");
+	});
+
+	it("expands section variants so a strict reviewer can submit one incremental section", () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						overall_correctness: { enum: ["correct", "incorrect"] },
+						explanation: { type: "string" },
+						confidence: { type: "number" },
+					},
+					optionalProperties: {
+						findings: {
+							elements: {
+								properties: {
+									title: { type: "string" },
+									body: { type: "string" },
+									priority: { type: "number" },
+								},
+							},
+						},
+					},
+				},
+			}),
+		);
+		expect(tool.strict).toBe(true);
+
+		const toolDefinition: Tool = {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+			strict: tool.strict,
+		};
+		// One incremental finding (a single element, not the full output) must validate.
+		expect(
+			validateToolArguments(toolDefinition, {
+				type: "toolCall",
+				id: "call-one-finding",
+				name: tool.name,
+				arguments: { type: ["findings"], result: { data: { title: "t", body: "b", priority: 1 } } },
+			}),
+		).toBeDefined();
+		// A lone verdict value must validate too.
+		expect(
+			validateToolArguments(toolDefinition, {
+				type: "toolCall",
+				id: "call-verdict",
+				name: tool.name,
+				arguments: { type: ["overall_correctness"], result: { data: "incorrect" } },
+			}),
+		).toBeDefined();
+		// The full terminal output still validates.
+		expect(
+			validateToolArguments(toolDefinition, {
+				type: "toolCall",
+				id: "call-full",
+				name: tool.name,
+				arguments: {
+					result: { data: { overall_correctness: "incorrect", explanation: "x", confidence: 0.5 } },
+				},
+			}),
+		).toBeDefined();
+
+		// Stays Codex-valid: strict, no top-level combinator.
+		const [converted] = convertOpenAICodexResponsesTools([toolDefinition], makeCodexModel());
+		if (converted.type !== "function") throw new Error("expected a function tool payload");
+		expect(converted.strict).toBe(true);
+		for (const combinator of ["allOf", "anyOf", "oneOf", "enum", "const", "not"]) {
+			expect(converted.parameters[combinator]).toBeUndefined();
+		}
 	});
 	it("supports $defs/$ref output schemas by inlining definitions and degrades after first runtime failure", async () => {
 		const outputSchema = {

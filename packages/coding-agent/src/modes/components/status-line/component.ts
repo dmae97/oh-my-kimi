@@ -408,7 +408,7 @@ export class StatusLineComponent implements Component {
 	markActivityEnd(): void {
 		const meter = this.#meter();
 		if (meter.activeStartedAt === null) return;
-		meter.activeMs += Date.now() - meter.activeStartedAt;
+		meter.activeMs += Math.max(0, Date.now() - meter.activeStartedAt);
 		meter.activeStartedAt = null;
 	}
 
@@ -420,7 +420,7 @@ export class StatusLineComponent implements Component {
 	getActiveMs(): number {
 		const meter = this.#meter();
 		if (meter.activeStartedAt === null) return meter.activeMs;
-		return meter.activeMs + Date.now() - meter.activeStartedAt;
+		return meter.activeMs + Math.max(0, Date.now() - meter.activeStartedAt);
 	}
 
 	/**
