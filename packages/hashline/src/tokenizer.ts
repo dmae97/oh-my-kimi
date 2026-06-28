@@ -234,8 +234,22 @@ function scanKeyword(line: string, index: number, end: number, keyword: string):
 	return next;
 }
 
+/**
+ * GLM 5.2 inserts a stray `.` between the line number/range and the trailing
+ * `:` (e.g. `SWAP 2.=3.:`, `INS.POST 2.:`). A `.` is never valid syntax at
+ * this position, so skip it when it precedes an optional `:` or end-of-line.
+ */
+function skipStrayDot(line: string, index: number, end: number): number {
+	if (index < end && line.charCodeAt(index) === CHAR_DOT) {
+		const after = skipWhitespace(line, index + 1, end);
+		if (after === end || line.charCodeAt(after) === CHAR_COLON) return after;
+	}
+	return index;
+}
+
 function consumeOptionalColon(line: string, index: number, end: number): number {
-	const cursor = skipWhitespace(line, index, end);
+	let cursor = skipWhitespace(line, index, end);
+	cursor = skipStrayDot(line, cursor, end);
 	return cursor < end && line.charCodeAt(cursor) === CHAR_COLON ? skipWhitespace(line, cursor + 1, end) : cursor;
 }
 
@@ -337,7 +351,8 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 	if (deleteBlockEnd !== null) {
 		const anchor = scanLineNumber(line, skipWhitespace(line, deleteBlockEnd, end), end);
 		if (anchor === null) return null;
-		const next = skipWhitespace(line, anchor.nextIndex, end);
+		let next = skipWhitespace(line, anchor.nextIndex, end);
+		next = skipStrayDot(line, next, end);
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
 	}
@@ -345,7 +360,8 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 	if (deleteEnd !== null) {
 		const range = scanHeaderRange(line, deleteEnd, end, true);
 		if (range === null) return null;
-		const next = skipWhitespace(line, range.nextIndex, end);
+		let next = skipWhitespace(line, range.nextIndex, end);
+		next = skipStrayDot(line, next, end);
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete", range: range.range }, nextIndex: next };
 	}

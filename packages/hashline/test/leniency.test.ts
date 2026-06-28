@@ -94,6 +94,21 @@ describe("hashline core — verb header forms", () => {
 		expect(applyPatch(FILE, "INS.PRE 2\n+X")).toBe("a\nX\nb\nc\nd\ne");
 		expect(applyPatch(FILE, "INS.HEAD\n+X")).toBe("X\na\nb\nc\nd\ne");
 	});
+
+	it("tolerates GLM 5.2 stray dot before the trailing colon", () => {
+		// GLM 5.2 inserts a `.` between the line number/range and `:`,
+		// e.g. `SWAP 2.=3.:` instead of `SWAP 2.=3:`.
+		expect(applyPatch(FILE, "SWAP 2.=3.:\n+X")).toBe("a\nX\nd\ne");
+		expect(applyPatch(FILE, "SWAP 2.=2.:\n+X")).toBe("a\nX\nc\nd\ne");
+		// `INS.POST 2.:` instead of `INS.POST 2:`
+		expect(applyPatch(FILE, "INS.POST 2.:\n+X")).toBe("a\nb\nX\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.PRE 2.:\n+X")).toBe("a\nX\nb\nc\nd\ne");
+		// `DEL 2.=3.` instead of `DEL 2.=3` (stray dot, no colon)
+		expect(applyPatch(FILE, "DEL 2.=3.")).toBe("a\nd\ne");
+		// `INS.HEAD.:` and `INS.TAIL.:` with stray dot
+		expect(applyPatch(FILE, "INS.HEAD.:\n+X")).toBe("X\na\nb\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.TAIL.:\n+X")).toBe("a\nb\nc\nd\ne\nX");
+	});
 });
 
 describe("hashline body contracts", () => {
