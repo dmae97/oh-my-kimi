@@ -8,20 +8,24 @@
  */
 import { ptree } from "@oh-my-pi/pi-utils";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
-import { quotePosixPath } from "./utils";
+import { quotePosixPath, wrapInPosixShell } from "./utils";
 
 /** Per-operation timeout for remote transfers (matches the ssh tool's grep window). */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * Ensure the ControlMaster connection and restrict transfers to remotes whose
- * *login* shell runs our POSIX snippets directly. OpenSSH hands each command to
- * `$SHELL -c`, so the login shell must be POSIX: Windows (cmd/powershell) can't
- * drive `head`/`cat`/`mv`, and csh/tcsh apply `!` history expansion to the
- * command line. `ensureHostInfo` classifies those (and fish) as a non-sh shell,
- * so accept only sh, bash, and zsh; anything else is refused here.
+ * Ensure the ControlMaster connection and pick the verified POSIX shell to
+ * run transfer commands under. Returns the shell name so the caller can
+ * wrap its snippet in `<shell> -c '…'`; OpenSSH otherwise hands the command
+ * to the user's login shell, which on fish/csh/tcsh hosts can't parse our
+ * `if [ … ]; then …` constructs (#3719).
+ *
+ * Windows hosts are refused up front — `ssh://` runs `head`/`cat`/`mv`/`test`
+ * directly and cmd/powershell can't drive those. Everywhere else, we require
+ * a non-empty `transferShell` (set by `probeHostInfo` after `sh -lc` /
+ * `bash -lc` / `zsh -lc` round-trips a marker against the remote).
  */
-async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
+async function ensurePosixRemote(target: SSHConnectionTarget): Promise<"sh" | "bash" | "zsh"> {
 	await ensureConnection(target);
 	const info = await ensureHostInfo(target);
 	if (info.os === "windows") {
@@ -29,11 +33,12 @@ async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
 			`ssh://: ${target.name} is a Windows host; ssh:// supports POSIX remotes only (head/cat/mv) — use the ssh tool for Windows hosts`,
 		);
 	}
-	if (info.shell !== "sh" && info.shell !== "bash" && info.shell !== "zsh") {
+	if (!info.transferShell) {
 		throw new Error(
-			`ssh://: ${target.name} uses a non-POSIX login shell (${info.shell}); ssh:// read/write needs sh, bash, or zsh — use the ssh tool for this host`,
+			`ssh://: ${target.name} has no verified POSIX shell for ssh:// read/write — none of sh/bash/zsh round-tripped a capability probe (use the ssh tool for this host)`,
 		);
 	}
+	return info.transferShell;
 }
 
 export interface RemoteFileReadOptions {
@@ -67,9 +72,9 @@ export async function readRemoteFile(
 	remotePath: string,
 	opts: RemoteFileReadOptions,
 ): Promise<RemoteFileReadResult> {
-	await ensurePosixRemote(target);
+	const shell = await ensurePosixRemote(target);
 	const command = `head -c ${opts.maxBytes + 1} ${quotePosixPath(remotePath)}`;
-	const args = await buildRemoteCommand(target, command);
+	const args = await buildRemoteCommand(target, wrapInPosixShell(shell, command));
 	using child = ptree.spawn(["ssh", ...args], {
 		signal: ptree.combineSignals(opts.signal, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 	});
@@ -110,7 +115,7 @@ export async function writeRemoteFile(
 	content: Uint8Array,
 	opts: RemoteFileWriteOptions,
 ): Promise<void> {
-	await ensurePosixRemote(target);
+	const shell = await ensurePosixRemote(target);
 	if (remotePath.endsWith("/")) {
 		throw new Error("ssh://: destination is a directory path (trailing '/'); ssh:// write requires a file path");
 	}
@@ -135,7 +140,7 @@ export async function writeRemoteFile(
 		`elif [ -e ${dest} ] && [ ! -L ${dest} ]; then echo 'ssh://: destination is a special file (not a regular file)' >&2; exit 1; ` +
 		`else mv "$t" ${dest}; fi; ` +
 		`}`;
-	const args = await buildRemoteCommand(target, command, { allowStdin: true });
+	const args = await buildRemoteCommand(target, wrapInPosixShell(shell, command), { allowStdin: true });
 	using child = ptree.spawn(["ssh", ...args], {
 		stdin: content,
 		signal: ptree.combineSignals(opts.signal, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
@@ -155,10 +160,10 @@ export async function statRemotePath(
 	remotePath: string,
 	opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<RemotePathKind> {
-	await ensurePosixRemote(target);
+	const shell = await ensurePosixRemote(target);
 	const p = quotePosixPath(remotePath);
 	const command = `if [ -d ${p} ]; then echo directory; elif [ -f ${p} ]; then echo file; elif [ -e ${p} ]; then echo other; else echo missing; fi`;
-	const args = await buildRemoteCommand(target, command);
+	const args = await buildRemoteCommand(target, wrapInPosixShell(shell, command));
 	using child = ptree.spawn(["ssh", ...args], {
 		signal: ptree.combineSignals(opts.signal, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 	});
@@ -188,9 +193,9 @@ export async function listRemoteDir(
 	remotePath: string,
 	opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<RemoteDirEntry[]> {
-	await ensurePosixRemote(target);
+	const shell = await ensurePosixRemote(target);
 	const command = `LC_ALL=C ls -1Ap -- ${quotePosixPath(remotePath)}`;
-	const args = await buildRemoteCommand(target, command);
+	const args = await buildRemoteCommand(target, wrapInPosixShell(shell, command));
 	using child = ptree.spawn(["ssh", ...args], {
 		signal: ptree.combineSignals(opts.signal, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 	});

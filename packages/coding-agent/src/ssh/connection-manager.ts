@@ -25,6 +25,15 @@ export interface SSHHostInfo {
 	version: number;
 	os: SSHHostOs;
 	shell: SSHHostShell;
+	/**
+	 * Shell name OMP verified can execute the POSIX transfer snippets
+	 * (`head`/`cat`/`mv`/`test`/`ls`) `ssh://` uses. Probed by running
+	 * `sh -lc` / `bash -lc` / `zsh -lc` against the remote and keeping the
+	 * first one that round-trips a known marker. Independent of `shell`
+	 * (the self-reported login shell), which may be noisy, exotic, or simply
+	 * mis-classified — only `transferShell` gates ssh:// transfers.
+	 */
+	transferShell?: "sh" | "bash" | "zsh";
 	compatShell?: "bash" | "sh";
 	compatEnabled: boolean;
 }
@@ -32,7 +41,7 @@ export interface SSHHostInfo {
 const CONTROL_DIR = getSshControlDir();
 const CONTROL_PATH = path.join(CONTROL_DIR, "%C.sock");
 const HOST_INFO_DIR = getRemoteHostDir();
-const HOST_INFO_VERSION = 3;
+const HOST_INFO_VERSION = 4;
 
 const activeHosts = new Map<string, SSHConnectionTarget>();
 const pendingConnections = new Map<string, Promise<void>>();
@@ -166,6 +175,11 @@ function parseCompatShell(value: unknown): "bash" | "sh" | undefined {
 	return undefined;
 }
 
+function parseTransferShell(value: unknown): SSHHostInfo["transferShell"] {
+	if (value === "sh" || value === "bash" || value === "zsh") return value;
+	return undefined;
+}
+
 function applyCompatOverride(host: SSHConnectionTarget, info: SSHHostInfo): SSHHostInfo {
 	const compatShell =
 		info.compatShell ??
@@ -184,18 +198,26 @@ function applyCompatOverride(host: SSHConnectionTarget, info: SSHHostInfo): SSHH
 	return { ...info, version: info.version ?? 0, compatShell, compatEnabled };
 }
 
-function parseHostInfo(value: unknown): SSHHostInfo | null {
+/**
+ * Parse a raw cache-file value (or any unknown) into a normalized
+ * {@link SSHHostInfo}, dropping fields that don't pass the per-field guards.
+ * Exported so cache-layer round-tripping (incl. the new `transferShell`
+ * field, #3719) is testable without touching disk.
+ */
+export function parseHostInfo(value: unknown): SSHHostInfo | null {
 	if (!value || typeof value !== "object") return null;
 	const record = value as Record<string, unknown>;
 	const os = parseOs(record.os) ?? "unknown";
 	const shell = parseShell(record.shell) ?? "unknown";
 	const compatShell = parseCompatShell(record.compatShell);
+	const transferShell = parseTransferShell(record.transferShell);
 	const compatEnabled = typeof record.compatEnabled === "boolean" ? record.compatEnabled : false;
 	const version = typeof record.version === "number" ? record.version : 0;
 	return {
 		version,
 		os,
 		shell,
+		transferShell,
 		compatShell,
 		compatEnabled,
 	};
@@ -208,6 +230,11 @@ function shouldRefreshHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): bo
 	if (info.os === "windows" && info.compatEnabled && !info.compatShell) return true;
 	if (info.os === "windows" && info.compatShell === "bash" && info.shell === "unknown") return true;
 	if (host.compat === true && info.os === "windows" && !info.compatShell) return true;
+	// A non-Windows host with no verified POSIX transfer shell is ambiguous —
+	// either the probe never ran capability checks, or every candidate failed.
+	// Re-probe rather than letting the ssh:// transfer guard reject it on a
+	// stale `shell: "unknown"` classification (#3719).
+	if (info.os !== "windows" && !info.transferShell) return true;
 	return false;
 }
 
@@ -252,15 +279,99 @@ async function persistHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): Pr
 	}
 }
 
+/**
+ * Frame marker emitted by the remote OS/shell probe. The probe wraps its
+ * payload in this prefix so the parser can ignore startup-file noise (banners,
+ * `motd`, login messages, `Last login: …`) instead of trusting only the first
+ * line of stdout. See #3719.
+ */
+export const HOST_PROBE_MARKER = "PI_HOST_PROBE=";
+
+/** Marker for the transfer-shell capability probe. */
+export const TRANSFER_PROBE_MARKER = "PI_TRANSFER_OK|";
+
+/** sh / bash / zsh, in the order we'll try as `transferShell` candidates. */
+const TRANSFER_SHELL_CANDIDATES = ["sh", "bash", "zsh"] as const;
+
+/**
+ * Find the first line of `stdout`/`stderr` that begins with `marker` and
+ * return everything after it. Used by the SSH host probe so noisy login
+ * dotfiles can't corrupt OS/shell classification by emitting text on the
+ * first line of `ssh` output.
+ *
+ * Returns `null` when no marker line is found in either stream.
+ */
+export function extractProbePayload(stdout: string, stderr: string, marker = HOST_PROBE_MARKER): string | null {
+	for (const blob of [stdout, stderr]) {
+		if (!blob) continue;
+		for (const line of blob.split("\n")) {
+			const trimmed = line.trim();
+			if (trimmed.startsWith(marker)) {
+				return trimmed.slice(marker.length);
+			}
+		}
+	}
+	return null;
+}
+
+/**
+ * Find `marker` anywhere in `stdout` or `stderr` and return everything that
+ * follows it, scanning stdout first. Returns `null` when the marker is in
+ * neither stream.
+ *
+ * Used by the transfer-shell capability probe. Some remotes have broken
+ * login dotfiles that swap fd 1/2, so the marker can land on stderr even
+ * though the probe ran the printf successfully (matches the host-info
+ * probe's stderr fallback). See #3719.
+ */
+export function findProbeMarker(stdout: string, stderr: string, marker: string): string | null {
+	for (const blob of [stdout, stderr]) {
+		if (!blob) continue;
+		const idx = blob.indexOf(marker);
+		if (idx !== -1) return blob.slice(idx + marker.length);
+	}
+	return null;
+}
+
+/** Classify a POSIX-ish `uname -s` payload from the transfer-shell probe. */
+export function osFromUname(value: string): SSHHostOs | undefined {
+	const uname = value.toLowerCase();
+	if (uname.includes("darwin")) return "macos";
+	if (uname.includes("linux") || uname.includes("gnu")) return "linux";
+	if (uname.includes("mingw") || uname.includes("msys") || uname.includes("cygwin") || uname.includes("windows")) {
+		return "windows";
+	}
+	return undefined;
+}
+
+async function probeTransferShell(
+	host: SSHConnectionTarget,
+): Promise<{ shell: SSHHostInfo["transferShell"]; uname: string }> {
+	for (const candidate of TRANSFER_SHELL_CANDIDATES) {
+		// `printf` is POSIX and emits no trailing newline, so we can pin the
+		// marker right against the uname output and split on it cleanly.
+		const remote = `${candidate} -lc 'printf "${TRANSFER_PROBE_MARKER}"; uname -s 2>/dev/null || true'`;
+		const probe = await runSshCaptureSync(await buildRemoteCommand(host, remote));
+		if (probe.exitCode !== 0) continue;
+		const tail = findProbeMarker(probe.stdout, probe.stderr, TRANSFER_PROBE_MARKER);
+		if (tail === null) continue;
+		return { shell: candidate, uname: tail.trim() };
+	}
+	return { shell: undefined, uname: "" };
+}
+
 async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
-	const command = 'echo "$OSTYPE|$SHELL|$BASH_VERSION" 2>/dev/null || echo "%OS%|%COMSPEC%|"';
+	const command = `echo "${HOST_PROBE_MARKER}$OSTYPE|$SHELL|$BASH_VERSION" 2>/dev/null || echo "${HOST_PROBE_MARKER}%OS%|%COMSPEC%|"`;
 	const result = await runSshCaptureSync(await buildRemoteCommand(host, command));
-	if (result.exitCode !== 0 && !result.stdout) {
+	const payload = extractProbePayload(result.stdout, result.stderr);
+	if (payload === null) {
 		logger.debug("SSH host probe failed", { host: host.name, error: result.stderr });
+		const transferProbe = await probeTransferShell(host);
 		const fallback: SSHHostInfo = {
 			version: HOST_INFO_VERSION,
-			os: "unknown",
+			os: transferProbe.shell ? (osFromUname(transferProbe.uname) ?? "unknown") : "unknown",
 			shell: "unknown",
+			transferShell: transferProbe.shell,
 			compatShell: undefined,
 			compatEnabled: false,
 		};
@@ -268,27 +379,26 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 		return fallback;
 	}
 
-	const output = (result.stdout || result.stderr).split("\n")[0]?.trim() ?? "";
-	const [rawOs = "", rawShell = "", rawBash = ""] = output.split("|");
+	const [rawOs = "", rawShell = "", rawBash = ""] = payload.split("|");
 	const ostype = rawOs.trim();
 	const shellRaw = rawShell.trim();
 	const bashVersion = rawBash.trim();
-	const outputLower = output.toLowerCase();
+	const payloadLower = payload.toLowerCase();
 	const osLower = ostype.toLowerCase();
 	const shellLower = shellRaw.toLowerCase();
 	const unexpandedPosixVars =
-		output.includes("$OSTYPE") || output.includes("$SHELL") || output.includes("$BASH_VERSION");
+		payload.includes("$OSTYPE") || payload.includes("$SHELL") || payload.includes("$BASH_VERSION");
 	const windowsDetected =
 		osLower.includes("windows") ||
 		osLower.includes("msys") ||
 		osLower.includes("cygwin") ||
 		osLower.includes("mingw") ||
-		outputLower.includes("windows_nt") ||
-		outputLower.includes("comspec") ||
+		payloadLower.includes("windows_nt") ||
+		payloadLower.includes("comspec") ||
 		shellLower.includes("cmd") ||
 		shellLower.includes("powershell") ||
 		unexpandedPosixVars ||
-		output.includes("%OS%");
+		payload.includes("%OS%");
 
 	let os: SSHHostOs = "unknown";
 	if (windowsDetected) {
@@ -303,6 +413,22 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	let shell = parseShell(shellLower) ?? "unknown";
 	if (shell === "unknown" && os === "windows" && !shellLower) {
 		shell = "cmd";
+	}
+
+	// For any non-Windows host (including `unknown`, which is often a misclassified
+	// POSIX remote with noisy login output) verify a working transfer shell by
+	// running `sh -lc` / `bash -lc` / `zsh -lc` against it. The first one whose
+	// printf round-trips becomes `transferShell`; ssh:// gates on this rather
+	// than the self-reported login-shell name (#3719).
+	let transferShell: SSHHostInfo["transferShell"];
+	if (os !== "windows") {
+		const probe = await probeTransferShell(host);
+		transferShell = probe.shell;
+		// `uname -s` from the same probe lets us recover the OS when the first
+		// probe couldn't classify it (e.g. the remote silently nuked `$OSTYPE`).
+		if (transferShell && os === "unknown") {
+			os = osFromUname(probe.uname) ?? os;
+		}
 	}
 
 	const hasBash = !unexpandedPosixVars && (Boolean(bashVersion) || shell === "bash");
@@ -328,6 +454,7 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 		version: HOST_INFO_VERSION,
 		os,
 		shell,
+		transferShell,
 		compatShell,
 		compatEnabled,
 	});

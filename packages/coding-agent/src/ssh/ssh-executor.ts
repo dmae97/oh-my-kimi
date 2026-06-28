@@ -4,6 +4,7 @@ import { OutputSink } from "../session/streaming-output";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
 import { hasSshfs, mountRemote } from "./sshfs-mount";
+import { wrapInPosixShell } from "./utils";
 
 export interface SSHExecutorOptions {
 	/** Timeout in milliseconds */
@@ -78,18 +79,6 @@ function createAbortWaiter(
 	return { promise, cleanup: () => signal.removeEventListener("abort", onAbort) };
 }
 
-function quoteForCompatShell(command: string): string {
-	if (command.length === 0) {
-		return "''";
-	}
-	const escaped = command.replace(/'/g, "'\\''");
-	return `'${escaped}'`;
-}
-
-function buildCompatCommand(shell: "bash" | "sh", command: string): string {
-	return `${shell} -c ${quoteForCompatShell(command)}`;
-}
-
 export async function executeSSH(
 	host: SSHConnectionTarget,
 	command: string,
@@ -108,7 +97,7 @@ export async function executeSSH(
 	if (options?.compatEnabled) {
 		const info = await ensureHostInfo(host);
 		if (info.compatShell) {
-			resolvedCommand = buildCompatCommand(info.compatShell, command);
+			resolvedCommand = wrapInPosixShell(info.compatShell, command);
 		} else {
 			logger.warn("SSH compat enabled without detected compat shell", { host: host.name });
 		}
