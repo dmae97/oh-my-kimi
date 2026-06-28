@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.3] - 2026-06-28
+
 ### Added
 
 - Support for parsing named advisor transcripts using the `__advisor.<slug>.jsonl` naming convention.

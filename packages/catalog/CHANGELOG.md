@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.3] - 2026-06-28
+
 ### Added
 
 - Added support and configuration parameters for V2 streaming compaction in RemoteCompactionConfig, catalog types, and model/provider metadata.
@@ -9,7 +11,6 @@
 ### Changed
 
 - Enabled automatic content markup healing for all OpenAI-compatible streaming models
-
 - Updated pricing and context window limits for several catalog models.
 - Disabled reasoning capability for multiple providers in the catalog.
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.3] - 2026-06-28
+
 ### Added
 
 - Added `escapeXmlAttribute` utility function for safe XML attribute value encoding.

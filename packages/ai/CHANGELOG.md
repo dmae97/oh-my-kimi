@@ -2,11 +2,12 @@
 
 ## [Unreleased]
 
+## [16.2.3] - 2026-06-28
+
 ### Changed
 
 - Enabled automatic removal of leaked reasoning tags for all models
 - Prevented reasoning text duplication when models emit both structured and inline thinking
-
 - Defaulted reasoning context to all turns for all Codex requests.
 
 ### Fixed

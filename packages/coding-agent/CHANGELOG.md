@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.3] - 2026-06-28
+
 ### Added
 
 - Added support for multiple configurable advisors via WATCHDOG.yml/WATCHDOG.yaml files, allowing per-advisor models, tool subsets, and instructions.
@@ -17,15 +19,10 @@
 ### Changed
 
 - Reduced session file size by removing redundant thinking signatures already present in payloads
-
 - Advisors can now be granted any built-in agent tool (including edit, write, and bash), removing the previous read-only restriction.
 - Improved the debug log and raw SSE stream viewers with a wider, bordered overlay, clearer status indicators, dynamic layouts, and mouse support for scrolling and interaction.
 - Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.
 - Refined interrupted thinking system instructions to encourage smoother continuation.
-
-### Removed
-
-- Removed history URI support for reading agent transcripts
 
 ### Fixed
 
@@ -49,6 +46,10 @@
 - Fixed the time_spent status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
 - Fixed expanded pending SSH previews committing provisional rows to native scrollback before the final result render.
 - Fixed ssh:// rejecting POSIX-capable remotes whose login-shell classification was ambiguous by verifying a working transfer shell directly and gating transfers on that capability.
+
+### Removed
+
+- Removed history URI support for reading agent transcripts
 
 ## [16.2.2] - 2026-06-27
 
