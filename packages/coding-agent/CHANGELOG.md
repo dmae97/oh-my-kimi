@@ -40,6 +40,9 @@
 ### Fixed
 
 - Fixed Ctrl+T staying locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata. ([#3669](https://github.com/can1357/oh-my-pi/issues/3669))
+### Fixed
+
+- Fixed `/shake` (and other mid-stream chat rebuilds) erasing the live LLM output by preserving the in-flight `streamingComponent` and `pendingTools` across `rebuildChatFromMessages` so subsequent `message_update`/`message_end` events keep updating on-screen components. ([#3656](https://github.com/can1357/oh-my-pi/issues/3656))
 
 ## [16.2.2] - 2026-06-27
 
