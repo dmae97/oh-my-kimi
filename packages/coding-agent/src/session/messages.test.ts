@@ -105,4 +105,21 @@ describe("convertToLlm", () => {
 			"thinking",
 		]);
 	});
+
+	it("keeps a signed (complete) trailing thinking block in the assistant LLM view even with a continuity message", () => {
+		const messages: AgentMessage[] = [
+			abortedAssistant([
+				{ type: "text", text: "partial answer" },
+				{ type: "thinking", thinking: "complete reasoning", thinkingSignature: "sig" },
+			]),
+			interruptedThinkingContinuity(),
+		];
+
+		const llm = convertToLlm(messages);
+		const assistant = llm.find(entry => entry.role === "assistant");
+		expect(Array.isArray(assistant?.content) && assistant.content.map(block => block.type)).toEqual([
+			"text",
+			"thinking",
+		]);
+	});
 });

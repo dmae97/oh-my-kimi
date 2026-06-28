@@ -56,12 +56,14 @@ export interface DemotedInterruptedThinking {
 }
 
 /**
- * Remove a trailing interrupted-thinking run from an assistant message.
+ * Demote a trailing run of *incomplete* interrupted-thinking from an assistant
+ * message — reasoning that was still streaming when the user aborted.
  *
- * Only visible, non-empty `thinking` blocks at the meaningful tail are demoted.
- * Trailing empty text placeholders are ignored and omitted from the stripped
- * content. Text, tool-call, redacted/encrypted-only, and empty-thinking tails
- * are left unchanged.
+ * A block joins the run only when it is a non-empty `thinking` block with no
+ * `thinkingSignature`. A signed/complete thinking block (Anthropic signature,
+ * OpenAI reasoning item id) is safely replayable, so it ends the run and stays
+ * in place — as do `redactedThinking` encrypted blobs, text, tool calls,
+ * empty-thinking blocks, and trailing empty text placeholders.
  */
 export function demoteInterruptedThinking(
 	message: Pick<AssistantMessage, "content">,
@@ -79,7 +81,7 @@ export function demoteInterruptedThinking(
 	let runStart = scanEnd;
 	while (runStart > 0) {
 		const block = content[runStart - 1]!;
-		if (block.type !== "thinking" || block.thinking.trim().length === 0) {
+		if (block.type !== "thinking" || block.thinking.trim().length === 0 || block.thinkingSignature) {
 			break;
 		}
 		runStart--;

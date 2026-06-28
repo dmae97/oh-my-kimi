@@ -69,4 +69,26 @@ describe("demoteInterruptedThinking", () => {
 		expect(demoteContent([{ type: "thinking", thinking: " \n\t" }])).toBeUndefined();
 		expect(demoteContent([{ type: "redactedThinking", data: "encrypted" }])).toBeUndefined();
 	});
+
+	it("preserves a non-empty signed thinking tail as native replayable reasoning", () => {
+		expect(
+			demoteContent([
+				{ type: "text", text: "Visible answer." },
+				{ type: "thinking", thinking: "Complete signed reasoning", thinkingSignature: "sig" },
+			]),
+		).toBeUndefined();
+	});
+
+	it("demotes only the unsigned tail and keeps an earlier signed thinking block", () => {
+		expect(
+			demoteContent([
+				{ type: "thinking", thinking: "Complete signed reasoning", thinkingSignature: "sig" },
+				{ type: "thinking", thinking: "Interrupted unsigned tail" },
+			]),
+		).toEqual({
+			reasoning: "Interrupted unsigned tail",
+			strippedContent: [{ type: "thinking", thinking: "Complete signed reasoning", thinkingSignature: "sig" }],
+			blockCount: 1,
+		});
+	});
 });
