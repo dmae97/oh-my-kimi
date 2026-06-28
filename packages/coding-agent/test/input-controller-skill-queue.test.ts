@@ -27,6 +27,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 type StubEditor = {
 	setText: (text: string) => void;
 	getText: () => string;
+	getExpandedText: () => string;
 	clearDraft: (historyText?: string) => void;
 	addToHistory: Mock<(...args: unknown[]) => unknown>;
 	onSubmit?: (text: string) => Promise<void>;
@@ -65,6 +66,9 @@ function createStubInputControllerContext(opts: {
 			editorText = text;
 		},
 		getText() {
+			return editorText;
+		},
+		getExpandedText() {
 			return editorText;
 		},
 		clearDraft(historyText?: string) {
@@ -618,6 +622,9 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 			editorText = text;
 		},
 		getText() {
+			return editorText;
+		},
+		getExpandedText() {
 			return editorText;
 		},
 		clearDraft(historyText?: string) {

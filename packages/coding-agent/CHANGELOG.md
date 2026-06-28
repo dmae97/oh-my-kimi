@@ -12,6 +12,9 @@
 - Fixed omp update leaving behind stale Bun install-cache directories for globally installed packages.
 - Fixed a reconnection loop issue in /collab sessions caused by oversized entries (such as large tool outputs) by truncating replicated payloads that exceed 1 MB.
 - Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session, ensuring prompt injections remain session-stable.
+### Fixed
+
+- Fixed Ctrl+Q / Ctrl+Enter follow-up submissions sending the literal `[Paste #N]` marker instead of the expanded paste body ([#3737](https://github.com/can1357/oh-my-pi/issues/3737)).
 
 ## [16.2.3] - 2026-06-28
 

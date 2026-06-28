@@ -26,6 +26,7 @@ type FakeEditor = {
 	onSubmit?: (text: string) => Promise<void>;
 	setText(text: string): void;
 	getText(): string;
+	getExpandedText(): string;
 	addToHistory(text: string): void;
 	setActionKeys(action: string, keys: string[]): void;
 	setCustomKeyHandler(key: string, handler: () => void): void;
@@ -103,6 +104,9 @@ async function createContext() {
 			editorText = text;
 		},
 		getText() {
+			return editorText;
+		},
+		getExpandedText() {
 			return editorText;
 		},
 		addToHistory: vi.fn(),
