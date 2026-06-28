@@ -6,6 +6,7 @@
  */
 
 import {
+	type Api,
 	type ApiKey,
 	type AssistantMessage,
 	type Context,
@@ -828,6 +829,12 @@ export interface HandoffFromContextOptions {
 	 * anything provided here.
 	 */
 	streamOptions: SimpleStreamOptions;
+	/** Optional completion transport override for host-level request wrappers. */
+	completeImpl?: <TApi extends Api>(
+		model: Model<TApi>,
+		ctx: Context,
+		options: SimpleStreamOptions,
+	) => Promise<AssistantMessage>;
 	/** See {@link HandoffOptions.telemetry}. */
 	telemetry?: AgentTelemetry;
 	/** See {@link HandoffOptions.thinkingLevel}. */
@@ -859,7 +866,7 @@ export async function generateHandoffFromContext(
 			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
 			toolChoice: "none",
 		},
-		{ telemetry: options.telemetry, oneshotKind: "handoff" },
+		{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl },
 	);
 
 	if (response.stopReason === "error") {

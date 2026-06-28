@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AgentMessage, type AgentTool, AppendOnlyContextManager } from "@oh-my-pi/pi-agent-core";
+import {
+	Agent,
+	type AgentMessage,
+	type AgentTool,
+	AppendOnlyContextManager,
+	type StreamFn,
+} from "@oh-my-pi/pi-agent-core";
 import {
 	type Api,
 	type Context,
@@ -276,6 +282,55 @@ describe("AgentSession message pipeline", () => {
 		expect(capturedOptions?.sessionId).toStartWith(`${cacheSessionId}:side:`);
 		expect(capturedOptions?.sessionId).not.toBe(cacheSessionId);
 		expect(capturedOptions?.preferWebsockets).toBe(false);
+	});
+
+	it("runs ephemeral side-channel requests through the configured side stream function", async () => {
+		const model = buildModel({
+			id: "side-stream-model",
+			name: "Side Stream Model",
+			api: "anthropic",
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		let capturedOptions: SimpleStreamOptions | undefined;
+		let capturedContext: Context | undefined;
+		const sideStreamFn: StreamFn = (_model, context, options) => {
+			capturedContext = context;
+			capturedOptions = options;
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("Side answer");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "Side answer", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+		const session = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["system prompt"],
+					messages: [],
+					tools: [],
+				},
+			}),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: createModelRegistryStub() as never,
+			sideStreamFn,
+		});
+		sessions.push(session);
+
+		const result = await session.runEphemeralTurn({ promptText: "Question?" });
+
+		expect(result.replyText).toBe("Side answer");
+		expect(capturedContext?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Question?" }]);
+		expect(capturedOptions?.sessionId).toStartWith(`${session.sessionId}:side:`);
 	});
 
 	it("rotates ephemeral side-channel credentials on Google Resource exhausted", async () => {
