@@ -130,6 +130,7 @@ import {
 	loadProjectContextFiles as loadContextFilesInternal,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
+import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -2539,7 +2540,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// the advisor (via AgentSessionConfig.streamFn). Keeps OpenRouter
 		// sticky-routing variants, antigravity endpoint routing, in-flight caps,
 		// and the loop guard consistent across every agent the session drives.
-		const settingsAwareStreamFn = createSettingsAwareStreamFn(settings);
+		// Wrapped in a per-provider concurrency limiter so each LLM HTTP request
+		// — not the whole subagent lifecycle — holds the slot, preventing the
+		// nested-spawn deadlock from issue #3749.
+		const settingsAwareStreamFn = wrapStreamFnWithProviderConcurrency(
+			settings,
+			createSettingsAwareStreamFn(settings),
+		);
 		agent = new Agent({
 			initialState: {
 				systemPrompt,

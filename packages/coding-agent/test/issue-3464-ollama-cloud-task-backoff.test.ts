@@ -1,30 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import { Agent, type StreamFn } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { LoadExtensionsResult } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
-import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
-import {
-	AgentSession,
-	type AgentSessionEvent,
-	type PromptOptions,
-} from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { Semaphore } from "@oh-my-pi/pi-coding-agent/task/parallel";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
-import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { wrapStreamFnWithProviderConcurrency } from "@oh-my-pi/pi-coding-agent/task/provider-concurrency";
 import { TempDir } from "@oh-my-pi/pi-utils";
-
-type MockPromptSession = AgentSession & {
-	emit(event: AgentSessionEvent): void;
-};
 
 interface Deferred {
 	promise: Promise<void>;
@@ -36,63 +24,11 @@ function deferred(): Deferred {
 	return { promise, resolve };
 }
 
-function createSessionResult(session: AgentSession): CreateAgentSessionResult {
-	return {
-		session,
-		extensionsResult: { extensions: [], errors: [], runtime: {} as unknown } as LoadExtensionsResult,
-		setToolUIContext: () => {},
-		eventBus: new EventBus(),
-	};
-}
-
-function createGateSession(onPrompt: () => Promise<void>): MockPromptSession {
-	const listeners: Array<(event: AgentSessionEvent) => void> = [];
-	const session = {
-		agent: { state: { systemPrompt: ["test"] } },
-		state: { messages: [] },
-		extensionRunner: undefined,
-		sessionManager: { appendSessionInit: () => {} },
-		getActiveToolNames: () => ["yield"],
-		setActiveToolsByName: async () => {},
-		subscribe: (listener: (event: AgentSessionEvent) => void) => {
-			listeners.push(listener);
-			return () => {};
-		},
-		prompt: async (_text: string, _options?: PromptOptions) => {
-			await onPrompt();
-			for (const listener of listeners) {
-				listener({
-					type: "tool_execution_end",
-					toolCallId: "tool-yield",
-					toolName: "yield",
-					result: { content: [{ type: "text", text: "Result submitted." }], details: { status: "success" } },
-					isError: false,
-				});
-			}
-		},
-		waitForIdle: async () => {},
-		getLastAssistantMessage: () => undefined,
-		abort: async () => {},
-		dispose: async () => {},
-		emit: (event: AgentSessionEvent) => {
-			for (const listener of listeners) listener(event);
-		},
-	};
-	return session as unknown as MockPromptSession;
-}
-
 function requireModel(provider: GeneratedProvider, id: string): Model {
 	const model = getBundledModel(provider, id);
 	if (!model) throw new Error(`Expected bundled model ${provider}/${id}`);
 	return model;
 }
-
-const taskAgent: AgentDefinition = {
-	name: "task",
-	description: "General task agent",
-	systemPrompt: "test",
-	source: "bundled",
-};
 
 describe("issue #3464: ollama-cloud task backoff", () => {
 	let tempDir: TempDir;
@@ -161,62 +97,76 @@ describe("issue #3464: ollama-cloud task backoff", () => {
 		expect(session.model?.id).toBe(fallback.id);
 	});
 
-	it("bounds concurrent subagent runs by the resolved ollama-cloud provider limit", async () => {
+	it("bounds concurrent ollama-cloud LLM streams by the configured maxConcurrency", async () => {
 		const cloudModel = requireModel("ollama-cloud", "gpt-oss:120b");
-		const started: string[] = [];
-		const gates = new Map<string, Deferred>();
-		const firstStarted = deferred();
-		const secondStarted = deferred();
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			const id = options?.agentId ?? "unknown";
-			const gate = deferred();
-			gates.set(id, gate);
-			return createSessionResult(
-				createGateSession(async () => {
-					started.push(id);
-					if (id === "CloudOne") firstStarted.resolve();
-					if (id === "CloudTwo") secondStarted.resolve();
-					await gate.promise;
-				}),
-			);
-		});
 		const settings = Settings.isolated({
-			"providers.ollama-cloud.maxConcurrency": 1,
+			"providers.ollama-cloud.maxConcurrency": 2,
 		});
 
-		const first = runSubprocess({
-			cwd: "/tmp",
-			agent: taskAgent,
-			task: "first",
-			index: 0,
-			id: "CloudOne",
-			modelOverride: `${cloudModel.provider}/${cloudModel.id}`,
-			settings,
-			modelRegistry,
-			enableLsp: false,
-		});
-		const second = runSubprocess({
-			cwd: "/tmp",
-			agent: taskAgent,
-			task: "second",
-			index: 1,
-			id: "CloudTwo",
-			modelOverride: `${cloudModel.provider}/${cloudModel.id}`,
-			settings,
-			modelRegistry,
-			enableLsp: false,
-		});
+		let inFlight = 0;
+		let peakInFlight = 0;
+		let invocations = 0;
+		const gates: Deferred[] = [];
+		const base: StreamFn = model => {
+			const gate = deferred();
+			gates.push(gate);
+			invocations++;
+			inFlight++;
+			peakInFlight = Math.max(peakInFlight, inFlight);
+			const stream = new AssistantMessageEventStream();
+			void gate.promise.then(() => {
+				inFlight--;
+				const message: AssistantMessage = {
+					role: "assistant",
+					content: [],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: Date.now(),
+				};
+				stream.push({ type: "done", reason: "stop", message });
+				stream.end();
+			});
+			return stream;
+		};
+		const wrapped = wrapStreamFnWithProviderConcurrency(settings, base);
 
-		await firstStarted.promise;
-		expect(started).toEqual(["CloudOne"]);
-		expect(gates.has("CloudTwo")).toBe(false);
+		const waitForInvocations = async (target: number): Promise<void> => {
+			for (let i = 0; i < 1000 && invocations < target; i++) {
+				await Promise.resolve();
+			}
+			expect(invocations).toBe(target);
+		};
 
-		gates.get("CloudOne")?.resolve();
-		await first;
-		await secondStarted.promise;
-		expect(started).toEqual(["CloudOne", "CloudTwo"]);
-		gates.get("CloudTwo")?.resolve();
-		await second;
+		const calls = Array.from({ length: 4 }, async () => wrapped(cloudModel, { messages: [] }, {}));
+		// Two slots admit two calls; the next two queue behind them.
+		await waitForInvocations(2);
+		expect(inFlight).toBe(2);
+
+		// Release the first slot; exactly one queued waiter is admitted.
+		gates[0]!.resolve();
+		await waitForInvocations(3);
+		expect(inFlight).toBe(2);
+		expect(peakInFlight).toBe(2);
+
+		gates[1]!.resolve();
+		await waitForInvocations(4);
+		expect(inFlight).toBe(2);
+
+		gates[2]!.resolve();
+		gates[3]!.resolve();
+		await Promise.all(calls);
+		expect(inFlight).toBe(0);
+		expect(peakInFlight).toBe(2);
 	});
 
 	it("frees a queued slot when its acquire waiter is aborted", async () => {
