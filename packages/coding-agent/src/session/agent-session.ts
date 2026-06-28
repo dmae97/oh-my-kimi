@@ -9502,12 +9502,9 @@ export class AgentSession {
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				return await this.#runRecoveryCompactionWithRollback(
-					"overflow",
-					assistantMessage,
-					allowDefer,
-					{ autoContinue },
-				);
+				return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, allowDefer, {
+					autoContinue,
+				});
 			}
 			return COMPACTION_CHECK_NONE;
 		}
@@ -9540,12 +9537,10 @@ export class AgentSession {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
 				});
-				return await this.#runRecoveryCompactionWithRollback(
-					"incomplete",
-					assistantMessage,
-					allowDefer,
-					{ autoContinue, triggerContextTokens: calculateContextTokens(assistantMessage.usage) },
-				);
+				return await this.#runRecoveryCompactionWithRollback("incomplete", assistantMessage, allowDefer, {
+					autoContinue,
+					triggerContextTokens: calculateContextTokens(assistantMessage.usage),
+				});
 			}
 			// Neither promotion nor compaction is available — surface the dead-end so
 			// the user understands why the turn yielded with nothing.
