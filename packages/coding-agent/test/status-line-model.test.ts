@@ -40,6 +40,7 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 		subagentCount: 0,
 		activeMs: 0,
 		activeRepo: null,
+		worktree: null,
 		git: { branch: null, status: null, pr: null },
 		usage: null,
 	};

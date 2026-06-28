@@ -301,7 +301,10 @@ describe("subagent warning injection", () => {
 		expect(result.rawOutput).toBe("final answer from the assistant");
 	});
 
-	it("lets a terminal string-typed last-turn result override earlier incremental sections", () => {
+	it("keeps accumulated sections when a data-less terminal yield finalizes", () => {
+		// Previously a data-less `type: "final"` collapsed to the last assistant
+		// turn and dropped earlier incremental sections; the sections are the work
+		// product, so they must survive the finalize.
 		const result = finalizeSubprocessOutput({
 			rawOutput: "",
 			exitCode: 0,
@@ -317,7 +320,43 @@ describe("subagent warning injection", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(result.rawOutput).toBe("plain final answer");
+		expect(JSON.parse(result.rawOutput)).toEqual({ summary: "first" });
+	});
+
+	it("finalizes a string-typed terminal yield that carries data as the top-level result", () => {
+		// Regression: a `type: "result"` finalize with the full structured object
+		// was treated as a section labeled "result", nesting the payload one level
+		// deep so every required field read as missing (schema_violation).
+		const result = finalizeSubprocessOutput({
+			rawOutput: "",
+			exitCode: 0,
+			stderr: "",
+			doneAborted: false,
+			signalAborted: false,
+			yieldItems: [
+				{
+					status: "success",
+					type: "result",
+					data: { summary: "did it", filesChanged: ["a.ts"], notes: ["ok"] },
+				},
+			],
+			outputSchema: {
+				properties: {
+					summary: { type: "string" },
+					filesChanged: { elements: { type: "string" } },
+					notes: { elements: { type: "string" } },
+				},
+			},
+			lastAssistantText: "some prose that must not become the result",
+		});
+
+		expect(result.stderr).not.toContain("schema_violation");
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.rawOutput)).toEqual({
+			summary: "did it",
+			filesChanged: ["a.ts"],
+			notes: ["ok"],
+		});
 	});
 
 	it("serializes untyped useLastTurn yield as raw text", () => {
