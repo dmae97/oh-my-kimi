@@ -171,8 +171,8 @@ function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[
 
 	while (cursor < bytes.length) {
 		const { values, error, read, done } = Bun.JSONL.parseChunk(bytes, cursor, bytes.length);
-		if (values.length > 0) {
-			entries.push(...(values as SessionEntry[]));
+		for (const value of values as SessionEntry[]) {
+			entries.push(value);
 		}
 
 		if (error) {
