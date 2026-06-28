@@ -75,6 +75,34 @@ describe("InputController thinking visibility", () => {
 		expect(showStatus).toHaveBeenCalledWith("Thinking is off — enable thinking to show blocks");
 	});
 
+	it("allows toggling when thinking is off after reasoning content was received", () => {
+		const assistant = new AssistantMessageComponent();
+		const setHideThinkingBlock = vi.spyOn(assistant, "setHideThinkingBlock");
+		const set = vi.fn();
+		const showStatus = vi.fn();
+		const resetDisplay = vi.fn();
+		const ctx = {
+			hideThinkingBlock: false,
+			effectiveHideThinkingBlock: false,
+			hasDisplayableThinkingContent: true,
+			settings: { set },
+			session: { agent: { hideThinkingSummary: false }, thinkingLevel: "off" },
+			chatContainer: { children: [assistant], clear: vi.fn(), addChild: vi.fn() },
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			showStatus,
+			ui: { resetDisplay },
+		} as unknown as InteractiveModeContext;
+
+		new InputController(ctx).toggleThinkingBlockVisibility();
+
+		expect(ctx.hideThinkingBlock).toBe(true);
+		expect(set).toHaveBeenCalledWith("hideThinkingBlock", true);
+		expect(setHideThinkingBlock).toHaveBeenCalledWith(true);
+		expect(resetDisplay).toHaveBeenCalledTimes(1);
+		expect(showStatus).toHaveBeenCalledWith("Thinking blocks: hidden");
+	});
+
 	it("refuses to toggle when the focused view session has thinking off", () => {
 		const assistant = new AssistantMessageComponent();
 		const setHideThinkingBlock = vi.spyOn(assistant, "setHideThinkingBlock");

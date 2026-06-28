@@ -53,11 +53,13 @@ afterEach(() => {
 });
 
 function createFixture(streamingMessage?: AssistantMessage) {
+	const componentCalls: string[] = [];
 	const streamingComponent = {
-		updateContent: vi.fn(),
+		updateContent: vi.fn(() => componentCalls.push("update")),
 		setComplete: vi.fn(),
 		markTranscriptBlockFinalized: vi.fn(),
 		setErrorPinned: vi.fn(),
+		setHideThinkingBlock: vi.fn((hide: boolean) => componentCalls.push(`hide:${hide}`)),
 	};
 	const showPinnedError = vi.fn();
 	const clearPinnedError = vi.fn();
@@ -68,10 +70,30 @@ function createFixture(streamingMessage?: AssistantMessage) {
 
 	const session = { isStreaming: false };
 	const viewSession = { isStreaming: false, isTtsrAbortPending: false, retryAttempt: 0 };
+	let hasDisplayableThinkingContent = false;
+	const noteDisplayableThinkingContent = vi.fn((message: AssistantMessage) => {
+		const hasThinking = message.content.some(
+			content => content.type === "thinking" && content.thinking.trim() !== "",
+		);
+		if (!hasThinking || hasDisplayableThinkingContent) return false;
+		hasDisplayableThinkingContent = true;
+		return true;
+	});
+	const chatChildren: unknown[] = [];
+	const chatContainer = {
+		children: chatChildren,
+		addChild: vi.fn((child: unknown) => {
+			chatChildren.push(child);
+		}),
+		clear: vi.fn(() => {
+			chatChildren.length = 0;
+		}),
+	};
 	const ctx = {
 		isInitialized: true,
 		init: vi.fn(async () => {}),
 		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
+		settings: { get: vi.fn(() => false) },
 		statusLine: { invalidate: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		updatePendingMessagesDisplay: vi.fn(),
@@ -83,12 +105,21 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		editor: {},
 		streamingComponent: streamingMessage ? streamingComponent : undefined,
 		streamingMessage,
+		chatContainer,
+		proseOnlyThinking: true,
 		pendingTools: new Map(),
 		flushCompactionQueue: vi.fn(async () => {}),
 		showPinnedError,
 		clearPinnedError,
 		showError: vi.fn(),
 		showStatus: vi.fn(),
+		noteDisplayableThinkingContent,
+		get hasDisplayableThinkingContent() {
+			return hasDisplayableThinkingContent;
+		},
+		get effectiveHideThinkingBlock() {
+			return !hasDisplayableThinkingContent;
+		},
 		showWarning: vi.fn(),
 		session,
 		get viewSession() {
@@ -98,7 +129,7 @@ function createFixture(streamingMessage?: AssistantMessage) {
 	} as unknown as InteractiveModeContext;
 
 	const controller = new EventController(ctx);
-	return { controller, ctx, showPinnedError, clearPinnedError, streamingComponent };
+	return { controller, ctx, showPinnedError, clearPinnedError, streamingComponent, componentCalls };
 }
 
 describe("EventController error banner", () => {
@@ -185,7 +216,6 @@ describe("EventController error banner", () => {
 	it("does not pin a banner for an aborted assistant turn", async () => {
 		const message = makeAssistantMessage({ stopReason: "aborted", errorMessage: "Operation aborted" });
 		const { controller, showPinnedError } = createFixture(message);
-
 		await controller.handleEvent({ type: "message_end", message } as Extract<
 			AgentSessionEvent,
 			{ type: "message_end" }
@@ -200,6 +230,37 @@ describe("EventController error banner", () => {
 		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
 
 		expect(clearPinnedError).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("EventController thinking visibility", () => {
+	it("shows the first observed thinking delta on the active streaming component", async () => {
+		const initial = makeAssistantMessage({ content: [] });
+		const message = makeAssistantMessage({
+			content: [{ type: "thinking", thinking: "server-side reasoning" }],
+		});
+		const { controller, ctx } = createFixture();
+
+		await controller.handleEvent({
+			type: "message_start",
+			message: initial,
+		} as Extract<AgentSessionEvent, { type: "message_start" }>);
+		const component = ctx.streamingComponent;
+		if (!(component instanceof AssistantMessageComponent)) {
+			throw new Error("Expected streaming assistant component");
+		}
+
+		await controller.handleEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: {
+				type: "thinking_delta",
+				delta: "server-side reasoning",
+				contentIndex: 0,
+			},
+		} as Extract<AgentSessionEvent, { type: "message_update" }>);
+
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("server-side reasoning");
 	});
 });
 
