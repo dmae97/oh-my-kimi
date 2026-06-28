@@ -53,6 +53,21 @@ describe("AIError.classify — structural provider errors", () => {
 		});
 		expect(AIError.is(AIError.classify(fatalStream), AIError.Flag.Transient)).toBe(false);
 	});
+
+	it("classifies an incomplete provider stream as transient + retryable", () => {
+		const err = new AIError.ProviderResponseError(
+			"Google API stream ended without a finish reason (connection dropped or response truncated)",
+			{ provider: "google", kind: "incomplete-stream" },
+		);
+		const id = AIError.classify(err);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(id)).toBe(true);
+	});
+
+	it("does not mark a terminal output provider error as transient", () => {
+		const err = new AIError.ProviderResponseError("upstream error", { provider: "google", kind: "output" });
+		expect(AIError.retriable(AIError.classify(err))).toBe(false);
+	});
 });
 
 describe("AIError.finalize", () => {
@@ -75,6 +90,18 @@ describe("AIError.finalize", () => {
 		const result = await AIError.finalize(new AIError.ProviderHttpError("Bad Gateway", 502), {});
 		expect(result.status).toBe(502);
 		expect(AIError.is(result.id, AIError.Flag.Transient)).toBe(true);
+	});
+
+	it("keeps an incomplete-stream provider error retryable through finalize + classifyMessage", async () => {
+		const result = await AIError.finalize(
+			new AIError.ProviderResponseError("stream ended without a finish reason", { kind: "incomplete-stream" }),
+			{},
+		);
+		expect(result.stopReason).toBe("error");
+		expect(AIError.retriable(result.id)).toBe(true);
+		// The transient flag survives a re-classify from the persisted message fields.
+		const reId = AIError.classifyMessage({ errorId: result.id, errorMessage: result.message });
+		expect(AIError.retriable(reId)).toBe(true);
 	});
 });
 
