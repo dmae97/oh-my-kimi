@@ -4,47 +4,34 @@
 
 ### Added
 
-- Added mouse support for scrolling and interaction in the debug log and raw SSE stream viewers
-
-- Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph (replacing the model icon) instead of a separate ` · <level>` suffix.
-- Added support for tracking reasoning tokens in session and advisor statistics
-- Added `compaction.remoteStreamingV2Enabled` setting to toggle V2 streaming for remote compaction
-- Added `compaction.v2RetainedMessageBudget` setting to control token budget for V2 compaction
-- Added Remote Compaction V2 streaming configuration settings
-- Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source ids.
-- Added citation-marker unwrapping for hashline edit parsing, diff preview, streaming matching, and remove/move detection while preserving snapshot tags for hash verification.
+- Added mouse support for scrolling and interaction in the debug log and raw SSE stream viewers.
+- Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph instead of a separate text suffix.
+- Added support for tracking reasoning tokens in session and advisor statistics.
+- Added Remote Compaction V2 streaming configuration settings (`compaction.remoteStreamingV2Enabled` and `compaction.v2RetainedMessageBudget`) to control token budgets and toggle V2 streaming for remote compaction.
+- Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source IDs, along with citation-marker unwrapping for hashline edit parsing, diff previews, and streaming matching.
 - Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
 - Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
-- Added `remoteCompaction` V2 streaming schema fields and compaction settings for Responses-stream remote compaction.
-- Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph (replacing the model icon) instead of a separate ` · <level>` suffix.
 
 ### Changed
 
-- Refactored debug log and raw SSE stream viewers to use a standard overlay component
-- Improved debug log viewer UI with clearer status indicators, controls, and dynamic layout
-- Updated raw SSE debug stream viewer with a consistent UI and improved footer documentation
-- Updated the idle recap to use an LLM-generated summary instead of a static status line
-- Moved the debug raw SSE stream and recent logs views onto fullscreen alternate-screen overlays with wider, bordered layouts.
-- Refined interrupted thinking system instructions to encourage smoother continuation
-- Changed the idle recap from a static "Goal/Next" line into an LLM-generated welcome-back recap: after the idle delay an abortable ephemeral side-channel turn (same pipeline as `/btw`) summarizes where things stand in one or two plain sentences, anchored by the live goal/title and active todo task; any activity cancels the in-flight turn and a late reply is discarded.
+- Refactored and improved the debug log and raw SSE stream viewers to use a standard, wider, bordered overlay component with clearer status indicators, controls, and dynamic layouts.
+- Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.
+- Refined interrupted thinking system instructions to encourage smoother continuation.
 
 ### Fixed
 
-- Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history
-- Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
-- Preserved interrupted assistant thinking as hidden durable context after user interrupts.
-- Fixed resumed OpenAI / OpenAI-Codex sessions losing encrypted reasoning and native assistant turns: rehydration only strips Responses replay metadata for GitHub Copilot now (the sole provider that 401s on warmed-session replay), so remote compaction rebuilds faithful native history instead of sending tool-call-only context with no reasoning.
-- Fixed the ask tool's `Other (type your own)` editor dropping the original question and option list while the user types a custom answer. ([#3660](https://github.com/can1357/oh-my-pi/issues/3660))
-- Fixed auto-snapcompact on text-only active models by downgrading automatic maintenance to context-full compaction instead of failing the session when the active model cannot read snapcompact frames. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
-- Fixed autoresearch's `before_agent_start` handler crashing when `event.systemPrompt` was undefined. The handler now coerces a missing system prompt to an empty string so the autoresearch block still renders. ([#3665](https://github.com/can1357/oh-my-pi/issues/3665))
-- Fixed OMP exiting silently during startup when `~/.codex/hooks/*.{ts,js}` contained standalone Codex hook scripts: untyped scripts are no longer treated as OMP hooks, and dynamic imports of extension/hook modules are wrapped in a `process.exit` guard so a top-level exit raises a recoverable load error instead of terminating the host. ([#3680](https://github.com/can1357/oh-my-pi/issues/3680))
-- Fixed the HTML session export's "toggle thinking" and "toggle tools" keyboard shortcuts being unreachable in a web browser: `Ctrl+T` and `Ctrl+O` are reserved by every major browser (new tab / open file), so the page never saw the keystroke. The shortcuts are now bare `T` / `O` (suppressed while focus is in the search input) and the in-page help bar reads `T toggle thinking · O toggle tools` ([#3670](https://github.com/can1357/oh-my-pi/issues/3670)).
-- Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns. ([#3698](https://github.com/can1357/oh-my-pi/issues/3698))
-- Fixed `/skill:` prompts submitted during compaction so they are re-invoked as user-attributed skill prompts instead of being dropped or treated as plain text.
-- Fixed Ctrl+T staying locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata. ([#3669](https://github.com/can1357/oh-my-pi/issues/3669))
-- Fixed `/shake` (and other mid-stream chat rebuilds) erasing the live LLM output by preserving the in-flight `streamingComponent` and `pendingTools` across `rebuildChatFromMessages` so subsequent `message_update`/`message_end` events keep updating on-screen components. ([#3656](https://github.com/can1357/oh-my-pi/issues/3656))
-- Fixed the `time_spent` status-line segment ticking on wall-clock since session start, so an idle session displayed hours of "time spent" while the agent did nothing. The segment now accumulates only the union of `agent_start`→`agent_end` windows, ticking live during a turn and freezing the instant the agent yields; `/clear` and fresh-session flows zero the meter via the renamed `resetActiveTime` boundary hook. Meters are kept per-session (WeakMap keyed on `AgentSession`) so the focus-controller's mid-turn synthesized `agent_start` cannot leak into the main session's meter on unfocus, a re-focus onto a now-idle subagent drops the stale window rather than crediting the detached gap, and an in-place `switchSession` file swap (`/resume`, `/move`, ACP fork/load, RPC `switch_session`, extension `switchSession`) starts the meter fresh so the resumed conversation does not inherit the previous one's accumulated time. Collab guests also close the meter from the host-idle state reconciler so a reconnect that dropped the host's `agent_end` cannot leave `time_spent` ticking. ([#3681](https://github.com/can1357/oh-my-pi/issues/3681))
-- Fixed auto-snapcompact failing the session on any local blocker (text-only active model, high non-ASCII transcript, kept history exceeding the context budget, or post-render overflow) by downgrading automatic maintenance to context-full compaction. Manual `/compact snapcompact` keeps the local-only failure contract. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
+- Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
+- Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
+- Fixed resumed OpenAI and OpenAI-Codex sessions losing encrypted reasoning and native assistant turns during rehydration.
+- Fixed the ask tool's custom answer editor dropping the original question and option list while typing.
+- Fixed auto-snapcompact failing the session on local blockers (such as text-only active models, high non-ASCII transcripts, or context budget overflows) by gracefully downgrading automatic maintenance to context-full compaction.
+- Fixed autoresearch's `before_agent_start` handler crashing when the system prompt was undefined.
+- Fixed OMP exiting silently during startup when encountering standalone Codex hook scripts in `~/.codex/hooks/`.
+- Fixed unreachable keyboard shortcuts in HTML session exports by changing the "toggle thinking" and "toggle tools" shortcuts from `Ctrl+T` and `Ctrl+O` to bare `T` and `O` keys.
+- Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns, including during compaction.
+- Fixed reasoning streaming being locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata.
+- Fixed `/shake` and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
+- Fixed the `time_spent` status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
 
 ## [16.2.2] - 2026-06-27
 

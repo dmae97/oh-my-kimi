@@ -4,27 +4,18 @@
 
 ### Added
 
-- Added support for V2 streaming remote compaction for compatible AI models
-- Added infrastructure for provider-native tool history replay during V2 remote compaction
-- Added session routing and prompt-cache support to V2 remote compaction requests
-- Added support for V2 streaming remote compaction for eligible OpenAI-compatible models
-- Included sessionId and promptCacheKey support in remote compaction requests
-- Added Responses-stream remote compaction V2 with Codex-style `compaction_trigger` streaming, retained-history replacement, and transient retries.
+- Added V2 streaming remote compaction for compatible AI and OpenAI-compatible models, featuring session routing, prompt-cache support, and provider-native tool history replay.
 
 ### Changed
 
-- Updated remote compaction to forward full conversation history to the provider instead of local trimming
-- Enabled V2 streaming remote compaction by default for compatible models
-- Updated remote compaction to forward full conversation history to the provider instead of local trimming
-- Enabled V2 streaming remote compaction by default for compatible models
+- Enabled V2 streaming remote compaction by default for compatible models.
+- Updated remote compaction to forward full conversation history to the provider instead of performing local trimming.
 
 ### Fixed
 
-- Resolved issue where assistant responses and encrypted reasoning were lost during local history trimming before remote compaction
-- Improved reliability of remote compaction using transient error retries and configurable timeouts
-- Fixed potential hangs by ensuring user-initiated aborts terminate remote compaction immediately
-- Resolved issue where assistant responses and encrypted reasoning were lost during local history trimming before remote compaction
-- Added `title_change` session metadata to the compaction entry type union so hosts with title audit entries remain type-compatible.
+- Fixed an issue where assistant responses and encrypted reasoning were lost during local history trimming prior to remote compaction.
+- Improved reliability of remote compaction with transient error retries, configurable timeouts, and immediate termination upon user-initiated aborts.
+- Added title_change session metadata to the compaction entry type union to maintain type compatibility for hosts with title audit entries.
 
 ## [16.2.2] - 2026-06-27
 
