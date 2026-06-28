@@ -31,6 +31,9 @@
 ### Fixed
 
 - Fixed the HTML session export's "toggle thinking" and "toggle tools" keyboard shortcuts being unreachable in a web browser: `Ctrl+T` and `Ctrl+O` are reserved by every major browser (new tab / open file), so the page never saw the keystroke. The shortcuts are now bare `T` / `O` (suppressed while focus is in the search input) and the in-page help bar reads `T toggle thinking · O toggle tools` ([#3670](https://github.com/can1357/oh-my-pi/issues/3670)).
+### Fixed
+
+- Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns. ([#3698](https://github.com/can1357/oh-my-pi/issues/3698))
 
 ## [16.2.2] - 2026-06-27
 
