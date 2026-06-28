@@ -151,8 +151,14 @@ interface MemoryInstructionSession {
 	sessionManager: Pick<AgentSession["sessionManager"], "getSessionFile">;
 }
 
+interface MemoryToolDeveloperInstructionsSnapshot {
+	summary: string;
+	learned: string;
+}
+
 interface CachedMemoryToolDeveloperInstructions {
 	sessionFile: string | undefined;
+	snapshot: MemoryToolDeveloperInstructionsSnapshot | undefined;
 	value: string | undefined;
 }
 
@@ -160,9 +166,73 @@ const memoryToolDeveloperInstructionsBySession = new WeakMap<
 	MemoryInstructionSession,
 	CachedMemoryToolDeveloperInstructions
 >();
+const memoryToolDeveloperInstructionsByRoot = new Map<string, MemoryToolDeveloperInstructionsSnapshot | undefined>();
+
+function getMemoryInstructionRoot(agentDir: string, settings: Settings): string {
+	return getMemoryRoot(agentDir, settings.getCwd());
+}
 
 function getMemoryInstructionSessionFile(session: MemoryInstructionSession): string | undefined {
 	return session.sessionManager.getSessionFile() ?? undefined;
+}
+
+async function readMemoryToolDeveloperInstructionsSnapshot(
+	agentDir: string,
+	settings: Settings,
+): Promise<MemoryToolDeveloperInstructionsSnapshot | undefined> {
+	const cfg = loadMemoryConfig(settings);
+	if (!cfg.enabled) return undefined;
+	const memoryRoot = getMemoryInstructionRoot(agentDir, settings);
+
+	let summary = "";
+	try {
+		summary = (await Bun.file(path.join(memoryRoot, "memory_summary.md")).text()).trim();
+	} catch {
+		// Missing or unreadable summary — injection is best-effort; fall through
+		// so any captured lessons still surface on their own.
+	}
+	const learned = await readLearnedLessons(memoryRoot);
+	return { summary, learned };
+}
+
+function renderMemoryToolDeveloperInstructionsSnapshot(
+	snapshot: MemoryToolDeveloperInstructionsSnapshot | undefined,
+	settings: Settings,
+): string | undefined {
+	if (!snapshot) return undefined;
+	const cfg = loadMemoryConfig(settings);
+	if (!cfg.enabled) return undefined;
+	if (!snapshot.summary && !snapshot.learned) return undefined;
+
+	const summaryOut = snapshot.summary
+		? truncateByApproxTokens(snapshot.summary, cfg.summaryInjectionTokenLimit).trim()
+		: "";
+	// Lessons share ONE injection budget with the summary so the combined block
+	// stays within `summaryInjectionTokenLimit` (~4 chars/token, matching
+	// truncateByApproxTokens). With no summary, lessons get the whole budget.
+	// Clamp to 0: truncateByApproxTokens appends a marker, so a truncated summary
+	// can exceed `limit * 4` chars and drive the remainder negative — when the
+	// summary already fills the budget, lessons are simply dropped.
+	const learnedBudget = Math.max(0, cfg.summaryInjectionTokenLimit - Math.ceil(summaryOut.length / 4));
+	const learnedOut =
+		snapshot.learned && learnedBudget > 0 ? truncateByApproxTokens(snapshot.learned, learnedBudget).trim() : "";
+	if (!summaryOut && !learnedOut) return undefined;
+
+	return prompt.render(readPathTemplate, {
+		memory_summary: summaryOut,
+		learned: learnedOut,
+	});
+}
+
+function cacheMemoryToolDeveloperInstructions(
+	session: MemoryInstructionSession,
+	sessionFile: string | undefined,
+	snapshot: MemoryToolDeveloperInstructionsSnapshot | undefined,
+	settings: Settings,
+): string | undefined {
+	const value = renderMemoryToolDeveloperInstructionsSnapshot(snapshot, settings);
+	memoryToolDeveloperInstructionsBySession.set(session, { sessionFile, snapshot, value });
+	return value;
 }
 
 /**
@@ -175,6 +245,30 @@ export function clearMemoryToolDeveloperInstructionsCache(session: MemoryInstruc
 }
 
 /**
+ * Refresh the active session's consolidated-memory snapshot after startup maintenance.
+ *
+ * Startup may finish after the first prompt build and write `memory_summary.md`;
+ * the active session should see that summary. It must not reread `learned.md`,
+ * because a `learn` call racing with startup belongs to the next session's
+ * memory prompt, not the active prompt-cache prefix.
+ */
+export async function refreshMemoryToolDeveloperInstructionsCacheAfterStartup(
+	session: MemoryInstructionSession,
+	agentDir: string,
+	settings: Settings,
+): Promise<void> {
+	const sessionFile = getMemoryInstructionSessionFile(session);
+	const cached = memoryToolDeveloperInstructionsBySession.get(session);
+	const current = await readMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+	const root = getMemoryInstructionRoot(agentDir, settings);
+	const baseline = memoryToolDeveloperInstructionsByRoot.get(root);
+	const cachedLearned = cached && cached.sessionFile === sessionFile ? cached.snapshot?.learned : undefined;
+	const learned = cachedLearned ?? baseline?.learned ?? "";
+	const snapshot = current ? { summary: current.summary, learned } : undefined;
+	cacheMemoryToolDeveloperInstructions(session, sessionFile, snapshot, settings);
+}
+
+/**
  * Build memory usage instructions for prompt injection.
  */
 export async function buildMemoryToolDeveloperInstructions(
@@ -182,50 +276,18 @@ export async function buildMemoryToolDeveloperInstructions(
 	settings: Settings,
 	session?: MemoryInstructionSession,
 ): Promise<string | undefined> {
-	if (!session) return buildMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+	if (!session) {
+		const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+		memoryToolDeveloperInstructionsByRoot.set(getMemoryInstructionRoot(agentDir, settings), snapshot);
+		return renderMemoryToolDeveloperInstructionsSnapshot(snapshot, settings);
+	}
 
 	const sessionFile = getMemoryInstructionSessionFile(session);
 	const cached = memoryToolDeveloperInstructionsBySession.get(session);
 	if (cached && cached.sessionFile === sessionFile) return cached.value;
 
-	const value = await buildMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
-	memoryToolDeveloperInstructionsBySession.set(session, { sessionFile, value });
-	return value;
-}
-
-async function buildMemoryToolDeveloperInstructionsSnapshot(
-	agentDir: string,
-	settings: Settings,
-): Promise<string | undefined> {
-	const cfg = loadMemoryConfig(settings);
-	if (!cfg.enabled) return undefined;
-	const memoryRoot = getMemoryRoot(agentDir, settings.getCwd());
-
-	let summary = "";
-	try {
-		summary = (await Bun.file(path.join(memoryRoot, "memory_summary.md")).text()).trim();
-	} catch {
-		// Missing or unreadable summary — injection is best-effort; fall through
-		// so any captured lessons still surface on their own.
-	}
-	const learned = await readLearnedLessons(memoryRoot);
-	if (!summary && !learned) return undefined;
-
-	const summaryOut = summary ? truncateByApproxTokens(summary, cfg.summaryInjectionTokenLimit).trim() : "";
-	// Lessons share ONE injection budget with the summary so the combined block
-	// stays within `summaryInjectionTokenLimit` (~4 chars/token, matching
-	// truncateByApproxTokens). With no summary, lessons get the whole budget.
-	// Clamp to 0: truncateByApproxTokens appends a marker, so a truncated summary
-	// can exceed `limit * 4` chars and drive the remainder negative — when the
-	// summary already fills the budget, lessons are simply dropped.
-	const learnedBudget = Math.max(0, cfg.summaryInjectionTokenLimit - Math.ceil(summaryOut.length / 4));
-	const learnedOut = learned && learnedBudget > 0 ? truncateByApproxTokens(learned, learnedBudget).trim() : "";
-	if (!summaryOut && !learnedOut) return undefined;
-
-	return prompt.render(readPathTemplate, {
-		memory_summary: summaryOut,
-		learned: learnedOut,
-	});
+	const snapshot = await readMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+	return cacheMemoryToolDeveloperInstructions(session, sessionFile, snapshot, settings);
 }
 
 /**
@@ -262,10 +324,7 @@ async function runMemoryStartup(options: {
 }): Promise<void> {
 	await runPhase1(options);
 	await runPhase2(options);
-	// Phase 2 may have rewritten `memory_summary.md`; drop the per-session
-	// snapshot so the refresh below picks up the new summary instead of
-	// returning the cached value from the first prompt build.
-	clearMemoryToolDeveloperInstructionsCache(options.session);
+	await refreshMemoryToolDeveloperInstructionsCacheAfterStartup(options.session, options.agentDir, options.settings);
 	await options.session.refreshBaseSystemPrompt?.();
 }
 

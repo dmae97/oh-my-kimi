@@ -5,8 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildMemoryToolDeveloperInstructions,
-	clearMemoryToolDeveloperInstructionsCache,
 	getMemoryRoot,
+	refreshMemoryToolDeveloperInstructionsCacheAfterStartup,
 	saveLearnedLesson,
 } from "@oh-my-pi/pi-coding-agent/memories";
 import { localBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/local-backend";
@@ -198,22 +198,30 @@ describe("learned-lesson read-back", () => {
 		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
 	});
 
-	it("refreshes the frozen memory prompt after background consolidation invalidates it", async () => {
+	it("uses the pre-session learned snapshot when startup refresh has no session cache yet", async () => {
 		const settings = Settings.isolated({ "memory.backend": "local" });
-		const session = sessionWithFile("session-consolidate.jsonl");
-		// First build (before background consolidation finishes) snapshots an empty result.
-		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Prior-session lesson" });
+		const initial = await buildMemoryToolDeveloperInstructions(agentDir, settings);
+		expect(initial).toContain("Prior-session lesson");
 
+		const session = sessionWithFile("session-consolidate.jsonl");
+		// The active session learns while the background pipeline is still running,
+		// before any session-scoped prompt rebuild has populated the WeakMap.
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Active-session lesson" });
 		// Background pipeline writes the consolidated summary later.
 		const root = getMemoryRoot(agentDir, settings.getCwd());
 		await Bun.write(path.join(root, "memory_summary.md"), "Consolidated guidance here.\n");
 
-		// Without invalidation the cached undefined would stick.
-		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
-
-		clearMemoryToolDeveloperInstructionsCache(session);
+		await refreshMemoryToolDeveloperInstructionsCacheAfterStartup(session, agentDir, settings);
 		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings, session);
 		expect(out).toContain("Consolidated guidance here.");
+		expect(out).toContain("Prior-session lesson");
+		expect(out).not.toContain("Active-session lesson");
+
+		const nextSession = sessionWithFile("session-after-consolidate.jsonl");
+		const nextOut = await buildMemoryToolDeveloperInstructions(agentDir, settings, nextSession);
+		expect(nextOut).toContain("Consolidated guidance here.");
+		expect(nextOut).toContain("Active-session lesson");
 	});
 
 	it("injects both the summary and lessons when both exist", async () => {
