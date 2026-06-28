@@ -35,17 +35,6 @@ export interface DesktopNotifier {
 }
 
 /**
- * Terminal ids that ship their own in-app notification surface and would
- * otherwise show a duplicate toast (the editor's own UI plus the D-Bus toast).
- * Conservative whitelist — only terminals known to surface notifications in
- * their host UI today; new entries land alongside the evidence.
- */
-const NATIVE_NOTIFY_TERMINALS: Partial<Record<TerminalId, true>> = {
-	vscode: true,
-	warp: true,
-};
-
-/**
  * Whether the current process can reach a freedesktop notification daemon:
  * Linux platform + a session bus address in env. Caller is still responsible
  * for resolving a delivery binary via {@link resolveDesktopNotifier}.
@@ -60,21 +49,21 @@ export function hasLinuxDesktopSession(
 
 /**
  * Whether `sendNotification` should also dispatch a D-Bus toast for this
- * terminal. Returns true only when (1) the terminal lacks an in-band escape
- * for arbitrary toasts (BEL is the chosen `notifyProtocol`), (2) the host
- * exposes a Linux desktop session, (3) the terminal does not already render
- * notifications in its own UI, and (4) the user has not opted out via
- * `PI_NO_DESKTOP_NOTIFY=1`. Pure helper for tests and the singleton path.
+ * terminal. Returns true only when (1) the chosen `notifyProtocol` is BEL,
+ * which cannot carry arbitrary toast text, (2) the host exposes a Linux desktop
+ * session, and (3) the user has not opted out via `PI_NO_DESKTOP_NOTIFY=1`.
+ * Terminals that genuinely speak OSC 9 / OSC 99 pass
+ * `notifyProtocolIsBell=false` and are filtered before the D-Bus fallback can
+ * run. Pure helper for tests and the singleton path.
  */
 export function shouldDeliverDesktopNotification(
-	terminalId: TerminalId,
+	_terminalId: TerminalId,
 	notifyProtocolIsBell: boolean,
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = Bun.env,
 ): boolean {
 	if (!notifyProtocolIsBell) return false;
 	if (!hasLinuxDesktopSession(platform, env)) return false;
-	if (NATIVE_NOTIFY_TERMINALS[terminalId]) return false;
 	if (env.PI_NO_DESKTOP_NOTIFY === "1") return false;
 	return true;
 }
