@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed an issue where assistant responses and encrypted reasoning were lost during local history trimming prior to remote compaction.
+- Improved reliability of remote compaction with transient error retries, configurable timeouts, and immediate termination upon user-initiated aborts.
+- Added title_change session metadata to the compaction entry type union to maintain type compatibility for hosts with title audit entries.
+- Fixed transient stream read failures after a completed tool call being treated as terminal errors; the agent now executes the completed tool call and continues the turn.
+
 ## [16.2.3] - 2026-06-28
 
 ### Changed
@@ -12,12 +19,6 @@
 
 - Fixed an issue where assistant responses and encrypted reasoning could be lost during local history trimming.
 - Added `title_change` session metadata to the compaction entry type union to maintain type compatibility for hosts with title audit entries.
-- Fixed an issue where assistant responses and encrypted reasoning were lost during local history trimming prior to remote compaction.
-- Improved reliability of remote compaction with transient error retries, configurable timeouts, and immediate termination upon user-initiated aborts.
-- Added title_change session metadata to the compaction entry type union to maintain type compatibility for hosts with title audit entries.
-### Fixed
-
-- Fixed transient stream read failures after a completed tool call being treated as terminal errors; the agent now executes the completed tool call and continues the turn.
 
 ## [16.2.2] - 2026-06-27
 

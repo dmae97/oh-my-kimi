@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added contract tests for `resolveUsedFraction` covering all four resolution paths (explicit fraction, used/limit, percent+used, inverted remaining) and their precedence ordering
+
+### Fixed
+
+- Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
+- Fixed OpenAI Responses `stream_read_error` provider events being classified as non-transient, which prevented the coding agent's auto-retry path from continuing after a recoverable stream read failure.
+- Enabled freeform tool patch support for Azure OpenAI and Codex models
+- Fixed /usage show returning "No usage data available" when using a custom proxy base URL for Codex by routing usage and credit-reset requests to the canonical ChatGPT origin
+- Fixed Z.AI usage reporting to preserve distinct 5-hour, weekly, and monthly quota windows instead of rendering duplicate token windows as separate accounts.
+
 ## [16.2.3] - 2026-06-28
 
 ### Changed
@@ -14,17 +26,6 @@
 
 - Enabled freeform tool patch support for Azure OpenAI and Codex models.
 - Fixed an issue where the `/usage show` command returned "No usage data available" when using a custom proxy base URL for Codex.
-
-### Fixed
-
-- Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
-
-### Fixed
-
-- Fixed OpenAI Responses `stream_read_error` provider events being classified as non-transient, which prevented the coding agent's auto-retry path from continuing after a recoverable stream read failure.
-- Enabled freeform tool patch support for Azure OpenAI and Codex models
-- Fixed /usage show returning "No usage data available" when using a custom proxy base URL for Codex by routing usage and credit-reset requests to the canonical ChatGPT origin
-- Fixed Z.AI usage reporting to preserve distinct 5-hour, weekly, and monthly quota windows instead of rendering duplicate token windows as separate accounts.
 
 ## [16.2.2] - 2026-06-27
 
@@ -164,9 +165,6 @@
 - Fixed OpenRouter Anthropic models on the Responses path omitting `cache_control`, so prompt caching engages without forcing Chat Completions. ([#3397](https://github.com/can1357/oh-my-pi/issues/3397))
 - Fixed OpenRouter Anthropic Responses follow-up requests replaying prior reasoning items with stale signatures, which caused HTTP 400 `Invalid signature in thinking block` errors after a thinking turn. ([#3399](https://github.com/can1357/oh-my-pi/issues/3399))
 - Fixed OpenRouter Anthropic models on the Responses path omitting `cache_control`, so prompt caching engages without forcing Chat Completions. `cacheRetention: "long"` now upgrades the breakpoint to `ttl: "1h"`. ([#3397](https://github.com/can1357/oh-my-pi/issues/3397))
-### Added
-
-- Added contract tests for `resolveUsedFraction` covering all four resolution paths (explicit fraction, used/limit, percent+used, inverted remaining) and their precedence ordering
 
 ## [16.1.16] - 2026-06-23
 

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
+- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
+- Fixed `/move <dir>` to relocate the current session file and artifacts into the target directory's resume bucket instead of switching to a new empty target session, so `/resume` from the target directory shows the moved conversation.
+- Fixed `omp update` leaving older Bun install-cache copies of globally installed `omp` packages behind. After a successful Bun global install, the update command now prunes stale `pkg@version@@@N` cache directories and their marker entries for packages present in Bun's global `node_modules` tree, while leaving unrelated shared-cache packages untouched.
+
 ## [16.2.3] - 2026-06-28
 
 ### Added
@@ -34,8 +41,6 @@
 - Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature.
 - Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
 - Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
-- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
-- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
 - Fixed resumed OpenAI and OpenAI-Codex sessions losing encrypted reasoning and native assistant turns during rehydration.
 - Fixed the ask tool's custom answer editor dropping the original question and option list while typing.
 - Fixed auto-snapcompact failing the session on local blockers (such as text-only active models, high non-ASCII transcripts, or context budget overflows) by gracefully downgrading automatic maintenance to context-full compaction.
@@ -52,9 +57,6 @@
 ### Removed
 
 - Removed history URI support for reading agent transcripts
-### Fixed
-
-- Fixed `/move <dir>` to relocate the current session file and artifacts into the target directory's resume bucket instead of switching to a new empty target session, so `/resume` from the target directory shows the moved conversation.
 
 ## [16.2.2] - 2026-06-27
 
@@ -2406,8 +2408,6 @@
 - Fixed empty assistant stop retry continuations preserving auto-retry state until a non-empty assistant turn completes or recovery reaches its retry cap.
 - Fixed TTSR rule conditions never matching streamed `edit`/`write` tool calls whose wire format obscures the real content (hashline `+` body rows, apply_patch envelopes, JSON-escaped `write` content). The edit and write tools now expose a `matcherDigest` normalization and TTSR matches against the introduced source text, so rule regexes stay universal regardless of the active edit mode.
 
-- Fixed `omp update` leaving older Bun install-cache copies of globally installed `omp` packages behind. After a successful Bun global install, the update command now prunes stale `pkg@version@@@N` cache directories and their marker entries for packages present in Bun's global `node_modules` tree, while leaving unrelated shared-cache packages untouched.
-
 ### Changed
 
 - Changed the JJ utility API to mirror Git's scoped helpers: repository operations now live under `jj.repo` (`root`, `resolve`, `is`, `clearRootCache`), and diff file listing is available as `jj.diff.changedFiles`.
@@ -2420,6 +2420,7 @@
 - Fixed an unhandled `EPIPE` rejection when an MCP stdio server exits between returning the `initialize` response and the client's `notifications/initialized` send. `StdioTransport.notify()` and `#sendResponse()` now route stdin writes through a shared helper that catches synchronous sink failures: `notify()` tears the transport down (firing `onClose`) and surfaces a `Transport closed while sending notification` rejection so `connectToServer()` treats the handshake as a failed connection instead of returning a "connected" handle wrapping a dead transport; `#sendResponse()` stays silent because a dead subprocess has no use for the response. `StdioTransport.close()` is now the authoritative resource teardown — it no longer early-returns when `#handleClose()` has already flipped `#connected`, so the subprocess and read loop are always cleaned up (including in the `connectToServer()` failure path) ([#1710](https://github.com/can1357/oh-my-pi/issues/1710)).
 - Fixed startup model resolution ignoring cached discovery rows for special built-in providers (`google-antigravity`, `google-gemini-cli`, `openai-codex`) until the background refresh completed ([#1721](https://github.com/can1357/oh-my-pi/issues/1721)).
 - Fixed Windows clipboard-image paste keeping `Ctrl+V` unregistered by default. The TUI now registers `Ctrl+V` plus the Windows Terminal-safe `Alt+V` fallback, and the keybinding docs call out when to use the fallback ([#1708](https://github.com/can1357/oh-my-pi/issues/1708)).
+
 ## [15.8.0] - 2026-06-02
 
 ### Added
