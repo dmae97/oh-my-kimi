@@ -354,3 +354,62 @@ describe("matcherDigest", () => {
 		expect(EDIT_MODE_STRATEGIES.replace.matcherDigest({})).toBeUndefined();
 	});
 });
+
+describe("hashline streaming preview (tag-based path recovery)", () => {
+	const strategy = EDIT_MODE_STRATEGIES.hashline;
+	const text = "const a = 1;\nconst b = 2;\n";
+	let tmpDir: string;
+	let nestedFile: string;
+	let snapshots: InMemorySnapshotStore;
+	let header: string;
+
+	beforeEach(async () => {
+		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-recover-"));
+		// The file lives in a nested dir; the model authored a bare `[mod.ts#tag]`
+		// header (basename only), and the snapshot was recorded under the real
+		// nested path when the file was read. cwd has no top-level mod.ts.
+		nestedFile = path.join(tmpDir, "pkg", "src", "mod.ts");
+		await Bun.write(nestedFile, text);
+		snapshots = new InMemorySnapshotStore();
+		header = formatHashlineHeader("mod.ts", snapshots.record(nestedFile, text));
+	});
+
+	afterEach(async () => {
+		await removeWithRetries(tmpDir);
+	});
+
+	const ctx = (cwd: string, isStreaming: boolean) => ({
+		cwd,
+		signal: new AbortController().signal,
+		snapshots,
+		isStreaming,
+	});
+
+	test("streaming: recovers the bare header onto its nested file instead of blanking", async () => {
+		const input = `${header}\nSWAP 1.=1:\n+const a = 99;`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, true) as never);
+		expect(previews).not.toBeNull();
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const a = 99;");
+	});
+
+	test("args-complete: recovers the bare header for the final Myers diff too", async () => {
+		const input = `${header}\nSWAP 1.=1:\n+const a = 99;`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
+		expect(previews).not.toBeNull();
+		expect(previews).toHaveLength(1);
+		expect(previews?.[0]?.error).toBeUndefined();
+		expect(previews?.[0]?.diff).toContain("const a = 99;");
+	});
+
+	test("no unique basename+tag match: surfaces the read error instead of recovering", async () => {
+		// A header whose basename matches no retained snapshot path cannot recover;
+		// the preview must report the failure rather than silently pick a file.
+		const orphan = formatHashlineHeader("absent.ts", snapshots.record(nestedFile, text));
+		const input = `${orphan}\nSWAP 1.=1:\n+const a = 99;`;
+		const previews = await strategy.computeDiffPreview({ input } as never, ctx(tmpDir, false) as never);
+		expect(previews).not.toBeNull();
+		expect(previews?.[0]?.error).toBeTruthy();
+	});
+});

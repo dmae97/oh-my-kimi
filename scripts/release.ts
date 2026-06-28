@@ -7,7 +7,7 @@
  *   bun scripts/release.ts watch                         Watch CI for current commit
  *
  * Example: bun scripts/release.ts minor
-
+ */
 import { $, Glob } from "bun";
 import { runChangelogFixer } from "./fix-changelogs";
 
