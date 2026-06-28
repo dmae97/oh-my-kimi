@@ -12,8 +12,10 @@ import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
  * `/usage show` (issue #3679).
  *
  * Accepted overrides are the canonical `chatgpt.com` / `chat.openai.com`
- * origins (optionally without `/backend-api`, which is appended). Any other
- * host falls back to {@link CODEX_BASE_URL}.
+ * origins. Any extra path (e.g. a streaming override like
+ * `/backend-api/codex/responses`) is normalized to `${origin}/backend-api`,
+ * since the account endpoints always live directly under `/backend-api`. Any
+ * other host falls back to {@link CODEX_BASE_URL}.
  */
 export function normalizeCodexBaseUrl(baseUrl?: string): string {
 	const trimmed = baseUrl?.trim().replace(/\/+$/, "");
@@ -26,7 +28,8 @@ export function normalizeCodexBaseUrl(baseUrl?: string): string {
 	}
 	const host = parsed.host.toLowerCase();
 	if (host !== "chatgpt.com" && host !== "chat.openai.com") return CODEX_BASE_URL;
-	const lower = trimmed.toLowerCase();
-	if (!lower.includes("/backend-api")) return `${parsed.origin}/backend-api`;
-	return trimmed;
+	// wham/usage always lives at `${origin}/backend-api/...` on the canonical
+	// ChatGPT origin, so ignore any extra path (e.g. `/backend-api/codex/responses`
+	// from a streaming baseUrl) — otherwise we'd build `.../codex/responses/wham/usage`.
+	return `${parsed.origin}/backend-api`;
 }
