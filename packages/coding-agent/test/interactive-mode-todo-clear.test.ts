@@ -144,6 +144,16 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(mode.todoReminderContainer.children).toHaveLength(0);
 		expect(renderTodos(mode)).toContain("current task");
 	});
+
+	it("clears stale todo reminders when direct todo state updates", async () => {
+		await createMode(-1);
+		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
+
+		mode.setTodos([{ name: "Implementation", tasks: [{ content: "current task", status: "pending" }] }]);
+
+		expect(mode.todoReminderContainer.children).toHaveLength(0);
+		expect(renderTodos(mode)).toContain("current task");
+	});
 });
 
 describe("InteractiveMode todo HUD anchor", () => {

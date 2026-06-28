@@ -17,7 +17,7 @@ function createContext() {
 		init: vi.fn(async () => {}),
 		ui: { requestRender: vi.fn() },
 		pendingTools: new Map(),
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),

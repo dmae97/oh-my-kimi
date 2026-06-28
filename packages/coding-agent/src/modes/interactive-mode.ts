@@ -4093,6 +4093,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
+		this.todoReminderContainer.clear();
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();

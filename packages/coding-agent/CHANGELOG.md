@@ -31,6 +31,8 @@
 - Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature.
 - Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
 - Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
+- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
+- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
 - Fixed resumed OpenAI and OpenAI-Codex sessions losing encrypted reasoning and native assistant turns during rehydration.
 - Fixed the ask tool's custom answer editor dropping the original question and option list while typing.
 - Fixed auto-snapcompact failing the session on local blockers (such as text-only active models, high non-ASCII transcripts, or context budget overflows) by gracefully downgrading automatic maintenance to context-full compaction.
@@ -71,9 +73,6 @@
 - Fixed Tavily web search with recency filters to retry once without `time_range` when Tavily returns HTTP 200 with no renderable content. ([#3633](https://github.com/can1357/oh-my-pi/issues/3633))
 - Fixed TUI thought stream stalling and `ui.loop-blocked` warnings during subagent-heavy runs by replacing the mid-run compaction persistence check's O(n²) branch rebuild + per-pair `JSON.stringify` content compare with a one-shot persistence-key snapshot. Content equality is preserved as the rare collision tiebreaker. ([#3629](https://github.com/can1357/oh-my-pi/issues/3629))
 - Fixed marketplace-installed plugins appearing in both the npm plugin list and the OMP extension-package status provider. ([#3628](https://github.com/can1357/oh-my-pi/issues/3628))
-### Fixed
-
-- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
 
 ## [16.2.1] - 2026-06-27
 
@@ -86,9 +85,7 @@
 
 - Fixed live ACP `generate_image` updates resolving OMP-internal image blob refs before sending renderable image content to clients. ([#3623](https://github.com/can1357/oh-my-pi/issues/3623))
 - Fixed Claude marketplace plugin `.mcp.json` MCP servers to expand environment variables in `url` and `headers` before connecting. ([#3621](https://github.com/can1357/oh-my-pi/issues/3621))
-### Fixed
 
-- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
 
 ## [16.2.0] - 2026-06-27
 

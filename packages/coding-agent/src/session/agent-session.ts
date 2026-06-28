@@ -116,6 +116,7 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
+	escapeXmlText,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
@@ -6497,9 +6498,9 @@ export class AgentSession {
 				} else {
 					open++;
 				}
-				taskLines.push(`  - [${task.status}] ${task.content}`);
+				taskLines.push(`  - [${task.status}] ${escapeXmlText(task.content)}`);
 			}
-			lines.push(`- ${phase.name}\n${taskLines.join("\n")}`);
+			lines.push(`- ${escapeXmlText(phase.name)}\n${taskLines.join("\n")}`);
 		}
 
 		return (
