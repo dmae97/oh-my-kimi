@@ -11,6 +11,10 @@
 - Updated pricing and context window limits for several catalog models.
 - Disabled reasoning capability for multiple providers in the catalog.
 
+### Fixed
+
+- Fixed LiteLLM MiniMax M3 discovery to drop reseller-only `(3x usage)` display suffixes. ([#3715](https://github.com/can1357/oh-my-pi/issues/3715))
+
 ## [16.2.2] - 2026-06-27
 
 ### Removed

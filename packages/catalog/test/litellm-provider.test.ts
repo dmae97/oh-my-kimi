@@ -317,6 +317,39 @@ describe("LiteLLM provider discovery", () => {
 		expect(models?.[0]).toMatchObject({ id: "legacy-gpt", contextWindow: 96_000 });
 	});
 
+	test("drops reseller usage suffix from LiteLLM rich model names", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "minimax-m3",
+							model_name: "MiniMax M3 (3x usage)",
+						},
+					],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(models?.[0]).toMatchObject({
+			id: "minimax-m3",
+			name: "MiniMax M3",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+		});
+	});
+
 	test("falls back to OpenAI models list when rich endpoints are unavailable", async () => {
 		const authByUrl = new Map<string, string | undefined>();
 		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

@@ -2856,6 +2856,33 @@ function normalizeLiteLLMRuntimeBaseUrl(baseUrl: string): string {
 	return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
+const LITELLM_RESELLER_USAGE_SUFFIX = /\s+\(\d+(?:\.\d+)?[x×] usage\)$/i;
+
+function stripLiteLLMResellerUsageSuffix(name: string): string {
+	const cleaned = name.replace(LITELLM_RESELLER_USAGE_SUFFIX, "").trim();
+	return cleaned.length > 0 ? cleaned : name;
+}
+
+function toLiteLLMDisplayName(modelName: string | undefined, referenceName: string | undefined, id: string): string {
+	const cleanedModelName = modelName ? stripLiteLLMResellerUsageSuffix(modelName) : undefined;
+	if (cleanedModelName && cleanedModelName !== id) {
+		return cleanedModelName;
+	}
+	return referenceName ? stripLiteLLMResellerUsageSuffix(referenceName) : id;
+}
+
+function mapLiteLLMOpenAICompatibleModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	const model = mapWithBundledReference(entry, defaults, reference);
+	return {
+		...model,
+		name: stripLiteLLMResellerUsageSuffix(model.name),
+	};
+}
+
 function toNonEmptyString(value: unknown): string | undefined {
 	if (typeof value !== "string") {
 		return undefined;
@@ -2955,7 +2982,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 	};
 	return {
 		id,
-		name: modelName && modelName !== id ? modelName : (reference?.name ?? id),
+		name: toLiteLLMDisplayName(modelName, reference?.name, id),
 		api: options.api,
 		provider: options.provider,
 		baseUrl: runtimeBaseUrl,
@@ -3074,7 +3101,8 @@ export function litellmModelManagerOptions(
 				provider: "litellm",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) => mapWithBundledReference(entry, defaults, resolveReference(defaults.id)),
+				mapModel: (entry, defaults) =>
+					mapLiteLLMOpenAICompatibleModel(entry, defaults, resolveReference(defaults.id)),
 				fetch: config?.fetch,
 			});
 		},
