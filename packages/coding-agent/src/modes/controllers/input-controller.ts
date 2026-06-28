@@ -725,7 +725,7 @@ export class InputController {
 					this.ctx.queueCompactionMessage(text, "steer", images);
 					return;
 				}
-				if (await this.#invokeSkillCommand(text, "steer")) {
+				if (await this.#invokeSkillCommand(text, "steer", inputImages, inputImageLinks)) {
 					return;
 				}
 			}
@@ -1082,27 +1082,52 @@ export class InputController {
 
 	/**
 	 * Dispatch a `/skill:<name> [args]` invocation through `promptCustomMessage`
-	 * using the supplied `streamingBehavior`. Returns true if the text was a
-	 * recognised skill command and was dispatched. A failure to load the skill
-	 * file is surfaced via `showError` but still returns true — the editor was
-	 * already cleared on the success path, so falling through to plain-text
-	 * handling at that point would double-submit. Returns false when the text
-	 * isn't a `/skill:` prefix or the command name isn't a registered skill,
-	 * so the caller can fall through to plain-text handling (this branch
-	 * leaves the editor state untouched). `streamingBehavior` is only consulted
-	 * while the agent is streaming; the idle path of `promptCustomMessage`
-	 * ignores it.
+	 * using the supplied `streamingBehavior`. Returns false when the text is not
+	 * a registered skill command and leaves the editor state untouched. Registered
+	 * skills consume the full composer draft (text plus pending images) before
+	 * dispatch; if dispatch rejects, the draft is restored so the user can retry.
 	 */
-	async #invokeSkillCommand(text: string, streamingBehavior: "steer" | "followUp"): Promise<boolean> {
+	async #invokeSkillCommand(
+		text: string,
+		streamingBehavior: "steer" | "followUp",
+		images?: ImageContent[],
+		imageLinks?: (string | undefined)[],
+	): Promise<boolean> {
 		if (!isKnownSkillCommand(this.ctx, text)) return false;
-		this.ctx.editor.addToHistory(text);
-		this.ctx.editor.setText("");
-		const handled = await invokeSkillCommandFromText(this.ctx, text, streamingBehavior);
-		if (this.ctx.session.isStreaming) {
-			this.ctx.updatePendingMessagesDisplay();
-			this.ctx.ui.requestRender();
+		const draftImages = images && images.length > 0 ? [...images] : undefined;
+		const draftImageLinks = draftImages && imageLinks && imageLinks.length > 0 ? [...imageLinks] : undefined;
+		const restoreDraft = () => {
+			this.ctx.editor.setText(text);
+			if (draftImages && draftImages.length > 0) {
+				this.ctx.editor.pendingImages = [...draftImages];
+				this.ctx.editor.pendingImageLinks = draftImageLinks
+					? [...draftImageLinks]
+					: draftImages.map(() => undefined);
+				this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
+			}
+		};
+
+		this.ctx.editor.clearDraft(text);
+		try {
+			const handled = await invokeSkillCommandFromText(this.ctx, text, streamingBehavior, {
+				images: draftImages,
+				propagateErrors: true,
+			});
+			if (!handled) {
+				restoreDraft();
+				return false;
+			}
+			return true;
+		} catch (error) {
+			restoreDraft();
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+			return true;
+		} finally {
+			if (this.ctx.session.isStreaming) {
+				this.ctx.updatePendingMessagesDisplay();
+				this.ctx.ui.requestRender();
+			}
 		}
-		return handled;
 	}
 
 	async handleRetry(): Promise<void> {
@@ -1162,7 +1187,7 @@ export class InputController {
 		// Skill commands invoke through the custom-message path regardless of
 		// which keybinding submitted them. Enter routes them as `steer`;
 		// Ctrl+Enter (this handler) routes them as `followUp`.
-		if (text && (await this.#invokeSkillCommand(text, "followUp"))) {
+		if (text && (await this.#invokeSkillCommand(text, "followUp", images, imageLinks))) {
 			return;
 		}
 
