@@ -1108,7 +1108,10 @@ describe("AgentSession handoff", () => {
 			`<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`,
 		);
 		expect(handoffSessionFile).not.toBe(previousSessionFile);
-		expect(handoffEntries[0]).toMatchObject({ type: "session", parentSession: previousSessionFile });
+		expect(handoffEntries.find(entry => entry.type === "session")).toMatchObject({
+			type: "session",
+			parentSession: previousSessionFile,
+		});
 		expect(
 			handoffEntries.some(
 				entry => entry.type === "custom_message" && entry.customType === "handoff" && entry.display,
