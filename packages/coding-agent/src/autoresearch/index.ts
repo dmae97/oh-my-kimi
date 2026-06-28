@@ -320,6 +320,11 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		runtime.lastRunDuration = pendingRun?.durationSeconds ?? runtime.lastRunDuration;
 		runtime.lastRunAsi = pendingRun?.parsedAsi ?? runtime.lastRunAsi;
 		const state = runtime.state;
+		// `event.systemPrompt` is typed `string[]`, but upstream code paths can leave
+		// it unset (issue #3665). Coerce defensively so the autoresearch block still
+		// renders — the model just loses the upstream prefix for this turn, which is
+		// strictly better than crashing the handler.
+		const basePrompt = Array.isArray(event.systemPrompt) ? event.systemPrompt.join("\n\n") : "";
 		const currentSegmentResults = currentResults(state.results, state.currentSegment);
 		const baselineMetric = findBaselineMetric(state.results, state.currentSegment);
 		const baselineRunNumber = findBaselineRunNumber(state.results, state.currentSegment);
@@ -358,7 +363,7 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 			return {
 				systemPrompt: [
 					prompt.render(setupPromptTemplate, {
-						base_system_prompt: event.systemPrompt.join("\n\n"),
+						base_system_prompt: basePrompt,
 						has_goal: goal.trim().length > 0,
 						goal,
 						working_dir: ctx.cwd,
@@ -373,7 +378,7 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		return {
 			systemPrompt: [
 				prompt.render(promptTemplate, {
-					base_system_prompt: event.systemPrompt.join("\n\n"),
+					base_system_prompt: basePrompt,
 					has_goal: goal.trim().length > 0,
 					goal,
 					working_dir: ctx.cwd,

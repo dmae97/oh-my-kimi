@@ -22,6 +22,9 @@
 - Fixed resumed OpenAI / OpenAI-Codex sessions losing encrypted reasoning and native assistant turns: rehydration only strips Responses replay metadata for GitHub Copilot now (the sole provider that 401s on warmed-session replay), so remote compaction rebuilds faithful native history instead of sending tool-call-only context with no reasoning.
 - Fixed the ask tool's `Other (type your own)` editor dropping the original question and option list while the user types a custom answer. ([#3660](https://github.com/can1357/oh-my-pi/issues/3660))
 - Fixed auto-snapcompact on text-only active models by downgrading automatic maintenance to context-full compaction instead of failing the session when the active model cannot read snapcompact frames. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
+### Fixed
+
+- Fixed autoresearch's `before_agent_start` handler crashing when `event.systemPrompt` was undefined. The handler now coerces a missing system prompt to an empty string so the autoresearch block still renders. ([#3665](https://github.com/can1357/oh-my-pi/issues/3665))
 
 ## [16.2.2] - 2026-06-27
 
