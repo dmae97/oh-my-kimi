@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed the in-process `tail` builtin aborting the whole host process with a `BrokenPipe` panic when its stdout consumer closed the pipe early. The bounded (seekable, large-file) path `unwrap()`ed the `io::copy` write into the command's file descriptor; it now propagates the error through `bounded_tail`/`print_target_section` like the unbounded path and the sibling `cat` builtin, so a closed reader surfaces as a normal non-zero exit instead of `std::process::abort`.
+- Fixed a crash in the in-process `tail` builtin where the host process would abort with a `BrokenPipe` panic if the stdout consumer closed the pipe early.
 
 ## [16.1.23] - 2026-06-26
 

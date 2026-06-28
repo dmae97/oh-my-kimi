@@ -151,10 +151,12 @@ fn run_caught(run: UutilRun, argv: Vec<OsString>) -> i32 {
 	let name = argv
 		.first()
 		.map_or_else(|| String::from("command"), |arg| arg.to_string_lossy().into_owned());
-	if let Ok(code) = catch_unwind(|| run(argv)) { code } else {
- 			let _ = writeln!(pi_uutils_ctx::stderr(), "{name}: internal error");
- 			1
- 		}
+	if let Ok(code) = catch_unwind(|| run(argv)) {
+		code
+	} else {
+		let _ = writeln!(pi_uutils_ctx::stderr(), "{name}: internal error");
+		1
+	}
 }
 
 /// Minimal help/usage content for a uutils-backed builtin. The full utility
@@ -211,8 +213,10 @@ uutil_builtin!(pub fn uniq_builtin => uu_uniq::run);
 #[cfg(test)]
 mod tests {
 	use std::{
+		collections::HashMap,
 		ffi::OsString,
 		io::{self, Write},
+		path::PathBuf,
 		sync::{Arc, atomic::AtomicBool, mpsc},
 	};
 
@@ -226,6 +230,7 @@ mod tests {
 			let _ = self.0.send(buf.to_vec());
 			Ok(buf.len())
 		}
+
 		fn flush(&mut self) -> io::Result<()> {
 			Ok(())
 		}
@@ -233,21 +238,20 @@ mod tests {
 
 	fn scope_io(stderr: Box<dyn Write + Send>) -> pi_uutils_ctx::ScopeIo {
 		pi_uutils_ctx::ScopeIo {
-			stdin:                 Box::new(io::empty()),
-			stdin_fd:              None,
+			stdin: Box::new(io::empty()),
+			stdin_fd: None,
 			stdin_is_search_input: false,
-			stdout:                Box::new(io::sink()),
+			stdout: Box::new(io::sink()),
 			stderr,
-			cwd:                   std::path::PathBuf::from("."),
-			env:                   std::collections::HashMap::new(),
-			cancel:                Arc::new(AtomicBool::new(false)),
+			cwd: PathBuf::from("."),
+			env: HashMap::new(),
+			cancel: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
 	fn run_in_scope(run: UutilRun, argv: Vec<OsString>) -> (i32, String) {
 		let (tx, rx) = mpsc::channel();
-		let code =
-			pi_uutils_ctx::scope(scope_io(Box::new(ChanWriter(tx))), || run_caught(run, argv));
+		let code = pi_uutils_ctx::scope(scope_io(Box::new(ChanWriter(tx))), || run_caught(run, argv));
 		let mut err = Vec::new();
 		while let Ok(chunk) = rx.try_recv() {
 			err.extend_from_slice(&chunk);

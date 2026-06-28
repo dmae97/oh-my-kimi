@@ -4,12 +4,12 @@
 
 ### Fixed
 
-- Anchored the todo-reminder HUD outside durable chat history while preserving native Todo HUD collapsing and auto-clear behavior.
-- Fixed goal-mode continuations losing sight of persisted todo progress by injecting the current todo state into hidden goal context, so autonomous goal turns reconcile stale `in_progress` items before moving to later work.
-- Fixed `/move <dir>` to relocate the current session file and artifacts into the target directory's resume bucket instead of switching to a new empty target session, so `/resume` from the target directory shows the moved conversation.
-- Fixed `omp update` leaving older Bun install-cache copies of globally installed `omp` packages behind. After a successful Bun global install, the update command now prunes stale `pkg@version@@@N` cache directories and their marker entries for packages present in Bun's global `node_modules` tree, while leaving unrelated shared-cache packages untouched.
-- Fixed `/collab` host disconnecting in a loop ("Collab relay connection lost (Connection ended), reconnecting…") when the live session held an oversized entry (typically a `read`/`bash`/`search` tool result that captured several megabytes of output). `CollabHost.#sendSnapshotChunks` packed entries into 512 KB-target batches but added the first entry of every batch unconditionally, so a single oversized entry shipped as its own oversized chunk; the relay closed the host's WebSocket with `1006 Received too big message`, `CollabSocket` reconnected on the non-fatal code, the next guest hello triggered the same oversized send, and the loop never broke. The host now runs every replicated entry and event through a `shrinkForReplication` helper that head-truncates long strings with an `[…N chars elided for collab session]` marker once a payload exceeds `MAX_REPLICATED_PAYLOAD_BYTES = 1 MB`; the snapshot chunk train, live `entry` broadcasts, and live `event` broadcasts (including large `tool_execution_end` results) all ride that cap, so single oversized entries no longer kill the host's WebSocket ([#3739](https://github.com/can1357/oh-my-pi/issues/3739)).
-- Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session by keeping passive capture guidance and learned-memory prompt injections session-stable.
+- Fixed todo-reminder HUD rendering outside durable chat history while preserving native collapsing and auto-clear behavior.
+- Fixed goal-mode continuations losing track of persisted todo progress, ensuring autonomous goal turns reconcile stale in-progress items before moving to subsequent tasks.
+- Fixed the /move <dir> command to correctly relocate the current session and its artifacts to the target directory, allowing /resume to work seamlessly from the new location.
+- Fixed omp update leaving behind stale Bun install-cache directories for globally installed packages.
+- Fixed a reconnection loop issue in /collab sessions caused by oversized entries (such as large tool outputs) by truncating replicated payloads that exceed 1 MB.
+- Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session, ensuring prompt injections remain session-stable.
 
 ## [16.2.3] - 2026-06-28
 

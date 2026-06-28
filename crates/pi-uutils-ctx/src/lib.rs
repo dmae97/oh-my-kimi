@@ -331,14 +331,14 @@ mod tests {
 
 	fn empty_io() -> ScopeIo {
 		ScopeIo {
-			stdin:                 Box::new(std::io::empty()),
+			stdin:                 Box::new(io::empty()),
 			stdin_fd:              None,
 			stdin_is_search_input: false,
-			stdout:                Box::new(std::io::sink()),
-			stderr:                Box::new(std::io::sink()),
-			cwd:                   std::path::PathBuf::from("."),
-			env:                   std::collections::HashMap::new(),
-			cancel:                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+			stdout:                Box::new(io::sink()),
+			stderr:                Box::new(io::sink()),
+			cwd:                   PathBuf::from("."),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
 		}
 	}
 

@@ -4,15 +4,13 @@
 
 ### Added
 
-- Added contract tests for `resolveUsedFraction` covering all four resolution paths (explicit fraction, used/limit, percent+used, inverted remaining) and their precedence ordering
+- Enabled freeform tool patch support for Azure OpenAI and Codex models
 
 ### Fixed
 
-- Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
-- Fixed OpenAI Responses `stream_read_error` provider events being classified as non-transient, which prevented the coding agent's auto-retry path from continuing after a recoverable stream read failure.
-- Enabled freeform tool patch support for Azure OpenAI and Codex models
-- Fixed /usage show returning "No usage data available" when using a custom proxy base URL for Codex by routing usage and credit-reset requests to the canonical ChatGPT origin
-- Fixed Z.AI usage reporting to preserve distinct 5-hour, weekly, and monthly quota windows instead of rendering duplicate token windows as separate accounts.
+- Fixed usage reporting for Antigravity and Z.AI to correctly surface and preserve distinct quota windows (daily, weekly, monthly) instead of collapsing or duplicating them
+- Fixed an issue where `/usage show` returned "No usage data available" when using a custom proxy base URL for Codex
+- Fixed OpenAI stream read errors being incorrectly classified as non-transient, enabling the coding agent to automatically retry after recoverable stream failures
 
 ## [16.2.3] - 2026-06-28
 
