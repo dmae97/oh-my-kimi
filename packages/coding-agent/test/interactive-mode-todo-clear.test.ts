@@ -8,7 +8,9 @@ import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { type NativeScrollbackLiveRegion, Text } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -21,6 +23,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let mode: InteractiveMode;
+	let eventBus: EventBus;
 
 	beforeAll(async () => {
 		await initTheme();
@@ -52,6 +55,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 
+		eventBus = new EventBus();
 		session = new AgentSession({
 			agent: new Agent({
 				initialState: {
@@ -65,7 +69,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 			settings: Settings.isolated({ "tasks.todoClearDelay": todoClearDelay }),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, eventBus);
 	}
 
 	it("clears closed todos from the panel instantly without mutating session history", async () => {
@@ -153,6 +157,29 @@ describe("InteractiveMode todo HUD persistence", () => {
 
 		expect(mode.todoReminderContainer.children).toHaveLength(0);
 		expect(renderTodos(mode)).toContain("current task");
+	});
+
+	it("clears stale todo reminders when subagent reconciliation updates todo state", async () => {
+		await createMode(-1);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		session.setTodoPhases([
+			{ name: "Implementation", tasks: [{ content: "Fix review comments", status: "pending" }] },
+		]);
+		mode.setTodos(session.getTodoPhases());
+		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
+
+		await mode.init();
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "ReviewFixer",
+			index: 0,
+			agent: "task",
+			description: "Fix review comments",
+			status: "completed",
+			detached: true,
+		});
+
+		expect(mode.todoReminderContainer.children).toHaveLength(0);
+		expect(session.getTodoPhases()[0]?.tasks[0]?.status).toBe("completed");
 	});
 });
 

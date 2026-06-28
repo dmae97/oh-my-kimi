@@ -1628,8 +1628,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			}),
 		}));
 		if (!mutated) return;
-		this.todoPhases = next;
 		this.session.setTodoPhases(next);
+		this.setTodos(next);
 	}
 
 	#cancelTodoAutoClearTimer(): void {

@@ -68,11 +68,6 @@
 - Fixed marketplace-installed plugins incorrectly appearing in both the npm plugin list and the extension-package status provider.
 - Fixed inconsistent OpenRouter prompt-cache hits on `/advisor` turns by ensuring advisor agents inherit the same provider-shaping options, hooks, and settings as the main agent.
 - Fixed path-scoped TTSR (Targeted Tool Safety Rules) evaluation for `hashline` and `apply_patch` edit streams, ensuring rules are correctly applied to file paths parsed from section headers and envelope markers without leaking across file scopes.
-- Prevented auto-generated session titles from accidentally re-shouting user all-caps text
-- Fixed auto-generated session titles re-shouting emphatic ALL-CAPS from the user's message. `reconcileTitleCasing` (`packages/coding-agent/src/tiny/text.ts`) restored any source token with interior/repeated uppercase, so shouting like "unify ALL ERROR HANDLING" turned the model's clean sentence case ("Unify error handling…") back into "Unify ERROR HANDLING…". Casing is now restored only from mixed-case identifiers the user typed deliberately (`TinyVMM`, `iOS`, `IDs`); pure all-caps is left to the model's own output.
-- Fixed Tavily web search with recency filters to retry once without `time_range` when Tavily returns HTTP 200 with no renderable content. ([#3633](https://github.com/can1357/oh-my-pi/issues/3633))
-- Fixed TUI thought stream stalling and `ui.loop-blocked` warnings during subagent-heavy runs by replacing the mid-run compaction persistence check's O(n²) branch rebuild + per-pair `JSON.stringify` content compare with a one-shot persistence-key snapshot. Content equality is preserved as the rare collision tiebreaker. ([#3629](https://github.com/can1357/oh-my-pi/issues/3629))
-- Fixed marketplace-installed plugins appearing in both the npm plugin list and the OMP extension-package status provider. ([#3628](https://github.com/can1357/oh-my-pi/issues/3628))
 
 ## [16.2.1] - 2026-06-27
 
@@ -85,7 +80,6 @@
 
 - Fixed live ACP `generate_image` updates resolving OMP-internal image blob refs before sending renderable image content to clients. ([#3623](https://github.com/can1357/oh-my-pi/issues/3623))
 - Fixed Claude marketplace plugin `.mcp.json` MCP servers to expand environment variables in `url` and `headers` before connecting. ([#3621](https://github.com/can1357/oh-my-pi/issues/3621))
-
 
 ## [16.2.0] - 2026-06-27
 

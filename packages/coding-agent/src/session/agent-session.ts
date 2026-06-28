@@ -116,7 +116,6 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
-	escapeXmlText,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
@@ -232,6 +231,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
+import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -6488,29 +6488,25 @@ export class AgentSession {
 		let total = 0;
 		let closed = 0;
 		let open = 0;
-		const lines: string[] = [];
-		for (const phase of phases) {
-			const taskLines: string[] = [];
-			for (const task of phase.tasks) {
+		const promptPhases = phases.map(phase => ({
+			name: phase.name,
+			tasks: phase.tasks.map(task => {
 				total++;
 				if (task.status === "completed" || task.status === "abandoned") {
 					closed++;
 				} else {
 					open++;
 				}
-				taskLines.push(`  - [${task.status}] ${escapeXmlText(task.content)}`);
-			}
-			lines.push(`- ${escapeXmlText(phase.name)}\n${taskLines.join("\n")}`);
-		}
+				return { content: task.content, status: task.status };
+			}),
+		}));
 
-		return (
-			"<todo_context>\n" +
-			"Current persisted todo state for this goal follows. Goal continuations do not get a visible user nudge, so treat this as live progress state, not old transcript decoration.\n" +
-			"Before continuing substantial work, compare your next action with these todos. If an item is stale, already finished, or no longer the active pointer, call the `todo` tool first to mark it done or rewrite the list. Do not leave a stale in_progress item while working on later phases.\n\n" +
-			`Overall: ${closed}/${total} done, ${open} open.\n` +
-			lines.join("\n") +
-			"\n</todo_context>"
-		);
+		return prompt.render(goalTodoContextPrompt, {
+			closed: String(closed),
+			open: String(open),
+			phases: promptPhases,
+			total: String(total),
+		});
 	}
 
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
