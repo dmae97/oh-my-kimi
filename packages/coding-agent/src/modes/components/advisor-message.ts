@@ -66,10 +66,17 @@ export function createAdvisorMessageCard(
 				const badge = entry.severity
 					? `${formatBadge(entry.severity, severityColor(entry.severity), uiTheme)} `
 					: "";
+				// Multi-advisor: attribute the note to its source. The implicit
+				// single ("default") advisor renders unlabeled, as before.
+				const who =
+					entry.advisor && entry.advisor !== "default"
+						? `${uiTheme.fg("dim", `[${replaceTabs(entry.advisor)}]`)} `
+						: "";
 				const quotePrefix = `  ${quote} `;
 				const quoteWidth = visibleWidth(quotePrefix);
 				const badgeWidth = visibleWidth(badge);
-				const w1 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth - badgeWidth);
+				const whoWidth = visibleWidth(who);
+				const w1 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth - badgeWidth - whoWidth);
 				const w2 = Math.max(10, Math.min(NOTE_LINE_WIDTH, width) - quoteWidth);
 
 				const paragraphs = entry.note.split("\n").filter(p => p.trim());
@@ -84,7 +91,7 @@ export function createAdvisorMessageCard(
 				}
 
 				bodyLines.forEach((line, index) => {
-					const prefix = index === 0 ? badge : "";
+					const prefix = index === 0 ? `${badge}${who}` : "";
 					lines.push(`  ${quote} ${prefix}${uiTheme.fg("toolOutput", replaceTabs(line))}`);
 				});
 			}

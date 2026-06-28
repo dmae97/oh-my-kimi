@@ -130,18 +130,22 @@ import {
 } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import {
+	ADVISOR_DEFAULT_TOOL_NAMES,
 	AdviseTool,
 	type AdvisorAgent,
+	type AdvisorConfig,
 	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
 	AdvisorRuntime,
 	type AdvisorSeverity,
 	AdvisorTranscriptRecorder,
+	advisorTranscriptFilename,
 	formatAdvisorBatchContent,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
 	resolveAdvisorDeliveryChannel,
+	slugifyAdvisorName,
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { classifyDifficulty } from "../auto-thinking/classifier";
@@ -614,12 +618,20 @@ export interface AgentSessionConfig {
 	advisorReadOnlyTools?: AgentTool[];
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
+	/** Preloaded YAML top-level `instructions` shared baseline, kept separate from
+	 *  `advisorWatchdogPrompt` so `/advisor configure` can swap it live. */
+	advisorSharedInstructions?: string;
 	/**
 	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
 	 * block for the advisor — the same standing instructions the primary agent
 	 * receives, so the reviewer holds the agent to them.
 	 */
 	advisorContextPrompt?: string;
+	/**
+	 * Advisors discovered from `WATCHDOG.yml`. Empty/undefined runs a single
+	 * legacy advisor on the `advisor` role (byte-for-byte the pre-config path).
+	 */
+	advisorConfigs?: AdvisorConfig[];
 	/**
 	 * Strip tool descriptions from provider-bound tool specs on side requests
 	 * (handoff). Must match the session-start value used to build the system
@@ -754,6 +766,43 @@ export interface AdvisorStats {
 		assistant: number;
 		total: number;
 	};
+	/** Per-advisor breakdown; one entry per active advisor (single-advisor sessions have one). */
+	advisors: PerAdvisorStat[];
+}
+
+/** One advisor's slice of {@link AdvisorStats}, surfaced for the multi-advisor status panel. */
+export interface PerAdvisorStat {
+	name: string;
+	model: Model;
+	contextWindow: number;
+	contextTokens: number;
+	tokens: AdvisorStats["tokens"];
+	cost: number;
+	messages: AdvisorStats["messages"];
+}
+
+/**
+ * One live advisor instance: its own agent/runtime/tools/recorder plus a
+ * per-advisor emission guard and identity. The session holds an array of these;
+ * primary-scoped state (turn counters, interrupt latches, the shared yield
+ * channel) stays on the session.
+ */
+interface ActiveAdvisor {
+	/** Display name from config ("default" for the legacy no-YAML advisor). */
+	name: string;
+	/** Slug for the transcript filename/session id; "" → `__advisor.jsonl`. */
+	slug: string;
+	agent: Agent;
+	runtime: AdvisorRuntime;
+	adviseTool: AdviseTool;
+	emissionGuard: AdvisorEmissionGuard;
+	recorder: AdvisorTranscriptRecorder;
+	/** Latest recorder close, awaited by dispose() so the final turn lands on disk. */
+	recorderClosed: Promise<void>;
+	/** Unsubscribe for the advisor agent's event stream feeding the recorder. */
+	agentUnsubscribe?: () => void;
+	model: Model;
+	thinkingLevel: ThinkingLevel;
 }
 
 export interface FreshSessionResult {
@@ -1292,29 +1341,21 @@ export class AgentSession {
 	#advisorAutoResumeSuppressed = false;
 	#advisorPrimaryTurnsCompleted = 0;
 	#advisorInterruptImmuneTurnStart: number | undefined;
-	/** Dedupe + per-update rate-limit + content-free-phrase filter applied to
-	 *  every accepted advisor `advise()` call. Owned by the session because the
-	 *  session is what routes accepted notes back to the primary transcript.
-	 *  Reset on advisor reset (compaction, session switch, `/new`). */
-	readonly #advisorEmissionGuard = new AdvisorEmissionGuard();
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
-	#advisorRuntime?: AdvisorRuntime;
 	#advisorEnabled = false;
-	/** The advisor's own agent, retained so `/dump advisor` can serialize its transcript. Undefined when no advisor is active. */
-	#advisorAgent?: Agent;
-	#advisorAdviseTool?: AdviseTool;
 	#advisorReadOnlyTools?: AgentTool[];
 	#advisorWatchdogPrompt?: string;
+	#advisorSharedInstructions?: string;
 	#advisorContextPrompt?: string;
 	#advisorYieldQueueUnsubscribe?: () => void;
-	/** Persists the advisor agent's turns to `<session>/__advisor.jsonl` for stats
-	 *  attribution and Agent Hub observability. Undefined when no advisor is active. */
-	#advisorTranscriptRecorder?: AdvisorTranscriptRecorder;
-	/** Unsubscribe for the advisor agent's event stream feeding the recorder. */
-	#advisorAgentUnsubscribe?: () => void;
-	/** Latest advisor-recorder close, awaited by dispose() so the final turn lands on disk. */
+	/** Live advisors. Empty when no advisor is active. */
+	#advisors: ActiveAdvisor[] = [];
+	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
+	#advisorConfigs?: AdvisorConfig[];
+	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
+	 *  used as the open barrier for the next build so two writers never share a file. */
 	#advisorRecorderClosed: Promise<void> = Promise.resolve();
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
@@ -1735,7 +1776,9 @@ export class AgentSession {
 		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
 		this.#advisorReadOnlyTools = config.advisorReadOnlyTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
+		this.#advisorSharedInstructions = config.advisorSharedInstructions;
 		this.#advisorContextPrompt = config.advisorContextPrompt;
+		this.#advisorConfigs = config.advisorConfigs;
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
@@ -1780,12 +1823,15 @@ export class AgentSession {
 				await this.#applyRewind(rewindReport, messages);
 			}
 			this.#advisorPrimaryTurnsCompleted++;
-			if (this.#advisorRuntime && !this.#advisorRuntime.disposed) {
-				this.#advisorRuntime.onTurnEnd(messages);
+			if (this.#advisors.length > 0) {
+				for (const a of this.#advisors) {
+					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages);
+				}
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
 				if (syncBacklog !== "off") {
 					const threshold = parseInt(syncBacklog, 10);
-					await this.#advisorRuntime.waitForCatchup(30000, threshold, signal);
+					// Parallel so the 30s catch-up budget is shared across advisors, not summed.
+					await Promise.all(this.#advisors.map(a => a.runtime.waitForCatchup(30000, threshold, signal)));
 				}
 			}
 			await this.#maintainContextMidRun(messages, signal, context);
@@ -1955,12 +2001,14 @@ export class AgentSession {
 		// Mute the recorder across the re-prime: AdvisorRuntime.reset() aborts the advisor
 		// loop, and that abort can emit an `aborted` message_end we must not attribute to
 		// either session's transcript. Detach, reset, then re-attach the live agent's feed.
-		this.#advisorAgentUnsubscribe?.();
-		this.#advisorAgentUnsubscribe = undefined;
-		this.#advisorRuntime?.reset();
-		this.#advisorAdviseTool?.resetDeliveredNotes();
-		this.#advisorEmissionGuard.reset();
-		this.#attachAdvisorRecorderFeed();
+		for (const a of this.#advisors) {
+			a.agentUnsubscribe?.();
+			a.agentUnsubscribe = undefined;
+			a.runtime.reset();
+			a.adviseTool.resetDeliveredNotes();
+			a.emissionGuard.reset();
+			this.#attachAdvisorRecorderFeed(a);
+		}
 		this.#advisorPrimaryTurnsCompleted = 0;
 		this.#advisorInterruptImmuneTurnStart = undefined;
 		this.#advisorAutoResumeSuppressed = false;
@@ -1973,261 +2021,298 @@ export class AgentSession {
 
 	#buildAdvisorRuntime(seedToCurrent = false): boolean {
 		if (this.#isDisposed) return false;
-		if (this.#advisorRuntime) return true;
+		if (this.#advisors.length > 0) return true;
 		if (!this.#advisorEnabled) return false;
 		if (this.#agentKind !== "main" && !this.settings.get("advisor.subagents")) return false;
 
-		const advisorSel = resolveAdvisorRoleSelection(
-			this.settings,
-			this.#modelRegistry.getAvailable(),
-			this.#modelRegistry,
-		);
-		if (!advisorSel) {
-			logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive");
-			return false;
-		}
-
-		// Concern and blocker interrupt the running agent through the steering
-		// channel (aborting in-flight tools at the next steering boundary); when the
-		// loop has already yielded, triggerTurn resumes it so the advice is acted on
-		// immediately rather than waiting for the next user prompt. After a deliberate
-		// user interrupt the auto-resume is suppressed — but only while the agent is
-		// idle or still tearing the interrupted turn down: a concern is then recorded
-		// as a visible card and re-enters context when the user resumes. Once a turn
-		// is streaming again (a resume the user already drove) it is steered in live,
-		// since steering an active run auto-resumes nothing; parking it there would
-		// strand the advice and dump the backlog as one burst at the next prompt. A
-		// plain nit always rides the non-interrupting YieldQueue aside.
-		// Apply the per-session emission policy (one-advise-per-update gate,
-		// exact-text dedupe, content-free phrase filter) before any routing.
-		// Suppression here means the advisor model called `advise()` but the call
-		// is dropped silently — the model still sees `Recorded.` from the tool, so
-		// telling it "suppressed" doesn't tempt it into rephrasing the same useless
-		// note to bypass the dedupe.
-		const enqueueAdvice = (note: string, severity?: AdvisorSeverity) => {
-			if (!this.#advisorEmissionGuard.accept(note)) {
-				logger.debug("advisor advice suppressed by emission guard", { severity });
-				return;
-			}
-			const interrupting = isInterruptingSeverity(severity);
-			const channel = resolveAdvisorDeliveryChannel({
-				severity,
-				autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
-				// Key on the live agent-core loop, not session `isStreaming` (which also
-				// counts `#promptInFlightCount` during post-turn unwind). Only a running
-				// loop will consume a steer at its next boundary; steering into the unwind
-				// window would strand the card and let #drainStrandedQueuedMessages
-				// auto-resume it despite the user's interrupt.
-				streaming: this.agent.state.isStreaming,
-				aborting: this.#abortInProgress,
-				interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
-			});
-			if (channel === "aside") {
-				this.yieldQueue.enqueue("advisor", { note, severity });
-				return;
-			}
-			const notes: AdvisorNote[] = [{ note, severity }];
-			const content = formatAdvisorBatchContent(notes);
-			const details = { notes } satisfies AdvisorMessageDetails;
-			if (channel === "preserve") {
-				this.#preserveAdvisorCard({
-					role: "custom",
-					customType: "advisor",
-					content,
-					display: true,
-					attribution: "agent",
-					details,
-					timestamp: Date.now(),
-				});
-				return;
-			}
-			this.#recordAdvisorInterruptDelivered();
-			void this.sendCustomMessage(
-				{ customType: "advisor", content, display: true, attribution: "agent", details },
-				{ deliverAs: "steer", triggerTurn: true },
-			).catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
-		};
-
-		const adviseTool = new AdviseTool(enqueueAdvice);
-		this.#advisorAdviseTool = adviseTool;
-		const advisorReadOnlyTools = this.#advisorReadOnlyTools ?? [];
-
-		const appendOnlyContext = new AppendOnlyContextManager();
-		const advisorThinkingLevel = advisorSel.thinkingLevel ?? ThinkingLevel.Medium;
-		const systemPrompt = [advisorSystemPrompt];
-		if (this.#advisorContextPrompt) {
-			systemPrompt.push(this.#advisorContextPrompt);
-		}
-		if (this.#advisorWatchdogPrompt) {
-			systemPrompt.push(this.#advisorWatchdogPrompt);
-		}
-		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
+		// The lone implicit "default" advisor (slug "") reproduces the legacy
+		// single-advisor path: the `advisor` role model + `__advisor.jsonl`.
+		const legacy = !this.#advisorConfigs?.length;
+		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
 
 		// Advisor service tier (`serviceTierAdvisor`): "none" (default) runs the
 		// advisor on standard processing; "inherit" tracks the session's live tier
 		// per request (like the main agent, including /fast toggles) via a resolver;
-		// a concrete value pins the advisor to that tier regardless of the session.
+		// a concrete value pins the advisor to that tier. One value for all advisors.
 		const advisorTierSetting = this.settings.get("serviceTierAdvisor");
 		const advisorServiceTier =
 			advisorTierSetting === "inherit" ? undefined : resolveServiceTierSetting(advisorTierSetting, undefined);
 		const advisorServiceTierResolver =
 			advisorTierSetting === "inherit" ? (model: Model) => this.#effectiveServiceTier(model) : undefined;
 
-		// Thread the primary's telemetry into the advisor loop so the advisor
-		// model's GenAI spans + usage/cost hooks fire like every other model call,
-		// stamped with the advisor's own identity. `conversationId` is cleared so
-		// the advisor loop falls back to its own `-advisor` session id for
-		// `gen_ai.conversation.id` instead of inheriting the primary's
-		// conversation; undefined telemetry stays undefined (zero-overhead no-op).
-		const advisorTelemetry = this.agent.telemetry
-			? {
-					...this.agent.telemetry,
-					agent: {
-						id: advisorSessionId,
-						name: MODEL_ROLES.advisor.name,
-						description: formatModelString(advisorSel.model),
-					},
-					conversationId: undefined,
-				}
-			: undefined;
-		// Mirror the provider-shaping options the SDK installs on the main agent
-		// so the advisor's requests cache, route, and obfuscate identically:
-		//
-		// - `streamFn`/`advisorStreamFn` carries the session's OpenRouter sticky
-		//   variant, antigravity endpoint mode, in-flight cap, and loop guard.
-		// - `onPayload`/`onResponse`/`onSseEvent` keep extension hooks plus the
-		//   per-session `RawSseDebugBuffer` recording advisor traffic too.
-		// - `providerSessionState` shares Codex websockets / Anthropic fast-mode
-		//   fallback state with the main agent so both turns reuse the same
-		//   transport caches.
-		// - `promptCacheKey` pins OpenAI Responses (and any provider that reads
-		//   `prompt_cache_key`) to the advisor session id so consecutive advisor
-		//   turns land on the same cache shard.
-		// - `transformProviderContext` applies snapcompact, secret obfuscation,
-		//   and image clamping to advisor requests like the main turn.
-		//
-		// Without this parity, OpenRouter advisor calls bypassed the variant
-		// suffix and prompt-cache key and produced inconsistent cache hits
-		// (see can1357/oh-my-pi#3639).
-		const advisorAgent = new Agent({
-			initialState: {
-				systemPrompt,
-				model: advisorSel.model,
-				thinkingLevel: toReasoningEffort(advisorThinkingLevel),
-				tools: [adviseTool, ...advisorReadOnlyTools],
-			},
-			appendOnlyContext,
-			sessionId: advisorSessionId,
-			promptCacheKey: advisorSessionId,
-			providerSessionState: this.#providerSessionState,
-			getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
-			streamFn: this.#advisorStreamFn,
-			onPayload: this.#onPayload,
-			onResponse: this.#onResponse,
-			onSseEvent: this.#onSseEvent,
-			transformProviderContext: this.#transformProviderContext,
-			intentTracing: false,
-			telemetry: advisorTelemetry,
-			serviceTier: advisorServiceTier,
-			serviceTierResolver: advisorServiceTierResolver,
-		});
-		advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
+		const usedSlugs = new Set<string>();
+		for (const config of roster) {
+			let slug = legacy ? "" : slugifyAdvisorName(config.name);
+			if (slug) {
+				let candidate = slug;
+				let n = 2;
+				while (usedSlugs.has(candidate)) candidate = `${slug}-${n++}`;
+				slug = candidate;
+				usedSlugs.add(slug);
+			}
 
-		const advisorAgentFacade: AdvisorAgent = {
-			prompt: input => advisorAgent.prompt(input),
-			abort: reason => advisorAgent.abort(reason),
-			reset: () => {
-				advisorAgent.reset();
-				appendOnlyContext.log.clear();
-			},
-			rollbackTo: count => {
-				// Drop the failed user batch + synthetic assistant-error turn
-				// `Agent.#runLoop` appended for a turn ending in `stopReason: "error"`.
-				// The append-only context auto-resyncs on the next prompt's
-				// `syncMessages` shrink path, but reset the sync cursor so the log
-				// can't carry the dropped tail forward if no further turn ever runs.
-				const messages = advisorAgent.state.messages;
-				if (count < messages.length) {
-					messages.length = count;
+			// Resolve the advisor's model: an explicit `model` override wins; else the
+			// `advisor` role chain. A model that fails to resolve skips just this advisor.
+			let model: Model | undefined;
+			let thinkingLevel: ThinkingLevel | undefined;
+			if (config.model) {
+				const resolved = resolveModelOverride([config.model], this.#modelRegistry, this.settings);
+				model = resolved.model;
+				thinkingLevel = resolved.thinkingLevel;
+				if (!model) {
+					this.emitNotice("warning", `Advisor "${config.name}": no model matched "${config.model}"`, "advisor");
+					continue;
 				}
-				appendOnlyContext.resetSyncCursor();
-				advisorAgent.state.error = undefined;
-			},
-			state: advisorAgent.state,
-		};
-
-		this.#advisorAgent = advisorAgent;
-		// Persist the advisor's turns to `<session>/__advisor.jsonl` (resolved lazily
-		// so it follows session switches) so its model usage is attributed in stats
-		// and its transcript shows in the Agent Hub — without registering it as a peer.
-		const recorder = new AdvisorTranscriptRecorder(
-			() => this.sessionManager.getSessionFile(),
-			() => this.sessionManager.getCwd(),
-			// On the advisor on→off→on toggle, wait for the prior recorder's close so
-			// two SessionManagers never hold the same __advisor.jsonl at once.
-			this.#advisorRecorderClosed,
-		);
-		this.#advisorTranscriptRecorder = recorder;
-		this.#attachAdvisorRecorderFeed();
-		this.#advisorRuntime = new AdvisorRuntime(advisorAgentFacade, {
-			snapshotMessages: () => this.agent.state.messages,
-			enqueueAdvice,
-			maintainContext: incomingTokens => this.#maintainAdvisorContext(incomingTokens),
-			obfuscator: this.#obfuscator,
-			beginAdvisorUpdate: () => this.#advisorEmissionGuard.beginUpdate(),
-			notifyFailure: error => {
-				const message = error instanceof Error ? error.message : String(error);
-				this.emitNotice(
-					"warning",
-					`Advisor unavailable for ${formatModelString(advisorSel.model)}: ${message}`,
-					"advisor",
+			} else {
+				const sel = resolveAdvisorRoleSelection(
+					this.settings,
+					this.#modelRegistry.getAvailable(),
+					this.#modelRegistry,
 				);
-			},
-		});
-		if (seedToCurrent) {
-			this.#advisorRuntime.seedTo(this.agent.state.messages.length);
+				if (!sel) {
+					logger.debug("advisor enabled but no model assigned to the 'advisor' role; advisor inactive", {
+						advisor: config.name,
+					});
+					continue;
+				}
+				model = sel.model;
+				thinkingLevel = sel.thinkingLevel;
+			}
+			const advisorModel = model;
+			const advisorName = config.name;
+			const advisorThinkingLevel = thinkingLevel ?? ThinkingLevel.Medium;
+
+			const emissionGuard = new AdvisorEmissionGuard();
+			const adviseTool = new AdviseTool((note, severity) => this.#routeAdvice(advisorRef, note, severity));
+
+			// `#advisorWatchdogPrompt` already carries WATCHDOG.md + YAML shared
+			// instructions; `config.instructions` adds this advisor's specialization.
+			const systemPrompt = [advisorSystemPrompt];
+			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
+			if (this.#advisorWatchdogPrompt) systemPrompt.push(this.#advisorWatchdogPrompt);
+			if (this.#advisorSharedInstructions) systemPrompt.push(this.#advisorSharedInstructions);
+			if (config.instructions?.trim()) systemPrompt.push(config.instructions.trim());
+
+			const names = config.tools?.length ? new Set(config.tools) : ADVISOR_DEFAULT_TOOL_NAMES;
+			const tools = (this.#advisorReadOnlyTools ?? []).filter(t => names.has(t.name));
+
+			const advisorSessionId = this.#advisorSessionId(slug);
+			const appendOnlyContext = new AppendOnlyContextManager();
+
+			// Thread the primary's telemetry into the advisor loop so the advisor
+			// model's GenAI spans + usage/cost hooks fire stamped with the advisor's
+			// own identity. `conversationId` is cleared so the advisor loop falls back
+			// to its own session id; undefined telemetry stays undefined.
+			const advisorTelemetry = this.agent.telemetry
+				? {
+						...this.agent.telemetry,
+						agent: {
+							id: advisorSessionId,
+							name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
+							description: formatModelString(advisorModel),
+						},
+						conversationId: undefined,
+					}
+				: undefined;
+			// Mirror the SDK's provider-shaping options (streamFn/onPayload/...,
+			// providerSessionState, promptCacheKey, transformProviderContext) so each
+			// advisor's requests cache, route, and obfuscate like the main turn.
+			const advisorAgent = new Agent({
+				initialState: {
+					systemPrompt,
+					model: advisorModel,
+					thinkingLevel: toReasoningEffort(advisorThinkingLevel),
+					tools: [adviseTool, ...tools],
+				},
+				appendOnlyContext,
+				sessionId: advisorSessionId,
+				promptCacheKey: advisorSessionId,
+				providerSessionState: this.#providerSessionState,
+				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+				streamFn: this.#advisorStreamFn,
+				onPayload: this.#onPayload,
+				onResponse: this.#onResponse,
+				onSseEvent: this.#onSseEvent,
+				transformProviderContext: this.#transformProviderContext,
+				intentTracing: false,
+				telemetry: advisorTelemetry,
+				serviceTier: advisorServiceTier,
+				serviceTierResolver: advisorServiceTierResolver,
+			});
+			advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
+
+			const advisorAgentFacade: AdvisorAgent = {
+				prompt: input => advisorAgent.prompt(input),
+				abort: reason => advisorAgent.abort(reason),
+				reset: () => {
+					advisorAgent.reset();
+					appendOnlyContext.log.clear();
+				},
+				rollbackTo: count => {
+					// Drop the failed user batch + synthetic assistant-error turn
+					// `Agent.#runLoop` appended for a turn ending in `stopReason: "error"`.
+					const messages = advisorAgent.state.messages;
+					if (count < messages.length) {
+						messages.length = count;
+					}
+					appendOnlyContext.resetSyncCursor();
+					advisorAgent.state.error = undefined;
+				},
+				state: advisorAgent.state,
+			};
+
+			// Persist this advisor's turns to `<session>/__advisor[.<slug>].jsonl`
+			// (resolved lazily so it follows session switches) for stats attribution
+			// and Agent Hub observability, without registering it as a peer.
+			const recorder = new AdvisorTranscriptRecorder(
+				() => this.sessionManager.getSessionFile(),
+				() => this.sessionManager.getCwd(),
+				advisorTranscriptFilename(slug),
+				// On the advisor on→off→on toggle, wait for the prior recorders' closes
+				// so two SessionManagers never hold the same file at once.
+				this.#advisorRecorderClosed,
+			);
+			const runtime = new AdvisorRuntime(advisorAgentFacade, {
+				snapshotMessages: () => this.agent.state.messages,
+				enqueueAdvice: (note, severity) => this.#routeAdvice(advisorRef, note, severity),
+				maintainContext: incomingTokens => this.#maintainAdvisorContext(advisorRef, incomingTokens),
+				obfuscator: this.#obfuscator,
+				beginAdvisorUpdate: () => advisorRef.emissionGuard.beginUpdate(),
+				notifyFailure: error => {
+					const message = error instanceof Error ? error.message : String(error);
+					this.emitNotice(
+						"warning",
+						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorModel)}: ${message}`,
+						"advisor",
+					);
+				},
+			});
+
+			const advisorRef: ActiveAdvisor = {
+				name: advisorName,
+				slug,
+				agent: advisorAgent,
+				runtime,
+				adviseTool,
+				emissionGuard,
+				recorder,
+				recorderClosed: Promise.resolve(),
+				model: advisorModel,
+				thinkingLevel: advisorThinkingLevel,
+			};
+			this.#attachAdvisorRecorderFeed(advisorRef);
+			if (seedToCurrent) runtime.seedTo(this.agent.state.messages.length);
+			this.#advisors.push(advisorRef);
 		}
 
-		// Batch non-blocking advisor notes into one injected custom message.
-		this.#advisorYieldQueueUnsubscribe = this.yieldQueue.register<AdvisorNote>("advisor", {
-			build: entries =>
-				entries.length === 0
-					? null
-					: ({
-							role: "custom",
-							customType: "advisor",
-							display: true,
-							attribution: "agent",
-							timestamp: Date.now(),
-							content: formatAdvisorBatchContent(entries),
-							details: { notes: entries } satisfies AdvisorMessageDetails,
-						} satisfies CustomMessage),
-			skipIdleFlush: true,
-		});
+		// One shared non-blocking aside channel for all advisors; the build callback
+		// aggregates every advisor's queued nits into one card (each entry already
+		// carries its own `advisor` name).
+		if (this.#advisors.length > 0 && !this.#advisorYieldQueueUnsubscribe) {
+			this.#advisorYieldQueueUnsubscribe = this.yieldQueue.register<AdvisorNote>("advisor", {
+				build: entries =>
+					entries.length === 0
+						? null
+						: ({
+								role: "custom",
+								customType: "advisor",
+								display: true,
+								attribution: "agent",
+								timestamp: Date.now(),
+								content: formatAdvisorBatchContent(entries),
+								details: { notes: entries } satisfies AdvisorMessageDetails,
+							} satisfies CustomMessage),
+				skipIdleFlush: true,
+			});
+		}
 
-		return true;
+		return this.#advisors.length > 0;
+	}
+
+	/** Provider/session id for an advisor's loop. The slug suffix MUST match the
+	 *  advisor's transcript filename so stats/telemetry attribute the same advisor. */
+	#advisorSessionId(slug: string): string | undefined {
+		if (!this.sessionId) return undefined;
+		return slug ? `${this.sessionId}-advisor-${slug}` : `${this.sessionId}-advisor`;
+	}
+
+	/**
+	 * Route one accepted advice note from `advisor` to the primary. Concern and
+	 * blocker interrupt the running agent through the steering channel; once the
+	 * loop has yielded, `triggerTurn` resumes it. After a deliberate user interrupt
+	 * auto-resume is suppressed while idle/unwinding (the note becomes a preserved
+	 * card re-entering on resume); a live-streaming turn is steered in directly. A
+	 * plain nit always rides the non-interrupting YieldQueue aside. Suppression by
+	 * the per-advisor emission guard drops the note silently — the model still saw
+	 * `Recorded.`, so it isn't tempted to rephrase the same note past the dedupe.
+	 */
+	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {
+		if (!advisor.emissionGuard.accept(note)) {
+			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
+			return;
+		}
+		// The implicit single ("default") advisor stamps no source name, so its
+		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
+		const source = advisor.slug ? advisor.name : undefined;
+		const interrupting = isInterruptingSeverity(severity);
+		const channel = resolveAdvisorDeliveryChannel({
+			severity,
+			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
+			// Key on the live agent-core loop, not session `isStreaming` (which also
+			// counts `#promptInFlightCount` during post-turn unwind). Only a running
+			// loop consumes a steer at its next boundary.
+			streaming: this.agent.state.isStreaming,
+			aborting: this.#abortInProgress,
+			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
+		});
+		if (channel === "aside") {
+			this.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
+			return;
+		}
+		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
+		const content = formatAdvisorBatchContent(notes);
+		const details = { notes } satisfies AdvisorMessageDetails;
+		if (channel === "preserve") {
+			this.#preserveAdvisorCard({
+				role: "custom",
+				customType: "advisor",
+				content,
+				display: true,
+				attribution: "agent",
+				details,
+				timestamp: Date.now(),
+			});
+			return;
+		}
+		this.#recordAdvisorInterruptDelivered();
+		void this.sendCustomMessage(
+			{ customType: "advisor", content, display: true, attribution: "agent", details },
+			{ deliverAs: "steer", triggerTurn: true },
+		).catch(err => logger.debug("advisor delivery failed", { err: String(err) }));
+	}
+
+	/** Re-prime every advisor's transcript view (compaction/shake/rewind) without the
+	 *  session-level latch reset {@link #resetAdvisorSessionState} performs. */
+	#resetAllAdvisorRuntimes(): void {
+		for (const a of this.#advisors) a.runtime.reset();
 	}
 
 	#stopAdvisorRuntime(): void {
-		// Detach the recorder feed BEFORE aborting the advisor agent: dispose() aborts
+		// Detach each recorder feed BEFORE aborting its advisor agent: dispose() aborts
 		// the loop, and an abort emits a final `message_end` we must not enqueue against
 		// a closing recorder (it would reopen and resurrect an already-released file).
-		this.#advisorAgentUnsubscribe?.();
-		this.#advisorAgentUnsubscribe = undefined;
-		if (this.#advisorRuntime) {
-			this.#advisorRuntime.dispose();
-			this.#advisorRuntime = undefined;
-		}
-		if (this.#advisorTranscriptRecorder) {
-			// Capture the close so dispose()/`/drop` can await the queued open+append+close —
+		const closes: Promise<void>[] = [];
+		for (const a of this.#advisors) {
+			a.agentUnsubscribe?.();
+			a.agentUnsubscribe = undefined;
+			a.runtime.dispose();
+			// Capture each close so dispose()/`/drop` can await the queued open+append+close —
 			// the last advisor turn would otherwise be lost on a fast process exit.
-			this.#advisorRecorderClosed = this.#advisorTranscriptRecorder.close();
-			this.#advisorTranscriptRecorder = undefined;
+			a.recorderClosed = a.recorder.close();
+			closes.push(a.recorderClosed);
 		}
-		if (this.#advisorAgent) {
-			this.#advisorAgent = undefined;
-		}
-		this.#advisorAdviseTool = undefined;
+		this.#advisorRecorderClosed = Promise.all(closes).then(() => {});
+		this.#advisors = [];
 		this.#advisorYieldQueueUnsubscribe?.();
 		this.#advisorYieldQueueUnsubscribe = undefined;
 	}
@@ -2235,16 +2320,13 @@ export class AgentSession {
 	/** Subscribe the advisor agent's finalized messages into the transcript recorder.
 	 *  Idempotent-by-replacement: callers detach the prior feed first. Kept separate
 	 *  so the re-prime path can mute the feed across an abort-driven reset. */
-	#attachAdvisorRecorderFeed(): void {
-		const agent = this.#advisorAgent;
-		const recorder = this.#advisorTranscriptRecorder;
-		if (!agent || !recorder) return;
-		this.#advisorAgentUnsubscribe = agent.subscribe(event => {
-			if (event.type === "message_end") recorder.record(event.message);
+	#attachAdvisorRecorderFeed(advisor: ActiveAdvisor): void {
+		advisor.agentUnsubscribe = advisor.agent.subscribe(event => {
+			if (event.type === "message_end") advisor.recorder.record(event.message);
 		});
 	}
 
-	async #promoteAdvisorContextModel(currentModel: Model): Promise<boolean> {
+	async #promoteAdvisorContextModel(advisor: ActiveAdvisor, currentModel: Model): Promise<boolean> {
 		const promotionSettings = this.settings.getGroup("contextPromotion");
 		if (!promotionSettings.enabled) return false;
 		const contextWindow = currentModel.contextWindow ?? 0;
@@ -2252,25 +2334,23 @@ export class AgentSession {
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
 		if (!targetModel) return false;
 
-		const advisorSel = resolveAdvisorRoleSelection(
-			this.settings,
-			this.#modelRegistry.getAvailable(),
-			this.#modelRegistry,
-		);
-		const advisorThinkingLevel = advisorSel?.thinkingLevel ?? ThinkingLevel.Medium;
-
+		// Preserve this advisor's own thinking level (a configured `model:...:high`
+		// keeps its suffix across a promotion); only the model changes.
+		const advisorThinkingLevel = advisor.thinkingLevel;
 		try {
-			this.#advisorAgent?.setModel(targetModel);
-			this.#advisorAgent?.setThinkingLevel(toReasoningEffort(advisorThinkingLevel));
-			this.#advisorAgent?.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
-			this.#advisorAgent?.appendOnlyContext?.invalidateForModelChange();
+			advisor.agent.setModel(targetModel);
+			advisor.agent.setThinkingLevel(toReasoningEffort(advisorThinkingLevel));
+			advisor.agent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
+			advisor.agent.appendOnlyContext?.invalidateForModelChange();
 			logger.debug("Advisor context promotion switched model on overflow", {
+				advisor: advisor.name,
 				from: `${currentModel.provider}/${currentModel.id}`,
 				to: `${targetModel.provider}/${targetModel.id}`,
 			});
 			return true;
 		} catch (error) {
 			logger.warn("Advisor context promotion failed", {
+				advisor: advisor.name,
 				from: `${currentModel.provider}/${currentModel.id}`,
 				to: `${targetModel.provider}/${targetModel.id}`,
 				error: String(error),
@@ -2279,19 +2359,18 @@ export class AgentSession {
 		}
 	}
 
-	async #maintainAdvisorContext(incomingTokens: number): Promise<boolean> {
-		const advisor = this.#advisorAgent;
-		if (!advisor) return false;
+	async #maintainAdvisorContext(advisor: ActiveAdvisor, incomingTokens: number): Promise<boolean> {
+		const agent = advisor.agent;
 
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return false;
 		if (!compactionSettings.enabled) return false;
 
-		const advisorModel = advisor.state.model;
+		const advisorModel = agent.state.model;
 		const contextWindow = advisorModel.contextWindow ?? 0;
 		if (contextWindow <= 0) return false;
 
-		const messages = advisor.state.messages;
+		const messages = agent.state.messages;
 		let contextTokens = incomingTokens;
 		for (const message of messages) {
 			contextTokens += estimateTokens(message);
@@ -2302,9 +2381,9 @@ export class AgentSession {
 		}
 
 		// 1. Try promotion first
-		if (await this.#promoteAdvisorContextModel(advisorModel)) {
+		if (await this.#promoteAdvisorContextModel(advisor, advisorModel)) {
 			// Promotion succeeded, check if new model has enough space
-			const newModel = advisor.state.model;
+			const newModel = agent.state.model;
 			const newWindow = newModel.contextWindow ?? 0;
 			if (newWindow > 0) {
 				const stillNeedsCompaction = shouldCompact(contextTokens, newWindow, compactionSettings);
@@ -2326,7 +2405,9 @@ export class AgentSession {
 					timestamp,
 					summary: message.summary,
 					shortSummary: message.shortSummary,
-					firstKeptEntryId: (message as any).firstKeptEntryId || `msg-${i + 1}`,
+					firstKeptEntryId:
+						(message as CompactionSummaryMessage & { firstKeptEntryId?: string }).firstKeptEntryId ||
+						`msg-${i + 1}`,
 					tokensBefore: message.tokensBefore,
 				} satisfies CompactionEntry;
 			}
@@ -2356,9 +2437,9 @@ export class AgentSession {
 			return true;
 		}
 
-		const advisorCompactionThinkingLevel: ThinkingLevel | undefined = advisor.state.disableReasoning
+		const advisorCompactionThinkingLevel: ThinkingLevel | undefined = agent.state.disableReasoning
 			? ThinkingLevel.Off
-			: advisor.state.thinkingLevel;
+			: agent.state.thinkingLevel;
 
 		// Advisor state is in-memory-only, so snapcompact's frame archive has no
 		// stable SessionEntry preserveData slot to carry across future advisor
@@ -2367,10 +2448,10 @@ export class AgentSession {
 
 		let compactResult: CompactionResult | undefined;
 		let lastError: unknown;
-		const advisorSessionId = this.sessionId ? `${this.sessionId}-advisor` : undefined;
+		const advisorSessionId = this.#advisorSessionId(advisor.slug);
 		// Instrument the advisor's overflow-compaction one-shot like the primary
 		// compaction path so the advisor model's maintenance call also emits spans.
-		const telemetry = resolveTelemetry(advisor.telemetry, advisorSessionId);
+		const telemetry = resolveTelemetry(agent.telemetry, advisorSessionId);
 
 		for (const candidate of candidates) {
 			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorSessionId);
@@ -2387,7 +2468,7 @@ export class AgentSession {
 						thinkingLevel: advisorCompactionThinkingLevel,
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
-						tools: advisor.state.tools,
+						tools: agent.state.tools,
 						sessionId: advisorSessionId,
 						promptCacheKey: advisorSessionId,
 					},
@@ -2414,7 +2495,7 @@ export class AgentSession {
 			firstKeptEntryId,
 		} as CompactionSummaryMessage & { firstKeptEntryId?: string };
 
-		advisor.replaceMessages([summaryMessage, ...preparation.recentMessages]);
+		agent.replaceMessages([summaryMessage, ...preparation.recentMessages]);
 		return false;
 	}
 
@@ -7736,9 +7817,11 @@ export class AgentSession {
 			// running advisor turn could otherwise finish, emit `message_end`, and recreate
 			// `<old>/__advisor.jsonl`. #resetAdvisorSessionState (after newSession) re-primes
 			// the advisor and re-attaches the feed at the new session's path.
-			this.#advisorAgentUnsubscribe?.();
-			this.#advisorAgentUnsubscribe = undefined;
-			if (this.#advisorTranscriptRecorder) await this.#advisorTranscriptRecorder.close();
+			for (const a of this.#advisors) {
+				a.agentUnsubscribe?.();
+				a.agentUnsubscribe = undefined;
+				await a.recorder.close();
+			}
 			try {
 				await this.sessionManager.dropSession(previousSessionFile);
 			} catch (err) {
@@ -8450,7 +8533,7 @@ export class AgentSession {
 		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAllAdvisorRuntimes();
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return result;
@@ -8487,7 +8570,7 @@ export class AgentSession {
 
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAllAdvisorRuntimes();
 		this.#syncTodoPhasesFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return result;
@@ -8538,7 +8621,7 @@ export class AgentSession {
 		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAllAdvisorRuntimes();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		return { removed };
 	}
@@ -8595,7 +8678,7 @@ export class AgentSession {
 		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
-		this.#advisorRuntime?.reset();
+		this.#resetAllAdvisorRuntimes();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		return {
@@ -8885,7 +8968,7 @@ export class AgentSession {
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
 			this.#planReferenceSent = false;
-			this.#advisorRuntime?.reset();
+			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
@@ -9149,7 +9232,7 @@ export class AgentSession {
 			// Rebuild agent messages from session
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
-			this.#advisorRuntime?.reset();
+			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
 
 			return { document: handoffText, savedPath };
@@ -11275,7 +11358,7 @@ export class AgentSession {
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
 			this.#planReferenceSent = false;
-			this.#advisorRuntime?.reset();
+			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
 			this.#closeCodexProviderSessionsForHistoryRewrite();
 
@@ -13121,7 +13204,7 @@ export class AgentSession {
 			this.#applyThinkingLevelToAgent(previousThinkingLevel);
 			this.agent.serviceTier = previousServiceTier;
 			this.#syncTodoPhasesFromBranch();
-			this.#advisorRuntime?.reset();
+			this.#resetAllAdvisorRuntimes();
 			this.#reconnectToAgent();
 			if (restoreMcpError) {
 				throw restoreMcpError;
@@ -14108,6 +14191,23 @@ export class AgentSession {
 	}
 
 	/**
+	 * Replace the live advisor roster from an edited `WATCHDOG.yml` (the `/advisor
+	 * configure` save path). Swaps the configs + shared baseline, then rebuilds the
+	 * runtimes in place so the change applies without a restart. When the advisor is
+	 * disabled the new configs are simply stored for the next enable.
+	 *
+	 * @returns the number of advisors active after the rebuild.
+	 */
+	applyAdvisorConfigs(advisors: AdvisorConfig[], sharedInstructions: string | undefined): number {
+		this.#advisorConfigs = advisors;
+		this.#advisorSharedInstructions = sharedInstructions;
+		if (!this.#advisorEnabled) return 0;
+		this.#stopAdvisorRuntime();
+		this.#buildAdvisorRuntime(true);
+		return this.#advisors.length;
+	}
+
+	/**
 	 * Whether the advisor setting is enabled for this session.
 	 */
 	isAdvisorEnabled(): boolean {
@@ -14121,7 +14221,17 @@ export class AgentSession {
 	 * not merely the setting. Drives the status-line badge and `/dump advisor`.
 	 */
 	isAdvisorActive(): boolean {
-		return this.#advisorAgent !== undefined;
+		return this.#advisors.length > 0;
+	}
+
+	/**
+	 * The names of the read-only tools available to advisors this session (the
+	 * pool a `/advisor configure` editor lists; the actual built set may be
+	 * smaller than {@link ADVISOR_READONLY_TOOL_NAMES} when a tool's optional
+	 * factory returns null, e.g. lsp with no servers).
+	 */
+	getAdvisorAvailableToolNames(): string[] {
+		return (this.#advisorReadOnlyTools ?? []).map(tool => tool.name);
 	}
 
 	/**
@@ -14132,7 +14242,7 @@ export class AgentSession {
 	 * (`streamFn`, `promptCacheKey`, `providerSessionState`, ...).
 	 */
 	getAdvisorAgent(): Agent | undefined {
-		return this.#advisorAgent;
+		return this.#advisors[0]?.agent;
 	}
 
 	/**
@@ -14140,8 +14250,8 @@ export class AgentSession {
 	 */
 	getAdvisorStats(): AdvisorStats {
 		const configured = this.#advisorEnabled;
-		const advisor = this.#advisorAgent;
-		if (!advisor) {
+		const advisors = this.#advisors.map(a => this.#computeAdvisorStat(a));
+		if (advisors.length === 0) {
 			return {
 				configured,
 				active: false,
@@ -14150,10 +14260,45 @@ export class AgentSession {
 				tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				cost: 0,
 				messages: { user: 0, assistant: 0, total: 0 },
+				advisors: [],
 			};
 		}
-		const model = advisor.state.model;
-		const messages = advisor.state.messages;
+		const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+		const messages = { user: 0, assistant: 0, total: 0 };
+		let cost = 0;
+		let contextTokens = 0;
+		for (const a of advisors) {
+			tokens.input += a.tokens.input;
+			tokens.output += a.tokens.output;
+			tokens.reasoning += a.tokens.reasoning;
+			tokens.cacheRead += a.tokens.cacheRead;
+			tokens.cacheWrite += a.tokens.cacheWrite;
+			tokens.total += a.tokens.total;
+			messages.user += a.messages.user;
+			messages.assistant += a.messages.assistant;
+			messages.total += a.messages.total;
+			cost += a.cost;
+			contextTokens += a.contextTokens;
+		}
+		// Single-advisor displays read the top-level model/window directly; surface the
+		// first advisor's so the legacy status line stays byte-identical.
+		return {
+			configured,
+			active: true,
+			model: advisors[0].model,
+			contextWindow: advisors[0].contextWindow,
+			contextTokens,
+			tokens,
+			cost,
+			messages,
+			advisors,
+		};
+	}
+
+	/** Compute one advisor's stats slice (tokens, cost, context, message counts). */
+	#computeAdvisorStat(advisor: ActiveAdvisor): PerAdvisorStat {
+		const model = advisor.agent.state.model;
+		const messages = advisor.agent.state.messages;
 		const contextTokens = this.#estimateAdvisorContextTokens(messages);
 		let input = 0;
 		let output = 0;
@@ -14177,19 +14322,11 @@ export class AgentSession {
 			}
 		}
 		return {
-			configured,
-			active: true,
+			name: advisor.name,
 			model,
 			contextWindow: model.contextWindow ?? 0,
 			contextTokens,
-			tokens: {
-				input,
-				output,
-				reasoning,
-				cacheRead,
-				cacheWrite,
-				total: input + output + cacheRead + cacheWrite,
-			},
+			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite },
 			cost,
 			messages: { user, assistant, total: messages.length },
 		};
@@ -14205,19 +14342,30 @@ export class AgentSession {
 				? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
 				: "Advisor is disabled.";
 		}
-		const model = stats.model!;
-		const contextLine =
-			stats.contextWindow > 0
-				? `Context: ${stats.contextTokens.toLocaleString()} / ${stats.contextWindow.toLocaleString()} tokens (${Math.round((stats.contextTokens / stats.contextWindow) * 100)}%)`
-				: `Context: ${stats.contextTokens.toLocaleString()} tokens`;
-		const spendParts = [
-			`${stats.tokens.input.toLocaleString()} input`,
-			`${stats.tokens.output.toLocaleString()} output`,
-		];
-		if (stats.tokens.cacheRead > 0) spendParts.push(`${stats.tokens.cacheRead.toLocaleString()} cache read`);
-		if (stats.tokens.cacheWrite > 0) spendParts.push(`${stats.tokens.cacheWrite.toLocaleString()} cache write`);
-		const spendLine = `Spend: ${spendParts.join(", ")}, $${stats.cost.toFixed(4)}`;
-		return `Advisor is enabled (${model.provider}/${model.id}). ${contextLine}. ${spendLine}.`;
+		if (stats.advisors.length <= 1) {
+			const s = stats.advisors[0];
+			const contextLine =
+				s.contextWindow > 0
+					? `Context: ${s.contextTokens.toLocaleString()} / ${s.contextWindow.toLocaleString()} tokens (${Math.round((s.contextTokens / s.contextWindow) * 100)}%)`
+					: `Context: ${s.contextTokens.toLocaleString()} tokens`;
+			const spendParts = [`${s.tokens.input.toLocaleString()} input`, `${s.tokens.output.toLocaleString()} output`];
+			if (s.tokens.cacheRead > 0) spendParts.push(`${s.tokens.cacheRead.toLocaleString()} cache read`);
+			if (s.tokens.cacheWrite > 0) spendParts.push(`${s.tokens.cacheWrite.toLocaleString()} cache write`);
+			const spendLine = `Spend: ${spendParts.join(", ")}, $${s.cost.toFixed(4)}`;
+			return `Advisor is enabled (${s.model.provider}/${s.model.id}). ${contextLine}. ${spendLine}.`;
+		}
+		const lines = [`Advisors enabled (${stats.advisors.length}):`];
+		for (const s of stats.advisors) {
+			const ctx =
+				s.contextWindow > 0
+					? `${s.contextTokens.toLocaleString()} / ${s.contextWindow.toLocaleString()} (${Math.round((s.contextTokens / s.contextWindow) * 100)}%)`
+					: `${s.contextTokens.toLocaleString()}`;
+			lines.push(`  • ${s.name} (${s.model.provider}/${s.model.id}) — context ${ctx} tokens, $${s.cost.toFixed(4)}`);
+		}
+		lines.push(
+			`Totals: ${stats.tokens.input.toLocaleString()} input, ${stats.tokens.output.toLocaleString()} output, $${stats.cost.toFixed(4)}.`,
+		);
+		return lines.join("\n");
 	}
 
 	/**
@@ -14261,18 +14409,21 @@ export class AgentSession {
 	 * {@link formatSessionAsText}. Returns null when no advisor is active.
 	 */
 	formatAdvisorHistoryAsText(options?: { compact?: boolean }): string | null {
-		const advisor = this.#advisorAgent;
-		if (!advisor) return null;
-		if (options?.compact) {
-			return formatSessionHistoryMarkdown(advisor.state.messages);
-		}
-		return formatSessionDumpText({
-			messages: advisor.state.messages,
-			systemPrompt: advisor.state.systemPrompt,
-			model: advisor.state.model,
-			thinkingLevel: advisor.state.thinkingLevel,
-			tools: advisor.state.tools,
-		});
+		if (this.#advisors.length === 0) return null;
+		const dump = (a: ActiveAdvisor): string =>
+			options?.compact
+				? formatSessionHistoryMarkdown(a.agent.state.messages)
+				: formatSessionDumpText({
+						messages: a.agent.state.messages,
+						systemPrompt: a.agent.state.systemPrompt,
+						model: a.agent.state.model,
+						thinkingLevel: a.agent.state.thinkingLevel,
+						tools: a.agent.state.tools,
+					});
+		if (this.#advisors.length === 1) return dump(this.#advisors[0]);
+		return this.#advisors
+			.map(a => `### Advisor: ${a.name} (${a.agent.state.model.provider}/${a.agent.state.model.id})\n\n${dump(a)}`)
+			.join("\n\n");
 	}
 
 	// =========================================================================

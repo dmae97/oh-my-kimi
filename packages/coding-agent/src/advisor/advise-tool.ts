@@ -6,7 +6,7 @@ import type {
 	AgentToolResult,
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
-import { escapeXmlText } from "@oh-my-pi/pi-utils";
+import { escapeXmlAttribute, escapeXmlText } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import adviseDescription from "../prompts/advisor/advise-tool.md" with { type: "text" };
 
@@ -24,12 +24,16 @@ export type AdvisorSeverity = "nit" | "concern" | "blocker";
 export interface AdviseDetails {
 	note: string;
 	severity?: AdvisorSeverity;
+	/** Which configured advisor produced this note (omitted for the default advisor). */
+	advisor?: string;
 }
 
 /** One queued advice note. */
 export interface AdvisorNote {
 	note: string;
 	severity?: AdvisorSeverity;
+	/** Which configured advisor produced this note (omitted for the default advisor). */
+	advisor?: string;
 }
 
 /** Details payload on the batched `advisor` custom message rendered in the transcript. */
@@ -55,7 +59,8 @@ export function formatAdvisorBatchContent(notes: readonly AdvisorNote[]): string
 	return notes
 		.map(n => {
 			const severity = n.severity ? ` severity="${n.severity}"` : "";
-			return `<advisory${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
+			const who = n.advisor ? ` advisor="${escapeXmlAttribute(n.advisor)}"` : "";
+			return `<advisory${who}${severity} guidance="${ADVISOR_GUIDANCE}">\n${escapeXmlText(n.note)}\n</advisory>`;
 		})
 		.join("\n");
 }
@@ -133,11 +138,14 @@ export function deriveAdvisorTelemetry(
 }
 
 /**
- * Side-effect-free investigation tools handed to the advisor agent so it can
- * inspect the workspace before weighing in. Names match the primary session's
- * tool instances, which the advisor reuses.
+ * Full set of read-only investigative tools an advisor may be granted. The SDK
+ * builds tool instances for these against the advisor's isolated read-only
+ * ToolSession; `lsp` and `web_search` are read-only and never mutate the
+ * workspace.
  */
-export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
+export const ADVISOR_READONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob", "lsp", "web_search"]);
+/** The read-only tools an advisor receives by default when its config omits `tools`. A configurable subset of {@link ADVISOR_READONLY_TOOL_NAMES}. */
+export const ADVISOR_DEFAULT_TOOL_NAMES: ReadonlySet<string> = new Set(["read", "grep", "glob"]);
 
 function advisorNoteDedupeKey(note: string): string {
 	return note.trim().replace(/\s+/g, " ");

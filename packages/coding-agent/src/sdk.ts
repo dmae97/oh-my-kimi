@@ -20,6 +20,7 @@ import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Sn
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
+	discoverAdvisorConfigs,
 	discoverWatchdogFiles,
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
@@ -1158,6 +1159,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	activeRepoContextPromise.catch(() => {});
 	const watchdogFilesPromise = logger.time("discoverWatchdogFiles", () => discoverWatchdogFiles(cwd, agentDir));
 	watchdogFilesPromise.catch(() => {});
+	const advisorConfigsPromise = logger.time("discoverAdvisorConfigs", () => discoverAdvisorConfigs(cwd, agentDir));
+	advisorConfigsPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
@@ -1403,12 +1406,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		return result;
 	};
-	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext] = await Promise.all([
-		contextFilesPromise,
-		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
-		watchdogFilesPromise,
-		activeRepoContextPromise,
-	]);
+	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext, discoveredAdvisors] =
+		await Promise.all([
+			contextFilesPromise,
+			raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
+			watchdogFilesPromise,
+			activeRepoContextPromise,
+			advisorConfigsPromise,
+		]);
 
 	let agent: Agent;
 	let session!: AgentSession;
@@ -2677,6 +2682,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
+			advisorSharedInstructions: discoveredAdvisors.sharedInstructions,
+			advisorConfigs: discoveredAdvisors.advisors,
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,

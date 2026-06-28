@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added escapeXmlAttribute function for safe XML attribute value encoding
+
 ## [16.2.0] - 2026-06-27
 
 ### Added

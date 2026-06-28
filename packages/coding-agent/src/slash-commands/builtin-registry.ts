@@ -438,16 +438,18 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		name: "advisor",
 		description: "Toggle the advisor (a second model that reviews each turn and injects notes)",
 		acpDescription: "Toggle advisor",
-		acpInputHint: "[on|off|status|dump [raw]]",
+		acpInputHint: "[on|off|status|dump [raw]|configure]",
 		subcommands: [
 			{ name: "on", description: "Enable the advisor" },
 			{ name: "off", description: "Disable the advisor" },
 			{ name: "status", description: "Show advisor status" },
 			{ name: "dump", description: "Copy the advisor's transcript to clipboard", usage: "[raw]" },
+			{ name: "configure", description: "Open the advisor configuration editor (TUI)" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			const stats = runtime.ctx.session.getAdvisorStats();
+			if (stats.active && stats.advisors.length > 1) return `Advisor: on (${stats.advisors.length} advisors)`;
 			if (stats.active && stats.model) return `Advisor: on (${stats.model.provider}/${stats.model.id})`;
 			if (stats.configured) return "Advisor: configured, no model";
 			return "Advisor: off";
@@ -488,7 +490,13 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.output(text ?? "Advisor is not active for this session.");
 				return commandConsumed();
 			}
-			return usage("Usage: /advisor [on|off|status|dump [raw]]", runtime);
+			if (verb === "configure") {
+				await runtime.output(
+					"/advisor configure opens an interactive editor and is only available in the interactive TUI.",
+				);
+				return commandConsumed();
+			}
+			return usage("Usage: /advisor [on|off|status|dump [raw]|configure]", runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -533,7 +541,12 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]]");
+			if (verb === "configure") {
+				runtime.ctx.showAdvisorConfigure();
+				runtime.ctx.editor.setText("");
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /advisor [on|off|status|dump [raw]|configure]");
 			runtime.ctx.editor.setText("");
 		},
 	},

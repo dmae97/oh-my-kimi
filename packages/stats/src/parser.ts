@@ -21,12 +21,16 @@ const ADVISOR_TRANSCRIPT_BASENAME = "__advisor.jsonl";
  * directory. Layout: `<sessionsDir>/<project>/<file>.jsonl` is the `main`
  * agent; subagent and advisor transcripts live nested one level deeper inside
  * the session's artifacts dir (`<project>/<session>/<id>.jsonl`,
- * `<project>/<session>/__advisor.jsonl`). Any `__advisor.jsonl` — at any depth,
- * including a subagent's own advisor — counts as `advisor`; every other nested
- * transcript is a task `subagent`.
+ * `<project>/<session>/__advisor.jsonl`). Any advisor transcript
+ * (`__advisor.jsonl` or `__advisor.<slug>.jsonl`) — at any depth, including a
+ * subagent's own advisor — counts as `advisor`; every other nested transcript
+ * is a task `subagent`.
  */
 export function classifyAgentType(sessionPath: string): AgentType {
-	if (path.basename(sessionPath) === ADVISOR_TRANSCRIPT_BASENAME) return "advisor";
+	const base = path.basename(sessionPath);
+	if (base === ADVISOR_TRANSCRIPT_BASENAME || (base.startsWith("__advisor.") && base.endsWith(".jsonl"))) {
+		return "advisor";
+	}
 	const rel = path.relative(getSessionsDir(), sessionPath);
 	// `<project>/<file>.jsonl` -> 2 segments. Deeper nesting is a subagent.
 	return rel.split(path.sep).length <= 2 ? "main" : "subagent";

@@ -83,6 +83,11 @@ describe("classifyAgentType", () => {
 		expect(classifyAgentType(path.join(session, "AuthLoader", "__advisor.jsonl"))).toBe("advisor");
 		// A subagent that spawned its own subagent is still a subagent.
 		expect(classifyAgentType(path.join(session, "AuthLoader", "Nested.jsonl"))).toBe("subagent");
+		// Named (multi-advisor) transcripts `__advisor.<slug>.jsonl` also count as advisor.
+		expect(classifyAgentType(path.join(session, "__advisor.arch.jsonl"))).toBe("advisor");
+		expect(classifyAgentType(path.join(session, "AuthLoader", "__advisor.security.jsonl"))).toBe("advisor");
+		// `__advisor-2.jsonl` (output-manager bump namespace) is NOT an advisor transcript.
+		expect(classifyAgentType(path.join(session, "__advisor-2.jsonl"))).toBe("subagent");
 	});
 });
 

@@ -64,3 +64,33 @@ export function escapeXmlText(input: string): string {
 	}
 	return output;
 }
+
+/**
+ * Escape XML-significant characters for an attribute VALUE: the three body
+ * characters (`&`, `<`, `>`) plus the double quote (`"` → `&quot;`) that would
+ * otherwise close the attribute. Allocation-conscious: returns the input
+ * unchanged (same reference) when nothing needs escaping. Use it for attribute
+ * values; {@link escapeXmlText} is for element bodies and leaves `"` intact.
+ */
+export function escapeXmlAttribute(input: string): string {
+	let firstEscapable = -1;
+	for (let index = 0; index < input.length; index++) {
+		const char = input.charCodeAt(index);
+		if (char === 38 || char === 60 || char === 62 || char === 34) {
+			firstEscapable = index;
+			break;
+		}
+	}
+	if (firstEscapable === -1) return input;
+
+	let output = input.slice(0, firstEscapable);
+	for (let index = firstEscapable; index < input.length; index++) {
+		const char = input[index];
+		if (char === "&") output += "&amp;";
+		else if (char === "<") output += "&lt;";
+		else if (char === ">") output += "&gt;";
+		else if (char === '"') output += "&quot;";
+		else output += char;
+	}
+	return output;
+}

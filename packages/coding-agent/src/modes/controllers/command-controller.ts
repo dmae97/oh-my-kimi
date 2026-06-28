@@ -360,6 +360,27 @@ export class CommandController {
 			]);
 			return;
 		}
+		if (stats.advisors.length > 1) {
+			let info = `${theme.bold("Advisor Status")} (${stats.advisors.length} advisors)\n`;
+			for (const a of stats.advisors) {
+				const ctx =
+					a.contextWindow > 0
+						? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
+						: `${a.contextTokens.toLocaleString()}`;
+				info += `\n${theme.bold(a.name)}\n`;
+				info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
+				info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
+				info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
+				if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
+				info += "\n";
+			}
+			info += `\n${theme.bold("Totals")}\n`;
+			info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
+			if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
+			return;
+		}
 		const model = stats.model!;
 		let info = `${theme.bold("Advisor Status")}\n\n`;
 		info += `${theme.bold("Provider")}\n`;

@@ -15,6 +15,23 @@ export const ADVISOR_TRANSCRIPT_FILENAME = `${ADVISOR_TRANSCRIPT_STEM}.jsonl`;
 const JSONL_SUFFIX = ".jsonl";
 
 /**
+ * Transcript filename for an advisor: `__advisor.jsonl` for the legacy/default
+ * advisor (empty slug), `__advisor.<slug>.jsonl` for a named advisor. The `.`
+ * separator keeps named files out of the output manager's `-<n>` bump namespace.
+ */
+export function advisorTranscriptFilename(slug: string): string {
+	return slug ? `${ADVISOR_TRANSCRIPT_STEM}.${slug}${JSONL_SUFFIX}` : ADVISOR_TRANSCRIPT_FILENAME;
+}
+
+/** Whether a filename is any advisor transcript (`__advisor.jsonl` or `__advisor.<slug>.jsonl`). */
+export function isAdvisorTranscriptName(name: string): boolean {
+	return (
+		name === ADVISOR_TRANSCRIPT_FILENAME ||
+		(name.startsWith(`${ADVISOR_TRANSCRIPT_STEM}.`) && name.endsWith(JSONL_SUFFIX))
+	);
+}
+
+/**
  * Append-only persister for an advisor agent's transcript.
  *
  * The advisor is a passive reviewer with its own model usage, so — like a task
@@ -38,19 +55,25 @@ const JSONL_SUFFIX = ".jsonl";
 export class AdvisorTranscriptRecorder {
 	#manager: SessionManager | undefined;
 	#file: string | undefined;
+	#filename: string;
 	/** Serializes the async open/close against synchronous appends so records land in order. */
 	#queue: Promise<void>;
 
 	/**
+	 * @param filename Transcript filename within the session dir. Defaults to
+	 *   `__advisor.jsonl`; named advisors pass `__advisor.<slug>.jsonl` via
+	 *   {@link advisorTranscriptFilename}.
 	 * @param after Optional barrier the queue starts behind — used on the advisor
 	 *   on→off→on toggle so a fresh recorder's first `open` waits for the prior
-	 *   recorder's `close` and the two never hold the same `__advisor.jsonl` at once.
+	 *   recorder's `close` and the two never hold the same file at once.
 	 */
 	constructor(
 		private readonly resolveSessionFile: () => string | undefined,
 		private readonly resolveCwd: () => string,
+		filename: string = ADVISOR_TRANSCRIPT_FILENAME,
 		after?: Promise<unknown>,
 	) {
+		this.#filename = filename;
 		this.#queue = after
 			? after.then(
 					() => {},
@@ -83,7 +106,7 @@ export class AdvisorTranscriptRecorder {
 		}
 		const sessionFile = this.resolveSessionFile();
 		if (!sessionFile?.endsWith(JSONL_SUFFIX)) return;
-		const file = path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), ADVISOR_TRANSCRIPT_FILENAME);
+		const file = path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), this.#filename);
 		const cwd = this.resolveCwd();
 		this.#enqueue(async () => {
 			if (file !== this.#file) {

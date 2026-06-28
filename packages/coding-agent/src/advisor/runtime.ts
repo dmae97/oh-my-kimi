@@ -209,6 +209,7 @@ export class AdvisorRuntime {
 			includeToolIntent: true,
 			watchedRoles: true,
 			expandPrimaryContext: true,
+			expandEditDiffs: true,
 		});
 		if (!md.trim()) return null;
 		return `### Session update\n\n${md}`;
@@ -434,10 +435,19 @@ function obfuscateDetails(
 function obfuscateAdvisorMessage(obfuscator: SecretObfuscator, message: AgentMessage): AgentMessage {
 	switch (message.role) {
 		case "user":
-		case "developer":
-		case "toolResult": {
+		case "developer": {
 			const content = obfuscateTextualContent(obfuscator, message.content as TextualContent);
 			return content === message.content ? message : ({ ...(message as object), content } as AgentMessage);
+		}
+		case "toolResult": {
+			const msg = message as AgentMessage & {
+				content: TextualContent;
+				details?: Record<string, unknown>;
+			};
+			const content = obfuscateTextualContent(obfuscator, msg.content);
+			const details = obfuscateDetails(obfuscator, msg.details);
+			if (content === msg.content && details === msg.details) return message;
+			return { ...(message as object), content, details } as AgentMessage;
 		}
 		case "assistant":
 			return obfuscateAssistantMessage(obfuscator, message as AssistantMessage) as AgentMessage;

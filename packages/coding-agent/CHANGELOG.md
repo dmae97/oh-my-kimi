@@ -4,6 +4,10 @@
 
 ### Added
 
+- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, read-only tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
+- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle the read-only tool set (read/grep/glob/lsp/web_search, defaulting to read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
+- Added the full unified edit diff to the advisor's transcript view so it sees what each edit changed without re-reading the file.
+
 - Added mouse support for scrolling and interaction in the debug log and raw SSE stream viewers.
 - Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph instead of a separate text suffix.
 - Added support for tracking reasoning tokens in session and advisor statistics.
@@ -11,6 +15,9 @@
 - Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source IDs, along with citation-marker unwrapping for hashline edit parsing, diff previews, and streaming matching.
 - Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
 - Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
+- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, read-only tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
+- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle the read-only tool set (read/grep/glob/lsp/web_search, defaulting to read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
+- Added the full unified edit diff to the advisor's transcript view so it sees what each edit changed without re-reading the file.
 
 ### Changed
 
@@ -23,7 +30,6 @@
 - Fixed array-typed output schema validation by correctly assembling incremental yields into lists
 - Fixed OpenAI/Codex compatibility by removing top-level schema combinators from tool parameters
 - Fixed validation errors for untyped final yields in strict-mode providers by allowing `null` types
-
 - Fixed Alt+M default-role model configuration being disabled by the current session's context size. ([#3708](https://github.com/can1357/oh-my-pi/issues/3708))
 - Fixed MCP `type: "sse"` servers by adding the legacy HTTP+SSE endpoint handshake and streaming JSON-RPC response path. ([#3710](https://github.com/can1357/oh-my-pi/issues/3710))
 - Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature
