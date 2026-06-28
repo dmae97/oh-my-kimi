@@ -53,6 +53,7 @@ import { reset as resetCapabilities } from "../capability";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
+import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -100,7 +101,6 @@ import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { formatTaskId } from "../task/render";
 import type { LspStartupServerInfo } from "../tools";
-import { isImageProviderPreference, setPreferredImageProvider } from "../tools/image-gen";
 import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
@@ -114,12 +114,6 @@ import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../utils/session-color";
 import { messageHasDisplayableThinking } from "../utils/thinking-display";
 import { popTerminalTitle, pushTerminalTitle, setSessionTerminalTitle } from "../utils/title-generator";
-import {
-	isSearchProviderId,
-	isSearchProviderPreference,
-	setExcludedSearchProviders,
-	setPreferredSearchProvider,
-} from "../web/search";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import type { BashExecutionComponent } from "./components/bash-execution";
 import { ChatBlock, type ChatBlockHost } from "./components/chat-block";
@@ -1053,18 +1047,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// module-level search/image provider state reflects the destination
 			// project's configuration. Without this, the previous project's
 			// exclusions leak and newly-excluded providers are still used.
-			const excludedWebSearchProviders = settings.get("providers.webSearchExclude");
-			if (Array.isArray(excludedWebSearchProviders)) {
-				setExcludedSearchProviders(excludedWebSearchProviders.filter(isSearchProviderId));
-			}
-			const webSearchProvider = settings.get("providers.webSearch");
-			if (typeof webSearchProvider === "string" && isSearchProviderPreference(webSearchProvider)) {
-				setPreferredSearchProvider(webSearchProvider);
-			}
-			const imageProvider = settings.get("providers.image");
-			if (isImageProviderPreference(imageProvider)) {
-				setPreferredImageProvider(imageProvider);
-			}
+			applyProviderGlobalsFromSettings(settings);
 		}
 		// Re-warm plugin roots, capabilities, slash commands, and the ssh tool so
 		// the next prompt sees everything scoped to the new project directory.

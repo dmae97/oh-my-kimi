@@ -50,6 +50,9 @@
 ### Removed
 
 - Removed history URI support for reading agent transcripts
+### Fixed
+
+- Fixed `/move <dir>` to relocate the current session file and artifacts into the target directory's resume bucket instead of switching to a new empty target session, so `/resume` from the target directory shows the moved conversation.
 
 ## [16.2.2] - 2026-06-27
 

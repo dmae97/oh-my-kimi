@@ -1618,9 +1618,8 @@ export class SessionManager {
 	/**
 	 * Create a fresh empty session file in the default session directory for
 	 * `cwd`, writing only the session header. The returned path can be passed to
-	 * `setSessionFile` / `AgentSession.switchSession` to start a new empty
-	 * session in that directory. Used by `/move` to switch projects without
-	 * dragging the current conversation along.
+	 * `setSessionFile` / `AgentSession.switchSession` when a caller explicitly
+	 * needs a brand-new persisted session at a cwd-derived path.
 	 */
 	static createEmptySessionFile(cwd: string, storage: SessionStorage = new FileSessionStorage()): string {
 		const sessionDir = SessionManager.getDefaultSessionDir(cwd, undefined, storage);

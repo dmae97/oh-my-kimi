@@ -109,6 +109,23 @@ describe("SessionManager.moveTo", () => {
 		expect(hasAssistantEntry(entries)).toBe(true);
 	});
 
+	it("makes the moved session visible to resume from the target cwd", async () => {
+		const session = SessionManager.create(cwdA);
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage());
+		await session.flush();
+		const oldFile = session.getSessionFile()!;
+
+		await session.moveTo(cwdB);
+
+		const movedFile = session.getSessionFile()!;
+		const sourceSessions = await SessionManager.list(cwdA);
+		const targetSessions = await SessionManager.list(cwdB);
+
+		expect(sourceSessions.some(item => item.path === oldFile)).toBe(false);
+		expect(targetSessions.some(item => item.path === movedFile)).toBe(true);
+	});
+
 	it("succeeds on fresh session without ENOENT, then deferred persistence works", async () => {
 		const session = SessionManager.create(cwdA);
 		// No messages — file never written to disk
