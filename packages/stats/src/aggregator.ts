@@ -23,7 +23,7 @@ import {
 	setFileOffset,
 	updateUserMessageLinks,
 } from "./db";
-import { getSessionEntry, listAllSessionFiles, type ParseSessionResult } from "./parser";
+import { getSessionEntry, listAllSessionFiles, type ParseSessionResult, parseSessionFile } from "./parser";
 import type { SyncWorkerRequest, SyncWorkerResponse } from "./sync-worker";
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
 // hidden argv mode, so the compiled binary and npm bundle only need one
@@ -68,6 +68,9 @@ export interface SyncOptions {
 }
 
 function defaultWorkerCount(): number {
+	// Bun 1.3.x can abort the macOS process when stats sync workers re-enter
+	// the compiled `omp` binary. Keep macOS on the documented serial path.
+	if (process.platform === "darwin") return 1;
 	// `navigator.hardwareConcurrency` is the portable answer in Bun; fall
 	// back to a small fixed pool if it's somehow unavailable.
 	const hw = typeof navigator !== "undefined" ? (navigator.hardwareConcurrency ?? 0) : 0;
@@ -183,11 +186,11 @@ export async function smokeTestSyncWorker({ timeoutMs = 5_000 }: { timeoutMs?: n
 /**
  * Sync all session files to the database.
  *
- * Parsing fans out across a worker pool (one in-flight job per worker)
- * while DB writes and offset bookkeeping stay on the calling thread so the
- * single SQLite handle stays uncontended. `onProgress` fires once per
- * completed file (skipped files included so the bar walks at a steady
- * rate).
+ * `workers: 1` parses inline. Larger pools fan parsing out across workers
+ * (one in-flight job per worker) while DB writes and offset bookkeeping stay on
+ * the calling thread so the single SQLite handle stays uncontended.
+ * `onProgress` fires once per completed file (skipped files included so the
+ * bar walks at a steady rate).
  */
 export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: number; files: number }> {
 	await initDb();
@@ -200,10 +203,6 @@ export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: 
 	let completed = 0;
 	let cursor = 0;
 
-	const poolSize = Math.max(1, Math.min(files.length, opts?.workers ?? defaultWorkerCount()));
-	const handles: WorkerHandle[] = [];
-	for (let i = 0; i < poolSize; i++) handles.push(spawnWorker());
-
 	const report = (sessionFile: string) => {
 		completed++;
 		opts?.onProgress?.({
@@ -214,34 +213,51 @@ export async function syncAllSessions(opts?: SyncOptions): Promise<{ processed: 
 		});
 	};
 
+	const processFile = async (
+		sessionFile: string,
+		parse: (sessionFile: string, fromOffset: number) => Promise<ParseSessionResult>,
+	): Promise<void> => {
+		let fileStats: fs.Stats;
+		try {
+			fileStats = await fs.promises.stat(sessionFile);
+		} catch {
+			report(sessionFile);
+			return;
+		}
+		const lastModified = fileStats.mtimeMs;
+		const stored = getFileOffset(sessionFile);
+		if (stored && stored.lastModified >= lastModified) {
+			report(sessionFile);
+			return;
+		}
+
+		const fromOffset = stored?.offset ?? 0;
+		const result = await parse(sessionFile, fromOffset);
+		const inserted = applyParseResult(sessionFile, lastModified, result);
+		if (inserted > 0) {
+			totalProcessed += inserted;
+			filesProcessed++;
+		}
+		report(sessionFile);
+	};
+
+	const poolSize = Math.max(1, Math.min(files.length, opts?.workers ?? defaultWorkerCount()));
+	if (poolSize === 1) {
+		for (const sessionFile of files) {
+			await processFile(sessionFile, parseSessionFile);
+		}
+		return { processed: totalProcessed, files: filesProcessed };
+	}
+
+	const handles: WorkerHandle[] = [];
+	for (let i = 0; i < poolSize; i++) handles.push(spawnWorker());
+
 	async function drain(handle: WorkerHandle): Promise<void> {
 		while (true) {
 			const idx = cursor++;
 			if (idx >= files.length) return;
 			const sessionFile = files[idx];
-
-			let fileStats: fs.Stats;
-			try {
-				fileStats = await fs.promises.stat(sessionFile);
-			} catch {
-				report(sessionFile);
-				continue;
-			}
-			const lastModified = fileStats.mtimeMs;
-			const stored = getFileOffset(sessionFile);
-			if (stored && stored.lastModified >= lastModified) {
-				report(sessionFile);
-				continue;
-			}
-
-			const fromOffset = stored?.offset ?? 0;
-			const result = await dispatch(handle, { sessionFile, fromOffset });
-			const inserted = applyParseResult(sessionFile, lastModified, result);
-			if (inserted > 0) {
-				totalProcessed += inserted;
-				filesProcessed++;
-			}
-			report(sessionFile);
+			await processFile(sessionFile, (file, fromOffset) => dispatch(handle, { sessionFile: file, fromOffset }));
 		}
 	}
 
