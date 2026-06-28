@@ -3011,6 +3011,7 @@ dependencies = [
  "pi-ast",
  "pi-iso",
  "pi-shell",
+ "pi-uutils-ctx",
  "png",
  "portable-pty",
  "rayon",

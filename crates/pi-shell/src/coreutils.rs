@@ -11,6 +11,7 @@ use std::{
 	collections::HashMap,
 	ffi::OsString,
 	io::{self, Read, Write},
+	panic::catch_unwind,
 	sync::{
 		Arc,
 		atomic::{AtomicBool, Ordering},
@@ -106,7 +107,7 @@ async fn run_uutil<SE: ShellExtensions>(
 				env,
 				cancel: scope_flag,
 			},
-			|| run(argv),
+			|| run_caught(run, argv),
 		)
 	});
 
@@ -136,6 +137,24 @@ async fn run_uutil<SE: ShellExtensions>(
 	};
 
 	Ok(ExecutionResult::new((code & 0xff) as u8))
+}
+
+/// Runs a uutils entry point, containing any panic at the in-process boundary.
+///
+/// A vendored utility that panics (e.g. an `unwrap` on a `BrokenPipe`, the
+/// crash this guards — see uu-tail) must not take down the long-lived host.
+/// With `panic = "unwind"` the panic unwinds to here, where it becomes a
+/// non-zero exit plus a concise note on the command's own stderr. The native
+/// crash hook recognizes the active uutils scope and keeps the recovered panic
+/// out of the user-facing crash report (it is still logged to disk).
+fn run_caught(run: UutilRun, argv: Vec<OsString>) -> i32 {
+	let name = argv
+		.first()
+		.map_or_else(|| String::from("command"), |arg| arg.to_string_lossy().into_owned());
+	if let Ok(code) = catch_unwind(|| run(argv)) { code } else {
+ 			let _ = writeln!(pi_uutils_ctx::stderr(), "{name}: internal error");
+ 			1
+ 		}
 }
 
 /// Minimal help/usage content for a uutils-backed builtin. The full utility
@@ -188,3 +207,71 @@ uutil_builtin!(pub fn rm_builtin => uu_rm::run);
 uutil_builtin!(pub fn mv_builtin => uu_mv::run);
 uutil_builtin!(pub fn cat_builtin => uu_cat::run);
 uutil_builtin!(pub fn uniq_builtin => uu_uniq::run);
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		ffi::OsString,
+		io::{self, Write},
+		sync::{Arc, atomic::AtomicBool, mpsc},
+	};
+
+	use super::{UutilRun, run_caught};
+
+	/// `Send` writer that forwards every write onto a channel so a test can
+	/// inspect what the utility wrote to the scope's stderr.
+	struct ChanWriter(mpsc::Sender<Vec<u8>>);
+	impl Write for ChanWriter {
+		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+			let _ = self.0.send(buf.to_vec());
+			Ok(buf.len())
+		}
+		fn flush(&mut self) -> io::Result<()> {
+			Ok(())
+		}
+	}
+
+	fn scope_io(stderr: Box<dyn Write + Send>) -> pi_uutils_ctx::ScopeIo {
+		pi_uutils_ctx::ScopeIo {
+			stdin:                 Box::new(io::empty()),
+			stdin_fd:              None,
+			stdin_is_search_input: false,
+			stdout:                Box::new(io::sink()),
+			stderr,
+			cwd:                   std::path::PathBuf::from("."),
+			env:                   std::collections::HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		}
+	}
+
+	fn run_in_scope(run: UutilRun, argv: Vec<OsString>) -> (i32, String) {
+		let (tx, rx) = mpsc::channel();
+		let code =
+			pi_uutils_ctx::scope(scope_io(Box::new(ChanWriter(tx))), || run_caught(run, argv));
+		let mut err = Vec::new();
+		while let Ok(chunk) = rx.try_recv() {
+			err.extend_from_slice(&chunk);
+		}
+		(code, String::from_utf8(err).expect("utf8 stderr"))
+	}
+
+	#[test]
+	fn run_caught_passes_through_exit_code() {
+		fn ok(_argv: Vec<OsString>) -> i32 {
+			7
+		}
+		let (code, err) = run_in_scope(ok, vec![OsString::from("wc")]);
+		assert_eq!(code, 7, "successful utility exit code is preserved");
+		assert!(err.is_empty(), "no diagnostic on a clean run");
+	}
+
+	#[test]
+	fn run_caught_maps_panic_to_failure() {
+		fn boom(_argv: Vec<OsString>) -> i32 {
+			panic!("kaboom");
+		}
+		let (code, err) = run_in_scope(boom, vec![OsString::from("tail")]);
+		assert_eq!(code, 1, "a panic in the utility becomes a failed command");
+		assert_eq!(err, "tail: internal error\n", "diagnostic names the command");
+	}
+}

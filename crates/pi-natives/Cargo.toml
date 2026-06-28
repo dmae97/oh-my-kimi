@@ -36,6 +36,7 @@ phf.workspace = true
 pi-ast.workspace = true
 pi-iso.workspace = true
 pi-shell.workspace = true
+pi-uutils-ctx = { path = "../pi-uutils-ctx" }
 portable-pty.workspace = true
 png.workspace = true
 rayon.workspace = true

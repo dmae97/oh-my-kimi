@@ -615,6 +615,7 @@ mod tests {
 			fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
 				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
 			}
+
 			fn flush(&mut self) -> io::Result<()> {
 				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
 			}
@@ -641,7 +642,9 @@ mod tests {
 		let lines = b"0123456789\n".repeat(64);
 		let len = blksize_limit + lines.len() as u64 + 1;
 		file.set_len(len).expect("extend file");
-		file.seek(SeekFrom::Start(len - lines.len() as u64)).expect("seek to tail");
+		file
+			.seek(SeekFrom::Start(len - lines.len() as u64))
+			.expect("seek to tail");
 		file.write_all(&lines).expect("write tail lines");
 		file.flush().expect("flush");
 		drop(file);
