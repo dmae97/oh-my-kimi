@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Applied `NODE_EXTRA_CA_CERTS` to every provider fetch — OpenAI-compatible, Codex, Ollama, Azure Responses, and Google — not just the Anthropic Foundry path, so custom gateways behind a private CA bundle no longer fail with certificate verification errors ([#3731](https://github.com/can1357/oh-my-pi/issues/3731)).
+
 ## [16.2.3] - 2026-06-28
 
 ### Changed
