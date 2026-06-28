@@ -659,8 +659,14 @@ export interface RemoteCompactionConfig<TApi extends Api = Api> {
 	enabled?: boolean;
 	/** Adapter family used by the configured compaction endpoint. */
 	api?: TApi;
-	/** Absolute compact endpoint URL; when omitted, the adapter derives it from the model base URL. */
+	/** Absolute V1 compact endpoint URL; when omitted, the adapter derives it from the model base URL. */
 	endpoint?: string;
+	/** Enables Responses-stream V2 compaction for models verified to support `compaction_trigger`. */
+	v2StreamingEnabled?: boolean;
+	/** Absolute Responses-stream endpoint URL for V2 compaction; overrides `streamingEndpoint`. */
+	v2Endpoint?: string;
+	/** Absolute provider streaming endpoint URL used by V2 compaction when no dedicated endpoint is set. */
+	streamingEndpoint?: string;
 	/** Model id sent to the compaction endpoint when it differs from the active model id. */
 	model?: string;
 }

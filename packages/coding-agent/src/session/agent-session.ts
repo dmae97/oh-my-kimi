@@ -2382,6 +2382,9 @@ export class AgentSession {
 						thinkingLevel: advisorCompactionThinkingLevel,
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
+						tools: advisor.state.tools,
+						sessionId: advisorSessionId,
+						promptCacheKey: advisorSessionId,
 					},
 				);
 				break;
@@ -10472,6 +10475,9 @@ export class AgentSession {
 						// via resolveCompactionEffort so unsupported-effort models
 						// (xai-oauth/grok-build) don't trip requireSupportedEffort.
 						thinkingLevel: this.thinkingLevel,
+						tools: this.agent.state.tools,
+						sessionId: this.sessionId,
+						promptCacheKey: this.sessionId,
 					},
 				);
 			} catch (error) {
@@ -11072,6 +11078,9 @@ export class AgentSession {
 									// site. Clamped per-model inside compact() via
 									// resolveCompactionEffort.
 									thinkingLevel: this.thinkingLevel,
+									tools: this.agent.state.tools,
+									sessionId: this.sessionId,
+									promptCacheKey: this.sessionId,
 								},
 							);
 							break;

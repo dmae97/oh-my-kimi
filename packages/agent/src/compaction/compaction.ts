@@ -20,6 +20,8 @@ import {
 	withAuth,
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
+import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -28,6 +30,14 @@ import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
 import { countTokens } from "../tokenizer";
 import type { AgentMessage } from "../types";
+import {
+	buildCompactionV2Request,
+	getCompactionV2PreserveData,
+	requestCompactionV2Streaming,
+	shouldUseCompactionV2Streaming,
+	storeCompactionV2PreserveData,
+	V2_RETAINED_MESSAGE_TOKEN_BUDGET,
+} from "./compaction-v2-streaming";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { type ConvertToLlm, createBranchSummaryMessage, createCustomMessage, defaultConvertToLlm } from "./messages";
 import {
@@ -155,6 +165,8 @@ export interface CompactionSettings {
 	autoContinue?: boolean;
 	remoteEnabled?: boolean;
 	remoteEndpoint?: string;
+	remoteStreamingV2Enabled?: boolean;
+	v2RetainedMessageBudget?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
@@ -167,6 +179,8 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	keepRecentTokens: 20000,
 	autoContinue: true,
 	remoteEnabled: true,
+	remoteStreamingV2Enabled: true,
+	v2RetainedMessageBudget: V2_RETAINED_MESSAGE_TOKEN_BUDGET,
 };
 
 // ============================================================================
@@ -657,6 +671,12 @@ export interface SummaryOptions {
 	 * `resolveCompactionEffort` for the conversion contract.
 	 */
 	thinkingLevel?: ThinkingLevel;
+	/** Session routing key for remote compaction transports with sticky provider sessions. */
+	sessionId?: string;
+	/** Prompt-cache key for remote compaction transports that support provider prefix caching. */
+	promptCacheKey?: string;
+	/** Provider-visible tools for remote compaction transports that replay native tool history. */
+	tools?: Tool[];
 	/** Optional fetch implementation threaded into remote compaction calls. */
 	fetch?: FetchImpl;
 }
@@ -1079,6 +1099,49 @@ export function prepareCompaction(
 
 const TURN_PREFIX_SUMMARIZATION_PROMPT = prompt.render(compactionTurnPrefixPrompt);
 
+function openAiCompatSupportsImageDetailOriginal(model: Model): boolean {
+	const compat = model.compat;
+	return !!compat && "supportsImageDetailOriginal" in compat && compat.supportsImageDetailOriginal === true;
+}
+
+function buildOpenAiResponsesCompactionInput(
+	messages: Message[],
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
+	previousReplacementHistory: Array<Record<string, unknown>> | undefined,
+): unknown[] {
+	const input = buildResponsesInput({
+		model,
+		context: { messages },
+		strictResponsesPairing: model.compat.strictResponsesPairing,
+		supportsImageDetailOriginal: openAiCompatSupportsImageDetailOriginal(model),
+		nativeHistory: { replay: true, filterReasoning: false },
+		includeThinkingSignatures: true,
+		repairOrphanOutputs: true,
+	});
+	return previousReplacementHistory ? [...previousReplacementHistory, ...input] : input;
+}
+
+/**
+ * Resolve the Responses `reasoning` param for a V2 compaction request the same
+ * way a normal turn does — through {@link resolveOpenAICompatPolicy}, so it
+ * honors per-model effort support, `omitReasoningEffort`, disable modes, and the
+ * wire-effort mapping. Returns `undefined` for non-reasoning models or when the
+ * user selected `Off` (matching the normal-turn omission, not a fabricated shape).
+ */
+function buildCompactionV2Reasoning(
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
+	thinkingLevel: ThinkingLevel | undefined,
+): { effort: string; summary: string } | undefined {
+	const policy = resolveOpenAICompatPolicy(model, {
+		endpoint: "responses",
+		reasoning: resolveCompactionEffort(model, thinkingLevel),
+	});
+	const reasoning = policy.reasoning;
+	if (!reasoning.modelSupported || reasoning.disabled || reasoning.omitReasoningEffort) return undefined;
+	if (reasoning.requestedEffort === undefined) return undefined;
+	return { effort: reasoning.wireEffort ?? reasoning.requestedEffort, summary: "auto" };
+}
+
 /**
  * Generate summaries for compaction using prepared data.
  * Returns CompactionResult - SessionManager adds id/parentId when saving.
@@ -1122,6 +1185,9 @@ export async function compact(
 		// silently falls back to Effort.High — the same defect e07b47ee4 fixed
 		// at the call sites, leaked back in here. See resolveCompactionEffort.
 		thinkingLevel: options?.thinkingLevel,
+		sessionId: options?.sessionId,
+		promptCacheKey: options?.promptCacheKey,
+		tools: options?.tools,
 		fetch: options?.fetch,
 	};
 
@@ -1138,18 +1204,74 @@ export async function compact(
 		: undefined;
 
 	let preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined);
-	if (settings.remoteEnabled !== false && shouldUseOpenAiRemoteCompaction(model)) {
-		const previousRemoteCompaction = getPreservedOpenAiRemoteCompactionData(previousPreserveData);
-		const remoteMessages: AgentMessage[] = [
-			...(snapcompactArchiveMigrationMessage ? [snapcompactArchiveMigrationMessage] : []),
-			...messagesToSummarize,
-			...turnPrefixMessages,
-			...recentMessages,
-		];
+	const remoteMessages: AgentMessage[] = [
+		...(snapcompactArchiveMigrationMessage ? [snapcompactArchiveMigrationMessage] : []),
+		...messagesToSummarize,
+		...turnPrefixMessages,
+		...recentMessages,
+	];
+	let usedRemoteCompaction = false;
+	if (
+		settings.remoteEnabled !== false &&
+		settings.remoteStreamingV2Enabled !== false &&
+		shouldUseCompactionV2Streaming(model)
+	) {
+		const previousRemoteCompaction = getCompactionV2PreserveData(previousPreserveData);
 		const previousReplacementHistory =
 			previousRemoteCompaction?.provider === model.provider
 				? previousRemoteCompaction.replacementHistory
 				: undefined;
+		const remoteHistory = buildOpenAiResponsesCompactionInput(
+			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
+			model,
+			previousReplacementHistory,
+		);
+		if (remoteHistory.length > 0) {
+			try {
+				const request = buildCompactionV2Request(
+					model,
+					remoteHistory,
+					summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
+					{
+						tools: summaryOptions.tools
+							? convertTools(summaryOptions.tools, model.compat.supportsStrictMode, model)
+							: undefined,
+						reasoning: buildCompactionV2Reasoning(model, summaryOptions.thinkingLevel),
+						sessionId: summaryOptions.sessionId,
+						promptCacheKey: summaryOptions.promptCacheKey,
+						retainedMessageBudget: settings.v2RetainedMessageBudget,
+					},
+				);
+				const remote = await withAuth(
+					apiKey,
+					key => requestCompactionV2Streaming(model, key, request, signal, { fetch: summaryOptions.fetch }),
+					{ signal },
+				);
+				preserveData = { ...(preserveData ?? {}), ...storeCompactionV2PreserveData(remote, model) };
+				usedRemoteCompaction = true;
+			} catch (err) {
+				// A user/session abort is a cancellation, not a remote failure —
+				// swallowing it here would downgrade Esc into "fall back to local
+				// summarization" and keep compaction running on an aborted signal.
+				if (signal?.aborted) throw err;
+				logger.warn("OpenAI V2 remote compaction failed, falling back to V1/local summarization", {
+					error: err instanceof Error ? err.message : String(err),
+					model: model.id,
+					provider: model.provider,
+				});
+			}
+		}
+	}
+
+	if (!usedRemoteCompaction && settings.remoteEnabled !== false && shouldUseOpenAiRemoteCompaction(model)) {
+		const previousRemoteCompaction = getPreservedOpenAiRemoteCompactionData(previousPreserveData);
+		const previousV2Compaction = getCompactionV2PreserveData(previousPreserveData);
+		const previousReplacementHistory =
+			previousRemoteCompaction?.provider === model.provider
+				? previousRemoteCompaction.replacementHistory
+				: previousV2Compaction?.provider === model.provider
+					? previousV2Compaction.replacementHistory
+					: undefined;
 		const remoteHistory = buildOpenAiNativeHistory(
 			(summaryOptions.convertToLlm ?? defaultConvertToLlm)(remoteMessages),
 			model,
@@ -1188,7 +1310,13 @@ export async function compact(
 	// Generate summaries (can be parallel if both needed) and merge into one
 	let summary: string;
 
-	if (isSplitTurn && turnPrefixMessages.length > 0) {
+	// If V2 compaction succeeded, skip local summarization and short-summary generation.
+	if (usedRemoteCompaction) {
+		const usedTokens = getCompactionV2PreserveData(preserveData)?.usedTokens ?? 0;
+		summary =
+			"Remote V2 compaction preserved provider-native history for this session." +
+			(usedTokens > 0 ? ` Retained ${usedTokens} tokens in the provider replay payload.` : "");
+	} else if (isSplitTurn && turnPrefixMessages.length > 0) {
 		// Generate both summaries in parallel
 		const [historyResult, turnPrefixResult] = await Promise.all([
 			messagesToSummarize.length > 0 || previousSummaryForCompaction
@@ -1227,25 +1355,19 @@ export async function compact(
 		summary = "No prior history.";
 	}
 
-	const shortSummary = await generateShortSummary(
-		recentMessages,
-		summary,
-		model,
-		settings.reserveTokens,
-		apiKey,
-		signal,
-		{
-			extraContext: options?.extraContext,
-			remoteEndpoint: summaryOptions.remoteEndpoint,
-			initiatorOverride: summaryOptions.initiatorOverride,
-			metadata: summaryOptions.metadata,
-			telemetry: summaryOptions.telemetry,
-			// Same propagation as summaryOptions above — generateShortSummary
-			// resolves its own reasoning via resolveCompactionEffort.
-			thinkingLevel: options?.thinkingLevel,
-			fetch: summaryOptions.fetch,
-		},
-	);
+	const shortSummary = usedRemoteCompaction
+		? "Remote V2 compaction"
+		: await generateShortSummary(recentMessages, summary, model, settings.reserveTokens, apiKey, signal, {
+				extraContext: options?.extraContext,
+				remoteEndpoint: summaryOptions.remoteEndpoint,
+				initiatorOverride: summaryOptions.initiatorOverride,
+				metadata: summaryOptions.metadata,
+				telemetry: summaryOptions.telemetry,
+				// Same propagation as summaryOptions above — generateShortSummary
+				// resolves its own reasoning via resolveCompactionEffort.
+				thinkingLevel: options?.thinkingLevel,
+				fetch: summaryOptions.fetch,
+			});
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);

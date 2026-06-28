@@ -768,6 +768,8 @@ describe("ModelRegistry", () => {
 							enabled: true,
 							api: "openai-responses",
 							endpoint: "http://127.0.0.1:8080/v1/responses/provider-compact",
+							v2StreamingEnabled: true,
+							streamingEndpoint: "http://127.0.0.1:8080/v1/responses",
 							model: "provider-compact",
 						},
 						models: [
@@ -781,6 +783,7 @@ describe("ModelRegistry", () => {
 								compactionModel: "cc-switch/gpt-5.4",
 								remoteCompaction: {
 									endpoint: "http://127.0.0.1:8080/v1/responses/model-compact",
+									v2Endpoint: "http://127.0.0.1:8080/v1/responses/model-stream",
 									model: "gpt-5.5-compact",
 								},
 							},
@@ -850,6 +853,9 @@ describe("ModelRegistry", () => {
 				enabled: true,
 				api: "openai-responses",
 				endpoint: "http://127.0.0.1:8080/v1/responses/model-compact",
+				v2StreamingEnabled: true,
+				streamingEndpoint: "http://127.0.0.1:8080/v1/responses",
+				v2Endpoint: "http://127.0.0.1:8080/v1/responses/model-stream",
 				model: "gpt-5.5-compact",
 			});
 		});

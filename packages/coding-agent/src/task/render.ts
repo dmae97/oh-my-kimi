@@ -35,7 +35,7 @@ import { framedBlock, renderStatusLine } from "../tui";
 import { assembleYieldResult } from "./executor";
 import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails } from "./types";
+import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails, YieldItem } from "./types";
 
 /** Render context threaded in from `ToolExecutionComponent.#buildRenderContext`. */
 interface TaskRenderContext {
@@ -147,7 +147,7 @@ function normalizeReportFindings(value: unknown): ReportFindingDetails[] {
 function extractIncrementalReviewResult(
 	value: unknown,
 ): { summary: SubmitReviewDetails; findings: ReportFindingDetails[] } | undefined {
-	const yieldItems = normalizeYieldData(value).map(item => ({
+	const yieldItems: YieldItem[] = normalizeYieldData(value).map(item => ({
 		data: item.data,
 		type: item.type,
 		status: item.status === "aborted" ? "aborted" : item.status === "success" ? "success" : undefined,

@@ -936,7 +936,9 @@ export function buildParams(
  * runtime path only consumes that metadata.
  * @internal Exported for tests.
  */
-export function supportsFreeformApplyPatch(model: Model<"openai-responses">): boolean {
+export function supportsFreeformApplyPatch(
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
+): boolean {
 	return model.applyPatchToolType === "freeform";
 }
 
@@ -970,7 +972,7 @@ export function mapOpenAIResponsesToolChoiceForTools(
 export function convertTools(
 	tools: Tool[],
 	strictMode: boolean,
-	model: Model<"openai-responses">,
+	model: Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses">,
 	onQuarantine: (toolName: string, schemaPath: string) => void = (toolName, schemaPath) =>
 		logger.warn(
 			`Tool "${toolName}" omitted from the openai-responses request: its parameter schema is invalid for this provider at ${schemaPath} (an enum/const value cannot match its declared type). Other tools are unaffected.`,

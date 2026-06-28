@@ -34,6 +34,10 @@ const PRIORITY_INFO: Record<FindingPriority, FindingPriorityInfo> = {
 
 export const PRIORITY_LABELS: FindingPriority[] = ["P0", "P1", "P2", "P3"];
 
+export function isFindingPriority(value: unknown): value is FindingPriority {
+	return value === "P0" || value === "P1" || value === "P2" || value === "P3";
+}
+
 export function getPriorityInfo(priority: FindingPriority): FindingPriorityInfo {
 	return PRIORITY_INFO[priority] ?? { ord: 3, symbol: "status.info", color: "muted" };
 }

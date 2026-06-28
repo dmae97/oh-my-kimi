@@ -1,9 +1,12 @@
 /**
  * Remote compaction utilities.
  *
- * Provider-side conversation summarization endpoints. Two flavors:
+ * Provider-side conversation summarization endpoints. Three flavors:
  *
- * - **OpenAI remote compaction** (`/responses/compact`): preserves encrypted
+ * - **OpenAI remote compaction V2** (Responses streaming): appends a
+ *   `compaction_trigger` input item to the normal stream and stores the returned
+ *   `compaction` item with retained real user messages in `preserveData`.
+ * - **OpenAI remote compaction V1** (`/responses/compact`): preserves encrypted
  *   reasoning across compactions by submitting the full responses-API native
  *   history and storing the returned `compaction` / `compaction_summary`
  *   item in `preserveData` so future turns can replay the encrypted state.
@@ -28,6 +31,8 @@ import {
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
 import { $env, logger } from "@oh-my-pi/pi-utils";
+
+export * from "./compaction-v2-streaming";
 
 // ============================================================================
 // Public types
@@ -214,55 +219,10 @@ export function withOpenAiRemoteCompactionPreserveData(
 // Input/output filtering for OpenAI compact endpoint
 // ============================================================================
 
-function shouldTrimOpenAiCompactInputItem(item: Record<string, unknown>): boolean {
-	return item.type === "function_call_output" || (item.type === "message" && item.role === "developer");
-}
-
 function shouldKeepOpenAiCompactOutputItem(item: Record<string, unknown>): boolean {
 	if (item.type === "compaction" || item.type === "compaction_summary") return true;
 	if (item.type !== "message") return false;
 	return item.role === "assistant" || item.role === "user";
-}
-
-function trimOpenAiCompactInput(
-	input: Array<Record<string, unknown>>,
-	contextWindow: number,
-	instructions: string,
-): Array<Record<string, unknown>> {
-	const trimmed = [...input];
-	// Per-item serialized sizes are cached and decremented on removal.
-	// Re-stringifying the whole input per popped item was O(N²) in total chars
-	// — hundreds of MB of stringify churn on a 200k-token codex history,
-	// blocking the event loop for seconds (same class as the addOpenAiCallIds
-	// fix above).
-	const sizes = trimmed.map(item => JSON.stringify(item).length);
-	let chars = instructions.length;
-	for (const size of sizes) chars += size;
-	const removeAt = (index: number): void => {
-		chars -= sizes[index] ?? 0;
-		trimmed.splice(index, 1);
-		sizes.splice(index, 1);
-	};
-	while (trimmed.length > 0 && Math.ceil(chars / 4) > contextWindow) {
-		const last = trimmed[trimmed.length - 1];
-		if (last?.type === "function_call_output" || last?.type === "custom_tool_call_output") {
-			const callId = typeof last.call_id === "string" ? last.call_id : undefined;
-			const callType = last.type === "custom_tool_call_output" ? "custom_tool_call" : "function_call";
-			removeAt(trimmed.length - 1);
-			if (callId) {
-				const matchingCallIndex = trimmed.findLastIndex(item => item.type === callType && item.call_id === callId);
-				if (matchingCallIndex >= 0) {
-					removeAt(matchingCallIndex);
-				}
-			}
-			continue;
-		}
-		if (!last || !shouldTrimOpenAiCompactInputItem(last)) {
-			break;
-		}
-		removeAt(trimmed.length - 1);
-	}
-	return trimmed;
 }
 
 // Register every tool-call id in `items` (and the subset using the custom-tool
@@ -506,7 +466,10 @@ export async function requestOpenAiRemoteCompaction(
 	const requestModel = resolveOpenAiCompactModel(model);
 	const request: OpenAiRemoteCompactionRequest = {
 		model: requestModel,
-		input: trimOpenAiCompactInput(compactInput, model.contextWindow ?? Number.POSITIVE_INFINITY, instructions),
+		// Send full history to the endpoint - don't trim locally.
+		// The provider handles compression via the compaction endpoint.
+		// Trimming before sending loses assistant messages and thinking blocks.
+		input: compactInput,
 		instructions,
 	};
 	const isAzureOpenAiResponses = (model.remoteCompaction?.api ?? model.api) === "azure-openai-responses";

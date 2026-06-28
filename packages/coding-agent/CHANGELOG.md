@@ -2,18 +2,21 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
 ### Added
 
+- Added `compaction.remoteStreamingV2Enabled` setting to toggle V2 streaming for remote compaction
+- Added `compaction.v2RetainedMessageBudget` setting to control token budget for V2 compaction
+
+- Added Remote Compaction V2 streaming configuration settings
 - Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source ids.
 - Added citation-marker unwrapping for hashline edit parsing, diff preview, streaming matching, and remove/move detection while preserving snapshot tags for hash verification.
 - Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
 - Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
+- Added `remoteCompaction` V2 streaming schema fields and compaction settings for Responses-stream remote compaction.
 
 ### Fixed
 
+- Fixed the live todo HUD going stale during long tool-use loops by adding a mid-run reconciliation reminder: after several consecutive tool-use turns without invoking the `todo` tool, the agent now receives a `<system-reminder>` listing the still-incomplete items so it flips them as work completes rather than batch-marking everything `done` at the very end of a run. ([#3651](https://github.com/can1357/oh-my-pi/issues/3651))
 - Preserved interrupted assistant thinking as hidden durable context after user interrupts.
 - Fixed the ask tool's `Other (type your own)` editor dropping the original question and option list while the user types a custom answer. ([#3660](https://github.com/can1357/oh-my-pi/issues/3660))
 - Fixed auto-snapcompact on text-only active models by downgrading automatic maintenance to context-full compaction instead of failing the session when the active model cannot read snapcompact frames. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))

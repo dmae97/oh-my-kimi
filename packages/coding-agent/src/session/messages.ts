@@ -527,21 +527,32 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
 	if (message.providerPayload?.type !== "openaiResponsesHistory") {
 		return message;
 	}
+	// Only GitHub Copilot rejects replayed assistant-side native history on a
+	// warmed (resumed) session with HTTP 401 — that is the sole reason this strip
+	// exists. For every other Responses-family provider (OpenAI, OpenAI-Codex,
+	// Azure) the encrypted reasoning and native response items are self-contained
+	// and MUST survive rehydration: remote compaction replays them to rebuild
+	// faithful native history (user + assistant turns + encrypted reasoning), and
+	// same-model live turns reuse them for prompt-cache continuity. Stripping them
+	// for all providers is what left resumed sessions compacting tool-call-only
+	// history with no reasoning and no assistant prose.
+	if (message.provider !== "github-copilot") {
+		return message;
+	}
 
 	let didSanitizeContent = false;
 	const sanitizedContent = message.content.map(block => {
 		if (block.type !== "thinking" || block.thinkingSignature === undefined) {
 			return block;
 		}
-
 		didSanitizeContent = true;
 		return { ...block, thinkingSignature: undefined };
 	});
 
-	// Strip the assistant-side native replay payload entirely.
-	// After rehydration it belongs to a previous live provider connection and
-	// replaying it on a warmed session causes 401 rejections from GitHub Copilot.
-	// User/developer payloads are preserved separately by the caller.
+	// Strip the assistant-side native replay payload entirely. After rehydration
+	// it belongs to a previous live Copilot connection and replaying it on a
+	// warmed session causes 401 rejections. User/developer payloads are preserved
+	// separately by the caller.
 	return {
 		...message,
 		...(didSanitizeContent ? { content: sanitizedContent } : {}),

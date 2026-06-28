@@ -56,7 +56,7 @@ function createStaleAssistantMessage(
 	text: string,
 	options: { api?: AssistantMessage["api"]; provider?: string; model?: string } = {},
 ): AssistantMessage {
-	const { api = "openai-responses", provider = "openai", model = "gpt-5-mini" } = options;
+	const { api = "openai-responses", provider = "github-copilot", model = "gpt-5-mini" } = options;
 	return {
 		role: "assistant",
 		content: [
@@ -185,6 +185,19 @@ function expectAssistantReplayMetadataSanitized(message: AssistantMessage): void
 		arguments: { path: "README.md" },
 		thoughtSignature: "tool_sig_preserved",
 	});
+}
+
+function expectAssistantReplayMetadataPreserved(message: AssistantMessage): void {
+	// Non-Copilot Responses-family turns (OpenAI, OpenAI-Codex, Azure) keep their
+	// native replay payload and encrypted reasoning across rehydration so remote
+	// compaction can rebuild faithful native history.
+	expect(message.providerPayload?.type).toBe("openaiResponsesHistory");
+
+	const thinkingBlock = message.content.find(block => block.type === "thinking");
+	if (thinkingBlock?.type !== "thinking") {
+		throw new Error("Expected assistant thinking block");
+	}
+	expect(thinkingBlock.thinkingSignature).toBeDefined();
 }
 
 async function createPersistedSession(
@@ -332,7 +345,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		expect(runtimeUser.providerPayload).toEqual(preservedUserPayload);
 	});
 
-	it("sanitizes stale Responses-family assistant replay metadata for direct SessionManager.open consumers", async () => {
+	it("preserves codex assistant replay metadata for direct SessionManager.open consumers", async () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-issue-505-open-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);
 		const assistantText = "Codex assistant snapshot";
@@ -350,7 +363,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		if (persistedAssistant.role !== "assistant") {
 			throw new Error("Expected persisted codex assistant message");
 		}
-		expectAssistantReplayMetadataSanitized(persistedAssistant);
+		expectAssistantReplayMetadataPreserved(persistedAssistant);
 		await openedSessionManager.close();
 	});
 
@@ -416,13 +429,13 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 
 		expect(closeSpy).not.toHaveBeenCalled();
 		expect(session.providerSessionState.size).toBe(1);
-		expectAssistantReplayMetadataSanitized(findRuntimeAssistant(session, assistantText));
+		expectAssistantReplayMetadataPreserved(findRuntimeAssistant(session, assistantText));
 
 		const persistedAssistant = findPersistedMessageEntry(session.sessionManager, "assistant", assistantText).message;
 		if (persistedAssistant.role !== "assistant") {
 			throw new Error("Expected reloaded assistant message");
 		}
-		expectAssistantReplayMetadataSanitized(persistedAssistant);
+		expectAssistantReplayMetadataPreserved(persistedAssistant);
 	});
 
 	it("keeps provider session state when same-file reload only changes message metadata", async () => {
@@ -468,7 +481,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		expect(session.providerSessionState.size).toBe(1);
 		expect(session.model?.provider).toBe("openai-codex");
 		expect(session.model?.id).toBe("gpt-5.2-codex");
-		expectAssistantReplayMetadataSanitized(findRuntimeAssistant(session, assistantText));
+		expectAssistantReplayMetadataPreserved(findRuntimeAssistant(session, assistantText));
 	});
 
 	it("captures session-manager state when custom message details are proxy-backed", async () => {
@@ -598,7 +611,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		expect(session.model?.id).toBe("gpt-5-mini");
 		expect(closeSpy).toHaveBeenCalledTimes(1);
 		expect(session.providerSessionState.size).toBe(0);
-		expectAssistantReplayMetadataSanitized(findRuntimeAssistant(session, assistantText));
+		expectAssistantReplayMetadataPreserved(findRuntimeAssistant(session, assistantText));
 	});
 
 	it("resets plain openai-responses provider state when same-file reload restores a different saved model", async () => {
