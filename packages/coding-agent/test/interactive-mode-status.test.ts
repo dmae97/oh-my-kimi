@@ -34,7 +34,7 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 			buildSessionContext: () => buildSessionContext([]),
 			getEntries: () => [],
 		},
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		renderSessionContext: (
 			context: SessionContext,

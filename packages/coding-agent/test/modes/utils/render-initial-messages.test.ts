@@ -139,7 +139,7 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 		pendingBashComponents: [],
 		pendingPythonComponents: [],
 		pendingTools: new Map(),
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		updateEditorTopBorder: vi.fn(),
 		ui: { requestRender: vi.fn(), imageBudget: undefined },

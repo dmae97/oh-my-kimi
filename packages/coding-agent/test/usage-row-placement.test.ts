@@ -54,7 +54,7 @@ function makeHarness(showTokenUsage: boolean): { ctx: InteractiveModeContext; he
 		chatContainer: new Container(),
 		pendingTools: new Map(),
 		ui: { requestRender: vi.fn() },
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		settings: { get: (key: string) => (key === "display.showTokenUsage" ? showTokenUsage : false) },
 		addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),

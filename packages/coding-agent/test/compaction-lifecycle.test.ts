@@ -44,7 +44,7 @@ function buildCtx(compact: InteractiveModeContext["session"]["compact"]) {
 		ui: { requestRender: vi.fn(), requestComponentRender: vi.fn() },
 		session: { compact },
 		rebuildChatFromMessages,
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		showError,
 		flushCompactionQueue: vi.fn(async () => undefined),

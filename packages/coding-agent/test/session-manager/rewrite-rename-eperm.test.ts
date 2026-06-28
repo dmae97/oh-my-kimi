@@ -62,11 +62,12 @@ describe("SessionManager rewrite EPERM replacement fallback", () => {
 		const sessionFile = session.getSessionFile();
 		if (!sessionFile) throw new Error("Expected session file");
 
+		session.appendMessage({ role: "user", content: "rewrite after EPERM", timestamp: Date.now() });
 		storage.failNextSessionReplace = true;
-		await expect(session.setSessionName("renamed session", "user")).resolves.toBe(true);
+		await expect(session.rewriteEntries()).resolves.toBeUndefined();
 
 		const rewritten = await storage.readText(sessionFile);
-		expect(rewritten).toContain('"title":"renamed session"');
+		expect(rewritten).toContain("rewrite after EPERM");
 		const backupPath = storage.backupCleanupPath;
 		if (!backupPath) throw new Error("Expected EPERM fallback to create a rollback backup");
 		expect(storage.existsSync(backupPath)).toBe(false);
@@ -118,7 +119,8 @@ describe("SessionManager rewrite EPERM rollback failure", () => {
 
 		let thrown: Error | undefined;
 		try {
-			await session.setSessionName("doomed", "user");
+			session.appendMessage({ role: "user", content: "doomed", timestamp: Date.now() });
+			await session.rewriteEntries();
 		} catch (err) {
 			thrown = err as Error;
 		}

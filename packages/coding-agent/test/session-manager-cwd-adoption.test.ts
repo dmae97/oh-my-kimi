@@ -56,9 +56,14 @@ describe("SessionManager cwd adoption on resume", () => {
 		// Simulate a legacy session whose header predates the cwd field.
 		const raw = await Bun.file(fileB).text();
 		const lines = raw.split("\n").filter(Boolean);
-		const header = JSON.parse(lines[0]) as Record<string, unknown>;
+		const headerIndex = lines.findIndex(line => {
+			const entry = JSON.parse(line) as Record<string, unknown>;
+			return entry.type === "session";
+		});
+		expect(headerIndex).toBeGreaterThanOrEqual(0);
+		const header = JSON.parse(lines[headerIndex] ?? "") as Record<string, unknown>;
 		header.cwd = "";
-		lines[0] = JSON.stringify(header);
+		lines[headerIndex] = JSON.stringify(header);
 		await Bun.write(fileB, `${lines.join("\n")}\n`);
 
 		const launchDir = path.join(projectA, "sessions");
