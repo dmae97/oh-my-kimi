@@ -30,6 +30,10 @@ import {
 	unpackEnvelope,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
+import {
+	MAX_REPLICATED_PAYLOAD_BYTES,
+	shrinkForReplication,
+} from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
@@ -269,5 +273,62 @@ describe("collab replication shrinking (#3739)", () => {
 		// number of dropped chars so the guest can show "this was bigger".
 		expect(shrunkContent.length).toBeLessThan(snapshot.bigPayloadLength / 10);
 		expect(shrunkContent).toContain("chars elided for collab session");
+	});
+});
+
+describe("shrinkForReplication (#3740 review)", () => {
+	it("passes already-small values through by reference", () => {
+		const small = { type: "message", id: "x", text: "hi" };
+		expect(shrinkForReplication(small)).toBe(small);
+	});
+
+	it("clamps a single giant string under the cap with an elision marker", () => {
+		const giant = { content: "x".repeat(5 * 1024 * 1024) };
+		const shrunk = shrinkForReplication(giant);
+		const size = JSON.stringify(shrunk).length;
+		expect(size).toBeLessThanOrEqual(MAX_REPLICATED_PAYLOAD_BYTES);
+		expect(shrunk).not.toBe(giant);
+		expect(shrunk.content).toContain("chars elided for collab session");
+	});
+
+	it("clamps a payload built of many short strings (no individual oversized) under the cap", () => {
+		// Realistic shape: a tool result content array with thousands of small
+		// text blocks. ~3 MB total; no individual string crosses the 64 B
+		// floor of the final shrink pass, so the helper MUST clip the array,
+		// not just the strings.
+		const content = Array.from({ length: 100_000 }, (_, i) => ({
+			type: "text",
+			text: `block-${i}`,
+		}));
+		const payload = { role: "toolResult", content };
+		const original = JSON.stringify(payload).length;
+		expect(original).toBeGreaterThan(MAX_REPLICATED_PAYLOAD_BYTES);
+		const shrunk = shrinkForReplication(payload);
+		const shrunkSize = JSON.stringify(shrunk).length;
+		expect(shrunkSize).toBeLessThanOrEqual(MAX_REPLICATED_PAYLOAD_BYTES);
+		// Array was clipped with a summary marker reporting the dropped count.
+		const shrunkContent = shrunk.content;
+		expect(Array.isArray(shrunkContent)).toBe(true);
+		const marker = shrunkContent.find(
+			(item: unknown) => typeof item === "string" && item.includes("items elided for collab session"),
+		);
+		expect(marker).toBeDefined();
+	});
+
+	it("preserves the wire discriminator on a fully-shrunk payload", () => {
+		// Even the worst-case final pass keeps the discriminator key/value
+		// pairs intact (only string leaves and array tails are touched), so
+		// guests still see the entry/event as the correct kind.
+		const evt = {
+			type: "tool_execution_end",
+			toolCallId: "call-1",
+			toolName: "read",
+			result: { text: "x".repeat(8 * 1024 * 1024) },
+		};
+		const shrunk = shrinkForReplication(evt);
+		expect(shrunk.type).toBe("tool_execution_end");
+		expect(shrunk.toolCallId).toBe("call-1");
+		expect(shrunk.toolName).toBe("read");
+		expect(JSON.stringify(shrunk).length).toBeLessThanOrEqual(MAX_REPLICATED_PAYLOAD_BYTES);
 	});
 });
