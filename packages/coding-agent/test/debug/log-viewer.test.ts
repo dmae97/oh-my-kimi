@@ -1,10 +1,18 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import {
 	buildLogCopyPayload,
+	DebugLogViewerComponent,
 	DebugLogViewerModel,
 	LOAD_OLDER_LABEL,
 	SESSION_BOUNDARY_WARNING,
 } from "@oh-my-pi/pi-coding-agent/debug/log-viewer";
+import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+
+beforeAll(async () => {
+	const theme = await getThemeByName("dark");
+	if (!theme) throw new Error("Expected dark theme");
+	setThemeInstance(theme);
+});
 
 describe("DebugLogViewerModel", () => {
 	const describeRow = (row: { kind: string; logIndex?: number }): string => {
@@ -189,6 +197,28 @@ describe("DebugLogViewerModel", () => {
 		model.collapseSelected();
 		expect(model.isExpanded(0)).toBe(false);
 		expect(model.isExpanded(1)).toBe(false);
+	});
+
+	it("selects and expands a clicked visible log row", () => {
+		let updates = 0;
+		const viewer = new DebugLogViewerComponent({
+			logs: ["alpha", "beta", "gamma"].join("\n"),
+			terminalRows: 12,
+			onExit: () => {},
+			onUpdate: () => {
+				updates++;
+			},
+		});
+
+		viewer.render(80);
+		viewer.handleInput("\x1b[<0;2;6M");
+
+		const rendered = viewer
+			.render(80)
+			.map(line => Bun.stripANSI(line))
+			.join("\n");
+		expect(rendered).toContain("▾ beta");
+		expect(updates).toBe(1);
 	});
 });
 

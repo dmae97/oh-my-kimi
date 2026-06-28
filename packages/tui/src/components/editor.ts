@@ -1,7 +1,6 @@
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import {
 	type AutocompleteProvider,
-	type CombinedAutocompleteProvider,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 } from "../autocomplete";
@@ -2859,10 +2858,13 @@ export class Editor implements Component, Focusable {
 		if (!this.#autocompleteProvider) return;
 		// Check if we should trigger file completion on Tab
 		if (explicitTab) {
-			const provider = this.#autocompleteProvider as CombinedAutocompleteProvider;
 			const shouldTrigger =
-				!provider.shouldTriggerFileCompletion ||
-				provider.shouldTriggerFileCompletion(this.#state.lines, this.#state.cursorLine, this.#state.cursorCol);
+				!this.#autocompleteProvider.shouldTriggerFileCompletion ||
+				this.#autocompleteProvider.shouldTriggerFileCompletion(
+					this.#state.lines,
+					this.#state.cursorLine,
+					this.#state.cursorCol,
+				);
 			if (!shouldTrigger) {
 				return;
 			}
@@ -2924,17 +2926,16 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 	async #forceFileAutocomplete(explicitTab: boolean = false): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 
-		// Check if provider supports force file suggestions via runtime check
-		const provider = this.#autocompleteProvider as {
-			getForceFileSuggestions?: CombinedAutocompleteProvider["getForceFileSuggestions"];
-		};
-		if (typeof provider.getForceFileSuggestions !== "function") {
+		// File-aware providers expose getForceFileSuggestions; slash-only ones fall back to regular completion.
+		const getForceFileSuggestions = this.#autocompleteProvider.getForceFileSuggestions;
+		if (typeof getForceFileSuggestions !== "function") {
 			await this.#tryTriggerAutocomplete(true);
 			return;
 		}
 
 		const requestId = ++this.#autocompleteRequestId;
-		const suggestions = await provider.getForceFileSuggestions(
+		const suggestions = await getForceFileSuggestions.call(
+			this.#autocompleteProvider,
 			this.#state.lines,
 			this.#state.cursorLine,
 			this.#state.cursorCol,

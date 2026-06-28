@@ -641,7 +641,7 @@ export class DebugLogViewerComponent implements Component {
 		const overBody = event.row >= this.#bodyRowStart && event.row < this.#bodyRowStart + this.#bodyRowCount;
 		if (event.wheel !== null && overBody) {
 			this.#statusMessage = undefined;
-			const maxOffset = Math.max(0, this.#model.rows.length - 1);
+			const maxOffset = Math.max(0, this.#model.rows.length - this.#bodyHeight());
 			this.#scrollRowOffset = Math.max(0, Math.min(maxOffset, this.#scrollRowOffset + event.wheel * 3));
 			this.#onUpdate?.();
 			return true;
