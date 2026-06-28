@@ -178,7 +178,17 @@ interface HashlineHeaderContext {
 }
 
 function formatReadHashlineHeader(displayPath: string, tag: string): string {
-	return formatHashlineHeader(path.basename(displayPath), tag);
+	// In-workspace reads collapse to the bare filename for brevity: the edit
+	// tool's snapshot-tag recovery rebinds a bare `[name#tag]` onto the in-tree
+	// file it uniquely names. Out-of-workspace reads can't lean on that —
+	// recovery refuses to redirect a write outside the cwd/sandbox
+	// (HashlineFilesystem.allowTagPathRecovery) — so an absolute displayPath
+	// must stay directly resolvable, otherwise the basename resolves against
+	// cwd, misses, and the edit fails with "File not found" (e.g. ~/.claude/*).
+	// `shortenPath` keeps `~/.claude/...` (round-trips through resolveToCwd's ~
+	// expansion) instead of leaking the full home path into the read output.
+	const anchor = path.isAbsolute(displayPath) ? shortenPath(displayPath) : path.basename(displayPath);
+	return formatHashlineHeader(anchor, tag);
 }
 
 function recordFullHashlineContext(
