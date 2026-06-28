@@ -8,6 +8,7 @@ import * as url from "node:url";
 import { getProjectDir, logger, withTimeout } from "@oh-my-pi/pi-utils";
 import { describeMCPTimeout, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "./timeout";
 import { createHttpTransport } from "./transports/http";
+import { createSseTransport } from "./transports/sse";
 import { createStdioTransport } from "./transports/stdio";
 import type {
 	MCPGetPromptParams,
@@ -77,8 +78,9 @@ async function createTransport(config: MCPServerConfig): Promise<MCPTransport> {
 		case "stdio":
 			return createStdioTransport(config as MCPStdioServerConfig);
 		case "http":
+			return createHttpTransport(config as MCPHttpServerConfig);
 		case "sse":
-			return createHttpTransport(config as MCPHttpServerConfig | MCPSseServerConfig);
+			return createSseTransport(config as MCPSseServerConfig);
 		default:
 			throw new Error(`Unknown server type: ${serverType}`);
 	}

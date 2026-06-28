@@ -25,6 +25,7 @@
 - Fixed validation errors for untyped final yields in strict-mode providers by allowing `null` types
 
 - Fixed Alt+M default-role model configuration being disabled by the current session's context size. ([#3708](https://github.com/can1357/oh-my-pi/issues/3708))
+- Fixed MCP `type: "sse"` servers by adding the legacy HTTP+SSE endpoint handshake and streaming JSON-RPC response path. ([#3710](https://github.com/can1357/oh-my-pi/issues/3710))
 - Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature
 - Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
 - Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
