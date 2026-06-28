@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildMemoryToolDeveloperInstructions,
+	clearMemoryToolDeveloperInstructionsCache,
 	getMemoryRoot,
 	saveLearnedLesson,
 } from "@oh-my-pi/pi-coding-agent/memories";
@@ -195,6 +196,24 @@ describe("learned-lesson read-back", () => {
 		await localBackend.clear(agentDir, settings.getCwd(), session as unknown as AgentSession);
 
 		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+	});
+
+	it("refreshes the frozen memory prompt after background consolidation invalidates it", async () => {
+		const settings = Settings.isolated({ "memory.backend": "local" });
+		const session = sessionWithFile("session-consolidate.jsonl");
+		// First build (before background consolidation finishes) snapshots an empty result.
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+
+		// Background pipeline writes the consolidated summary later.
+		const root = getMemoryRoot(agentDir, settings.getCwd());
+		await Bun.write(path.join(root, "memory_summary.md"), "Consolidated guidance here.\n");
+
+		// Without invalidation the cached undefined would stick.
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+
+		clearMemoryToolDeveloperInstructionsCache(session);
+		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings, session);
+		expect(out).toContain("Consolidated guidance here.");
 	});
 
 	it("injects both the summary and lessons when both exist", async () => {

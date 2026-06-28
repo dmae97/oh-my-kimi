@@ -262,6 +262,10 @@ async function runMemoryStartup(options: {
 }): Promise<void> {
 	await runPhase1(options);
 	await runPhase2(options);
+	// Phase 2 may have rewritten `memory_summary.md`; drop the per-session
+	// snapshot so the refresh below picks up the new summary instead of
+	// returning the cached value from the first prompt build.
+	clearMemoryToolDeveloperInstructionsCache(options.session);
 	await options.session.refreshBaseSystemPrompt?.();
 }
 
