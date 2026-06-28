@@ -992,9 +992,34 @@ export interface CompactionPreparation {
 	settings: CompactionSettings;
 }
 
+/**
+ * Whether a prior compaction's preserve data can be carried forward by the
+ * upcoming compaction. A local compaction (no remote preserve) always can — it
+ * holds a real textual summary. A remote compaction (V2 or V1) only can when
+ * some candidate model shares its provider AND remote replay is still enabled;
+ * otherwise its provider-native replay is dead weight and only the opaque
+ * placeholder summary survives, so the caller must re-expand the originals.
+ */
+function remotePreserveReusableByAny(
+	preserveData: Record<string, unknown> | undefined,
+	models: readonly Model[],
+	settings: CompactionSettings,
+): boolean {
+	const remote = getCompactionV2PreserveData(preserveData) ?? getPreservedOpenAiRemoteCompactionData(preserveData);
+	if (!remote) return true;
+	if (settings.remoteEnabled === false) return false;
+	for (const model of models) {
+		if (remote.provider !== model.provider) continue;
+		const v2Ok = settings.remoteStreamingV2Enabled !== false && shouldUseCompactionV2Streaming(model);
+		if (v2Ok || shouldUseOpenAiRemoteCompaction(model)) return true;
+	}
+	return false;
+}
+
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	compactionModels: readonly Model[] = [],
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -1002,10 +1027,18 @@ export function prepareCompaction(
 
 	let prevCompactionIndex = -1;
 	for (let i = pathEntries.length - 1; i >= 0; i--) {
-		if (pathEntries[i].type === "compaction") {
-			prevCompactionIndex = i;
-			break;
+		if (pathEntries[i].type !== "compaction") continue;
+		// Skip a prior remote compaction (V2 or V1) whose provider-native replay
+		// none of the upcoming compaction candidates can reuse: its summary is only
+		// an opaque placeholder, so re-expand its original messages and summarize
+		// them locally rather than stranding that history. compact() still reuses it
+		// when a candidate can (same provider, remote enabled).
+		const entry = pathEntries[i] as CompactionEntry;
+		if (compactionModels.length > 0 && !remotePreserveReusableByAny(entry.preserveData, compactionModels, settings)) {
+			continue;
 		}
+		prevCompactionIndex = i;
+		break;
 	}
 	const boundaryStart = prevCompactionIndex + 1;
 	const boundaryEnd = pathEntries.length;
@@ -1293,6 +1326,7 @@ export async function compact(
 					{ signal },
 				);
 				preserveData = withOpenAiRemoteCompactionPreserveData(previousPreserveData, remote);
+				usedRemoteCompaction = true;
 			} catch (err) {
 				// A user/session abort is a cancellation, not a remote failure —
 				// swallowing it here would downgrade Esc into "fall back to local
@@ -1310,11 +1344,16 @@ export async function compact(
 	// Generate summaries (can be parallel if both needed) and merge into one
 	let summary: string;
 
-	// If V2 compaction succeeded, skip local summarization and short-summary generation.
 	if (usedRemoteCompaction) {
+		// Remote compaction (V2 or V1) already compacted remotely; the durable
+		// history lives in the provider replay payload (preserveData). Skip local
+		// summarization so a successful remote compaction never pays for a second,
+		// redundant LLM round. If a LATER compaction cannot reuse this payload,
+		// prepareCompaction re-expands the original messages and summarizes them
+		// locally then (see remotePreserveReusableByAny).
 		const usedTokens = getCompactionV2PreserveData(preserveData)?.usedTokens ?? 0;
 		summary =
-			"Remote V2 compaction preserved provider-native history for this session." +
+			"Remote compaction preserved provider-native history for this session." +
 			(usedTokens > 0 ? ` Retained ${usedTokens} tokens in the provider replay payload.` : "");
 	} else if (isSplitTurn && turnPrefixMessages.length > 0) {
 		// Generate both summaries in parallel
@@ -1356,7 +1395,7 @@ export async function compact(
 	}
 
 	const shortSummary = usedRemoteCompaction
-		? "Remote V2 compaction"
+		? "Remote compaction"
 		: await generateShortSummary(recentMessages, summary, model, settings.reserveTokens, apiKey, signal, {
 				extraContext: options?.extraContext,
 				remoteEndpoint: summaryOptions.remoteEndpoint,

@@ -9,7 +9,12 @@
 
 import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import { isTransientStatus, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
-import { parseAzureDeploymentNameMap } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import {
+	getOpenAIResponsesPromptCacheKey,
+	getOpenAIResponsesRoutingSessionId,
+	parseAzureDeploymentNameMap,
+	resolveOpenAIRequestSetup,
+} from "@oh-my-pi/pi-ai/providers/openai-shared";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -34,7 +39,9 @@ export const V2_COMPACTION_TIMEOUT_MS = 180_000;
 const DEFAULT_AZURE_API_VERSION = "v1";
 const OPENAI_REMOTE_COMPACTION_PRESERVE_KEY = "openaiRemoteCompaction";
 const COMPACTION_TRIGGER_ITEM = { type: "compaction_trigger" } as const;
-const IMAGE_TOKEN_ESTIMATE = 1;
+// OpenAI image metering depends on detail and dimensions; charge the common
+// high-detail 1024px-path budget so retained image history cannot be unbounded.
+const IMAGE_TOKEN_ESTIMATE = 765;
 const CONTEXTUAL_USER_PREFIXES = [
 	"<environment_context>",
 	"<user_instructions>",
@@ -101,8 +108,7 @@ export function getCompactionV2Endpoint(model: Model): string | undefined {
 export function shouldUseCompactionV2Streaming(
 	model: Model,
 ): model is Model<"openai-responses" | "azure-openai-responses" | "openai-codex-responses"> {
-	if (model.remoteCompaction?.enabled === false) return false;
-	if (model.remoteCompaction?.v2StreamingEnabled === false) return false;
+	if (model.remoteCompaction?.v2StreamingEnabled !== true) return false;
 	return getCompactionV2Endpoint(model) !== undefined;
 }
 
@@ -262,6 +268,8 @@ async function attemptCompactionV2Streaming(
 	// Faithful to Codex: append the compaction trigger as the final input item
 	// of an otherwise-normal Responses request, then stream the result. `store`
 	// stays false — compaction must never persist a server-side response object.
+	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
+	const promptCacheKey = getOpenAIResponsesPromptCacheKey(cacheOptions);
 	const body: Record<string, unknown> = {
 		model: request.model,
 		input: [...request.input, COMPACTION_TRIGGER_ITEM],
@@ -269,7 +277,7 @@ async function attemptCompactionV2Streaming(
 		stream: true,
 		store: false,
 		...(request.reasoning ? { reasoning: request.reasoning, include: ["reasoning.encrypted_content"] } : {}),
-		...(request.promptCacheKey ? { prompt_cache_key: request.promptCacheKey } : {}),
+		...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
 		...(request.tools && request.tools.length > 0 ? { tools: request.tools, tool_choice: "auto" } : {}),
 	};
 	const response = await fetchImpl(endpoint, {
@@ -301,6 +309,9 @@ async function attemptCompactionV2Streaming(
 
 function buildCompactionV2Headers(model: Model, apiKey: string, request: CompactionV2Request): Record<string, string> {
 	const api = compactionV2Api(model);
+	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
+	const routingSessionId = getOpenAIResponsesRoutingSessionId(cacheOptions);
+	const promptCacheSessionId = getOpenAIResponsesPromptCacheKey(cacheOptions);
 	const headers: Record<string, string> =
 		api === "azure-openai-responses"
 			? {
@@ -310,17 +321,20 @@ function buildCompactionV2Headers(model: Model, apiKey: string, request: Compact
 				}
 			: {
 					"content-type": "application/json",
-					Authorization: `Bearer ${apiKey}`,
-					...(model.headers ?? {}),
+					...resolveOpenAIRequestSetup(
+						{ provider: model.provider, id: model.id, baseUrl: model.baseUrl, headers: model.headers },
+						{ apiKey, messages: [], openAISessionId: routingSessionId, promptCacheSessionId },
+					).headers,
 				};
-
-	if (request.sessionId) {
-		headers["session-id"] = request.sessionId;
-	}
 	if (api === "openai-codex-responses" || model.provider === "openai-codex") {
 		const accountId = getCodexAccountId(apiKey);
 		if (accountId) {
 			headers[OPENAI_HEADERS.ACCOUNT_ID] = accountId;
+		}
+		if (routingSessionId) {
+			headers[OPENAI_HEADERS.CONVERSATION_ID] = routingSessionId;
+			headers[OPENAI_HEADERS.SESSION_ID] = routingSessionId;
+			headers["x-client-request-id"] = routingSessionId;
 		}
 		headers[OPENAI_HEADERS.BETA] = OPENAI_HEADER_VALUES.BETA_RESPONSES;
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
@@ -575,7 +589,7 @@ function truncateRetainedMessagesForCompactionV2(
 	for (let i = items.length - 1; i >= 0; i--) {
 		if (remaining === 0) continue;
 		const item = items[i];
-		const tokenCount = Math.max(messageTextTokenCount(item), IMAGE_TOKEN_ESTIMATE);
+		const tokenCount = Math.max(messageContentTokenCount(item), 1);
 		if (tokenCount <= remaining) {
 			truncatedReversed.push(item);
 			remaining = Math.max(0, remaining - tokenCount);
@@ -592,11 +606,15 @@ function truncateRetainedMessagesForCompactionV2(
 	return truncatedReversed;
 }
 
-function messageTextTokenCount(item: Record<string, unknown>): number {
+function messageContentTokenCount(item: Record<string, unknown>): number {
 	const content = Array.isArray(item.content) ? item.content : [];
 	let tokens = 0;
 	for (const part of content) {
 		if (!isRecord(part)) continue;
+		if (part.type === "input_image") {
+			tokens += IMAGE_TOKEN_ESTIMATE;
+			continue;
+		}
 		if (part.type === "input_text" || part.type === "output_text") {
 			tokens += approxTokenCount(stringField(part, "text") ?? "");
 		}
@@ -614,7 +632,9 @@ function truncateMessageTextToTokenBudget(
 	for (const part of content) {
 		if (!isRecord(part)) continue;
 		if (part.type === "input_image") {
+			if (remaining < IMAGE_TOKEN_ESTIMATE) continue;
 			truncatedContent.push(part);
+			remaining = Math.max(0, remaining - IMAGE_TOKEN_ESTIMATE);
 			continue;
 		}
 		if (part.type !== "input_text" && part.type !== "output_text") continue;
