@@ -270,22 +270,30 @@ interface SessionListHeader {
 	timestamp?: string;
 }
 
+function normalizeTitleOverride(title: string | undefined): string | null | undefined {
+	if (title === undefined) return undefined;
+	return title.trim() ? title : null;
+}
+
 function sessionListHeaderFromRecord(
 	record: Record<string, unknown> | undefined,
-	titleOverride?: string,
+	titleOverride?: string | null,
 ): SessionListHeader | undefined {
 	if (record?.type !== "session" || typeof record.id !== "string") return undefined;
 	return {
 		type: "session",
 		id: record.id,
 		cwd: typeof record.cwd === "string" ? record.cwd : undefined,
-		title: titleOverride ?? (typeof record.title === "string" ? record.title : undefined),
+		title:
+			titleOverride === null
+				? undefined
+				: (titleOverride ?? (typeof record.title === "string" ? record.title : undefined)),
 		parentSession: typeof record.parentSession === "string" ? record.parentSession : undefined,
 		timestamp: typeof record.timestamp === "string" ? record.timestamp : undefined,
 	};
 }
 
-function parseSessionListHeaderLine(line: string, titleOverride?: string): SessionListHeader | undefined {
+function parseSessionListHeaderLine(line: string, titleOverride?: string | null): SessionListHeader | undefined {
 	if (extractStringProperty(line, "type") !== "session") return undefined;
 	const id = extractStringProperty(line, "id");
 	if (!id) return undefined;
@@ -293,7 +301,7 @@ function parseSessionListHeaderLine(line: string, titleOverride?: string): Sessi
 		type: "session",
 		id,
 		cwd: extractStringProperty(line, "cwd"),
-		title: titleOverride ?? extractStringProperty(line, "title"),
+		title: titleOverride === null ? undefined : (titleOverride ?? extractStringProperty(line, "title")),
 		parentSession: extractStringProperty(line, "parentSession"),
 		timestamp: extractStringProperty(line, "timestamp"),
 	};
@@ -304,18 +312,19 @@ function parseSessionListHeader(
 	entries: Array<Record<string, unknown>>,
 ): SessionListHeader | undefined {
 	const firstEntry = entries[0];
-	const parsedSlotTitle =
-		firstEntry?.type === "title" && typeof firstEntry.title === "string" ? firstEntry.title : undefined;
+	const parsedSlotTitle = normalizeTitleOverride(
+		firstEntry?.type === "title" && typeof firstEntry.title === "string" ? firstEntry.title : undefined,
+	);
 	const parsedHeader = sessionListHeaderFromRecord(entries[firstEntry?.type === "title" ? 1 : 0], parsedSlotTitle);
 	if (parsedHeader) return parsedHeader;
 
-	let slotTitle: string | undefined;
+	let slotTitle: string | null | undefined;
 	let firstNonEmpty = true;
 	for (const rawLine of content.split(/\r?\n/)) {
 		const line = rawLine.trim();
 		if (!line) continue;
 		if (firstNonEmpty && extractStringProperty(line, "type") === "title") {
-			slotTitle = extractStringProperty(line, "title");
+			slotTitle = normalizeTitleOverride(extractStringProperty(line, "title"));
 			firstNonEmpty = false;
 			continue;
 		}

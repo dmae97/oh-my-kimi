@@ -63,7 +63,7 @@ import {
 	type SessionStorage,
 	type SessionStorageWriter,
 } from "./session-storage";
-import { serializeTitleSlot } from "./session-title-slot";
+import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
 
 const JSONL_SUFFIX_LENGTH = ".jsonl".length;
 
@@ -580,6 +580,59 @@ export class SessionManager {
 		}
 	}
 
+	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
+		if (!this.#persist || !this.#sessionFile) return;
+		if (this.#diskFailure) throw this.#diskFailure;
+
+		if (!this.#shouldHaveSessionFile()) {
+			this.#fileIsCurrent = false;
+			return;
+		}
+
+		if (
+			!this.#fileIsCurrent ||
+			this.#rewriteRequired ||
+			!this.#hasTitleSlot ||
+			!this.#storage.existsSync(this.#sessionFile)
+		) {
+			await this.#rewriteAtomically();
+			return;
+		}
+
+		const epoch = this.#diskEpoch;
+		const line = this.#lineFor(entry);
+		await this.#scheduleDiskWork(
+			async () => {
+				const sessionFile = this.#sessionFile;
+				if (!sessionFile) return;
+				try {
+					await this.#appendWriter().append(line);
+					await this.#storage.updateSessionTitle(sessionFile, update);
+					this.#fileIsCurrent = true;
+				} catch {
+					await this.#closeWriterHandle();
+					await this.#storage.writeTextAtomic(sessionFile, this.#fileBody());
+					this.#clearDiskError();
+					this.#fileIsCurrent = true;
+					this.#rewriteRequired = false;
+					this.#hasTitleSlot = true;
+				}
+			},
+			{ epoch },
+		);
+	}
+
+	#notifyEntryAppended(entry: SessionEntry): void {
+		const callback = this.onEntryAppended;
+		if (callback) {
+			try {
+				callback(entry);
+			} catch (err) {
+				logger.warn("collab entry hook failed", { error: String(err) });
+			}
+		}
+	}
+
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
@@ -649,15 +702,7 @@ export class SessionManager {
 		this.#entries.push(entry);
 		this.#index.insert(entry);
 		this.#appendToSessionFile(entry);
-
-		const callback = this.onEntryAppended;
-		if (callback) {
-			try {
-				callback(entry);
-			} catch (err) {
-				logger.warn("collab entry hook failed", { error: String(err) });
-			}
-		}
+		this.#notifyEntryAppended(entry);
 	}
 
 	#draftPath(): string | null {
@@ -1158,19 +1203,10 @@ export class SessionManager {
 		};
 		if (previousTitle) entry.previousTitle = previousTitle;
 		if (trigger) entry.trigger = trigger;
-		this.#recordEntry(entry);
-
-		if (this.#persist && this.#sessionFile && this.#storage.existsSync(this.#sessionFile)) {
-			if (this.#hasTitleSlot) {
-				try {
-					await this.#storage.updateSessionTitle(this.#sessionFile, { title, source, updatedAt: timestamp });
-				} catch {
-					await this.#rewriteAtomically();
-				}
-			} else {
-				await this.#rewriteAtomically();
-			}
-		}
+		this.#entries.push(entry);
+		this.#index.insert(entry);
+		this.#notifyEntryAppended(entry);
+		await this.#persistTitleChangeEntry(entry, { title, source, updatedAt: timestamp });
 
 		this.#notifySessionNameListeners();
 		return true;

@@ -156,7 +156,15 @@ export class IndexedSessionStorage implements SessionStorage {
 				trackDrain: false,
 			});
 		} catch (err) {
-			this.#index.set(path, previous);
+			const current = this.#index.get(path);
+			if (
+				current?.mtimeMs === next.mtimeMs &&
+				current.title === next.title &&
+				current.titleSource === next.titleSource &&
+				current.titleUpdatedAt === next.titleUpdatedAt
+			) {
+				this.#index.set(path, previous);
+			}
 			throw toError(err);
 		}
 	}
