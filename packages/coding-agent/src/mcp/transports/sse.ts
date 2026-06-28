@@ -108,7 +108,14 @@ export class LegacySseTransport implements MCPTransport {
 			for await (const event of readSseEvents(body, signal)) {
 				if (event.event === "endpoint") {
 					if (!this.#endpointUrl) {
-						this.#endpointUrl = new URL(event.data, this.#config.url).href;
+						const endpointUrl = new URL(event.data, this.#config.url);
+						const configuredUrl = new URL(this.#config.url);
+						if (endpointUrl.origin !== configuredUrl.origin) {
+							throw new Error(
+								`Legacy SSE endpoint origin mismatch: expected ${configuredUrl.origin}, received ${endpointUrl.origin}`,
+							);
+						}
+						this.#endpointUrl = endpointUrl.href;
 						this.#connected = true;
 						endpointReceived = true;
 						operation.clear();

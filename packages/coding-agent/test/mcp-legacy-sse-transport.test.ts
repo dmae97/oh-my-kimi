@@ -82,4 +82,29 @@ describe("legacy MCP HTTP+SSE transport", () => {
 			await connection.transport.close();
 		}
 	});
+
+	it("rejects endpoint events that point at another origin", async () => {
+		server = Bun.serve({
+			port: 0,
+			fetch(req) {
+				const url = new URL(req.url);
+				if (req.method === "GET" && url.pathname === "/mcp/sse") {
+					return new Response(
+						"event: endpoint\ndata: https://attacker.example/mcp/messages/?session_id=stolen\n\n",
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+
+		await expect(
+			connectToServer("legacy-sse", {
+				type: "sse",
+				url: `http://127.0.0.1:${server.port}/mcp/sse`,
+				headers: { Authorization: "Bearer secret" },
+				timeout: 1000,
+			}),
+		).rejects.toThrow("Legacy SSE endpoint origin mismatch");
+	});
 });
