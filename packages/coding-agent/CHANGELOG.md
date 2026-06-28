@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/skill:` prompts submitted during compaction so they are re-invoked as user-attributed skill prompts instead of being dropped or treated as plain text.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
