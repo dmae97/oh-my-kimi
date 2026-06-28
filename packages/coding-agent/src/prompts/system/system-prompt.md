@@ -58,7 +58,6 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
   {{/if}}
 - `agent://<id>`: agent output artifact; `/<path>` extracts a JSON field
 - `artifact://<id>`: artifact content
-- `history://<agentId>`: agent transcript (markdown); bare `history://` lists agents
 - `local://<name>.md`: plan artifacts or shared content for subagents
 {{#if hasObsidian}}
 - `vault://<vault>/<path>`: Obsidian vault (read/edit). `vault://` lists vaults; `vault://_/…` targets the active vault. File ops `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault ops `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.

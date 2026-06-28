@@ -7,7 +7,7 @@ Send/receive short text messages between agents in this process.
 - Messaging an `idle`/`parked` peer wakes it — no separate revive call.
 - `op: "wait"` — block for a message (optionally only `from` one peer); consumes + returns it. Timeout = clean "no message", not an error.
 - `op: "inbox"` — drain pending messages without blocking.
-- Replies arrive only when the recipient sends one. For peer background, `read` `history://<id>`, don't interrogate.
+- Replies arrive only when the recipient sends one; don't interrogate a peer for status.
 </instruction>
 
 <when_to_use>
@@ -24,7 +24,7 @@ NEVER for: routine progress updates, things a tool call can verify, questions yo
 Applies to sending + replying.
 - **Plain prose only.** NEVER JSON status payloads like `{"type":"task_completed",…}` — write a normal sentence.
 - **NEVER quote the message you answer.** Lead with the answer; set `replyTo`.
-- **Learn about peers via IRC** — NEVER grep artifacts, read other sessions' JSONL, or shell-poke. DM them, or `read` `history://<id>`.
+- **Learn about peers via IRC** — NEVER grep artifacts, read other sessions' JSONL, or shell-poke. DM them.
 - **Send, then keep working.** `wait`/`await: true` only when you cannot proceed. NEVER "did you get my message?". A `failed` receipt = peer unreachable — move on; NEVER retry in a loop.
 - **Answer expected questions** via `irc send` to the sender (finish your current step first).
 - **Stay terse.** One question per send; share files via `local://`/`memory://`/`artifact://` URLs, never pasted blobs.

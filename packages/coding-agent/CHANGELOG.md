@@ -21,6 +21,10 @@
 - Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.
 - Refined interrupted thinking system instructions to encourage smoother continuation.
 
+### Removed
+
+- Removed history URI support for reading agent transcripts
+
 ### Fixed
 
 - Fixed array-typed output schema validation by correctly assembling incremental yields into lists.
