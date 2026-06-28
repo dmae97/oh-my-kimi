@@ -481,6 +481,16 @@ export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: Assis
 	};
 }
 
+function customMessageContentToLlmContent(
+	content: CustomMessage["content"],
+): (TextContent | ImageContent)[] {
+	return typeof content === "string" ? [{ type: "text", text: content }] : content;
+}
+
+function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
+	return message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user";
+}
+
 /**
  * Transform AgentMessages (including custom types) to LLM-compatible Messages.
  *
@@ -555,7 +565,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				}
 				return out;
 			}
-			case "custom":
+			case "custom": {
+				if (isUserInvokedSkillPrompt(m)) {
+					return [
+						{
+							role: "user",
+							content: customMessageContentToLlmContent(m.content),
+							attribution: "user",
+							timestamp: m.timestamp,
+						},
+					];
+				}
+				const converted = convertMessageToLlm(m);
+				return converted ? [converted] : [];
+			}
 			case "hookMessage":
 			case "branchSummary":
 			case "compactionSummary":
