@@ -130,32 +130,45 @@ export function assembleYieldResult(
 	arrayLabels?: ReadonlySet<string>,
 ): AssembledYieldResult | undefined {
 	if (yieldItems.length === 0) return undefined;
+
+	// Terminal = the last non-incremental yield (untyped, or string-typed like
+	// `type: "result"`). Array-typed yields are incremental sections and never
+	// terminate on their own.
 	let terminalItem: YieldItem | undefined;
 	for (let index = yieldItems.length - 1; index >= 0; index--) {
 		const item = yieldItems[index];
-		if (!item) continue;
-		if (!isIncrementalYieldType(item.type)) {
+		if (item && !isIncrementalYieldType(item.type)) {
 			terminalItem = item;
 			break;
 		}
 	}
-	let hasTypedSections = false;
+
+	// Sections come ONLY from incremental (array-typed) yields. A string `type`
+	// is a terminal marker, never a section label: folding its data under the
+	// label is what nested a finalize payload (`type: "result"`, `data: {…}`) one
+	// level deep and made output-schema validation report every field missing.
+	const sections: Record<string, unknown> = {};
+	const sectionCounts = new Map<string, number>();
+	let schemaOverridden = false;
+	let missingData = false;
+	let hasSections = false;
 	for (const item of yieldItems) {
-		if (getYieldLabels(item.type).length > 0) {
-			hasTypedSections = true;
-			break;
+		if (item.status === "aborted") continue;
+		if (!isIncrementalYieldType(item.type)) continue;
+		schemaOverridden ||= item.schemaOverridden === true;
+		const labels = getYieldLabels(item.type);
+		const resolved = resolveYieldPayload(item, lastAssistantText, labels);
+		missingData ||= resolved.missingData;
+		for (const label of labels) {
+			appendYieldSection(sections, sectionCounts, label, resolved.value, arrayLabels?.has(label) ?? false);
+			hasSections = true;
 		}
 	}
-	if (terminalItem && typeof terminalItem.type === "string" && terminalItem.data === undefined) {
-		const resolved = resolveYieldPayload(terminalItem, lastAssistantText, getYieldLabels(terminalItem.type));
-		return {
-			data: resolved.value,
-			schemaOverridden: terminalItem.schemaOverridden === true,
-			rawText: resolved.fromLastAssistantText && typeof resolved.value === "string",
-			missingData: resolved.missingData,
-		};
-	}
-	if (!hasTypedSections && terminalItem) {
+
+	// An explicit terminal payload wins: an untyped final result or a
+	// `type: "result"` finalize that carries `data` is the complete result, used
+	// verbatim — never wrapped in a section.
+	if (terminalItem && terminalItem.data !== undefined) {
 		const resolved = resolveYieldPayload(terminalItem, lastAssistantText, []);
 		return {
 			data: resolved.value,
@@ -165,39 +178,14 @@ export function assembleYieldResult(
 		};
 	}
 
-	const sections: Record<string, unknown> = {};
-	const sectionCounts = new Map<string, number>();
-	let schemaOverridden = false;
-	let missingData = false;
-	let hasSections = false;
-
-	for (const item of yieldItems) {
-		if (item.status === "aborted") continue;
-		schemaOverridden ||= item.schemaOverridden === true;
-		const labels = getYieldLabels(item.type);
-		if (labels.length === 0) continue;
-		const resolved = resolveYieldPayload(item, lastAssistantText, labels);
-		missingData ||= resolved.missingData;
-		const incremental = isIncrementalYieldType(item.type);
-		for (const label of labels) {
-			appendYieldSection(
-				sections,
-				sectionCounts,
-				label,
-				resolved.value,
-				incremental && (arrayLabels?.has(label) ?? false),
-			);
-			hasSections = true;
-		}
-		if (!isIncrementalYieldType(item.type)) break;
-	}
-
+	// A data-less terminal finalize keeps accumulated sections; only when none
+	// exist does the last assistant turn become the raw result.
 	if (hasSections) {
 		return { data: sections, schemaOverridden, rawText: false, missingData };
 	}
 
 	if (!terminalItem) return undefined;
-	const resolved = resolveYieldPayload(terminalItem, lastAssistantText, []);
+	const resolved = resolveYieldPayload(terminalItem, lastAssistantText, getYieldLabels(terminalItem.type));
 	return {
 		data: resolved.value,
 		schemaOverridden: terminalItem.schemaOverridden === true,
