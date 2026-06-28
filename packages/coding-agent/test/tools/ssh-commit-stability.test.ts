@@ -46,6 +46,34 @@ describe("ssh tool block commit stability", () => {
 		expect(component.isTranscriptBlockCommitStable()).toBe(false);
 	});
 
+	it("keeps the collapsed pending SSH preview commit-unstable until a result arrives", () => {
+		// Issue #3714: with `provisionalPendingPreview: true` the pending call
+		// preview is commit-unstable regardless of expansion, so neither the
+		// `⏳ SSH: [host]` header nor the framed bottom border can leak into
+		// native scrollback before the result render inserts `Output`.
+		const component = makeSshComponent();
+		component.setArgsComplete();
+
+		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(component.isTranscriptBlockCommitStable()).toBe(false);
+	});
+
+	it("keeps the expanded pending SSH preview commit-unstable until a result arrives", () => {
+		// Issue #3714: the previous `"collapsed"` opt-out left expanded pending
+		// rows commit-stable. Once the box outgrew the viewport the stale
+		// `⏳ SSH: [host]` header and the pending `╰──╯` footer reached native
+		// scrollback, then the final result re-anchored the frame and stranded
+		// the pending rows above (header variant) or reused the footer row in
+		// place as `├── Output ──┤` (footer variant). Expanded MUST also be
+		// commit-unstable until the result render replaces the pending shape.
+		const component = makeSshComponent();
+		component.setExpanded(true);
+		component.setArgsComplete();
+
+		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(component.isTranscriptBlockCommitStable()).toBe(false);
+	});
+
 	it("flips commit-stable as soon as the SSH result settles", () => {
 		const component = makeSshComponent();
 		component.updateResult(partialResult("connecting…"), true);
@@ -61,6 +89,20 @@ describe("ssh tool block commit stability", () => {
 		// commit-stable behaviour — the SSH opt-in must be renderer-scoped.
 		const component = new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub);
 		component.updateResult(partialResult("a\nb\n"), true);
+
+		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(component.isTranscriptBlockCommitStable()).toBe(true);
+	});
+
+	it("does not opt other foreground tools out of expanded pending-preview commits", () => {
+		// Sanity: bash/eval still use `provisionalPendingPreview: "collapsed"`,
+		// so once expanded their pending preview is commit-stable. The SSH
+		// `true` opt-in MUST remain renderer-scoped — flipping the default
+		// here would block long top-anchored streams (e.g. a task call's
+		// context/assignment markdown) from reaching native scrollback.
+		const component = new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub);
+		component.setExpanded(true);
+		component.setArgsComplete();
 
 		expect(component.isTranscriptBlockFinalized()).toBe(false);
 		expect(component.isTranscriptBlockCommitStable()).toBe(true);
