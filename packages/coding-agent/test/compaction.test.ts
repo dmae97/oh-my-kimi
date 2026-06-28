@@ -534,7 +534,7 @@ describe("remote compaction setting", () => {
 				item => item.type === "reasoning" && item.encrypted_content === "encrypted_reasoning_turn_1",
 			),
 		).toBe(true);
-		expect(result.summary).toContain("Remote compaction preserved provider-native history for this session.");
+		expect(result.summary).toContain("History summary");
 		expect(result.preserveData).toEqual({
 			openaiRemoteCompaction: {
 				provider: "openai",
