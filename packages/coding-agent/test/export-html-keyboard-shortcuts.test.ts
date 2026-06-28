@@ -81,8 +81,15 @@ describe("HTML export keyboard shortcuts", () => {
 	});
 
 	it("leaves editable targets alone", () => {
-		expect(exerciseShortcut(keydownBody, { key: "t", target: { tagName: "INPUT", isContentEditable: false } })).toEqual({ calls: [], prevented: false });
-		expect(exerciseShortcut(keydownBody, { key: "o", target: { tagName: "TEXTAREA", isContentEditable: false } })).toEqual({ calls: [], prevented: false });
-		expect(exerciseShortcut(keydownBody, { key: "T", target: { tagName: "DIV", isContentEditable: true } })).toEqual({ calls: [], prevented: false });
+		expect(
+			exerciseShortcut(keydownBody, { key: "t", target: { tagName: "INPUT", isContentEditable: false } }),
+		).toEqual({ calls: [], prevented: false });
+		expect(
+			exerciseShortcut(keydownBody, { key: "o", target: { tagName: "TEXTAREA", isContentEditable: false } }),
+		).toEqual({ calls: [], prevented: false });
+		expect(exerciseShortcut(keydownBody, { key: "T", target: { tagName: "DIV", isContentEditable: true } })).toEqual({
+			calls: [],
+			prevented: false,
+		});
 	});
 });

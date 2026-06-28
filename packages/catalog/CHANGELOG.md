@@ -5,7 +5,6 @@
 ### Added
 
 - Added V2 streaming compaction configuration parameters to RemoteCompactionConfig
-
 - Added support for V2 streaming compaction configuration in catalog types
 - Added remote compaction V2 streaming metadata fields for model and provider configuration.
 
@@ -13,7 +12,6 @@
 
 - Updated pricing and context window limits for several catalog models
 - Disabled reasoning capability for multiple providers in the catalog
-
 - Updated pricing and context window limits for several catalog models
 - Disabled reasoning capability for multiple providers in the catalog
 

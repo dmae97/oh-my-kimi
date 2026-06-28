@@ -5,6 +5,7 @@
 ### Added
 
 - Added a freedesktop D-Bus desktop-notification fallback for BEL-protocol terminals on Linux: `TERMINAL.sendNotification` now fans out completion/ask toasts through `notify-send` (libnotify) — or `gdbus call ... org.freedesktop.Notifications.Notify` when libnotify is absent — whenever `DBUS_SESSION_BUS_ADDRESS` is set, so VTE-family hosts (Ptyxis, GNOME Terminal, Tilix, …) plus Alacritty and bare xterm finally surface toasts they cannot deliver in-band ([#3685](https://github.com/can1357/oh-my-pi/issues/3685)). Skipped for terminals with their own notification UI (VS Code, Warp) to avoid duplicate toasts, gated by a `PI_NO_DESKTOP_NOTIFY=1` opt-out, and kept fire-and-forget so the BEL still fires for tmux `monitor-bell`, X11 urgency hints, and audible-bell handlers.
+
 ### Fixed
 
 - Fixed slash skill autocomplete staying closed after existing prompt text; mid-prompt `/...` lookup now shows only `/skill:<name>` commands and accepting one replaces the draft with that skill command ([#3654](https://github.com/can1357/oh-my-pi/issues/3654)).

@@ -5,7 +5,6 @@
 ### Added
 
 - Added support for tracking reasoning tokens in session and advisor statistics
-
 - Added `compaction.remoteStreamingV2Enabled` setting to toggle V2 streaming for remote compaction
 - Added `compaction.v2RetainedMessageBudget` setting to control token budget for V2 compaction
 - Added Remote Compaction V2 streaming configuration settings
@@ -22,29 +21,13 @@
 - Fixed resumed OpenAI / OpenAI-Codex sessions losing encrypted reasoning and native assistant turns: rehydration only strips Responses replay metadata for GitHub Copilot now (the sole provider that 401s on warmed-session replay), so remote compaction rebuilds faithful native history instead of sending tool-call-only context with no reasoning.
 - Fixed the ask tool's `Other (type your own)` editor dropping the original question and option list while the user types a custom answer. ([#3660](https://github.com/can1357/oh-my-pi/issues/3660))
 - Fixed auto-snapcompact on text-only active models by downgrading automatic maintenance to context-full compaction instead of failing the session when the active model cannot read snapcompact frames. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
-### Fixed
-
 - Fixed autoresearch's `before_agent_start` handler crashing when `event.systemPrompt` was undefined. The handler now coerces a missing system prompt to an empty string so the autoresearch block still renders. ([#3665](https://github.com/can1357/oh-my-pi/issues/3665))
-### Fixed
-
 - Fixed OMP exiting silently during startup when `~/.codex/hooks/*.{ts,js}` contained standalone Codex hook scripts: untyped scripts are no longer treated as OMP hooks, and dynamic imports of extension/hook modules are wrapped in a `process.exit` guard so a top-level exit raises a recoverable load error instead of terminating the host. ([#3680](https://github.com/can1357/oh-my-pi/issues/3680))
-### Fixed
-
 - Fixed the HTML session export's "toggle thinking" and "toggle tools" keyboard shortcuts being unreachable in a web browser: `Ctrl+T` and `Ctrl+O` are reserved by every major browser (new tab / open file), so the page never saw the keystroke. The shortcuts are now bare `T` / `O` (suppressed while focus is in the search input) and the in-page help bar reads `T toggle thinking · O toggle tools` ([#3670](https://github.com/can1357/oh-my-pi/issues/3670)).
-### Fixed
-
 - Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns. ([#3698](https://github.com/can1357/oh-my-pi/issues/3698))
-### Fixed
-
 - Fixed `/skill:` prompts submitted during compaction so they are re-invoked as user-attributed skill prompts instead of being dropped or treated as plain text.
-### Fixed
-
 - Fixed Ctrl+T staying locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata. ([#3669](https://github.com/can1357/oh-my-pi/issues/3669))
-### Fixed
-
 - Fixed `/shake` (and other mid-stream chat rebuilds) erasing the live LLM output by preserving the in-flight `streamingComponent` and `pendingTools` across `rebuildChatFromMessages` so subsequent `message_update`/`message_end` events keep updating on-screen components. ([#3656](https://github.com/can1357/oh-my-pi/issues/3656))
-### Fixed
-
 - Fixed the `time_spent` status-line segment ticking on wall-clock since session start, so an idle session displayed hours of "time spent" while the agent did nothing. The segment now accumulates only the union of `agent_start`→`agent_end` windows, ticking live during a turn and freezing the instant the agent yields; `/clear` and fresh-session flows zero the meter via the renamed `resetActiveTime` boundary hook. Meters are kept per-session (WeakMap keyed on `AgentSession`) so the focus-controller's mid-turn synthesized `agent_start` cannot leak into the main session's meter on unfocus, a re-focus onto a now-idle subagent drops the stale window rather than crediting the detached gap, and an in-place `switchSession` file swap (`/resume`, `/move`, ACP fork/load, RPC `switch_session`, extension `switchSession`) starts the meter fresh so the resumed conversation does not inherit the previous one's accumulated time. Collab guests also close the meter from the host-idle state reconciler so a reconnect that dropped the host's `agent_end` cannot leave `time_spent` ticking. ([#3681](https://github.com/can1357/oh-my-pi/issues/3681))
 - Fixed auto-snapcompact failing the session on any local blocker (text-only active model, high non-ASCII transcript, kept history exceeding the context budget, or post-render overflow) by downgrading automatic maintenance to context-full compaction. Manual `/compact snapcompact` keeps the local-only failure contract. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
 

@@ -72,9 +72,7 @@ describe("SessionManager.forkFrom", () => {
 
 			const cloneEntries = await loadEntriesFromFile(cloneFile);
 			const cloneHeader = cloneEntries.find((entry): entry is SessionHeader => entry.type === "session");
-			const cloneMessage = cloneEntries.find(
-				(entry): entry is SessionMessageEntry => entry.type === "message",
-			);
+			const cloneMessage = cloneEntries.find((entry): entry is SessionMessageEntry => entry.type === "message");
 			expect(cloneHeader?.id).not.toBe(sourceHeader.id);
 			expect(cloneHeader?.parentSession).toBe(sourceHeader.id);
 			expect(cloneHeader?.cwd).toBe(cwd);

@@ -1258,7 +1258,6 @@ export class AgentSession {
 	readonly settings: Settings;
 	readonly yieldQueue: YieldQueue;
 	fileSnapshotStore?: InMemorySnapshotStore;
-	citationSourceStore?: CitationSourceStore;
 	#autoApprove: boolean;
 
 	#powerAssertion: MacOSPowerAssertion | undefined;

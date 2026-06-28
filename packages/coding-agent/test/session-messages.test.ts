@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { type AgentMessage, filterProviderReplayMessages } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
 import { inferCopilotInitiator } from "@oh-my-pi/pi-ai/providers/github-copilot-headers";
-import { convertToLlm, SKILL_PROMPT_MESSAGE_TYPE, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	convertToLlm,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	wrapSteeringForModel,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 
 function expectAttribution(message: Message | undefined, expected: "user" | "agent" | undefined): void {
 	expect(message).toBeDefined();
@@ -334,7 +338,7 @@ describe("convertToLlm custom message mapping", () => {
 		if (converted[1]?.role !== "user" || !Array.isArray(converted[1].content)) {
 			throw new Error("Expected user custom images");
 		}
-		expect(converted[1].content.filter(content => content.type === "image")).toEqual([image])
+		expect(converted[1].content.filter(content => content.type === "image")).toEqual([image]);
 	});
 });
 
