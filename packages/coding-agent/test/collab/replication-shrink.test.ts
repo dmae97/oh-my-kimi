@@ -224,8 +224,7 @@ describe("collab replication shrinking (#3739)", () => {
 			frames.push(frame);
 			if (frame.t === "snapshot-chunk" && frame.final) trainDone.resolve();
 		};
-		guest.onOpen = () =>
-			guest.send({ t: "hello", proto: COLLAB_PROTO, name: "test", writeToken });
+		guest.onOpen = () => guest.send({ t: "hello", proto: COLLAB_PROTO, name: "test", writeToken });
 		const guestClosed = Promise.withResolvers<void>();
 		guest.onClose = (reason, willReconnect) => {
 			closes.push({ reason, willReconnect });
@@ -261,10 +260,11 @@ describe("collab replication shrinking (#3739)", () => {
 		expect(chunkEntries.map(e => e.id)).toEqual(snapshot.entries.map(e => e.id));
 
 		const bigShrunk = chunkEntries.find(e => e.id === snapshot.bigEntryId);
-		if (!bigShrunk || bigShrunk.type !== "message") throw new Error("expected shrunk big message entry");
-		const shrunkContent = bigShrunk.message.content;
-		expect(typeof shrunkContent).toBe("string");
-		if (typeof shrunkContent !== "string") throw new Error("expected string content");
+		if (bigShrunk?.type !== "message") throw new Error("expected shrunk big message entry");
+		const bigMessage = bigShrunk.message;
+		if (bigMessage.role !== "user") throw new Error("expected shrunk big user message");
+		const shrunkContent = bigMessage.content;
+		if (typeof shrunkContent !== "string") throw new Error("expected string content after shrink");
 		// Original was 5 MB; the head-truncation marker carries the exact
 		// number of dropped chars so the guest can show "this was bigger".
 		expect(shrunkContent.length).toBeLessThan(snapshot.bigPayloadLength / 10);
