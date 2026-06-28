@@ -114,7 +114,7 @@ async function settle(promise: Promise<void>, label: string, timeoutMs = 3000): 
 }
 
 beforeAll(async () => {
-	sharedRoot = await TempDir.create(`memories-runtime-${Snowflake.next()}`);
+	sharedRoot = await TempDir.create(`@memories-runtime-${Snowflake.next()}`);
 });
 
 afterAll(async () => {
