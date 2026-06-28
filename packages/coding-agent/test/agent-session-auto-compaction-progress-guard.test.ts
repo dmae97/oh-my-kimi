@@ -443,6 +443,42 @@ describe("AgentSession auto-compaction progress guard", () => {
 		);
 	});
 
+	it("restores the persisted overflow error when compaction skips without committing", async () => {
+		// `#runAutoCompaction` returning COMPACTION_CHECK_NONE without writing a
+		// compaction summary (no available model, hook cancel, compaction error)
+		// MUST NOT erase the user-visible assistant error: the transcript would
+		// otherwise lose the only explanation of why the turn stopped.
+		seedPriorTurns();
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([]);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = overflowAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(sessionManager.getBranch()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: assistantMsg.errorMessage,
+				}),
+			}),
+		);
+	});
+
 	it("retries a small-window overflow when the default reserve exceeds the model window", async () => {
 		// Bundled 4k/8k models can be smaller than the default absolute reserve
 		// (16,384). Retry fit must clamp that reserve; otherwise the budget goes

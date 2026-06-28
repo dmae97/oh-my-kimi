@@ -9502,8 +9502,9 @@ export class AgentSession {
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
 			if (compactionSettings.enabled && compactionSettings.strategy !== "off") {
-				await this.#dropPersistedAssistantTurn(assistantMessage);
-				return await this.#runAutoCompaction("overflow", true, false, allowDefer, { autoContinue });
+				return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, allowDefer, {
+					autoContinue,
+				});
 			}
 			return COMPACTION_CHECK_NONE;
 		}
@@ -9532,12 +9533,11 @@ export class AgentSession {
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
 			if (incompleteCompactionSettings.enabled && incompleteCompactionSettings.strategy !== "off") {
-				await this.#dropPersistedAssistantTurn(assistantMessage);
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
 				});
-				return await this.#runAutoCompaction("incomplete", true, false, allowDefer, {
+				return await this.#runRecoveryCompactionWithRollback("incomplete", assistantMessage, allowDefer, {
 					autoContinue,
 					triggerContextTokens: calculateContextTokens(assistantMessage.usage),
 				});
@@ -9814,6 +9814,40 @@ export class AgentSession {
 	async #dropPersistedAssistantTurn(assistantMessage: AssistantMessage): Promise<void> {
 		await this.#waitForSessionMessagePersistence(assistantMessage);
 		this.#discardAssistantTurn(assistantMessage);
+	}
+
+	/**
+	 * Drop the failed assistant turn from persisted history, run
+	 * {@link #runAutoCompaction} for an `overflow` / `incomplete` recovery, and
+	 * restore the assistant entry if compaction did not actually commit
+	 * anything (no usable model/preparation, hook cancel, or compaction error).
+	 *
+	 * Compaction has to see a clean branch — otherwise its `prepareCompaction`
+	 * pass would keep the failed turn in the kept region and the retry would
+	 * replay it. But a NONE return that was not paired with a fresh compaction
+	 * summary means no recovery is in progress, and leaving the branch
+	 * reparented would erase the only user-visible explanation for why the turn
+	 * stopped. Reverting the drop in that case preserves the transcript while
+	 * still letting a real recovery path own the rewrite.
+	 */
+	async #runRecoveryCompactionWithRollback(
+		reason: "overflow" | "incomplete",
+		assistantMessage: AssistantMessage,
+		allowDefer: boolean,
+		options: { autoContinue: boolean; triggerContextTokens?: number },
+	): Promise<CompactionCheckResult> {
+		const compactionEntryBefore = getLatestCompactionEntry(this.sessionManager.getBranch());
+		await this.#dropPersistedAssistantTurn(assistantMessage);
+		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, options);
+		const recoveryCommitted =
+			result.continuationScheduled || result.deferredHandoff || result.automaticContinuationBlocked === true;
+		if (!recoveryCommitted) {
+			const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
+			if (compactionEntryAfter === compactionEntryBefore) {
+				this.sessionManager.appendMessage(assistantMessage);
+			}
+		}
+		return result;
 	}
 
 	/**
