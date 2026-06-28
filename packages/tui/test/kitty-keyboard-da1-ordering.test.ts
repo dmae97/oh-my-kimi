@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import type { Component } from "@oh-my-pi/pi-tui";
 import {
 	createProcessTerminalRenderHarness,
 	type ProcessTerminalRenderHarness,
@@ -10,6 +11,13 @@ import {
 // is only a sentinel that guarantees a reply even from terminals that ignore
 // `CSI ? u`. Some terminals (Superset / xterm-on-Electron) answer DA1 first;
 // the kitty reply must still be honored regardless of ordering.
+
+class ModalProbe implements Component {
+	invalidate(): void {}
+	render(): string[] {
+		return ["modal"];
+	}
+}
 describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () => {
 	let harness: ProcessTerminalRenderHarness | undefined;
 
@@ -65,5 +73,27 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(harness.terminal.kittyProtocolActive).toBe(false);
 		expect(out).toContain("\x1b[>4;2m");
 		expect(out).not.toContain("\x1b[>1u");
+	});
+
+	it("reasserts modifyOtherKeys fallback when fullscreen overlays enter the alternate screen", async () => {
+		harness = createProcessTerminalRenderHarness(100, 30);
+		await harness.settle();
+		harness.writes.length = 0;
+
+		await harness.feed("\x1b[?1;2c");
+		expect(harness.writes.join("")).toContain("\x1b[>4;2m");
+		harness.writes.length = 0;
+
+		const overlay = harness.tui.showOverlay(new ModalProbe(), {
+			fullscreen: true,
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+		});
+		await harness.settle();
+
+		const out = harness.writes.join("");
+		expect(out).toContain("\x1b[?1049h\x1b[>4;2m");
+		overlay.hide();
 	});
 });

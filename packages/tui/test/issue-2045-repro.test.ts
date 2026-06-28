@@ -28,6 +28,10 @@ class CaptureTerminal implements Terminal {
 		return null;
 	}
 
+	get keyboardEnhancementSequence(): string | null {
+		return null;
+	}
+
 	get appearance(): TerminalAppearance | undefined {
 		return undefined;
 	}

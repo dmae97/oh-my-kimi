@@ -2488,11 +2488,11 @@ export class TUI extends Container {
 		// modal there; the normal screen and all accounting stay untouched.
 		const wantAlt = this.#wantsAltScreen();
 		if (wantAlt && !this.#altActive) {
-			// Kitty keyboard flags are per-screen: re-push our level on the freshly
-			// entered alternate screen, or Esc/modified keys revert to legacy
-			// encoding inside fullscreen overlays (Ghostty/kitty). See kitty
-			// keyboard-protocol docs: the mode stack is separate per screen.
-			this.terminal.write(`\x1b[?1049h${this.terminal.kittyEnableSequence ?? ""}${MOUSE_TRACKING_ON}`);
+			// Enhanced keyboard modes can be buffer-local: re-push the active
+			// modified-key reporting sequence on the freshly entered alternate
+			// screen, or Esc/modified keys revert to legacy encoding inside
+			// fullscreen overlays (Ghostty/kitty/iTerm2).
+			this.terminal.write(`\x1b[?1049h${this.terminal.keyboardEnhancementSequence ?? ""}${MOUSE_TRACKING_ON}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
@@ -3346,7 +3346,7 @@ export class TUI extends Container {
 		setAltScreenActive(true);
 		this.#forgetHardwareCursorState();
 		this.#recordHardwareCursorHidden();
-		return `${ALT_SCREEN_ENTER}${this.terminal.kittyEnableSequence ?? ""}`;
+		return `${ALT_SCREEN_ENTER}${this.terminal.keyboardEnhancementSequence ?? ""}`;
 	}
 
 	#leaveResizeAltSequence(): string {

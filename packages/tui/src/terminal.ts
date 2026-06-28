@@ -336,6 +336,10 @@ export interface Terminal {
 	// so the TUI re-pushes this after entering the alternate screen.
 	get kittyEnableSequence(): string | null;
 
+	// The active modified-key reporting sequence to reassert after terminal buffer
+	// switches, or null when no enhanced keyboard mode is active.
+	get keyboardEnhancementSequence(): string | null;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -470,6 +474,11 @@ export class ProcessTerminal implements Terminal {
 
 	get kittyEnableSequence(): string | null {
 		return this.#kittyProtocolActive ? this.#kittyEnableSeq : null;
+	}
+
+	get keyboardEnhancementSequence(): string | null {
+		if (this.#kittyProtocolActive) return this.#kittyEnableSeq;
+		return this.#modifyOtherKeysActive ? "\x1b[>4;2m" : null;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
