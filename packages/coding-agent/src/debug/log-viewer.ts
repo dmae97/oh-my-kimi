@@ -3,6 +3,7 @@ import {
 	extractPrintableText,
 	matchesKey,
 	padding,
+	parseSgrMouse,
 	replaceTabs,
 	truncateToWidth,
 	visibleWidth,
@@ -185,6 +186,31 @@ export class DebugLogViewerModel {
 		if (this.#getCursorRow()?.kind !== "log" && !extendSelection) {
 			this.#selectionAnchorSelectableIndex = undefined;
 		}
+	}
+
+	moveCursorToRow(rowIndex: number, extendSelection: boolean): boolean {
+		const selectableIndex = this.#selectableRowIndices.indexOf(rowIndex);
+		if (selectableIndex < 0) {
+			return false;
+		}
+
+		if (extendSelection && this.#selectionAnchorSelectableIndex === undefined) {
+			const row = this.#getCursorRow();
+			if (row?.kind === "log") {
+				this.#selectionAnchorSelectableIndex = this.#cursorSelectableIndex;
+			}
+		}
+
+		this.#cursorSelectableIndex = selectableIndex;
+
+		if (!extendSelection) {
+			this.#selectionAnchorSelectableIndex = undefined;
+		}
+
+		if (this.#getCursorRow()?.kind !== "log" && !extendSelection) {
+			this.#selectionAnchorSelectableIndex = undefined;
+		}
+		return true;
 	}
 
 	getSelectedLogIndices(): number[] {
@@ -487,6 +513,9 @@ export class DebugLogViewerComponent implements Component {
 	#scrollRowOffset = 0;
 	#statusMessage: string | undefined;
 	#loadingOlder = false;
+	#bodyRowStart = 0;
+	#bodyRowCount = 0;
+	#bodyLineToRowIndex: Array<number | undefined> = [];
 
 	constructor(options: DebugLogViewerComponentOptions) {
 		this.#logSource = options.logSource;
@@ -504,6 +533,10 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	handleInput(keyData: string): void {
+		if (keyData.startsWith("\x1b[<") && this.#handleMouse(keyData)) {
+			return;
+		}
+
 		if (matchesKey(keyData, "escape") || matchesKey(keyData, "esc")) {
 			this.#onExit();
 			return;
@@ -601,6 +634,42 @@ export class DebugLogViewerComponent implements Component {
 		}
 	}
 
+	#handleMouse(keyData: string): boolean {
+		const event = parseSgrMouse(keyData);
+		if (!event) return false;
+
+		const overBody = event.row >= this.#bodyRowStart && event.row < this.#bodyRowStart + this.#bodyRowCount;
+		if (event.wheel !== null && overBody) {
+			this.#statusMessage = undefined;
+			const maxOffset = Math.max(0, this.#model.rows.length - 1);
+			this.#scrollRowOffset = Math.max(0, Math.min(maxOffset, this.#scrollRowOffset + event.wheel * 3));
+			this.#onUpdate?.();
+			return true;
+		}
+
+		if (!event.leftClick || !overBody) return false;
+		const rowIndex = this.#bodyLineToRowIndex[event.row - this.#bodyRowStart];
+		if (rowIndex === undefined) return false;
+
+		const target = this.#model.rows[rowIndex];
+		if (!target || target.kind === "warning") return false;
+		this.#statusMessage = undefined;
+		this.#model.moveCursorToRow(rowIndex, false);
+		if (target.kind === "load-older") {
+			void this.#handleLoadOlder();
+			return true;
+		}
+
+		if (this.#model.isExpanded(target.logIndex)) {
+			this.#model.collapseSelected();
+		} else {
+			this.#model.expandSelected();
+		}
+		this.#ensureCursorVisible();
+		this.#onUpdate?.();
+		return true;
+	}
+
 	invalidate(): void {
 		// no cached child state
 	}
@@ -613,6 +682,8 @@ export class DebugLogViewerComponent implements Component {
 		const bodyHeight = this.#bodyHeight();
 
 		const rows = this.#renderRows(contentWidth);
+		this.#bodyRowStart = 4;
+		this.#bodyRowCount = bodyHeight;
 		const visibleBodyLines = this.#renderVisibleBodyLines(rows, bodyHeight);
 
 		return [
@@ -635,7 +706,7 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#controlsText(): string {
-		return "Esc close · Ctrl+C copy · ↑/↓ move · Shift+↑/↓ select · ←/→ collapse/expand · Ctrl+A all · Ctrl+O older · Ctrl+P pid";
+		return "Esc close · Ctrl+C copy · ↑/↓/wheel move · click toggle · Shift+↑/↓ select · ←/→ collapse/expand · Ctrl+A all · Ctrl+O older · Ctrl+P pid";
 	}
 
 	#filterText(): string {
@@ -786,8 +857,10 @@ export class DebugLogViewerComponent implements Component {
 	}
 
 	#renderVisibleBodyLines(rows: Array<{ lines: string[]; rowIndex: number }>, bodyHeight: number): string[] {
+		this.#bodyLineToRowIndex = [];
 		const lines: string[] = [];
 		if (rows.length === 0) {
+			this.#bodyLineToRowIndex.push(undefined);
 			lines.push(row(theme.fg("muted", "no matches"), this.#lastRenderWidth));
 		}
 		for (let i = this.#scrollRowOffset; i < rows.length; i++) {
@@ -800,6 +873,7 @@ export class DebugLogViewerComponent implements Component {
 				if (lines.length >= bodyHeight) {
 					break;
 				}
+				this.#bodyLineToRowIndex.push(renderedRow.rowIndex);
 				lines.push(row(line, this.#lastRenderWidth));
 			}
 
@@ -809,6 +883,7 @@ export class DebugLogViewerComponent implements Component {
 		}
 
 		while (lines.length < bodyHeight) {
+			this.#bodyLineToRowIndex.push(undefined);
 			lines.push(row("", this.#lastRenderWidth));
 		}
 

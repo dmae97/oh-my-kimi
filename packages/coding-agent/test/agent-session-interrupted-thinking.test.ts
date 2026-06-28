@@ -190,9 +190,9 @@ describe("AgentSession interrupted thinking persistence", () => {
 		const llm = convertToLlm(messages);
 		const assistantLlm = llm.find(entry => entry.role === "assistant");
 		expect(assistantLlm).toBeDefined();
-		expect(Array.isArray(assistantLlm?.content) && assistantLlm.content.some(block => block.type === "thinking")).toBe(
-			false,
-		);
+		expect(
+			Array.isArray(assistantLlm?.content) && assistantLlm.content.some(block => block.type === "thinking"),
+		).toBe(false);
 		const developerLlm = llm.filter(entry => entry.role === "developer");
 		expect(developerLlm.some(entry => JSON.stringify(entry.content).includes(REASONING_TEXT))).toBe(true);
 	});
