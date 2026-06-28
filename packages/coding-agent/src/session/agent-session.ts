@@ -231,6 +231,7 @@ import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
+import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
@@ -6492,15 +6493,25 @@ export class AgentSession {
 		return {
 			role: "custom",
 			customType: "goal-mode-context",
-			content: todoContext ? `${content}\n\n${todoContext}` : content,
+			content: prompt.render(goalModeContextPrompt, { goalContext: content, todoContext }),
 			display: false,
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
 	}
 
+	#sanitizeGoalTodoText(text: string): string {
+		return escapeXmlText(text)
+			.replace(/\r\n/g, "\\n")
+			.replace(/\r/g, "\\r")
+			.replace(/\n/g, "\\n")
+			.replace(/\t/g, "\\t")
+			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+	}
+
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
+		if (!this.getActiveToolNames().includes("todo")) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
@@ -6508,7 +6519,7 @@ export class AgentSession {
 		let closed = 0;
 		let open = 0;
 		const promptPhases = phases.map(phase => ({
-			name: phase.name,
+			name: this.#sanitizeGoalTodoText(phase.name),
 			tasks: phase.tasks.map(task => {
 				total++;
 				if (task.status === "completed" || task.status === "abandoned") {
@@ -6516,7 +6527,7 @@ export class AgentSession {
 				} else {
 					open++;
 				}
-				return { content: task.content, status: task.status };
+				return { content: this.#sanitizeGoalTodoText(task.content), status: task.status };
 			}),
 		}));
 

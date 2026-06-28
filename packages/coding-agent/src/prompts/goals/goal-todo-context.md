@@ -4,9 +4,9 @@ Before continuing substantial work, compare your next action with these todos. I
 
 Overall: {{closed}}/{{total}} done, {{open}} open.
 {{#each phases}}
-- {{escapeXml name}}
+- {{name}}
 {{#each tasks}}
-  - [{{status}}] {{escapeXml content}}
+  - [{{status}}] {{content}}
 {{/each}}
 {{/each}}
 </todo_context>
