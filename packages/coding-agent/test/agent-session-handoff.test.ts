@@ -399,7 +399,7 @@ describe("AgentSession handoff", () => {
 		expect(compactSpy).not.toHaveBeenCalled();
 	});
 
-	it("does not call the LLM summarizer when auto snapcompact preflight fails", async () => {
+	it("downgrades auto snapcompact to context-full when local preflight rejects the transcript", async () => {
 		session.settings.set("compaction.strategy", "snapcompact");
 		const entries = sessionManager.getBranch();
 		const lastEntryId = entries[entries.length - 1]?.id;
@@ -417,7 +417,13 @@ describe("AgentSession handoff", () => {
 			settings: { ...compactionModule.DEFAULT_COMPACTION_SETTINGS, strategy: "snapcompact" },
 		};
 		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(fixedPreparation);
-		const compactSpy = vi.spyOn(compactionModule, "compact").mockRejectedValue(new Error("429 quota exhausted"));
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockResolvedValue({
+			summary: "compacted",
+			shortSummary: undefined,
+			firstKeptEntryId: lastEntryId,
+			tokensBefore: 100,
+			details: {},
+		});
 
 		await session.runIdleCompaction();
 
@@ -425,13 +431,22 @@ describe("AgentSession handoff", () => {
 			(event): event is Extract<AgentSessionEvent, { type: "auto_compaction_end" }> =>
 				event.type === "auto_compaction_end",
 		);
-		expect(compactSpy).not.toHaveBeenCalled();
+		expect(compactSpy).toHaveBeenCalled();
+		// The start event fires before the in-try preflight downgrades action, so it
+		// still reports "snapcompact"; the end event reflects the downgraded action.
 		expect(events).toContainEqual({ type: "auto_compaction_start", reason: "idle", action: "snapcompact" });
 		expect(endEvent).toMatchObject({
 			type: "auto_compaction_end",
-			action: "snapcompact",
-			errorMessage: expect.stringContaining("snapcompact cannot render this conversation locally"),
+			action: "context-full",
 		});
+		expect(endEvent?.errorMessage).toBeUndefined();
+		const downgradeNotice = events.find(
+			(event): event is Extract<AgentSessionEvent, { type: "notice" }> =>
+				event.type === "notice" &&
+				event.source === "compaction" &&
+				event.message.startsWith("snapcompact disabled: high non-ASCII rate detected"),
+		);
+		expect(downgradeNotice?.message).toContain("using context-full auto-compaction instead.");
 	});
 
 	it("strips hook-supplied snapcompact data when persisting context-full compaction", async () => {

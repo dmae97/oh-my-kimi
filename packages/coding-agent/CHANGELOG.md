@@ -46,6 +46,7 @@
 ### Fixed
 
 - Fixed the `time_spent` status-line segment ticking on wall-clock since session start, so an idle session displayed hours of "time spent" while the agent did nothing. The segment now accumulates only the union of `agent_start`→`agent_end` windows, ticking live during a turn and freezing the instant the agent yields; `/clear` and fresh-session flows zero the meter via the renamed `resetActiveTime` boundary hook. Meters are kept per-session (WeakMap keyed on `AgentSession`) so the focus-controller's mid-turn synthesized `agent_start` cannot leak into the main session's meter on unfocus, a re-focus onto a now-idle subagent drops the stale window rather than crediting the detached gap, and an in-place `switchSession` file swap (`/resume`, `/move`, ACP fork/load, RPC `switch_session`, extension `switchSession`) starts the meter fresh so the resumed conversation does not inherit the previous one's accumulated time. Collab guests also close the meter from the host-idle state reconciler so a reconnect that dropped the host's `agent_end` cannot leave `time_spent` ticking. ([#3681](https://github.com/can1357/oh-my-pi/issues/3681))
+- Fixed auto-snapcompact failing the session on any local blocker (text-only active model, high non-ASCII transcript, kept history exceeding the context budget, or post-render overflow) by downgrading automatic maintenance to context-full compaction. Manual `/compact snapcompact` keeps the local-only failure contract. ([#3659](https://github.com/can1357/oh-my-pi/issues/3659))
 
 ## [16.2.2] - 2026-06-27
 
