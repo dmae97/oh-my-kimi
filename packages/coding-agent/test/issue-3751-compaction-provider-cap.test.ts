@@ -21,10 +21,15 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
-import { compact, type CompactionPreparation, createFileOps, DEFAULT_COMPACTION_SETTINGS } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	type CompactionPreparation,
+	compact,
+	createFileOps,
+	DEFAULT_COMPACTION_SETTINGS,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core/types";
-import * as ai from "@oh-my-pi/pi-ai";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import * as ai from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -66,16 +71,12 @@ function makeAssistantMessage(text: string, model: Model): AssistantMessage {
 	};
 }
 
-function makePreparation(): CompactionPreparation {
+function makePreparation(model: Model): CompactionPreparation {
 	return {
 		firstKeptEntryId: "kept-1",
 		messagesToSummarize: [
 			{ role: "user", content: "history msg", timestamp: 1 } satisfies AgentMessage,
-			{
-				role: "assistant",
-				content: [{ type: "text", text: "history reply" }],
-				timestamp: 2,
-			} satisfies AgentMessage,
+			makeAssistantMessage("history reply", model),
 		],
 		turnPrefixMessages: [{ role: "user", content: "turn prefix msg", timestamp: 3 } satisfies AgentMessage],
 		recentMessages: [{ role: "user", content: "recent msg", timestamp: 4 } satisfies AgentMessage],
@@ -110,7 +111,7 @@ describe("issue #3751: compaction summaries respect provider concurrency cap", (
 			return makeAssistantMessage("summary text", requestModel);
 		};
 
-		await compact(makePreparation(), model, "test-key", undefined, undefined, {
+		await compact(makePreparation(model), model, "test-key", undefined, undefined, {
 			completeImpl: override,
 		});
 
@@ -163,7 +164,7 @@ describe("issue #3751: compaction summaries respect provider concurrency cap", (
 			.mockResolvedValue(makeAssistantMessage("default transport must not run", model));
 
 		// Kick off compaction; it must immediately try to acquire the slot.
-		const compaction = compact(makePreparation(), model, "test-key", undefined, undefined, {
+		const compaction = compact(makePreparation(model), model, "test-key", undefined, undefined, {
 			completeImpl,
 		});
 		await waitFor(() => gates.length === 1, "first compaction summarizer in flight");
