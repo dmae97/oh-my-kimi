@@ -96,6 +96,7 @@ export type SymbolKey =
 	| "icon.pause"
 	| "icon.loop"
 	| "icon.folder"
+	| "icon.worktree"
 	| "icon.search"
 	| "icon.scratchFolder"
 	| "icon.file"
@@ -299,6 +300,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.pause": "⏸",
 	"icon.loop": "↻",
 	"icon.folder": "📁",
+	"icon.worktree": "🌳",
 	"icon.search": "🔍",
 	"icon.scratchFolder": "🗑",
 	"icon.file": "📄",
@@ -561,6 +563,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.search": "\uf002",
 	// pick:  | alt:
 	"icon.scratchFolder": "\uf014",
+	// pick: nf-fa-sitemap | alt: nf-cod-list_tree
+	"icon.worktree": "\uf0e8",
 	// pick:  | alt:  
 	"icon.file": "\uf15b",
 	// pick:  | alt:  ⎇
@@ -808,6 +812,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"icon.pause": "||",
 	"icon.loop": "loop",
 	"icon.folder": "[D]",
+	"icon.worktree": "[wt]",
 	"icon.search": "[/]",
 	"icon.scratchFolder": "[T]",
 	"icon.file": "[F]",
@@ -1797,6 +1802,7 @@ export class Theme {
 			pause: this.#symbols["icon.pause"],
 			loop: this.#symbols["icon.loop"],
 			folder: this.#symbols["icon.folder"],
+			worktree: this.#symbols["icon.worktree"],
 			scratchFolder: this.#symbols["icon.scratchFolder"],
 			file: this.#symbols["icon.file"],
 			git: this.#symbols["icon.git"],

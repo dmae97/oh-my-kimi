@@ -160,6 +160,29 @@ interface ActiveRepoCache {
 	projectDir: string;
 	activeRepo: ActiveRepoContext | null;
 	effectiveGitCwd: string;
+	/** Project + worktree dir name when `projectDir` is a linked worktree, else null. */
+	worktree: WorktreeContext | null;
+}
+
+interface WorktreeContext {
+	/** Primary-checkout (project) name shown by the path segment. */
+	projectName: string;
+	/** Worktree directory name — suppressed from the path when it equals the branch. */
+	worktreeName: string;
+}
+
+/**
+ * Project + worktree-dir names when `cwd` is a linked git worktree, else null.
+ * The project name comes from the shared primary checkout; bare-repo worktrees
+ * resolve to the shared `foo.git` dir, so a trailing `.git` is stripped.
+ */
+function resolveWorktreeContext(cwd: string): WorktreeContext | null {
+	const worktree = git.repo.linkedWorktreeSync(cwd);
+	if (!worktree) return null;
+	const base = path.basename(worktree.primaryRoot);
+	const projectName = base.endsWith(".git") ? base.slice(0, -4) : base;
+	if (!projectName) return null;
+	return { projectName, worktreeName: path.basename(worktree.root) };
 }
 
 /**
@@ -312,7 +335,10 @@ export class StatusLineComponent implements Component {
 
 		const activeRepo = resolveActiveRepoContextSync(projectDir);
 		const effectiveGitCwd = activeRepo?.repoRoot ?? projectDir;
-		this.#activeRepoCache = { projectDir, activeRepo, effectiveGitCwd };
+		// Only collapse the bare-cwd case: a single-direct-child-repo context
+		// (activeRepo set) renders `<parent> ↳ <child>`, which we leave intact.
+		const worktree = activeRepo ? null : resolveWorktreeContext(effectiveGitCwd);
+		this.#activeRepoCache = { projectDir, activeRepo, effectiveGitCwd, worktree };
 		return this.#activeRepoCache;
 	}
 
@@ -988,7 +1014,7 @@ export class StatusLineComponent implements Component {
 		const projectDir = getProjectDir();
 		const activeRepoCache = shouldResolveActiveRepo
 			? this.#resolveActiveRepoCache()
-			: { projectDir, activeRepo: null, effectiveGitCwd: projectDir };
+			: { projectDir, activeRepo: null, effectiveGitCwd: projectDir, worktree: null };
 		const gitBranch = includeGit || includePr ? this.#getCurrentBranch(activeRepoCache.effectiveGitCwd) : null;
 		const gitStatus = includeGit ? this.#getGitStatus(activeRepoCache.effectiveGitCwd) : null;
 		const gitPr = includePr ? this.#lookupPr(activeRepoCache.effectiveGitCwd) : null;
@@ -1015,6 +1041,7 @@ export class StatusLineComponent implements Component {
 				status: gitStatus,
 				pr: gitPr,
 			},
+			worktree: activeRepoCache.worktree,
 			usage: this.#cachedUsage,
 		};
 	}

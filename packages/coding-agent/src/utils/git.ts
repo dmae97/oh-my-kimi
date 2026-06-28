@@ -1712,6 +1712,19 @@ export const repo = {
 		return primaryRootFromRepositorySync(repository);
 	},
 
+	/**
+	 * Linked-worktree metadata for `cwd`, or `null` when `cwd` is the primary
+	 * checkout (or outside a repository). `root` is the worktree's own checkout
+	 * root; `primaryRoot` is the shared main checkout that names the project.
+	 * Resolves purely via on-disk `.git`/`commondir` walking — no subprocess —
+	 * so the status line may call it on every render.
+	 */
+	linkedWorktreeSync(cwd: string): { root: string; primaryRoot: string } | null {
+		const repository = resolveRepositorySync(cwd);
+		if (!repository || !isLinkedWorktree(repository)) return null;
+		return { root: repository.repoRoot, primaryRoot: primaryRootFromRepositorySync(repository) };
+	},
+
 	/** Full GitRepository metadata (sync). */
 	resolveSync(cwd: string): GitRepository | null {
 		return resolveRepositorySync(cwd);
