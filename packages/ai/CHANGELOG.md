@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.4] - 2026-06-28
+
 ### Added
 
 - Enabled freeform tool patch support for Azure OpenAI and Codex models

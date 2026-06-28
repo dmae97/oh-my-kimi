@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.4] - 2026-06-28
+
 ### Fixed
 
 - Fixed todo-reminder HUD rendering outside durable chat history while preserving native collapsing and auto-clear behavior.

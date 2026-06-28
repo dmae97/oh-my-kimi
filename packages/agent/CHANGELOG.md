@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.4] - 2026-06-28
+
 ### Changed
 
 - Improved the reliability of remote compaction by introducing transient error retries, configurable timeouts, and immediate termination upon user-initiated aborts.
