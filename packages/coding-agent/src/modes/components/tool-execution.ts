@@ -132,6 +132,14 @@ function rawTextInputFromPartialJson(partialJson: unknown): string | undefined {
 	return partialJson;
 }
 
+/** Read the streamed raw-JSON buffer a tool block stashes on its args, narrowed
+ *  rather than cast: a missing or non-string `__partialJson` yields `undefined`. */
+function partialJsonOf(args: unknown): string | undefined {
+	if (args == null || typeof args !== "object" || !("__partialJson" in args)) return undefined;
+	const value = args.__partialJson;
+	return typeof value === "string" ? value : undefined;
+}
+
 function getArgsWithStreamedTextInput(args: unknown): unknown {
 	if (args == null || typeof args !== "object") return args;
 	const record = args as Record<string, unknown>;
@@ -242,6 +250,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#editDiffLastArgsKey?: string;
 	// Latest in-flight streaming diff recompute, captured so it can be awaited.
 	#editDiffInFlight?: Promise<void>;
+	/** Set when newer args arrived while a preview compute was in flight; the
+	 *  drain loop re-runs once the current compute settles, so a slow diff
+	 *  coalesces streamed ticks instead of being aborted by each one. */
+	#editDiffDirty = false;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
@@ -323,7 +335,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.setIgnoreTight(true);
 
 		this.#updateDisplay();
-		this.#editDiffInFlight = this.#runPreviewDiff();
+		this.#schedulePreviewDiff();
 	}
 
 	updateArgs(args: any, _toolCallId?: string): void {
@@ -335,7 +347,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#args = args;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
-		this.#editDiffInFlight = this.#runPreviewDiff();
+		this.#schedulePreviewDiff();
 		this.#updateDisplay();
 	}
 
@@ -346,7 +358,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	setArgsComplete(_toolCallId?: string): void {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
-		this.#editDiffInFlight = this.#runPreviewDiff();
+		this.#schedulePreviewDiff();
 	}
 
 	/**
@@ -360,7 +372,32 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		await this.#editDiffInFlight;
 	}
 
-	async #runPreviewDiff(): Promise<void> {
+	/**
+	 * Schedule a streaming diff preview recompute, coalescing bursts of
+	 * `updateArgs` into one compute at a time: run the current compute to
+	 * completion and re-run only after it settles when newer args arrived, never
+	 * cancelling an in-flight compute on a fresh tick. The reveal controller pushes
+	 * args ~30fps and a whole-file hashline/large-file diff can outlast a frame, so
+	 * cancel-per-tick would starve every compute and no preview would land until
+	 * args complete. Coalescing lets each diff land, so the preview tracks the
+	 * stream at the rate the diffs can sustain.
+	 */
+	#schedulePreviewDiff(): void {
+		this.#editDiffDirty = true;
+		if (this.#editDiffInFlight) return;
+		this.#editDiffInFlight = this.#drainPreviewDiff().finally(() => {
+			this.#editDiffInFlight = undefined;
+		});
+	}
+
+	async #drainPreviewDiff(): Promise<void> {
+		while (this.#editDiffDirty) {
+			this.#editDiffDirty = false;
+			await this.#computePreviewDiff();
+		}
+	}
+
+	async #computePreviewDiff(): Promise<void> {
 		const editMode = this.#editMode;
 		if (!editMode) return;
 		const strategy = EDIT_MODE_STRATEGIES[editMode];
@@ -370,7 +407,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (args == null || typeof args !== "object") return;
 
 		const previewArgs = getArgsWithStreamedTextInput(args);
-		const partialJson = (previewArgs as { __partialJson?: string }).__partialJson;
+		const partialJson = partialJsonOf(previewArgs);
 		let effectiveArgs: unknown;
 		try {
 			effectiveArgs = strategy.extractCompleteEdits(previewArgs, partialJson);
@@ -400,7 +437,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (argsKey === this.#editDiffLastArgsKey) return;
 		this.#editDiffLastArgsKey = argsKey;
 
-		this.#editDiffAbort?.abort();
+		// Single-flight (the drain loop never overlaps computes), so this controller
+		// only ever cancels the live compute on teardown via `stopAnimation`.
 		const controller = new AbortController();
 		this.#editDiffAbort = controller;
 
@@ -732,6 +770,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#stopTodoStrikeAnimation();
 		this.#editDiffAbort?.abort();
 		this.#editDiffAbort = undefined;
+		// Drop any queued rerun so the drain loop exits instead of recomputing a
+		// preview for a torn-down block after its in-flight compute is aborted.
+		this.#editDiffDirty = false;
 	}
 
 	setExpanded(expanded: boolean): void {
