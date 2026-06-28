@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as desktopNotify from "@oh-my-pi/pi-tui/desktop-notify";
 import { ProcessTerminal } from "@oh-my-pi/pi-tui/terminal";
 import {
 	getTerminalInfo,
@@ -205,6 +206,48 @@ describe("terminal notifications", () => {
 		TERMINAL.sendNotification("ping");
 
 		expect(writes).toEqual(["\x07"]);
+	});
+
+	it("Bell-protocol sendNotification also fans out to D-Bus when the gate is open", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		const writes: string[] = [];
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+			return true;
+		});
+		vi.spyOn(desktopNotify, "shouldDeliverDesktopNotification").mockReturnValue(true);
+		const dbus = vi.spyOn(desktopNotify, "sendDesktopNotification").mockImplementation(() => {});
+
+		TERMINAL.sendNotification({ title: "Session", body: "Complete" });
+
+		// BEL still hits stdout for tmux monitor-bell / X11 urgency / audible bell.
+		expect(writes).toEqual(["\x07"]);
+		// And the desktop toast is dispatched with the same structured payload.
+		expect(dbus).toHaveBeenCalledTimes(1);
+		expect(dbus).toHaveBeenCalledWith({ title: "Session", body: "Complete" });
+	});
+
+	it("skips the D-Bus dispatch when the gate forbids it (kept side-effect free)", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.spyOn(desktopNotify, "shouldDeliverDesktopNotification").mockReturnValue(false);
+		const dbus = vi.spyOn(desktopNotify, "sendDesktopNotification").mockImplementation(() => {});
+
+		TERMINAL.sendNotification("ping");
+
+		expect(dbus).not.toHaveBeenCalled();
+	});
+
+	it("never reaches D-Bus when the terminal already speaks an in-band notify protocol", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		// Even if the gate would say yes, the BEL branch is skipped so dispatch never fires.
+		vi.spyOn(desktopNotify, "shouldDeliverDesktopNotification").mockReturnValue(true);
+		const dbus = vi.spyOn(desktopNotify, "sendDesktopNotification").mockImplementation(() => {});
+
+		TERMINAL.sendNotification("ping");
+
+		expect(dbus).not.toHaveBeenCalled();
 	});
 
 	it("outside tmux, OSC-protocol sendNotification writes the raw OSC unchanged", () => {
