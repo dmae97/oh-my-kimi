@@ -37,7 +37,6 @@ import type { McpConnectionStatusEvent } from "./startup-events";
 import type { MCPToolDetails } from "./tool-bridge";
 import { DeferredMCPTool, MCPTool } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
-import { HttpTransport } from "./transports/http";
 import type {
 	MCPGetPromptResult,
 	MCPPrompt,
@@ -48,6 +47,7 @@ import type {
 	MCPServerConfig,
 	MCPServerConnection,
 	MCPToolDefinition,
+	MCPTransport,
 } from "./types";
 import { MCPNotificationMethods } from "./types";
 
@@ -56,6 +56,13 @@ type ToolLoadResult = {
 	serverTools: MCPToolDefinition[];
 };
 
+interface AuthRefreshableMCPTransport extends MCPTransport {
+	onAuthError?: () => Promise<Record<string, string> | null>;
+}
+
+function isAuthRefreshableMCPTransport(transport: MCPTransport): transport is AuthRefreshableMCPTransport {
+	return "onAuthError" in transport;
+}
 type TrackedPromise<T> = {
 	promise: Promise<T>;
 	status: "pending" | "fulfilled" | "rejected";
@@ -419,12 +426,12 @@ export class MCPManager {
 						this.#connections.set(name, connection);
 					}
 
-					// Wire auth refresh for HTTP transports so 401s trigger token refresh.
+					// Wire auth refresh for HTTP-like transports so 401s trigger token refresh.
 					// Gate on a resolvable managed credential, not on the auth block:
 					// definition-only configs (url-keyed fallback) get Bearer injection
 					// too and need the same mid-session refresh hook.
 					if (
-						connection.transport instanceof HttpTransport &&
+						isAuthRefreshableMCPTransport(connection.transport) &&
 						lookupMcpOAuthCredential(this.#authStorage, config)
 					) {
 						connection.transport.onAuthError = async () => {
@@ -957,9 +964,9 @@ export class MCPManager {
 
 		this.#connections.set(name, connection);
 
-		// Wire auth refresh for HTTP transports, and reconnect for any transport.
+		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
 		// Same gate as connectServers: any resolvable managed credential.
-		if (connection.transport instanceof HttpTransport && lookupMcpOAuthCredential(this.#authStorage, config)) {
+		if (isAuthRefreshableMCPTransport(connection.transport) && lookupMcpOAuthCredential(this.#authStorage, config)) {
 			connection.transport.onAuthError = async () => {
 				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 				if (refreshed.type === "http" || refreshed.type === "sse") {
