@@ -268,8 +268,9 @@ describe("compaction skill re-invocation", () => {
 	});
 
 	it("re-invokes a queued skill as a user-attributed skill prompt", async () => {
+		const image: ImageContent = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
 		const { ctx, promptCustomMessage, promptCustomMessageCalled, prompt, steer, followUp } =
-			createCompactionDrainContext([{ text: "/skill:test-skill arg1 arg2", mode: "followUp" }]);
+			createCompactionDrainContext([{ text: "/skill:test-skill arg1 arg2", mode: "followUp", images: [image] }]);
 		const uiHelpers = new UiHelpers(ctx);
 
 		await uiHelpers.flushCompactionQueue({ willRetry: false });
@@ -278,7 +279,11 @@ describe("compaction skill re-invocation", () => {
 		const [message, options] = firstPromptCustomCall(promptCustomMessage);
 		expect(message.customType).toBe(SKILL_PROMPT_MESSAGE_TYPE);
 		expect(message.attribution).toBe("user");
-		expect(message.content).toContain("Do the thing.");
+		if (!Array.isArray(message.content)) {
+			throw new Error("expected queued skill prompt to preserve image content blocks");
+		}
+		expect(message.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Do the thing.") });
+		expect(message.content[1]).toEqual(image);
 		expect(message.details).toMatchObject({ name: "test-skill", args: "arg1 arg2", lineCount: 1 });
 		expect(options).toEqual({
 			streamingBehavior: "followUp",
@@ -292,13 +297,22 @@ describe("compaction skill re-invocation", () => {
 	it("queues retry-drained skills without appending them to session history", async () => {
 		const fixture = await createRealSession();
 		try {
-			const { ctx } = createCompactionDrainContext([{ text: "/skill:test-skill retry args", mode: "followUp" }]);
+			const image: ImageContent = { type: "image", data: "cmV0cnk=", mimeType: "image/png" };
+			const { ctx } = createCompactionDrainContext([
+				{ text: "/skill:test-skill retry args", mode: "followUp", images: [image] },
+			]);
 			ctx.session = fixture.session;
 			const uiHelpers = new UiHelpers(ctx);
 
 			await uiHelpers.flushCompactionQueue({ willRetry: true });
 
 			expect(fixture.session.getQueuedMessages().followUp).toEqual(["/skill:test-skill retry args"]);
+			const queued = fixture.session.agent.peekFollowUpQueue()[0];
+			if (queued?.role !== "custom" || !Array.isArray(queued.content)) {
+				throw new Error("expected retry-drained skill to be queued as image-bearing custom content");
+			}
+			expect(queued.customType).toBe(SKILL_PROMPT_MESSAGE_TYPE);
+			expect(queued.content[1]).toEqual(image);
 			expect(fixture.session.messages).toEqual([]);
 		} finally {
 			await fixture.session.dispose();

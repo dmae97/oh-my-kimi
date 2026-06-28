@@ -672,6 +672,7 @@ export class UiHelpers {
 			await invokeSkillCommandFromText(this.ctx, message.text, message.mode, {
 				propagateErrors: true,
 				queueOnly: true,
+				images: message.images,
 			})
 		) {
 			return;
@@ -770,7 +771,12 @@ export class UiHelpers {
 			// is not sent as a literal prompt after compaction.
 			let promptPromise: Promise<unknown>;
 			if (isKnownSkillCommand(this.ctx, firstPrompt.text)) {
-				const built = await buildSkillCommandPrompt(this.ctx, firstPrompt.text, firstPrompt.mode);
+				const built = await buildSkillCommandPrompt(
+					this.ctx,
+					firstPrompt.text,
+					firstPrompt.mode,
+					firstPrompt.images,
+				);
 				promptPromise = built
 					? this.ctx.session.promptCustomMessage(built.message, built.options).catch(restoreQueue)
 					: Promise.resolve();

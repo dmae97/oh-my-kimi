@@ -1,3 +1,4 @@
+import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -8,7 +9,7 @@ type SkillPromptMessage = Pick<
 	"customType" | "content" | "display" | "details" | "attribution"
 > & {
 	customType: typeof SKILL_PROMPT_MESSAGE_TYPE;
-	content: string;
+	content: string | (TextContent | ImageContent)[];
 	display: true;
 	details: SkillPromptDetails;
 	attribution: "user";
@@ -27,6 +28,7 @@ interface ParsedSkillCommand {
 interface InvokeSkillCommandOptions {
 	propagateErrors?: boolean;
 	queueOnly?: boolean;
+	images?: ImageContent[];
 }
 
 /** Built custom-message payload and delivery options for a `/skill:` command. */
@@ -55,6 +57,7 @@ export async function buildSkillCommandPrompt(
 	ctx: SkillCommandHost,
 	text: string,
 	streamingBehavior: "steer" | "followUp",
+	images?: ImageContent[],
 ): Promise<BuiltSkillCommandPrompt | undefined> {
 	const parsed = parseSkillCommand(text);
 	if (!parsed) return undefined;
@@ -68,6 +71,8 @@ export async function buildSkillCommandPrompt(
 		metaLines.push(`User: ${parsed.args}`);
 	}
 	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+	const textBlock: TextContent = { type: "text", text: message };
+	const promptContent = images && images.length > 0 ? [textBlock, ...images] : message;
 	const skillName = parsed.commandName.slice("skill:".length);
 	const details: SkillPromptDetails = {
 		name: skillName || parsed.commandName,
@@ -79,7 +84,7 @@ export async function buildSkillCommandPrompt(
 	return {
 		message: {
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: message,
+			content: promptContent,
 			display: true,
 			details,
 			attribution: "user",
@@ -96,7 +101,7 @@ export async function invokeSkillCommandFromText(
 	options?: InvokeSkillCommandOptions,
 ): Promise<boolean> {
 	try {
-		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior);
+		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior, options?.images);
 		if (!built) return false;
 		const promptOptions = options?.queueOnly ? { ...built.options, queueOnly: true } : built.options;
 		await ctx.session.promptCustomMessage(built.message, promptOptions);
