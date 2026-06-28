@@ -1518,7 +1518,7 @@ function retainCompletedToolCalls(
 				: {
 						type: STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL,
 						category: message.stopDetails?.type ?? null,
-						explanation: message.stopDetails?.explanation ?? null,
+						explanation: message.stopDetails?.explanation ?? message.errorMessage ?? null,
 					},
 	};
 }
