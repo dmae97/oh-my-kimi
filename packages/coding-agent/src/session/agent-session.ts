@@ -724,6 +724,7 @@ export interface SessionStats {
 	tokens: {
 		input: number;
 		output: number;
+		reasoning: number;
 		cacheRead: number;
 		cacheWrite: number;
 		total: number;
@@ -742,6 +743,7 @@ export interface AdvisorStats {
 	tokens: {
 		input: number;
 		output: number;
+		reasoning: number;
 		cacheRead: number;
 		cacheWrite: number;
 		total: number;
@@ -13445,10 +13447,11 @@ export class AgentSession {
 		let totalInput = 0;
 		let totalOutput = 0;
 		let totalCacheRead = 0;
+		let totalReasoning = 0;
 		let totalCacheWrite = 0;
 		let totalCost = 0;
-
 		let totalPremiumRequests = 0;
+
 		const getTaskToolUsage = (details: unknown): Usage | undefined => {
 			if (!details || typeof details !== "object") return undefined;
 			const record = details as Record<string, unknown>;
@@ -13463,6 +13466,7 @@ export class AgentSession {
 				toolCalls += assistantMsg.content.filter(c => c.type === "toolCall").length;
 				totalInput += assistantMsg.usage.input;
 				totalOutput += assistantMsg.usage.output;
+				totalReasoning += assistantMsg.usage.reasoningTokens ?? 0;
 				totalCacheRead += assistantMsg.usage.cacheRead;
 				totalCacheWrite += assistantMsg.usage.cacheWrite;
 				totalPremiumRequests += assistantMsg.usage.premiumRequests ?? 0;
@@ -13474,6 +13478,7 @@ export class AgentSession {
 				if (usage) {
 					totalInput += usage.input;
 					totalOutput += usage.output;
+					totalReasoning += usage.reasoningTokens ?? 0;
 					totalCacheRead += usage.cacheRead;
 					totalCacheWrite += usage.cacheWrite;
 					totalPremiumRequests += usage.premiumRequests ?? 0;
@@ -13493,6 +13498,7 @@ export class AgentSession {
 			tokens: {
 				input: totalInput,
 				output: totalOutput,
+				reasoning: totalReasoning,
 				cacheRead: totalCacheRead,
 				cacheWrite: totalCacheWrite,
 				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
@@ -14065,7 +14071,7 @@ export class AgentSession {
 				active: false,
 				contextWindow: 0,
 				contextTokens: 0,
-				tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 				cost: 0,
 				messages: { user: 0, assistant: 0, total: 0 },
 			};
@@ -14075,6 +14081,7 @@ export class AgentSession {
 		const contextTokens = this.#estimateAdvisorContextTokens(messages);
 		let input = 0;
 		let output = 0;
+		let reasoning = 0;
 		let cacheRead = 0;
 		let cacheWrite = 0;
 		let cost = 0;
@@ -14087,6 +14094,7 @@ export class AgentSession {
 				const assistantMsg = message as AssistantMessage;
 				input += assistantMsg.usage.input;
 				output += assistantMsg.usage.output;
+				reasoning += assistantMsg.usage.reasoningTokens ?? 0;
 				cacheRead += assistantMsg.usage.cacheRead;
 				cacheWrite += assistantMsg.usage.cacheWrite;
 				cost += assistantMsg.usage.cost.total;
@@ -14101,6 +14109,7 @@ export class AgentSession {
 			tokens: {
 				input,
 				output,
+				reasoning,
 				cacheRead,
 				cacheWrite,
 				total: input + output + cacheRead + cacheWrite,

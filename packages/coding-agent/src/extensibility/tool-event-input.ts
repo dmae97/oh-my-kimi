@@ -1,6 +1,29 @@
 const HASHLINE_FILE_PREFIX = "¶";
 const HASHLINE_FILE_TAG_RE = /#[0-9a-fA-F]{4}$/u;
 
+interface ToolEventInputResolver {
+	name: string;
+	resolveEventInput?: (input: string) => string;
+}
+
+/** Resolves mode-specific textual tool input before extension/hook event normalization. */
+export function resolveToolEventInput(
+	tool: ToolEventInputResolver,
+	input: Record<string, unknown>,
+): Record<string, unknown> {
+	if (tool.name !== "edit" || typeof tool.resolveEventInput !== "function") return input;
+	let resolved = input;
+	for (const key of ["input", "_input"] as const) {
+		const value = stringField(resolved, key);
+		if (value === undefined) continue;
+		const nextValue = tool.resolveEventInput(value);
+		if (nextValue === value) continue;
+		if (resolved === input) resolved = { ...input };
+		resolved[key] = nextValue;
+	}
+	return resolved;
+}
+
 function stringField(input: Record<string, unknown>, key: string): string | undefined {
 	const value = input[key];
 	return typeof value === "string" && value.length > 0 ? value : undefined;
