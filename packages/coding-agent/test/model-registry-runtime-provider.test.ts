@@ -142,8 +142,8 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("registerProvider keeps runtime header objects live for request-time reads", () => {
-		const providerHeaders = { "X-Request-ID": "request-1" };
-		const modelHeaders = { "X-Message-ID": "message-1" };
+		const providerHeaders: Record<string, string> = { "X-Request-ID": "request-1" };
+		const modelHeaders: Record<string, string> = { "X-Message-ID": "message-1" };
 
 		registry.registerProvider(
 			"runtime-provider",

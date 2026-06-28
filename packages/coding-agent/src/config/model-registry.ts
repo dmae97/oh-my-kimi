@@ -375,7 +375,6 @@ function createLiveConfigHeaders(
 	});
 }
 
-
 function resolveConfigHeaders(headers: Record<string, string> | undefined): Record<string, string> | undefined {
 	return materializeConfigHeaderSources([headers]);
 }
@@ -1722,7 +1721,9 @@ export class ModelRegistry {
 			baseUrl: override.baseUrl ?? baseOverride?.baseUrl,
 			apiKey: override.apiKey ?? baseOverride?.apiKey,
 			authHeader: override.authHeader ?? baseOverride?.authHeader,
-			headers: override.headers ? createLiveConfigHeaders([baseOverride?.headers, override.headers]) : baseOverride?.headers,
+			headers: override.headers
+				? createLiveConfigHeaders([baseOverride?.headers, override.headers])
+				: baseOverride?.headers,
 			compat: override.compat ? mergeCompat(baseOverride?.compat, override.compat) : baseOverride?.compat,
 			remoteCompaction: mergeRemoteCompactionConfig(baseOverride?.remoteCompaction, override.remoteCompaction),
 			transport: override.transport ?? baseOverride?.transport,
