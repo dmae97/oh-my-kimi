@@ -624,6 +624,9 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 		getText() {
 			return editorText;
 		},
+		getExpandedText() {
+			return editorText;
+		},
 		clearDraft(historyText?: string) {
 			if (historyText !== undefined) this.addToHistory(historyText);
 			this.setText("");

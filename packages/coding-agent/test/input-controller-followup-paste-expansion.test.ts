@@ -28,8 +28,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 					editorText = text;
 				},
 				getText: () => editorText,
-				getExpandedText: () =>
-					editorText.replace(/\[Paste #1(?:, (?:\+\d+ lines|\d+ chars))?\]/g, expanded),
+				getExpandedText: () => editorText.replace(/\[Paste #1(?:, (?:\+\d+ lines|\d+ chars))?\]/g, expanded),
 				addToHistory: vi.fn(),
 				pendingImages: [],
 				pendingImageLinks: [],
@@ -76,8 +75,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 					editorText = text;
 				},
 				getText: () => editorText,
-				getExpandedText: () =>
-					editorText.replace(/\[Paste #2(?:, (?:\+\d+ lines|\d+ chars))?\]/g, expanded),
+				getExpandedText: () => editorText.replace(/\[Paste #2(?:, (?:\+\d+ lines|\d+ chars))?\]/g, expanded),
 				addToHistory: vi.fn(),
 				pendingImages: [],
 				pendingImageLinks: [],
