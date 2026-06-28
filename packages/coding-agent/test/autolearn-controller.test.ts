@@ -64,32 +64,13 @@ function install(session: FakeSession, overrides: Record<string, unknown> = {}):
 }
 
 describe("AutoLearnController", () => {
-	it("fires one passive nudge once the tool-call threshold is met", () => {
+	it("does not inject a passive nudge into the conversation prefix", () => {
 		const session = new FakeSession();
 		install(session);
 		session.toolCalls(5);
 		session.agentEnd();
 
-		expect(session.sent).toHaveLength(1);
-		expect(session.sent[0]?.message.customType).toBe("autolearn-nudge");
-		expect(session.sent[0]?.message.display).toBe(false);
-		expect(session.sent[0]?.options?.deliverAs).toBe("nextTurn");
-		expect(session.sent[0]?.options?.triggerTurn).toBe(false);
-	});
-
-	it("the passive nudge is framed as additive — answer the user, capture alongside", () => {
-		// Passive mode rides the user's real next message, so the nudge must
-		// NOT tell the agent to stop after capturing — the user's message is
-		// the real work. Locking in the content of #3504's fix so a later
-		// edit cannot silently swap the two prompts.
-		const session = new FakeSession();
-		install(session);
-		session.toolCalls(5);
-		session.agentEnd();
-		const body = String(session.sent[0]?.message.content);
-		expect(body).toMatch(/answer that message normally|in addition to|not a replacement/i);
-		expect(body).not.toMatch(/wait for the user'?s next prompt/i);
-		expect(body).not.toMatch(/then stop\.|do not resume prior work/i);
+		expect(session.sent).toHaveLength(0);
 	});
 
 	it("the auto-continue nudge is terminal — capture then stop, never assume approval (#3504)", () => {
@@ -115,7 +96,7 @@ describe("AutoLearnController", () => {
 
 	it("does not nudge below the threshold", () => {
 		const session = new FakeSession();
-		install(session);
+		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(4);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(0);
@@ -124,14 +105,14 @@ describe("AutoLearnController", () => {
 	it("does not nudge during plan mode", () => {
 		const session = new FakeSession();
 		session.planEnabled = true;
-		install(session);
+		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(5);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(0);
 	});
 	it("does not combine tool calls across separate sub-threshold turns", () => {
 		const session = new FakeSession();
-		install(session);
+		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(3);
 		session.agentEnd();
 		session.toolCalls(3);
@@ -143,7 +124,7 @@ describe("AutoLearnController", () => {
 	it("discards plan-mode tool calls instead of leaking them into the next turn", () => {
 		const session = new FakeSession();
 		session.planEnabled = true;
-		install(session);
+		install(session, { "autolearn.autoContinue": true });
 		session.toolCalls(5);
 		session.agentEnd(); // plan mode: no fire, counter reset
 		session.planEnabled = false;
@@ -152,11 +133,11 @@ describe("AutoLearnController", () => {
 		expect(session.sent).toHaveLength(0);
 	});
 
-	it("stops nudging when autolearn is disabled mid-session", () => {
+	it("stops auto-continuing when autolearn is disabled mid-session", () => {
 		const session = new FakeSession();
 		// Enable via the global layer (not an isolated override) so the live flag
 		// can be flipped and the controller's fire-time re-check is exercised.
-		const settings = Settings.isolated({});
+		const settings = Settings.isolated({ "autolearn.autoContinue": true });
 		settings.set("autolearn.enabled", true);
 		new AutoLearnController({ session: session as unknown as AgentSession, settings });
 		session.toolCalls(5);
@@ -192,7 +173,7 @@ describe("AutoLearnController", () => {
 	it("never nudges a turn that started in goal mode even if the goal ended mid-turn", () => {
 		const session = new FakeSession();
 		session.goalEnabled = true;
-		install(session);
+		install(session, { "autolearn.autoContinue": true });
 		// The turn begins as a goal continuation...
 		session.agentStart();
 		session.toolCalls(5);
@@ -262,7 +243,7 @@ describe("AutoLearnController", () => {
 
 	it("respects a custom minToolCalls threshold", () => {
 		const session = new FakeSession();
-		install(session, { "autolearn.minToolCalls": 2 });
+		install(session, { "autolearn.autoContinue": true, "autolearn.minToolCalls": 2 });
 		session.toolCalls(2);
 		session.agentEnd();
 		expect(session.sent).toHaveLength(1);

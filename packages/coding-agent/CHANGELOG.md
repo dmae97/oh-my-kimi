@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed autolearn and local memory writes mutating Anthropic prompt-cache prefixes mid-session by keeping passive capture guidance and learned-memory prompt injections session-stable.
+
 ## [16.2.3] - 2026-06-28
 
 ### Added
