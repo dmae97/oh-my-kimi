@@ -714,10 +714,6 @@ export class ModelSelectorComponent extends Container {
 		return this.#temporaryOnly && this.#isModelOverCurrentContext(model);
 	}
 
-	#isDefaultRoleActionOverContextLimit(action: MenuRoleAction, model: Model): boolean {
-		return action.role === "default" && this.#isModelOverCurrentContext(model);
-	}
-
 	#formatCurrentContextLimitSuffix(model: Model): string {
 		return ` ${theme.status.disabled} context>${formatNumber(model.contextWindow ?? 0).toLowerCase()}`;
 	}
@@ -1065,47 +1061,16 @@ export class ModelSelectorComponent extends Container {
 			: this.#filteredModels[this.#selectedIndex];
 	}
 
-	#isMenuRoleIndexDisabled(index: number, selectedItem: ModelItem | CanonicalModelItem): boolean {
-		const action = this.#menuRoleActions[index];
-		return action ? this.#isDefaultRoleActionOverContextLimit(action, selectedItem.model) : false;
-	}
-
-	#coerceMenuSelectedIndex(index: number, selectedItem: ModelItem | CanonicalModelItem): number {
+	#coerceMenuSelectedIndex(index: number): number {
 		const maxIndex = this.#menuRoleActions.length - 1;
 		if (maxIndex < 0) {
 			return 0;
 		}
-		const clamped = Math.max(0, Math.min(index, maxIndex));
-		if (!this.#isMenuRoleIndexDisabled(clamped, selectedItem)) {
-			return clamped;
-		}
-		for (let i = clamped + 1; i <= maxIndex; i++) {
-			if (!this.#isMenuRoleIndexDisabled(i, selectedItem)) {
-				return i;
-			}
-		}
-		for (let i = clamped - 1; i >= 0; i--) {
-			if (!this.#isMenuRoleIndexDisabled(i, selectedItem)) {
-				return i;
-			}
-		}
-		return clamped;
+		return Math.max(0, Math.min(index, maxIndex));
 	}
 
-	#moveMenuSelection(delta: number, selectedItem: ModelItem | CanonicalModelItem, optionCount: number): void {
-		let index = this.#menuSelectedIndex;
-		for (let step = 0; step < optionCount; step++) {
-			index = (index + delta + optionCount) % optionCount;
-			if (this.#menuStep !== "role" || !this.#isMenuRoleIndexDisabled(index, selectedItem)) {
-				this.#menuSelectedIndex = index;
-				this.#updateMenu();
-				return;
-			}
-		}
-		this.#menuSelectedIndex =
-			this.#menuStep === "role"
-				? this.#coerceMenuSelectedIndex(this.#menuSelectedIndex, selectedItem)
-				: this.#menuSelectedIndex;
+	#moveMenuSelection(delta: number, _selectedItem: ModelItem | CanonicalModelItem, optionCount: number): void {
+		this.#menuSelectedIndex = (this.#menuSelectedIndex + delta + optionCount) % optionCount;
 		this.#updateMenu();
 	}
 
@@ -1116,7 +1081,7 @@ export class ModelSelectorComponent extends Container {
 		this.#isMenuOpen = true;
 		this.#menuStep = "role";
 		this.#menuSelectedRole = null;
-		this.#menuSelectedIndex = this.#coerceMenuSelectedIndex(0, selectedItem);
+		this.#menuSelectedIndex = this.#coerceMenuSelectedIndex(0);
 		// Collapse the model list while the action/thinking menu is open so the
 		// menu owns the full viewport instead of stacking below a now-irrelevant
 		// (and often off-screen) list.
@@ -1149,9 +1114,7 @@ export class ModelSelectorComponent extends Container {
 				})
 			: this.#menuRoleActions.map((action, index) => {
 					const prefix = index === this.#menuSelectedIndex ? `  ${theme.nav.cursor} ` : "    ";
-					const disabled = this.#isDefaultRoleActionOverContextLimit(action, selectedItem.model);
-					const suffix = disabled ? this.#formatCurrentContextLimitSuffix(selectedItem.model) : "";
-					return `${prefix}${action.label}${suffix}`;
+					return `${prefix}${action.label}`;
 				});
 
 		const selectedRoleName = this.#menuSelectedRole ? getRoleInfo(this.#menuSelectedRole, this.#settings).name : "";
@@ -1301,7 +1264,7 @@ export class ModelSelectorComponent extends Container {
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
 			if (this.#menuStep === "role") {
 				const action = this.#menuRoleActions[this.#menuSelectedIndex];
-				if (!action || this.#isDefaultRoleActionOverContextLimit(action, selectedItem.model)) return;
+				if (!action) return;
 				this.#menuSelectedRole = action.role;
 				this.#menuStep = "thinking";
 				this.#menuSelectedIndex = this.#getThinkingPreselectIndex(action.role, selectedItem.model);

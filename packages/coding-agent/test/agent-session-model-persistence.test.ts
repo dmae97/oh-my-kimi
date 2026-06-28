@@ -189,6 +189,29 @@ describe("AgentSession model persistence", () => {
 		expect(created.settings.getModelRole("default")).toBe(modelValue(nextModel));
 	});
 
+	it("persists the default role without switching the active model when over context", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const nextModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+
+		const created = await createSession({
+			initialModel: defaultModel,
+			modelRoles: { default: modelValue(defaultModel) },
+		});
+
+		const targetWindow = nextModel.contextWindow ?? 0;
+		expect(targetWindow).toBeGreaterThan(0);
+		const overflowTokens = targetWindow + 1;
+
+		const result = await created.session.setModel(nextModel, "default", {
+			persist: true,
+			currentContextTokens: overflowTokens,
+		});
+
+		expect(result).toEqual({ switched: false });
+		expect(created.session.model?.id).toBe(defaultModel.id);
+		expect(created.settings.getModelRole("default")).toBe(modelValue(nextModel));
+	});
+
 	it("cycles role models without rewriting configured roles", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");

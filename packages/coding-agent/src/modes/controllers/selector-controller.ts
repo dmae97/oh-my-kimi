@@ -540,19 +540,25 @@ export class SelectorController {
 							done();
 							this.ctx.ui.requestRender();
 						} else if (role === "default") {
-							// Default: update agent state and persist
-							await this.ctx.session.setModel(model, role, {
+							const { switched } = await this.ctx.session.setModel(model, role, {
 								selector,
 								thinkingLevel: concreteThinking,
 								persist: true,
+								currentContextTokens,
 							});
 							if (isAuto) {
-								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
-							} else if (concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
+								if (switched) {
+									this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
+								} else {
+									this.ctx.settings.set("defaultThinkingLevel", AUTO_THINKING);
+								}
+							} else if (switched && concreteThinking && concreteThinking !== ThinkingLevel.Inherit) {
 								this.ctx.session.setThinkingLevel(concreteThinking);
 							}
-							this.ctx.statusLine.invalidate();
-							this.ctx.updateEditorBorderColor();
+							if (switched) {
+								this.ctx.statusLine.invalidate();
+								this.ctx.updateEditorBorderColor();
+							}
 							this.ctx.showStatus(`Default model: ${selector ?? model.id}`);
 							// Don't call done() - selector stays open for role assignment
 						} else {
