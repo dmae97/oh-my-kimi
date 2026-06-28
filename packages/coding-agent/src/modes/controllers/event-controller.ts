@@ -2,6 +2,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
@@ -20,6 +21,7 @@ import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
+import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import { previewLine, TRUNCATE_LENGTHS } from "../../tools/render-utils";
@@ -74,6 +76,9 @@ export class EventController {
 	#pinnedErrorComponent: AssistantMessageComponent | undefined = undefined;
 	#idleCompactionTimer?: NodeJS.Timeout;
 	#idleRecapTimer?: NodeJS.Timeout;
+	// In-flight ephemeral recap turn; aborted by #cancelIdleRecap when any
+	// activity (new turn, compaction, editor draft) supersedes the idle recap.
+	#idleRecapAbort?: AbortController;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
@@ -1266,6 +1271,10 @@ export class EventController {
 			clearTimeout(this.#idleRecapTimer);
 			this.#idleRecapTimer = undefined;
 		}
+		if (this.#idleRecapAbort) {
+			this.#idleRecapAbort.abort();
+			this.#idleRecapAbort = undefined;
+		}
 	}
 
 	#scheduleIdleCompaction(): void {
@@ -1310,24 +1319,51 @@ export class EventController {
 			Math.max(IDLE_RECAP_MIN_SECONDS, Math.min(IDLE_RECAP_MAX_SECONDS, recapSettings.idleSeconds)) * 1000;
 		this.#idleRecapTimer = setTimeout(() => {
 			this.#idleRecapTimer = undefined;
-			if (this.ctx.viewSession.isStreaming) return;
-			if (this.ctx.viewSession.isCompacting) return;
-			if (this.ctx.editor.getText().trim()) return;
-
-			const message = this.#buildIdleRecapMessage();
-			if (!message) return;
-			this.ctx.showStatus(theme.fg("dim", theme.italic(message)), { dim: false });
+			void this.#runIdleRecap();
 		}, timeoutMs);
 		this.#idleRecapTimer.unref?.();
 	}
 
-	#buildIdleRecapMessage(): string | undefined {
-		const goal = this.#idleRecapGoalText();
-		const next = nextActionableTask(this.ctx.todoPhases)?.content;
-		const parts: string[] = [];
-		if (goal) parts.push(`Goal: ${previewLine(goal, TRUNCATE_LENGTHS.CONTENT)}`);
-		if (next) parts.push(`Next: ${previewLine(next, TRUNCATE_LENGTHS.CONTENT)}`);
-		return parts.length > 0 ? `※ recap: ${parts.join(" ")}` : undefined;
+	/**
+	 * Generate the idle recap with an ephemeral side-channel turn over the
+	 * current conversation (same pipeline as `/btw`) and surface it as a status
+	 * line. Live goal/title and the active todo task are passed as anchoring
+	 * hints because the snapshot only carries conversation history, not the
+	 * controller's todo/goal state. The request is abortable: any activity
+	 * cancels it via #cancelIdleRecap, and idle conditions are re-checked after
+	 * the reply lands so a stale recap never paints over fresh work.
+	 */
+	async #runIdleRecap(): Promise<void> {
+		if (!this.#idleConditionsHold()) return;
+		if (!this.ctx.viewSession.model) return;
+		if (this.ctx.viewSession.messages.length === 0) return;
+
+		const promptText = prompt.render(idleRecapPrompt, {
+			goal: this.#idleRecapGoalText() ?? "",
+			task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
+		});
+
+		const abort = new AbortController();
+		this.#idleRecapAbort = abort;
+		try {
+			const { replyText } = await this.ctx.viewSession.runEphemeralTurn({ promptText, signal: abort.signal });
+			if (this.#idleRecapAbort !== abort || abort.signal.aborted || !this.#idleConditionsHold()) return;
+			const recap = previewLine(replyText, TRUNCATE_LENGTHS.RECAP);
+			if (!recap) return;
+			this.ctx.showStatus(theme.fg("dim", theme.italic(`※ recap: ${recap}`)), { dim: false });
+		} catch (error) {
+			if (!abort.signal.aborted) logger.debug("Idle recap turn failed", { error: String(error) });
+		} finally {
+			if (this.#idleRecapAbort === abort) this.#idleRecapAbort = undefined;
+		}
+	}
+
+	/** Idle gate shared by the recap timer fire and its post-reply re-check. */
+	#idleConditionsHold(): boolean {
+		if (this.ctx.viewSession.isStreaming) return false;
+		if (this.ctx.viewSession.isCompacting) return false;
+		if (this.ctx.editor.getText().trim()) return false;
+		return true;
 	}
 
 	#idleRecapGoalText(): string | undefined {

@@ -74,6 +74,8 @@ export const TRUNCATE_LENGTHS = {
 	LINE: 110,
 	/** Very short (task previews, badges) */
 	SHORT: 40,
+	/** Idle recap status line (~40-word LLM reply) */
+	RECAP: 280,
 } as const;
 
 /** Keybinding action that toggles tool-output expansion. */

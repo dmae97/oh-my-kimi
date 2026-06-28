@@ -5,6 +5,12 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
+async function flushMicrotasks(): Promise<void> {
+	for (let i = 0; i < 10; i++) {
+		await Promise.resolve();
+	}
+}
+
 function createAssistantMessage(): AssistantMessage {
 	return {
 		role: "assistant",
@@ -32,12 +38,18 @@ function createContext(
 		isCompacting?: boolean;
 		isStreaming?: boolean;
 		runIdleCompaction?: () => void;
+		runEphemeralTurn?: (args: {
+			promptText: string;
+			signal?: AbortSignal;
+		}) => Promise<{ replyText: string; assistantMessage: AssistantMessage }>;
 		sessionName?: string;
 		showStatus?: (message: string, options?: { dim?: boolean }) => void;
 		todoPhases?: InteractiveModeContext["todoPhases"];
 	} = {},
 ): InteractiveModeContext {
 	const runIdleCompaction = options.runIdleCompaction ?? (() => {});
+	const runEphemeralTurn =
+		options.runEphemeralTurn ?? (async () => ({ replyText: "", assistantMessage: createAssistantMessage() }));
 	const goalState = options.goalObjective
 		? {
 				enabled: true,
@@ -63,7 +75,7 @@ function createContext(
 		ui: { requestRender: vi.fn() },
 		chatContainer: { removeChild: vi.fn() },
 		statusContainer: { clear: vi.fn() },
-		statusLine: { invalidate: vi.fn() },
+		statusLine: { invalidate: vi.fn(), markActivityStart: vi.fn(), markActivityEnd: vi.fn() },
 		updateEditorTopBorder: vi.fn(),
 		editor: { getText: () => options.editorText ?? "" },
 		sessionManager: { getSessionName: () => options.sessionName },
@@ -73,6 +85,9 @@ function createContext(
 			isCompacting: options.isCompacting ?? false,
 			isStreaming: options.isStreaming ?? false,
 			runIdleCompaction,
+			runEphemeralTurn,
+			model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+			messages: [createAssistantMessage()],
 			getContextUsage: () => ({ tokens: 210 }),
 			getGoalModeState: () => goalState,
 			agent: { state: { messages: [createAssistantMessage()] } },
@@ -118,7 +133,7 @@ describe("EventController idle compaction teardown", () => {
 		expect(runIdleCompaction).not.toHaveBeenCalled();
 	});
 
-	it("emits an idle recap after the default four-minute delay", async () => {
+	it("emits an LLM-generated recap after the default four-minute delay", async () => {
 		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
@@ -128,22 +143,39 @@ describe("EventController idle compaction teardown", () => {
 			},
 		});
 		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
+		let capturedPrompt = "";
+		const runEphemeralTurn = vi.fn(async (args: { promptText: string; signal?: AbortSignal }) => {
+			capturedPrompt = args.promptText;
+			return {
+				replyText: "Reworking the login flow; auth suite passes. Next: wire the focused token-refresh test.",
+				assistantMessage: createAssistantMessage(),
+			};
+		});
 		const context = createContext({
 			sessionName: "Fix login flow",
 			showStatus,
+			runEphemeralTurn,
 			todoPhases: [{ name: "Work", tasks: [{ content: "Wire focused tests", status: "pending" }] }],
 		});
 
 		const controller = new EventController(context);
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		vi.advanceTimersByTime(239_999);
-		expect(showStatus).not.toHaveBeenCalled();
+		expect(runEphemeralTurn).not.toHaveBeenCalled();
 
 		vi.advanceTimersByTime(1);
+		await flushMicrotasks();
+
+		expect(runEphemeralTurn).toHaveBeenCalledTimes(1);
+		// Live goal/title and the active todo task anchor the recap prompt the snapshot can't guarantee.
+		expect(capturedPrompt).toContain("Fix login flow");
+		expect(capturedPrompt).toContain("Wire focused tests");
 
 		expect(showStatus).toHaveBeenCalledTimes(1);
 		const [message, options] = showStatus.mock.calls[0] ?? [];
-		expect(Bun.stripANSI(message ?? "")).toBe("※ recap: Goal: Fix login flow Next: Wire focused tests");
+		expect(Bun.stripANSI(message ?? "")).toBe(
+			"※ recap: Reworking the login flow; auth suite passes. Next: wire the focused token-refresh test.",
+		);
 		expect(options).toEqual({ dim: false });
 		controller.dispose();
 	});
@@ -198,5 +230,40 @@ describe("EventController idle compaction teardown", () => {
 
 		expect(showStatus).not.toHaveBeenCalled();
 		controller.dispose();
+	});
+
+	it("aborts the in-flight recap and drops its late reply when disposed", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: {
+				"compaction.idleEnabled": false,
+				"completion.notify": "off",
+			},
+		});
+		const showStatus = vi.fn((_: string, _options?: { dim?: boolean }) => {});
+		const { promise, resolve } = Promise.withResolvers<{ replyText: string; assistantMessage: AssistantMessage }>();
+		let receivedSignal: AbortSignal | undefined;
+		const runEphemeralTurn = vi.fn((args: { promptText: string; signal?: AbortSignal }) => {
+			receivedSignal = args.signal;
+			return promise;
+		});
+		const context = createContext({ sessionName: "Fix login flow", showStatus, runEphemeralTurn });
+
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+		vi.advanceTimersByTime(240_000);
+		await flushMicrotasks();
+
+		expect(runEphemeralTurn).toHaveBeenCalledTimes(1);
+		expect(receivedSignal?.aborted).toBe(false);
+
+		controller.dispose();
+		expect(receivedSignal?.aborted).toBe(true);
+
+		// A reply that lands after cancellation must not paint a stale recap.
+		resolve({ replyText: "stale recap", assistantMessage: createAssistantMessage() });
+		await flushMicrotasks();
+		expect(showStatus).not.toHaveBeenCalled();
 	});
 });

@@ -18,7 +18,10 @@
 
 ### Changed
 
+- Updated the idle recap to use an LLM-generated summary instead of a static status line
+
 - Refined interrupted thinking system instructions to encourage smoother continuation
+- Changed the idle recap from a static "Goal/Next" line into an LLM-generated welcome-back recap: after the idle delay an abortable ephemeral side-channel turn (same pipeline as `/btw`) summarizes where things stand in one or two plain sentences, anchored by the live goal/title and active todo task; any activity cancels the in-flight turn and a late reply is discarded.
 
 ### Fixed
 

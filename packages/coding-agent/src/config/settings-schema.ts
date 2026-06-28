@@ -1651,7 +1651,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			group: "Notifications",
 			label: "Idle Recap",
-			description: "Show a brief goal and next-task recap after the terminal has been idle",
+			description: "Generate a brief LLM recap of where things stand after the terminal has been idle",
 		},
 	},
 
