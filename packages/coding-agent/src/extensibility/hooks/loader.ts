@@ -164,7 +164,7 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
 		);
 
 		// Call factory to register handlers
-		factory(api);
+		await withExitGuard(async () => factory(api));
 
 		return {
 			hook: {

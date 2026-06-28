@@ -46,14 +46,17 @@ export function createNoOpUIContext(): HookUIContext {
 /**
  * Raised by {@link withExitGuard} when a guarded callback synchronously
  * attempts to terminate the host process. Callers catch this like any other
- * import-time failure so the extension/hook is skipped with a logged error
+ * load-time failure so the extension/hook is skipped with a logged error
  * instead of taking the CLI down with it.
  */
 export class ExtensionExitError extends Error {
 	readonly code: number | string | undefined;
-	constructor(code: number | string | undefined) {
+	constructor(
+		code: number | string | undefined,
+		readonly alias = "process.exit",
+	) {
 		super(
-			`Module called process.exit(${code === undefined ? "" : String(code)}) at import time; ` +
+			`Module called ${alias}(${code === undefined ? "" : String(code)}) during guarded extension/hook loading; ` +
 				`OMP extension/hook modules must not terminate the host process.`,
 		);
 		this.name = "ExtensionExitError";
@@ -61,37 +64,55 @@ export class ExtensionExitError extends Error {
 	}
 }
 
+type ExitAliasName = "process.exit" | "process.reallyExit";
+
 let exitGuardDepth = 0;
-let exitGuardOriginal: typeof process.exit | null = null;
+let exitGuardOriginalProcessExit: typeof process.exit | null = null;
+let exitGuardOriginalReallyExit: typeof process.reallyExit | null = null;
 
 /**
- * Run `fn` with `process.exit` patched so any synchronous attempt to terminate
+ * Run `fn` with hard-exit APIs patched so any synchronous attempt to terminate
  * the host raises {@link ExtensionExitError} instead. Restored in `finally`.
  *
- * Guards the dynamic-import sites that load third-party extension / hook
- * modules — a top-level `process.exit(0)` in a stranger's script (e.g. a
- * Codex hook script that happens to live next to OMP-shaped modules) would
- * otherwise kill OMP during startup with no error surface, since `try/catch`
- * around `await import()` cannot intercept a synchronous exit.
+ * Guards the dynamic-import and factory-invocation sites that load third-party
+ * extension / hook modules — a `process.exit(0)` or `process.reallyExit(0)` in
+ * a stranger's script (e.g. a Codex hook script that happens to live next to
+ * OMP-shaped modules) would otherwise kill OMP during startup with no error
+ * surface, since `try/catch` cannot intercept a synchronous exit.
  *
  * Nested and concurrent guard windows are safe: only the outermost guard
- * restores the real `process.exit`.
+ * restores the real hard-exit APIs.
  */
+function guardedExit(alias: ExitAliasName): (code?: number | string) => never {
+	return (code?: number | string): never => {
+		throw new ExtensionExitError(code, alias);
+	};
+}
+
 export async function withExitGuard<T>(fn: () => Promise<T>): Promise<T> {
 	if (exitGuardDepth === 0) {
-		exitGuardOriginal = process.exit;
-		process.exit = ((code?: number | string): never => {
-			throw new ExtensionExitError(code);
-		}) as typeof process.exit;
+		exitGuardOriginalProcessExit = process.exit;
+		process.exit = guardedExit("process.exit") as typeof process.exit;
+
+		if (typeof process.reallyExit === "function") {
+			exitGuardOriginalReallyExit = process.reallyExit;
+			process.reallyExit = guardedExit("process.reallyExit") as typeof process.reallyExit;
+		}
 	}
 	exitGuardDepth++;
 	try {
 		return await fn();
 	} finally {
 		exitGuardDepth--;
-		if (exitGuardDepth === 0 && exitGuardOriginal) {
-			process.exit = exitGuardOriginal;
-			exitGuardOriginal = null;
+		if (exitGuardDepth === 0) {
+			if (exitGuardOriginalProcessExit) {
+				process.exit = exitGuardOriginalProcessExit;
+				exitGuardOriginalProcessExit = null;
+			}
+			if (exitGuardOriginalReallyExit) {
+				process.reallyExit = exitGuardOriginalReallyExit;
+				exitGuardOriginalReallyExit = null;
+			}
 		}
 	}
 }

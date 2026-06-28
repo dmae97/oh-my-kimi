@@ -302,7 +302,9 @@ async function loadExtension(
 
 		const extension = createExtension(extensionPath, resolvedPath);
 		const api = new ConcreteExtensionAPI(PiCodingAgent, extension, runtime, cwd, eventBus);
-		await factory(api);
+		await withExitGuard(async () => {
+			await factory(api);
+		});
 
 		return { extension, error: null };
 	} catch (err) {
