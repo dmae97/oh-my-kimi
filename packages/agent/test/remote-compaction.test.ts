@@ -4,6 +4,8 @@ import {
 	compact,
 	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
+	prepareCompaction,
+	type SessionEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	buildCompactionV2Request,
@@ -297,13 +299,19 @@ describe("requestCompactionV2Streaming", () => {
 		);
 		let requestBody: { model: string; input: Array<Record<string, unknown>>; prompt_cache_key?: string } | undefined;
 		let sessionHeader: string | undefined;
+		let clientRequestHeader: string | undefined;
+		let legacySessionHeader: string | undefined;
 		const fetchMock: FetchImpl = async (input, init) => {
 			expect(String(input)).toBe("https://compact.example/v1/responses");
 			if (!init?.headers || init.headers instanceof Headers || Array.isArray(init.headers)) {
 				throw new Error("Expected V2 compaction to send headers as a plain object");
 			}
-			const rawSessionHeader = init.headers["session-id"];
+			const rawSessionHeader = init.headers.session_id;
+			const rawClientRequestHeader = init.headers["x-client-request-id"];
+			const rawLegacySessionHeader = init.headers["session-id"];
 			sessionHeader = typeof rawSessionHeader === "string" ? rawSessionHeader : undefined;
+			clientRequestHeader = typeof rawClientRequestHeader === "string" ? rawClientRequestHeader : undefined;
+			legacySessionHeader = typeof rawLegacySessionHeader === "string" ? rawLegacySessionHeader : undefined;
 			requestBody = JSON.parse(String(init.body)) as {
 				model: string;
 				input: Array<Record<string, unknown>>;
@@ -335,6 +343,8 @@ describe("requestCompactionV2Streaming", () => {
 		const result = await requestCompactionV2Streaming(model, "test-key", request, undefined, { fetch: fetchMock });
 
 		expect(sessionHeader).toBe("session-1");
+		expect(clientRequestHeader).toBe("session-1");
+		expect(legacySessionHeader).toBeUndefined();
 		expect(requestBody?.model).toBe("gpt-5-compact");
 		expect(requestBody?.prompt_cache_key).toBe("cache-1");
 		expect(requestBody?.input[requestBody.input.length - 1]).toEqual({ type: "compaction_trigger" });
@@ -653,7 +663,86 @@ describe("compact() remote compaction failure handling", () => {
 		const remote = getCompactionV2PreserveData(result.preserveData);
 		expect(remote?.usedTokens).toBe(55);
 		expect(remote?.replacementHistory.at(-1)).toEqual(compactionItem);
+		expect(result.summary).toContain("Remote compaction preserved provider-native history");
 		expect(completeSpy).not.toHaveBeenCalled();
+	});
+
+	test("re-expands a prior V2 compaction's originals when no candidate can reuse the replay", async () => {
+		vi.spyOn(ai, "completeSimple").mockResolvedValue(localSummaryMessage("re-expanded local summary"));
+		const compactionItem = { type: "compaction", encrypted_content: "enc_v2" };
+		const v2Model = makeOpenAiModel({
+			remoteCompaction: {
+				enabled: true,
+				v2StreamingEnabled: true,
+				v2Endpoint: "https://compact.example/v1/responses",
+			},
+		});
+		// Produce a real V2 preserve payload (opaque placeholder summary, provider "openai").
+		const v2Preparation = makePreparation();
+		v2Preparation.messagesToSummarize = [{ role: "user", content: "ORIGINAL ALPHA port 4242", timestamp: 1 }];
+		v2Preparation.recentMessages = [{ role: "user", content: "turn after", timestamp: 2 }];
+		v2Preparation.settings = { ...v2Preparation.settings, remoteStreamingV2Enabled: true };
+		const v2Result = await compact(v2Preparation, v2Model, "k", undefined, undefined, {
+			fetch: async () =>
+				sseResponse([
+					{ type: "response.output_item.done", output_index: 0, item: compactionItem },
+					{
+						type: "response.completed",
+						response: { usage: { input_tokens: 9, output_tokens: 1, total_tokens: 10 } },
+					},
+				]),
+		});
+		// V2 success persists only the opaque placeholder — no second local summarization round.
+		expect(v2Result.summary).toContain("Remote compaction preserved provider-native history");
+
+		// Session branch after that V2 compaction: originals + compaction boundary + new turns.
+		const ts = (n: number) => new Date(n).toISOString();
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: ts(1),
+				message: { role: "user", content: "ORIGINAL ALPHA port 4242", timestamp: 1 },
+			},
+			{
+				type: "compaction",
+				id: "c1",
+				parentId: "m1",
+				timestamp: ts(2),
+				summary: v2Result.summary,
+				firstKeptEntryId: "m1",
+				tokensBefore: 100_000,
+				preserveData: v2Result.preserveData,
+			},
+			{
+				type: "message",
+				id: "m2",
+				parentId: "c1",
+				timestamp: ts(3),
+				message: { role: "user", content: "second turn", timestamp: 3 },
+			},
+			{
+				type: "message",
+				id: "m3",
+				parentId: "m2",
+				timestamp: ts(4),
+				message: { role: "user", content: "third turn", timestamp: 4 },
+			},
+		];
+		const baseSettings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1 };
+
+		// Remote disabled → the V2 replay is unusable → re-expand the pre-V2 original.
+		const reexpanded = prepareCompaction(entries, { ...baseSettings, remoteEnabled: false }, [v2Model]);
+		expect(reexpanded).toBeDefined();
+		const reexpandedText = JSON.stringify(reexpanded?.messagesToSummarize ?? []);
+		expect(reexpandedText).toContain("ORIGINAL ALPHA port 4242");
+
+		// Remote + V2 still enabled, same provider → reuse the replay, don't re-summarize originals.
+		const reused = prepareCompaction(entries, { ...baseSettings, remoteStreamingV2Enabled: true }, [v2Model]);
+		expect(reused).toBeDefined();
+		const reusedText = JSON.stringify(reused?.messagesToSummarize ?? []);
+		expect(reusedText).not.toContain("ORIGINAL ALPHA port 4242");
 	});
 
 	test("user abort during the remote compact request rejects without falling back to local summarization", async () => {

@@ -58,8 +58,11 @@ describe("SessionManager + SqlSessionStorage (SQLite)", () => {
 		])) as Array<{ content: string }>;
 		expect(rows).toHaveLength(1);
 		const lines = rows[0].content.trim().split("\n");
-		expect(lines.length).toBeGreaterThanOrEqual(2);
-		const header = JSON.parse(lines[0]);
+		expect(lines.length).toBeGreaterThanOrEqual(3);
+		// The fixed-width title slot is always the first physical line; the session header follows.
+		const slot = JSON.parse(lines[0]);
+		expect(slot.type).toBe("title");
+		const header = JSON.parse(lines[1]);
 		expect(header.type).toBe("session");
 		const msg = JSON.parse(lines[lines.length - 1]);
 		expect(msg.type).toBe("message");
