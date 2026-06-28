@@ -4,48 +4,45 @@
 
 ### Added
 
-- Added mouse support for scrolling and interaction in the debug log and raw SSE stream viewers.
-- Added the `statusLine.compactThinkingLevel` setting to render the model segment's thinking level as a single leading glyph instead of a separate text suffix.
+- Added support for multiple configurable advisors via WATCHDOG.yml/WATCHDOG.yaml files, allowing per-advisor models, tool subsets, and instructions.
+- Added /advisor configure, a full-screen, mouse-driven TUI to easily manage the advisor roster, configure models, toggle tool permissions, and edit instructions.
+- Added full unified edit diffs to advisor transcripts, allowing advisors to see changes directly without re-reading files.
+- Added the statusLine.compactThinkingLevel setting to render the model segment's thinking level as a single leading glyph instead of a separate text suffix.
 - Added support for tracking reasoning tokens in session and advisor statistics.
-- Added Remote Compaction V2 streaming configuration settings (`compaction.remoteStreamingV2Enabled` and `compaction.v2RetainedMessageBudget`) to control token budgets and toggle V2 streaming for remote compaction.
-- Added the `edit.citationTags` setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source IDs, along with citation-marker unwrapping for hashline edit parsing, diff previews, and streaming matching.
-- Added mutable session titles backed by a fixed JSONL title slot with append-only title-change audit entries, replan title refresh, and configurable idle recaps.
-- Added incremental `yield` submissions with typed sections and last-turn final results for subagents.
-- Added support for multiple configurable advisors via a `WATCHDOG.yml`/`WATCHDOG.yaml` file (discovered at the same user and project levels as `WATCHDOG.md`), each with its own model, tool subset, and instructions; the legacy single-advisor `WATCHDOG.md` path is unchanged. Per-advisor transcripts are written to `__advisor.<slug>.jsonl`, attributed in `omp stats` and the Agent Hub, and `/advisor status` shows a per-advisor breakdown.
-- Added `/advisor configure`, a full-screen, mouse-driven TUI for editing the project- or user-level `WATCHDOG.yml` advisor roster. A two-pane layout (the `/extensions` idiom) lists the advisors and actions on the left with a scrollable preview of the selected advisor's model/tools/instructions on the right; add/remove advisors, pick a model and thinking effort from the same rich selector as `/model`, toggle which of the agent's tools the advisor may use (default read/grep/glob), and write per-advisor and shared instructions in a multiline editor (Ctrl+G opens `$EDITOR`). The implicit default advisor is shown even before a config file exists, every screen supports wheel/hover/click, and saving applies the new roster to the live session without a restart.
-- Added the full unified edit diff to the advisor's transcript view so it sees what each edit changed without re-reading the file.
+- Added Remote Compaction V2 streaming configuration settings (compaction.remoteStreamingV2Enabled and compaction.v2RetainedMessageBudget) to control token budgets and toggle V2 streaming for remote compaction.
+- Added the edit.citationTags setting to emit model-facing hashline section headers as OpenAI citation markers with opaque source IDs, along with citation-marker unwrapping for hashline edit parsing, diff previews, and streaming matching.
+- Added mutable session titles with automatic replan title refreshes and configurable idle recaps.
+- Added support for incremental yield submissions with typed sections and final results for subagents.
 
 ### Changed
 
-- Advisors can now be granted any built-in agent tool, removing the read-only restriction
-
-- Refactored and improved the debug log and raw SSE stream viewers to use a standard, wider, bordered overlay component with clearer status indicators, controls, and dynamic layouts.
+- Advisors can now be granted any built-in agent tool (including edit, write, and bash), removing the previous read-only restriction.
+- Improved the debug log and raw SSE stream viewers with a wider, bordered overlay, clearer status indicators, dynamic layouts, and mouse support for scrolling and interaction.
 - Updated the idle recap feature to use an LLM-generated summary of where things stand (anchored by the live goal and active todo task) instead of a static status line.
 - Refined interrupted thinking system instructions to encourage smoother continuation.
-- Advisors are no longer restricted to read-only tools: `/advisor configure` can grant any of the agent's tools (including `edit`/`write`/`bash`), so an advisor can act, not just review. New/default advisors still get read/grep/glob, and each runs in its own advisor-scoped tool session.
 
 ### Fixed
 
-- Fixed array-typed output schema validation by correctly assembling incremental yields into lists
-- Fixed OpenAI/Codex compatibility by removing top-level schema combinators from tool parameters
-- Fixed validation errors for untyped final yields in strict-mode providers by allowing `null` types
-- Fixed Alt+M default-role model configuration being disabled by the current session's context size. ([#3708](https://github.com/can1357/oh-my-pi/issues/3708))
-- Fixed MCP `type: "sse"` servers by adding the legacy HTTP+SSE endpoint handshake and streaming JSON-RPC response path. ([#3710](https://github.com/can1357/oh-my-pi/issues/3710))
-- Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature
+- Fixed array-typed output schema validation by correctly assembling incremental yields into lists.
+- Fixed OpenAI/Codex compatibility by removing top-level schema combinators from tool parameters.
+- Fixed validation errors for untyped final yields in strict-mode providers by allowing null types.
+- Fixed Alt+M default-role model configuration being disabled by the current session's context size.
+- Fixed MCP type: "sse" servers by adding the legacy HTTP+SSE endpoint handshake and streaming JSON-RPC response path.
+- Fixed interrupted reasoning blocks being incorrectly stripped when they contained a valid signature.
 - Fixed interrupted thinking being lost in LLM provider requests after user interrupts by properly stripping trailing reasoning blocks from assistant turns while preserving them in the UI and session history.
 - Fixed the live todo HUD going stale during long tool-use loops by introducing a mid-run reconciliation reminder that prompts the agent to update incomplete items.
 - Fixed resumed OpenAI and OpenAI-Codex sessions losing encrypted reasoning and native assistant turns during rehydration.
 - Fixed the ask tool's custom answer editor dropping the original question and option list while typing.
 - Fixed auto-snapcompact failing the session on local blockers (such as text-only active models, high non-ASCII transcripts, or context budget overflows) by gracefully downgrading automatic maintenance to context-full compaction.
-- Fixed autoresearch's `before_agent_start` handler crashing when the system prompt was undefined.
-- Fixed OMP exiting silently during startup when encountering standalone Codex hook scripts in `~/.codex/hooks/`.
-- Fixed unreachable keyboard shortcuts in HTML session exports by changing the "toggle thinking" and "toggle tools" shortcuts from `Ctrl+T` and `Ctrl+O` to bare `T` and `O` keys.
-- Fixed user-invoked `/skill:` prompts reaching model providers as developer turns instead of user turns, including during compaction.
+- Fixed autoresearch's before_agent_start handler crashing when the system prompt was undefined.
+- Fixed OMP exiting silently during startup when encountering standalone Codex hook scripts in ~/.codex/hooks/.
+- Fixed unreachable keyboard shortcuts in HTML session exports by changing the "toggle thinking" and "toggle tools" shortcuts from Ctrl+T and Ctrl+O to bare T and O keys.
+- Fixed user-invoked /skill: prompts reaching model providers as developer turns instead of user turns, including during compaction.
 - Fixed reasoning streaming being locked off for OpenAI-compatible providers that stream reasoning content without advertising reasoning support in model metadata.
-- Fixed `/shake` and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
-- Fixed the `time_spent` status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
-- Fixed expanded pending SSH previews committing provisional rows (`⏳ SSH: [host]` header or the framed `╰──╯` footer) to native scrollback before the result render inserted the `Output` section, leaving a stale pending header above the final frame or reusing the pending footer in-place as the new `├── Output ──┤` separator. The SSH renderer now opts out of pending-preview commits in every expansion state. ([#3714](https://github.com/can1357/oh-my-pi/issues/3714))
-- Fixed `ssh://` rejecting POSIX-capable remotes whose login-shell classification was ambiguous (`shell: "unknown"`), by verifying a working transfer shell directly (`sh -lc`/`bash -lc`/`zsh -lc`) and gating transfers on that capability instead of the self-reported login-shell name. Transfer commands are now dispatched through the verified shell (`<transferShell> -c '…'`) so a remote whose login shell is fish/csh/tcsh still parses the POSIX snippets correctly. The host probe is also marker-framed to ignore login-banner noise, and ambiguous non-Windows cache entries are treated as stale. ([#3719](https://github.com/can1357/oh-my-pi/issues/3719))
+- Fixed /shake and other mid-stream chat rebuilds erasing live LLM output by preserving the in-flight streaming components and pending tools.
+- Fixed the time_spent status-line segment ticking continuously during idle sessions by ensuring it only accumulates active agent execution windows and resets correctly across session switches.
+- Fixed expanded pending SSH previews committing provisional rows to native scrollback before the final result render.
+- Fixed ssh:// rejecting POSIX-capable remotes whose login-shell classification was ambiguous by verifying a working transfer shell directly and gating transfers on that capability.
 
 ## [16.2.2] - 2026-06-27
 

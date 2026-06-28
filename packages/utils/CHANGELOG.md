@@ -4,10 +4,11 @@
 
 ### Added
 
-- Added escapeXmlAttribute function for safe XML attribute value encoding
+- Added `escapeXmlAttribute` utility function for safe XML attribute value encoding.
+
 ### Fixed
 
-- Normalized `ptree.ChildProcess.bytes()` to always return a `Uint8Array`. Bun's `Response(stream).bytes()` returns the raw `ArrayBuffer` once the body arrives in more than one chunk (subprocess stdout past ~128 KB), which broke callers relying on `Uint8Array` methods like `.indexOf` and `.subarray` — including the `ssh://` read path's `decodeUtf8Text`, which crashed with `indexOf is not a function` on larger remote text files. ([#3712](https://github.com/can1357/oh-my-pi/issues/3712))
+- Fixed a crash in `ptree.ChildProcess.bytes()` and the `ssh://` read path when handling large subprocess outputs (over 128 KB) under Bun by ensuring it consistently returns a `Uint8Array`.
 
 ## [16.2.0] - 2026-06-27
 

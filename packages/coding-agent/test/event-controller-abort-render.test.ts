@@ -66,6 +66,7 @@ function createFixture(opts: {
 		streamingComponent,
 		streamingMessage: opts.streamingMessage,
 		pendingTools: new Map(),
+		noteDisplayableThinkingContent: vi.fn(() => false),
 	};
 	const sessionMock = {
 		isTtsrAbortPending: opts.isTtsrAbortPending ?? false,
