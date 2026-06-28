@@ -199,6 +199,21 @@ describe("update-cli bun cache pruning", () => {
 		expect(await Bun.file(path.join(dir, "chalk@4.1.2@@@1", "package.json")).exists()).toBe(true);
 	});
 
+	it("keeps current registry-qualified marker entries with their materialized package", async () => {
+		const dir = await makeTempDir();
+		await Bun.write(path.join(dir, "pkg", "1.0.0@@registry.npmjs.org@@@1"), "");
+		await Bun.write(
+			path.join(dir, "pkg@1.0.0@@registry.npmjs.org@@@1", "package.json"),
+			JSON.stringify({ name: "pkg", version: "1.0.0" }),
+		);
+
+		const result = await pruneBunInstallCache(dir, new Set(["pkg"]));
+
+		expect(result).toEqual({ scannedPackages: 1, removedEntries: 0 });
+		expect(await Bun.file(path.join(dir, "pkg", "1.0.0@@registry.npmjs.org@@@1")).exists()).toBe(true);
+		expect(await Bun.file(path.join(dir, "pkg@1.0.0@@registry.npmjs.org@@@1", "package.json")).exists()).toBe(true);
+	});
+
 	it("treats a stable release as newer than a matching prerelease", async () => {
 		const dir = await makeTempDir();
 		await Bun.write(path.join(dir, "pkg", "1.0.0-beta.1@@@1"), "");

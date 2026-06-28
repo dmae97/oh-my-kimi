@@ -284,8 +284,8 @@ interface BunCachePackageGroup {
 }
 
 function stripBunCacheVersionSuffix(name: string): string {
-	const suffixIndex = name.indexOf("@@@");
-	return suffixIndex === -1 ? name : name.slice(0, suffixIndex);
+	const metadataIndex = name.indexOf("@@");
+	return metadataIndex === -1 ? name : name.slice(0, metadataIndex);
 }
 
 function compareSemverIdentifier(a: string, b: string): number {
