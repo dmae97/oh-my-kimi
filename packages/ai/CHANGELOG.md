@@ -15,6 +15,10 @@
 - Enabled freeform tool patch support for Azure OpenAI and Codex models.
 - Fixed an issue where the `/usage show` command returned "No usage data available" when using a custom proxy base URL for Codex.
 
+### Fixed
+
+- Fixed Antigravity usage reporting to surface named daily and weekly quota windows from Cloud Code Assist model metadata, so `/usage` can show weekly Antigravity limits instead of collapsing them into the default bucket.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
