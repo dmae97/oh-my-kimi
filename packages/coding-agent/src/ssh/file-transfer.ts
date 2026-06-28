@@ -14,12 +14,15 @@ import { quotePosixPath } from "./utils";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * Ensure the ControlMaster connection and restrict transfers to remotes whose
- * *login* shell runs our POSIX snippets directly. OpenSSH hands each command to
- * `$SHELL -c`, so the login shell must be POSIX: Windows (cmd/powershell) can't
- * drive `head`/`cat`/`mv`, and csh/tcsh apply `!` history expansion to the
- * command line. `ensureHostInfo` classifies those (and fish) as a non-sh shell,
- * so accept only sh, bash, and zsh; anything else is refused here.
+ * Ensure the ControlMaster connection and restrict transfers to remotes where
+ * OMP has verified a working POSIX transfer shell (`info.transferShell`).
+ *
+ * Windows hosts are refused up front — `ssh://` runs `head`/`cat`/`mv`/`test`
+ * directly, and cmd/powershell can't drive those. Everywhere else, we trust
+ * the capability probe (`sh -lc` / `bash -lc` / `zsh -lc` against the remote)
+ * over the self-reported login-shell name, because login-shell classification
+ * can be wrong or noisy (#3719). When the probe couldn't verify any candidate,
+ * `transferShell` is `undefined` and the guard rejects.
  */
 async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
 	await ensureConnection(target);
@@ -29,9 +32,9 @@ async function ensurePosixRemote(target: SSHConnectionTarget): Promise<void> {
 			`ssh://: ${target.name} is a Windows host; ssh:// supports POSIX remotes only (head/cat/mv) — use the ssh tool for Windows hosts`,
 		);
 	}
-	if (info.shell !== "sh" && info.shell !== "bash" && info.shell !== "zsh") {
+	if (!info.transferShell) {
 		throw new Error(
-			`ssh://: ${target.name} uses a non-POSIX login shell (${info.shell}); ssh:// read/write needs sh, bash, or zsh — use the ssh tool for this host`,
+			`ssh://: ${target.name} has no verified POSIX shell for ssh:// read/write — none of sh/bash/zsh round-tripped a capability probe (use the ssh tool for this host)`,
 		);
 	}
 }

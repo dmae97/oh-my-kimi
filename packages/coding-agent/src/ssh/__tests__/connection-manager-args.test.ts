@@ -2,7 +2,15 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getRemoteHostDir } from "@oh-my-pi/pi-utils";
-import { buildRemoteCommand, getHostInfo, type SSHConnectionTarget, type SSHHostShell } from "../connection-manager";
+import {
+	buildRemoteCommand,
+	extractProbePayload,
+	getHostInfo,
+	HOST_PROBE_MARKER,
+	parseHostInfo,
+	type SSHConnectionTarget,
+	type SSHHostShell,
+} from "../connection-manager";
 import { buildSshTarget, sanitizeHostName } from "../utils";
 
 const TARGET: SSHConnectionTarget = { name: "h", host: "h" };
@@ -65,5 +73,65 @@ describe("ssh host shell classification", () => {
 				await fs.promises.rm(file, { force: true });
 			}
 		}
+	});
+});
+
+describe("extractProbePayload (host probe framing)", () => {
+	it("returns the text after the first marker line, ignoring login banners", async () => {
+		// Real-world failure shape: noisy dotfiles print a banner before the
+		// echo we asked for, so the legacy first-line parser would have read
+		// `Last login: ...` and classified the host as unknown (#3719).
+		const stdout = [
+			"Last login: Wed Mar 19 09:14:22 2025 from 10.0.0.1",
+			"Welcome to fancybox 1.0",
+			`${HOST_PROBE_MARKER}linux-gnu|/bin/bash|5.2.21`,
+		].join("\n");
+		expect(extractProbePayload(stdout, "")).toBe("linux-gnu|/bin/bash|5.2.21");
+	});
+
+	it("falls back to stderr when the payload only shows up there", async () => {
+		// Some shells redirect every echo to stderr after a dotfile error; the
+		// parser needs to recover the marker line from either stream.
+		const stderr = `noise\n${HOST_PROBE_MARKER}darwin|/bin/zsh|\n`;
+		expect(extractProbePayload("", stderr)).toBe("darwin|/bin/zsh|");
+	});
+
+	it("returns null when no marker line is present", async () => {
+		expect(extractProbePayload("just login banner\n", "and stderr noise\n")).toBeNull();
+	});
+});
+
+describe("parseHostInfo transferShell handling", () => {
+	it("round-trips a verified transferShell value", () => {
+		// Cache writers persist `transferShell` so callers don't re-probe
+		// every session; parseHostInfo must thread it back through (#3719).
+		const parsed = parseHostInfo({
+			version: 4,
+			os: "linux",
+			shell: "unknown",
+			transferShell: "bash",
+			compatEnabled: false,
+		});
+		expect(parsed?.transferShell).toBe("bash");
+	});
+
+	it("drops a transferShell value outside the sh/bash/zsh allowlist", () => {
+		// Anything we couldn't have probed (fish, csh, garbage) must not slip
+		// into the cache and bypass the ssh:// transfer guard.
+		const parsed = parseHostInfo({
+			version: 4,
+			os: "linux",
+			shell: "sh",
+			transferShell: "fish",
+			compatEnabled: false,
+		});
+		expect(parsed?.transferShell).toBeUndefined();
+	});
+
+	it("returns transferShell undefined when the field is missing", () => {
+		// A pre-v4 cache file lacks transferShell entirely; the parsed value
+		// must be undefined so shouldRefreshHostInfo treats it as stale.
+		const parsed = parseHostInfo({ version: 3, os: "linux", shell: "sh", compatEnabled: false });
+		expect(parsed?.transferShell).toBeUndefined();
 	});
 });
