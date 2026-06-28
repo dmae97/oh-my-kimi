@@ -174,7 +174,7 @@ function makeGuestContext(counts: number[]): InteractiveModeContext {
 			},
 			setCollabStatus: () => {},
 			invalidate: () => {},
-			setSessionStartTime: () => {},
+			resetActiveTime: () => {},
 		},
 		ui: { requestRender: () => {} },
 		chatContainer: { clear: () => {} },

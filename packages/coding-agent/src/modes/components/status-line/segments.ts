@@ -400,13 +400,19 @@ const contextTotalSegment: StatusLineSegment = {
 	},
 };
 
+/**
+ * Total time the agent was actively processing this session — the union of
+ * every `agent_start`→`agent_end` window plus the currently-running window,
+ * sourced from {@link SegmentContext.activeMs}. Idle wall-clock between turns
+ * never accumulates, so the displayed total reflects how long the agent has
+ * been working for the user, not how long the session has been open. Hidden
+ * before the first second of activity to avoid flashing `0s` at session start.
+ */
 const timeSpentSegment: StatusLineSegment = {
 	id: "time_spent",
 	render(ctx) {
-		const elapsed = Date.now() - ctx.sessionStartTime;
-		if (elapsed < 1000) return { content: "", visible: false };
-
-		return { content: withIcon(theme.icon.time, formatDuration(elapsed)), visible: true };
+		if (ctx.activeMs < 1000) return { content: "", visible: false };
+		return { content: withIcon(theme.icon.time, formatDuration(ctx.activeMs)), visible: true };
 	},
 };
 

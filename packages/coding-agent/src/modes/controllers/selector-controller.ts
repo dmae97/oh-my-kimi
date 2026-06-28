@@ -933,7 +933,7 @@ export class SelectorController {
 
 		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
+		this.ctx.statusLine.resetActiveTime();
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });

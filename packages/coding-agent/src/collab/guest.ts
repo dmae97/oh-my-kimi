@@ -78,6 +78,33 @@ interface PendingSnapshot {
 	isResync: boolean;
 }
 
+/** Minimal context surface the idle-state reconciler mutates. */
+export interface GuestIdleReconcilerCtx {
+	statusLine: { markActivityEnd: () => void };
+	loadingAnimation: { stop: () => void } | undefined;
+}
+
+/**
+ * Close the guest UI state held open by an earlier `agent_start` whose
+ * matching `agent_end` never reached us — most often because a reconnect
+ * dropped the event mid-stream. Triggered from {@link CollabGuestLink}'s
+ * `state` reconciler when the host reports `isStreaming === false`:
+ * folds the in-flight active-time window into the per-session meter (so
+ * `time_spent` stops ticking) and stops the `Working…` loader if one is
+ * still animating. No-op when the host is still streaming.
+ *
+ * Exported for direct unit testing; mutates the loader field on `ctx` so
+ * the same loader is not stopped twice on subsequent reconciliations.
+ */
+export function reconcileGuestIdleHostState(ctx: GuestIdleReconcilerCtx, isStreaming: boolean): void {
+	if (isStreaming) return;
+	ctx.statusLine.markActivityEnd();
+	if (ctx.loadingAnimation) {
+		ctx.loadingAnimation.stop();
+		ctx.loadingAnimation = undefined;
+	}
+}
+
 export class CollabGuestLink {
 	#ctx: InteractiveModeContext;
 	#socket: CollabSocket | null = null;
@@ -425,12 +452,7 @@ export class CollabGuestLink {
 				this.#applyHostState(frame.state);
 				setSessionTerminalTitle(frame.state.sessionName, frame.state.cwd);
 				this.#updateStatusSegment();
-				// Reconciler: events normally drive the loader; clear a stale one if
-				// the host reports idle (e.g. events lost across a reconnect).
-				if (!frame.state.isStreaming && this.#ctx.loadingAnimation) {
-					this.#ctx.loadingAnimation.stop();
-					this.#ctx.loadingAnimation = undefined;
-				}
+				reconcileGuestIdleHostState(this.#ctx, frame.state.isStreaming);
 				this.#ctx.statusLine.invalidate();
 				this.#ctx.ui.requestRender();
 				break;
@@ -588,7 +610,7 @@ export class CollabGuestLink {
 		await this.#ctx.session.newSession();
 		setSessionTerminalTitle(this.#ctx.sessionManager.getSessionName(), this.#ctx.sessionManager.getCwd());
 		this.#ctx.statusLine.invalidate();
-		this.#ctx.statusLine.setSessionStartTime(Date.now());
+		this.#ctx.statusLine.resetActiveTime();
 		this.#ctx.updateEditorTopBorder();
 		this.#ctx.updateEditorBorderColor();
 		this.#ctx.renderInitialMessages({ clearTerminalHistory: true });

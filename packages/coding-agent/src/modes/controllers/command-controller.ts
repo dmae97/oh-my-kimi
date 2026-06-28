@@ -846,7 +846,7 @@ export class CommandController {
 		setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
 
 		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
+		this.ctx.statusLine.resetActiveTime();
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
 		this.ctx.chatContainer.clear();
@@ -1018,7 +1018,7 @@ export class CommandController {
 		this.ctx.streamingMessage = undefined;
 		this.ctx.pendingTools.clear();
 		this.ctx.statusLine.invalidate();
-		this.ctx.statusLine.setSessionStartTime(Date.now());
+		this.ctx.statusLine.resetActiveTime();
 		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
 		await this.ctx.reloadTodos();
