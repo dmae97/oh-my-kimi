@@ -36,7 +36,7 @@ describe("resolveUsedFraction", () => {
 		expect(resolveUsedFraction(limit)).toBeCloseTo(0.25);
 	});
 
-	it("does not fall back to percent+used when used/limit is available but limit is 0", () => {
+	it("falls back to percent+used when used/limit is skipped because limit is 0", () => {
 		const limit = makeLimit({ used: 5, limit: 0, unit: "percent" });
 		// limit === 0 skips used/limit; percent+used should apply
 		expect(resolveUsedFraction(limit)).toBe(0.05);
