@@ -30,6 +30,7 @@ pub use rg::run as run_rg;
 #[derive(Parser, Debug)]
 #[command(
 	name = "grep",
+	version = concat!("grep (pi-uu-grep) ", env!("CARGO_PKG_VERSION")),
 	about = "Search for PATTERN in each FILE or standard input.",
 	disable_help_flag = true,
 	disable_version_flag = true
@@ -125,6 +126,31 @@ struct Cli {
 	#[allow(dead_code)]
 	#[arg(long = "help", action = clap::ArgAction::Help)]
 	help: Option<bool>,
+
+	/// Print version information.
+	///
+	/// GNU grep ships a `--version`, and shell startup scripts probe it.
+	/// Routed through clap so output lands on the in-process stdout via the
+	/// same path as `--help`.
+	#[allow(dead_code)]
+	#[arg(short = 'V', long = "version", action = clap::ArgAction::Version)]
+	version: Option<bool>,
+
+	/// Surface color in matches: accepted for GNU-grep compatibility and
+	/// silently ignored. The builtin writes to in-process file descriptors
+	/// (often a pipe consumed by another tool), so injecting ANSI escapes
+	/// would corrupt downstream output. The common `alias grep='grep
+	/// --color=auto'` from distro bashrc files passes through unchanged.
+	#[allow(dead_code)]
+	#[arg(
+		long = "color",
+		alias = "colour",
+		value_name = "WHEN",
+		num_args = 0..=1,
+		require_equals = true,
+		default_missing_value = "auto",
+	)]
+	color: Option<String>,
 
 	/// PATTERN followed by FILEs (PATTERN is omitted when -e is given).
 	#[arg(value_name = "ARGS")]
@@ -741,5 +767,30 @@ mod tests {
 		assert!(stdout.contains("foooo"), "regex alternative should match: {stdout}");
 		assert!(stdout.contains("bar)"), "literal alternative should match: {stdout}");
 		assert!(!stdout.contains("baz"), "non-matching line leaked: {stdout}");
+	}
+
+	#[test]
+	fn color_flag_is_accepted_and_ignored() {
+		// Regression for #3755: the universal `alias grep='grep --color=auto'`
+		// must not break bare `grep` in shell pipelines.
+		for color in ["--color=auto", "--color=always", "--color=never", "--color", "--colour=auto"] {
+			let (code, stdout, stderr) = run_grep(&[color, "foo"], "foo\nbar\n");
+			assert_eq!(code, 0, "{color}: stderr: {stderr}");
+			assert!(stderr.is_empty(), "{color}: unexpected stderr: {stderr}");
+			assert_eq!(stdout, "foo\n", "{color}: matched lines: {stdout:?}");
+		}
+	}
+
+	#[test]
+	fn version_flag_prints_and_exits_zero() {
+		// `grep --version` is the universal probe shells run; the builtin must
+		// not reject it with exit 2.
+		let (code, stdout, stderr) = run_grep(&["--version"], "");
+		assert_eq!(code, 0, "stderr: {stderr}");
+		assert!(stderr.is_empty(), "unexpected stderr: {stderr}");
+		assert!(
+			stdout.contains("grep") && stdout.contains("pi-uu-grep"),
+			"version output should identify the builtin, got: {stdout:?}"
+		);
 	}
 }
