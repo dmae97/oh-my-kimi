@@ -117,6 +117,12 @@ class CountingViewportTerminal extends VirtualTerminal {
 	}
 }
 
+class LegacyKeyboardVirtualTerminal extends VirtualTerminal {
+	get keyboardEnhancementSequence(): string | null {
+		return undefined as unknown as string | null;
+	}
+}
+
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_v, i) => `${prefix}${i}`);
 }
@@ -3276,6 +3282,32 @@ describe("TUI terminal-state regressions", () => {
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("falls back to kittyEnableSequence for legacy custom terminals", async () => {
+			const term = new LegacyKeyboardVirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				tui.showOverlay(new MutableLinesComponent(["MODAL-0"]), {
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				expect(modalWrites).toContain("\x1b[?1049h\x1b[>1u");
 			} finally {
 				tui.stop();
 			}

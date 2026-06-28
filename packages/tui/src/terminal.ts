@@ -337,8 +337,9 @@ export interface Terminal {
 	get kittyEnableSequence(): string | null;
 
 	// The active modified-key reporting sequence to reassert after terminal buffer
-	// switches, or null when no enhanced keyboard mode is active.
-	get keyboardEnhancementSequence(): string | null;
+	// switches, or null when no enhanced keyboard mode is active. Optional so
+	// custom Terminals built against older pi-tui versions keep working.
+	readonly keyboardEnhancementSequence?: string | null;
 
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines

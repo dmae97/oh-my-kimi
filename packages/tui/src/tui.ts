@@ -2492,7 +2492,7 @@ export class TUI extends Container {
 			// modified-key reporting sequence on the freshly entered alternate
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
-			this.terminal.write(`\x1b[?1049h${this.terminal.keyboardEnhancementSequence ?? ""}${MOUSE_TRACKING_ON}`);
+			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementSequence()}${MOUSE_TRACKING_ON}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
@@ -3340,13 +3340,17 @@ export class TUI extends Container {
 	}
 
 	/** Enter or leave the alternate screen borrowed for transient resize frames. */
+	#keyboardEnhancementSequence(): string {
+		return this.terminal.keyboardEnhancementSequence ?? this.terminal.kittyEnableSequence ?? "";
+	}
+
 	#enterResizeAltSequence(): string {
 		if (this.#resizeAltActive || this.#altActive) return "";
 		this.#resizeAltActive = true;
 		setAltScreenActive(true);
 		this.#forgetHardwareCursorState();
 		this.#recordHardwareCursorHidden();
-		return `${ALT_SCREEN_ENTER}${this.terminal.keyboardEnhancementSequence ?? ""}`;
+		return `${ALT_SCREEN_ENTER}${this.#keyboardEnhancementSequence()}`;
 	}
 
 	#leaveResizeAltSequence(): string {
