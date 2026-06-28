@@ -5,10 +5,12 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	buildMemoryToolDeveloperInstructions,
+	clearMemoryToolDeveloperInstructionsCache,
 	getMemoryRoot,
 	saveLearnedLesson,
 } from "@oh-my-pi/pi-coding-agent/memories";
 import { localBackend } from "@oh-my-pi/pi-coding-agent/memory-backend/local-backend";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { LearnTool } from "@oh-my-pi/pi-coding-agent/tools/learn";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -157,12 +159,61 @@ describe("learned-lesson read-back", () => {
 		await removeWithRetries(tmp);
 	});
 
+	function sessionWithFile(sessionFile: string) {
+		return {
+			sessionManager: {
+				getSessionFile: () => sessionFile,
+			},
+		};
+	}
+
 	it("injects lessons even when no consolidated summary exists", async () => {
 		const settings = Settings.isolated({ "memory.backend": "local" });
 		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "File-backed lesson" });
 		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings);
 		expect(out).toContain("Learned lessons");
 		expect(out).toContain("- File-backed lesson");
+	});
+
+	it("keeps a session's memory prompt stable after a learned lesson is written", async () => {
+		const settings = Settings.isolated({ "memory.backend": "local" });
+		const session = sessionWithFile("session-1.jsonl");
+
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Later session only" });
+
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+		const nextSession = sessionWithFile("session-2.jsonl");
+		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings, nextSession);
+		expect(out).toContain("- Later session only");
+	});
+
+	it("refreshes the frozen memory prompt after explicit memory clear", async () => {
+		const settings = Settings.isolated({ "memory.backend": "local" });
+		const session = sessionWithFile("session-clear.jsonl");
+		await saveLearnedLesson(agentDir, settings.getCwd(), { content: "Clearable lesson" });
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toContain("Clearable lesson");
+		await localBackend.clear(agentDir, settings.getCwd(), session as unknown as AgentSession);
+
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+	});
+
+	it("refreshes the frozen memory prompt after background consolidation invalidates it", async () => {
+		const settings = Settings.isolated({ "memory.backend": "local" });
+		const session = sessionWithFile("session-consolidate.jsonl");
+		// First build (before background consolidation finishes) snapshots an empty result.
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+
+		// Background pipeline writes the consolidated summary later.
+		const root = getMemoryRoot(agentDir, settings.getCwd());
+		await Bun.write(path.join(root, "memory_summary.md"), "Consolidated guidance here.\n");
+
+		// Without invalidation the cached undefined would stick.
+		expect(await buildMemoryToolDeveloperInstructions(agentDir, settings, session)).toBeUndefined();
+
+		clearMemoryToolDeveloperInstructionsCache(session);
+		const out = await buildMemoryToolDeveloperInstructions(agentDir, settings, session);
+		expect(out).toContain("Consolidated guidance here.");
 	});
 
 	it("injects both the summary and lessons when both exist", async () => {

@@ -147,10 +147,53 @@ export function startMemoryStartupTask(options: {
 	});
 }
 
+interface MemoryInstructionSession {
+	sessionManager: Pick<AgentSession["sessionManager"], "getSessionFile">;
+}
+
+interface CachedMemoryToolDeveloperInstructions {
+	sessionFile: string | undefined;
+	value: string | undefined;
+}
+
+const memoryToolDeveloperInstructionsBySession = new WeakMap<
+	MemoryInstructionSession,
+	CachedMemoryToolDeveloperInstructions
+>();
+
+function getMemoryInstructionSessionFile(session: MemoryInstructionSession): string | undefined {
+	return session.sessionManager.getSessionFile() ?? undefined;
+}
+
+/**
+ * Drop the per-session memory instruction snapshot after explicit memory state
+ * changes that must affect the active conversation immediately, such as
+ * `/memory clear`.
+ */
+export function clearMemoryToolDeveloperInstructionsCache(session: MemoryInstructionSession | undefined): void {
+	if (session) memoryToolDeveloperInstructionsBySession.delete(session);
+}
+
 /**
  * Build memory usage instructions for prompt injection.
  */
 export async function buildMemoryToolDeveloperInstructions(
+	agentDir: string,
+	settings: Settings,
+	session?: MemoryInstructionSession,
+): Promise<string | undefined> {
+	if (!session) return buildMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+
+	const sessionFile = getMemoryInstructionSessionFile(session);
+	const cached = memoryToolDeveloperInstructionsBySession.get(session);
+	if (cached && cached.sessionFile === sessionFile) return cached.value;
+
+	const value = await buildMemoryToolDeveloperInstructionsSnapshot(agentDir, settings);
+	memoryToolDeveloperInstructionsBySession.set(session, { sessionFile, value });
+	return value;
+}
+
+async function buildMemoryToolDeveloperInstructionsSnapshot(
 	agentDir: string,
 	settings: Settings,
 ): Promise<string | undefined> {
@@ -219,6 +262,10 @@ async function runMemoryStartup(options: {
 }): Promise<void> {
 	await runPhase1(options);
 	await runPhase2(options);
+	// Phase 2 may have rewritten `memory_summary.md`; drop the per-session
+	// snapshot so the refresh below picks up the new summary instead of
+	// returning the cached value from the first prompt build.
+	clearMemoryToolDeveloperInstructionsCache(options.session);
 	await options.session.refreshBaseSystemPrompt?.();
 }
 
