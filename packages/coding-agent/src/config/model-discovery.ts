@@ -142,7 +142,21 @@ function toPositiveNumberOrUndefined(value: unknown): number | undefined {
 	return undefined;
 }
 
+function extractOllamaRuntimeContextWindow(payload: Record<string, unknown>): number | undefined {
+	const parameters = payload.parameters;
+	if (typeof parameters !== "string") {
+		return undefined;
+	}
+	const match = parameters.match(/(?:^|\n)\s*num_ctx\s+(\d+)\s*(?:$|\n)/m);
+	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
+}
+
 function extractOllamaContextWindow(payload: Record<string, unknown>): number | undefined {
+	const runtimeContextWindow = extractOllamaRuntimeContextWindow(payload);
+	if (runtimeContextWindow !== undefined) {
+		return runtimeContextWindow;
+	}
+
 	const modelInfo = payload.model_info;
 	if (isRecord(modelInfo)) {
 		for (const [key, value] of Object.entries(modelInfo)) {
@@ -155,12 +169,7 @@ function extractOllamaContextWindow(payload: Record<string, unknown>): number | 
 		}
 	}
 
-	const parameters = payload.parameters;
-	if (typeof parameters !== "string") {
-		return undefined;
-	}
-	const match = parameters.match(/(?:^|\n)\s*num_ctx\s+(\d+)\s*(?:$|\n)/m);
-	return match ? toPositiveNumberOrUndefined(match[1]) : undefined;
+	return undefined;
 }
 
 function extractLlamaCppContextWindow(payload: Record<string, unknown>): number | undefined {
@@ -179,7 +188,7 @@ function extractLlamaCppModelContextWindow(item: Record<string, unknown>): numbe
 	if (!isRecord(meta)) {
 		return undefined;
 	}
-	return toPositiveNumberOrUndefined(meta.n_ctx) ?? toPositiveNumberOrUndefined(meta.n_ctx_train);
+	return toPositiveNumberOrUndefined(meta.n_ctx);
 }
 
 function parseLlamaCppModelList(payload: unknown): LlamaCppModelListEntry[] {
