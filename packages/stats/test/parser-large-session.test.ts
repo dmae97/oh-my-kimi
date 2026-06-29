@@ -62,7 +62,9 @@ describe("large session parsing", () => {
 
 		const result = await parseSessionFile(sessionFile);
 
-		expect(result.newOffset).toBe(entry.length * entryCount - 1);
+		// The lenient line scanner consumes the entire file (every line is `\n`-terminated),
+		// so the resume offset is the full byte length rather than the byte before the final newline.
+		expect(result.newOffset).toBe(entry.length * entryCount);
 		expect(result.stats).toEqual([]);
 		expect(result.userStats).toEqual([]);
 		expect(result.userLinks).toEqual([]);
