@@ -7,7 +7,6 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ToolExample, TSchema } from "@oh-my-pi/pi-ai";
 import { renderToolInventory } from "@oh-my-pi/pi-ai/dialect";
 import { $env, getGpuCachePath, getProjectDir, hasFsCode, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
-import { $ } from "bun";
 import { contextFileCapability } from "./capability/context-file";
 import { systemPromptCapability } from "./capability/system-prompt";
 import { findConfigFile } from "./config";
@@ -112,21 +111,33 @@ function parseWmicTable(output: string, header: string): string | null {
 }
 
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
+/** Killed by the OS at this deadline, so a wedged probe cannot outlive the prep race. */
+const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS;
+
+async function runGpuProbe(cmd: string[]): Promise<string | null> {
+	try {
+		const proc = Bun.spawn({
+			cmd,
+			stdout: "pipe",
+			stderr: "ignore",
+			stdin: "ignore",
+			timeout: GPU_PROBE_TIMEOUT_MS,
+		});
+		const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+		return exitCode === 0 ? stdout : null;
+	} catch {
+		return null;
+	}
+}
 
 async function getGpuModel(): Promise<string | null> {
 	switch (process.platform) {
 		case "win32": {
-			const output = await $`wmic path win32_VideoController get name`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = await runGpuProbe(["wmic", "path", "win32_VideoController", "get", "name"]);
 			return output ? parseWmicTable(output, "Name") : null;
 		}
 		case "linux": {
-			const output = await $`lspci`
-				.quiet()
-				.text()
-				.catch(() => null);
+			const output = await runGpuProbe(["lspci"]);
 			if (!output) return null;
 			const gpus: Array<{ name: string; priority: number }> = [];
 			for (const line of output.split("\n")) {

@@ -5,6 +5,7 @@ import * as path from "node:path";
 
 interface ProbeRunResult {
 	elapsedMs: number;
+	childElapsedMs: number;
 	cached: unknown;
 	count: number;
 }
@@ -20,7 +21,7 @@ async function runProbeScenario(options: { runs: number; sleepSeconds?: number }
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,
-			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
+			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
 		);
 		await fs.chmod(lspciPath, 0o755);
 
@@ -74,16 +75,18 @@ console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt
 			env.OMP_GPU_PROBE_SLEEP = String(options.sleepSeconds);
 		}
 
+		const childStartedAt = performance.now();
 		const child = Bun.spawn([process.execPath, scenarioPath], { stdout: "pipe", stderr: "pipe", env });
 		const [stdout, stderr, exitCode] = await Promise.all([
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
 			child.exited,
 		]);
+		const childElapsedMs = Math.round(performance.now() - childStartedAt);
 		if (exitCode !== 0) {
 			throw new Error(`GPU probe scenario failed with exit ${exitCode}: ${stderr}`);
 		}
-		return JSON.parse(stdout.trim());
+		return { ...JSON.parse(stdout.trim()), childElapsedMs };
 	} finally {
 		await fs.rm(tempRoot, { recursive: true, force: true });
 	}
@@ -97,9 +100,12 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		expect(result.count).toBe(1);
 	}, 15_000);
 
-	it("uses the system prompt prep deadline for slow GPU probes", async () => {
+	it("kills the GPU probe at the prep deadline", async () => {
 		const result = await runProbeScenario({ runs: 1, sleepSeconds: 7 });
 
 		expect(result.elapsedMs).toBeLessThan(6500);
+		// Codex#3838: the child process MUST exit shortly after the deadline,
+		// not linger until the underlying probe (sleep 7) finishes on its own.
+		expect(result.childElapsedMs).toBeLessThan(6500);
 	}, 15_000);
 });
