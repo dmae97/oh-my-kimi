@@ -1,31 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parseSessionFile } from "@oh-my-pi/omp-stats/parser";
-import { getAgentDir, getSessionsDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getSessionsDir } from "@oh-my-pi/pi-utils";
+import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const originalConfigDir = process.env.PI_CONFIG_DIR;
-const originalAgentDir = getAgentDir();
-let tempDir: TempDir | null = null;
-
-beforeEach(() => {
-	tempDir = TempDir.createSync("@pi-stats-large-session-");
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(tempDir.join("agent"));
-});
+installStatsTestIsolation("@pi-stats-large-session-");
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	if (originalConfigDir === undefined) {
-		delete process.env.PI_CONFIG_DIR;
-	} else {
-		process.env.PI_CONFIG_DIR = originalConfigDir;
-	}
-	setAgentDir(originalAgentDir);
-	tempDir?.removeSync();
-	tempDir = null;
 });
 
 async function writeLargeSessionFile(): Promise<string> {

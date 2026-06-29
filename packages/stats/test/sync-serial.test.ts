@@ -1,33 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";
-import { closeDb, getOverallStats } from "@oh-my-pi/omp-stats/db";
-import { getAgentDir, getSessionsDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getOverallStats } from "@oh-my-pi/omp-stats/db";
+import { getSessionsDir } from "@oh-my-pi/pi-utils";
+import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const originalConfigDir = process.env.PI_CONFIG_DIR;
-const originalAgentDir = getAgentDir();
-let tempDir: TempDir | null = null;
-
-beforeEach(() => {
-	tempDir = TempDir.createSync("@pi-stats-sync-serial-");
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(tempDir.join("agent"));
-});
+installStatsTestIsolation("@pi-stats-sync-serial-");
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	closeDb();
-	if (originalConfigDir === undefined) {
-		delete process.env.PI_CONFIG_DIR;
-	} else {
-		process.env.PI_CONFIG_DIR = originalConfigDir;
-	}
-	setAgentDir(originalAgentDir);
-	tempDir?.removeSync();
-	tempDir = null;
 });
 
 async function writeSessionFile(): Promise<void> {

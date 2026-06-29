@@ -1,43 +1,15 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { getOverviewStats } from "@oh-my-pi/omp-stats/aggregator";
-import { closeDb, getStatsByAgentType, initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
+import { getStatsByAgentType, initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
 import { classifyAgentType } from "@oh-my-pi/omp-stats/parser";
 import type { AgentType, MessageStats } from "@oh-my-pi/omp-stats/types";
-import {
-	getAgentDir,
-	getConfigRootDir,
-	getSessionsDir,
-	getStatsDbPath,
-	setAgentDir,
-	TempDir,
-} from "@oh-my-pi/pi-utils";
+import { getConfigRootDir, getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const originalConfigDir = process.env.PI_CONFIG_DIR;
-const originalAgentDir = getAgentDir();
-let tempDir: TempDir | null = null;
-
-beforeEach(() => {
-	tempDir = TempDir.createSync("@pi-stats-agent-type-");
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(path.join(os.homedir(), configDir, "agent"));
-});
-
-afterEach(() => {
-	closeDb();
-	if (originalConfigDir === undefined) {
-		delete process.env.PI_CONFIG_DIR;
-	} else {
-		process.env.PI_CONFIG_DIR = originalConfigDir;
-	}
-	setAgentDir(originalAgentDir);
-	tempDir?.removeSync();
-	tempDir = null;
-});
+installStatsTestIsolation("@pi-stats-agent-type-");
 
 interface Tokens {
 	input: number;

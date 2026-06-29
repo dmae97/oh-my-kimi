@@ -1,46 +1,14 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { syncAllSessions } from "@oh-my-pi/omp-stats/aggregator";
 import { closeDb, getOverallStats, getRecentRequests, initDb, insertMessageStats } from "@oh-my-pi/omp-stats/db";
 import type { MessageStats } from "@oh-my-pi/omp-stats/types";
-import { getAgentDir, getSessionsDir, getStatsDbPath, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { getSessionsDir, getStatsDbPath } from "@oh-my-pi/pi-utils";
+import { installStatsTestIsolation } from "./helpers/temp-agent";
 
-const XDG_KEYS = ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] as const;
-const originalConfigDir = process.env.PI_CONFIG_DIR;
-const originalAgentDir = getAgentDir();
-const originalXdg: Record<string, string | undefined> = {};
-let tempDir: TempDir | null = null;
-
-beforeEach(() => {
-	tempDir = TempDir.createSync("@pi-stats-fork-dedup-");
-	for (const key of XDG_KEYS) {
-		originalXdg[key] = process.env[key];
-		delete process.env[key];
-	}
-	const configDir = path.relative(os.homedir(), tempDir.join("config"));
-	process.env.PI_CONFIG_DIR = configDir;
-	setAgentDir(path.join(os.homedir(), configDir, "agent"));
-});
-
-afterEach(() => {
-	closeDb();
-	if (originalConfigDir === undefined) {
-		delete process.env.PI_CONFIG_DIR;
-	} else {
-		process.env.PI_CONFIG_DIR = originalConfigDir;
-	}
-	for (const key of XDG_KEYS) {
-		const prior = originalXdg[key];
-		if (prior === undefined) delete process.env[key];
-		else process.env[key] = prior;
-	}
-	setAgentDir(originalAgentDir);
-	tempDir?.removeSync();
-	tempDir = null;
-});
+installStatsTestIsolation("@pi-stats-fork-dedup-");
 
 interface AssistantOptions {
 	entryId: string;
