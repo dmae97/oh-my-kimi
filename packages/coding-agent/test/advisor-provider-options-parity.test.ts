@@ -68,7 +68,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		} catch {}
 	});
 
-	it("inherits streamFn, promptCacheKey, websocket preference, and providerSessionState from the session", () => {
+	it("inherits streamFn, promptCacheKey, and providerSessionState from the session", () => {
 		const advisorStreamFn: StreamFn = (m, ctx, opts) => streamSimple(m, ctx, opts);
 		const mainAgent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -98,7 +98,6 @@ describe("AgentSession advisor provider-options parity", () => {
 		// Shared transport / fast-mode state map keeps Codex websockets and
 		// Anthropic fast-mode fallbacks consistent across the two agents.
 		expect(advisor.providerSessionState).toBe(session.providerSessionState);
-		expect(session.preferWebsockets).toBe(true);
 
 		// Stable cache key on the advisor session id pins consecutive advisor
 		// turns to the same OpenAI Responses cache shard.

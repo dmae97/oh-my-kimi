@@ -8,6 +8,7 @@ import type {
 	Context,
 	Effort,
 	Model,
+	ProviderSessionState,
 	ServiceTier,
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
@@ -139,6 +140,13 @@ function normalizePositiveInteger(name: string, value: number | undefined, fallb
 	return value;
 }
 
+function closeProviderSessionStates(providerSessionState: Map<string, ProviderSessionState>): void {
+	for (const state of providerSessionState.values()) {
+		state.close();
+	}
+	providerSessionState.clear();
+}
+
 function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
 	switch (event.type) {
 		case "text_delta":
@@ -208,6 +216,7 @@ async function runBenchRequest(
 ): Promise<BenchRunResult> {
 	const startedAt = now();
 	let firstTokenAt: number | undefined;
+	const providerSessionState = new Map<string, ProviderSessionState>();
 	try {
 		const context: Context = {
 			// Codex's Responses endpoint 400s with "Instructions are required" when no
@@ -225,7 +234,7 @@ async function runBenchRequest(
 			reasoning: options.reasoning,
 			disableReasoning: options.disableReasoning,
 			serviceTier: options.serviceTier,
-			providerSessionState: new Map(),
+			providerSessionState,
 			preferWebsockets: true,
 			// pi-ai opts every OpenRouter request into response caching (1h TTL).
 			// Bench sends a byte-identical request each run, so within the TTL
@@ -283,6 +292,8 @@ async function runBenchRequest(
 		};
 	} catch (error) {
 		return { ok: false, error: getErrorMessage(error) };
+	} finally {
+		closeProviderSessionStates(providerSessionState);
 	}
 }
 
