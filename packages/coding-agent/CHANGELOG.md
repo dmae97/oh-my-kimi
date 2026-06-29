@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `irc` inbox drains missing messages that arrived while the recipient agent was already running. ([#3834](https://github.com/can1357/oh-my-pi/issues/3834))
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed

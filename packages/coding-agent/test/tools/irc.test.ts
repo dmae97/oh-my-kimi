@@ -580,6 +580,29 @@ describe("IRC", () => {
 			expect(text).toContain("No message");
 		});
 
+		it("op=inbox drains IRC asides that arrived while the caller was running", async () => {
+			const { session } = createRealSession();
+			sessions.push(session);
+			Object.defineProperty(session, "isStreaming", { value: true, configurable: true });
+			registry.register({ id: "0-Running", displayName: "task", kind: "sub", session });
+
+			const delivery = await session.deliverIrcMessage({
+				id: "msg-running",
+				from: "0-Main",
+				to: "0-Running",
+				body: "parallel note",
+				ts: Date.now(),
+			});
+			expect(delivery).toBe("injected");
+
+			const tool = new IrcTool(makeToolSession(registry, "0-Running"));
+			const result = await tool.execute("call-1", { op: "inbox" });
+
+			expect(result.details?.inbox?.map(msg => msg.body)).toEqual(["parallel note"]);
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("parallel note");
+		});
+
 		it("op=inbox drains the caller's mailbox", async () => {
 			const main = makeFakeSession();
 			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
