@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed `omp search` applying `providers.webSearch` and `providers.webSearchExclude` before resolving its implicit provider chain. ([#3793](https://github.com/can1357/oh-my-pi/issues/3793))
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
 
 ## [16.2.5] - 2026-06-28

@@ -4,8 +4,10 @@
  * Handles `omp q`/`omp web-search` subcommands for testing web search providers.
  */
 
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
+import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
+import { Settings } from "../config/settings";
 import { initTheme, theme } from "../modes/theme/theme";
 import { runSearchQuery, type SearchQueryParams } from "../web/search/index";
 import { SEARCH_PROVIDER_ORDER } from "../web/search/provider";
@@ -84,6 +86,9 @@ export async function runSearchCommand(cmd: SearchCommandArgs): Promise<void> {
 		process.stderr.write(`${chalk.red("Error: --limit must be a number")}\n`);
 		process.exit(1);
 	}
+
+	const settings = await Settings.init({ cwd: getProjectDir() });
+	applyProviderGlobalsFromSettings(settings);
 
 	await initTheme();
 
