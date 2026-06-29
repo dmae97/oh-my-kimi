@@ -208,6 +208,39 @@ async function captureServiceTier(opts: {
 	return { wire: captured?.serviceTier, summary: summary.serviceTier };
 }
 
+describe("bench provider session state and websocket preference", () => {
+	it("sends providerSessionState and preferWebsockets to the stream", async () => {
+		const registry = fakeRegistry({
+			models: [fakeModel("openai-codex", "gpt-5.5")],
+			authedProviders: ["openai-codex"],
+		});
+		let captured: SimpleStreamOptions | undefined;
+		await runBenchCommand(
+			{ models: ["openai-codex/gpt-5.5"], flags: { runs: 1, maxTokens: 64, json: true } },
+			{
+				createRuntime: async () => ({
+					modelRegistry: registry,
+					settings: undefined,
+					close: () => {},
+				}),
+				randomSessionId: () => "sess-1",
+				writeStdout: () => {},
+				writeStderr: () => {},
+				setExitCode: () => {},
+				streamSimple: (_model, _context, options) => {
+					captured = options;
+					return fakeStream();
+				},
+				now: () => 0,
+				stdoutIsTTY: false,
+			},
+		);
+		expect(captured?.providerSessionState).toBeInstanceOf(Map);
+		expect(captured?.providerSessionState?.size).toBe(0);
+		expect(captured?.preferWebsockets).toBe(true);
+	});
+});
+
 describe("bench service tier", () => {
 	it("sends the configured serviceTier setting when no flag is passed", async () => {
 		const { wire, summary } = await captureServiceTier({ setting: "flex" });

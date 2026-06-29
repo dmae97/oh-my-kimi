@@ -7,8 +7,8 @@
  * with only `sessionId`/`getApiKey`/telemetry — it dropped the session's
  * `streamFn` wrapper (so `providers.openrouterVariant` and `loopGuard` never
  * landed on advisor requests), its `promptCacheKey` (so OpenAI Responses
- * fell back to a different cache shard), and its shared `providerSessionState`
- * (so Codex websocket / Anthropic fast-mode state was not reused).
+ * fell back to a different cache shard), its shared `providerSessionState`,
+ * and its explicit websocket preference.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
@@ -68,7 +68,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		} catch {}
 	});
 
-	it("inherits streamFn, promptCacheKey and providerSessionState from the session", () => {
+	it("inherits streamFn, promptCacheKey, websocket preference, and providerSessionState from the session", () => {
 		const advisorStreamFn: StreamFn = (m, ctx, opts) => streamSimple(m, ctx, opts);
 		const mainAgent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
@@ -80,6 +80,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			modelRegistry,
 			advisorTools: [],
 			advisorStreamFn,
+			preferWebsockets: true,
 		});
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		expect(session.setAdvisorEnabled(true)).toBe(true);
@@ -97,6 +98,7 @@ describe("AgentSession advisor provider-options parity", () => {
 		// Shared transport / fast-mode state map keeps Codex websockets and
 		// Anthropic fast-mode fallbacks consistent across the two agents.
 		expect(advisor.providerSessionState).toBe(session.providerSessionState);
+		expect(session.preferWebsockets).toBe(true);
 
 		// Stable cache key on the advisor session id pins consecutive advisor
 		// turns to the same OpenAI Responses cache shard.
@@ -131,6 +133,7 @@ describe("AgentSession advisor provider-options parity", () => {
 			onResponse,
 			onSseEvent,
 			transformProviderContext,
+			preferWebsockets: true,
 		});
 		session.settings.setModelRole("advisor", "anthropic/claude-sonnet-4-5");
 		expect(session.setAdvisorEnabled(true)).toBe(true);
@@ -160,5 +163,6 @@ describe("AgentSession advisor provider-options parity", () => {
 		expect(opts.sessionId).toBe(advisor.sessionId);
 		expect(opts.promptCacheKey).toBe(advisor.sessionId);
 		expect(opts.providerSessionState).toBe(session.providerSessionState);
+		expect(opts.preferWebsockets).toBe(true);
 	});
 });
