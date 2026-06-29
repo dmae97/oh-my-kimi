@@ -549,6 +549,8 @@ export interface AgentSessionConfig {
 	 * main agent. Defaults to plain `streamSimple` when omitted.
 	 */
 	advisorStreamFn?: StreamFn;
+	/** Hint that OpenAI Codex requests should prefer websocket transport when supported. */
+	preferWebsockets?: boolean;
 	/** Provider payload hook used by the active session request path */
 	onPayload?: SimpleStreamOptions["onPayload"];
 	/** Provider response hook used by the active session request path */
@@ -1468,6 +1470,7 @@ export class AgentSession {
 	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
 	#sideStreamFn: StreamFn;
 	#advisorStreamFn: StreamFn | undefined;
+	#preferWebsockets: boolean | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#rebuildSystemPrompt:
 		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
@@ -1798,6 +1801,7 @@ export class AgentSession {
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#advisorStreamFn = config.advisorStreamFn;
+		this.#preferWebsockets = config.preferWebsockets;
 		this.#onPayload = config.onPayload;
 		this.rawSseDebugBuffer = config.rawSseDebugBuffer ?? new RawSseDebugBuffer();
 		// Avoid wrapping in an `async` closure when no user callback is configured: the
@@ -2139,6 +2143,7 @@ export class AgentSession {
 				sessionId: advisorSessionId,
 				promptCacheKey: advisorSessionId,
 				providerSessionState: this.#providerSessionState,
+				preferWebsockets: this.#preferWebsockets,
 				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
 				streamFn: this.#advisorStreamFn,
 				onPayload: this.#onPayload,
@@ -2622,6 +2627,11 @@ export class AgentSession {
 	/** Provider-scoped mutable state store for transport/session caches. */
 	get providerSessionState(): Map<string, ProviderSessionState> {
 		return this.#providerSessionState;
+	}
+
+	/** Hint forwarded to provider calls that support websocket transport. */
+	get preferWebsockets(): boolean | undefined {
+		return this.#preferWebsockets;
 	}
 
 	getHindsightSessionState(): HindsightSessionState | undefined {
