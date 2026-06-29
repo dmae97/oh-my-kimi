@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
+- Fixed Windows `--extension` paths with spaces or `\\?\` prefixes being truncated or passed through to Bun import/spawn APIs. ([#3804](https://github.com/can1357/oh-my-pi/issues/3804))
 
 ## [16.2.5] - 2026-06-28
 

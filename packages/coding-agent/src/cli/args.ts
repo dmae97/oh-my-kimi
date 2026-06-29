@@ -94,6 +94,35 @@ const PARSE_DEPS: ParseDeps = {
 	thinkingEfforts: CLI_THINKING_LEVELS,
 };
 
+const WINDOWS_PATH_VALUE_FLAGS: ReadonlySet<string> = new Set(["--extension", "-e", "--hook"]);
+const WINDOWS_PATH_START_RE =
+	/^(?:[A-Za-z]:[\\/]|\\\\[?]\\(?:[A-Za-z]:[\\/]|UNC[\\/])|\\\\[^\\/]+[\\/][^\\/]+[\\/]|\/\/[?]\/(?:[A-Za-z]:\/|UNC\/)|\/\/[^/]+\/[^/]+\/)/;
+const WINDOWS_MODULE_PATH_SUFFIX_RE = /\.(?:[cm]?[jt]sx?)$/i;
+
+function consumeBuiltInStringValue(flag: string, args: string[], valueIndex: number): { value: string; index: number } {
+	const value = args[valueIndex];
+	if (
+		value === undefined ||
+		!WINDOWS_PATH_VALUE_FLAGS.has(flag) ||
+		!WINDOWS_PATH_START_RE.test(value) ||
+		WINDOWS_MODULE_PATH_SUFFIX_RE.test(value)
+	) {
+		return { value: value ?? "", index: valueIndex };
+	}
+
+	let candidate = value;
+	for (let index = valueIndex + 1; index < args.length; index++) {
+		const next = args[index];
+		if (next === PROFILE_BOOTSTRAP_BOUNDARY_ARG || next.startsWith("-")) break;
+		candidate += ` ${next}`;
+		if (WINDOWS_MODULE_PATH_SUFFIX_RE.test(candidate)) {
+			return { value: candidate, index };
+		}
+	}
+
+	return { value, index: valueIndex };
+}
+
 export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	// Work on a copy: the `--option=value` handling below splices the value
 	// into the array, and callers reuse the same argv (the post-extension
@@ -161,7 +190,9 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			// here only when its boolean extension is NOT loaded) would otherwise swallow
 			// the marker as its value and drop the user's trailing message.
 			if (i + 1 < args.length && args[i + 1] !== PROFILE_BOOTSTRAP_BOUNDARY_ARG) {
-				STRING_SETTERS[arg](result, args[++i], PARSE_DEPS);
+				const consumed = consumeBuiltInStringValue(arg, args, i + 1);
+				i = consumed.index;
+				STRING_SETTERS[arg](result, consumed.value, PARSE_DEPS);
 			}
 		} else if (OPTIONAL_VALUE_FLAGS.has(arg)) {
 			const config = OPTIONAL_FLAGS[arg];
