@@ -116,6 +116,7 @@ import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
+	escapeXmlText,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
