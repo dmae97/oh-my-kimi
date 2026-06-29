@@ -27,6 +27,7 @@ import { ToolError } from "../../tools/tool-errors";
 import { generateDiffString } from "../diff";
 import { getFileSnapshotStore } from "../file-snapshot-store";
 import type { EditToolDetails, EditToolPerFileResult, LspBatchRequest } from "../renderer";
+import { pruneOversizedEditSnapshots } from "../snapshot-details";
 import { nativeBlockResolver } from "./block-resolver";
 import { HashlineFilesystem } from "./filesystem";
 import { hashPatchInput, NOOP_HARD_LIMIT, recordNoopEdit, resetNoopEdit } from "./noop-loop-guard";
@@ -114,17 +115,22 @@ function renderSection(
 	if (result.op === "delete") {
 		const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
 			content: [{ type: "text", text: `Deleted ${result.path}` }],
-			details: {
+			details: pruneOversizedEditSnapshots({
 				diff: "",
 				op: "delete",
 				path: result.path,
 				oldText: result.before,
 				meta: outputMeta().get(),
-			},
+			}),
 		};
 		return {
 			toolResult,
-			perFileResult: { path: result.path, diff: "", op: "delete", oldText: result.before },
+			perFileResult: pruneOversizedEditSnapshots({
+				path: result.path,
+				diff: "",
+				op: "delete",
+				oldText: result.before,
+			}),
 		};
 	}
 
@@ -161,7 +167,7 @@ function renderSection(
 					text: `${result.header}${blockBlock}${moveBlock}${previewBlock}${warningsBlock}`,
 				},
 			],
-			details: {
+			details: pruneOversizedEditSnapshots({
 				diff: diff.diff,
 				firstChangedLine,
 				diagnostics,
@@ -172,9 +178,9 @@ function renderSection(
 				oldText: result.before,
 				newText: result.after,
 				meta,
-			},
+			}),
 		},
-		perFileResult: {
+		perFileResult: pruneOversizedEditSnapshots({
 			path: result.moveDest ?? result.path,
 			diff: diff.diff,
 			firstChangedLine,
@@ -184,7 +190,7 @@ function renderSection(
 			sourcePath: result.moveDest ? sourcePath : undefined,
 			oldText: result.before,
 			newText: result.after,
-		},
+		}),
 	};
 }
 

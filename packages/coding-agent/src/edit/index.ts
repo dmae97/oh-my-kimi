@@ -25,6 +25,7 @@ import applyPatchGrammar from "./modes/apply-patch.lark" with { type: "text" };
 import { executePatchSingle, type PatchEditEntry, type PatchParams, patchEditSchema } from "./modes/patch";
 import { executeReplaceSingle, type ReplaceEditEntry, type ReplaceParams, replaceEditSchema } from "./modes/replace";
 import { type EditToolDetails, type EditToolPerFileResult, getLspBatchRequest, type LspBatchRequest } from "./renderer";
+import { pruneOversizedEditSnapshots } from "./snapshot-details";
 import { EDIT_MODE_STRATEGIES } from "./streaming";
 
 export * from "@oh-my-pi/hashline";
@@ -38,6 +39,7 @@ export * from "./modes/patch";
 export * from "./modes/replace";
 export * from "./normalize";
 export * from "./renderer";
+export * from "./snapshot-details";
 export * from "./streaming";
 
 type TInput =
@@ -158,6 +160,7 @@ async function executeApplyPatchPerFile(
 				meta: details?.meta,
 				oldText: details?.oldText,
 				newText: details?.newText,
+				snapshotsPruned: details?.snapshotsPruned,
 			});
 			const text = result.content?.find(c => c.type === "text")?.text ?? "";
 			if (text) contentTexts.push(text);
@@ -186,14 +189,14 @@ async function executeApplyPatchPerFile(
 
 	return {
 		content: [{ type: "text", text: contentTexts.join("\n") }],
-		details: {
+		details: pruneOversizedEditSnapshots({
 			diff: perFileResults
 				.map(r => r.diff)
 				.filter(Boolean)
 				.join("\n"),
 			firstChangedLine: perFileResults.find(r => r.firstChangedLine)?.firstChangedLine,
 			perFileResults,
-		},
+		}),
 	};
 }
 
@@ -216,6 +219,11 @@ async function executeSinglePathEntries(
 	let firstOldText: string | undefined;
 	let hasLastNewText = false;
 	let lastNewText: string | undefined;
+	// Any pruned child invalidates the aggregate snapshot: combining a kept
+	// first-entry oldText with a pruned next entry's newText (or vice-versa)
+	// would describe a transition the file never made. Suppress aggregate
+	// snapshots and stamp the marker so ACP/downstream can degrade cleanly.
+	let snapshotsPruned = false;
 
 	for (let i = 0; i < runs.length; i++) {
 		const isLast = i === runs.length - 1;
@@ -239,6 +247,7 @@ async function executeSinglePathEntries(
 				lastNewText = details.newText;
 				hasLastNewText = true;
 			}
+			if (details?.snapshotsPruned) snapshotsPruned = true;
 			const text = result.content?.find(c => c.type === "text")?.text ?? "";
 			if (text) contentTexts.push(text);
 		} catch (err) {
@@ -276,13 +285,17 @@ async function executeSinglePathEntries(
 
 	return {
 		content: [{ type: "text", text: contentTexts.join("\n") }],
-		details: {
+		details: pruneOversizedEditSnapshots({
 			diff: diffTexts.join("\n"),
 			firstChangedLine,
 			path: metadataPath ?? path,
-			...(hasFirstOldText ? { oldText: firstOldText } : {}),
-			...(hasLastNewText ? { newText: lastNewText } : {}),
-		},
+			...(snapshotsPruned
+				? { snapshotsPruned: true as const }
+				: {
+						...(hasFirstOldText ? { oldText: firstOldText } : {}),
+						...(hasLastNewText ? { newText: lastNewText } : {}),
+					}),
+		}),
 		// Any per-entry failure marks the aggregate result as an error so the
 		// renderer takes the error branch instead of falling through to the
 		// streaming-edit preview (which displays the *proposed* diff and looks
