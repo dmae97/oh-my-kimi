@@ -15,6 +15,8 @@
 - Fixed large resumed sessions dominated by repeated compaction summaries exhausting memory on Ctrl+C flush, and improved fork session previews that start with developer or assistant turns. ([#3789](https://github.com/can1357/oh-my-pi/issues/3789))
 
 - Fixed `omp search` applying `providers.webSearch` and `providers.webSearchExclude` before resolving its implicit provider chain. ([#3793](https://github.com/can1357/oh-my-pi/issues/3793))
+- Fixed Gemini web search using only Cloud Code Assist OAuth by allowing standard `GEMINI_API_KEY` developer API credentials to run native Google Search grounding. ([#3810](https://github.com/can1357/oh-my-pi/issues/3810))
+
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
 - Fixed the `edit` tool persisting unbounded full-file `oldText` / `newText` snapshots in tool-result `details`, inflating per-turn session JSONL lines (hundreds of KB per edit on large files). `details.oldText`/`details.newText` are now pruned when their combined length exceeds 32 KB; the visible diff, path, line, and diagnostic metadata are preserved, and ACP `diff` content still flows for smaller edits. ([#3786](https://github.com/can1357/oh-my-pi/issues/3786))
 
