@@ -24,144 +24,194 @@ function makeParams(query: string, fetch: FetchImpl) {
 	} as const;
 }
 
+function htmlPage(...results: Array<{ url: string; title: string; snippet?: string }>): string {
+	const blocks = results
+		.map(r => {
+			const href = `//duckduckgo.com/l/?uddg=${encodeURIComponent(r.url)}&amp;rut=abc`;
+			const snippet = r.snippet === undefined ? "" : `<a class="result__snippet" href="${href}">${r.snippet}</a>`;
+			return `<div class="result results_links results_links_deep web-result">
+				<h2 class="result__title"><a rel="nofollow" class="result__a" href="${href}">${r.title}</a></h2>
+				${snippet}
+			</div>`;
+		})
+		.join("\n");
+	return `<!DOCTYPE html><html><body>${blocks}<div class="nav-link">next</div></body></html>`;
+}
+
+function anomalyPage(): string {
+	return `<!DOCTYPE html><html><body>
+		<form id="challenge-form" action="//duckduckgo.com/anomaly.js?cc=botnet" method="POST">
+			<div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>
+		</form>
+	</body></html>`;
+}
+
 describe("DuckDuckGo web search provider", () => {
-	it("calls the official Instant Answer API with unauthenticated JSON query params", async () => {
+	it("POSTs the query and recency filter to the no-JS HTML frontend", async () => {
 		let capturedUrl: string | null = null;
 		let capturedInit: RequestInit | undefined;
 		const fetchMock: FetchImpl = (input, init) => {
 			capturedUrl = typeof input === "string" ? input : input.toString();
 			capturedInit = init;
 			return Promise.resolve(
-				new Response(JSON.stringify({ AbstractText: "Duck answer", Results: [] }), {
+				new Response(htmlPage({ url: "https://example.com/a", title: "A" }), {
 					status: 200,
-					headers: { "Content-Type": "application/json" },
+					headers: { "Content-Type": "text/html" },
 				}),
 			);
 		};
 
-		await searchDuckDuckGo(makeParams("instant answer", fetchMock));
+		await searchDuckDuckGo({ ...makeParams("how to fix bug in code", fetchMock), recency: "week" });
 
-		expect(capturedUrl).not.toBeNull();
-		const url = new URL(capturedUrl ?? "");
-		expect(`${url.origin}${url.pathname}`).toBe("https://api.duckduckgo.com/");
-		expect(url.searchParams.get("q")).toBe("instant answer");
-		expect(url.searchParams.get("format")).toBe("json");
-		expect(url.searchParams.get("no_redirect")).toBe("1");
-		expect(url.searchParams.get("no_html")).toBe("1");
-		expect(url.searchParams.get("skip_disambig")).toBe("1");
-		expect(url.searchParams.get("t")).toBe("oh-my-pi");
-		expect(capturedInit?.method).toBe("GET");
-		expect(capturedInit?.headers).toBeUndefined();
+		expect(capturedUrl).toBe("https://html.duckduckgo.com/html/");
+		expect(capturedInit?.method).toBe("POST");
+		const form = new URLSearchParams(capturedInit?.body as string);
+		expect(form.get("q")).toBe("how to fix bug in code");
+		expect(form.get("kl")).toBe("us-en");
+		expect(form.get("df")).toBe("w");
+		const headers = capturedInit?.headers as Record<string, string>;
+		expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
+		expect(headers["User-Agent"]).toContain("Mozilla/5.0");
 	});
 
-	it("uses AbstractText as the answer and flattens abstract, result, and nested related topics within the local limit", async () => {
-		const fetchMock: FetchImpl = () =>
-			Promise.resolve(
-				new Response(
-					JSON.stringify({
-						AbstractText: "  DuckDuckGo <b>abstract</b> &amp; answer  ",
-						AbstractURL: " https://example.com/abstract ",
-						AbstractSource: " Example Abstract Source ",
-						Heading: "Example Heading",
-						Results: [
-							{
-								FirstURL: "https://example.com/result",
-								Text: "Result <i>snippet</i>",
-							},
-						],
-						RelatedTopics: [
-							{
-								FirstURL: "https://example.com/related",
-								Text: "Related topic",
-							},
-							{
-								Topics: [
-									{
-										FirstURL: "https://example.com/nested",
-										Text: "Nested related topic",
-									},
-								],
-							},
-							{
-								FirstURL: "https://example.com/omitted-by-limit",
-								Text: "Should be omitted by local limit",
-							},
-						],
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-			);
-
-		const response = await searchDuckDuckGo({ ...makeParams("duck mapping", fetchMock), numSearchResults: 4 });
-
-		expect(response).toMatchObject({
-			provider: "duckduckgo",
-			answer: "DuckDuckGo abstract & answer",
-			sources: [
-				{
-					title: "Example Abstract Source",
-					url: "https://example.com/abstract",
-					snippet: "DuckDuckGo abstract & answer",
-				},
-				{
-					title: "Result snippet",
-					url: "https://example.com/result",
-					snippet: "Result snippet",
-				},
-				{
-					title: "Related topic",
-					url: "https://example.com/related",
-					snippet: "Related topic",
-				},
-				{
-					title: "Nested related topic",
-					url: "https://example.com/nested",
-					snippet: "Nested related topic",
-				},
-			],
-		});
-		expect(response.sources).toHaveLength(4);
-		expect(response.sources.some(source => source.url === "https://example.com/omitted-by-limit")).toBe(false);
-	});
-
-	it("clamps oversized local result limits to DuckDuckGo's provider maximum", async () => {
-		const fetchMock: FetchImpl = () =>
-			Promise.resolve(
-				new Response(
-					JSON.stringify({
-						RelatedTopics: Array.from({ length: 25 }, (_value, index) => ({
-							FirstURL: `https://example.com/topic-${index}`,
-							Text: `Topic ${index}`,
-						})),
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-			);
-
-		const response = await searchDuckDuckGo({ ...makeParams("duck clamp", fetchMock), numSearchResults: 999 });
-
-		expect(response.sources).toHaveLength(20);
-		expect(response.sources.at(0)?.url).toBe("https://example.com/topic-0");
-		expect(response.sources.at(-1)?.url).toBe("https://example.com/topic-19");
-		expect(response.sources.some(source => source.url === "https://example.com/topic-20")).toBe(false);
-	});
-
-	it.each([
-		["Answer", { Answer: "  Direct answer  " }, "Direct answer"],
-		["Definition", { Definition: "  Definition answer  " }, "Definition answer"],
-	] as const)("falls back to %s when AbstractText is absent", async (_field, payload, expectedAnswer) => {
-		const fetchMock: FetchImpl = () =>
-			Promise.resolve(
-				new Response(JSON.stringify(payload), {
+	it("omits the df form param when no recency is requested", async () => {
+		let capturedInit: RequestInit | undefined;
+		const fetchMock: FetchImpl = (_input, init) => {
+			capturedInit = init;
+			return Promise.resolve(
+				new Response(htmlPage({ url: "https://example.com/x", title: "X" }), {
 					status: 200,
-					headers: { "Content-Type": "application/json" },
+					headers: { "Content-Type": "text/html" },
+				}),
+			);
+		};
+
+		await searchDuckDuckGo(makeParams("plain query", fetchMock));
+
+		const form = new URLSearchParams(capturedInit?.body as string);
+		expect(form.has("df")).toBe(false);
+	});
+
+	it("parses result blocks, unwraps DDG redirect URLs, and clamps to numSearchResults", async () => {
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				new Response(
+					htmlPage(
+						{
+							url: "https://example.com/first",
+							title: "First &amp; result",
+							snippet: "Snippet <b>one</b>",
+						},
+						{ url: "https://example.com/second", title: "Second" },
+						{ url: "https://example.com/third", title: "Third" },
+					),
+					{ status: 200, headers: { "Content-Type": "text/html" } },
+				),
+			);
+
+		const response = await searchDuckDuckGo({ ...makeParams("multi", fetchMock), numSearchResults: 2 });
+
+		expect(response.provider).toBe("duckduckgo");
+		expect(response.answer).toBeUndefined();
+		expect(response.sources).toEqual([
+			{
+				title: "First & result",
+				url: "https://example.com/first",
+				snippet: "Snippet one",
+			},
+			{
+				title: "Second",
+				url: "https://example.com/second",
+				snippet: undefined,
+			},
+		]);
+	});
+
+	it("deduplicates results that share the same target URL", async () => {
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				new Response(
+					htmlPage(
+						{ url: "https://example.com/dup", title: "First copy", snippet: "one" },
+						{ url: "https://example.com/dup", title: "Second copy", snippet: "two" },
+						{ url: "https://example.com/unique", title: "Other" },
+					),
+					{ status: 200, headers: { "Content-Type": "text/html" } },
+				),
+			);
+
+		const response = await searchDuckDuckGo(makeParams("dup query", fetchMock));
+
+		expect(response.sources.map(s => s.url)).toEqual(["https://example.com/dup", "https://example.com/unique"]);
+	});
+
+	it("clamps oversized result limits to the provider maximum", async () => {
+		const many = Array.from({ length: 40 }, (_, i) => ({
+			url: `https://example.com/r-${i}`,
+			title: `Result ${i}`,
+		}));
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				new Response(htmlPage(...many), {
+					status: 200,
+					headers: { "Content-Type": "text/html" },
 				}),
 			);
 
-		const response = await searchDuckDuckGo(makeParams("fallback answer", fetchMock));
-		expect(response).toMatchObject({
+		const response = await searchDuckDuckGo({ ...makeParams("clamp", fetchMock), numSearchResults: 999 });
+
+		expect(response.sources).toHaveLength(30);
+		expect(response.sources.at(0)?.url).toBe("https://example.com/r-0");
+		expect(response.sources.at(-1)?.url).toBe("https://example.com/r-29");
+	});
+
+	it("supports unwrapped result hrefs (sponsored/instant rows)", async () => {
+		const html = `<div class="result"><h2 class="result__title">
+			<a class="result__a" href="https://direct.example/page">Direct</a>
+		</h2></div>`;
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(new Response(html, { status: 200, headers: { "Content-Type": "text/html" } }));
+
+		const response = await searchDuckDuckGo(makeParams("direct", fetchMock));
+
+		expect(response.sources).toEqual([
+			{ title: "Direct", url: "https://direct.example/page", snippet: undefined },
+		]);
+	});
+
+	it("throws a clear SearchProviderError when DDG serves the anomaly modal", async () => {
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				new Response(anomalyPage(), {
+					status: 202,
+					headers: { "Content-Type": "text/html" },
+				}),
+			);
+
+		try {
+			await searchDuckDuckGo(makeParams("blocked", fetchMock));
+			expect.unreachable("DDG anomaly response should reject");
+		} catch (error) {
+			expect(error).toBeInstanceOf(SearchProviderError);
+			const err = error as SearchProviderError;
+			expect(err.provider).toBe("duckduckgo");
+			expect(err.status).toBe(429);
+			expect(err.message).toMatch(/bot-detection challenge/i);
+		}
+	});
+
+	it("flags anomaly pages served with a 200 status", async () => {
+		const fetchMock: FetchImpl = () =>
+			Promise.resolve(
+				new Response(anomalyPage(), {
+					status: 200,
+					headers: { "Content-Type": "text/html" },
+				}),
+			);
+
+		await expect(searchDuckDuckGo(makeParams("blocked-200", fetchMock))).rejects.toMatchObject({
 			provider: "duckduckgo",
-			answer: expectedAnswer,
+			status: 429,
 		});
 	});
 
@@ -181,7 +231,7 @@ describe("DuckDuckGo web search provider", () => {
 			expect(error).toMatchObject({
 				provider: "duckduckgo",
 				status: 503,
-				message: "DuckDuckGo API error (503): upstream unavailable",
+				message: "DuckDuckGo HTML error (503)",
 			});
 		}
 	});
