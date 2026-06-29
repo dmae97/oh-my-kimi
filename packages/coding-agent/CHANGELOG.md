@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
+- Fixed `omp install pi-lean-ctx` failing extension validation because the legacy Pi coding-agent root shim did not expose the read-only tool factories (`createFindToolDefinition`, `createLsToolDefinition`, and `createGrepToolDefinition`) that older Pi plugins import. ([#3808](https://github.com/can1357/oh-my-pi/issues/3808))
 
 ## [16.2.5] - 2026-06-28
 
