@@ -6,122 +6,180 @@ import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
-const DUCKDUCKGO_SEARCH_URL = "https://api.duckduckgo.com/";
+/**
+ * DuckDuckGo's no-JS HTML search frontend. POST `q=…` to receive a static
+ * results page we can parse without a real browser. The Instant Answer API
+ * (`api.duckduckgo.com`) was tried first but it only returns content for
+ * Wikipedia/Wolfram-Alpha-style topics — empty for the vast majority of
+ * agent queries (see #3799).
+ */
+const DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/";
 const DEFAULT_NUM_RESULTS = 10;
-const MAX_NUM_RESULTS = 20;
+const MAX_NUM_RESULTS = 30;
 
-interface DuckDuckGoTopic {
-	FirstURL?: string | null;
-	Text?: string | null;
-	Topics?: DuckDuckGoTopic[] | null;
+/**
+ * Recency → DDG `df` form param. DDG accepts single letters for the time
+ * filter; queries without a `df` value return the unfiltered default.
+ */
+const RECENCY_TO_DDG_DF: Record<NonNullable<SearchParams["recency"]>, string> = {
+	day: "d",
+	week: "w",
+	month: "m",
+	year: "y",
+};
+
+/**
+ * Browser-like UA so DDG serves the standard results page instead of the
+ * mobile-only or noscript variants. DDG returns HTTP 202 plus an anomaly
+ * modal when it suspects automation; we surface that as a clear error so
+ * the orchestrator can fall through to the next provider with context.
+ */
+const BROWSER_USER_AGENT =
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+interface ParsedResult {
+	title: string;
+	url: string;
+	snippet?: string;
 }
 
-interface DuckDuckGoResponse {
-	AbstractText?: string | null;
-	AbstractURL?: string | null;
-	AbstractSource?: string | null;
-	Answer?: string | null;
-	Definition?: string | null;
-	Heading?: string | null;
-	Results?: DuckDuckGoTopic[] | null;
-	RelatedTopics?: DuckDuckGoTopic[] | null;
-}
-
-function cleanText(value: string | null | undefined): string | undefined {
-	const cleaned = value
-		?.replace(/<[^>]*>/g, " ")
+/**
+ * Decode an HTML-encoded fragment lifted from DDG markup. Strips inline tags
+ * (the results page wraps query terms in `<b>`), unescapes the small set of
+ * named entities DDG emits, and normalises whitespace.
+ */
+function decodeHtmlText(value: string): string {
+	return value
+		.replace(/<[^>]*>/g, " ")
+		.replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+		.replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(Number.parseInt(code, 16)))
 		.replace(/&nbsp;/gi, " ")
 		.replace(/&amp;/gi, "&")
 		.replace(/&lt;/gi, "<")
 		.replace(/&gt;/gi, ">")
 		.replace(/&quot;/gi, '"')
-		.replace(/&#39;/gi, "'")
+		.replace(/&#39;|&apos;/gi, "'")
 		.replace(/\s+/g, " ")
 		.trim();
-	return cleaned ? cleaned : undefined;
 }
 
-function addSource(sources: SearchSource[], source: SearchSource): void {
-	if (!source.url || sources.some(existing => existing.url === source.url)) return;
-	sources.push(source);
-}
-
-function addTopicSource(sources: SearchSource[], topic: DuckDuckGoTopic): void {
-	const url = topic.FirstURL?.trim();
-	if (!url) return;
-	const text = cleanText(topic.Text);
-	addSource(sources, {
-		title: text ?? url,
-		url,
-		snippet: text,
-	});
-}
-
-function collectTopicSources(sources: SearchSource[], topics: readonly DuckDuckGoTopic[] | null | undefined): void {
-	if (!topics) return;
-	for (const topic of topics) {
-		addTopicSource(sources, topic);
-		collectTopicSources(sources, topic.Topics);
+/**
+ * Resolve a DDG result href back to the underlying target URL.
+ *
+ * DDG routes outbound clicks through `//duckduckgo.com/l/?uddg=<encoded>` so
+ * it can record analytics; we want the unwrapped URL. Handles three shapes
+ * the page mixes in practice: redirect wrappers, protocol-relative links,
+ * and (rarely) absolute URLs on sponsored or instant answer rows.
+ */
+function unwrapResultUrl(href: string): string | undefined {
+	if (!href) return undefined;
+	const decoded = href.replace(/&amp;/gi, "&");
+	const wrapMatch = decoded.match(/[?&]uddg=([^&]+)/);
+	if (wrapMatch) {
+		try {
+			return decodeURIComponent(wrapMatch[1]);
+		} catch {
+			return undefined;
+		}
 	}
+	if (decoded.startsWith("//")) return `https:${decoded}`;
+	if (decoded.startsWith("http://") || decoded.startsWith("https://")) return decoded;
+	return undefined;
 }
 
-async function callDuckDuckGoSearch(params: SearchParams): Promise<DuckDuckGoResponse> {
-	const queryString = [
-		["q", params.query],
-		["format", "json"],
-		["no_redirect", "1"],
-		["no_html", "1"],
-		["skip_disambig", "1"],
-		["t", "oh-my-pi"],
-	]
-		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-		.join("&");
-	const response = await (params.fetch ?? fetch)(`${DUCKDUCKGO_SEARCH_URL}?${queryString}`, {
-		method: "GET",
+/**
+ * Walk the HTML page and pull out result blocks in document order.
+ *
+ * DDG renders each result inside a `<div class="result …">` container with
+ * `<a class="result__a" …>` for the title link and an optional sibling
+ * `<a class="result__snippet">` (or `<div class="result__snippet">` in some
+ * variants) for the preview text. Sponsored placements, missing snippets,
+ * and the trailing pagination row are tolerated.
+ */
+function parseHtmlResults(html: string): ParsedResult[] {
+	const results: ParsedResult[] = [];
+	const blockRe =
+		/<div\b[^>]*\bclass="[^"]*\bresult\b[^"]*"[^>]*>([\s\S]*?)(?=<div\b[^>]*\bclass="[^"]*\bresult\b|<div\b[^>]*\bclass="[^"]*\bnav-link\b|$)/g;
+	const titleRe = /<a\b[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/;
+	const snippetRe = /<(?:a|div|span)\b[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div|span)>/;
+	for (const match of html.matchAll(blockRe)) {
+		const block = match[1];
+		const title = titleRe.exec(block);
+		if (!title) continue;
+		const url = unwrapResultUrl(title[1]);
+		if (!url) continue;
+		const titleText = decodeHtmlText(title[2]);
+		if (!titleText) continue;
+		const snippet = snippetRe.exec(block);
+		const snippetText = snippet ? decodeHtmlText(snippet[1]) : undefined;
+		results.push({ title: titleText, url, snippet: snippetText || undefined });
+	}
+	return results;
+}
+
+/**
+ * `true` when the page DDG returned is the bot-challenge modal instead of
+ * real results. DDG mixes status codes (200 vs 202) on these so the body
+ * check is the reliable signal.
+ */
+function isAnomalyResponse(html: string): boolean {
+	return html.includes("anomaly-modal") || html.includes("anomaly.js");
+}
+
+async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
+	const form = new URLSearchParams({ q: params.query, kl: "us-en" });
+	const df = params.recency ? RECENCY_TO_DDG_DF[params.recency] : undefined;
+	if (df) form.set("df", df);
+
+	const response = await (params.fetch ?? fetch)(DUCKDUCKGO_HTML_URL, {
+		method: "POST",
+		body: form.toString(),
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			"User-Agent": BROWSER_USER_AGENT,
+			Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"Accept-Language": "en-US,en;q=0.5",
+		},
 		signal: withHardTimeout(params.signal),
 	});
 
-	if (!response.ok) {
-		const errorText = await response.text();
-		const classified = classifyProviderHttpError("duckduckgo", response.status, errorText);
+	const body = await response.text();
+	if (!response.ok && response.status !== 202) {
+		const classified = classifyProviderHttpError("duckduckgo", response.status, body);
 		if (classified) throw classified;
+		throw new SearchProviderError("duckduckgo", `DuckDuckGo HTML error (${response.status})`, response.status);
+	}
+
+	if (isAnomalyResponse(body)) {
 		throw new SearchProviderError(
 			"duckduckgo",
-			`DuckDuckGo API error (${response.status}): ${errorText}`,
-			response.status,
+			"DuckDuckGo blocked the request with a bot-detection challenge. DuckDuckGo throttles repeat searches from datacenter and shared-egress IPs; configure another provider (e.g. Brave, Tavily, SearXNG) or retry from a residential network.",
+			429,
 		);
 	}
 
-	return (await response.json()) as DuckDuckGoResponse;
+	return body;
 }
 
-/** Execute DuckDuckGo Instant Answer API search. */
+/** Execute a DuckDuckGo web search via the no-JS HTML frontend. */
 export async function searchDuckDuckGo(params: SearchParams): Promise<SearchResponse> {
 	const numResults = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-	const data = await callDuckDuckGoSearch(params);
-	const answer = cleanText(data.AbstractText) ?? cleanText(data.Answer) ?? cleanText(data.Definition);
-	const sources: SearchSource[] = [];
+	const html = await callDuckDuckGoHtml(params);
+	const parsed = parseHtmlResults(html);
 
-	const abstractUrl = data.AbstractURL?.trim();
-	if (abstractUrl) {
-		addSource(sources, {
-			title: cleanText(data.AbstractSource) ?? cleanText(data.Heading) ?? abstractUrl,
-			url: abstractUrl,
-			snippet: cleanText(data.AbstractText),
-		});
+	const sources: SearchSource[] = [];
+	const seen = new Set<string>();
+	for (const result of parsed) {
+		if (seen.has(result.url)) continue;
+		seen.add(result.url);
+		sources.push({ title: result.title, url: result.url, snippet: result.snippet });
+		if (sources.length >= numResults) break;
 	}
 
-	collectTopicSources(sources, data.Results);
-	collectTopicSources(sources, data.RelatedTopics);
-
-	return {
-		provider: "duckduckgo",
-		answer,
-		sources: sources.slice(0, numResults),
-	};
+	return { provider: "duckduckgo", sources };
 }
 
-/** Search provider for DuckDuckGo Instant Answer API. */
+/** Search provider for DuckDuckGo (no API key required). */
 export class DuckDuckGoProvider extends SearchProvider {
 	readonly id = "duckduckgo";
 	readonly label = "DuckDuckGo";

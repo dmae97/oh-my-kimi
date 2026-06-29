@@ -14,7 +14,7 @@
   - `packages/coding-agent/src/web/search/providers/anthropic.ts` — Claude web-search provider.
   - `packages/coding-agent/src/web/search/providers/brave.ts` — Brave Search API adapter.
   - `packages/coding-agent/src/web/search/providers/codex.ts` — OpenAI Codex SSE adapter.
-  - `packages/coding-agent/src/web/search/providers/duckduckgo.ts` — DuckDuckGo Instant Answer API adapter.
+  - `packages/coding-agent/src/web/search/providers/duckduckgo.ts` — DuckDuckGo HTML frontend scraper.
   - `packages/coding-agent/src/web/search/providers/exa.ts` — Exa API or MCP adapter.
   - `packages/coding-agent/src/web/search/providers/firecrawl.ts` — Firecrawl search adapter.
   - `packages/coding-agent/src/web/search/providers/gemini.ts` — Gemini grounding SSE adapter.
@@ -197,8 +197,10 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - Output: `sources`, `relatedQuestions` from `suggestions`.
   - **DuckDuckGo** — `packages/coding-agent/src/web/search/providers/duckduckgo.ts`
     - Availability: always available; no API key.
-    - Querying: GET official Instant Answer API `https://api.duckduckgo.com/` with JSON/no-HTML flags; no scraped HTML.
-    - `limit` / `num_search_results`: collapsed and clamped to `1..20`, default `10`; output may include `answer` and `sources` from abstracts/results/topics.
+    - Querying: POST the no-JS HTML frontend `https://html.duckduckgo.com/html/` with `q`, `kl=us-en`, and an optional `df` recency filter (`d`/`w`/`m`/`y`); parses the result list and unwraps `//duckduckgo.com/l/?uddg=…` redirect URLs.
+    - `recency` maps to `df`; values outside `day|week|month|year` are ignored.
+    - `limit` / `num_search_results`: collapsed and clamped to `1..30`, default `10`; output exposes `sources` only (DuckDuckGo's HTML page does not return a standalone abstract).
+    - DuckDuckGo serves a bot-detection challenge (HTTP 200/202 with an `anomaly-modal` body) when it throttles datacenter or shared-egress IPs. The adapter detects this and raises a `SearchProviderError` so the orchestrator can fall through to the next configured provider with a clear cause.
 
 ## Side Effects
 - Network

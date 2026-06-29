@@ -43,7 +43,7 @@ export const SEARCH_PROVIDER_OPTIONS = [
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
-	{ value: "duckduckgo", label: "DuckDuckGo", description: "Uses DuckDuckGo Instant Answer API (no API key)" },
+	{ value: "duckduckgo", label: "DuckDuckGo", description: "Scrapes the DuckDuckGo HTML frontend (no API key)" },
 ] as const;
 
 /** Supported web search providers (every option except `auto`). */
