@@ -22,14 +22,14 @@ import type { EditToolDetails, EditToolPerFileResult } from "./renderer";
  */
 export const MAX_EDIT_SNAPSHOT_TEXT_CHARS = 32_768;
 
-type WithSnapshot = { oldText?: string; newText?: string };
+type WithSnapshot = { oldText?: string; newText?: string; snapshotsPruned?: boolean };
 
 function pruneSnapshot<T extends WithSnapshot>(details: T): T {
 	if ((details.oldText?.length ?? 0) + (details.newText?.length ?? 0) <= MAX_EDIT_SNAPSHOT_TEXT_CHARS) {
 		return details;
 	}
 	const { oldText: _old, newText: _new, ...rest } = details;
-	return rest as T;
+	return { ...rest, snapshotsPruned: true } as T;
 }
 
 /**

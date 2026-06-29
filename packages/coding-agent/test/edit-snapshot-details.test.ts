@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	DEFAULT_FUZZY_THRESHOLD,
+	EditTool,
+	type EditToolDetails,
 	executePatchSingle,
 	executeReplaceSingle,
 	MAX_EDIT_SNAPSHOT_TEXT_CHARS,
@@ -69,7 +71,7 @@ describe("pruneOversizedEditSnapshots", () => {
 			oldText: oversized,
 			newText: oversized,
 		});
-		expect(result).toEqual({ diff: "@@", path: "/p", firstChangedLine: 5 });
+		expect(result).toEqual({ diff: "@@", path: "/p", firstChangedLine: 5, snapshotsPruned: true });
 		expect("oldText" in result).toBe(false);
 		expect("newText" in result).toBe(false);
 	});
@@ -84,7 +86,7 @@ describe("pruneOversizedEditSnapshots", () => {
 				{ path: "/small", diff: "d2", oldText: small, newText: small },
 			],
 		});
-		expect(result.perFileResults?.[0]).toEqual({ path: "/big", diff: "d1" });
+		expect(result.perFileResults?.[0]).toEqual({ path: "/big", diff: "d1", snapshotsPruned: true });
 		expect(result.perFileResults?.[1]).toEqual({
 			path: "/small",
 			diff: "d2",
@@ -139,5 +141,50 @@ describe("executeReplaceSingle on oversized files", () => {
 		expect(details.path).toBe(path.join(tempDir, "big.txt"));
 		expect(details.oldText).toBeUndefined();
 		expect(details.newText).toBeUndefined();
+	});
+});
+
+describe("EditTool single-path aggregation across mixed-size entries", () => {
+	test("pruned first-entry snapshots suppress aggregate snapshots from a later kept entry", async () => {
+		// Reviewer scenario from #3787: a multi-entry single-path edit where the
+		// first entry shrinks a large file (oldText pruned, file becomes tiny)
+		// and a later entry trivially edits the now-tiny file (snapshots kept).
+		// Without the marker, the aggregator would record the second entry's
+		// small oldText as the whole-file pre-image and ACP clients would
+		// render a misleading partial diff.
+		await Bun.write(path.join(tempDir, "shrink.txt"), `${FILLER}TAIL\n`);
+
+		// Replace mode lets us shrink the file in one edit, then tweak the result.
+		const replaceSession = {
+			cwd: tempDir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			enableLsp: false,
+			settings: Settings.isolated({ "edit.mode": "replace" }),
+			getArtifactsDir: () => null,
+			getSessionId: () => null,
+			getPlanModeState: () => undefined,
+		} as unknown as ToolSession;
+		const tool = new EditTool(replaceSession);
+
+		const result = await tool.execute("call-shrink", {
+			path: "shrink.txt",
+			edits: [
+				// Entry 1: collapse the entire large prefix into one tiny token —
+				// oldText is ~1.28 MB, newText is tiny → combined > 32 KB → pruned.
+				{ old_text: FILLER, new_text: "tiny\n" },
+				// Entry 2: trivial rename on the now-tiny file —
+				// oldText/newText combined well under 32 KB → kept by the inner.
+				{ old_text: "TAIL", new_text: "DONE" },
+			],
+		});
+
+		const details = result.details as EditToolDetails;
+		expect(details.snapshotsPruned).toBe(true);
+		expect(details.oldText).toBeUndefined();
+		expect(details.newText).toBeUndefined();
+		// Aggregate diff still reflects both transitions.
+		expect(details.diff.length).toBeGreaterThan(0);
 	});
 });
