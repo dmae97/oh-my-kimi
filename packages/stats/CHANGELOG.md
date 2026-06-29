@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.6] - 2026-06-29
+
 ### Fixed
 
 - Fixed application crashes and Bun aborts on macOS and when parsing large stats session files, including during `omp --smoke-test` runs, by utilizing a more resilient serial parser and lenient line scanner.

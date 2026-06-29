@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.6] - 2026-06-29
+
 ### Fixed
 
 - Fixed namespaced GLM-5.x model IDs on Z.AI/Zhipu OpenAI-compatible endpoints to inherit the widened stream watchdog, avoiding spurious stalled-stream errors during long thinking phases. ([#3819](https://github.com/can1357/oh-my-pi/issues/3819))

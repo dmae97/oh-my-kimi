@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.6] - 2026-06-29
+
 ### Changed
 
 - Optimized argument streaming performance by throttling JSON re-parsing for renderers that do not require raw input.

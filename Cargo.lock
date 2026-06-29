@@ -1940,9 +1940,9 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.18.4"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25470f23803092da7d239834776d653104d551bc4d7eacaf31e6837854b8e9eb"
+checksum = "993f007684f2e9727160da8b960ec161264703bfd1af084fd2e34d040c9a0dd4"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "pi-ast"
-version = "16.2.5"
+version = "16.2.6"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -2972,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "pi-iso"
-version = "16.2.5"
+version = "16.2.6"
 dependencies = [
  "async-trait",
  "libc",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "pi-natives"
-version = "16.2.5"
+version = "16.2.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3033,7 +3033,7 @@ dependencies = [
 
 [[package]]
 name = "pi-shell"
-version = "16.2.5"
+version = "16.2.6"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -4721,9 +4721,9 @@ dependencies = [
 
 [[package]]
 name = "triomphe"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd69c5aa8f924c7519d6372789a74eac5b94fb0f8fcf0d4a97eb0bfc3e785f39"
+checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
 
 [[package]]
 name = "type-map"

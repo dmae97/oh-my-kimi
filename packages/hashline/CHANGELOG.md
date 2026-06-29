@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.6] - 2026-06-29
+
 ### Fixed
 
 - Fixed a parser error ("payload line has no preceding hunk header") caused by stray dots before the trailing colon in hunk headers, improving compatibility with GLM 5.2 outputs.
