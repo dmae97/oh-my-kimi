@@ -10,6 +10,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { DiscoverableTool } from "@oh-my-pi/pi-coding-agent/tool-discovery/tool-index";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -338,7 +339,7 @@ describe("InteractiveMode goal mode integration", () => {
 			isToolDiscoveryEnabled: () => harness.session.isToolDiscoveryEnabled(),
 			getSelectedDiscoveredToolNames: () => harness.session.getSelectedDiscoveredToolNames(),
 			activateDiscoveredTools: (toolNames: string[]) => harness.session.activateDiscoveredTools(toolNames),
-			getDiscoverableTools: (filter?: Parameters<AgentSession["getDiscoverableTools"]>[0]) =>
+			getDiscoverableTools: (filter?: { source?: DiscoverableTool["source"] }) =>
 				harness.session.getDiscoverableTools(filter),
 		});
 		for (const tool of await createTools(harness.toolSession, ["search_tool_bm25"])) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -193,7 +194,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		vi.spyOn(mode, "updateEditorBorderColor").mockImplementation(() => {});
 		vi.spyOn(mode, "showStatus").mockImplementation(() => {});
 
-		await mode.handleBtwBranch("why did this fail?", {} as Parameters<InteractiveMode["handleBtwBranch"]>[1]);
+		await mode.handleBtwBranch("why did this fail?", {} as AssistantMessage);
 
 		expect(mode.todoReminderContainer.children).toHaveLength(0);
 	});

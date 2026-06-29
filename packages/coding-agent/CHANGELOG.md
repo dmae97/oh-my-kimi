@@ -14,6 +14,7 @@
 - Fixed llama.cpp discovery mapping unlimited `max_tokens = -1` / `n_predict = -1` output limits to the generic 32K discovery cap instead of the discovered runtime context window. ([#3781](https://github.com/can1357/oh-my-pi/issues/3781))
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
 - Fixed the `edit` tool persisting unbounded full-file `oldText` / `newText` snapshots in tool-result `details`, inflating per-turn session JSONL lines (hundreds of KB per edit on large files). `details.oldText`/`details.newText` are now pruned when their combined length exceeds 32 KB; the visible diff, path, line, and diagnostic metadata are preserved, and ACP `diff` content still flows for smaller edits. ([#3786](https://github.com/can1357/oh-my-pi/issues/3786))
+- Fixed todo HUD and goal-mode continuations preserving accurate persisted todo context across `/btw` branches, hidden goal prompts, and discovery-only todo tool states.
 
 ## [16.2.5] - 2026-06-28
 
