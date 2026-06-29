@@ -367,12 +367,15 @@ async function tryAcquireProviderInFlightLease(
 	}
 }
 
-async function signalProviderInFlightWaiters(provider: string): Promise<void> {
+async function signalProviderInFlightWaitersInDir(dir: string): Promise<void> {
 	try {
-		const dir = providerInFlightDir(provider);
 		await fs.mkdir(dir, { recursive: true });
-		await Bun.write(providerInFlightSignalPath(provider), String(Date.now()));
+		await Bun.write(path.join(dir, ".wakeup"), String(Date.now()));
 	} catch {}
+}
+
+async function signalProviderInFlightWaiters(provider: string): Promise<void> {
+	await signalProviderInFlightWaitersInDir(providerInFlightDir(provider));
 }
 
 function waitForProviderInFlightSignal(provider: string, signal?: AbortSignal): Promise<void> {
@@ -434,11 +437,15 @@ async function removeProviderInFlightLeaseDir(leasePath: string): Promise<void> 
 	}
 }
 
-async function releaseProviderInFlightLease(provider: string, lease: ProviderInFlightLease): Promise<void> {
+// Signal into the lease's OWN provider directory (derived from `lease.path`)
+// rather than recomputing it from the current root. A release that lands after
+// the in-flight root has been repointed (only the test seam does that) must not
+// write `.wakeup` into an unrelated provider directory.
+async function releaseProviderInFlightLease(lease: ProviderInFlightLease): Promise<void> {
 	clearInterval(lease.heartbeat);
 	await lease.flushHeartbeat();
 	await removeProviderInFlightLeaseDir(lease.path);
-	await signalProviderInFlightWaiters(provider);
+	await signalProviderInFlightWaitersInDir(path.dirname(lease.path));
 }
 
 async function acquireProviderInFlightSlot(
@@ -451,7 +458,7 @@ async function acquireProviderInFlightSlot(
 	while (true) {
 		if (signal?.aborted) throw signal.reason ?? new AIError.AbortError("Provider request aborted before dispatch");
 		const lease = await tryAcquireProviderInFlightLease(provider, limit, signal);
-		if (lease) return () => releaseProviderInFlightLease(provider, lease);
+		if (lease) return () => releaseProviderInFlightLease(lease);
 		if (!loggedWait) {
 			loggedWait = true;
 			logger.debug("Provider in-flight limit blocked request", { provider, limit });
