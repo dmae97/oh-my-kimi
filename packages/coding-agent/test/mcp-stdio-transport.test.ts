@@ -70,11 +70,10 @@ describe("resolveStdioSpawnCommand", () => {
 		}
 	});
 
-	it("launches npm .cmd shims through node so CodeGraph owns the stdio pipes", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-codegraph-"));
+	it("keeps PATH-resolved npx.cmd on the cmd.exe path so npm preserves stdio semantics", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-npx-"));
 		try {
-			const shim = path.join(tempDir, "codegraph.cmd");
-			const entry = path.join(tempDir, "node_modules", "@colbymchenry", "codegraph", "npm-shim.js");
+			const shim = path.join(tempDir, "npx.cmd");
 			await Bun.write(
 				shim,
 				[
@@ -94,13 +93,13 @@ describe("resolveStdioSpawnCommand", () => {
 					"  SET PATHEXT=%PATHEXT:;.JS;=;%",
 					")",
 					"",
-					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\@colbymchenry\\codegraph\\npm-shim.js" %*',
+					'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\node_modules\\npm\\bin\\npx-cli.js" %*',
 					"",
 				].join("\r\n"),
 			);
 
 			const result = await resolveStdioSpawnCommand(
-				{ type: "stdio", command: "codegraph.cmd", args: ["serve", "--mcp"] },
+				{ type: "stdio", command: "npx", args: ["-y", "mcp-gdb"] },
 				{
 					cwd: tempDir,
 					env: {
@@ -113,7 +112,7 @@ describe("resolveStdioSpawnCommand", () => {
 				},
 			);
 
-			expect(result.cmd).toEqual(["node", entry, "serve", "--mcp"]);
+			expect(result.cmd).toEqual(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", `""${shim}" "-y" "mcp-gdb""`]);
 			expect(result.windowsHide).toBe(false);
 			expect(result.detached).toBe(false);
 		} finally {

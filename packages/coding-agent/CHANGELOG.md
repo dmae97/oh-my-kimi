@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
+- Fixed Windows MCP stdio launches for PATH-resolved `npx.cmd` shims by preserving the `cmd.exe` wrapper path that keeps npm-owned subprocess stdio attached. ([#3794](https://github.com/can1357/oh-my-pi/issues/3794))
 
 ## [16.2.5] - 2026-06-28
 
