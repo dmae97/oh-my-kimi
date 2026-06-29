@@ -8,8 +8,8 @@
  * itself) honored both the per-server `enabled` flag in `mcp.json` and the
  * user-level `disabledServers` denylist.
  *
- * The fixtures below cover both inputs and the round-trip the dashboard's
- * MCP toggle uses (`setServerDisabled`).
+ * The fixtures below cover both inputs and the round-trip helper the
+ * dashboard's MCP toggle uses.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -117,12 +117,12 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		// setMcpServerEnabled MUST overwrite the per-server flag.
 		const projectMcpPath = path.join(projectDir, ".omp", "mcp.json");
 
-		await setMcpServerEnabled(
-			getMCPConfigPath("user", projectDir),
-			getMCPConfigPath("project", projectDir),
-			"flag-disabled-server",
-			true,
-		);
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "flag-disabled-server",
+			enabled: true,
+		});
 
 		const projectConfig = await readMCPConfigFile(projectMcpPath);
 		expect(projectConfig.mcpServers?.["flag-disabled-server"]?.enabled).toBe(true);
@@ -149,12 +149,12 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		);
 		await setServerDisabled(getMCPConfigPath("user", projectDir), "active-server", true);
 
-		await setMcpServerEnabled(
-			getMCPConfigPath("user", projectDir),
-			getMCPConfigPath("project", projectDir),
-			"active-server",
-			true,
-		);
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "active-server",
+			enabled: true,
+		});
 
 		const userConfig = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
 		expect(userConfig.disabledServers ?? []).not.toContain("active-server");
@@ -165,12 +165,12 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 	});
 
 	test("dashboard disable on a config-resident server writes enabled:false (not denylist)", async () => {
-		await setMcpServerEnabled(
-			getMCPConfigPath("user", projectDir),
-			getMCPConfigPath("project", projectDir),
-			"active-server",
-			false,
-		);
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "active-server",
+			enabled: false,
+		});
 
 		const projectConfig = await readMCPConfigFile(path.join(projectDir, ".omp", "mcp.json"));
 		expect(projectConfig.mcpServers?.["active-server"]?.enabled).toBe(false);
@@ -185,24 +185,57 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		expect(disabled!.state).toBe("disabled");
 	});
 
+	test("dashboard re-enable updates the row's non-primary source mcp.json before denylisting", async () => {
+		const alternatePath = path.join(projectDir, ".omp", ".mcp.json");
+		await Bun.write(
+			alternatePath,
+			JSON.stringify({
+				mcpServers: {
+					"alternate-server": { command: "echo", args: ["alternate"], enabled: false },
+				},
+			}),
+		);
+
+		const disabled = (await loadAllExtensions(projectDir, [])).find(e => e.id === "mcp:alternate-server");
+		expect(disabled).toBeDefined();
+		expect(disabled!.state).toBe("disabled");
+
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			sourcePath: alternatePath,
+			name: "alternate-server",
+			enabled: true,
+		});
+
+		const alternateConfig = await readMCPConfigFile(alternatePath);
+		expect(alternateConfig.mcpServers?.["alternate-server"]?.enabled).toBe(true);
+
+		const userConfig = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
+		expect(userConfig.disabledServers ?? []).not.toContain("alternate-server");
+
+		const reenabled = (await loadAllExtensions(projectDir, [])).find(e => e.id === "mcp:alternate-server");
+		expect(reenabled).toBeDefined();
+		expect(reenabled!.state).toBe("active");
+	});
 	test("dashboard toggles on a discovered (config-less) server use the denylist", async () => {
 		// `phantom-server` is not in any config; only the denylist can suppress it.
-		await setMcpServerEnabled(
-			getMCPConfigPath("user", projectDir),
-			getMCPConfigPath("project", projectDir),
-			"phantom-server",
-			false,
-		);
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "phantom-server",
+			enabled: false,
+		});
 
 		let userConfig = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
 		expect(userConfig.disabledServers ?? []).toContain("phantom-server");
 
-		await setMcpServerEnabled(
-			getMCPConfigPath("user", projectDir),
-			getMCPConfigPath("project", projectDir),
-			"phantom-server",
-			true,
-		);
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "phantom-server",
+			enabled: true,
+		});
 
 		userConfig = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
 		expect(userConfig.disabledServers ?? []).not.toContain("phantom-server");

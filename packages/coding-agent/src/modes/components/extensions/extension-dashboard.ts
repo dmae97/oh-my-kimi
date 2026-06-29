@@ -294,12 +294,13 @@ export class ExtensionDashboard implements Component {
 	async #toggleMcpExtension(extensionId: string, enabled: boolean, sm: Settings): Promise<void> {
 		const name = extensionId.slice("mcp:".length);
 		try {
-			await setMcpServerEnabled(
-				getMCPConfigPath("user", this.cwd),
-				getMCPConfigPath("project", this.cwd),
+			await setMcpServerEnabled({
+				userPath: getMCPConfigPath("user", this.cwd),
+				projectPath: getMCPConfigPath("project", this.cwd),
+				sourcePath: this.#writableMcpSourcePath(extensionId),
 				name,
 				enabled,
-			);
+			});
 		} catch (error) {
 			logger.warn("Failed to persist MCP toggle", { name, enabled, error: String(error) });
 		}
@@ -317,6 +318,13 @@ export class ExtensionDashboard implements Component {
 		}
 
 		await this.#refreshFromState();
+	}
+
+	#writableMcpSourcePath(extensionId: string): string | undefined {
+		const extension = this.#state.extensions.find(ext => ext.id === extensionId);
+		if (!extension) return undefined;
+		if (extension.source.provider !== "native" && extension.source.provider !== "mcp-json") return undefined;
+		return extension.path;
 	}
 
 	async #refreshFromState(): Promise<void> {

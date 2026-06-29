@@ -228,15 +228,25 @@ export async function setServerDisabled(filePath: string, name: string, disabled
 	await writeMCPConfigFile(filePath, updated);
 }
 
+/** Paths and target state for toggling one MCP server across known config files. */
+export interface SetMcpServerEnabledOptions {
+	userPath: string;
+	projectPath: string;
+	sourcePath?: string;
+	name: string;
+	enabled: boolean;
+}
+
 /**
  * Flip a server's enabled/disabled state regardless of where it lives.
  *
- * Mirrors `/mcp enable` / `/mcp disable` (see
- * `slash-commands/helpers/mcp.ts:handleEnableDisableCommand`) so the
- * `/extensions` dashboard's MCP toggle and the slash command share one source
- * of truth:
+ * Mirrors `/mcp enable` / `/mcp disable` for primary configs, but also accepts
+ * the loaded row's source path so dashboard toggles can update supported
+ * alternate MCP files such as `.omp/.mcp.json` and user `.mcp.json` before
+ * falling back to the user-level `disabledServers` denylist.
  *
- * - Server defined in project mcp.json → write `enabled` on that entry.
+ * - Server found in `sourcePath` → write `enabled` on that entry.
+ * - Else server defined in project mcp.json → write `enabled` on that entry.
  * - Else server defined in user mcp.json → write `enabled` on that entry.
  * - Else (discovered third-party server) → use the user-level
  *   `disabledServers` denylist.
@@ -244,21 +254,19 @@ export async function setServerDisabled(filePath: string, name: string, disabled
  *   via `/mcp disable` and later re-enabled via `enabled: true` doesn't stay
  *   suppressed by a leftover deny entry.
  */
-export async function setMcpServerEnabled(
-	userPath: string,
-	projectPath: string,
-	name: string,
-	enabled: boolean,
-): Promise<void> {
-	const [userConfig, projectConfig] = await Promise.all([readMCPConfigFile(userPath), readMCPConfigFile(projectPath)]);
-
+export async function setMcpServerEnabled(options: SetMcpServerEnabledOptions): Promise<void> {
+	const { userPath, projectPath, sourcePath, name, enabled } = options;
+	const candidatePaths = [...new Set([sourcePath, projectPath, userPath].filter(path => path !== undefined))];
 	let updatedInConfig = false;
-	if (projectConfig.mcpServers?.[name] !== undefined) {
-		await updateMCPServer(projectPath, name, { ...projectConfig.mcpServers[name], enabled });
+
+	for (const filePath of candidatePaths) {
+		const config = await readMCPConfigFile(filePath);
+		const server = config.mcpServers?.[name];
+		if (server === undefined) continue;
+
+		await updateMCPServer(filePath, name, { ...server, enabled });
 		updatedInConfig = true;
-	} else if (userConfig.mcpServers?.[name] !== undefined) {
-		await updateMCPServer(userPath, name, { ...userConfig.mcpServers[name], enabled });
-		updatedInConfig = true;
+		break;
 	}
 
 	if (!updatedInConfig) {
