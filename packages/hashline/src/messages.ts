@@ -168,6 +168,10 @@ export const RECOVERY_SESSION_CHAIN_WARNING =
 export const RECOVERY_SESSION_REPLAY_WARNING =
 	"Recovered by replaying your edits onto the current file content (a prior in-session edit changed the lines you re-targeted with a stale hash). Verify the diff matches your intent.";
 
+/** `Recovery`: stale anchors were relocated to unchanged live lines after drift. */
+export const RECOVERY_LINE_REMAP_WARNING =
+	"Recovered by remapping stale line anchors to unchanged current lines (file changed since the tagged read). Verify the diff matches your intent.";
+
 /**
  * `insert head:`/`insert tail:` applied despite a stale snapshot tag.
  * Head/tail position is content-independent, so drift is non-fatal: apply

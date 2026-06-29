@@ -5,14 +5,24 @@
  * (the model is anchored against content that no longer exists), not
  * silently overwrite the new content with the stale-authored payload.
  *
- * Companion positive case: when the prior edit changed lines elsewhere
- * but left the re-targeted line alone, replay must still succeed and
- * surface the standard session-chain banner.
+ * Companion positive cases: unchanged equal-line anchors still replay with the
+ * standard session-chain banner, and anchors shifted by prior insertions remap
+ * to the same logical line before replay.
  */
 import { describe, expect, it } from "bun:test";
-import { InMemorySnapshotStore, parsePatch, RECOVERY_SESSION_REPLAY_WARNING, Recovery } from "@oh-my-pi/hashline";
+import {
+	InMemorySnapshotStore,
+	parsePatch,
+	RECOVERY_LINE_REMAP_WARNING,
+	RECOVERY_SESSION_REPLAY_WARNING,
+	Recovery,
+} from "@oh-my-pi/hashline";
 
 const PATH = "/tmp/__hashline-recovery-session-chain__.ts";
+
+function lines(...rows: string[]): string {
+	return `${rows.join("\n")}\n`;
+}
 
 function seedTwoSnapshots(): { store: InMemorySnapshotStore; v0Text: string; v1Text: string; h0: string; h1: string } {
 	const store = new InMemorySnapshotStore();
@@ -70,5 +80,45 @@ describe("Recovery — session-chain replay anchor-content gate", () => {
 		// pointing at duplicated rows even with both guards satisfied), so
 		// the dedicated REPLAY warning surfaces a "verify the diff" hedge.
 		expect(recovered?.warnings).toContain(RECOVERY_SESSION_REPLAY_WARNING);
+	});
+
+	it("recovers stale anchors shifted by a prior in-session insertion", () => {
+		const store = new InMemorySnapshotStore();
+		const v0Text = lines("L1", "L2", "L3", "L4", "L5", "L6");
+		const h0 = store.record(PATH, v0Text);
+		const v1Text = lines("L1", "L2", "INSERTED", "L3", "L4", "L5", "L6");
+		store.record(PATH, v1Text);
+		const { edits } = parsePatch("SWAP 5.=5:\n+L5-MODEL");
+
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText: v1Text,
+			fileHash: h0,
+			edits,
+		});
+
+		expect(recovered).not.toBeNull();
+		expect(recovered?.text).toBe(lines("L1", "L2", "INSERTED", "L3", "L4", "L5-MODEL", "L6"));
+		expect(recovered?.warnings).toContain(RECOVERY_LINE_REMAP_WARNING);
+	});
+
+	it("recovers stale anchors shifted by a prior in-session deletion", () => {
+		const store = new InMemorySnapshotStore();
+		const v0Text = lines("L1", "L2", "L3", "L4", "L5", "L6");
+		const h0 = store.record(PATH, v0Text);
+		const v1Text = lines("L1", "L3", "L4", "L5", "L6");
+		store.record(PATH, v1Text);
+		const { edits } = parsePatch("SWAP 5.=5:\n+L5-MODEL");
+
+		const recovered = new Recovery(store).tryRecover({
+			path: PATH,
+			currentText: v1Text,
+			fileHash: h0,
+			edits,
+		});
+
+		expect(recovered).not.toBeNull();
+		expect(recovered?.text).toBe(lines("L1", "L3", "L4", "L5-MODEL", "L6"));
+		expect(recovered?.warnings).toContain(RECOVERY_LINE_REMAP_WARNING);
 	});
 });

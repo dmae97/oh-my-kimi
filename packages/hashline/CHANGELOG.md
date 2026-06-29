@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recovered stale edit anchors after earlier in-session insertions or deletions shifted unchanged target lines. ([#3775](https://github.com/can1357/oh-my-pi/issues/3775))
+
 ## [16.2.0] - 2026-06-27
 
 ### Added
