@@ -63,6 +63,11 @@ console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt
 			OMP_GPU_PROBE_COUNT: probeCountPath,
 			OMP_GPU_PROBE_RUNS: String(options.runs),
 		};
+		// Strip inherited dirs-resolver overrides so XDG_CACHE_HOME above wins and
+		// the test cannot touch the developer/CI profile's real gpu_cache.json.
+		for (const key of ["PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"]) {
+			delete env[key];
+		}
 		if (options.sleepSeconds === undefined) {
 			delete env.OMP_GPU_PROBE_SLEEP;
 		} else {
