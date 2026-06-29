@@ -160,9 +160,9 @@ describe("DuckDuckGo web search provider", () => {
 
 		const response = await searchDuckDuckGo({ ...makeParams("clamp", fetchMock), numSearchResults: 999 });
 
-		expect(response.sources).toHaveLength(30);
+		expect(response.sources).toHaveLength(20);
 		expect(response.sources.at(0)?.url).toBe("https://example.com/r-0");
-		expect(response.sources.at(-1)?.url).toBe("https://example.com/r-29");
+		expect(response.sources.at(-1)?.url).toBe("https://example.com/r-19");
 	});
 
 	it("supports unwrapped result hrefs (sponsored/instant rows)", async () => {

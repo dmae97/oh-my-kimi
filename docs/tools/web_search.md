@@ -199,7 +199,7 @@ Streaming: none. `WebSearchTool.execute()` forwards its `AbortSignal` into `exec
     - Availability: always available; no API key.
     - Querying: POST the no-JS HTML frontend `https://html.duckduckgo.com/html/` with `q`, `kl=us-en`, and an optional `df` recency filter (`d`/`w`/`m`/`y`); parses the result list and unwraps `//duckduckgo.com/l/?uddg=…` redirect URLs.
     - `recency` maps to `df`; values outside `day|week|month|year` are ignored.
-    - `limit` / `num_search_results`: collapsed and clamped to `1..30`, default `10`; output exposes `sources` only (DuckDuckGo's HTML page does not return a standalone abstract).
+    - `limit` / `num_search_results`: collapsed and clamped to `1..20`, default `10`; output exposes `sources` only (DuckDuckGo's HTML page does not return a standalone abstract).
     - DuckDuckGo serves a bot-detection challenge (HTTP 200/202 with an `anomaly-modal` body) when it throttles datacenter or shared-egress IPs. The adapter detects this and raises a `SearchProviderError` so the orchestrator can fall through to the next configured provider with a clear cause.
 
 ## Side Effects

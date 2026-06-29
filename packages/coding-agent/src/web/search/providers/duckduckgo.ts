@@ -15,7 +15,7 @@ import { classifyProviderHttpError, withHardTimeout } from "./utils";
  */
 const DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/";
 const DEFAULT_NUM_RESULTS = 10;
-const MAX_NUM_RESULTS = 30;
+const MAX_NUM_RESULTS = 20;
 
 /**
  * Recency → DDG `df` form param. DDG accepts single letters for the time
