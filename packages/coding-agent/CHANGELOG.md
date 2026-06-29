@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed system-prompt GPU detection blocking startup and rerunning failed probes by applying the prep deadline and caching empty results. ([#3835](https://github.com/can1357/oh-my-pi/issues/3835))
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed

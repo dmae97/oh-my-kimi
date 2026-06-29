@@ -176,20 +176,20 @@ function getTerminalName(): string | undefined {
 	return term ?? undefined;
 }
 
-/** Cached system info structure */
+/** Cached GPU probe result. */
 interface GpuCache {
-	gpu: string;
-}
-
-function getSystemInfoCachePath(): string {
-	return getGpuCachePath();
+	gpu: string | null;
 }
 
 async function loadGpuCache(): Promise<GpuCache | null> {
 	try {
-		const cachePath = getSystemInfoCachePath();
+		const cachePath = getGpuCachePath();
 		const content = await Bun.file(cachePath).json();
-		return content as GpuCache;
+		if (content && typeof content === "object" && "gpu" in content) {
+			const gpu = content.gpu;
+			return { gpu: typeof gpu === "string" ? gpu : null };
+		}
+		return null;
 	} catch {
 		return null;
 	}
@@ -197,7 +197,7 @@ async function loadGpuCache(): Promise<GpuCache | null> {
 
 async function saveGpuCache(info: GpuCache): Promise<void> {
 	try {
-		const cachePath = getSystemInfoCachePath();
+		const cachePath = getGpuCachePath();
 		await Bun.write(cachePath, JSON.stringify(info, null, "\t"));
 	} catch {
 		// Silently ignore cache write failures
@@ -206,15 +206,12 @@ async function saveGpuCache(info: GpuCache): Promise<void> {
 
 async function getCachedGpu(): Promise<string | undefined> {
 	const cached = await logger.time("getCachedGpu:loadGpuCache", loadGpuCache);
-	if (cached) return cached.gpu;
+	if (cached) return cached.gpu ?? undefined;
 	const gpu = await logger.time("getCachedGpu:getGpuModel", getGpuModel);
-	if (gpu) {
-		await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
-	}
+	await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
 	return gpu ?? undefined;
 }
-async function getEnvironmentInfo(): Promise<Array<{ label: string; value: string }>> {
-	const gpu = await getCachedGpu();
+function getEnvironmentInfo(gpu: string | undefined): Array<{ label: string; value: string }> {
 	let cpuModel: string | undefined;
 	try {
 		cpuModel = os.cpus()[0]?.model;
@@ -500,6 +497,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			agentsMdFiles: [],
 		} satisfies WorkspaceTree,
 		activeRepoContext: null as ActiveRepoContext | null,
+		gpu: undefined as string | undefined,
 	};
 
 	const deadline = Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => "__timeout__" as const);
@@ -566,6 +564,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		providedActiveRepoContext !== undefined
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(resolvedCwd));
+	const gpuPromise = logger.time("getCachedGpu", getCachedGpu);
 
 	const [
 		resolvedCustomPrompt,
@@ -575,6 +574,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skills,
 		workspaceTree,
 		activeRepoContext,
+		gpu,
 	] = await Promise.all([
 		withDeadline(
 			"customPrompt",
@@ -597,6 +597,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
 		withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
 		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
+		withDeadline("getCachedGpu", gpuPromise, prepDefaults.gpu),
 	]);
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
@@ -675,7 +676,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	];
 	const injectedAlwaysApplyRules = dedupeAlwaysApplyRules(alwaysApplyRules, promptSources);
 
-	const environment = await logger.time("getEnvironmentInfo", getEnvironmentInfo);
+	const environment = getEnvironmentInfo(gpu);
 	const data = {
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
