@@ -107,16 +107,17 @@ fn clamped_rayon_threads(threads: usize) -> usize {
 #[cfg(any(target_os = "windows", test))]
 enum RayonPoolPlan {
 	WorkerThreads(usize),
-	CurrentThreadOnly,
+	SkipGlobalPool,
 }
 
 #[cfg(any(target_os = "windows", test))]
 fn rayon_pool_plan(desired: usize, spawnable: usize) -> RayonPoolPlan {
 	let desired = clamped_rayon_threads(desired);
-	if spawnable >= desired {
-		RayonPoolPlan::WorkerThreads(desired)
+	let workers = spawnable.min(desired);
+	if workers > 0 {
+		RayonPoolPlan::WorkerThreads(workers)
 	} else {
-		RayonPoolPlan::CurrentThreadOnly
+		RayonPoolPlan::SkipGlobalPool
 	}
 }
 
@@ -165,10 +166,12 @@ fn probe_spawnable_workers(target: usize) -> usize {
 
 /// Install Rayon's global pool before any `par_iter` or vendored uutils sort
 /// path can lazily initialize it with Rayon's default one-thread-per-core
-/// policy. When the probe sees memory pressure, use the current JS thread as a
-/// one-thread pool rather than risking a failed `build_global()` call: Rayon
-/// stores global initialization in a `Once`, so a spawn error would permanently
-/// poison the process for later parallel work.
+/// policy. When the probe sees fewer workers than requested, build the global
+/// pool with the actually spawnable count; when it sees zero workers, leave the
+/// global pool untouched and keep patched Rayon callsites on sequential paths.
+/// Rayon stores global initialization in a `Once`, so a failed
+/// `build_global()` call would permanently poison the process for later
+/// parallel work.
 #[cfg(target_os = "windows")]
 fn configure_rayon_pool() {
 	let desired = desired_rayon_threads();
@@ -177,12 +180,14 @@ fn configure_rayon_pool() {
 		RayonPoolPlan::WorkerThreads(threads) => rayon::ThreadPoolBuilder::new()
 			.num_threads(threads)
 			.build_global(),
-		RayonPoolPlan::CurrentThreadOnly => rayon::ThreadPoolBuilder::new()
-			.num_threads(1)
-			.use_current_thread()
-			.build_global(),
+		RayonPoolPlan::SkipGlobalPool => {
+			pi_uutils_ctx::set_rayon_global_pool_available(false);
+			return;
+		},
 	};
-	let _ = result;
+	if result.is_ok() {
+		pi_uutils_ctx::set_rayon_global_pool_available(true);
+	}
 }
 
 /// Build the custom Tokio runtime napi-rs uses on Windows, sized to what the
@@ -273,7 +278,10 @@ static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// [`create_windows_napi_tokio_runtime`] pre-flights the spawn instead. Rayon
 /// has the same one-thread-per-core lazy default, so [`configure_rayon_pool`]
 /// installs a probed global pool before `count_tokens` or vendored `sort` can
-/// trigger it across a N-API nounwind boundary. Idempotent.
+/// trigger it across a N-API nounwind boundary. If no worker thread is
+/// spawnable, patched Rayon callsites stay sequential rather than registering a
+/// current-thread-only global pool that cannot steal work from later native
+/// calls. Idempotent.
 #[napi(js_name = "__ompInstallTokioRuntime")]
 #[allow(clippy::missing_const_for_fn, reason = "napi macro is incompatible with const fn")]
 pub fn omp_install_tokio_runtime() {
@@ -310,8 +318,14 @@ mod tests {
 	}
 
 	#[test]
-	fn rayon_uses_current_thread_when_probe_detects_pressure() {
-		assert_eq!(rayon_pool_plan(4, 3), RayonPoolPlan::CurrentThreadOnly);
-		assert_eq!(rayon_pool_plan(1, 0), RayonPoolPlan::CurrentThreadOnly);
+	fn rayon_uses_worker_pool_when_any_probe_thread_succeeds() {
+		assert_eq!(rayon_pool_plan(4, 3), RayonPoolPlan::WorkerThreads(3));
+		assert_eq!(rayon_pool_plan(1, 1), RayonPoolPlan::WorkerThreads(1));
+	}
+
+	#[test]
+	fn rayon_skips_global_pool_when_no_worker_can_spawn() {
+		assert_eq!(rayon_pool_plan(4, 0), RayonPoolPlan::SkipGlobalPool);
+		assert_eq!(rayon_pool_plan(1, 0), RayonPoolPlan::SkipGlobalPool);
 	}
 }

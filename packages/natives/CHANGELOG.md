@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed `pi-natives` aborting on Windows under low commit charge when Rayon's global pool lazily spawned one worker per logical CPU for `count_tokens` or vendored `sort`. The post-load native runtime installer now configures Rayon's global pool through the same Windows thread-spawn probe used for Tokio and falls back to a current-thread Rayon pool when the probe detects memory pressure ([#3770](https://github.com/can1357/oh-my-pi/issues/3770)).
+- Fixed `pi-natives` aborting on Windows under low commit charge when Rayon's global pool lazily spawned one worker per logical CPU for `count_tokens` or vendored `sort`. The post-load native runtime installer now configures Rayon's global pool through the same Windows thread-spawn probe used for Tokio and keeps patched Rayon callsites sequential if no worker thread can be spawned ([#3770](https://github.com/can1357/oh-my-pi/issues/3770)).
 
 ## [16.2.5] - 2026-06-28
 
