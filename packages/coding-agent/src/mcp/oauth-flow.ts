@@ -75,6 +75,10 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
 
+function hasOAuthScope(scopes: string | null | undefined, scope: string): boolean {
+	return !!scopes && scopes.split(/\s+/).includes(scope);
+}
+
 function isLoopbackHostname(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
 }
@@ -225,12 +229,10 @@ export interface MCPOAuthConfig {
 	/** OAuth scopes (space-separated) */
 	scopes?: string;
 	/**
-	 * `prompt` parameter for the authorization request. Defaults to `"consent"`
-	 * so the provider always shows its authorize screen instead of silently
-	 * re-approving the browser's current session — without it, reauthorizing to
-	 * switch accounts/workspaces is impossible once a session cookie exists
-	 * (RFC 6749 §3.1 requires servers to ignore the param when unsupported).
-	 * Set to `""` to omit the parameter entirely.
+	 * `prompt` parameter for the authorization request. By default the parameter
+	 * is omitted, matching the reference MCP SDK, except for `offline_access`
+	 * requests where OIDC Core requires `prompt=consent` to issue refresh-token
+	 * access. Set to `""` to omit the parameter entirely.
 	 */
 	prompt?: string;
 	/** Exact redirect URI to advertise to the provider */
@@ -325,7 +327,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (this.config.scopes && !params.get("scope")) {
 			params.set("scope", this.config.scopes);
 		}
-		const prompt = this.config.prompt ?? "consent";
+		const prompt = this.config.prompt ?? (hasOAuthScope(params.get("scope"), "offline_access") ? "consent" : "");
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);
 		}
@@ -494,7 +496,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 					Accept: "application/json",
 				},
 				body: JSON.stringify({
-					client_name: "Codex",
+					client_name: "oh-my-pi",
 					redirect_uris: [redirectUri],
 					grant_types: ["authorization_code", "refresh_token"],
 					response_types: ["code"],

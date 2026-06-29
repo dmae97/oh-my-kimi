@@ -19,6 +19,7 @@
 - Fixed Windows MCP stdio launches for PATH-resolved `npx.cmd` shims by preserving the `cmd.exe` wrapper path that keeps npm-owned subprocess stdio attached. ([#3794](https://github.com/can1357/oh-my-pi/issues/3794))
 - Fixed `web_search` with the `duckduckgo` provider returning empty results for any non-encyclopedic query. The provider hit DuckDuckGo's Instant Answer API (`api.duckduckgo.com`), which only serves Wikipedia/Wolfram-Alpha-style topics, so the orchestrator surfaced "DuckDuckGo returned no renderable search content" for typical agent queries. It now POSTs the no-JS HTML frontend (`html.duckduckgo.com/html/`) and parses the result list, with a clear bot-challenge error when DuckDuckGo throttles the request from datacenter/shared-egress IPs. ([#3799](https://github.com/can1357/oh-my-pi/issues/3799))
 - Fixed Windows `--extension` paths with spaces or `\\?\` prefixes being truncated or passed through to Bun import/spawn APIs. ([#3804](https://github.com/can1357/oh-my-pi/issues/3804))
+- Fixed `/mcp reauth` for Cloudflare by matching the reference MCP SDK's OAuth `prompt` behavior: OMP now omits `prompt` by default, only sends `prompt=consent` when `offline_access` is requested, and labels dynamically registered MCP OAuth clients as `oh-my-pi` instead of `Codex`. ([#3817](https://github.com/can1357/oh-my-pi/issues/3817))
 
 ## [16.2.5] - 2026-06-28
 
