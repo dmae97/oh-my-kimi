@@ -830,6 +830,60 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("llama.cpp", "sleeping-model")?.contextWindow).toBe(239104);
 	});
 
+	test("llama.cpp selected model refresh leaves the cached model untouched when /models no longer lists it", async () => {
+		writeModelCache(
+			"llama.cpp",
+			Date.now(),
+			[
+				buildModel({
+					id: "swapped-out-model",
+					name: "swapped-out-model",
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: "http://127.0.0.1:8080",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 128000,
+					maxTokens: 32768,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(JSON.stringify({ data: [{ id: "another-model", meta: { n_ctx: 524288 } }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 524288,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const stale = registry.find("llama.cpp", "swapped-out-model");
+		if (!stale) throw new Error("cached llama.cpp model missing");
+		const refreshed = await registry.refreshSelectedModelMetadata(stale);
+		expect(refreshed.contextWindow).toBe(128000);
+		expect(refreshed.maxTokens).toBe(32768);
+	});
+
 	test("llama.cpp selected model refresh does not resolve command api keys", async () => {
 		const commandLogPath = path.join(tempDir, "llama-cpp-key-command.log");
 		writeRawModelsJson({

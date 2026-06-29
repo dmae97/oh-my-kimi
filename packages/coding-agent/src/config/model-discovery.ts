@@ -496,8 +496,11 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 		}
 		const entries = parseLlamaCppModelList(await response.json());
 		const entry = entries.find(entry => entry.id === model.id);
+		if (!entry) {
+			return undefined;
+		}
 		const contextWindow =
-			entry?.runtimeContextWindow ?? serverMetadata?.contextWindow ?? entry?.trainingContextWindow;
+			entry.runtimeContextWindow ?? serverMetadata?.contextWindow ?? entry.trainingContextWindow;
 		if (contextWindow === undefined) {
 			return undefined;
 		}
