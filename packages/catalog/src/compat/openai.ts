@@ -33,7 +33,7 @@ import type {
 import { applyCompatOverrides } from "./apply";
 
 /** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
-const GLM_CODING_PLAN_MODEL_PATTERN = /^glm-5(?:[.-]|$)/i;
+const GLM_CODING_PLAN_MODEL_PATTERN = /(^|\/)glm-5(?:[.-]|$)/i;
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Direct DeepSeek reasoning models stall between thinking and answer phases. */
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
