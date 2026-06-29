@@ -4,7 +4,7 @@
  */
 import * as path from "node:path";
 import { fuzzyMatch } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import type { ContextFile } from "../../../capability/context-file";
 import type { ExtensionModule } from "../../../capability/extension-module";
 import type { Hook } from "../../../capability/hook";
@@ -22,6 +22,7 @@ import {
 	isProviderEnabled,
 	loadCapability,
 } from "../../../discovery";
+import { readDisabledServers } from "../../../mcp/config-writer";
 import type {
 	DashboardState,
 	Extension,
@@ -141,12 +142,18 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 		logger.warn("Failed to load extension-modules capability", { error: String(error) });
 	}
 
-	// Load MCP servers
+	// Load MCP servers. The dashboard mirrors `/mcp list` (issue #3827) by
+	// honoring the same disable signals: the dashboard-private settings list,
+	// the per-server `enabled: false` flag, and the user-level `disabledServers`
+	// denylist that `/mcp disable` writes through `setServerDisabled`.
 	try {
+		const mcpDisabledNames = cwd
+			? new Set(await readDisabledServers(getMCPConfigPath("user", cwd)).catch(() => []))
+			: new Set<string>();
 		const mcps = await loadCapability<MCPServer>("mcps", loadOpts);
 		for (const server of mcps.all) {
 			const id = makeExtensionId("mcp", server.name);
-			const isDisabled = disabledExtensions.has(id);
+			const isDisabled = disabledExtensions.has(id) || server.enabled === false || mcpDisabledNames.has(server.name);
 			const isShadowed = (server as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(server._source.provider);
 

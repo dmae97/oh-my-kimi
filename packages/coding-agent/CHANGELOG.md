@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/extensions` showing MCP servers as `active` when `/mcp list` reported them as `disabled`. The dashboard now mirrors `/mcp list` by honoring both the per-server `enabled: false` flag and the user-level `disabledServers` denylist, and toggling an MCP server from the dashboard now writes through the same denylist so `/mcp list`, the MCP runtime, and the dashboard stay in sync ([#3827](https://github.com/can1357/oh-my-pi/issues/3827)).
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed
