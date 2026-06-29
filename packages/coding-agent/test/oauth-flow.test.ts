@@ -61,7 +61,7 @@ async function completeLocalOAuthCallback(url: string): Promise<void> {
 }
 
 describe("mcp oauth flow", () => {
-	it("uses Codex client name for dynamic client registration", async () => {
+	it("uses oh-my-pi client name for dynamic client registration", async () => {
 		let registrationPayload: Record<string, unknown> | null = null;
 
 		const flow = new MCPOAuthFlow(
@@ -79,12 +79,12 @@ describe("mcp oauth flow", () => {
 		const authUrl = new URL(url);
 
 		expect(registrationPayload).not.toBeNull();
-		expect((registrationPayload as { client_name?: string } | null)?.client_name).toBe("Codex");
+		expect((registrationPayload as { client_name?: string } | null)?.client_name).toBe("oh-my-pi");
 		expect(authUrl.searchParams.get("client_id")).toBe("registered-client-id");
 		expect(authUrl.searchParams.get("state")).toBe("test-state");
 	});
 
-	it("defaults prompt=login+consent so reauth shows the login screen first and then re-confirms consent", async () => {
+	it("omits prompt by default so provider-specific reauth pages can use returning grants", async () => {
 		const flow = new MCPOAuthFlow(
 			{
 				authorizationUrl: "https://provider.example/authorize",
@@ -96,11 +96,23 @@ describe("mcp oauth flow", () => {
 
 		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53180/callback");
 
-		// `login` MUST come before `consent`: providers (e.g. Cloudflare) that
-		// only honor the first recognized value MUST still see the login page,
-		// otherwise reauth lands on the consent screen attached to the existing
-		// browser session and accounts can never be switched (issue #3817).
-		expect(new URL(url).searchParams.get("prompt")).toBe("login consent");
+		expect(new URL(url).searchParams.has("prompt")).toBe(false);
+	});
+
+	it("defaults prompt=consent when offline_access is requested", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				scopes: "openid offline_access",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53184/callback");
+
+		expect(new URL(url).searchParams.get("prompt")).toBe("consent");
 	});
 
 	it("passes an explicit prompt value through to the authorization request", async () => {

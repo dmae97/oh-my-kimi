@@ -75,6 +75,10 @@ export interface MCPStoredOAuthCredential extends OAuthCredential {
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
 
+function hasOAuthScope(scopes: string | null | undefined, scope: string): boolean {
+	return !!scopes && scopes.split(/\s+/).includes(scope);
+}
+
 function isLoopbackHostname(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
 }
@@ -225,15 +229,10 @@ export interface MCPOAuthConfig {
 	/** OAuth scopes (space-separated) */
 	scopes?: string;
 	/**
-	 * `prompt` parameter for the authorization request. Defaults to
-	 * `"login consent"` so the provider re-prompts for authentication AND
-	 * consent — without `login` the user cannot switch accounts when an
-	 * existing browser session cookie is present (e.g. Cloudflare's MCP OAuth
-	 * server lands directly on the consent screen attached to the cached
-	 * account), and without `consent` the authorize screen would be silently
-	 * re-approved on providers that suppress it once granted. Per RFC 6749
-	 * §3.1 servers MUST ignore values they do not support, so passing both is
-	 * safe across providers. Set to `""` to omit the parameter entirely.
+	 * `prompt` parameter for the authorization request. By default the parameter
+	 * is omitted, matching the reference MCP SDK, except for `offline_access`
+	 * requests where OIDC Core requires `prompt=consent` to issue refresh-token
+	 * access. Set to `""` to omit the parameter entirely.
 	 */
 	prompt?: string;
 	/** Exact redirect URI to advertise to the provider */
@@ -328,7 +327,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (this.config.scopes && !params.get("scope")) {
 			params.set("scope", this.config.scopes);
 		}
-		const prompt = this.config.prompt ?? "login consent";
+		const prompt = this.config.prompt ?? (hasOAuthScope(params.get("scope"), "offline_access") ? "consent" : "");
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);
 		}
@@ -497,7 +496,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 					Accept: "application/json",
 				},
 				body: JSON.stringify({
-					client_name: "Codex",
+					client_name: "oh-my-pi",
 					redirect_uris: [redirectUri],
 					grant_types: ["authorization_code", "refresh_token"],
 					response_types: ["code"],
