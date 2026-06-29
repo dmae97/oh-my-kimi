@@ -68,6 +68,13 @@ function classifyWindow(id: string | undefined, label: string | undefined): Anti
 	return undefined;
 }
 
+function inferWindowFromReset(resetAt: number | undefined, nowMs: number): AntigravityWindowDescriptor {
+	if (resetAt !== undefined && Number.isFinite(resetAt) && resetAt - nowMs > ONE_DAY_MS) {
+		return { id: "weekly", label: "Weekly", durationMs: ONE_WEEK_MS };
+	}
+	return { id: "daily", label: "Daily", durationMs: ONE_DAY_MS };
+}
+
 function withWindowDescriptor(
 	info: AntigravityQuotaInfo,
 	descriptor: AntigravityWindowDescriptor | undefined,
@@ -94,11 +101,10 @@ function getUsageStatus(remainingFraction: number | undefined): UsageStatus | un
 	return "ok";
 }
 
-function parseWindow(info: AntigravityQuotaInfo): UsageWindow | undefined {
-	const descriptor = classifyWindow(info.windowId, info.windowLabel);
+function parseWindow(info: AntigravityQuotaInfo, nowMs: number): UsageWindow | undefined {
 	const resetAt = info.resetTime ? Date.parse(info.resetTime) : undefined;
 	const hasResetAt = resetAt !== undefined && Number.isFinite(resetAt);
-	if (!descriptor && !hasResetAt) return undefined;
+	const descriptor = classifyWindow(info.windowId, info.windowLabel) ?? inferWindowFromReset(resetAt, nowMs);
 	return {
 		id: descriptor?.id ?? info.windowId ?? "default",
 		label: info.windowLabel ?? descriptor?.label ?? "Default",
@@ -278,7 +284,7 @@ async function fetchAntigravityUsage(params: UsageFetchParams, ctx: UsageFetchCo
 		const quotaInfos = normalizeQuotaInfos(modelInfo);
 		for (const quotaInfo of quotaInfos) {
 			const amount = buildAmount(quotaInfo);
-			const window = parseWindow(quotaInfo);
+			const window = parseWindow(quotaInfo, nowMs);
 			if (window?.resetsAt) {
 				earliestReset = earliestReset ? Math.min(earliestReset, window.resetsAt) : window.resetsAt;
 			}
