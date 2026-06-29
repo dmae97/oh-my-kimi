@@ -8,6 +8,7 @@ import type {
 	Context,
 	Effort,
 	Model,
+	ServiceTier,
 	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai";
@@ -23,12 +24,14 @@ import {
 	getModelMatchPreferences,
 	resolveCliModel,
 } from "../config/model-resolver";
+import { resolveServiceTierSetting } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 import { resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
-const DEFAULT_RUNS = 1;
+const DEFAULT_RUNS = 10;
+const DEFAULT_PAR = 4;
 const DEFAULT_MAX_TOKENS = 512;
 const ERROR_WIDTH = 110;
 const BENCH_PROMPT = benchPrompt.trim();
@@ -39,7 +42,10 @@ export interface BenchCommandArgs {
 		runs?: number;
 		maxTokens?: number;
 		prompt?: string;
+		/** Service-tier setting value (`none` omits); overrides the configured `serviceTier` setting. */
+		serviceTier?: string;
 		json?: boolean;
+		par?: number;
 	};
 }
 
@@ -99,6 +105,8 @@ export interface BenchSummary {
 	maxTokens: number;
 	models: BenchModelReport[];
 	failures: number;
+	/** Requested service tier passed to every request; absent when none was requested. Scoped tiers (`openai-only`/`claude-only`) may be dropped per-provider downstream. */
+	serviceTier?: ServiceTier;
 }
 
 type BenchStreamSimple = (
@@ -188,6 +196,8 @@ interface BenchRequestOptions {
 	reasoning?: Effort;
 	/** Only set for an explicit `:off` suffix — some endpoints reject disablement. */
 	disableReasoning?: boolean;
+	/** Requested service tier passed to `streamSimple`; absent omits the option. The provider layer applies scope/support gating before it reaches the wire. */
+	serviceTier?: ServiceTier;
 }
 
 async function runBenchRequest(
@@ -214,6 +224,7 @@ async function runBenchRequest(
 					: options.maxTokens,
 			reasoning: options.reasoning,
 			disableReasoning: options.disableReasoning,
+			serviceTier: options.serviceTier,
 			// pi-ai opts every OpenRouter request into response caching (1h TTL).
 			// Bench sends a byte-identical request each run, so within the TTL
 			// OpenRouter replays the cached generation with zeroed usage — the run
@@ -469,10 +480,11 @@ function resolveBenchModels(
 	}
 	return resolved;
 }
-
 export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDependencies = {}): Promise<BenchSummary> {
 	const runs = normalizePositiveInteger("runs", command.flags.runs, DEFAULT_RUNS);
 	const maxTokens = normalizePositiveInteger("max-tokens", command.flags.maxTokens, DEFAULT_MAX_TOKENS);
+	const par =
+		command.flags.par !== undefined ? normalizePositiveInteger("par", command.flags.par, DEFAULT_PAR) : DEFAULT_PAR;
 	const prompt = command.flags.prompt?.trim() || BENCH_PROMPT;
 	const json = command.flags.json === true;
 	const randomSessionId = deps.randomSessionId ?? (() => Bun.randomUUIDv7());
@@ -493,6 +505,12 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 	const runtime = await (deps.createRuntime ?? createDefaultRuntime)();
 	try {
 		const targets = resolveBenchModels(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
+		// Explicit `--service-tier` wins; otherwise fall back to the configured
+		// `serviceTier` setting (`none`/unset omits the wire field). Scope-aware
+		// gating to the model's provider happens downstream in the provider layer.
+		const serviceTierValue = command.flags.serviceTier ?? runtime.settings?.get("serviceTier");
+		const serviceTier = serviceTierValue ? resolveServiceTierSetting(serviceTierValue, undefined) : undefined;
+		if (!json && serviceTier) writeStdout(`${chalk.dim(`service tier: ${serviceTier}`)}\n`);
 		const reports: BenchModelReport[] = [];
 		for (const { selector, model, thinking } of targets) {
 			if (!json) {
@@ -501,21 +519,29 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 				writeStdout(`${chalk.bold(resolvedModel)}${resolvedNote}\n`);
 			}
 			const results: BenchRunResult[] = [];
-			for (let index = 0; index < runs; index++) {
-				const sessionId = randomSessionId();
-				const initialKey = await runtime.modelRegistry.getApiKey(model, sessionId);
-				if (!initialKey) {
-					const failure: BenchRunFailure = {
-						ok: false,
-						error: `No credentials for provider "${model.provider}". Run \`omp\` and use /login, or set the provider API key.`,
-					};
-					results.push(failure);
-					if (!json) writeStdout(`${formatRunLine(failure, index, runs)}\n`);
-					break; // remaining runs would fail identically
-				}
-				if (!json && interactive) {
-					writeStdout(chalk.dim(`  … run ${index + 1}/${runs} streaming`));
-				}
+
+			// Preflight check: let's verify credentials before starting any runs.
+			// This matches the old sequential break behavior exactly and avoids launching/printing
+			// multiple failures.
+			const testSessionId = randomSessionId();
+			const preflightKey = await runtime.modelRegistry.getApiKey(model, testSessionId);
+			if (!preflightKey) {
+				const failure: BenchRunFailure = {
+					ok: false,
+					error: `No credentials for provider "${model.provider}". Run \`omp\` and use /login, or set the provider API key.`,
+				};
+				results.push(failure);
+				if (!json) writeStdout(`${formatRunLine(failure, 0, runs)}\n`);
+				reports.push(buildModelReport(selector, model, thinking, results));
+				continue;
+			}
+
+			// We will launch up to `par` workers/requests concurrently.
+			// To keep output clean, non-JSON output emits entries in correct index order.
+			let nextToPrint = 0;
+
+			const runWorker = async (index: number) => {
+				const sessionId = index === 0 ? testSessionId : randomSessionId();
 				const result = await runBenchRequest(
 					model,
 					{
@@ -525,20 +551,49 @@ export async function runBenchCommand(command: BenchCommandArgs, deps: BenchDepe
 						maxTokens,
 						reasoning: toReasoningEffort(thinking),
 						disableReasoning: shouldDisableReasoning(thinking) ? true : undefined,
+						serviceTier,
 					},
 					streamFn,
 					now,
 				);
-				results.push(result);
-				if (!json) {
-					if (interactive) writeStdout("\r\x1b[2K");
-					writeStdout(`${formatRunLine(result, index, runs)}\n`);
+				results[index] = result;
+			};
+
+			// Concurrency-limited running pool
+			const queue = Array.from({ length: runs }, (_, i) => i);
+			const activeWorkers: Promise<void>[] = [];
+
+			const processNext = async (): Promise<void> => {
+				if (queue.length === 0) return;
+				const index = queue.shift()!;
+
+				// Pre-print a status update if requested and interactive
+				if (!json && interactive) {
+					writeStdout(chalk.dim(`  … run ${index + 1}/${runs} streaming\n`));
 				}
+
+				await runWorker(index);
+
+				// Attempt to print completed results that are in-order
+				if (!json) {
+					while (nextToPrint < runs && results[nextToPrint] !== undefined) {
+						const res = results[nextToPrint];
+						writeStdout(`${formatRunLine(res, nextToPrint, runs)}\n`);
+						nextToPrint++;
+					}
+				}
+
+				await processNext();
+			};
+
+			for (let w = 0; w < Math.min(par, runs); w++) {
+				activeWorkers.push(processNext());
 			}
+			await Promise.all(activeWorkers);
 			reports.push(buildModelReport(selector, model, thinking, results));
 		}
 		const failures = reports.reduce((sum, report) => sum + report.results.filter(result => !result.ok).length, 0);
-		const summary: BenchSummary = { runs, maxTokens, models: reports, failures };
+		const summary: BenchSummary = { runs, maxTokens, models: reports, failures, serviceTier };
 		if (json) {
 			writeStdout(`${JSON.stringify(summary, null, 2)}\n`);
 		} else if (reports.length > 1 || runs > 1) {
