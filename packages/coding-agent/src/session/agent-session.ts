@@ -12840,10 +12840,16 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Drains IRC incoming asides that have reached this running session but have
-	 * not yet been folded into the next model step.
+	 * Surfaces (and consumes) IRC incoming asides that have reached this running
+	 * session but have not yet been folded into the next model step.
+	 *
+	 * The inbox tool injects the formatted body into the tool result, so the
+	 * model sees it once via the result. Leaving the record in
+	 * {@link #pendingIrcAsides} would let the aside provider deliver it a second
+	 * time at the next step boundary — including on `peek`, which is why peek
+	 * also drains here.
 	 */
-	drainPendingIrcInboxMessages(agentId: string, opts?: { peek?: boolean }): IrcMessage[] {
+	drainPendingIrcInboxMessages(agentId: string): IrcMessage[] {
 		const messages: IrcMessage[] = [];
 		const remaining: CustomMessage[] = [];
 		for (const record of this.#pendingIrcAsides) {
@@ -12872,13 +12878,8 @@ export class AgentSession {
 				ts: record.timestamp,
 				...(typeof replyTo === "string" ? { replyTo } : {}),
 			});
-			if (opts?.peek) {
-				remaining.push(record);
-			}
 		}
-		if (!opts?.peek) {
-			this.#pendingIrcAsides = remaining;
-		}
+		this.#pendingIrcAsides = remaining;
 		return messages;
 	}
 
