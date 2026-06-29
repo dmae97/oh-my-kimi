@@ -264,7 +264,7 @@ describe("AssistantMessageComponent streaming thinking pulse", () => {
 		component.updateContent(streaming([{ type: "thinking", thinking: "ab" }], 57), { transient: true });
 
 		const plain = Bun.stripANSI(component.render(RENDER_WIDTH).join("\n"));
-		// Layout: "<glyph> <total> · <rate> toks/s" — 57 provider tokens, 47.0 tok/s.
+		// Layout: "<glyph> Thinking · <total> · <rate> toks/s" — 57 provider tokens, 47.0 tok/s.
 		expect(plain).toContain("57 · 47.0 toks/s");
 
 		nowSpy.mockRestore();
