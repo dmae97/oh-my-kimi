@@ -181,6 +181,22 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(mode.todoReminderContainer.children).toHaveLength(0);
 		expect(session.getTodoPhases()[0]?.tasks[0]?.status).toBe("completed");
 	});
+
+	it("clears stale todo reminders when /btw branches", async () => {
+		await createMode(-1);
+		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
+		vi.spyOn(session, "branchFromBtw").mockResolvedValue({
+			cancelled: false,
+			sessionFile: path.join(tempDir.path(), "branch.jsonl"),
+		});
+		vi.spyOn(mode, "renderInitialMessages").mockImplementation(() => {});
+		vi.spyOn(mode, "updateEditorBorderColor").mockImplementation(() => {});
+		vi.spyOn(mode, "showStatus").mockImplementation(() => {});
+
+		await mode.handleBtwBranch("why did this fail?", {} as Parameters<InteractiveMode["handleBtwBranch"]>[1]);
+
+		expect(mode.todoReminderContainer.children).toHaveLength(0);
+	});
 });
 
 describe("InteractiveMode todo HUD anchor", () => {

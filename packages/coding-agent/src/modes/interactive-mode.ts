@@ -4017,6 +4017,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#btwController.dispose();
 			this.#omfgController.dispose();
 			this.chatContainer.clear();
+			this.todoReminderContainer.clear();
 			this.renderInitialMessages({ clearTerminalHistory: true });
 			this.updateEditorBorderColor();
 			this.showStatus(
