@@ -514,7 +514,10 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 					limit,
 				});
 				const output = matches
-					.map(match => path.relative(absolutePath, match).split(path.sep).join("/"))
+					.map(match => {
+						const rel = path.isAbsolute(match) ? path.relative(absolutePath, match) : match;
+						return rel.split(path.sep).join("/");
+					})
 					.join("\n");
 				const truncation = truncateHead(output, { maxLines: Number.MAX_SAFE_INTEGER });
 				return {

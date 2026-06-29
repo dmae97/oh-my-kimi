@@ -211,6 +211,29 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.observed.updates).toEqual(["remote output"]);
 	});
 
+	it("preserves relative paths from legacy find operations", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "legacy-find-ops-ext", version: "1.0.0" }),
+			"index.ts": [
+				'import { createFindToolDefinition } from "@earendil-works/pi-coding-agent";',
+				"const tool = createFindToolDefinition('/remote/project', {",
+				"  operations: {",
+				"    exists: () => true,",
+				"    glob: () => ['src/a.ts', '/remote/project/src/b.ts'],",
+				"  },",
+				"});",
+				"const result = await tool.execute('call-1', { pattern: '**/*.ts', path: '.' });",
+				"const text = result.content.find(block => block.type === 'text')?.text ?? '';",
+				"export const lines = text.split('\\n');",
+				"export default function (pi) { pi.registerTool(tool); }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { lines: string[] };
+
+		expect(mod.lines).toEqual(["src/a.ts", "src/b.ts"]);
+	});
+
 	it("rewrites extension bare deps to file URLs for compiled-binary loading", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "compiled-dep-ext", version: "1.0.0" }),
