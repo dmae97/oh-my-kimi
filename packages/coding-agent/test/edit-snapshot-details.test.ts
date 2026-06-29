@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatHashlineHeader } from "@oh-my-pi/hashline";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	canonicalSnapshotKey,
 	DEFAULT_FUZZY_THRESHOLD,
 	EditTool,
 	type EditToolDetails,
+	executeHashlineSingle,
 	executePatchSingle,
 	executeReplaceSingle,
+	getFileSnapshotStore,
 	MAX_EDIT_SNAPSHOT_TEXT_CHARS,
 	pruneOversizedEditSnapshots,
 } from "@oh-my-pi/pi-coding-agent/edit";
@@ -215,5 +219,61 @@ describe("EditTool single-path aggregation across mixed-size entries", () => {
 		expect(details.newText).toBeUndefined();
 		// Aggregate diff still reflects both transitions.
 		expect(details.diff.length).toBeGreaterThan(0);
+	});
+});
+
+describe("executeHashlineSingle multi-section aggregate cap", () => {
+	test("strips per-file snapshots once the shared budget is spent", async () => {
+		// Five files, each ~10 KB combined oldText+newText after a one-line
+		// swap. Each entry fits the per-entry 32 KB budget individually but the
+		// 50 KB cumulative bytes bust the shared aggregate budget — without
+		// the wrapping fix from #3787 review every per-file snapshot would
+		// survive to the session JSONL.
+		const fileCount = 5;
+		const session = {
+			cwd: tempDir,
+			settings: Settings.isolated(),
+		} as unknown as ToolSession;
+
+		const tags: string[] = [];
+		const filler = "filler line of content xxxx yyyy zzzz\n".repeat(120); // ~5 KB
+		for (let i = 0; i < fileCount; i++) {
+			const filePath = path.join(tempDir, `f${i}.ts`);
+			const source = `header${i}\n${filler}`;
+			await Bun.write(filePath, source);
+			const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(filePath), source);
+			tags.push(tag);
+		}
+
+		const sections = tags.map((tag, i) =>
+			[formatHashlineHeader(`f${i}.ts`, tag), "SWAP 1.=1:", `+HEADER${i}`].join("\n"),
+		);
+		const input = sections.join("\n");
+
+		const result = await executeHashlineSingle({
+			session,
+			input,
+			writethrough: async (targetPath, content) => {
+				await Bun.write(targetPath, content);
+				return undefined;
+			},
+			beginDeferredDiagnosticsForPath: noopBeginDeferred,
+		});
+
+		const details = result.details as EditToolDetails;
+		expect(details.perFileResults).toBeDefined();
+		expect(details.perFileResults!.length).toBe(fileCount);
+
+		const kept = details.perFileResults!.filter(e => e.oldText !== undefined);
+		const pruned = details.perFileResults!.filter(e => e.snapshotsPruned === true);
+		expect(kept.length).toBeGreaterThan(0);
+		expect(pruned.length).toBeGreaterThan(0);
+		expect(kept.length + pruned.length).toBe(fileCount);
+
+		const totalKept = details.perFileResults!.reduce(
+			(acc, e) => acc + (e.oldText?.length ?? 0) + (e.newText?.length ?? 0),
+			0,
+		);
+		expect(totalKept).toBeLessThanOrEqual(MAX_EDIT_SNAPSHOT_TEXT_CHARS);
 	});
 });

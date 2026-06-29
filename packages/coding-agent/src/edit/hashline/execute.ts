@@ -269,10 +269,10 @@ export async function executeHashlineSingle(
 					.join("\n\n"),
 			},
 		],
-		details: {
+		details: pruneOversizedEditSnapshots({
 			diff: rendered.map(r => r.toolResult.details?.diff ?? "").join("\n"),
 			perFileResults: rendered.map(r => r.perFileResult),
-		},
+		}),
 	};
 }
 
