@@ -50,6 +50,15 @@ const MAX_LIVE_IRC_CARDS = 4;
 const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
 
+const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
+
+function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {
+	if (rawInput) return true;
+	if (RAW_PARTIAL_JSON_RENDERERS[toolName]) return true;
+	if (tool === null || typeof tool !== "object" || !("renderCall" in tool)) return false;
+	return typeof tool.renderCall === "function";
+}
+
 type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
@@ -623,7 +632,7 @@ export class EventController {
 					// Internal URL read falls through to ToolExecutionComponent below.
 				}
 
-				// Preserve the raw partial JSON for renderers that need to surface fields before the JSON object closes.
+				// Preserve the raw partial JSON only for renderers that need to surface fields before the JSON object closes.
 				// Bash uses this to show inline env assignments during streaming instead of popping them in at completion.
 				// While the JSON is still open, ToolArgsRevealController paces the
 				// reveal (write/edit/bash previews grow smoothly when a slow provider
@@ -631,13 +640,14 @@ export class EventController {
 				// as-is — mirroring how assistant text snaps at message_end.
 				let renderArgs: Record<string, unknown>;
 				const partialJson = getStreamingPartialJson(content);
+				const rawInput = content.customWireName !== undefined;
+				const tool = this.ctx.viewSession.getToolByName(content.name);
 				if (partialJson) {
-					renderArgs = this.#toolArgsReveal.setTarget(
-						content.id,
-						partialJson,
-						content.customWireName !== undefined,
-						content.arguments,
-					);
+					renderArgs = this.#toolArgsReveal.setTarget(content.id, partialJson, {
+						rawInput,
+						exposeRawPartialJson: exposesRawPartialJson(content.name, rawInput, tool),
+						fullArgs: content.arguments,
+					});
 				} else {
 					this.#toolArgsReveal.finish(content.id);
 					renderArgs = content.arguments;
@@ -645,7 +655,6 @@ export class EventController {
 				if (!this.ctx.pendingTools.has(content.id)) {
 					this.#resolveDisplaceablePoll(content.name);
 					this.#resetReadGroup();
-					const tool = this.ctx.viewSession.getToolByName(content.name);
 					const component = new ToolExecutionComponent(
 						content.name,
 						renderArgs,
