@@ -139,73 +139,6 @@ async function resolveWindowsCommandPath(
 	return hasExt ? command : null;
 }
 
-function resolveWindowsShimPath(value: string, shimDir: string): string | null {
-	const match = /^%dp0%[\\/]*(.*)$/i.exec(value);
-	if (!match) return null;
-	const suffix = match[1];
-	if (!suffix) return shimDir;
-	return path.join(shimDir, ...suffix.split(/[\\/]+/).filter(Boolean));
-}
-
-function extractWindowsNpmShimTarget(content: string): string | null {
-	const match = /"%_prog%"\s+"([^"]+)"\s+%\*/i.exec(content);
-	return match?.[1] ?? null;
-}
-
-/**
- * Extract the shim's PATH-fallback interpreter (`SET "_prog=node"`). The
- * `IF EXIST` branch assigns a `%dp0%`-prefixed value, so requiring a
- * non-`%`-leading value picks the bare program name.
- */
-function extractWindowsNpmShimProg(content: string): string | null {
-	const match = /SET\s+"_prog=([^%"][^"]*)"/i.exec(content);
-	return match?.[1] ?? null;
-}
-
-async function resolveWindowsNpmShimCommand(
-	command: string,
-	args: readonly string[],
-	cwd: string,
-	windowsHide: boolean,
-): Promise<StdioSpawnCommand | null> {
-	if (!isWindowsBatchCommand(command)) return null;
-	if (!hasPathSegment(command)) return null;
-	const commandPath = path.resolve(cwd, command);
-
-	let content: string;
-	try {
-		content = await Bun.file(commandPath).text();
-	} catch {
-		return null;
-	}
-
-	// cmd-shim emits the same invocation line for every interpreter; only
-	// bypass cmd.exe when the shim's fallback interpreter is actually node.
-	const prog = extractWindowsNpmShimProg(content);
-	if (
-		!prog ||
-		path
-			.basename(prog)
-			.replace(/\.exe$/i, "")
-			.toLowerCase() !== "node"
-	)
-		return null;
-
-	const rawTarget = extractWindowsNpmShimTarget(content);
-	if (!rawTarget) return null;
-
-	const target = resolveWindowsShimPath(rawTarget, path.dirname(commandPath));
-	if (!target) return null;
-
-	const siblingNode = path.join(path.dirname(commandPath), "node.exe");
-	const nodeCommand = (await fileExists(siblingNode)) ? siblingNode : "node";
-	return {
-		cmd: [nodeCommand, target, ...args],
-		windowsHide,
-		detached: false,
-	};
-}
-
 function quoteCmdArg(value: string): string {
 	if (value.length === 0) return '""';
 	let result = '"';
@@ -260,8 +193,6 @@ export async function resolveStdioSpawnCommand(
 	const windowsHide = options.hostHasInheritableConsole === undefined ? true : !options.hostHasInheritableConsole;
 	const resolved = await resolveWindowsCommandPath(config.command, options.cwd, options.env);
 	const resolvedCommand = resolved ?? config.command;
-	const npmShimCommand = await resolveWindowsNpmShimCommand(resolvedCommand, args, options.cwd, windowsHide);
-	if (npmShimCommand) return npmShimCommand;
 
 	// Direct-spawn only when we resolved to a concrete file AND its extension
 	// is not a batch script. Everything else (resolved .cmd/.bat, or an
