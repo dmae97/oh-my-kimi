@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed Gemini web search using only Cloud Code Assist OAuth by allowing standard `GEMINI_API_KEY` developer API credentials to run native Google Search grounding. ([#3810](https://github.com/can1357/oh-my-pi/issues/3810))
+
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
 
 ## [16.2.5] - 2026-06-28
