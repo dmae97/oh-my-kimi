@@ -14,11 +14,15 @@
 import type { EditToolDetails, EditToolPerFileResult } from "./renderer";
 
 /**
- * Combined `oldText` + `newText` character budget per edit-tool result.
+ * Combined `oldText` + `newText` character budget for a single edit-tool
+ * result. Applies both per-entry (one file at a time) and as an aggregate
+ * across `perFileResults` (so a many-small-files batch can't accumulate
+ * unbounded snapshot bytes — see #3787 review).
  *
  * Picked so typical code-file edits keep ACP diff visualization while
- * pathological cases (large generated files, full-file rewrites) drop the raw
- * snapshots before they hit the session JSONL.
+ * pathological cases (large generated files, full-file rewrites, or
+ * many-file batches) drop the raw snapshots before they hit the
+ * session JSONL.
  */
 export const MAX_EDIT_SNAPSHOT_TEXT_CHARS = 32_768;
 
@@ -30,6 +34,28 @@ function pruneSnapshot<T extends WithSnapshot>(details: T): T {
 	}
 	const { oldText: _old, newText: _new, ...rest } = details;
 	return { ...rest, snapshotsPruned: true } as T;
+}
+
+/**
+ * Walk `perFileResults` in order with a shared budget. Each per-entry payload
+ * is first capped individually by {@link pruneSnapshot}; if its kept bytes
+ * would push the running aggregate past the cap, strip and mark this entry
+ * too. Early entries get to keep their diff visualization; later entries in
+ * a large batch degrade to text-only.
+ */
+function capPerFileSnapshots<T extends WithSnapshot>(entries: T[]): T[] {
+	let remaining = MAX_EDIT_SNAPSHOT_TEXT_CHARS;
+	return entries.map(entry => {
+		const perEntry = pruneSnapshot(entry);
+		const kept = (perEntry.oldText?.length ?? 0) + (perEntry.newText?.length ?? 0);
+		if (kept === 0) return perEntry;
+		if (kept <= remaining) {
+			remaining -= kept;
+			return perEntry;
+		}
+		const { oldText: _old, newText: _new, ...rest } = perEntry;
+		return { ...rest, snapshotsPruned: true } as T;
+	});
 }
 
 /**
@@ -45,7 +71,7 @@ export function pruneOversizedEditSnapshots(
 ): EditToolDetails | EditToolPerFileResult {
 	const pruned = pruneSnapshot(details);
 	if ("perFileResults" in pruned && pruned.perFileResults) {
-		return { ...pruned, perFileResults: pruned.perFileResults.map(pruneSnapshot) };
+		return { ...pruned, perFileResults: capPerFileSnapshots(pruned.perFileResults) };
 	}
 	return pruned;
 }

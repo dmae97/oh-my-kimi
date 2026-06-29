@@ -94,6 +94,35 @@ describe("pruneOversizedEditSnapshots", () => {
 			newText: small,
 		});
 	});
+
+	test("caps cumulative perFileResults snapshots at the shared aggregate budget", () => {
+		// Each entry is individually under the per-entry budget but their sum
+		// busts it: walking left-to-right, the first two fit, the rest must be
+		// stripped so a many-small-files batch can't accumulate unbounded bytes.
+		const entrySize = Math.floor(MAX_EDIT_SNAPSHOT_TEXT_CHARS / 4);
+		const chunk = "y".repeat(entrySize);
+		const entries = Array.from({ length: 5 }, (_, i) => ({
+			path: `/f${i}`,
+			diff: `d${i}`,
+			oldText: chunk,
+			newText: chunk,
+		}));
+		const result = pruneOversizedEditSnapshots({ diff: "agg", perFileResults: entries });
+
+		const kept = result.perFileResults!.filter(e => e.oldText !== undefined);
+		const pruned = result.perFileResults!.filter(e => e.snapshotsPruned === true);
+		expect(kept.length).toBe(2);
+		expect(pruned.length).toBe(3);
+
+		// Total kept snapshot bytes never exceed the shared cap.
+		const totalKept = result.perFileResults!.reduce(
+			(acc, e) => acc + (e.oldText?.length ?? 0) + (e.newText?.length ?? 0),
+			0,
+		);
+		expect(totalKept).toBeLessThanOrEqual(MAX_EDIT_SNAPSHOT_TEXT_CHARS);
+		// Pruned entries keep their diff/path so the renderer still works.
+		expect(pruned[0]).toMatchObject({ path: "/f2", diff: "d2", snapshotsPruned: true });
+	});
 });
 
 describe("executePatchSingle on oversized files", () => {
