@@ -219,10 +219,10 @@ describe("antigravity usage provider", () => {
 		expect(weekly?.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
 		expect(weekly?.amount.remainingFraction).toBe(0.4);
 	});
-	it("infers daily and weekly windows from unlabeled Antigravity reset horizons", async () => {
+	it("keeps near-reset unlabeled weekly windows separate from daily windows", async () => {
 		const now = Date.now();
 		const dailyReset = new Date(now + 5 * 3600_000).toISOString();
-		const weeklyReset = new Date(now + 27 * 3600_000).toISOString();
+		const weeklyReset = new Date(now + 23 * 3600_000).toISOString();
 		const payload = {
 			models: {
 				gemini: {
