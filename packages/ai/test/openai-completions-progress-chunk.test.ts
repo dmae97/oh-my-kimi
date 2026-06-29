@@ -105,6 +105,19 @@ describe("resolveOpenAICompat stream idle timeout", () => {
 		expect(model.compat.streamIdleTimeoutMs).toBe(600_000);
 	});
 
+	it("widens namespaced custom Z.AI OpenAI-compatible GLM 5.2 endpoints", () => {
+		const model = buildModel({
+			...openAICompletionsModel,
+			id: "zai-org/GLM-5.2",
+			name: "GLM-5.2",
+			provider: "openai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			compat: openAICompletionsModel.compatConfig,
+		} as ModelSpec<"openai-completions">);
+
+		expect(model.compat.streamIdleTimeoutMs).toBe(600_000);
+	});
+
 	it("widens DeepSeek V4 reasoning streams on the official DeepSeek API", () => {
 		const model = buildModel({
 			...openAICompletionsModel,
