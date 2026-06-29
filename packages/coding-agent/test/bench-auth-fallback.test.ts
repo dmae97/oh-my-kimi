@@ -6,8 +6,10 @@ import type {
 	AssistantMessageEvent,
 	AssistantMessageEventStream,
 	Model,
+	SimpleStreamOptions,
 } from "@oh-my-pi/pi-ai";
-import { type BenchModelRegistry, runBenchCommand } from "@oh-my-pi/pi-coding-agent/cli/bench-cli";
+import { type BenchModelRegistry, type BenchSummary, runBenchCommand } from "@oh-my-pi/pi-coding-agent/cli/bench-cli";
+import type { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 function fakeModel(provider: string, id: string): Model<Api> {
 	return {
@@ -166,5 +168,68 @@ describe("bench empty-output guard", () => {
 		expect(run.ok).toBe(false);
 		if (!run.ok) expect(run.error).toContain("no output");
 		expect(summary.models[0].average).toBeNull();
+	});
+});
+
+function settingsStub(serviceTier: string | undefined): Settings | undefined {
+	if (serviceTier === undefined) return undefined;
+	return { get: (key: string) => (key === "serviceTier" ? serviceTier : undefined) } as unknown as Settings;
+}
+
+async function captureServiceTier(opts: {
+	flag?: string;
+	setting?: string;
+}): Promise<{ wire: SimpleStreamOptions["serviceTier"]; summary: BenchSummary["serviceTier"] }> {
+	const registry = fakeRegistry({ models: [fakeModel("openai-codex", "gpt-5.5")], authedProviders: ["openai-codex"] });
+	let captured: SimpleStreamOptions | undefined;
+	const summary = await runBenchCommand(
+		{
+			models: ["openai-codex/gpt-5.5"],
+			flags: { runs: 1, maxTokens: 64, json: true, serviceTier: opts.flag },
+		},
+		{
+			createRuntime: async () => ({
+				modelRegistry: registry,
+				settings: settingsStub(opts.setting),
+				close: () => {},
+			}),
+			randomSessionId: () => "sess-1",
+			writeStdout: () => {},
+			writeStderr: () => {},
+			setExitCode: () => {},
+			streamSimple: (_model, _context, options) => {
+				captured = options;
+				return fakeStream();
+			},
+			now: () => 0,
+			stdoutIsTTY: false,
+		},
+	);
+	return { wire: captured?.serviceTier, summary: summary.serviceTier };
+}
+
+describe("bench service tier", () => {
+	it("sends the configured serviceTier setting when no flag is passed", async () => {
+		const { wire, summary } = await captureServiceTier({ setting: "flex" });
+		expect(wire).toBe("flex");
+		expect(summary).toBe("flex");
+	});
+
+	it("lets an explicit --service-tier override the configured setting", async () => {
+		const { wire, summary } = await captureServiceTier({ flag: "priority", setting: "flex" });
+		expect(wire).toBe("priority");
+		expect(summary).toBe("priority");
+	});
+
+	it("omits service_tier when the setting is none and no flag is passed", async () => {
+		const { wire, summary } = await captureServiceTier({ setting: "none" });
+		expect(wire).toBeUndefined();
+		expect(summary).toBeUndefined();
+	});
+
+	it("omits service_tier when neither flag nor settings are present", async () => {
+		const { wire, summary } = await captureServiceTier({});
+		expect(wire).toBeUndefined();
+		expect(summary).toBeUndefined();
 	});
 });
