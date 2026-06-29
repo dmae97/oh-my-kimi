@@ -139,7 +139,6 @@ async function resolveWindowsCommandPath(
 	return hasExt ? command : null;
 }
 
-
 function quoteCmdArg(value: string): string {
 	if (value.length === 0) return '""';
 	let result = '"';
