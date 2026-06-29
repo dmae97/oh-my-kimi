@@ -130,8 +130,69 @@ function buildLineMap(previousText: string, currentText: string): Map<number, nu
 	return map;
 }
 
+function lineIsDuplicated(lines: readonly string[], line: number): boolean {
+	const value = lines[line - 1];
+	return lines.indexOf(value) !== lines.lastIndexOf(value);
+}
+
+function nearestContextLine(
+	line: number,
+	direction: -1 | 1,
+	anchorLines: ReadonlySet<number>,
+	lineCount: number,
+): number | undefined {
+	for (let candidate = line + direction; candidate >= 1 && candidate <= lineCount; candidate += direction) {
+		if (!anchorLines.has(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function validateDuplicateAnchorContext(
+	line: number,
+	mapped: number,
+	previousLines: readonly string[],
+	lineMap: ReadonlyMap<number, number>,
+	anchorLines: ReadonlySet<number>,
+): boolean {
+	let checked = false;
+	const before = nearestContextLine(line, -1, anchorLines, previousLines.length);
+	if (before !== undefined) {
+		checked = true;
+		if (lineMap.get(before) !== mapped - (line - before)) return false;
+	}
+	const after = nearestContextLine(line, 1, anchorLines, previousLines.length);
+	if (after !== undefined) {
+		checked = true;
+		if (lineMap.get(after) !== mapped + (after - line)) return false;
+	}
+	return checked;
+}
+
+function validateRemappedAnchorContext(
+	previousText: string,
+	currentText: string,
+	lineMap: ReadonlyMap<number, number>,
+	edits: readonly Edit[],
+): boolean {
+	const previousLines = previousText.split("\n");
+	const currentLines = currentText.split("\n");
+	const anchorLines = new Set(collectAnchorLines(edits));
+
+	for (const line of anchorLines) {
+		const mapped = lineMap.get(line);
+		if (mapped === undefined) return false;
+		if (!lineIsDuplicated(previousLines, line) && !lineIsDuplicated(currentLines, mapped)) continue;
+		if (!validateDuplicateAnchorContext(line, mapped, previousLines, lineMap, anchorLines)) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 function remapEditsToCurrent(previousText: string, currentText: string, edits: readonly Edit[]): Edit[] | null {
 	const lineMap = buildLineMap(previousText, currentText);
+	if (!validateRemappedAnchorContext(previousText, currentText, lineMap, edits)) return null;
 	const offsets: number[] = [];
 
 	const mapLine = (line: number): number | null => {
