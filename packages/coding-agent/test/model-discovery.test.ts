@@ -884,6 +884,72 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(refreshed.maxTokens).toBe(32768);
 	});
 
+	test("llama.cpp selected model refresh clamps unlimited output to overridden context", async () => {
+		writeRawModelsJson({
+			"llama.cpp": {
+				baseUrl: "http://127.0.0.1:8080",
+				api: "openai-responses",
+				auth: "none",
+				discovery: { type: "llama.cpp" },
+				modelOverrides: {
+					"bounded-context-model": { contextWindow: 128000 },
+				},
+			},
+		});
+		writeModelCache(
+			"llama.cpp",
+			Date.now(),
+			[
+				buildModel({
+					id: "bounded-context-model",
+					name: "bounded-context-model",
+					provider: "llama.cpp",
+					api: "openai-responses",
+					baseUrl: "http://127.0.0.1:8080",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 262144,
+					maxTokens: 32768,
+				}),
+			],
+			true,
+			"",
+			cacheDbPath,
+		);
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(JSON.stringify({ data: [{ id: "bounded-context-model", meta: { n_ctx: 262144 } }] }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: {
+							n_ctx: 262144,
+							params: { max_tokens: -1, n_predict: -1 },
+						},
+					}),
+					{
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		const bounded = registry.find("llama.cpp", "bounded-context-model");
+		if (!bounded) throw new Error("cached llama.cpp model missing");
+		expect(bounded.contextWindow).toBe(128000);
+		const refreshed = await registry.refreshSelectedModelMetadata(bounded);
+		expect(refreshed.contextWindow).toBe(128000);
+		expect(refreshed.maxTokens).toBe(128000);
+	});
+
 	test("llama.cpp selected model refresh does not resolve command api keys", async () => {
 		const commandLogPath = path.join(tempDir, "llama-cpp-key-command.log");
 		writeRawModelsJson({

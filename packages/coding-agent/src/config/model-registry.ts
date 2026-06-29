@@ -889,12 +889,19 @@ export class ModelRegistry {
 		) {
 			patch.contextWindow = contextWindow;
 		}
+		const effectiveContextWindow =
+			override?.contextWindow ??
+			customModel?.contextWindow ??
+			patch.contextWindow ??
+			current.contextWindow ??
+			contextWindow;
+		const effectiveMaxTokens = Math.min(maxTokens, effectiveContextWindow);
 		if (
 			override?.maxTokens === undefined &&
 			customModel?.maxTokens === undefined &&
-			current.maxTokens !== maxTokens
+			current.maxTokens !== effectiveMaxTokens
 		) {
-			patch.maxTokens = maxTokens;
+			patch.maxTokens = effectiveMaxTokens;
 		}
 		if (patch.contextWindow === undefined && patch.maxTokens === undefined) {
 			return current;
