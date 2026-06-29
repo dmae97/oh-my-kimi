@@ -75,7 +75,7 @@ import {
 	DISCOVERY_DEFAULT_MAX_TOKENS,
 	type DiscoveryContext,
 	type DiscoveryProviderConfig,
-	discoverLlamaCppModelContextWindow,
+	discoverLlamaCppModelRuntimeMetadata,
 	discoverModelsByProviderType,
 	getImplicitOllamaBaseUrl,
 	getOllamaContextLengthOverride,
@@ -873,10 +873,11 @@ export class ModelRegistry {
 		if (!isLlamaCppDiscovery) {
 			return model;
 		}
-		const contextWindow = await discoverLlamaCppModelContextWindow(model, this.#nonResolvingDiscoveryContext());
-		if (contextWindow === undefined) {
+		const runtimeMetadata = await discoverLlamaCppModelRuntimeMetadata(model, this.#nonResolvingDiscoveryContext());
+		if (runtimeMetadata === undefined) {
 			return this.find(model.provider, model.id) ?? model;
 		}
+		const { contextWindow, maxTokens } = runtimeMetadata;
 		const current = this.find(model.provider, model.id) ?? model;
 		const override = this.#resolveLiveModelOverride(current);
 		const customModel = this.#resolveLiveCustomModelOverlay(current);
@@ -888,7 +889,6 @@ export class ModelRegistry {
 		) {
 			patch.contextWindow = contextWindow;
 		}
-		const maxTokens = Math.min(contextWindow, DISCOVERY_DEFAULT_MAX_TOKENS);
 		if (
 			override?.maxTokens === undefined &&
 			customModel?.maxTokens === undefined &&
