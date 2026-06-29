@@ -122,7 +122,7 @@ type OllamaDiscoveredModelMetadata = {
 type LlamaCppDiscoveredServerMetadata = {
 	contextWindow?: number;
 	input?: ("text" | "image")[];
-	maxTokens?: number | "contextWindow";
+	maxTokens?: "contextWindow";
 };
 
 type LlamaCppDiscoveredModelRuntimeMetadata = {
@@ -149,20 +149,25 @@ function toPositiveNumberOrUndefined(value: unknown): number | undefined {
 	return undefined;
 }
 
-function toFiniteNumberOrUndefined(value: unknown): number | undefined {
-	if (typeof value === "number" && Number.isFinite(value)) {
-		return value;
+function isLlamaCppUnlimitedSentinel(value: unknown): boolean {
+	if (typeof value === "number") {
+		return value === -1;
 	}
 	if (typeof value === "string" && value.trim()) {
-		const parsed = Number(value);
-		if (Number.isFinite(parsed)) {
-			return parsed;
-		}
+		return Number(value) === -1;
 	}
-	return undefined;
+	return false;
 }
 
-function extractLlamaCppMaxTokens(payload: Record<string, unknown>): number | "contextWindow" | undefined {
+/**
+ * llama.cpp `/props.default_generation_settings.params.{max_tokens,n_predict}`
+ * are per-request defaults the server applies when a client omits the field —
+ * clients can still raise them per call. Positive values therefore are NOT
+ * hard model caps; only the `-1` unlimited sentinel reliably tells us the
+ * server bounds generation by the runtime context window. Anything else
+ * leaves the discovery default in place.
+ */
+function extractLlamaCppMaxTokens(payload: Record<string, unknown>): "contextWindow" | undefined {
 	const generationSettings = payload.default_generation_settings;
 	const params = isRecord(generationSettings) ? generationSettings.params : undefined;
 	const candidates = [
@@ -173,23 +178,10 @@ function extractLlamaCppMaxTokens(payload: Record<string, unknown>): number | "c
 		payload.max_tokens,
 		payload.n_predict,
 	];
-	let hasContextBoundedLimit = false;
-	for (const candidate of candidates) {
-		const value = toFiniteNumberOrUndefined(candidate);
-		if (value === undefined) {
-			continue;
-		}
-		if (value > 0) {
-			return value;
-		}
-		if (value === -1) {
-			hasContextBoundedLimit = true;
-		}
-	}
-	return hasContextBoundedLimit ? "contextWindow" : undefined;
+	return candidates.some(isLlamaCppUnlimitedSentinel) ? "contextWindow" : undefined;
 }
 
-function resolveLlamaCppMaxTokens(contextWindow: number, maxTokens: number | "contextWindow" | undefined): number {
+function resolveLlamaCppMaxTokens(contextWindow: number, maxTokens: "contextWindow" | undefined): number {
 	return maxTokens === "contextWindow"
 		? contextWindow
 		: Math.min(contextWindow, maxTokens ?? DISCOVERY_DEFAULT_MAX_TOKENS);

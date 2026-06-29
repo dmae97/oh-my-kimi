@@ -685,7 +685,7 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(llama?.input).toEqual(["text", "image"]);
 	});
 
-	test("llama.cpp discovery honors positive output limits from props", async () => {
+	test("llama.cpp discovery ignores positive props defaults as per-request limits, not hard caps", async () => {
 		const fetchMock: FetchImpl = async input => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:8080/models") {
@@ -714,7 +714,7 @@ describe("ModelRegistry runtime discovery", () => {
 		await registry.refresh();
 		const llama = registry.find("llama.cpp", "bounded-output");
 		expect(llama?.contextWindow).toBe(262144);
-		expect(llama?.maxTokens).toBe(65536);
+		expect(llama?.maxTokens).toBe(32_768);
 	});
 	test("llama.cpp discovery prefers runtime n_ctx over training context metadata", async () => {
 		const fetchMock: FetchImpl = async input => {
