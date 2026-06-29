@@ -797,6 +797,21 @@ export class Markdown implements Component {
 	#streamPrefixText?: string;
 	#streamPrefixTokens?: Token[];
 
+	// Streaming render-prefix cache: content lines (post-render, post-wrap,
+	// post-margin) for the stable prefix tokens, extended incrementally as the
+	// frozen lex prefix grows. Only the transient (in-flight streaming) render
+	// path uses it — finalized renders use the L2 module cache. The lex cache
+	// above already avoids re-tokenizing the stable prefix; this also avoids
+	// re-rendering + re-wrapping + re-margining it, so each streaming tick pays
+	// O(changed tail) instead of O(whole rendered prefix). NOT reset by
+	// invalidate() (setText calls it every append); reset lazily on a key
+	// mismatch, a content-identity mismatch (frozen prefix replaced), or when
+	// the frozen prefix vanishes (non-append edit / finalize).
+	#rpKey?: string;
+	#rpFrozenText?: string;
+	#rpTokenCount = 0;
+	#rpLines?: string[];
+
 	#ignoreTight = false;
 
 	setIgnoreTight(ignore: boolean): this {
@@ -919,6 +934,72 @@ export class Markdown implements Component {
 		}
 	}
 
+	/**
+	 * Render tokens[start..end) to fully-styled, wrapped, margin-padded content
+	 * lines (everything except top/bottom padding). Mirrors the render→wrap→margin
+	 * pipeline but scoped to a token range. Safe to split at complete-token
+	 * boundaries: the wrap pass is stateless per line, and the margin pass's
+	 * `previousLineWasOsc66` fold always ends `false` after a complete token
+	 * (every OSC 66 sized heading is immediately followed by its structural empty
+	 * row), so concatenating per-range output is byte-identical to a single
+	 * whole-text pass. This is what lets the streaming render-prefix cache reuse
+	 * stable-prefix content lines and re-render only the tail.
+	 */
+	#renderTokenRange(
+		tokens: Token[],
+		start: number,
+		end: number,
+		contentWidth: number,
+		width: number,
+		leftMargin: string,
+		rightMargin: string,
+		bgFn: ((text: string) => string) | undefined,
+	): string[] {
+		const renderedLines: string[] = [];
+		for (let i = start; i < end; i++) {
+			const tokenLines = this.#renderToken(tokens[i]!, contentWidth, tokens[i + 1]?.type);
+			for (let j = 0; j < tokenLines.length; j++) renderedLines.push(tokenLines[j]!);
+		}
+		// Wrap (image/OSC66 lines bypass wrapping — would corrupt escape seqs).
+		const wrappedLines: string[] = [];
+		for (const line of renderedLines) {
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				wrappedLines.push(line);
+			} else {
+				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+			}
+		}
+		const contentLines: string[] = [];
+		let previousLineWasOsc66 = false;
+		for (let k = 0; k < wrappedLines.length; k++) {
+			const line = wrappedLines[k]!;
+			// The first empty row after a scale>1 OSC 66 heading is structural:
+			// it reserves the lower cells of the multicell glyphs. Do not pad or
+			// background-fill it — real spaces there can interact with Kitty's
+			// multicell overwrite rules during the first paint.
+			if (previousLineWasOsc66 && line === "") {
+				contentLines.push("");
+				previousLineWasOsc66 = false;
+				continue;
+			}
+			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
+				contentLines.push(line);
+				previousLineWasOsc66 = isOsc66Line(line);
+				continue;
+			}
+			previousLineWasOsc66 = false;
+			const lineWithMargins = leftMargin + line + rightMargin;
+			if (bgFn) {
+				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+			} else {
+				const visibleLen = visibleWidth(lineWithMargins);
+				const paddingNeeded = Math.max(0, width - visibleLen);
+				contentLines.push(lineWithMargins + padding(paddingNeeded));
+			}
+		}
+		return contentLines;
+	}
+
 	render(width: number): readonly string[] {
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
@@ -973,67 +1054,85 @@ export class Markdown implements Component {
 		// Parse markdown to HTML-like tokens
 		const tokens = this.#lexTokens(normalizedText);
 
-		// Convert tokens to styled terminal output
-		const renderedLines: string[] = [];
-
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i];
-			const nextToken = tokens[i + 1];
-			const tokenLines = this.#renderToken(token, contentWidth, nextToken?.type);
-			renderedLines.push(...tokenLines);
-		}
-
-		// Wrap lines (NO padding, NO background yet)
-		const wrappedLines: string[] = [];
-		for (const line of renderedLines) {
-			// Skip wrapping for image protocol lines and OSC 66 sized headings
-			// (would corrupt escape sequences / split the indivisible sized span).
-			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
-				wrappedLines.push(line);
-			} else {
-				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
-			}
-		}
-
-		// Add margins and background to each wrapped line
+		// Margins/background shared by every content line.
 		const leftMargin = padding(paddingX);
 		const rightMargin = padding(paddingX);
 		const bgFn = this.#defaultTextStyle?.bgColor;
-		const contentLines: string[] = [];
-
-		let previousLineWasOsc66 = false;
-
-		for (const line of wrappedLines) {
-			// The first empty row after a scale>1 OSC 66 heading is structural:
-			// it reserves the lower cells occupied by the multicell glyphs. Do
-			// not pad or background-fill it, because real spaces on that row can
-			// interact with Kitty's multicell overwrite rules during the first
-			// paint. Leave it as a cursor-only newline.
-			if (previousLineWasOsc66 && line === "") {
-				contentLines.push("");
-				previousLineWasOsc66 = false;
-				continue;
+		const transient = this.transientRenderCache;
+		const frozenPrefixText = this.#streamPrefixText;
+		const frozenCount = transient ? (this.#streamPrefixTokens?.length ?? 0) : 0;
+		const cacheableCount = Math.max(0, frozenCount - 1);
+		let contentLines: string[];
+		if (transient && cacheableCount > 0 && frozenPrefixText !== undefined) {
+			const bgColorProbe = this.#defaultTextStyle?.bgColor ? this.#defaultTextStyle.bgColor("\x01") : "";
+			const headingProbe = this.#theme.heading("");
+			// Include the same style-output probes as the L2 key: cached prefix lines
+			// are already styled/backgrounded, so a theme/bgColor function that changes
+			// output without changing object identity must invalidate them.
+			const rpKey = `${width}\x00${paddingX}\x00${this.#codeBlockIndent}\x00${objectId(this.#theme)}\x00${this.#defaultTextStyle ? objectId(this.#defaultTextStyle) : -1}\x00${TERMINAL.imageProtocol ?? ""}\x00${TERMINAL.hyperlinks ? 1 : 0}\x00${TERMINAL.textSizing ? 1 : 0}\x00${bgColorProbe}\x00${headingProbe}`;
+			if (this.#rpKey !== rpKey || !this.#rpLines) {
+				this.#rpKey = rpKey;
+				this.#rpTokenCount = 0;
+				this.#rpLines = [];
+				this.#rpFrozenText = undefined;
 			}
-
-			// Image lines and OSC 66 sized headings must be output raw - no margins or background
-			if (TERMINAL.isImageLine(line) || isOsc66Line(line)) {
-				contentLines.push(line);
-				previousLineWasOsc66 = isOsc66Line(line);
-				continue;
+			// Content-identity guard: a non-append edit re-freezes a DIFFERENT prefix
+			// that may still startsWith/count-match the old one. Reject unless the
+			// current frozen text still has the cached one as a verbatim prefix.
+			if (this.#rpFrozenText !== undefined && !frozenPrefixText.startsWith(this.#rpFrozenText)) {
+				this.#rpTokenCount = 0;
+				this.#rpLines.length = 0;
 			}
-
-			previousLineWasOsc66 = false;
-
-			const lineWithMargins = leftMargin + line + rightMargin;
-
-			if (bgFn) {
-				contentLines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-			} else {
-				// No background - just pad to width
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				contentLines.push(lineWithMargins + padding(paddingNeeded));
+			this.#rpFrozenText = frozenPrefixText;
+			// The prefix can't shrink under append-only growth; guard anyway.
+			if (this.#rpTokenCount > cacheableCount) {
+				this.#rpTokenCount = 0;
+				this.#rpLines.length = 0;
 			}
+			// Extend the cached prefix to cover [0..cacheableCount).
+			if (this.#rpTokenCount < cacheableCount) {
+				const ext = this.#renderTokenRange(
+					tokens,
+					this.#rpTokenCount,
+					cacheableCount,
+					contentWidth,
+					width,
+					leftMargin,
+					rightMargin,
+					bgFn,
+				);
+				for (let i = 0; i < ext.length; i++) this.#rpLines!.push(ext[i]!);
+				this.#rpTokenCount = cacheableCount;
+			}
+			// Render the tail [cacheableCount .. end) fresh each tick.
+			const tail = this.#renderTokenRange(
+				tokens,
+				cacheableCount,
+				tokens.length,
+				contentWidth,
+				width,
+				leftMargin,
+				rightMargin,
+				bgFn,
+			);
+			contentLines = this.#rpLines!.length > 0 ? [...this.#rpLines!, ...tail] : tail;
+		} else {
+			// No frozen prefix yet (early ticks), non-transient, or post-finalize:
+			// full render and drop any stale prefix cache.
+			this.#rpKey = undefined;
+			this.#rpFrozenText = undefined;
+			this.#rpTokenCount = 0;
+			this.#rpLines = undefined;
+			contentLines = this.#renderTokenRange(
+				tokens,
+				0,
+				tokens.length,
+				contentWidth,
+				width,
+				leftMargin,
+				rightMargin,
+				bgFn,
+			);
 		}
 
 		// Add top/bottom padding (empty lines)

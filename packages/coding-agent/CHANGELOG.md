@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced streaming reveal CPU cost: the smooth-reveal grapheme slice now resumes segmentation from the cached boundary cluster each tick instead of re-segmenting the whole revealed prefix, so per-tick work scales with the newly revealed delta rather than the message length.
+- Reduced streaming render cost: Markdown now caches the rendered content lines for the stable streaming-lex prefix and re-renders only the changed tail each tick, so per-tick render work scales with the delta rather than the whole revealed message.
+
+### Fixed
+
+- Fixed the assistant-message fast path dropping the transient flag on streaming updates, so in-flight renders correctly skip per-tick code syntax highlighting (now applied once at message finalization) and avoid redundant L2 cache-key work.
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed

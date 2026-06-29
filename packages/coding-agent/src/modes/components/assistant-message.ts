@@ -702,7 +702,7 @@ export class AssistantMessageComponent extends Container {
 		);
 
 		// Fast path: reuse Markdown children when shape is stable during streaming
-		if (this.#tryFastPathUpdate(message)) return;
+		if (this.#tryFastPathUpdate(message, opts)) return;
 
 		// Clear content container
 		this.#contentContainer.clear();

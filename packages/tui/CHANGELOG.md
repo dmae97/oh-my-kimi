@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Markdown transient (streaming) renders now cache the rendered content lines for the stable streaming-lex prefix and re-render only the changed tail each tick, reducing per-frame render cost from O(whole revealed message) to O(delta). Output is byte-identical to the full pipeline.
+
 ## [16.2.3] - 2026-06-28
 
 ### Added

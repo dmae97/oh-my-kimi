@@ -48,8 +48,12 @@ function countGraphemesFrom(text: string, start: number): { count: number; tailS
 /** Memoizes per-block grapheme counts across reveal ticks. Streaming blocks only
  *  grow by appending, and an append can only alter the final grapheme cluster of
  *  the previous text, so only the suffix from that cluster needs re-segmenting. */
-class BlockUnitCounter {
+export class BlockUnitCounter {
 	#entries = new Map<number, { text: string; count: number; tailStart: number }>();
+	// Per-block slice cursor: the code-unit offset of the `units`-th grapheme and
+	// the start of that final grapheme cluster, so a reveal tick resumes from the
+	// boundary cluster instead of re-segmenting from offset 0.
+	#sliceEntries = new Map<number, { text: string; units: number; offset: number; lastStart: number }>();
 
 	count(index: number, text: string): number {
 		const entry = this.#entries.get(index);
@@ -67,8 +71,79 @@ class BlockUnitCounter {
 		return full.count;
 	}
 
+	/** Slice `text` to its first `units` graphemes, resuming from the cached
+	 *  boundary cluster when `text` is unchanged or has only grown (append-only,
+	 *  the streaming case). The reveal position advances monotonically while the
+	 *  target text is fixed or appending, so each tick segments only the new
+	 *  graphemes rather than the whole revealed prefix. */
+	slice(index: number, text: string, units: number): string {
+		if (units <= 0 || text.length === 0) return "";
+		const e = this.#sliceEntries.get(index);
+		if (e !== undefined && text.startsWith(e.text)) {
+			if (text === e.text && units === e.units) {
+				// Exact cache hit — text unchanged, so the cached offset is valid.
+				return e.offset >= text.length ? text : text.slice(0, e.offset);
+			}
+			if (units >= e.units) {
+				// Text unchanged or only appended, and the reveal point hasn't moved
+				// backward. Resume from the boundary cluster: an append can EXTEND that
+				// final cluster (e.g. "a" → "a\u0301"), so even an unchanged unit count
+				// must re-segment it rather than trust a now-stale offset.
+				return this.#advanceSlice(index, text, units, e);
+			}
+			// units < e.units: reveal shrank (rare, e.g. a resync clamp) — re-segment.
+		}
+		return this.#fullSlice(index, text, units);
+	}
+
+	/** Extend the cached slice (e.units graphemes) to `units` by segmenting only
+	 *  from the boundary cluster start. An append can extend that final cluster,
+	 *  so the first segment from `lastStart` is re-counted (mirroring `count`'s
+	 *  tailStart logic) rather than blindly trusting e.offset. */
+	#advanceSlice(
+		index: number,
+		text: string,
+		units: number,
+		e: { text: string; units: number; offset: number; lastStart: number },
+	): string {
+		const base = e.lastStart;
+		if (base >= text.length) return text;
+		const tail = base === 0 ? text : text.slice(base);
+		// Grapheme #e.units is the first segment from `base`; reach through #units.
+		const need = units - e.units + 1;
+		let consumed = 0;
+		let segStart = 0;
+		let segEnd = 0;
+		for (const seg of getSegmenter().segment(tail)) {
+			segStart = seg.index;
+			segEnd = seg.index + seg.segment.length;
+			if (++consumed >= need) break;
+		}
+		if (consumed === 0) return text;
+		const actualUnits = e.units - 1 + consumed;
+		const newOffset = base + segEnd;
+		const newLastStart = base + segStart;
+		this.#sliceEntries.set(index, { text, units: actualUnits, offset: newOffset, lastStart: newLastStart });
+		return newOffset >= text.length ? text : text.slice(0, newOffset);
+	}
+
+	#fullSlice(index: number, text: string, units: number): string {
+		let count = 0;
+		let segStart = 0;
+		let segEnd = 0;
+		for (const seg of getSegmenter().segment(text)) {
+			count++;
+			segStart = seg.index;
+			segEnd = seg.index + seg.segment.length;
+			if (count >= units) break;
+		}
+		this.#sliceEntries.set(index, { text, units: count, offset: segEnd, lastStart: segStart });
+		return segEnd === 0 || segEnd >= text.length ? text : text.slice(0, segEnd);
+	}
+
 	reset(): void {
 		this.#entries.clear();
+		this.#sliceEntries.clear();
 	}
 }
 
@@ -104,20 +179,24 @@ function revealTextBlock(
 	block: Extract<AssistantContentBlock, { type: "text" }>,
 	remaining: number,
 	units: number,
+	index: number,
+	sliceOf: (index: number, text: string, units: number) => string,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.text.length === 0 ? block : { ...block, text: "" };
 	if (remaining >= units) return block;
-	return { ...block, text: sliceGraphemes(block.text, remaining) };
+	return { ...block, text: sliceOf(index, block.text, remaining) };
 }
 
 function revealThinkingBlock(
 	block: Extract<AssistantContentBlock, { type: "thinking" }>,
 	remaining: number,
 	units: number,
+	index: number,
+	sliceOf: (index: number, text: string, units: number) => string,
 ): AssistantContentBlock {
 	if (remaining <= 0) return block.thinking.length === 0 ? block : { ...block, thinking: "" };
 	if (remaining >= units) return block;
-	return { ...block, thinking: sliceGraphemes(block.thinking, remaining) };
+	return { ...block, thinking: sliceOf(index, block.thinking, remaining) };
 }
 
 export function buildDisplayMessage(
@@ -126,6 +205,8 @@ export function buildDisplayMessage(
 	hideThinking: boolean,
 	proseOnly = true,
 	countOf: (index: number, text: string) => number = (_index, text) => countGraphemes(text),
+	sliceOf: (index: number, text: string, units: number) => string = (_index, text, units) =>
+		sliceGraphemes(text, units),
 ): AssistantMessage {
 	let remaining = Math.max(0, Math.floor(revealed));
 	const content: AssistantContentBlock[] = [];
@@ -133,7 +214,7 @@ export function buildDisplayMessage(
 		const block = target.content[i]!;
 		if (block.type === "text") {
 			const units = countOf(i, block.text);
-			content.push(revealTextBlock(block, remaining, units));
+			content.push(revealTextBlock(block, remaining, units, i, sliceOf));
 			remaining = Math.max(0, remaining - units);
 		} else if (block.type === "thinking" && !hideThinking) {
 			const formatted = formatThinkingForDisplay(block.thinking, proseOnly);
@@ -144,7 +225,7 @@ export function buildDisplayMessage(
 					thinking: formatted,
 					rawThinking: block.thinking,
 				};
-				content.push(revealThinkingBlock(displayBlock, remaining, units));
+				content.push(revealThinkingBlock(displayBlock, remaining, units, i, sliceOf));
 				remaining = Math.max(0, remaining - units);
 			} else {
 				content.push(block);
@@ -174,6 +255,8 @@ export class StreamingRevealController {
 	#smoothStreaming = true;
 	readonly #unitCounter = new BlockUnitCounter();
 	readonly #countOf = (index: number, text: string): number => this.#unitCounter.count(index, text);
+	readonly #sliceOf = (index: number, text: string, units: number): string =>
+		this.#unitCounter.slice(index, text, units);
 
 	constructor(options: StreamingRevealControllerOptions) {
 		this.#getSmoothStreaming = options.getSmoothStreaming;
@@ -193,7 +276,14 @@ export class StreamingRevealController {
 		if (!this.#smoothStreaming) {
 			const total = this.#visibleUnits(message);
 			component.updateContent(
-				buildDisplayMessage(message, total, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+				buildDisplayMessage(
+					message,
+					total,
+					this.#hideThinkingBlock,
+					this.#proseOnlyThinking,
+					this.#countOf,
+					this.#sliceOf,
+				),
 				{ transient: true },
 			);
 			return;
@@ -210,6 +300,7 @@ export class StreamingRevealController {
 					this.#hideThinkingBlock,
 					this.#proseOnlyThinking,
 					this.#countOf,
+					this.#sliceOf,
 				),
 				{
 					transient: true,
@@ -230,7 +321,14 @@ export class StreamingRevealController {
 		if (!this.#smoothStreaming) {
 			const total = this.#visibleUnits(message);
 			this.#component.updateContent(
-				buildDisplayMessage(message, total, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+				buildDisplayMessage(
+					message,
+					total,
+					this.#hideThinkingBlock,
+					this.#proseOnlyThinking,
+					this.#countOf,
+					this.#sliceOf,
+				),
 				{ transient: true },
 			);
 			return;
@@ -248,6 +346,7 @@ export class StreamingRevealController {
 					this.#hideThinkingBlock,
 					this.#proseOnlyThinking,
 					this.#countOf,
+					this.#sliceOf,
 				),
 				{
 					transient: true,
@@ -316,6 +415,7 @@ export class StreamingRevealController {
 				this.#hideThinkingBlock,
 				this.#proseOnlyThinking,
 				this.#countOf,
+				this.#sliceOf,
 			),
 			{ transient: true },
 		);
@@ -357,7 +457,14 @@ export class StreamingRevealController {
 		}
 		this.#revealed = Math.min(total, this.#revealed + nextStep(total - this.#revealed));
 		component.updateContent(
-			buildDisplayMessage(target, this.#revealed, this.#hideThinkingBlock, this.#proseOnlyThinking, this.#countOf),
+			buildDisplayMessage(
+				target,
+				this.#revealed,
+				this.#hideThinkingBlock,
+				this.#proseOnlyThinking,
+				this.#countOf,
+				this.#sliceOf,
+			),
 			{
 				transient: true,
 			},

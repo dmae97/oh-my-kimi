@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import {
+	BlockUnitCounter,
 	buildDisplayMessage,
 	CATCHUP_FRAMES,
 	MIN_STEP,
@@ -295,5 +296,54 @@ describe("streaming reveal", () => {
 		expect(textAt(latestMessage(component), 0)).toBe("abcdefghi");
 		expect(component.messages).toHaveLength(updates);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("BlockUnitCounter incremental slice", () => {
+	it("matches a pure grapheme slice across append-only growth and monotonic reveal", () => {
+		const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
+		const pureSlice = (text: string, units: number): string => {
+			if (units <= 0 || text.length === 0) return "";
+			let count = 0;
+			for (const { index, segment } of segmenter.segment(text)) {
+				count++;
+				if (count >= units) {
+					const end = index + segment.length;
+					return end >= text.length ? text : text.slice(0, end);
+				}
+			}
+			return text;
+		};
+		const counter = new BlockUnitCounter();
+		// Build the text up in append-only chunks (the streaming shape) and at
+		// every step probe many reveal positions — the incremental slice must
+		// equal the pure reference every time.
+		let text = "";
+		const chunks = ["H", "He", "Hello 🌍", "Hello 🌍 world!\n", "ab👨", "ab👨\u200D👩x code"];
+		for (const chunk of chunks) {
+			text = chunk;
+			const total = [...segmenter.segment(text)].length;
+			for (let u = 0; u <= total + 2; u++) {
+				expect(counter.slice(0, text, u)).toBe(pureSlice(text, u));
+			}
+		}
+	});
+
+	it("re-segments the boundary cluster when an append extends it at an unchanged unit count", () => {
+		// Regression guard: "a" cached at 1 grapheme (offset 1), then a combining
+		// mark appends and MERGES into that cluster ("a" + "\u0301" -> one grapheme),
+		// still 1 grapheme. The cached offset is now stale — the slice must return the
+		// full merged cluster, not the stale 1-code-unit "a". slice() preserves the
+		// input's code units, so the expectation is the decomposed form.
+		const counter = new BlockUnitCounter();
+		expect(counter.slice(0, "a", 1)).toBe("a");
+		expect(counter.slice(0, "a\u0301", 1)).toBe("a\u0301");
+		expect(counter.slice(0, "a\u0301b", 2)).toBe("a\u0301b");
+	});
+
+	it("re-segments from zero when the text is replaced, not appended", () => {
+		const counter = new BlockUnitCounter();
+		counter.slice(0, "aaaaa", 3);
+		expect(counter.slice(0, "xyz", 2)).toBe("xy");
 	});
 });
