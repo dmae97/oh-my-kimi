@@ -302,6 +302,31 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(content.match(/<\/todo_context>/g)).toHaveLength(1);
 	});
 
+	it("includes read-only todo state when todo is discoverable but inactive", async () => {
+		harness.settings.set("tools.discoveryMode", "all");
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		harness.session.setTodoPhases([
+			{
+				name: "Verification",
+				tasks: [{ content: "Run focused checks", status: "pending" }],
+			},
+		]);
+		expect(harness.session.getActiveToolNames()).not.toContain("todo");
+		expect(harness.session.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === "todo")).toBe(true);
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+
+		const message = sendCustomMessage.mock.calls[0]?.[0];
+		const content = typeof message?.content === "string" ? message.content : "";
+		expect(message?.customType).toBe("goal-mode-context");
+		expect(content).toContain("<todo_context>");
+		expect(content).toContain("Run focused checks");
+		expect(content).toContain("read-only progress state");
+		expect(content).toContain("discoverable but not active");
+		expect(content).not.toContain("call the `todo` tool first");
+	});
+
 	it("omits persisted todo state when todo tool is inactive", async () => {
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		harness.session.setTodoPhases([

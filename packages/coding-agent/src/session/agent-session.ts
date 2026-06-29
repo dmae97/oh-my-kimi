@@ -6512,7 +6512,11 @@ export class AgentSession {
 
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
-		if (!this.getActiveToolNames().includes("todo")) return undefined;
+		const activeToolNames = this.getActiveToolNames();
+		const canCallTodoTool = activeToolNames.includes("todo");
+		const canDiscoverTodoTool =
+			!canCallTodoTool && this.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === "todo");
+		if (!canCallTodoTool && !canDiscoverTodoTool) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
@@ -6533,6 +6537,7 @@ export class AgentSession {
 		}));
 
 		return prompt.render(goalTodoContextPrompt, {
+			canCallTodoTool,
 			closed: String(closed),
 			open: String(open),
 			phases: promptPhases,
