@@ -1,6 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { resolveModels } from "@oh-my-pi/pi-coding-agent/cli/tiny-models-cli";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { resolveModels, runTinyModelsCommand } from "@oh-my-pi/pi-coding-agent/cli/tiny-models-cli";
 import { TINY_LOCAL_MODELS } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("tiny-models download model resolution", () => {
 	it("excludes load-blocked models from `all` so the bulk prefetch stays green", () => {
@@ -24,5 +29,25 @@ describe("tiny-models download model resolution", () => {
 		expect(blocked).toBeDefined();
 		if (!blocked) return;
 		expect(resolveModels(blocked.key)).toEqual([blocked.key]);
+	});
+
+	it("includes worker error details in JSON failures", async () => {
+		const output: string[] = [];
+		spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+			output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+			return true;
+		});
+		spyOn(tinyTitleClient, "downloadModel").mockResolvedValue({
+			ok: false,
+			error: "Error: runtime install failed\n    at worker",
+		});
+
+		await expect(
+			runTinyModelsCommand({ action: "download", model: "lfm2-700m", flags: { json: true } }),
+		).rejects.toThrow("One or more tiny title models failed to download");
+
+		expect(JSON.parse(output.join(""))).toEqual({
+			results: [{ model: "lfm2-700m", ok: false, error: "Error: runtime install failed\n    at worker" }],
+		});
 	});
 });

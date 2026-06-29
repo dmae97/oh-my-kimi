@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp tiny-models download` JSON/text failures to include the worker-side download error instead of collapsing every worker failure to `ok:false`. ([#3839](https://github.com/can1357/oh-my-pi/issues/3839))
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed
