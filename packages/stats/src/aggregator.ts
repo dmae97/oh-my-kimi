@@ -152,10 +152,16 @@ function dispatch(handle: WorkerHandle, request: SyncWorkerRequest): Promise<Par
  * spawn path on a fresh install (no session files = early return), so a
  * dedicated probe is the only reliable signal.
  *
- * Resolves with the worker's `import.meta.url` (caller-visible diagnostics);
- * rejects on transport error, error response, or timeout.
+ * No-op on darwin: `syncAllSessions` keeps macOS on the serial parser path
+ * (see {@link defaultWorkerCount}) so the worker spawn surface is unreachable
+ * from the CLI, and probing it under the hardened runtime in
+ * `scripts/ci-macos-sign.sh` would re-enter the Bun-worker abort surface that
+ * motivated the darwin serial default in the first place.
+ *
+ * Rejects on transport error, error response, or timeout.
  */
 export async function smokeTestSyncWorker({ timeoutMs = 5_000 }: { timeoutMs?: number } = {}): Promise<void> {
+	if (process.platform === "darwin") return;
 	const worker = createSyncWorker();
 	const { promise, resolve, reject } = Promise.withResolvers<void>();
 	const timer = setTimeout(() => reject(new Error(`sync worker did not pong within ${timeoutMs}ms`)), timeoutMs);
