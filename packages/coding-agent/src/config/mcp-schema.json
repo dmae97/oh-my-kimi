@@ -22,7 +22,16 @@
     },
     "disabledServers": {
       "type": "array",
-      "description": "User-level denylist for disabling discovered servers by name.",
+      "description": "User-level denylist for disabling discovered servers by name. Highest precedence: a server here is hidden regardless of any other source.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "enabledServers": {
+      "type": "array",
+      "description": "User-level allowlist that overrides a discovered server's `enabled: false` flag (e.g. when the source config is owned by another tool such as opencode.json). The denylist still wins.",
       "items": {
         "type": "string",
         "minLength": 1

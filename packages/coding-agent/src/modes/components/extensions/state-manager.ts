@@ -22,7 +22,7 @@ import {
 	isProviderEnabled,
 	loadCapability,
 } from "../../../discovery";
-import { readDisabledServers } from "../../../mcp/config-writer";
+import { readDisabledServers, readEnabledServers } from "../../../mcp/config-writer";
 import type {
 	DashboardState,
 	Extension,
@@ -145,15 +145,29 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 	// Load MCP servers. The dashboard mirrors `/mcp list` (issue #3827) by
 	// honoring the same disable signals: the dashboard-private settings list,
 	// the per-server `enabled: false` flag, and the user-level `disabledServers`
-	// denylist that `/mcp disable` writes through `setServerDisabled`.
+	// denylist that `/mcp disable` writes through `setServerDisabled`. The
+	// user-level `enabledServers` allowlist overrides a non-writable source's
+	// `enabled: false` (e.g. opencode.json) but never the denylist.
 	try {
-		const mcpDisabledNames = cwd
-			? new Set(await readDisabledServers(getMCPConfigPath("user", cwd)).catch(() => []))
-			: new Set<string>();
+		const userMcpPath = cwd ? getMCPConfigPath("user", cwd) : undefined;
+		const [mcpDisabledNames, mcpForcedEnabled] = await Promise.all([
+			userMcpPath
+				? readDisabledServers(userMcpPath)
+						.then(list => new Set(list))
+						.catch(() => new Set<string>())
+				: Promise.resolve(new Set<string>()),
+			userMcpPath
+				? readEnabledServers(userMcpPath)
+						.then(list => new Set(list))
+						.catch(() => new Set<string>())
+				: Promise.resolve(new Set<string>()),
+		]);
 		const mcps = await loadCapability<MCPServer>("mcps", loadOpts);
 		for (const server of mcps.all) {
 			const id = makeExtensionId("mcp", server.name);
-			const isDisabled = disabledExtensions.has(id) || server.enabled === false || mcpDisabledNames.has(server.name);
+			const forced = mcpForcedEnabled.has(server.name);
+			const sourceSaysDisabled = server.enabled === false && !forced;
+			const isDisabled = mcpDisabledNames.has(server.name) || disabledExtensions.has(id) || sourceSaysDisabled;
 			const isShadowed = (server as { _shadowed?: boolean })._shadowed;
 			const providerEnabled = isProviderEnabled(server._source.provider);
 

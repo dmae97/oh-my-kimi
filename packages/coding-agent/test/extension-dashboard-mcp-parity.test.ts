@@ -16,7 +16,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/discovery";
+import { initializeWithSettings, reset as resetDiscoveryCache } from "@oh-my-pi/pi-coding-agent/discovery";
 import { readMCPConfigFile, setMcpServerEnabled, setServerDisabled } from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
 import { loadAllExtensions } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/state-manager";
 import { __resetDirsFromEnvForTests, getMCPConfigPath, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
@@ -218,6 +218,73 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		expect(reenabled).toBeDefined();
 		expect(reenabled!.state).toBe("active");
 	});
+	test("dashboard re-enable force-enables a tool-owned source (opencode.json) via enabledServers", async () => {
+		// OpenCode is a non-writable source: the dashboard must NOT mutate
+		// opencode.json, but the user-level enabledServers allowlist still has
+		// to flip the row active. Modeled after the codex review on PR #3829.
+		const opencodePath = path.join(projectDir, "opencode.json");
+		await Bun.write(
+			opencodePath,
+			JSON.stringify({
+				mcp: {
+					"opencode-server": {
+						type: "local",
+						command: ["echo", "opencode"],
+						enabled: false,
+					},
+				},
+			}),
+		);
+		// beforeEach's Settings.init() already cached an absent opencode.json
+		// for this projectDir, so drop the capability fs cache before the first
+		// dashboard load picks the file up.
+		resetDiscoveryCache();
+
+		const before = (await loadAllExtensions(projectDir, [])).find(e => e.id === "mcp:opencode-server");
+		expect(before).toBeDefined();
+		expect(before!.source.provider).toBe("opencode");
+		expect(before!.state).toBe("disabled");
+
+		// The dashboard withholds sourcePath for tool-owned sources, mirroring
+		// the #writableMcpSourcePath gate.
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "opencode-server",
+			enabled: true,
+		});
+
+		// opencode.json MUST stay untouched.
+		const opencodeRaw = JSON.parse(await Bun.file(opencodePath).text()) as {
+			mcp: { "opencode-server": { enabled: boolean } };
+		};
+		expect(opencodeRaw.mcp["opencode-server"].enabled).toBe(false);
+
+		// The override lands in the user mcp.json's enabledServers list.
+		const userConfig = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
+		expect(userConfig.enabledServers ?? []).toContain("opencode-server");
+
+		const after = (await loadAllExtensions(projectDir, [])).find(e => e.id === "mcp:opencode-server");
+		expect(after).toBeDefined();
+		expect(after!.state).toBe("active");
+
+		// Disabling again clears the override.
+		await setMcpServerEnabled({
+			userPath: getMCPConfigPath("user", projectDir),
+			projectPath: getMCPConfigPath("project", projectDir),
+			name: "opencode-server",
+			enabled: false,
+		});
+
+		const userConfigAfter = await readMCPConfigFile(getMCPConfigPath("user", projectDir));
+		expect(userConfigAfter.enabledServers ?? []).not.toContain("opencode-server");
+		expect(userConfigAfter.disabledServers ?? []).toContain("opencode-server");
+
+		const offAgain = (await loadAllExtensions(projectDir, [])).find(e => e.id === "mcp:opencode-server");
+		expect(offAgain).toBeDefined();
+		expect(offAgain!.state).toBe("disabled");
+	});
+
 	test("dashboard toggles on a discovered (config-less) server use the denylist", async () => {
 		// `phantom-server` is not in any config; only the denylist can suppress it.
 		await setMcpServerEnabled({

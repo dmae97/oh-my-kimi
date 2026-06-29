@@ -111,7 +111,10 @@ export const MCP_CONFIG_SCHEMA_URL =
 export interface MCPConfigFile {
 	$schema?: string;
 	mcpServers?: Record<string, MCPServerConfig>;
+	/** Names to hide regardless of any source `enabled` flag. Highest precedence. */
 	disabledServers?: string[];
+	/** Names to force-enable when a non-writable source reports `enabled: false`. */
+	enabledServers?: string[];
 }
 
 // =============================================================================
