@@ -4,22 +4,22 @@
 
 ### Changed
 
-- Optimized argument streaming to throttle JSON re-parsing for renderers that do not require raw input
+- Optimized argument streaming performance by throttling JSON re-parsing for renderers that do not require raw input.
 
 ### Fixed
 
-- Fixed memory leaks in benchmark CLI by properly closing provider sessions after completion
-- Fixed streamed tool-call argument previews starving TUI shimmer frames by throttling reveal-side JSON reparses and suppressing unchanged write-preview arg updates while preserving raw-prefix updates for bash/edit/custom renderers.
-- Fixed llama.cpp discovery mapping unlimited `max_tokens = -1` / `n_predict = -1` output limits to the generic 32K discovery cap instead of the discovered runtime context window. ([#3781](https://github.com/can1357/oh-my-pi/issues/3781))
-- Fixed large resumed sessions dominated by repeated compaction summaries exhausting memory on Ctrl+C flush, and improved fork session previews that start with developer or assistant turns. ([#3789](https://github.com/can1357/oh-my-pi/issues/3789))
-- Fixed `omp search` applying `providers.webSearch` and `providers.webSearchExclude` before resolving its implicit provider chain. ([#3793](https://github.com/can1357/oh-my-pi/issues/3793))
-- Fixed Gemini web search using only Cloud Code Assist OAuth by allowing standard `GEMINI_API_KEY` developer API credentials to run native Google Search grounding. ([#3810](https://github.com/can1357/oh-my-pi/issues/3810))
-- Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
-- Fixed the `edit` tool persisting unbounded full-file `oldText` / `newText` snapshots in tool-result `details`, inflating per-turn session JSONL lines (hundreds of KB per edit on large files). `details.oldText`/`details.newText` are now pruned when their combined length exceeds 32 KB; the visible diff, path, line, and diagnostic metadata are preserved, and ACP `diff` content still flows for smaller edits. ([#3786](https://github.com/can1357/oh-my-pi/issues/3786))
-- Fixed Windows MCP stdio launches for PATH-resolved `npx.cmd` shims by preserving the `cmd.exe` wrapper path that keeps npm-owned subprocess stdio attached. ([#3794](https://github.com/can1357/oh-my-pi/issues/3794))
-- Fixed `web_search` with the `duckduckgo` provider returning empty results for any non-encyclopedic query. The provider hit DuckDuckGo's Instant Answer API (`api.duckduckgo.com`), which only serves Wikipedia/Wolfram-Alpha-style topics, so the orchestrator surfaced "DuckDuckGo returned no renderable search content" for typical agent queries. It now POSTs the no-JS HTML frontend (`html.duckduckgo.com/html/`) and parses the result list, with a clear bot-challenge error when DuckDuckGo throttles the request from datacenter/shared-egress IPs. ([#3799](https://github.com/can1357/oh-my-pi/issues/3799))
-- Fixed Windows `--extension` paths with spaces or `\\?\` prefixes being truncated or passed through to Bun import/spawn APIs. ([#3804](https://github.com/can1357/oh-my-pi/issues/3804))
-- Fixed `/mcp reauth` for Cloudflare by matching the reference MCP SDK's OAuth `prompt` behavior: OMP now omits `prompt` by default, only sends `prompt=consent` when `offline_access` is requested, and labels dynamically registered MCP OAuth clients as `oh-my-pi` instead of `Codex`. ([#3817](https://github.com/can1357/oh-my-pi/issues/3817))
+- Fixed memory leaks in the benchmark CLI by ensuring provider sessions are properly closed upon completion.
+- Fixed TUI rendering lag and shimmer frame starvation during streamed tool-call argument previews.
+- Fixed llama.cpp discovery mapping unlimited output limits (max_tokens = -1 / n_predict = -1) to the generic 32K cap instead of the actual discovered runtime context window.
+- Fixed memory exhaustion on Ctrl+C flush for large resumed sessions with repeated compaction summaries, and improved fork session previews starting with developer or assistant turns.
+- Fixed omp search applying web search provider filters before resolving its implicit provider chain.
+- Fixed Gemini web search to support standard GEMINI_API_KEY developer API credentials for native Google Search grounding, in addition to Cloud Code Assist OAuth.
+- Fixed the bash interceptor blocking echo and printf redirects to standard device sinks (such as /dev/null, /dev/tty, /dev/stdout, and /dev/stderr).
+- Fixed session file size inflation in the edit tool by pruning extremely large oldText and newText snapshots (over 32 KB) from tool-result details, while preserving visible diffs, paths, lines, and diagnostic metadata.
+- Fixed Windows MCP stdio launches for PATH-resolved npx.cmd shims by preserving the cmd.exe wrapper path to keep subprocess stdio attached.
+- Fixed the DuckDuckGo web_search provider returning empty results for non-encyclopedic queries by switching from the Instant Answer API to parsing the HTML frontend, and added clear error handling for bot-challenge throttling.
+- Fixed Windows --extension paths with spaces or \\?\ prefixes being truncated or incorrectly passed to Bun import/spawn APIs.
+- Fixed /mcp reauth compatibility with Cloudflare by aligning OAuth prompt behavior with the reference MCP SDK and updating the client label to oh-my-pi.
 
 ## [16.2.5] - 2026-06-28
 

@@ -4,9 +4,7 @@
 
 ### Fixed
 
-- Kept stats session sync on the serial parser path for `workers: 1` and macOS defaults, avoiding Bun worker re-entry aborts when launching `/stats` ([#3733](https://github.com/can1357/oh-my-pi/issues/3733)).
-- Replaced the native `Bun.JSONL.parseChunk` session parser path with a lenient JS line scanner, avoiding Bun aborts on large stats session files ([#3733](https://github.com/can1357/oh-my-pi/issues/3733)).
-- Skipped the stats sync worker smoke probe on darwin so `omp --smoke-test` (and the macOS signing/notarization pre-launch run) no longer re-enters the Bun-worker abort surface the serial macOS sync now avoids ([#3733](https://github.com/can1357/oh-my-pi/issues/3733)).
+- Fixed application crashes and Bun aborts on macOS and when parsing large stats session files, including during `omp --smoke-test` runs, by utilizing a more resilient serial parser and lenient line scanner.
 
 ## [16.2.3] - 2026-06-28
 
