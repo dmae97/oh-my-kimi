@@ -82,6 +82,8 @@ const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 8;
 /// threads.
 #[cfg(any(target_os = "windows", test))]
 const RAYON_MAX_THREADS: usize = 8;
+#[cfg(any(target_os = "windows", test))]
+const RAYON_RESERVED_NON_RAYON_THREADS: usize = 1;
 
 /// Windows worker count we'd *like*, before checking what the OS will actually
 /// grant: the Tokio default (one per core) clamped to
@@ -113,7 +115,9 @@ enum RayonPoolPlan {
 #[cfg(any(target_os = "windows", test))]
 fn rayon_pool_plan(desired: usize, spawnable: usize) -> RayonPoolPlan {
 	let desired = clamped_rayon_threads(desired);
-	let workers = spawnable.min(desired);
+	let workers = spawnable
+		.saturating_sub(RAYON_RESERVED_NON_RAYON_THREADS)
+		.min(desired);
 	if workers > 0 {
 		RayonPoolPlan::WorkerThreads(workers)
 	} else {
@@ -166,9 +170,12 @@ fn probe_spawnable_workers(target: usize) -> usize {
 
 /// Install Rayon's global pool before any `par_iter` or vendored uutils sort
 /// path can lazily initialize it with Rayon's default one-thread-per-core
-/// policy. When the probe sees fewer workers than requested, build the global
-/// pool with the actually spawnable count; when it sees zero workers, leave the
-/// global pool untouched and keep patched Rayon callsites on sequential paths.
+/// policy. When the probe sees fewer workers than requested, reserve capacity
+/// for native code that must still perform its own `thread::spawn` (notably
+/// vendored `sort`'s external-sort helper) and build the global pool with the
+/// remaining spawnable count; when no worker remains after that reserve, leave
+/// the global pool untouched and keep patched Rayon callsites on sequential
+/// paths.
 /// Rayon stores global initialization in a `Once`, so a failed
 /// `build_global()` call would permanently poison the process for later
 /// parallel work.
@@ -309,8 +316,8 @@ mod tests {
 	}
 
 	#[test]
-	fn rayon_uses_worker_pool_only_when_full_probe_succeeds() {
-		assert_eq!(rayon_pool_plan(4, 4), RayonPoolPlan::WorkerThreads(4));
+	fn rayon_uses_requested_pool_when_probe_covers_request_and_reserve() {
+		assert_eq!(rayon_pool_plan(4, 5), RayonPoolPlan::WorkerThreads(4));
 		assert_eq!(
 			rayon_pool_plan(RAYON_MAX_THREADS + 4, usize::MAX),
 			RayonPoolPlan::WorkerThreads(RAYON_MAX_THREADS)
@@ -318,14 +325,14 @@ mod tests {
 	}
 
 	#[test]
-	fn rayon_uses_worker_pool_when_any_probe_thread_succeeds() {
-		assert_eq!(rayon_pool_plan(4, 3), RayonPoolPlan::WorkerThreads(3));
-		assert_eq!(rayon_pool_plan(1, 1), RayonPoolPlan::WorkerThreads(1));
+	fn rayon_uses_worker_pool_after_reserving_non_rayon_capacity() {
+		assert_eq!(rayon_pool_plan(4, 3), RayonPoolPlan::WorkerThreads(2));
+		assert_eq!(rayon_pool_plan(1, 2), RayonPoolPlan::WorkerThreads(1));
 	}
 
 	#[test]
-	fn rayon_skips_global_pool_when_no_worker_can_spawn() {
-		assert_eq!(rayon_pool_plan(4, 0), RayonPoolPlan::SkipGlobalPool);
+	fn rayon_skips_global_pool_when_only_reserved_capacity_can_spawn() {
+		assert_eq!(rayon_pool_plan(4, 1), RayonPoolPlan::SkipGlobalPool);
 		assert_eq!(rayon_pool_plan(1, 0), RayonPoolPlan::SkipGlobalPool);
 	}
 }
