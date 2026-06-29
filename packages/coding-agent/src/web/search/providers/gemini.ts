@@ -579,10 +579,7 @@ export class GeminiProvider extends SearchProvider {
 		// Cheap, in-memory check — avoids driving the refresh pipeline during
 		// the provider-chain probe. `searchGemini` refreshes OAuth lazily on the
 		// actual request and resolves developer API keys through AuthStorage.
-		return (
-			GEMINI_PROVIDERS.some((provider: GeminiProviderId) => authStorage.hasOAuth(provider)) ||
-			authStorage.hasAuth(DEVELOPER_API_PROVIDER)
-		);
+		return hasGeminiOAuth(authStorage) || authStorage.hasAuth(DEVELOPER_API_PROVIDER);
 	}
 
 	search(params: SearchParams): Promise<SearchResponse> {

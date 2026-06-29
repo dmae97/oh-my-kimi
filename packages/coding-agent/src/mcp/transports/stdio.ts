@@ -147,7 +147,6 @@ function resolveWindowsShimPath(value: string, shimDir: string): string | null {
 	return path.join(shimDir, ...suffix.split(/[\\/]+/).filter(Boolean));
 }
 
-
 async function resolveWindowsNpmShimCommand(
 	command: string,
 	args: readonly string[],
@@ -157,7 +156,10 @@ async function resolveWindowsNpmShimCommand(
 	if (!isWindowsBatchCommand(command)) return null;
 	if (!hasPathSegment(command)) return null;
 	const commandPath = path.resolve(cwd, command);
-	const commandName = path.basename(commandPath).replace(/\.cmd$/i, "").toLowerCase();
+	const commandName = path
+		.basename(commandPath)
+		.replace(/\.cmd$/i, "")
+		.toLowerCase();
 	if (commandName === "npx") return null;
 
 	let content: string;
