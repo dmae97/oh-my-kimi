@@ -161,6 +161,56 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		});
 	});
 
+	it("honors legacy bash operations overrides", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "legacy-bash-ops-ext", version: "1.0.0" }),
+			"index.ts": [
+				'import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";',
+				"const updates = [];",
+				"let captured;",
+				"const tool = createBashToolDefinition(process.cwd(), {",
+				"  operations: {",
+				"    async exec(command, cwd, options) {",
+				"      captured = { command, cwd, timeout: options.timeout, envValue: options.env.SENTINEL };",
+				"      options.onData(Buffer.from('remote output'));",
+				"      return { exitCode: 0 };",
+				"    },",
+				"  },",
+				"  spawnHook(context) {",
+				"    return { ...context, command: 'remote:' + context.command, cwd: '/remote', env: { ...context.env, SENTINEL: 'yes' } };",
+				"  },",
+				"});",
+				"const result = await tool.execute('call-1', { command: 'whoami', timeout: 7 }, undefined, update => {",
+				"  const text = update.content.find(block => block.type === 'text')?.text;",
+				"  if (text) updates.push(text);",
+				"});",
+				"export const observed = {",
+				"  captured,",
+				"  text: result.content.find(block => block.type === 'text')?.text,",
+				"  updates,",
+				"};",
+				"export default function (pi) { pi.registerTool(tool); }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as {
+			observed: {
+				captured: { command: string; cwd: string; timeout: number; envValue: string };
+				text: string;
+				updates: string[];
+			};
+		};
+
+		expect(mod.observed.captured).toEqual({
+			command: "remote:whoami",
+			cwd: "/remote",
+			timeout: 7,
+			envValue: "yes",
+		});
+		expect(mod.observed.text).toBe("remote output");
+		expect(mod.observed.updates).toEqual(["remote output"]);
+	});
+
 	it("rewrites extension bare deps to file URLs for compiled-binary loading", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "compiled-dep-ext", version: "1.0.0" }),

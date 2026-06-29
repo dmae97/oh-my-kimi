@@ -62,7 +62,21 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
+export interface BashOperations {
+	exec: (
+		command: string,
+		cwd: string,
+		options: {
+			onData: (data: Buffer) => void;
+			signal?: AbortSignal;
+			timeout?: number;
+			env?: NodeJS.ProcessEnv;
+		},
+	) => Promise<{ exitCode: number | null }>;
+}
+
 export interface BashToolOptions {
+	operations?: BashOperations;
 	commandPrefix?: string;
 	spawnHook?: BashSpawnHook;
 }
@@ -265,6 +279,67 @@ function normalizeLegacyLimit(limit: number | undefined, fallback: number): numb
 	return Math.max(1, Math.floor(limit));
 }
 
+function appendStatus(text: string, status: string): string {
+	return text ? `${text}\n\n${status}` : status;
+}
+
+function legacyBashSnapshot(output: string): { text: string; details?: { truncation: TruncationResult } } {
+	const truncation = truncateTail(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+	if (!truncation.truncated) {
+		return { text: truncation.content };
+	}
+	const startLine = truncation.totalLines - (truncation.outputLines ?? 0) + 1;
+	const note =
+		truncation.truncatedBy === "lines"
+			? `Showing lines ${startLine}-${truncation.totalLines} of ${truncation.totalLines}`
+			: `Showing lines ${startLine}-${truncation.totalLines} of ${truncation.totalLines} (${formatBytes(DEFAULT_MAX_BYTES)} limit)`;
+	return {
+		text: `${truncation.content}\n\n[${note}]`,
+		details: { truncation },
+	};
+}
+
+async function executeLegacyBashOperations(
+	operations: BashOperations,
+	spawn: BashSpawnContext,
+	timeout: number | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback | undefined,
+): Promise<AgentToolResult> {
+	let output = "";
+	const onData = (data: Buffer) => {
+		output += data.toString("utf8");
+		if (onUpdate) {
+			const snapshot = legacyBashSnapshot(output);
+			onUpdate({ content: [{ type: "text", text: snapshot.text }], details: snapshot.details });
+		}
+	};
+	try {
+		const result = await operations.exec(spawn.command, spawn.cwd, {
+			onData,
+			signal,
+			timeout,
+			env: spawn.env,
+		});
+		const snapshot = legacyBashSnapshot(output);
+		const text = snapshot.text || "(no output)";
+		if (result.exitCode !== 0 && result.exitCode !== null) {
+			throw new Error(appendStatus(text, `Command exited with code ${result.exitCode}`));
+		}
+		return { content: [{ type: "text", text }], details: snapshot.details };
+	} catch (err) {
+		const snapshot = legacyBashSnapshot(output);
+		const text = snapshot.text;
+		if (err instanceof Error && err.message === "aborted") {
+			throw new Error(appendStatus(text, "Command aborted"));
+		}
+		if (err instanceof Error && err.message.startsWith("timeout:")) {
+			throw new Error(appendStatus(text, `Command timed out after ${err.message.slice("timeout:".length)} seconds`));
+		}
+		throw err;
+	}
+}
+
 function createLegacyTool(_cwd: string, definition: ToolDefinition): ToolDefinition {
 	return definition;
 }
@@ -343,6 +418,15 @@ export function createBashToolDefinition(cwd: string, options?: BashToolOptions)
 			const command = options?.commandPrefix ? `${options.commandPrefix}\n${rawCommand}` : rawCommand;
 			const timeout = numberField(params, "timeout");
 			const spawn = options?.spawnHook?.({ command, cwd, env: process.env });
+			if (options?.operations) {
+				return executeLegacyBashOperations(
+					options.operations,
+					{ command: spawn?.command ?? command, cwd: spawn?.cwd ?? cwd, env: spawn?.env ?? process.env },
+					timeout,
+					signal,
+					onUpdate,
+				);
+			}
 			return tool.execute(
 				toolCallId,
 				{
