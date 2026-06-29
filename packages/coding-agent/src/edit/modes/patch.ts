@@ -48,6 +48,7 @@ import {
 } from "../normalize";
 import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { EditToolDetails, LspBatchRequest } from "../renderer";
+import { pruneOversizedEditSnapshots } from "../snapshot-details";
 import {
 	type ContextLineResult,
 	DEFAULT_FUZZY_THRESHOLD,
@@ -1894,7 +1895,7 @@ export async function executePatchSingle(
 
 	return {
 		content: [{ type: "text", text: resultText }],
-		details: {
+		details: pruneOversizedEditSnapshots({
 			diff: diffResult.diff,
 			// When the patch moves the file, anchor the diff to the destination
 			// path. ACP `ToolCallContent.diff.path` comes from this field, and
@@ -1909,6 +1910,6 @@ export async function executePatchSingle(
 			meta,
 			oldText,
 			newText,
-		},
+		}),
 	};
 }
