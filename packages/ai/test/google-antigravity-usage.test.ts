@@ -219,6 +219,35 @@ describe("antigravity usage provider", () => {
 		expect(weekly?.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
 		expect(weekly?.amount.remainingFraction).toBe(0.4);
 	});
+	it("keeps near-reset unlabeled weekly windows separate from daily windows", async () => {
+		const now = Date.now();
+		const dailyReset = new Date(now + 5 * 3600_000).toISOString();
+		const weeklyReset = new Date(now + 23 * 3600_000).toISOString();
+		const payload = {
+			models: {
+				gemini: {
+					displayName: "Gemini",
+					modelProvider: "MODEL_PROVIDER_GOOGLE",
+					quotaInfos: [
+						{ remainingFraction: 0.9, resetTime: dailyReset },
+						{ remainingFraction: 0.3, resetTime: weeklyReset },
+					],
+				},
+			},
+		};
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fakeFetch(payload)),
+		);
+
+		const daily = report!.limits.find(limit => limit.scope.windowId === "daily");
+		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
+		expect(report!.limits).toHaveLength(2);
+		expect(daily?.window?.label).toBe("Daily");
+		expect(daily?.amount.remainingFraction).toBe(0.9);
+		expect(weekly?.window?.label).toBe("Weekly");
+		expect(weekly?.amount.remainingFraction).toBe(0.3);
+	});
 
 	it("normalizes 7 Day window ids to the weekly usage window", async () => {
 		const payload = {

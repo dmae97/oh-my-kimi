@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Antigravity usage reporting to infer daily vs weekly windows from unlabeled reset-only quota rows, so fresh Cloud Code Assist payloads no longer collapse those counters into `Default` ([#3797](https://github.com/can1357/oh-my-pi/issues/3797)).
+
 ## [16.2.5] - 2026-06-28
 
 ### Fixed
