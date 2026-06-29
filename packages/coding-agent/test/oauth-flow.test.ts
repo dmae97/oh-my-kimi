@@ -84,7 +84,7 @@ describe("mcp oauth flow", () => {
 		expect(authUrl.searchParams.get("state")).toBe("test-state");
 	});
 
-	it("defaults prompt=consent so reauth can switch accounts despite an active browser session", async () => {
+	it("defaults prompt=login+consent so reauth shows the login screen first and then re-confirms consent", async () => {
 		const flow = new MCPOAuthFlow(
 			{
 				authorizationUrl: "https://provider.example/authorize",
@@ -96,7 +96,11 @@ describe("mcp oauth flow", () => {
 
 		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53180/callback");
 
-		expect(new URL(url).searchParams.get("prompt")).toBe("consent");
+		// `login` MUST come before `consent`: providers (e.g. Cloudflare) that
+		// only honor the first recognized value MUST still see the login page,
+		// otherwise reauth lands on the consent screen attached to the existing
+		// browser session and accounts can never be switched (issue #3817).
+		expect(new URL(url).searchParams.get("prompt")).toBe("login consent");
 	});
 
 	it("passes an explicit prompt value through to the authorization request", async () => {

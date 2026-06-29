@@ -225,12 +225,15 @@ export interface MCPOAuthConfig {
 	/** OAuth scopes (space-separated) */
 	scopes?: string;
 	/**
-	 * `prompt` parameter for the authorization request. Defaults to `"consent"`
-	 * so the provider always shows its authorize screen instead of silently
-	 * re-approving the browser's current session — without it, reauthorizing to
-	 * switch accounts/workspaces is impossible once a session cookie exists
-	 * (RFC 6749 §3.1 requires servers to ignore the param when unsupported).
-	 * Set to `""` to omit the parameter entirely.
+	 * `prompt` parameter for the authorization request. Defaults to
+	 * `"login consent"` so the provider re-prompts for authentication AND
+	 * consent — without `login` the user cannot switch accounts when an
+	 * existing browser session cookie is present (e.g. Cloudflare's MCP OAuth
+	 * server lands directly on the consent screen attached to the cached
+	 * account), and without `consent` the authorize screen would be silently
+	 * re-approved on providers that suppress it once granted. Per RFC 6749
+	 * §3.1 servers MUST ignore values they do not support, so passing both is
+	 * safe across providers. Set to `""` to omit the parameter entirely.
 	 */
 	prompt?: string;
 	/** Exact redirect URI to advertise to the provider */
@@ -325,7 +328,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (this.config.scopes && !params.get("scope")) {
 			params.set("scope", this.config.scopes);
 		}
-		const prompt = this.config.prompt ?? "consent";
+		const prompt = this.config.prompt ?? "login consent";
 		if (prompt && !params.get("prompt")) {
 			params.set("prompt", prompt);
 		}
