@@ -1,8 +1,11 @@
+import * as fs from "node:fs";
+import * as readline from "node:readline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { getBlobsDir, isEnoent, parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import { BlobStore, isBlobRef, resolveImageData, resolveImageDataUrl } from "./blob-store";
 import { buildSessionContext } from "./session-context";
 import {
+	type CompactionEntry,
 	type FileEntry,
 	type RawFileEntry,
 	SESSION_TITLE_SLOT_BYTES,
@@ -19,6 +22,10 @@ import {
 	type SessionTitleUpdate,
 	titleUpdateFromSlot,
 } from "./session-title-slot";
+
+const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const ELIDED_COMPACTION_SUMMARY = "[Superseded compaction summary elided during session load]";
+const ELIDED_COMPACTION_SHORT_SUMMARY = "Superseded compaction elided";
 
 function splitTitleSlot(content: string): { body: string; slot: SessionTitleUpdate | undefined } {
 	const slot = titleUpdateFromSlot(parseTitleSlotFromContent(content));
@@ -54,6 +61,76 @@ export function parseSessionContent(content: string): {
 	return { entries: foldTitleSlot(entries, slot), titleSlot: slot };
 }
 
+function elideCompactionSummary(entry: CompactionEntry | undefined): boolean {
+	if (!entry) return false;
+	if (
+		entry.summary === ELIDED_COMPACTION_SUMMARY &&
+		entry.shortSummary === ELIDED_COMPACTION_SHORT_SUMMARY &&
+		entry.preserveData === undefined
+	) {
+		return false;
+	}
+	entry.summary = ELIDED_COMPACTION_SUMMARY;
+	entry.shortSummary = ELIDED_COMPACTION_SHORT_SUMMARY;
+	entry.preserveData = undefined;
+	return true;
+}
+
+function elideSupersededCompactionEntries(entries: FileEntry[]): void {
+	let previousCompaction: CompactionEntry | undefined;
+	for (const entry of entries) {
+		if (entry.type !== "compaction") continue;
+		elideCompactionSummary(previousCompaction);
+		previousCompaction = entry;
+	}
+}
+
+async function loadEntriesFromFileStream(filePath: string): Promise<{
+	entries: FileEntry[];
+	titleSlot: SessionTitleUpdate | undefined;
+}> {
+	const entries: FileEntry[] = [];
+	let previousCompaction: CompactionEntry | undefined;
+	let titleSlot: SessionTitleUpdate | undefined;
+	let sawBodyLine = false;
+	const input = fs.createReadStream(filePath, { encoding: "utf8" });
+	const lines = readline.createInterface({ input, crlfDelay: Infinity });
+
+	try {
+		for await (const rawLine of lines) {
+			const line = rawLine.trim();
+			if (!line) continue;
+			if (!sawBodyLine) {
+				const slot = parseTitleSlotLine(line);
+				if (slot) {
+					titleSlot = titleUpdateFromSlot(slot);
+					sawBodyLine = true;
+					continue;
+				}
+				sawBodyLine = true;
+			}
+
+			let entry: FileEntry;
+			try {
+				entry = JSON.parse(line) as FileEntry;
+			} catch {
+				continue;
+			}
+			if (entry.type === "compaction") {
+				elideCompactionSummary(previousCompaction);
+				previousCompaction = entry;
+			}
+			entries.push(entry);
+		}
+	} catch (err) {
+		input.destroy();
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
+		throw err;
+	}
+
+	return { entries: foldTitleSlot(entries, titleSlot), titleSlot };
+}
+
 /** Read only the fixed-size head window to detect a physical title slot. */
 export async function readTitleSlotFromFile(
 	filePath: string,
@@ -80,14 +157,19 @@ export async function loadEntriesFromFile(
 	filePath: string,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<FileEntry[]> {
-	let content: string;
+	let loaded: { entries: FileEntry[]; titleSlot: SessionTitleUpdate | undefined };
 	try {
-		content = await storage.readText(filePath);
+		const stat = storage.statSync(filePath);
+		loaded =
+			storage instanceof FileSessionStorage && stat.size >= STREAM_LOAD_THRESHOLD_BYTES
+				? await loadEntriesFromFileStream(filePath)
+				: parseSessionContent(await storage.readText(filePath));
 	} catch (err) {
 		if (isEnoent(err)) return [];
 		throw err;
 	}
-	const { entries } = parseSessionContent(content);
+	const { entries } = loaded;
+	elideSupersededCompactionEntries(entries);
 
 	// Validate session header
 	if (entries.length === 0) return entries;

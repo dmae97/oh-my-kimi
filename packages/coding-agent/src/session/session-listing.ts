@@ -245,20 +245,21 @@ function countMessageMarkers(content: string): number {
 	return count;
 }
 
-function extractFirstUserMessageFromPrefix(content: string): string | undefined {
-	const roleIndex = content.indexOf('"role"');
-	if (roleIndex === -1) return undefined;
+function extractFirstDisplayMessageFromPrefix(content: string): string | undefined {
+	let fallback: string | undefined;
+	let index = content.indexOf('"role"');
 
-	let index = roleIndex;
 	while (index !== -1) {
 		const role = extractStringProperty(content, "role", index);
-		if (role === "user") {
-			return extractStringProperty(content, "content", index) ?? extractStringProperty(content, "text", index);
+		const text = extractStringProperty(content, "content", index) ?? extractStringProperty(content, "text", index);
+		if (text) {
+			if (role === "user") return text;
+			if (!fallback && (role === "developer" || role === "assistant")) fallback = text;
 		}
 		index = content.indexOf('"role"', index + 6);
 	}
 
-	return undefined;
+	return fallback;
 }
 
 interface SessionListHeader {
@@ -394,7 +395,7 @@ async function scanSessionFile(
 			}
 		}
 
-		firstMessage ||= extractFirstUserMessageFromPrefix(content) ?? "";
+		firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
 		return {
 			path: file,
