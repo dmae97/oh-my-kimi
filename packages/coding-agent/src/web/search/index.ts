@@ -138,14 +138,20 @@ async function executeSearch(
 	options: ExecuteSearchOptions,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
 	const { authStorage, sessionId, signal } = options;
-	const providers =
-		params.provider && params.provider !== "auto"
-			? await getSearchProvider(params.provider).then(async provider =>
-					(await provider.isExplicitlyAvailable(authStorage))
-						? [provider]
-						: resolveProviderChain(authStorage, "auto"),
-				)
-			: await resolveProviderChain(authStorage);
+	const explicitProvider = params.provider;
+	let providers: SearchProvider[];
+	if (explicitProvider && explicitProvider !== "auto") {
+		const provider = await getSearchProvider(explicitProvider);
+		providers = (await provider.isExplicitlyAvailable(authStorage))
+			? [provider]
+			: await resolveProviderChain(authStorage, "auto");
+	} else if (explicitProvider === "auto") {
+		// Explicit `--provider auto` bypasses the configured preferred provider
+		// for this invocation; exclusions still apply.
+		providers = await resolveProviderChain(authStorage, "auto");
+	} else {
+		providers = await resolveProviderChain(authStorage);
+	}
 	if (providers.length === 0) {
 		const message = "No web search provider configured.";
 		return {

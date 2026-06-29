@@ -125,4 +125,33 @@ describe("runSearchCommand provider settings", () => {
 		expect(plain).toContain("Provider: Tavily (API)");
 		expect(plain).not.toContain("Provider: Jina");
 	});
+
+	it("treats explicit --provider auto as a one-shot override of the configured preferred provider", async () => {
+		// Same Tavily preference is configured by `beforeEach`, but no exclusions
+		// hide Jina here, so the auto chain order (Jina before Tavily) decides.
+		const currentTempDir = tempAgentDir;
+		if (!currentTempDir) throw new Error("tempAgentDir missing");
+		resetSettingsForTest();
+		setPreferredSearchProvider("auto");
+		setExcludedSearchProviders([]);
+		await Settings.init({
+			inMemory: true,
+			cwd: currentTempDir.path(),
+			overrides: { "providers.webSearch": "tavily" },
+		});
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchMock());
+
+		let stdout = "";
+		vi.spyOn(process.stdout, "write").mockImplementation(chunk => {
+			stdout += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+			return true;
+		});
+
+		await runSearchCommand({ query: "explicit auto chain", provider: "auto", limit: 1, expanded: false });
+
+		const plain = stripVTControlCharacters(stdout);
+		expect(plain).toContain("Provider: Jina");
+		expect(plain).not.toContain("Provider: Tavily (API)");
+	});
 });
