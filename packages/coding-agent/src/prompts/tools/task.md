@@ -1,91 +1,71 @@
-{{#if asyncEnabled}}{{#if batchEnabled}}Spawns subagents to work in the background — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Spawns ONE subagent per call to work in the background.{{/if}}
+{{#if asyncEnabled}}{{#if batchEnabled}}Delegate work to background subagents by passing multiple items in a single `tasks[]` batch.{{else}}Delegate work to ONE background subagent per call.{{/if}}
+Execution does not block your turn: you receive agent and job IDs immediately, and the final results deliver themselves when the subagents finish.{{else}}{{#if batchEnabled}}Run subagents synchronously by passing items in a `tasks[]` batch.{{else}}Run ONE subagent synchronously per call.{{/if}}
+Execution blocks your turn: the call only returns once the work is completely finished.{{/if}}
 
-- Spawning is non-blocking: the call returns immediately with the agent id{{#if batchEnabled}}s{{/if}} and job id{{#if batchEnabled}}s{{/if}}; each result is delivered automatically when that agent yields.
-- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch into one `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
-- If genuinely blocked on a result, wait with `job poll`; otherwise keep working. `job cancel` terminates a task and **cannot carry a message** — only for stalled/abandoned work.
-{{else}}{{#if batchEnabled}}Runs subagents synchronously — one per `tasks[]` item; a single spawn is a one-item batch.{{else}}Runs ONE subagent synchronously per call.{{/if}}
+# Delegation Strategy
+- **Maximize parallelism:** Break work into the widest possible {{#if batchEnabled}}array of `tasks[]`{{else}}set of parallel `task` calls{{/if}}. NEVER serialize work that can run concurrently. Tasks touching different files or independent refactors should run in parallel; agents resolve their own file collisions live.
+- **Sequence only when necessary:** The only reason to run A before B is if B strictly requires A's output to function (e.g., a core API contract or schema migration). {{#if ircEnabled}}If the missing piece is small, run them in parallel and have B ask A via `irc`!{{/if}}
+- **Role matching:** Assign each subagent a specific `role` (e.g. "Security Reviewer", "DB Migrator"). Do not spawn generic workers.
+- **No overhead:** Each assignment MUST instruct its agent to skip formatters, linters, and project-wide test suites. You will run those once at the end.
+- **Do your own thinking:** NEVER assign reasoning, architecture, or design to `quick_task` or `explore`. They are for mechanical lookups only. Keep hard decisions in your own context or use `task`, `plan`, or `oracle`.
+- **One-pass agents:** Prefer agents that investigate **and** edit in a single pass; only spin a read-only discovery step (e.g. `explore`) when the affected files are genuinely unknown.
 
-- Spawning is blocking: the call returns only after the agent{{#if batchEnabled}}s{{/if}} finish; results arrive inline.
-- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. MUST batch into one `tasks[]` (share `context` once). Separate `task` calls ONLY for a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}.
+# Inputs
+- `agent`: The base agent type to use (e.g., `task`, `explore`).
+{{#if batchEnabled}}
+- `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
+- `tasks[]`: Array of subagents to spawn.
+  - `assignment`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
+  - `id`: A stable CamelCase identifier (≤32 chars). Generated automatically if omitted.
+  - `description`: A UI label only; the subagent NEVER sees it.
+  - `role`: The specialist this subagent embodies. Tailor per spawn; do not clone a generic worker.
+{{#if isolationEnabled}}
+  - `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
+{{/if}}
+{{else}}
+- `assignment`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
+- `id`: A stable CamelCase identifier (≤32 chars). Generated automatically if omitted.
+- `description`: A UI label only; the subagent NEVER sees it.
+- `role`: The specialist this subagent embodies. Tailor per spawn; do not clone a generic worker.
+{{#if isolationEnabled}}
+- `isolated`: Run in a dedicated worktree and return patches. Isolated agents are destroyed upon completion and cannot be addressed afterward.
+{{/if}}
+{{/if}}
+
+# Context and Communication
+Subagents start blank. They have no access to your conversation history.
+{{#if batchEnabled}}
+- Pass large payloads using `local://<path>` URIs, never inline text.
+{{else}}
+- *Note: The single-spawn shape has no `context` field.* Write shared project state ONCE to a `local://` file (e.g., `local://ctx.md`) and reference that URL in your assignments. Pass large payloads using `local://<path>` URIs, never inline text.
 {{/if}}
 {{#if ircEnabled}}
-- Coordinate with agents via `irc` using their ids. Agents reach you and their siblings live the same way.
+- Once spawned, coordinate with live agents via `irc` using their IDs. If task B depends on task A, B SHOULD message A directly.
+{{/if}}
+{{#if asyncEnabled}}
+- If you run out of things to do and are genuinely blocked waiting for a subagent, use `job poll`. Use `job cancel` only for stalled work.
 {{/if}}
 
-<parameters>
-- `agent`: agent type to spawn
+# Format Contracts
 {{#if batchEnabled}}
-- `context`: shared background prepended to every assignment — goal, constraints, shared contract (see context-fmt); REQUIRED, session-specific only
-- `tasks`: tasks to spawn — one subagent per item, all in parallel:
-  - `assignment`: complete self-contained instructions; one-liners and missing acceptance criteria are PROHIBITED
-  - `id`: stable agent id, CamelCase, ≤32 chars; generated when omitted
-  - `description`: UI label only — subagent never sees it
-  - `role`: specialist identity this subagent embodies (e.g. "Auth-flow security reviewer") — sets its system-prompt persona and roster display name; tailor every spawn rather than cloning a generic worker
-{{#if isolationEnabled}}
-  - `isolated`: run this spawn in an isolated env; returns patches. Isolated agents are torn down at completion — not addressable afterwards
-{{/if}}
-{{else}}
-- `id`: stable agent id, CamelCase, ≤32 chars; generated when omitted
-- `description`: UI label only — subagent never sees it
-- `role`: specialist identity this subagent embodies (e.g. "Auth-flow security reviewer") — sets its system-prompt persona and roster display name; tailor every spawn rather than cloning a generic worker
-- `assignment`: complete self-contained instructions; one-liners and missing acceptance criteria are PROHIBITED
-{{#if isolationEnabled}}
-- `isolated`: run in isolated env; returns patches. Isolated agents are torn down at completion — not addressable afterwards
-{{/if}}
-{{/if}}
-</parameters>
-
-<rules>
-- **Maximize fan-out.** Issue the widest {{#if batchEnabled}}`tasks[]` batch{{else}}set of parallel `task` calls{{/if}} the work decomposes into. NEVER serialize work that could run concurrently.
-- **Subagents do not verify, lint, or format.** Every assignment MUST instruct the subagent to skip all gates, formatters, and project-wide build/test/lint. You run them once at the end across the union of changed files.
-- No globs, no "update all", no package-wide scope. Fan out.
-- **Tailor every spawn with a `role`.** A role naming the specialist (e.g. "Parser edge-case tester", "SSE backpressure specialist") makes a sharper agent than a bare generic `task`/`quick_task` worker; decompose into named specialists, never clones of one generic worker. A role-less generic spawn is the exception.
-- NEVER slow down or serialize because tasks might overlap on some files. Agents resolve collisions among themselves in real time.
-- Subagents have no conversation history. Every fact, file path, and direction they need MUST be explicit in {{#if batchEnabled}}`context` or the item's `assignment`{{else}}the `assignment`{{/if}}.
-{{#if batchEnabled}}
-- **Shared background** lives in `context` once — never duplicated across assignments. Pass large payloads via `local://<path>` URIs, not inline.
-{{else}}
-- **Shared background**: write it ONCE to a `local://` file (e.g. `local://ctx.md`) and reference that path in each assignment. Pass large payloads via `local://<path>` URIs, not inline.
-{{/if}}
-- Prefer agents that investigate **and** edit in one pass; only spin a read-only discovery step when affected files are genuinely unknown.
-- **Read-only agents**: Agents tagged READ-ONLY (e.g. `explore`) have no edit/write/command tools. NEVER hand them an assignment that requires changing files or running commands. Use them to investigate and report back; do the edits yourself or delegate to a writing agent (`task`, `oracle`, `designer`).
-- **No reasoning offload**: NEVER offload reasoning, analysis, design, or decision-making to `quick_task` or `explore` — they run minimal-effort / small models for mechanical lookups and data collection only. Keep judgment and synthesis in your own context; delegate hard thinking to `task`, `plan`, or `oracle`.
-</rules>
-
-<parallelization>
-{{#if ircEnabled}}
-Test: can task B run correctly without seeing A's output? If no, sequence A → B — **unless** B can reasonably ask A for the missing piece over `irc`. Live coordination beats a serial waterfall when the contract is small and easy to describe in a DM.
-Still sequence when one task produces a large, evolving contract (generated types, schema migration, core module API) the other consumes wholesale — IRC round-trips do not replace a finished artifact.
-Parallel when tasks touch disjoint files, are independent refactors/tests, or only need occasional clarification that can be resolved peer-to-peer.
-{{else}}
-Test: can task B run correctly without seeing A's output? If no, sequence A → B.
-Sequential when one task produces a contract (types, API, schema, core module) the other consumes.
-Parallel when tasks touch disjoint files or are independent refactors/tests.
-{{/if}}
-{{#if ircEnabled}}Sequenced follow-ups SHOULD message the agent that produced the prerequisite — it already holds the context.{{/if}}
-</parallelization>
-
-{{#if batchEnabled}}
-<context-fmt>
-# Goal         ← one sentence: what the batch accomplishes
-# Constraints  ← MUST/NEVER rules and session decisions
-# Contract     ← exact types/signatures if tasks share an interface
-</context-fmt>
+The `context` field MUST follow this format:
+# Goal         ← what the batch accomplishes
+# Constraints  ← rules and session decisions
+# Contract     ← shared interfaces
 {{/if}}
 
-<assignment-fmt>
+The `assignment` field MUST follow this format:
 # Target       ← exact files and symbols; explicit non-goals
 # Change       ← step-by-step add/remove/rename; APIs and patterns
 # Acceptance   ← observable result; no project-wide commands
-</assignment-fmt>
 
-<agents>
+# Available Agents
 {{#if spawningDisabled}}
-Agent spawning is disabled for this context.
+Agent spawning is currently disabled.
 {{else}}
 {{#list agents join="\n"}}
-# {{name}}{{#if readOnly}} — READ-ONLY (no edit/write/exec tools){{/if}}
+### {{name}}{{#if readOnly}} (READ-ONLY: no edit/write/command tools){{/if}}
 {{description}}
+{{#if readOnly}}Use ONLY for investigation and reporting; do the edits yourself or assign them to a writing agent.{{/if}}
 {{/list}}
 {{/if}}
-</agents>

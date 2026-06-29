@@ -1,39 +1,28 @@
-Language Server Protocol (LSP) servers for code intelligence.
+Symbol-aware code intelligence from language servers — the accurate path for navigation, refactors, and diagnostics where text search or edits would miss callsites.
 
 <operations>
-- `diagnostics`: errors/warnings for a file, glob, or workspace (`file: "*"`)
-- `definition`: symbol definition
-- `type_definition`: symbol's type definition
-- `implementation`: concrete implementations
-- `references`: all references
-- `hover`: type info / docs
-- `symbols`: list file symbols, or search workspace with `file: "*"` + `query`
-- `rename`: rename symbol codebase-wide
-- `rename_file`: rename/move a file/directory; updates import paths + other references
-- `code_actions`: list quick-fixes/refactors/import actions; apply one when `apply: true` + `query` matches title or index
-- `status`: active language servers
-- `capabilities`: per-server capabilities
-- `request`: raw LSP request — `query` = method name (e.g. `rust-analyzer/expandMacro`, `workspace/executeCommand`); `payload` = JSON params
-- `reload`: restart one server (via `file`) or all (`file: "*"`)
+Position-based — pass `file` + `line` + `symbol` (substring on that line; append `#N` for the Nth match, e.g. `kind#2`):
+- `definition`, `type_definition`, `implementation`, `references`, `hover` — standard LSP lookups
+- `rename` — rename the symbol everywhere; **applies by default**, `apply: false` previews; needs `new_name`
+- `code_actions` — quick-fixes/refactors/imports at that position; lists by default (`query` filters by kind, e.g. `quickfix`, `source.organizeImports`), **applies one only with `apply: true` + `query`** (then `query` = action title substring or numeric index)
+
+File / workspace:
+- `diagnostics` — errors/warnings for a path, a glob (`src/**/*.ts`), or the whole workspace (`file: "*"`)
+- `symbols` — `file` lists that file's symbols; `file: "*"` + `query` searches the workspace
+- `rename_file` — move `file` → `new_name` on disk AND rewrite imports/references through the server; applies by default
+
+Servers:
+- `status`, `capabilities` — what's running / per-server capabilities (one via `file`, all via `*`)
+- `reload` — restart one server (`file`) or all (`*`); `reload *` also re-reads project LSP config
+- `request` — raw escape hatch: `query` = method (`rust-analyzer/expandMacro`, `workspace/executeCommand`), `payload` = JSON params (else auto-built from `file`/`line`/`symbol`)
 </operations>
 
-<parameters>
-- `file`: path, glob (e.g. `src/**/*.ts`), or `"*"` for workspace scope
-- `line`: 1-indexed line for position-based actions
-- `symbol`: substring on the target line. Append `#N` for the Nth occurrence — e.g. `foo#2` = second `foo`.
-- `query`: symbol search, code-action kind filter/selector (list/apply mode), or LSP method name when `action: request`
-- `new_name`: required for `rename` (new identifier) and `rename_file` (destination path)
-- `apply`: apply edits for rename/rename_file/code_actions (default true for rename/rename_file; code_actions list mode unless true)
-- `payload`: JSON params for `action: request`
-- `timeout`: seconds
-</parameters>
-
 <caution>
-- Missing `symbol` or out-of-bounds `#N` → explicit error.
+- `line` is 1-indexed. Project-aware `definition`/`references`/`rename` ERROR without `symbol` rather than guess the wrong identifier; a missing match or out-of-range `#N` is an explicit error, never a silent fallback.
 </caution>
 
 <critical>
-- You MUST use `lsp` for symbol-aware operations (rename, references, definition/implementation, code actions) whenever a language server is available — safer and more accurate than text-based alternatives.
-- You NEVER perform cross-file renames with `ast_edit`, `sed`, or manual edits when `lsp` `rename` can do it. Text-based renames miss shadowing, re-exports, and cross-file usages.
-- You SHOULD use `lsp` `code_actions` for imports, quick-fixes, and refactors the server already applies.
+- Symbol-aware work (rename, references, definition/type/impl, code actions) MUST use `lsp` whenever a server is available — it follows shadowing, re-exports, and cross-file usages that text tools miss.
+- NEVER do a cross-file rename with `ast_edit`, `sed`, or hand edits when `lsp` `rename`/`rename_file` can — text renames silently drop callsites.
+- Reach for `code_actions` on imports, quick-fixes, and server-known refactors before editing by hand.
 </critical>

@@ -1,33 +1,23 @@
-Send/receive short text messages between agents in this process.
+Send and receive short text messages between the agents running in this process.
 
-<instruction>
-- Main agent is `Main`; subagents reuse their task id (`AuthLoader`, `AuthLoader-2` on repeat).
-- `op: "list"` — peers with status (`running` | `idle` | `parked`), unread count, parent, last activity. Use when unsure who exists.
-- `op: "send"` — fire-and-forget; returns per-recipient receipts immediately, NEVER waits for the recipient to act. Outcomes: delivered, or `failed` (unreachable). `to: "all"` broadcasts to live peers.
-- Messaging an `idle`/`parked` peer wakes it — no separate revive call.
-- `op: "wait"` — block for a message (optionally only `from` one peer); consumes + returns it. Timeout = clean "no message", not an error.
-- `op: "inbox"` — drain pending messages without blocking.
-- Replies arrive only when the recipient sends one; don't interrogate a peer for status.
-</instruction>
+# Addressing and Discovery
+The main agent is always `Main`. Subagents inherit their task ID (e.g., `AuthLoader`). If you don't know who is currently running, use `op: "list"` to view all peers alongside their status, unread message count, and recent activity. Address peers by their exact ID from the roster; NEVER invent names.
 
-<when_to_use>
-Reach for `irc` when going alone is wasteful or wrong; when in doubt, message.
-- **Unexpected state** — missing file, config contradicting the assignment, API/tool behaving differently than told. DM `Main` (or your spawner), don't guess.
-- **Blocked by another agent** — a peer holds the file/branch/resource/decision you need, or started your change. DM them (or broadcast to find who) before duplicating work.
-- **Decision outside your scope** — a genuine fork the assignment didn't pre-decide. Ask the requester, don't pick unilaterally.
-- **Coordination** — a peer's in-flight work overlaps yours (roster shows each peer's role + activity); message before editing a shared file or duplicating a sibling's change.
+# Messaging Rules
+Use `op: "send"` to deliver a message to a specific peer or broadcast to `"all"`.
+- **Fire and forget:** Sending NEVER blocks. You get delivery receipts immediately (`delivered` or `failed`). Do not wait around—send your message and keep working. If a receipt says `failed`, the peer is gone; do not retry.
+- **Waking peers:** Sending a message to an `idle` or `parked` agent automatically wakes them up.
+- **Answering:** When replying to a question, use `op: "send"`, lead directly with your answer (NEVER quote the original message), and set `replyTo` so the recipient can correlate it.
+- **Format:** Messages MUST be plain prose. NEVER send JSON status objects. Keep it terse and share paths via `local://` or `artifact://` URLs, not pasted blobs.
 
-NEVER for: routine progress updates, things a tool call can verify, questions your assignment/repo/docs already answer.
-</when_to_use>
+# Waiting and Inboxes
+Messages only arrive when the peer actively sends one—do not interrogate a peer for status.
+- If you are completely blocked and MUST wait for an answer, use `op: "wait"` (or `await: true` on a send). This blocks your turn until a message arrives. If it times out, that just means "no message arrived", not a failure.
+- To check for messages without blocking, use `op: "inbox"` to drain your queue.
 
-<etiquette>
-Applies to sending + replying.
-- **Plain prose only.** NEVER JSON status payloads like `{"type":"task_completed",…}` — write a normal sentence.
-- **NEVER quote the message you answer.** Lead with the answer; set `replyTo`.
-- **Learn about peers via IRC** — NEVER grep artifacts, read other sessions' JSONL, or shell-poke. DM them.
-- **Send, then keep working.** `wait`/`await: true` only when you cannot proceed. NEVER "did you get my message?". A `failed` receipt = peer unreachable — move on; NEVER retry in a loop.
-- **Answer expected questions** via `irc send` to the sender (finish your current step first).
-- **Stay terse.** One question per send; share files via `local://`/`memory://`/`artifact://` URLs, never pasted blobs.
-- **Address peers by exact id** from `op: "list"` (e.g. `AuthLoader`, `Main`). NEVER invent friendly names.
-- **NEVER IRC what a tool answers.** A `read`, grep, or build resolves it? Do that first.
-</etiquette>
+# When to Coordinate
+Message peers instead of guessing, duplicating work, or spying.
+- Use IRC when you hit an unexpected state (e.g., missing files) or an out-of-scope decision. DM `Main` or your spawner for guidance.
+- If you overlap with another agent's work or need a file they are touching, DM them before editing.
+- NEVER use shell tools, grep, or read other sessions' files to figure out what a peer is doing. Message them directly.
+- NEVER use IRC for something a tool can answer (e.g., grepping codebase, running a build).
