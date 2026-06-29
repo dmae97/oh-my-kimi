@@ -122,6 +122,9 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			stderr: "ignore",
 			stdin: "ignore",
 			timeout: GPU_PROBE_TIMEOUT_MS,
+			// SIGKILL so a probe ignoring SIGTERM (PATH wrapper, wedged WMI) still
+			// dies at the deadline and lets getCachedGpu reach the null-cache write.
+			killSignal: "SIGKILL",
 		});
 		const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 		return exitCode === 0 ? stdout : null;
