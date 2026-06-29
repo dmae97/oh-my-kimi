@@ -21,6 +21,7 @@
 - Fixed the `edit` tool persisting unbounded full-file `oldText` / `newText` snapshots in tool-result `details`, inflating per-turn session JSONL lines (hundreds of KB per edit on large files). `details.oldText`/`details.newText` are now pruned when their combined length exceeds 32 KB; the visible diff, path, line, and diagnostic metadata are preserved, and ACP `diff` content still flows for smaller edits. ([#3786](https://github.com/can1357/oh-my-pi/issues/3786))
 - Fixed Windows MCP stdio launches for PATH-resolved `npx.cmd` shims by preserving the `cmd.exe` wrapper path that keeps npm-owned subprocess stdio attached. ([#3794](https://github.com/can1357/oh-my-pi/issues/3794))
 - Fixed `web_search` with the `duckduckgo` provider returning empty results for any non-encyclopedic query. The provider hit DuckDuckGo's Instant Answer API (`api.duckduckgo.com`), which only serves Wikipedia/Wolfram-Alpha-style topics, so the orchestrator surfaced "DuckDuckGo returned no renderable search content" for typical agent queries. It now POSTs the no-JS HTML frontend (`html.duckduckgo.com/html/`) and parses the result list, with a clear bot-challenge error when DuckDuckGo throttles the request from datacenter/shared-egress IPs. ([#3799](https://github.com/can1357/oh-my-pi/issues/3799))
+- Fixed Windows `--extension` paths with spaces or `\\?\` prefixes being truncated or passed through to Bun import/spawn APIs. ([#3804](https://github.com/can1357/oh-my-pi/issues/3804))
 
 ## [16.2.5] - 2026-06-28
 

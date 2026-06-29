@@ -1,5 +1,12 @@
 import * as path from "node:path";
-import { $env, isBunTestRuntime, isCompiledBinary, logger, workerHostEntry } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	isBunTestRuntime,
+	isCompiledBinary,
+	logger,
+	stripWindowsExtendedLengthPathPrefix,
+	workerHostEntry,
+} from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 
 /**
@@ -90,10 +97,11 @@ export const SMOKE_TEST_TIMEOUT_MS = 30_000;
  * embedding).
  */
 export function resolveWorkerSpawnCmd(workerArg: string): WorkerSpawnCommand {
-	if (isCompiledBinary()) return { cmd: [process.execPath, workerArg] };
+	const executable = stripWindowsExtendedLengthPathPrefix(process.execPath);
+	if (isCompiledBinary()) return { cmd: [executable, workerArg] };
 	const hostEntry = workerHostEntry();
 	if (hostEntry) {
-		return { cmd: [process.execPath, path.basename(hostEntry), workerArg], cwd: path.dirname(hostEntry) };
+		return { cmd: [executable, path.basename(hostEntry), workerArg], cwd: path.dirname(hostEntry) };
 	}
 	const packageRoot = path.resolve(import.meta.dir, "..", "..");
 	return { cmd: [process.execPath, "src/cli.ts", workerArg], cwd: packageRoot };

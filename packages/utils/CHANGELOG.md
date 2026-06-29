@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `stripWindowsExtendedLengthPathPrefix()` for normalizing `\\?\` and native Win32 path prefixes before Bun import/spawn calls. ([#3804](https://github.com/can1357/oh-my-pi/issues/3804))
+
 ## [16.2.3] - 2026-06-28
 
 ### Added

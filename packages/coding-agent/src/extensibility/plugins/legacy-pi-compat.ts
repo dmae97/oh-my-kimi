@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { isBuiltin } from "node:module";
 import * as path from "node:path";
 import * as url from "node:url";
-import { isCompiledBinary } from "@oh-my-pi/pi-utils";
+import { isCompiledBinary, stripWindowsExtendedLengthPathPrefix } from "@oh-my-pi/pi-utils";
 import { BUNDLED_PI_REGISTRY_KEYS } from "./legacy-pi-bundled-keys";
 
 const IS_COMPILED_BINARY = isCompiledBinary();
@@ -425,7 +425,7 @@ function toImportSpecifier(resolvedPath: string): string {
 	if (isBundledVirtualSpecifier(resolvedPath)) {
 		return resolvedPath;
 	}
-	return url.pathToFileURL(resolvedPath).href;
+	return url.pathToFileURL(stripWindowsExtendedLengthPathPrefix(resolvedPath)).href;
 }
 
 function rewriteLegacyPiImports(source: string): string {

@@ -1,3 +1,5 @@
+import { stripWindowsExtendedLengthPathPrefix } from "./path";
+
 /**
  * Main-module path declared by self-dispatching CLI entrypoints — entries
  * whose top-level argv handling routes hidden `__omp_*` worker selectors.
@@ -10,7 +12,7 @@ let workerHostMain: string | null = null;
 
 /** Called by CLI entrypoints whose main module dispatches worker argv selectors. */
 export function declareWorkerHostEntry(): void {
-	workerHostMain = Bun.main;
+	workerHostMain = stripWindowsExtendedLengthPathPrefix(Bun.main);
 }
 
 /** Main-module path of the self-dispatching CLI host, or null outside it. */
