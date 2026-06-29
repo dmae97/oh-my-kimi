@@ -76,10 +76,28 @@ function elideCompactionSummary(entry: CompactionEntry | undefined): boolean {
 	return true;
 }
 
+function collectActiveBranchIds(entries: FileEntry[]): Set<string> {
+	const byId = new Map<string, SessionEntry>();
+	for (const entry of entries) {
+		const id = (entry as SessionEntry).id;
+		if (typeof id === "string") byId.set(id, entry as SessionEntry);
+	}
+	const branchIds = new Set<string>();
+	let cursor = entries[entries.length - 1] as SessionEntry | undefined;
+	while (cursor && typeof cursor.id === "string" && !branchIds.has(cursor.id)) {
+		branchIds.add(cursor.id);
+		const parentId = cursor.parentId;
+		cursor = parentId ? byId.get(parentId) : undefined;
+	}
+	return branchIds;
+}
+
 function elideSupersededCompactionEntries(entries: FileEntry[]): void {
+	const branchIds = collectActiveBranchIds(entries);
 	let previousCompaction: CompactionEntry | undefined;
 	for (const entry of entries) {
 		if (entry.type !== "compaction") continue;
+		if (!branchIds.has(entry.id)) continue;
 		elideCompactionSummary(previousCompaction);
 		previousCompaction = entry;
 	}
@@ -90,7 +108,6 @@ async function loadEntriesFromFileStream(filePath: string): Promise<{
 	titleSlot: SessionTitleUpdate | undefined;
 }> {
 	const entries: FileEntry[] = [];
-	let previousCompaction: CompactionEntry | undefined;
 	let titleSlot: SessionTitleUpdate | undefined;
 	let sawBodyLine = false;
 	const input = fs.createReadStream(filePath, { encoding: "utf8" });
@@ -115,10 +132,6 @@ async function loadEntriesFromFileStream(filePath: string): Promise<{
 				entry = JSON.parse(line) as FileEntry;
 			} catch {
 				continue;
-			}
-			if (entry.type === "compaction") {
-				elideCompactionSummary(previousCompaction);
-				previousCompaction = entry;
 			}
 			entries.push(entry);
 		}

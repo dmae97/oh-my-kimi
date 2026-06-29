@@ -504,9 +504,10 @@ export class SessionManager {
 		return this.#forceFileCreation || this.#fileIsCurrent || this.#historyContainsAssistantMessage();
 	}
 
-	#elideSupersededCompactions(): boolean {
+	#elideSupersededCompactionsOnBranch(leafId: string | null): boolean {
+		if (!leafId) return false;
 		let changed = false;
-		for (const entry of this.#entries) {
+		for (const entry of this.#index.pathTo(leafId)) {
 			if (entry.type !== "compaction") continue;
 			if (
 				entry.summary === SUPERSEDED_COMPACTION_SUMMARY &&
@@ -1330,7 +1331,7 @@ export class SessionManager {
 		fromExtension?: boolean,
 		preserveData?: Record<string, unknown>,
 	): string {
-		const elidedSupersededCompactions = this.#elideSupersededCompactions();
+		const elidedSupersededCompactions = this.#elideSupersededCompactionsOnBranch(this.#index.leafId());
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			...this.#freshEntryFields(),

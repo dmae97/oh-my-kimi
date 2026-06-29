@@ -141,6 +141,113 @@ describe("large session memory guards", () => {
 		expect(compactions[1]?.summary).toBe(latestSummary);
 	});
 
+	it("preserves sibling-branch compactions when a newer compaction lands on another branch", async () => {
+		const storage = new CountingMemorySessionStorage();
+		const session = SessionManager.create("/work", "/sessions", storage);
+		const rootId = session.appendMessage({ role: "user", content: "shared root", timestamp: 1 });
+		session.appendMessage(makeAssistantMessage("root reply"));
+
+		const branchACompactionSummary = `branch-a-${"x".repeat(1024)}`;
+		const branchAPreserve = { openaiRemoteCompaction: { provider: "anthropic", replacementHistory: [] } };
+		session.appendCompaction(
+			branchACompactionSummary,
+			undefined,
+			rootId,
+			1000,
+			undefined,
+			undefined,
+			branchAPreserve,
+		);
+		const branchACompactionId = session.getLeafId();
+		if (!branchACompactionId) throw new Error("Expected branch A compaction id");
+
+		session.branch(rootId);
+		session.appendMessage(makeAssistantMessage("branch B reply"));
+		const branchBCompactionSummary = `branch-b-${"y".repeat(1024)}`;
+		session.appendCompaction(branchBCompactionSummary, undefined, rootId, 1000);
+
+		const branchACompaction = session.getEntry(branchACompactionId);
+		if (branchACompaction?.type !== "compaction") throw new Error("Expected sibling compaction entry");
+		expect(branchACompaction.summary).toBe(branchACompactionSummary);
+		expect(branchACompaction.preserveData).toEqual(branchAPreserve);
+
+		const branchBCompactions = session
+			.getEntries()
+			.filter(entry => entry.type === "compaction" && entry.summary === branchBCompactionSummary);
+		expect(branchBCompactions).toHaveLength(1);
+	});
+
+	it("only elides loaded compactions on the active branch", async () => {
+		const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-branch-load-"));
+		tempDirs.push(tempDir);
+		const sessionFile = path.join(tempDir, "branched.jsonl");
+		const branchASummary = `branch-a-${"x".repeat(1024)}`;
+		const branchBOldSummary = `branch-b-old-${"y".repeat(1024)}`;
+		const branchBNewSummary = `branch-b-new-${"z".repeat(1024)}`;
+		const lines = [
+			{ type: "session", version: 3, id: "sess", timestamp: "2026-01-01T00:00:00.000Z", cwd: tempDir },
+			{
+				type: "message",
+				id: "u1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01.000Z",
+				message: { role: "user", content: "shared", timestamp: 1 },
+			},
+			{
+				type: "compaction",
+				id: "ca",
+				parentId: "u1",
+				timestamp: "2026-01-01T00:00:02.000Z",
+				summary: branchASummary,
+				firstKeptEntryId: "u1",
+				tokensBefore: 1000,
+				preserveData: { openaiRemoteCompaction: { provider: "anthropic", replacementHistory: [] } },
+			},
+			{
+				type: "compaction",
+				id: "cb1",
+				parentId: "u1",
+				timestamp: "2026-01-01T00:00:03.000Z",
+				summary: branchBOldSummary,
+				firstKeptEntryId: "u1",
+				tokensBefore: 1000,
+				preserveData: { stale: true },
+			},
+			{
+				type: "message",
+				id: "a1",
+				parentId: "cb1",
+				timestamp: "2026-01-01T00:00:04.000Z",
+				message: makeAssistantMessage("branch b reply"),
+			},
+			{
+				type: "compaction",
+				id: "cb2",
+				parentId: "a1",
+				timestamp: "2026-01-01T00:00:05.000Z",
+				summary: branchBNewSummary,
+				firstKeptEntryId: "a1",
+				tokensBefore: 1000,
+			},
+		].map(entry => `${JSON.stringify(entry)}\n`);
+		await fsp.writeFile(sessionFile, lines.join(""));
+
+		const entries = await loadEntriesFromFile(sessionFile);
+		const byId = new Map(entries.map(entry => [(entry as { id?: string }).id, entry] as const));
+		const branchA = byId.get("ca");
+		const branchBOld = byId.get("cb1");
+		const branchBNew = byId.get("cb2");
+		if (branchA?.type !== "compaction" || branchBOld?.type !== "compaction" || branchBNew?.type !== "compaction") {
+			throw new Error("Expected compaction entries");
+		}
+
+		expect(branchA.summary).toBe(branchASummary);
+		expect(branchA.preserveData).toBeDefined();
+		expect(branchBOld.summary).toContain("Superseded compaction");
+		expect(branchBOld.preserveData).toBeUndefined();
+		expect(branchBNew.summary).toBe(branchBNewSummary);
+	});
+
 	it("uses developer prefix text when a fork has no early user message", async () => {
 		const storage = new MemorySessionStorage();
 		const sessionDir = "/sessions/project";
