@@ -104,7 +104,7 @@ export function resolveWorkerSpawnCmd(workerArg: string): WorkerSpawnCommand {
 		return { cmd: [executable, path.basename(hostEntry), workerArg], cwd: path.dirname(hostEntry) };
 	}
 	const packageRoot = path.resolve(import.meta.dir, "..", "..");
-	return { cmd: [process.execPath, "src/cli.ts", workerArg], cwd: packageRoot };
+	return { cmd: [executable, "src/cli.ts", workerArg], cwd: packageRoot };
 }
 
 /**
