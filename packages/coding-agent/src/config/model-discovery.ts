@@ -499,8 +499,7 @@ export async function discoverLlamaCppModelRuntimeMetadata(
 		if (!entry) {
 			return undefined;
 		}
-		const contextWindow =
-			entry.runtimeContextWindow ?? serverMetadata?.contextWindow ?? entry.trainingContextWindow;
+		const contextWindow = entry.runtimeContextWindow ?? serverMetadata?.contextWindow ?? entry.trainingContextWindow;
 		if (contextWindow === undefined) {
 			return undefined;
 		}
