@@ -20,14 +20,11 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { parseFrontmatter as parseOmpFrontmatter } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { EditTool } from "../edit";
-import { getLanguageFromPath, highlightCode } from "../modes/theme/theme";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
-	type TruncationOptions,
 	type TruncationResult,
 	truncateHead,
-	truncateLine,
 	truncateTail,
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
@@ -610,25 +607,6 @@ export const SettingsManager = {
 	},
 } as const;
 
-export { Container, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
-export { getAgentDir, logger, VERSION } from "@oh-my-pi/pi-utils";
-export * as zod from "zod/v4";
-export { z } from "zod/v4";
-export type { RetrySettings, SkillsSettings } from "../config/settings";
-export { Settings, settings } from "../config/settings";
-export type * from "../extensibility/extensions/types";
-export * from "../extensibility/extensions/types";
-export * from "../modes/theme/theme";
-export {
-	DEFAULT_MAX_BYTES,
-	DEFAULT_MAX_LINES,
-	formatBytes as formatSize,
-	getLanguageFromPath,
-	highlightCode,
-	type TruncationOptions,
-	type TruncationResult,
-	Type,
-	truncateHead,
-	truncateLine,
-	truncateTail,
-};
+export * from "../index";
+export { formatBytes as formatSize } from "../tools/render-utils";
+export { Type } from "./typebox";
