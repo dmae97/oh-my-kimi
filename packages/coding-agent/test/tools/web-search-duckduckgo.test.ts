@@ -48,10 +48,10 @@ function anomalyPage(): string {
 
 describe("DuckDuckGo web search provider", () => {
 	it("POSTs the query and recency filter to the no-JS HTML frontend", async () => {
-		let capturedUrl: string | null = null;
+		const captured: { url?: string } = {};
 		let capturedInit: RequestInit | undefined;
 		const fetchMock: FetchImpl = (input, init) => {
-			capturedUrl = typeof input === "string" ? input : input.toString();
+			captured.url = typeof input === "string" ? input : input.toString();
 			capturedInit = init;
 			return Promise.resolve(
 				new Response(htmlPage({ url: "https://example.com/a", title: "A" }), {
@@ -63,7 +63,7 @@ describe("DuckDuckGo web search provider", () => {
 
 		await searchDuckDuckGo({ ...makeParams("how to fix bug in code", fetchMock), recency: "week" });
 
-		expect(capturedUrl).toBe("https://html.duckduckgo.com/html/");
+		expect(captured.url).toBe("https://html.duckduckgo.com/html/");
 		expect(capturedInit?.method).toBe("POST");
 		const form = new URLSearchParams(capturedInit?.body as string);
 		expect(form.get("q")).toBe("how to fix bug in code");
@@ -174,9 +174,7 @@ describe("DuckDuckGo web search provider", () => {
 
 		const response = await searchDuckDuckGo(makeParams("direct", fetchMock));
 
-		expect(response.sources).toEqual([
-			{ title: "Direct", url: "https://direct.example/page", snippet: undefined },
-		]);
+		expect(response.sources).toEqual([{ title: "Direct", url: "https://direct.example/page", snippet: undefined }]);
 	});
 
 	it("throws a clear SearchProviderError when DDG serves the anomaly modal", async () => {
