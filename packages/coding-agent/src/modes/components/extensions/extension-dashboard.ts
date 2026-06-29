@@ -26,7 +26,7 @@ import {
 } from "@oh-my-pi/pi-tui";
 import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../../config/settings";
-import { setServerDisabled } from "../../../mcp/config-writer";
+import { setMcpServerEnabled } from "../../../mcp/config-writer";
 import { getTabBarTheme } from "../../../modes/shared";
 import { theme } from "../../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../../modes/utils/keybinding-matchers";
@@ -294,14 +294,20 @@ export class ExtensionDashboard implements Component {
 	async #toggleMcpExtension(extensionId: string, enabled: boolean, sm: Settings): Promise<void> {
 		const name = extensionId.slice("mcp:".length);
 		try {
-			await setServerDisabled(getMCPConfigPath("user", this.cwd), name, !enabled);
+			await setMcpServerEnabled(
+				getMCPConfigPath("user", this.cwd),
+				getMCPConfigPath("project", this.cwd),
+				name,
+				enabled,
+			);
 		} catch (error) {
 			logger.warn("Failed to persist MCP toggle", { name, enabled, error: String(error) });
 		}
 
-		// Reconcile `settings.disabledExtensions` with the canonical denylist so
-		// a legacy `mcp:<name>` flag from before this routing change doesn't keep
-		// the server marked disabled after the user re-enables it via the UI.
+		// Reconcile `settings.disabledExtensions` with the canonical mcp.json
+		// state so a legacy `mcp:<name>` flag from before this routing change
+		// doesn't keep the server marked disabled after the user re-enables it
+		// via the UI.
 		const stored = ((sm.get("disabledExtensions") as string[]) ?? []).slice();
 		const had = stored.indexOf(extensionId);
 		if (enabled && had !== -1) {

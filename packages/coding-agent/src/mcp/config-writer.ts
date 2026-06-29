@@ -227,3 +227,51 @@ export async function setServerDisabled(filePath: string, name: string, disabled
 
 	await writeMCPConfigFile(filePath, updated);
 }
+
+/**
+ * Flip a server's enabled/disabled state regardless of where it lives.
+ *
+ * Mirrors `/mcp enable` / `/mcp disable` (see
+ * `slash-commands/helpers/mcp.ts:handleEnableDisableCommand`) so the
+ * `/extensions` dashboard's MCP toggle and the slash command share one source
+ * of truth:
+ *
+ * - Server defined in project mcp.json → write `enabled` on that entry.
+ * - Else server defined in user mcp.json → write `enabled` on that entry.
+ * - Else (discovered third-party server) → use the user-level
+ *   `disabledServers` denylist.
+ * - On re-enable, ALWAYS clear any stale denylist entry so a server disabled
+ *   via `/mcp disable` and later re-enabled via `enabled: true` doesn't stay
+ *   suppressed by a leftover deny entry.
+ */
+export async function setMcpServerEnabled(
+	userPath: string,
+	projectPath: string,
+	name: string,
+	enabled: boolean,
+): Promise<void> {
+	const [userConfig, projectConfig] = await Promise.all([readMCPConfigFile(userPath), readMCPConfigFile(projectPath)]);
+
+	let updatedInConfig = false;
+	if (projectConfig.mcpServers?.[name] !== undefined) {
+		await updateMCPServer(projectPath, name, { ...projectConfig.mcpServers[name], enabled });
+		updatedInConfig = true;
+	} else if (userConfig.mcpServers?.[name] !== undefined) {
+		await updateMCPServer(userPath, name, { ...userConfig.mcpServers[name], enabled });
+		updatedInConfig = true;
+	}
+
+	if (!updatedInConfig) {
+		await setServerDisabled(userPath, name, !enabled);
+		return;
+	}
+
+	// Re-enable: the per-server `enabled` flag is now true, but a stale denylist
+	// entry would still hide the server. Drop it.
+	if (enabled) {
+		const denied = await readDisabledServers(userPath);
+		if (denied.includes(name)) {
+			await setServerDisabled(userPath, name, false);
+		}
+	}
+}
