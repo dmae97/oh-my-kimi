@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { setExcludedSearchProviders, setPreferredSearchProvider } from "@oh-my-pi/pi-coding-agent/web/search/provider";
-import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { runSearchCommand } from "../../../src/cli/web-search-cli";
 
 const WEB_SEARCH_ENV_KEYS = [
@@ -25,7 +24,8 @@ const WEB_SEARCH_ENV_KEYS = [
 ] as const;
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
+const originalOmpProfile = process.env.OMP_PROFILE;
+const originalPiProfile = process.env.PI_PROFILE;
 
 let tempAgentDir: TempDir | undefined;
 let originalEnv: Partial<Record<(typeof WEB_SEARCH_ENV_KEYS)[number], string | undefined>> = {};
@@ -35,6 +35,11 @@ function responseUrl(input: string | Request | URL): string {
 	if (typeof input === "string") return input;
 	if (input instanceof URL) return input.toString();
 	return input.url;
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+	if (value === undefined) delete process.env[key];
+	else process.env[key] = value;
 }
 
 function makeFetchMock(): typeof fetch {
@@ -93,16 +98,12 @@ afterEach(async () => {
 	setExcludedSearchProviders([]);
 	process.exitCode = originalExitCode;
 	for (const key of WEB_SEARCH_ENV_KEYS) {
-		const value = originalEnv[key];
-		if (value === undefined) delete process.env[key];
-		else process.env[key] = value;
+		restoreEnv(key, originalEnv[key]);
 	}
-	if (originalAgentDir) {
-		setAgentDir(originalAgentDir);
-	} else {
-		setAgentDir(fallbackAgentDir);
-		delete process.env.PI_CODING_AGENT_DIR;
-	}
+	restoreEnv("PI_CODING_AGENT_DIR", originalAgentDir);
+	restoreEnv("OMP_PROFILE", originalOmpProfile);
+	restoreEnv("PI_PROFILE", originalPiProfile);
+	__resetDirsFromEnvForTests();
 	if (tempAgentDir) {
 		await tempAgentDir.remove();
 		tempAgentDir = undefined;
