@@ -1797,7 +1797,7 @@ describe("ModelRegistry", () => {
 			for (const model of models) {
 				expect(
 					(model.compatConfig as { disableStrictTools?: boolean } | undefined)?.disableStrictTools,
-				).toBeFalsy();
+				).toBeUndefined();
 			}
 		});
 

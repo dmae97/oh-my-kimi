@@ -16,13 +16,21 @@ const GIT_ENV = {
 	GIT_AUTHOR_EMAIL: "t@example.com",
 	GIT_COMMITTER_NAME: "t",
 	GIT_COMMITTER_EMAIL: "t@example.com",
+	GIT_CONFIG_GLOBAL: "/dev/null",
+	GIT_CONFIG_SYSTEM: "/dev/null",
 } as const;
 
 function gitRun(cwd: string, args: string[]): string {
+	const env = { ...process.env, ...GIT_ENV };
+	delete env.GIT_DIR;
+	delete env.GIT_WORK_TREE;
+	delete env.GIT_INDEX_FILE;
+	delete env.GIT_OBJECT_DIRECTORY;
+	delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
 	const result = Bun.spawnSync({
 		cmd: ["git", ...args],
 		cwd,
-		env: { ...process.env, ...GIT_ENV },
+		env,
 		stdout: "pipe",
 		stderr: "pipe",
 	});

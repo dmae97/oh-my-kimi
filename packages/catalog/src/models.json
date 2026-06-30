@@ -15648,10 +15648,7 @@
 					"xhigh": "claude-opus-4-7-max"
 				}
 			},
-			"requestModelId": "claude-opus-4-7-low",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "claude-opus-4-7-low"
 		},
 		"claude-opus-4-7-fast": {
 			"id": "claude-opus-4-7-fast",
@@ -15691,10 +15688,7 @@
 					"xhigh": "claude-opus-4-7-max-fast"
 				}
 			},
-			"requestModelId": "claude-opus-4-7-low-fast",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "claude-opus-4-7-low-fast"
 		},
 		"claude-opus-4-8": {
 			"id": "claude-opus-4-8",
@@ -15734,10 +15728,7 @@
 					"xhigh": "claude-opus-4-8-max"
 				}
 			},
-			"requestModelId": "claude-opus-4-8-low",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "claude-opus-4-8-low"
 		},
 		"claude-opus-4-8-fast": {
 			"id": "claude-opus-4-8-fast",
@@ -15777,10 +15768,7 @@
 					"xhigh": "claude-opus-4-8-max-fast"
 				}
 			},
-			"requestModelId": "claude-opus-4-8-low-fast",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "claude-opus-4-8-low-fast"
 		},
 		"claude-sonnet-4-6": {
 			"id": "claude-sonnet-4-6",
@@ -16019,10 +16007,7 @@
 					"high": "gemini-3-1-pro-high"
 				}
 			},
-			"requestModelId": "gemini-3-1-pro-low",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gemini-3-1-pro-low"
 		},
 		"gemini-3-5-flash": {
 			"id": "gemini-3-5-flash",
@@ -16060,10 +16045,7 @@
 					"high": "gemini-3-5-flash-high"
 				}
 			},
-			"requestModelId": "gemini-3-5-flash-minimal",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gemini-3-5-flash-minimal"
 		},
 		"gemini-3-flash": {
 			"id": "gemini-3-flash",
@@ -16101,10 +16083,7 @@
 					"high": "MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH"
 				}
 			},
-			"requestModelId": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL"
 		},
 		"glm-5-1": {
 			"id": "glm-5-1",
@@ -16284,10 +16263,7 @@
 					"xhigh": "MODEL_GPT_5_2_XHIGH"
 				}
 			},
-			"requestModelId": "MODEL_GPT_5_2_NONE",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "MODEL_GPT_5_2_NONE"
 		},
 		"gpt-5-3-codex": {
 			"id": "gpt-5-3-codex",
@@ -16327,10 +16303,7 @@
 					"xhigh": "gpt-5-3-codex-xhigh"
 				}
 			},
-			"requestModelId": "gpt-5-3-codex-low",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-3-codex-low"
 		},
 		"gpt-5-3-codex-fast": {
 			"id": "gpt-5-3-codex-fast",
@@ -16370,10 +16343,7 @@
 					"xhigh": "gpt-5-3-codex-xhigh-priority"
 				}
 			},
-			"requestModelId": "gpt-5-3-codex-low-priority",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-3-codex-low-priority"
 		},
 		"gpt-5-4": {
 			"id": "gpt-5-4",
@@ -16413,10 +16383,7 @@
 					"xhigh": "gpt-5-4-xhigh"
 				}
 			},
-			"requestModelId": "gpt-5-4-none",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-4-none"
 		},
 		"gpt-5-4-fast": {
 			"id": "gpt-5-4-fast",
@@ -16456,10 +16423,7 @@
 					"xhigh": "gpt-5-4-xhigh-priority"
 				}
 			},
-			"requestModelId": "gpt-5-4-none-priority",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-4-none-priority"
 		},
 		"gpt-5-4-mini": {
 			"id": "gpt-5-4-mini",
@@ -16499,10 +16463,7 @@
 					"xhigh": "gpt-5-4-mini-xhigh"
 				}
 			},
-			"requestModelId": "gpt-5-4-mini-low",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-4-mini-low"
 		},
 		"gpt-5-5": {
 			"id": "gpt-5-5",
@@ -16542,10 +16503,7 @@
 					"xhigh": "gpt-5-5-xhigh"
 				}
 			},
-			"requestModelId": "gpt-5-5-none",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-5-none"
 		},
 		"gpt-5-5-fast": {
 			"id": "gpt-5-5-fast",
@@ -16585,10 +16543,7 @@
 					"xhigh": "gpt-5-5-xhigh-priority"
 				}
 			},
-			"requestModelId": "gpt-5-5-none-priority",
-			"compat": {
-				"trustExplicitThinkingOnly": true
-			}
+			"requestModelId": "gpt-5-5-none-priority"
 		},
 		"kimi-k2-6": {
 			"id": "kimi-k2-6",
@@ -62399,10 +62354,10 @@
 				"image"
 			],
 			"cost": {
-				"input": 3,
-				"output": 15,
-				"cacheRead": 0.3,
-				"cacheWrite": 3.75
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 2.5
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -63319,6 +63274,43 @@
 					"medium",
 					"high"
 				]
+			}
+		},
+		"anthropic/claude-sonnet-5": {
+			"id": "anthropic/claude-sonnet-5",
+			"name": "Claude Sonnet 5",
+			"api": "openrouter",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 2.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				}
 			}
 		},
 		"arcee-ai/trinity-large-preview": {
@@ -76018,7 +76010,6 @@
 			},
 			"compat": {
 				"officialEndpoint": false,
-				"disableStrictTools": false,
 				"disableAdaptiveThinking": false,
 				"supportsEagerToolInputStreaming": true,
 				"supportsLongCacheRetention": false,
@@ -76907,6 +76898,44 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			}
+		},
+		"anthropic/claude-sonnet-5": {
+			"id": "anthropic/claude-sonnet-5",
+			"name": "Claude Sonnet 5",
+			"api": "anthropic-messages",
+			"provider": "vercel-ai-gateway",
+			"baseUrl": "https://ai-gateway.vercel.sh",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.19999999999999998,
+				"cacheWrite": 2.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				},
+				"supportsDisplay": true
 			}
 		},
 		"arcee-ai/trinity-large-preview": {
@@ -78749,7 +78778,6 @@
 			},
 			"compat": {
 				"officialEndpoint": false,
-				"disableStrictTools": false,
 				"disableAdaptiveThinking": false,
 				"supportsEagerToolInputStreaming": true,
 				"supportsLongCacheRetention": false,
@@ -83883,6 +83911,44 @@
 				"effortMap": {
 					"minimal": "low"
 				}
+			}
+		},
+		"anthropic/claude-sonnet-5": {
+			"id": "anthropic/claude-sonnet-5",
+			"name": "Claude Sonnet 5",
+			"api": "anthropic-messages",
+			"provider": "zenmux",
+			"baseUrl": "https://zenmux.ai/api/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 2,
+				"output": 10,
+				"cacheRead": 0.2,
+				"cacheWrite": 4
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				],
+				"effortMap": {
+					"minimal": "low",
+					"low": "medium",
+					"medium": "high",
+					"high": "xhigh",
+					"xhigh": "max"
+				},
+				"supportsDisplay": true
 			}
 		},
 		"baidu/ernie-5.0-thinking-preview": {
