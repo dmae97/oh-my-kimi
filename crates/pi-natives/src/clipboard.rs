@@ -65,11 +65,13 @@ pub fn copy_to_clipboard(text: String) -> Result<()> {
 /// is harmless there.
 #[cfg(target_os = "linux")]
 fn set_clipboard_text(text: String) -> Result<()> {
-	use std::sync::{Mutex, OnceLock};
+	use std::sync::OnceLock;
+
+	use parking_lot::Mutex;
 
 	static CLIPBOARD: OnceLock<Mutex<Option<Clipboard>>> = OnceLock::new();
 	let cell = CLIPBOARD.get_or_init(|| Mutex::new(None));
-	let mut guard = cell.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+	let mut guard = cell.lock();
 	if guard.is_none() {
 		*guard = Some(
 			Clipboard::new()

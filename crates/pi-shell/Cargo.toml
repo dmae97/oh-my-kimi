@@ -21,6 +21,7 @@ clap.workspace = true
 os_pipe.workspace = true
 globset.workspace = true
 ignore.workspace = true
+parking_lot.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +29,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 xxhash-rust.workspace = true
+flume.workspace = true
 pi-walker.workspace = true
 pi-uutils-ctx = { path = "../pi-uutils-ctx" }
 uu_mkdir = { path = "../vendor/uu-mkdir" }

@@ -768,9 +768,10 @@ mod tests {
 	use std::{
 		collections::HashMap,
 		io::Cursor,
-		sync::{Arc, Mutex, atomic::AtomicBool},
+		sync::{Arc, atomic::AtomicBool},
 	};
 
+	use parking_lot::Mutex;
 	use pi_uutils_ctx::{ScopeIo, scope};
 
 	use super::*;
@@ -780,7 +781,7 @@ mod tests {
 
 	impl Write for SharedBuf {
 		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-			self.0.lock().expect("buffer lock").extend_from_slice(buf);
+			self.0.lock().extend_from_slice(buf);
 			Ok(buf.len())
 		}
 
@@ -809,10 +810,8 @@ mod tests {
 			.map(OsString::from)
 			.collect();
 		let code = scope(io, || run(argv));
-		let stdout =
-			String::from_utf8(out.lock().expect("stdout lock").clone()).expect("utf8 stdout");
-		let stderr =
-			String::from_utf8(err.lock().expect("stderr lock").clone()).expect("utf8 stderr");
+		let stdout = String::from_utf8(out.lock().clone()).expect("utf8 stdout");
+		let stderr = String::from_utf8(err.lock().clone()).expect("utf8 stderr");
 		(code, stdout, stderr)
 	}
 

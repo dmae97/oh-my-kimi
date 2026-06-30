@@ -8,7 +8,7 @@ use std::{
 	collections::HashMap,
 	io::{Read, Write},
 	str,
-	sync::{Arc, Mutex, mpsc},
+	sync::Arc,
 	time::{Duration, Instant},
 };
 
@@ -17,6 +17,7 @@ use napi::{
 	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
 };
 use napi_derive::napi;
+use parking_lot::Mutex;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
 use crate::{ps, task};
@@ -83,7 +84,7 @@ const POST_EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(300);
 const FINAL_READER_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 struct PtySessionCore {
-	control_tx: mpsc::Sender<ControlMessage>,
+	control_tx: flume::Sender<ControlMessage>,
 }
 
 /// Stateful PTY session for interactive stdin/stdout passthrough.
@@ -126,11 +127,9 @@ impl PtySession {
 		let core = Arc::clone(&self.core);
 
 		// Register control channel synchronously so write()/kill() work immediately.
-		let (control_tx, control_rx) = mpsc::channel::<ControlMessage>();
+		let (control_tx, control_rx) = flume::unbounded::<ControlMessage>();
 		{
-			let mut guard = core
-				.lock()
-				.map_err(|_| Error::from_reason("PTY session lock poisoned"))?;
+			let mut guard = core.lock();
 			if guard.is_some() {
 				return Err(Error::from_reason("PTY session already running"));
 			}
@@ -142,9 +141,7 @@ impl PtySession {
 					.await;
 
 			// Always clear core regardless of result
-			let mut guard = core
-				.lock()
-				.map_err(|_| Error::from_reason("PTY session lock poisoned"))?;
+			let mut guard = core.lock();
 			*guard = None;
 			drop(guard);
 
@@ -179,10 +176,7 @@ impl PtySession {
 
 impl PtySession {
 	fn send_control(&self, message: ControlMessage) -> Result<()> {
-		let guard = self
-			.core
-			.lock()
-			.map_err(|_| Error::from_reason("PTY session lock poisoned"))?;
+		let guard = self.core.lock();
 		let core = guard
 			.as_ref()
 			.ok_or_else(|| Error::from_reason("PTY session is not running"))?;
@@ -213,7 +207,7 @@ fn terminate_pty_processes(
 fn run_pty_sync(
 	config: PtyRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String>>,
-	control_rx: mpsc::Receiver<ControlMessage>,
+	control_rx: flume::Receiver<ControlMessage>,
 	ct: task::CancelToken,
 ) -> Result<PtyRunResult> {
 	let pty_system = native_pty_system();
@@ -225,7 +219,7 @@ fn run_pty_sync(
 		// Windows ConPTY openpty() can hang indefinitely when the console
 		// subsystem isn't properly initialized. Use a short startup timeout
 		// so the Promise rejects instead of hanging forever.
-		let (tx, rx) = mpsc::channel();
+		let (tx, rx) = flume::unbounded();
 		std::thread::spawn(move || {
 			let result = pty_system.openpty(PtySize {
 				rows:         config.rows,
@@ -303,7 +297,7 @@ fn run_pty_sync(
 		.try_clone_reader()
 		.map_err(|err| Error::from_reason(format!("Failed to create PTY reader: {err}")))?;
 
-	let (reader_tx, reader_rx) = mpsc::channel::<ReaderEvent>();
+	let (reader_tx, reader_rx) = flume::unbounded::<ReaderEvent>();
 	let reader_thread = std::thread::spawn(move || {
 		const REPLACEMENT: &str = "\u{FFFD}";
 		const BUF: usize = 65536;
@@ -404,8 +398,7 @@ fn run_pty_sync(
 						reader_drain_deadline = Some(Instant::now() + POST_CANCEL_DRAIN_TIMEOUT);
 					}
 				},
-				Err(mpsc::TryRecvError::Empty) => break,
-				Err(mpsc::TryRecvError::Disconnected) => break,
+				Err(flume::TryRecvError::Empty | flume::TryRecvError::Disconnected) => break,
 			}
 		}
 
@@ -416,8 +409,8 @@ fn run_pty_sync(
 					reader_done = true;
 					break;
 				},
-				Err(mpsc::TryRecvError::Empty) => break,
-				Err(mpsc::TryRecvError::Disconnected) => {
+				Err(flume::TryRecvError::Empty) => break,
+				Err(flume::TryRecvError::Disconnected) => {
 					reader_done = true;
 					break;
 				},
@@ -448,8 +441,8 @@ fn run_pty_sync(
 			match reader_rx.recv_timeout(wait_duration) {
 				Ok(ReaderEvent::Chunk(chunk)) => emit_chunk(&chunk, on_chunk.as_ref()),
 				Ok(ReaderEvent::Done) => reader_done = true,
-				Err(mpsc::RecvTimeoutError::Timeout) => {},
-				Err(mpsc::RecvTimeoutError::Disconnected) => {
+				Err(flume::RecvTimeoutError::Timeout) => {},
+				Err(flume::RecvTimeoutError::Disconnected) => {
 					reader_done = true;
 					if exit_code.is_none() {
 						std::thread::sleep(wait_duration);
@@ -519,8 +512,8 @@ fn run_pty_sync(
 					reader_done = true;
 					break;
 				},
-				Err(mpsc::RecvTimeoutError::Timeout) => {},
-				Err(mpsc::RecvTimeoutError::Disconnected) => {
+				Err(flume::RecvTimeoutError::Timeout) => {},
+				Err(flume::RecvTimeoutError::Disconnected) => {
 					reader_done = true;
 					break;
 				},
@@ -537,7 +530,7 @@ fn run_pty_sync(
 	// but the main thread never blocks.
 	#[cfg(windows)]
 	{
-		let (drop_tx, drop_rx) = mpsc::channel::<()>();
+		let (drop_tx, drop_rx) = flume::unbounded::<()>();
 		std::thread::spawn(move || {
 			drop(master);
 			let _ = drop_tx.send(());

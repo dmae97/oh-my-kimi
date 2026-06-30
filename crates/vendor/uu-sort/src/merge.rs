@@ -23,11 +23,11 @@ use std::{
 	path::PathBuf,
 	process::{Child, ChildStdin, ChildStdout, Command, Stdio},
 	rc::Rc,
-	sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel},
 	thread::{self, JoinHandle},
 };
 
 use compare::Compare;
+use flume::{Receiver, Sender};
 use uucore::error::{FromIo, UResult};
 
 use crate::{
@@ -177,11 +177,11 @@ fn merge_without_limit<M: MergeInput + 'static, F: Iterator<Item = UResult<M>>>(
 	files: F,
 	settings: &GlobalSettings,
 ) -> UResult<FileMerger<'_>> {
-	let (request_sender, request_receiver) = channel();
+	let (request_sender, request_receiver) = flume::unbounded();
 	let mut reader_files = Vec::with_capacity(files.size_hint().0);
 	let mut loaded_receivers = Vec::with_capacity(files.size_hint().0);
 	for (file_number, file) in files.enumerate() {
-		let (sender, receiver) = sync_channel(2);
+		let (sender, receiver) = flume::bounded(2);
 		loaded_receivers.push(receiver);
 		reader_files.push(Some(ReaderFile { file: file?, sender, carry_over: vec![] }));
 		// Send the initial chunk to trigger a read for each file
@@ -227,7 +227,7 @@ fn merge_without_limit<M: MergeInput + 'static, F: Iterator<Item = UResult<M>>>(
 /// The struct on the reader thread representing an input file
 struct ReaderFile<M: MergeInput> {
 	file:       M,
-	sender:     SyncSender<Chunk>,
+	sender:     Sender<Chunk>,
 	carry_over: Vec<u8>,
 }
 
@@ -238,7 +238,7 @@ fn reader(
 	settings: &GlobalSettings,
 	separator: u8,
 ) -> UResult<()> {
-	for (file_idx, recycled_chunk) in recycled_receiver {
+	while let Ok((file_idx, recycled_chunk)) = recycled_receiver.recv() {
 		if let Some(ReaderFile { file, sender, carry_over }) = &mut files[file_idx] {
 			let should_continue = chunks::read(
 				sender,

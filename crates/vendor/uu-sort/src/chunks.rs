@@ -12,9 +12,9 @@
 use std::{
 	io::{ErrorKind, Read},
 	ops::Range,
-	sync::mpsc::SyncSender,
 };
 
+use flume::Sender;
 use memchr::memchr_iter;
 use self_cell::self_cell;
 use uucore::error::{UResult, USimpleError};
@@ -180,7 +180,7 @@ impl RecycledChunk {
 /// * `settings`: The global settings.
 #[allow(clippy::too_many_arguments)]
 pub fn read<T: Read>(
-	sender: &SyncSender<Chunk>,
+	sender: &Sender<Chunk>,
 	recycled_chunk: RecycledChunk,
 	max_buffer_size: Option<usize>,
 	carry_over: &mut Vec<u8>,

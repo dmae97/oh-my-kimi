@@ -217,14 +217,16 @@ mod tests {
 		ffi::OsString,
 		io::{self, Write},
 		path::PathBuf,
-		sync::{Arc, atomic::AtomicBool, mpsc},
+		sync::{Arc, atomic::AtomicBool},
 	};
+
+	use flume::Sender;
 
 	use super::{UutilRun, run_caught};
 
 	/// `Send` writer that forwards every write onto a channel so a test can
 	/// inspect what the utility wrote to the scope's stderr.
-	struct ChanWriter(mpsc::Sender<Vec<u8>>);
+	struct ChanWriter(Sender<Vec<u8>>);
 	impl Write for ChanWriter {
 		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
 			let _ = self.0.send(buf.to_vec());
@@ -250,7 +252,7 @@ mod tests {
 	}
 
 	fn run_in_scope(run: UutilRun, argv: Vec<OsString>) -> (i32, String) {
-		let (tx, rx) = mpsc::channel();
+		let (tx, rx) = flume::unbounded();
 		let code = pi_uutils_ctx::scope(scope_io(Box::new(ChanWriter(tx))), || run_caught(run, argv));
 		let mut err = Vec::new();
 		while let Ok(chunk) = rx.try_recv() {

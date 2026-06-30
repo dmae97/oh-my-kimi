@@ -36,6 +36,7 @@ uucore = { version = "0.8.0", features = [
   "i18n-collator",
   "i18n-datetime",
 ] }
+flume = { workspace = true }
 pi-uutils-ctx = { path = "../../pi-uutils-ctx" }
 
 [target.'cfg(unix)'.dependencies]

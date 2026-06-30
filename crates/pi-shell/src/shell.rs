@@ -22,12 +22,10 @@ use brush_core::{
 };
 use bytes::Bytes;
 use clap::Parser;
+use flume::Sender;
 #[cfg(not(unix))]
 use tokio::io::AsyncReadExt as _;
-use tokio::{
-	sync::{Mutex as TokioMutex, mpsc},
-	time,
-};
+use tokio::{sync::Mutex as TokioMutex, time};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(windows)]
@@ -153,7 +151,7 @@ impl Shell {
 	pub async fn run(
 		&self,
 		options: ShellRunOptions,
-		on_chunk: Option<mpsc::UnboundedSender<String>>,
+		on_chunk: Option<Sender<String>>,
 		mut cancel_token: CancelToken,
 	) -> Result<ShellRunResult> {
 		let run_config = ShellRunConfig {
@@ -209,7 +207,7 @@ impl Shell {
 
 pub async fn execute_shell(
 	options: ShellExecuteOptions,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let minimizer = options
@@ -234,8 +232,8 @@ pub async fn execute_shell(
 /// its bytes are dropped.
 #[derive(Default)]
 pub struct StreamSinks {
-	pub stdout: Option<mpsc::UnboundedSender<Bytes>>,
-	pub stderr: Option<mpsc::UnboundedSender<Bytes>>,
+	pub stdout: Option<Sender<Bytes>>,
+	pub stderr: Option<Sender<Bytes>>,
 }
 
 /// One-shot execution that delivers stdout/stderr as raw byte chunks.
@@ -267,7 +265,7 @@ async fn run_shell_session(
 	abort_state: ShellAbortState,
 	config: ShellConfig,
 	run_config: ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	ct: &mut CancelToken,
 ) -> Result<ShellRunResult> {
 	let tokio_cancel = CancellationToken::new();
@@ -353,7 +351,7 @@ async fn run_shell_session(
 async fn run_shell_oneshot(
 	config: ShellConfig,
 	run_config: ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	ct: CancelToken,
 ) -> Result<ShellExecuteResult> {
 	let tokio_cancel = CancellationToken::new();
@@ -759,7 +757,7 @@ impl ChainCapture {
 async fn run_shell_command(
 	session: &mut ShellSessionCore,
 	options: &ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 ) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
@@ -810,7 +808,7 @@ async fn run_shell_command(
 async fn run_shell_command_single(
 	session: &mut ShellSessionCore,
 	options: &ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 	minimizer_mode: minimizer::engine::MinimizerMode,
@@ -893,7 +891,7 @@ async fn run_shell_command_single(
 async fn run_shell_command_segmented_chain(
 	session: &mut ShellSessionCore,
 	options: &ShellRunConfig,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 ) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
@@ -1035,7 +1033,7 @@ async fn run_shell_command_once(
 	session: &mut ShellSessionCore,
 	mut command: String,
 	mut params: ExecutionParameters,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
 	capture_mode: CommandCaptureMode,
@@ -1056,7 +1054,7 @@ async fn run_shell_command_once(
 	params.set_cancel_token(cancel_token.clone());
 	params.set_spawn_observer(spawn_registry.clone());
 	let reader_cancel = CancellationToken::new();
-	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
+	let (activity_tx, activity_rx) = flume::bounded::<()>(1);
 	let reader_callback = on_chunk;
 	let mut reader_handle = tokio::spawn({
 		let reader_cancel = reader_cancel.clone();
@@ -1123,8 +1121,8 @@ async fn run_shell_command_once(
 				reader_finished = true;
 				break;
 			}
-			msg = activity_rx.recv() => {
-				if msg.is_none() {
+			msg = activity_rx.recv_async() => {
+				if msg.is_err() {
 					break;
 				}
 				idle_timer.as_mut().reset(time::Instant::now() + POST_EXIT_IDLE);
@@ -1188,7 +1186,7 @@ async fn run_shell_command_streams(
 	params.set_cancel_token(cancel_token.clone());
 	params.set_spawn_observer(spawn_registry.clone());
 	let reader_cancel = CancellationToken::new();
-	let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
+	let (activity_tx, activity_rx) = flume::bounded::<()>(1);
 
 	let StreamSinks { stdout: stdout_sink, stderr: stderr_sink } = streams;
 	let mut stdout_handle = tokio::spawn(Box::pin(read_output_bytes(
@@ -1256,8 +1254,8 @@ async fn run_shell_command_streams(
 				let _ = res;
 				stderr_finished = true;
 			}
-			msg = activity_rx.recv() => {
-				if msg.is_none() {
+			msg = activity_rx.recv_async() => {
+				if msg.is_err() {
 					break;
 				}
 				idle_timer.as_mut().reset(time::Instant::now() + POST_EXIT_IDLE);
@@ -1295,9 +1293,9 @@ async fn run_shell_command_streams(
 
 async fn read_output_bytes(
 	reader: fs::File,
-	sink: Option<mpsc::UnboundedSender<Bytes>>,
+	sink: Option<Sender<Bytes>>,
 	cancel_token: CancellationToken,
-	activity: mpsc::Sender<()>,
+	activity: Sender<()>,
 ) {
 	const BUF: usize = 65536;
 
@@ -1564,9 +1562,9 @@ struct BufferedOutput {
 
 async fn read_output(
 	reader: fs::File,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
-	activity: mpsc::Sender<()>,
+	activity: Sender<()>,
 ) {
 	const REPLACEMENT: &str = "\u{FFFD}";
 	const BUF: usize = 65536;
@@ -1672,9 +1670,9 @@ async fn read_output(
 
 async fn read_output_buffered(
 	reader: fs::File,
-	on_chunk: Option<mpsc::UnboundedSender<String>>,
+	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
-	activity: mpsc::Sender<()>,
+	activity: Sender<()>,
 	max_capture_bytes: usize,
 ) -> BufferedOutput {
 	const REPLACEMENT: &str = "\u{FFFD}";
@@ -1832,7 +1830,7 @@ fn read_nonblocking<T: std::os::fd::AsRawFd>(file: &T, buf: &mut [u8]) -> io::Re
 	}
 }
 
-fn emit_chunk(text: &str, callback: Option<&mpsc::UnboundedSender<String>>) {
+fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
 	if let Some(callback) = callback {
 		let _ = callback.send(text.to_string());
 	}
@@ -2980,7 +2978,7 @@ mod tests {
 		cancel_token: CancelToken,
 	) -> (ShellExecuteResult, String) {
 		let _guard = shell_test_lock().lock().await;
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let (tx, rx) = flume::unbounded::<String>();
 		let options = ShellExecuteOptions {
 			command: command.to_string(),
 			cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
@@ -2991,7 +2989,7 @@ mod tests {
 			.await
 			.expect("execute_shell");
 		let mut output = String::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			output.push_str(&chunk);
 		}
 		(result, output)
@@ -3476,7 +3474,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		let _guard = shell_test_lock().lock().await;
 
 		let shell_b = Shell::new(None);
-		let (tx_b, mut rx_b) = mpsc::unbounded_channel::<String>();
+		let (tx_b, rx_b) = flume::unbounded::<String>();
 		let mut ct_b = CancelToken::default();
 		let abort_b = ct_b.emplace_abort_token();
 		let handle_b = tokio::spawn(async move {
@@ -3496,7 +3494,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		let b_ready = time::timeout(Duration::from_secs(5), async {
 			loop {
 				let chunk = rx_b
-					.recv()
+					.recv_async()
 					.await
 					.expect("run B ended before printing readiness");
 				b_output.push_str(&chunk);
@@ -3510,7 +3508,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(b_ready.trim(), "ready", "run B should reach its long sleep before run A starts");
 
 		let shell_a = Shell::new(None);
-		let (tx_a, mut rx_a) = mpsc::unbounded_channel::<String>();
+		let (tx_a, rx_a) = flume::unbounded::<String>();
 		let handle_a = tokio::spawn(async move {
 			shell_a
 				.run(
@@ -3528,7 +3526,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		let a_child_pid = time::timeout(Duration::from_secs(5), async {
 			loop {
 				let chunk = rx_a
-					.recv()
+					.recv_async()
 					.await
 					.expect("run A ended before printing its child pid");
 				a_output.push_str(&chunk);
@@ -3852,7 +3850,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	async fn read_output_stops_when_cancelled_before_pipe_eof() {
 		let (reader, _writer) = pipe_to_files("test").expect("test pipe should be created");
 		let cancel = CancellationToken::new();
-		let (activity_tx, _activity_rx) = mpsc::channel(1);
+		let (activity_tx, _activity_rx) = flume::bounded(1);
 		let handle = tokio::spawn(read_output(reader, None, cancel.clone(), activity_tx));
 
 		time::sleep(Duration::from_millis(10)).await;
@@ -3867,8 +3865,8 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn execute_shell_streams_separates_stdout_and_stderr() {
-		let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<Bytes>();
-		let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<Bytes>();
+		let (stdout_tx, stdout_rx) = flume::unbounded::<Bytes>();
+		let (stderr_tx, stderr_rx) = flume::unbounded::<Bytes>();
 		let options = ShellExecuteOptions {
 			command: "echo out; echo err 1>&2".to_string(),
 			..Default::default()
@@ -3881,11 +3879,11 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!result.cancelled);
 
 		let mut stdout = Vec::new();
-		while let Some(chunk) = stdout_rx.recv().await {
+		while let Ok(chunk) = stdout_rx.recv_async().await {
 			stdout.extend_from_slice(&chunk);
 		}
 		let mut stderr = Vec::new();
-		while let Some(chunk) = stderr_rx.recv().await {
+		while let Ok(chunk) = stderr_rx.recv_async().await {
 			stderr.extend_from_slice(&chunk);
 		}
 		assert_eq!(stdout, b"out\n");
@@ -3914,7 +3912,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn powershell_env_reference_survives_brush_expansion() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+		let (tx, rx) = flume::unbounded::<Bytes>();
 		let options = ShellExecuteOptions {
 			command: "printf '%s' \"$env:SystemRoot\"".to_string(),
 			..Default::default()
@@ -3926,7 +3924,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(result.exit_code, Some(0));
 
 		let mut stdout = Vec::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			stdout.extend_from_slice(&chunk);
 		}
 		assert_eq!(stdout, b"$env:SystemRoot");
@@ -3938,7 +3936,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn user_env_assignment_shadows_powershell_fallback() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
+		let (tx, rx) = flume::unbounded::<Bytes>();
 		let options = ShellExecuteOptions {
 			command: "env=prod; printf '%s' \"$env:8080\"".to_string(),
 			..Default::default()
@@ -3950,7 +3948,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(result.exit_code, Some(0));
 
 		let mut stdout = Vec::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			stdout.extend_from_slice(&chunk);
 		}
 		assert_eq!(stdout, b"prod:8080");
@@ -4026,7 +4024,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn nohup_background_captures_operand_pid() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let (tx, rx) = flume::unbounded::<String>();
 		let options = ShellExecuteOptions {
 			command: "nohup /bin/sh -c 'exit 0' >/dev/null 2>&1 & pid=$!; printf 'pid=%s\n' \
 			          \"$pid\"; test -n \"$pid\""
@@ -4041,7 +4039,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!result.timed_out);
 
 		let mut out = String::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			out.push_str(&chunk);
 		}
 		let pid = out
@@ -4055,14 +4053,14 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 	/// and exit code 125 (a nohup-level error, distinct from any command code).
 	#[tokio::test(flavor = "multi_thread")]
 	async fn nohup_builtin_without_command_reports_missing_operand() {
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let (tx, rx) = flume::unbounded::<String>();
 		let options = ShellExecuteOptions { command: "nohup".to_string(), ..Default::default() };
 		let result = execute_shell(options, Some(tx), CancelToken::default())
 			.await
 			.expect("execute should succeed");
 		assert_eq!(result.exit_code, Some(125));
 		let mut out = String::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			out.push_str(&chunk);
 		}
 		assert!(
@@ -4096,7 +4094,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 
 		let probe = "import signal,sys; sys.stdout.write('IGN' if \
 		             signal.getsignal(signal.SIGHUP)==signal.SIG_IGN else 'DFL')";
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let (tx, rx) = flume::unbounded::<String>();
 		let options = ShellExecuteOptions {
 			command: format!("nohup python3 -c \"{probe}\""),
 			..Default::default()
@@ -4106,7 +4104,7 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			.expect("execute should succeed");
 		assert_eq!(result.exit_code, Some(0));
 		let mut out = String::new();
-		while let Some(chunk) = rx.recv().await {
+		while let Ok(chunk) = rx.recv_async().await {
 			out.push_str(&chunk);
 		}
 		assert!(

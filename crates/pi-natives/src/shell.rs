@@ -6,7 +6,6 @@ use napi::{
 	Env, Result,
 	bindgen_prelude::*,
 	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
-	tokio::sync::mpsc,
 };
 use napi_derive::napi;
 use pi_shell::{
@@ -293,11 +292,11 @@ pub fn execute_shell<'env>(
 
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String>>,
-) -> (Option<mpsc::UnboundedSender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+) -> (Option<flume::Sender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
 	let Some(on_chunk) = on_chunk else {
 		return (None, None);
 	};
-	let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+	let (tx, rx) = flume::unbounded::<String>();
 	let handle = napi::tokio::spawn(async move {
 		// Hard cap on one coalesced batch so the JS main thread never sees a
 		// multi-MB napi callback (a giant single string would stall sanitize +
@@ -307,7 +306,7 @@ fn bridge_chunks(
 		// each batch because `String` ownership is moved into the napi call.
 		const INITIAL_BATCH_CAP: usize = 8 * 1024;
 		let mut batch = String::with_capacity(INITIAL_BATCH_CAP);
-		while let Some(first) = rx.recv().await {
+		while let Ok(first) = rx.recv_async().await {
 			batch.push_str(&first);
 			// Greedily drain everything already queued. Child processes that
 			// write byte-at-a-time (printf-style progress, llama-cli token
@@ -357,12 +356,12 @@ pub fn apply_bash_fixups(command: String) -> BashFixupResult {
 mod tests {
 	use std::time::Duration;
 
+	#[cfg(unix)]
+	use flume;
 	use pi_shell::{
 		ShellRunOptions as CoreShellRunOptions,
 		cancel::{AbortReason, CancelToken},
 	};
-	#[cfg(unix)]
-	use tokio::sync::mpsc;
 	use tokio::time;
 
 	use super::CoreShell;
@@ -412,7 +411,7 @@ mod tests {
 	#[tokio::test(flavor = "multi_thread")]
 	async fn embedded_external_command_runs_in_its_own_session() {
 		let shell = CoreShell::new(None);
-		let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+		let (tx, rx) = flume::unbounded::<String>();
 		let handle = tokio::spawn(async move {
 			shell
 				.run(
@@ -427,7 +426,7 @@ mod tests {
 				)
 				.await
 		});
-		let child_pid = time::timeout(Duration::from_secs(5), rx.recv())
+		let child_pid = time::timeout(Duration::from_secs(5), rx.recv_async())
 			.await
 			.expect("timed out waiting for child pid")
 			.expect("missing child pid chunk")

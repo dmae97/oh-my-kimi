@@ -12,10 +12,7 @@ use std::{
 	fs::File,
 	io::{self, Read},
 	path::{Path, PathBuf},
-	sync::{
-		Mutex,
-		atomic::{AtomicU64, AtomicUsize, Ordering},
-	},
+	sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use grep_matcher::Matcher;
@@ -29,6 +26,7 @@ use napi::{
 	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
 };
 use napi_derive::napi;
+use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::{glob_util, iofs, task};
@@ -1234,11 +1232,7 @@ fn handle_file(
 	}
 	match search_one_file(searcher, matcher, file, file_params, policy) {
 		FileOutcome::Defer => {
-			state
-				.deferred
-				.lock()
-				.expect("deferred lock poisoned")
-				.push(file.clone());
+			state.deferred.lock().push(file.clone());
 		},
 		FileOutcome::SkippedOversized => {
 			state.skipped_oversized.fetch_add(1, Ordering::Relaxed);
@@ -1248,16 +1242,12 @@ fn handle_file(
 			state.files_searched.fetch_add(1, Ordering::Relaxed);
 			if search.match_count > 0 {
 				let emitted_in_file = search.collected;
-				state
-					.results
-					.lock()
-					.expect("results lock poisoned")
-					.push(FileSearchResult {
-						relative_path: file.relative.clone(),
-						matches:       search.matches,
-						match_count:   search.match_count,
-						limit_reached: search.limit_reached,
-					});
+				state.results.lock().push(FileSearchResult {
+					relative_path: file.relative.clone(),
+					matches:       search.matches,
+					match_count:   search.match_count,
+					limit_reached: search.limit_reached,
+				});
 				if stop_after_matches.is_some() {
 					state.emitted.fetch_add(emitted_in_file, Ordering::Relaxed);
 				}
@@ -1316,7 +1306,7 @@ fn run_pass(
 			)?;
 		}
 	}
-	let mut results = std::mem::take(&mut *state.results.lock().expect("results lock poisoned"));
+	let mut results = std::mem::take(&mut *state.results.lock());
 	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
 	Ok(results)
 }
@@ -1348,11 +1338,7 @@ fn process_candidates(
 				None => true,
 			});
 	if !oversized_hinted.is_empty() {
-		state
-			.deferred
-			.lock()
-			.expect("deferred lock poisoned")
-			.extend(oversized_hinted);
+		state.deferred.lock().extend(oversized_hinted);
 	}
 
 	let mut results = run_pass(
@@ -1368,7 +1354,7 @@ fn process_candidates(
 
 	// Pass 2: deferred oversized files, searched over their leading window —
 	// only when a content-mode budget was not already satisfied in pass 1.
-	let deferred = std::mem::take(&mut *state.deferred.lock().expect("deferred lock poisoned"));
+	let deferred = std::mem::take(&mut *state.deferred.lock());
 	let limit_satisfied =
 		stop_after_matches.is_some_and(|stop| state.emitted.load(Ordering::Relaxed) >= stop);
 	if !deferred.is_empty() && !limit_satisfied {

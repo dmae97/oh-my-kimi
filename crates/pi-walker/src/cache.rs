@@ -4,12 +4,13 @@ use std::{
 	borrow::Cow,
 	fmt,
 	path::{Path, PathBuf},
-	sync::{Arc, LazyLock, Mutex},
+	sync::{Arc, LazyLock},
 	time::{Duration, Instant},
 };
 
 use dashmap::DashMap;
 use ignore::{ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
+use parking_lot::Mutex;
 use rayon::{ThreadPool, prelude::*};
 
 use crate::{
@@ -280,7 +281,6 @@ fn build_walker_for_options_inner(
 			if let Some(pruned_dirs) = &pruned_dirs
 				&& pruned_dirs
 					.lock()
-					.expect("pruned directory lock poisoned")
 					.iter()
 					.any(|dir| entry.path().starts_with(dir))
 			{
@@ -384,11 +384,7 @@ impl<H> Drop for EntryVisitor<'_, H> {
 			return;
 		}
 		let entries = std::mem::take(&mut self.entries);
-		self
-			.shared_entries
-			.lock()
-			.expect("entry collection lock poisoned")
-			.push(entries);
+		self.shared_entries.lock().push(entries);
 	}
 }
 
@@ -401,7 +397,7 @@ where
 		if self.visited == 0 || self.visited >= 128 {
 			self.visited = 0;
 			if let Err(err) = (self.heartbeat)() {
-				*self.error.lock().expect("error lock poisoned") = Some(err.to_string());
+				*self.error.lock() = Some(err.to_string());
 				return WalkState::Quit;
 			}
 		}
@@ -489,18 +485,12 @@ where
 	heartbeat().map_err(|err| WalkError::Interrupted(err.to_string()))?;
 	builder.build_parallel().visit(&mut visitor_builder);
 
-	let walk_error = error.lock().expect("error lock poisoned").take();
+	let walk_error = error.lock().take();
 	if let Some(error) = walk_error {
 		return Err(WalkError::Interrupted(error));
 	}
 
-	entries.extend(
-		shared_entries
-			.lock()
-			.expect("entry collection lock poisoned")
-			.drain(..)
-			.flatten(),
-	);
+	entries.extend(shared_entries.lock().drain(..).flatten());
 	entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 	Ok(EntryScan::Entries(CollectedEntries { entries, cache_age_ms: 0 }))
 }

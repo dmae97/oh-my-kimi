@@ -13,6 +13,7 @@ workspace = true
 dashmap.workspace = true
 globset.workspace = true
 ignore.workspace = true
+parking_lot.workspace = true
 rayon.workspace = true
 
 [target.'cfg(unix)'.dependencies]

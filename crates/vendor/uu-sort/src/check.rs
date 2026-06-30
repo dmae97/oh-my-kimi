@@ -5,15 +5,9 @@
 
 //! Check if a file is ordered
 
-use std::{
-	cmp::Ordering,
-	ffi::OsStr,
-	io::Read,
-	iter,
-	sync::mpsc::{Receiver, SyncSender, sync_channel},
-	thread,
-};
+use std::{cmp::Ordering, ffi::OsStr, io::Read, iter, thread};
 
+use flume::{Receiver, Sender};
 use itertools::Itertools;
 use uucore::error::UResult;
 
@@ -39,8 +33,8 @@ pub fn check(path: &OsStr, settings: &GlobalSettings) -> UResult<()> {
 		Ordering::Equal
 	};
 	let file = open(path)?;
-	let (recycled_sender, recycled_receiver) = sync_channel(2);
-	let (loaded_sender, loaded_receiver) = sync_channel(2);
+	let (recycled_sender, recycled_receiver) = flume::bounded(2);
+	let (loaded_sender, loaded_receiver) = flume::bounded(2);
 	thread::spawn({
 		let settings = settings.clone();
 		move || reader(file, &recycled_receiver, &loaded_sender, &settings)
@@ -57,7 +51,7 @@ pub fn check(path: &OsStr, settings: &GlobalSettings) -> UResult<()> {
 
 	let mut prev_chunk: Option<Chunk> = None;
 	let mut line_idx = 0;
-	for chunk in loaded_receiver {
+	while let Ok(chunk) = loaded_receiver.recv() {
 		line_idx += 1;
 		if let Some(prev_chunk) = prev_chunk.take() {
 			// Check if the first element of the new chunk is greater than the last
@@ -105,11 +99,11 @@ pub fn check(path: &OsStr, settings: &GlobalSettings) -> UResult<()> {
 fn reader(
 	mut file: Box<dyn Read + Send>,
 	receiver: &Receiver<RecycledChunk>,
-	sender: &SyncSender<Chunk>,
+	sender: &Sender<Chunk>,
 	settings: &GlobalSettings,
 ) -> UResult<()> {
 	let mut carry_over = vec![];
-	for recycled_chunk in receiver {
+	while let Ok(recycled_chunk) = receiver.recv() {
 		let should_continue = chunks::read(
 			sender,
 			recycled_chunk,

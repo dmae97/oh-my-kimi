@@ -20,3 +20,6 @@ grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
 globset = "0.4"
+
+[dev-dependencies]
+parking_lot.workspace = true

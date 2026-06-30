@@ -11,10 +11,10 @@ use std::{
 	fs::File,
 	io::{Read, Write},
 	path::PathBuf,
-	sync::mpsc::{Receiver, SyncSender},
 	thread,
 };
 
+use flume::{Receiver, Sender};
 use itertools::Itertools;
 use uucore::error::{UResult, strip_errno};
 
@@ -44,8 +44,8 @@ pub fn ext_sort(
 	output: Output,
 	tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
-	let (sorted_sender, sorted_receiver) = std::sync::mpsc::sync_channel(1);
-	let (recycled_sender, recycled_receiver) = std::sync::mpsc::sync_channel(1);
+	let (sorted_sender, sorted_receiver) = flume::bounded(1);
+	let (recycled_sender, recycled_receiver) = flume::bounded(1);
 	thread::spawn({
 		let settings = settings.clone();
 		move || sorter(&recycled_receiver, &sorted_sender, &settings)
@@ -105,7 +105,7 @@ fn reader_writer<
 	files: F,
 	settings: &GlobalSettings,
 	receiver: &Receiver<Chunk>,
-	sender: SyncSender<Chunk>,
+	sender: Sender<Chunk>,
 	output: Output,
 	tmp_dir: &mut TmpDirWrapper,
 ) -> UResult<()> {
@@ -177,7 +177,7 @@ fn reader_writer<
 }
 
 /// The function that is executed on the sorter thread.
-fn sorter(receiver: &Receiver<Chunk>, sender: &SyncSender<Chunk>, settings: &GlobalSettings) {
+fn sorter(receiver: &Receiver<Chunk>, sender: &Sender<Chunk>, settings: &GlobalSettings) {
 	while let Ok(mut payload) = receiver.recv() {
 		payload.with_dependent_mut(|_, contents| {
 			sort_by(&mut contents.lines, settings, &contents.line_data);
@@ -210,7 +210,7 @@ fn read_write_loop<I: WriteableTmpFile>(
 	buffer_size: usize,
 	settings: &GlobalSettings,
 	receiver: &Receiver<Chunk>,
-	sender: SyncSender<Chunk>,
+	sender: Sender<Chunk>,
 ) -> UResult<ReadResult<I>> {
 	let mut file = files.next().unwrap()?;
 

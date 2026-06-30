@@ -17,7 +17,7 @@ use std::{
 	hash::{Hash, Hasher},
 	io,
 	path::{Path, PathBuf},
-	sync::{Arc, Mutex},
+	sync::Arc,
 };
 
 pub use cache::{
@@ -26,6 +26,7 @@ pub use cache::{
 	parallel_for_each, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use parking_lot::Mutex;
 
 const HEARTBEAT_INTERVAL: usize = 128;
 
@@ -2307,10 +2308,7 @@ where
 			WalkControl::Quit => return Ok(WalkStatus::Stopped),
 			WalkControl::SkipDescend => {
 				if collected.file_type == FileType::Dir {
-					pruned_dirs
-						.lock()
-						.expect("pruned directory lock poisoned")
-						.push(entry.path().to_path_buf());
+					pruned_dirs.lock().push(entry.path().to_path_buf());
 				}
 			},
 			WalkControl::Continue => {},
@@ -2361,11 +2359,7 @@ fn ignore_error_to_io(error: &ignore::Error) -> io::Error {
 }
 
 fn is_pruned_path(path: &Path, pruned_dirs: &Arc<Mutex<Vec<PathBuf>>>) -> bool {
-	pruned_dirs
-		.lock()
-		.expect("pruned directory lock poisoned")
-		.iter()
-		.any(|dir| path.starts_with(dir))
+	pruned_dirs.lock().iter().any(|dir| path.starts_with(dir))
 }
 
 /// Return whether [`WalkDetail::Full`] provides file sizes without per-entry

@@ -3,6 +3,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use anyhow::Result;
+use parking_lot::Mutex;
 
 use crate::cancel::CancelToken;
 
@@ -1614,7 +1615,7 @@ struct SpawnedProcess {
 /// explicit — only processes this run actually spawned are ever signalled.
 #[derive(Default)]
 pub struct SpawnRegistry {
-	spawned: std::sync::Mutex<Vec<SpawnedProcess>>,
+	spawned: Mutex<Vec<SpawnedProcess>>,
 }
 
 impl SpawnRegistry {
@@ -1626,11 +1627,7 @@ impl SpawnRegistry {
 
 	/// Record a freshly spawned child. Called from the spawn-observer hook.
 	pub fn record(&self, pid: i32, pgid: Option<i32>) {
-		self
-			.spawned
-			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
-			.push(SpawnedProcess { pid, pgid });
+		self.spawned.lock().push(SpawnedProcess { pid, pgid });
 	}
 
 	/// Build the kill set from the processes recorded so far. Re-read on every
@@ -1644,11 +1641,7 @@ impl SpawnRegistry {
 	#[must_use]
 	pub fn build_targets(&self) -> TerminationTargets {
 		let mut targets = TerminationTargets::new();
-		let spawned = self
-			.spawned
-			.lock()
-			.unwrap_or_else(std::sync::PoisonError::into_inner)
-			.clone();
+		let spawned = self.spawned.lock().clone();
 		for entry in spawned {
 			targets.add_pid(entry.pid);
 			if let Some(pgid) = entry.pgid

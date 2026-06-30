@@ -35,7 +35,7 @@ mod platform {
 	use std::{
 		ffi::{CStr, CString, c_char, c_void},
 		ptr,
-		sync::{Arc, mpsc},
+		sync::Arc,
 		thread::{self, JoinHandle},
 	};
 
@@ -285,7 +285,7 @@ mod platform {
 			let rl_clone = run_loop.clone();
 
 			// Signal that the background thread has stored its `CFRunLoopRef`.
-			let (tx, rx) = mpsc::sync_channel::<()>(1);
+			let (tx, rx) = flume::bounded::<()>(1);
 
 			let handle = thread::spawn(move || {
 				// SAFETY: All CoreFoundation objects created or copied here are either released

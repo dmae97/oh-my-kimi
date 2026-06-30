@@ -33,6 +33,7 @@ napi.workspace = true
 napi-derive.workspace = true
 parking_lot.workspace = true
 phf.workspace = true
+flume.workspace = true
 pi-ast.workspace = true
 pi-iso.workspace = true
 pi-shell.workspace = true
