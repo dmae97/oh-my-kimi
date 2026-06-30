@@ -1594,6 +1594,10 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#setTextInternal(text);
 	}
+	submit(): void {
+		if (this.disableSubmit) return;
+		this.#submitValue();
+	}
 
 	#exitHistoryForEditing(): void {
 		if (this.#historyIndex === -1) return;
