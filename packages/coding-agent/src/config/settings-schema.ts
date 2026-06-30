@@ -144,7 +144,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Developer",
 	],
 	tasks: ["Modes", "Subagents", "Isolation", "Commands & Skills"],
-	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Privacy"],
+	providers: ["Services", "Fireworks", "Tiny Model", "Protocol", "Timeouts", "Privacy"],
 };
 
 /** Status line segment identifiers */
@@ -4550,6 +4550,44 @@ export const SETTINGS_SCHEMA = {
 				{ value: "auto", label: "Auto", description: "Use model/provider default websocket behavior" },
 				{ value: "off", label: "Off", description: "Disable websockets for OpenAI Codex models" },
 				{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
+			],
+		},
+	},
+
+	"providers.streamFirstEventTimeoutSeconds": {
+		type: "number",
+		default: -1,
+		ui: {
+			tab: "providers",
+			group: "Timeouts",
+			label: "Stream First Event Timeout",
+			description:
+				"Seconds to wait for the first model stream event; -1 uses provider/env defaults, 0 disables the watchdog",
+			options: [
+				{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
+				{ value: "0", label: "Off", description: "Disable first-event timeout" },
+				{ value: "300", label: "5 minutes" },
+				{ value: "600", label: "10 minutes" },
+				{ value: "1800", label: "30 minutes" },
+			],
+		},
+	},
+
+	"providers.streamIdleTimeoutSeconds": {
+		type: "number",
+		default: -1,
+		ui: {
+			tab: "providers",
+			group: "Timeouts",
+			label: "Stream Idle Timeout",
+			description:
+				"Seconds a model stream may stay silent between events; -1 uses provider/env defaults, 0 disables the watchdog",
+			options: [
+				{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
+				{ value: "0", label: "Off", description: "Disable idle timeout" },
+				{ value: "300", label: "5 minutes" },
+				{ value: "600", label: "10 minutes" },
+				{ value: "1800", label: "30 minutes" },
 			],
 		},
 	},

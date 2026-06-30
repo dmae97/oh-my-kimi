@@ -1,8 +1,8 @@
 /**
  * Contract: `createSettingsAwareStreamFn` layers session provider settings
  * (`providers.openrouterVariant`, `providers.antigravityEndpoint`,
- * `providers.maxInFlightRequests`, `model.loopGuard.*`, `textVerbosity` for
- * Responses-family requests) onto every call while letting caller-supplied
+ * `providers.stream*TimeoutSeconds`, `providers.maxInFlightRequests`,
+ * `model.loopGuard.*`, `textVerbosity` for Responses-family requests)
  * options win — the same wiring the main agent and the advisor agent share so
  * OpenRouter sticky-routing / response caching behaves the same on advisor turns
  * (can1357/oh-my-pi#3639).
@@ -63,6 +63,26 @@ describe("createSettingsAwareStreamFn", () => {
 		expect(calls[0]?.options?.textVerbosity).toBe("low");
 		expect(calls[1]?.options?.textVerbosity).toBe("low");
 		expect(calls[2]?.options?.textVerbosity).toBe("medium");
+	});
+
+	it("forwards configured stream watchdog budgets while preserving caller overrides", () => {
+		const settings = Settings.isolated({
+			"providers.streamFirstEventTimeoutSeconds": 600,
+			"providers.streamIdleTimeoutSeconds": 300,
+		});
+		const { fn: base, calls } = captureBase();
+		const wrapped = createSettingsAwareStreamFn(settings, base);
+
+		wrapped(stubModel, stubContext, undefined);
+		wrapped(stubModel, stubContext, {
+			streamFirstEventTimeoutMs: 15_000,
+			streamIdleTimeoutMs: 10_000,
+		});
+
+		expect(calls[0]?.options?.streamFirstEventTimeoutMs).toBe(600_000);
+		expect(calls[0]?.options?.streamIdleTimeoutMs).toBe(300_000);
+		expect(calls[1]?.options?.streamFirstEventTimeoutMs).toBe(15_000);
+		expect(calls[1]?.options?.streamIdleTimeoutMs).toBe(10_000);
 	});
 
 	it("treats the default openrouterVariant as absent so the base call carries no variant", () => {
