@@ -4,7 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
-import { loadSkills, loadSkillsFromDir, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import {
+	loadSkills,
+	loadSkillsFromDir,
+	parseSkillInvocation,
+	type Skill,
+} from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const fixturesDir = path.resolve(import.meta.dirname, "fixtures/skills");
@@ -488,5 +493,100 @@ describe("collision handling", () => {
 		expect(skillMap.get("calendar")?.source).toBe("first");
 		expect(collisionWarnings).toHaveLength(1);
 		expect(collisionWarnings[0].message).toContain("name collision");
+	});
+});
+
+describe("parseSkillInvocation", () => {
+	describe("leading `/skill:<name>` form", () => {
+		it("parses a bare leading command", () => {
+			expect(parseSkillInvocation("/skill:foo")).toEqual({ name: "foo", args: "" });
+		});
+
+		it("captures everything after the first space as args", () => {
+			expect(parseSkillInvocation("/skill:foo focus on auth")).toEqual({
+				name: "foo",
+				args: "focus on auth",
+			});
+		});
+
+		it("allows leading whitespace before the `/skill:<name>` command", () => {
+			expect(parseSkillInvocation("  /skill:foo focus on auth")).toEqual({
+				name: "foo",
+				args: "focus on auth",
+			});
+		});
+
+		it("returns undefined for the bare `/skill:` prefix", () => {
+			expect(parseSkillInvocation("/skill:")).toBeUndefined();
+		});
+	});
+
+	describe("mid-prompt `/skill:<name>` form (issue #3913)", () => {
+		it("threads surrounding prose through as args when the skill token appears after typed text", () => {
+			expect(parseSkillInvocation("fix the auth bug /skill:security-scan ")).toEqual({
+				name: "security-scan",
+				args: "fix the auth bug",
+			});
+		});
+
+		it("collapses prose on both sides of the skill token into a single args string", () => {
+			expect(parseSkillInvocation("leading /skill:foo trailing")).toEqual({
+				name: "foo",
+				args: "leading trailing",
+			});
+		});
+
+		it("preserves embedded newlines in args when the skill token spans a line break", () => {
+			expect(parseSkillInvocation("explain this\nthen use /skill:security-scan ")).toEqual({
+				name: "security-scan",
+				args: "explain this\nthen use",
+			});
+		});
+
+		it("does not hijack another slash command whose args mention a skill", () => {
+			expect(parseSkillInvocation("/compact /skill:security-scan")).toBeUndefined();
+			expect(parseSkillInvocation("/goal set /skill:foo focus on auth")).toBeUndefined();
+		});
+
+		it("does not hijack the bash tool (`!cmd`) when the body mentions a skill", () => {
+			expect(parseSkillInvocation("!echo /skill:reviewer")).toBeUndefined();
+			expect(parseSkillInvocation("!!echo /skill:reviewer")).toBeUndefined();
+			expect(parseSkillInvocation("   !echo /skill:reviewer")).toBeUndefined();
+		});
+
+		it("does not hijack the python tool (`$ code`) when the body mentions a skill", () => {
+			expect(parseSkillInvocation("$ run.py /skill:foo")).toBeUndefined();
+			expect(parseSkillInvocation("$$ run.py /skill:foo")).toBeUndefined();
+			expect(parseSkillInvocation("$\trun /skill:foo")).toBeUndefined();
+		});
+
+		it("still matches when `$` is followed by prose, not a python whitespace sigil", () => {
+			// `$echo`, `${HOME}`, and `$200` are not python commands — `pythonCommandPrefixLength`
+			// returns 0 for them — so the mid-prompt parser must still see the embedded skill.
+			expect(parseSkillInvocation("$echo /skill:reviewer")).toEqual({
+				name: "reviewer",
+				args: "$echo",
+			});
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: testing literal string containing shell variable
+			expect(parseSkillInvocation("${HOME}/bin /skill:foo")).toEqual({
+				name: "foo",
+				// biome-ignore lint/suspicious/noTemplateCurlyInString: testing literal string containing shell variable
+				args: "${HOME}/bin",
+			});
+		});
+
+		it("returns undefined when no `/skill:<name>` token is present", () => {
+			expect(parseSkillInvocation("no skill token here")).toBeUndefined();
+		});
+
+		it("does not match when the slash is glued to a preceding non-whitespace character", () => {
+			expect(parseSkillInvocation("https://example.com/skill:foo")).toBeUndefined();
+		});
+
+		it("excludes embedded slashes from the mid-prompt skill name", () => {
+			// `/skill:foo/bar` mid-prompt is ambiguous with a path — the mid-prompt
+			// regex requires `[^\s/]+`, so this falls through with no match.
+			expect(parseSkillInvocation("see /skill:foo/bar")).toBeUndefined();
+		});
 	});
 });

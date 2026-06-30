@@ -53,7 +53,7 @@ import {
 } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { buildSkillPromptMessage } from "../../extensibility/skills";
+import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../../internal-urls";
 import { MCPManager } from "../../mcp/manager";
@@ -831,21 +831,18 @@ export class AcpAgent implements Agent {
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
-		if (!text.startsWith("/skill:")) {
-			return false;
-		}
 		if (!record.session.skillsSettings?.enableSkillCommands) {
 			return false;
 		}
-		const spaceIndex = text.indexOf(" ");
-		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-		const skillName = commandName.slice("skill:".length);
-		const skill = record.session.skills.find(candidate => candidate.name === skillName);
+		const parsed = parseSkillInvocation(text);
+		if (!parsed) {
+			return false;
+		}
+		const skill = record.session.skills.find(candidate => candidate.name === parsed.name);
 		if (!skill) {
 			return false;
 		}
-		const built = await buildSkillPromptMessage(skill, args);
+		const built = await buildSkillPromptMessage(skill, parsed.args);
 		await record.session.promptCustomMessage({
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
 			content: built.message,

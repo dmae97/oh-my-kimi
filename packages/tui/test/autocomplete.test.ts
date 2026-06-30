@@ -156,7 +156,7 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(result.cursorCol).toBe("  /skill ".length);
 		});
 
-		it("replaces the whole draft when applying a mid-prompt skill completion", () => {
+		it("inserts the skill token at the cursor when applying a mid-prompt skill completion", () => {
 			const provider = new CombinedAutocompleteProvider([], "/tmp");
 			const result = provider.applyCompletion(
 				["explain this", "then use /security"],
@@ -166,9 +166,26 @@ describe("CombinedAutocompleteProvider", () => {
 				"/security",
 			);
 
-			expect(result.lines).toEqual(["/skill:security-scan"]);
+			// Prior line + prose before the slash are preserved; only the partial
+			// "/security" token is replaced with "/skill:security-scan ".
+			expect(result.lines).toEqual(["explain this", "then use /skill:security-scan "]);
+			expect(result.cursorLine).toBe(1);
+			expect(result.cursorCol).toBe("then use /skill:security-scan ".length);
+		});
+
+		it("keeps text after the cursor when applying a mid-prompt skill completion", () => {
+			const provider = new CombinedAutocompleteProvider([], "/tmp");
+			const result = provider.applyCompletion(
+				["fix bug /sec then ship"],
+				0,
+				"fix bug /sec".length,
+				{ value: "skill:security-scan", label: "/skill:security-scan" },
+				"/sec",
+			);
+
+			expect(result.lines[0]).toBe("fix bug /skill:security-scan  then ship");
 			expect(result.cursorLine).toBe(0);
-			expect(result.cursorCol).toBe("/skill:security-scan".length);
+			expect(result.cursorCol).toBe("fix bug /skill:security-scan ".length);
 		});
 
 		it("preserves earlier slash command arguments when completing a path inside the last argument", () => {

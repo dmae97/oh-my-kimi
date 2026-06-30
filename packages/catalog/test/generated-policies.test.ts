@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { Api, ModelSpec, Provider } from "@oh-my-pi/pi-catalog/types";
 import { applyGeneratedModelPolicies, linkOpenAIPromotionTargets } from "../scripts/generated-policies";
-import { ANTHROPIC_CURATED_FALLBACK_MODELS } from "../src/provider-models/openai-compat";
 
 function createSpec<TApi extends Api>(overrides: {
 	id: string;

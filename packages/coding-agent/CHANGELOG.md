@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/skill:<name>` invocation losing the user's prompt context when the slash token was reached mid-prompt via the autocomplete. The slash-command parser now recognizes a `/skill:<name>` token surrounded by whitespace in non-slash, non-local-execution drafts (in addition to the leading form) and threads the surrounding prose through to the skill as `args`, so the typed prompt survives both in the editor (see the TUI changelog) and in the dispatched skill message. Drafts that already begin with another slash command (`/compact /skill:foo`), a bash sigil (`!echo /skill:foo`, `!!echo /skill:foo`), or a python sigil (`$ run.py /skill:foo`, `$$ run.py /skill:foo`) keep their existing dispatcher precedence and are not hijacked by the mid-prompt skill parser. Applies to the interactive TUI, ACP, and RPC dispatch paths via the shared `parseSkillInvocation` helper in `extensibility/skills` ([#3913](https://github.com/can1357/oh-my-pi/issues/3913)).
+
 ## [16.2.9] - 2026-06-30
 
 ### Breaking Changes
