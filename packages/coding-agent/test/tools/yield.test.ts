@@ -282,6 +282,19 @@ describe("YieldTool", () => {
 			);
 		}
 
+		// The last-turn short-circuit (`type: ["findings"], result: {}`) MUST also reject
+		// the unknown label. Otherwise the stale section silently accepts the last assistant
+		// text and rides along when a sibling section trips MAX_SCHEMA_RETRIES and
+		// schemaOverridden in finalization (issue #3927 follow-up review).
+		await expect(
+			tool.execute("call-native-reviewer-label-last-turn", {
+				type: ["findings"],
+				result: {},
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict", "blockers", "non_blocking_notes"\./,
+		);
+
 		// Schema-retry budget intact: a separate, shape-only mismatch still fires the
 		// first-attempt retry hint (`2 retry attempt(s) remain`), proving the unknown-label
 		// path didn't burn the override.

@@ -321,25 +321,26 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 		const status = errorMessage !== undefined ? "aborted" : "success";
 		let schemaValidationOverridden = false;
+		// Unknown incremental labels are a hard contract mismatch with the closed caller
+		// schema. Reject before the last-turn short-circuit too: `type: ["findings"], result: {}`
+		// would otherwise be accepted as a typed last-turn incremental yield, then a sibling
+		// section's MAX_SCHEMA_RETRIES override flips schemaOverridden in finalization and the
+		// stale section rides along untouched.
+		if (status === "success" && isIncremental) {
+			const unknownLabels = this.#unknownIncrementalLabels(yieldType as string[]);
+			if (unknownLabels.length > 0) {
+				const validLabels =
+					this.#validateSection && this.#validateSection.size > 0
+						? formatYieldLabels([...this.#validateSection.keys()])
+						: "none";
+				throw new Error(
+					`Section ${formatYieldLabels(yieldType as string[])} uses unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}. Resubmit with one of the schema's labels: ${validLabels}.`,
+				);
+			}
+		}
 		if (status === "success" && !useLastTurn) {
 			if (data === null) {
 				throw new Error("data is required when yield indicates success");
-			}
-			// Unknown incremental labels are a hard contract mismatch with the closed
-			// caller schema, not a shape error a retry can fix. Reject them every time
-			// without touching the schema-retry counter so the override path never
-			// accepts a stale agent-native section name.
-			if (isIncremental) {
-				const unknownLabels = this.#unknownIncrementalLabels(yieldType as string[]);
-				if (unknownLabels.length > 0) {
-					const validLabels =
-						this.#validateSection && this.#validateSection.size > 0
-							? formatYieldLabels([...this.#validateSection.keys()])
-							: "none";
-					throw new Error(
-						`Section ${formatYieldLabels(yieldType as string[])} uses unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}. Resubmit with one of the schema's labels: ${validLabels}.`,
-					);
-				}
 			}
 			const sectionFailure = isIncremental
 				? this.#validateIncrementalSection(yieldType as string[], data)
