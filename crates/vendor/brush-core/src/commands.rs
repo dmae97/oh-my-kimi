@@ -689,6 +689,17 @@ pub(crate) fn execute_external_command(
 				tracing::warn!("could not retrieve pid for child process");
 			}
 
+			// Report the spawned child for scoped teardown. Skipped for reparented
+			// launches (`detach_reparent`, e.g. `nohup cmd &`): those double-fork
+			// out of the descendant tree and must survive the host's cancellation
+			// cleanup, so they are intentionally left unowned.
+			if !context.params.detach_reparent
+				&& let Some(observer) = context.params.spawn_observer()
+				&& let Some(pid) = pid
+			{
+				observer.on_spawn(pid, actual_pgid);
+			}
+
 			let mut child_process = processes::ChildProcess::new(child, pid, actual_pgid);
 			if let Some((output, markers)) = marker_output.take() {
 				child_process.set_completion_marker(

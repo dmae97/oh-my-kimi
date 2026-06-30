@@ -66,6 +66,21 @@ pub trait ExternalCommandOutputMarker: Send + Sync {
 	) -> Option<ExternalCommandOutputMarkers>;
 }
 
+/// Optional hook invoked after each external command is spawned, reporting the
+/// OS identity of the child. Embedders use it to scope process-tree teardown
+/// (cancellation cleanup) to exactly the processes a given run launched, rather
+/// than diffing the whole host process tree — which cannot distinguish the
+/// children of concurrent runs sharing one host process.
+///
+/// Not called for reparented launches (`detach_reparent`): those deliberately
+/// escape the shell's descendant tree (e.g. `nohup cmd &`) and must survive
+/// teardown, so they are intentionally left unowned.
+pub trait SpawnObserver: Send + Sync {
+	/// Reports a freshly spawned external child. `pgid` is the child's process
+	/// group id when known (always its own pid under `NewProcessGroup`).
+	fn on_spawn(&self, pid: i32, pgid: Option<i32>);
+}
+
 /// Parameters for execution.
 #[derive(Clone, Default)]
 pub struct ExecutionParameters {
@@ -88,6 +103,8 @@ pub struct ExecutionParameters {
 	/// Whether `errexit` (exit on error) behavior should be
 	/// suppressed in this execution context. Defaults to `false`.
 	pub suppress_errexit:     bool,
+	/// Optional hook reporting spawned external children for scoped teardown.
+	spawn_observer:           Option<Arc<dyn SpawnObserver>>,
 }
 
 impl ExecutionParameters {
@@ -126,6 +143,16 @@ impl ExecutionParameters {
 			return None;
 		}
 		self.command_output_marker.as_ref()
+	}
+
+	/// Assigns a spawn-observer hook for this execution.
+	pub fn set_spawn_observer(&mut self, observer: Arc<dyn SpawnObserver>) {
+		self.spawn_observer = Some(observer);
+	}
+
+	/// Returns the active spawn-observer hook, if any.
+	pub fn spawn_observer(&self) -> Option<&Arc<dyn SpawnObserver>> {
+		self.spawn_observer.as_ref()
 	}
 
 	/// Returns the standard input file; usable with `write!` et al.
