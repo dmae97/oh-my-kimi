@@ -86,6 +86,17 @@ describe("Kimi K2.7 Code thinking policy", () => {
 		}
 	});
 
+	it("keeps the openai disable shape for non-native Kimi K2.7 Code aliases", () => {
+		for (const { provider, id } of [
+			{ provider: "fireworks", id: "kimi-k2.7-code" },
+			{ provider: "openrouter", id: "moonshotai/kimi-k2.7-code" },
+		] as const) {
+			const model = getBundledModel<"openai-completions">(provider, id);
+			expect(model.compat.supportsForcedToolChoice).toBe(true);
+			expect(model.compat.reasoningDisableMode).not.toBe("omit");
+		}
+	});
+
 	it("keeps explicit disabled thinking for Kimi K2.6", () => {
 		const model = getBundledModel<"openai-completions">("moonshot", "kimi-k2.6");
 		const policy = resolveOpenAICompatPolicy(model, {

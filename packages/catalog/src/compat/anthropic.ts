@@ -28,11 +28,12 @@ export function isOfficialAnthropicApiUrl(baseUrl?: string): boolean {
 	return lower === OFFICIAL_ANTHROPIC_URL || lower.startsWith(`${OFFICIAL_ANTHROPIC_URL}/`);
 }
 
+/** Mirrors `compat/openai.ts`; native-only host gating is the caller's responsibility. */
 const KIMI_K27_CODE_MODEL_PATTERN = /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code(?:[-._]?highspeed)?$/i;
 
-function requiresKimiK27CodeEnabledThinking(spec: ModelSpec<"anthropic-messages">): boolean {
+function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolean {
 	if (KIMI_K27_CODE_MODEL_PATTERN.test(spec.id)) return true;
-	return spec.provider === "kimi-code" && spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
+	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
 }
 
 /** Build the resolved anthropic-messages compat record for a model spec. */
@@ -47,7 +48,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// doesn't whitelist the `fine-grained-tool-streaming-2025-05-14` beta either
 	// (issue #2558), so eager tool-input streaming is unavailable on this host.
 	const isCopilot = modelMatchesHost(spec, "githubCopilot");
-	const requiresThinkingEnabled = requiresKimiK27CodeEnabledThinking(spec);
+	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		disableStrictTools: false,
