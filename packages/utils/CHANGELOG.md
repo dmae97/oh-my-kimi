@@ -6,6 +6,10 @@
 
 - Added a response-body retry gate to `fetchWithRetry()` for deterministic provider failures that return retryable HTTP statuses.
 
+### Fixed
+
+- Fixed YAML frontmatter parsing for skill descriptions that use common unquoted plain scalars containing `: `, preserving typed fields without logging a warning.
+
 ## [16.2.7] - 2026-06-30
 
 ### Added

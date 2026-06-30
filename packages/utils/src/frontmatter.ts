@@ -37,6 +37,31 @@ function normalizeKeys<T>(obj: T): T {
 	return (changed ? result : obj) as T;
 }
 
+const PLAIN_SCALAR_KEY_VALUE = /^(\s*[A-Za-z_][\w-]*:\s+)(\S.*?)(\s*)$/;
+const FLOW_OR_EXPLICIT_VALUE_START = new Set(['"', "'", "[", "{", "|", ">", "!", "&", "*", "#"]);
+
+function quoteAmbiguousPlainScalars(metadata: string): string | undefined {
+	let changed = false;
+	const lines = metadata.split("\n").map(line => {
+		const match = line.match(PLAIN_SCALAR_KEY_VALUE);
+		if (!match) return line;
+		const [, prefix, rawValue, suffix] = match;
+		const value = rawValue.trimEnd();
+		if (!value.includes(": ")) return line;
+		if (FLOW_OR_EXPLICIT_VALUE_START.has(value[0])) return line;
+		changed = true;
+		return `${prefix}${JSON.stringify(value)}${suffix}`;
+	});
+	return changed ? lines.join("\n") : undefined;
+}
+
+function parseYamlRecord(metadata: string): Record<string, unknown> | null {
+	const loaded = YAML.parse(metadata.replaceAll("\t", "  "));
+	if (loaded === null || loaded === undefined) return null;
+	if (typeof loaded !== "object" || Array.isArray(loaded)) return null;
+	return loaded as Record<string, unknown>;
+}
+
 export class FrontmatterError extends Error {
 	constructor(
 		error: Error,
@@ -100,10 +125,19 @@ export function parseFrontmatter(
 	const body = normalized.slice(endIndex + 4).trim();
 
 	try {
-		// Replace tabs with spaces for YAML compatibility, use failsafe mode for robustness
-		const loaded = YAML.parse(metadata.replaceAll("\t", "  ")) as Record<string, unknown> | null;
+		const loaded = parseYamlRecord(metadata);
 		return { frontmatter: normalizeKeys({ ...frontmatter, ...loaded }), body };
 	} catch (error) {
+		const quotedMetadata = quoteAmbiguousPlainScalars(metadata);
+		if (quotedMetadata) {
+			try {
+				const loaded = parseYamlRecord(quotedMetadata);
+				return { frontmatter: normalizeKeys({ ...frontmatter, ...loaded }), body };
+			} catch {
+				// Fall through to the existing warning + simple key/value fallback.
+			}
+		}
+
 		const err = new FrontmatterError(
 			error instanceof Error ? error : new Error(`YAML: ${error}`),
 			loc ?? `Inline '${truncate(content, 64)}'`,
