@@ -11,7 +11,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import { type NativeScrollbackLiveRegion, Text } from "@oh-my-pi/pi-tui";
+import type { NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -125,48 +125,13 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
 	});
 
-	it("keeps the todo reminder panel in the live region while visible", async () => {
-		await createMode(-1);
-
-		const liveRegion = mode.todoReminderContainer as unknown as NativeScrollbackLiveRegion;
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
-
-		mode.todoReminderContainer.addChild(new Text("todo reminder", 0, 0));
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBe(0);
-
-		mode.todoReminderContainer.clear();
-		expect(liveRegion.getNativeScrollbackLiveRegionStart?.()).toBeUndefined();
-	});
-
-	it("clears stale todo reminders when todo state reloads", async () => {
-		await createMode(-1);
-		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
-		session.setTodoPhases([{ name: "Implementation", tasks: [{ content: "current task", status: "pending" }] }]);
-
-		await mode.reloadTodos();
-
-		expect(mode.todoReminderContainer.children).toHaveLength(0);
-		expect(renderTodos(mode)).toContain("current task");
-	});
-
-	it("clears stale todo reminders when direct todo state updates", async () => {
-		await createMode(-1);
-		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
-
-		mode.setTodos([{ name: "Implementation", tasks: [{ content: "current task", status: "pending" }] }]);
-
-		expect(mode.todoReminderContainer.children).toHaveLength(0);
-		expect(renderTodos(mode)).toContain("current task");
-	});
-
-	it("clears stale todo reminders when subagent reconciliation updates todo state", async () => {
+	it("marks todos complete when subagent reconciliation reports a finished agent", async () => {
 		await createMode(-1);
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		session.setTodoPhases([
 			{ name: "Implementation", tasks: [{ content: "Fix review comments", status: "pending" }] },
 		]);
 		mode.setTodos(session.getTodoPhases());
-		mode.todoReminderContainer.addChild(new Text("stale reminder", 0, 0));
 
 		await mode.init();
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
@@ -178,7 +143,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 			detached: true,
 		});
 
-		expect(mode.todoReminderContainer.children).toHaveLength(0);
 		expect(session.getTodoPhases()[0]?.tasks[0]?.status).toBe("completed");
 	});
 });

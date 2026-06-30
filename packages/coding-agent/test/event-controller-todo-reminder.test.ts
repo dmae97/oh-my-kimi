@@ -3,14 +3,12 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { Container } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	await initTheme(false);
 });
 
 function createContext() {
-	const todoReminderContainer = new Container();
 	const present = vi.fn();
 	const ctx = {
 		isInitialized: true,
@@ -26,11 +24,10 @@ function createContext() {
 		// handlers). Leaving it false matches the implicit assumption in this
 		// fixture: the todo HUD lifecycle is independent of the working loader.
 		viewSession: { isStreaming: false },
-		todoReminderContainer,
 		setTodos: vi.fn(),
 		present,
 	} as unknown as InteractiveModeContext;
-	return { ctx, todoReminderContainer, present };
+	return { ctx, present };
 }
 
 function reminder(attempt: number, content = "pending task"): Extract<AgentSessionEvent, { type: "todo_reminder" }> {
@@ -42,42 +39,28 @@ function reminder(attempt: number, content = "pending task"): Extract<AgentSessi
 	};
 }
 
-describe("EventController todo reminder HUD", () => {
-	it("renders reminders in the anchored container instead of durable chat history", async () => {
-		const { ctx, todoReminderContainer, present } = createContext();
+describe("EventController todo reminder", () => {
+	it("commits each reminder into durable chat history", async () => {
+		const { ctx, present } = createContext();
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent(reminder(1, "old task"));
-		expect(todoReminderContainer.children).toHaveLength(1);
-		expect(present).not.toHaveBeenCalled();
+		expect(present).toHaveBeenCalledTimes(1);
 
+		// A second reminder is a distinct escalation, committed as its own block —
+		// not merged into or replacing the first.
 		await controller.handleEvent(reminder(2, "new task"));
-		expect(todoReminderContainer.children).toHaveLength(1);
-		expect(present).not.toHaveBeenCalled();
-		expect(ctx.ui.requestRender).toHaveBeenCalled();
+		expect(present).toHaveBeenCalledTimes(2);
+		expect(present.mock.calls[0]![0]).not.toBe(present.mock.calls[1]![0]);
 	});
 
-	it("keeps reminders visible when an auto-continued turn starts", async () => {
-		const { ctx, todoReminderContainer } = createContext();
-		const controller = new EventController(ctx);
-
-		await controller.handleEvent(reminder(1));
-		const visibleReminder = todoReminderContainer.children[0];
-
-		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
-
-		expect(todoReminderContainer.children).toHaveLength(1);
-		expect(todoReminderContainer.children[0]).toBe(visibleReminder);
-		expect(ctx.ensureLoadingAnimation).toHaveBeenCalled();
-	});
-
-	it("clears reminders when a todo tool succeeds", async () => {
-		const { ctx, todoReminderContainer } = createContext();
+	it("leaves committed reminders untouched when a todo tool succeeds", async () => {
+		const { ctx, present } = createContext();
 		const controller = new EventController(ctx);
 		const phases = [{ name: "Implementation", tasks: [{ content: "done task", status: "completed" as const }] }];
 
 		await controller.handleEvent(reminder(1));
-		expect(todoReminderContainer.children).toHaveLength(1);
+		expect(present).toHaveBeenCalledTimes(1);
 
 		await controller.handleEvent({
 			type: "tool_execution_end",
@@ -87,7 +70,9 @@ describe("EventController todo reminder HUD", () => {
 			result: { content: [{ type: "text", text: "" }], details: { phases } },
 		} as Extract<AgentSessionEvent, { type: "tool_execution_end" }>);
 
-		expect(todoReminderContainer.children).toHaveLength(0);
+		// The reminder stays in history (no retroactive removal); only the sticky
+		// HUD updates via setTodos.
+		expect(present).toHaveBeenCalledTimes(1);
 		expect(ctx.setTodos).toHaveBeenCalledWith(phases);
 	});
 });

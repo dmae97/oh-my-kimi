@@ -379,7 +379,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	chatContainer: TranscriptContainer;
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
-	todoReminderContainer: Container;
 	todoContainer: Container;
 	subagentContainer: Container;
 	btwContainer: Container;
@@ -548,7 +547,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.retryLoader = undefined;
 		}
 		this.statusContainer.clear();
-		this.todoReminderContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.#cancelModelCycleClearTimer();
 		this.modelCycleContainer.clear();
@@ -628,7 +626,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new AnchoredLiveContainer();
-		this.todoReminderContainer = new AnchoredLiveContainer();
 		this.todoContainer = new AnchoredLiveContainer();
 		this.subagentContainer = new AnchoredLiveContainer();
 		this.btwContainer = new AnchoredLiveContainer();
@@ -848,7 +845,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.todoReminderContainer);
 		this.ui.addChild(this.todoContainer);
 		this.ui.addChild(this.subagentContainer);
 		this.ui.addChild(this.btwContainer);
@@ -4077,14 +4073,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			];
 		}
-		this.todoReminderContainer.clear();
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
 		this.ui.requestRender();
 	}
 
 	async reloadTodos(): Promise<void> {
-		this.todoReminderContainer.clear();
 		await this.#loadTodoList();
 		this.ui.requestRender();
 	}
