@@ -9,7 +9,7 @@ Built for [oh-my-pi](https://github.com/can1357/oh-my-pi)'s compaction pipeline,
 ## How it works
 
 1. Discarded history is serialized to compact text (`serializeConversation`), with per-tool-result and per-argument character caps.
-2. Text is normalized for the bundled bitmap fonts (`normalize`): ANSI sequences stripped, whitespace collapsed, newline runs folded into a single full-block glyph so line structure survives.
+2. Text is normalized for the selected native font (`normalize`): ANSI sequences stripped, whitespace collapsed, newline runs folded into a single full-block glyph, box drawing and compatibility symbols folded to ASCII, semantic emoji folded to ASCII labels, decorative emoji dropped, and non-Latin glyphs preserved when either the selected font or the embedded Silver fallback can render them.
 3. Pages of text are rasterized into PNG frames (`render` / `renderMany`). Frame width is fixed per shape; height hugs the rows actually printed, so a partially filled frame never bills blank pixel rows.
 4. Frames persist in the compaction entry's `preserveData` and are re-attached to the summary message on every context rebuild.
 
@@ -17,12 +17,14 @@ Frame shapes are provider-aware, chosen by SQuAD recall evals (see `research/`) 
 
 | Reader | Default shape | Notes |
 | --- | --- | --- |
-| Anthropic | `6x12-dim` | X.org 6x12 glyphs, stopwords dimmed gray; high-res Claude lines get 1932px frames |
-| Google | `doc-8on16-sent-dim` @2048 | Two newspaper columns, sentence-hue ink; Gemini bills a fixed per-image budget, so larger frames are free chars |
-| OpenAI | `8on16-bw` | 8x13 glyphs on a patch-aligned 16px pitch, sent at `detail: "original"` |
+| Anthropic | `11on16-bw` | X.org 8x13 glyphs on an 11px advance; high-res Claude lines get 1932px frames |
+| Google | `8on22-bw` @2048 | X.org 8x13 glyphs on a 22px pitch; Gemini bills a fixed per-image budget, so larger frames are free chars |
+| OpenAI | `8on22-bw` | X.org 8x13 glyphs on a 22px pitch, sent at `detail: "original"` |
 | Unknown | Anthropic shape | Per-provider image-count budgets guard against gateways that silently drop frames |
 
 `resolveShape({ api, id })` matches the model id, not just the wire API — a Claude routed through Vertex or OpenRouter keeps its Claude shape, priced for the gateway actually carrying the request.
+
+Bitmap shapes keep their provider-tuned geometry and draw missing glyphs through the embedded Silver TrueType fallback one character at a time; East Asian (CJK/Kana/Hangul) glyphs render full-width across two cells so they stay legible in the narrow ASCII grid. Selecting `silver16-bw` uses Silver for the whole frame.
 
 ## Install
 
@@ -58,8 +60,8 @@ const result = await compact(preparation, { model });
 
 - **Compaction**: `compact`, `CompactionPreparation`, `CompactionResult`, `getPreservedArchive`, `images`, `historyBlocks`
 - **Rendering**: `render`, `renderMany`, `frames`, `geometry`
-- **Shapes**: `SHAPES`, `SHAPE_VARIANTS`, `resolveShape`, `idealShapeVariant`, `isShape`, `isShapeVariantName`
-- **Text**: `serializeConversation`, `normalize`, `dimStopwords`, `wrap`
+- **Shapes**: `SHAPES`, `SHAPE_VARIANTS`, `resolveShape`, `resolveShapeForText`, `idealShapeVariant`, `isShape`, `isShapeVariantName`
+- **Text**: `serializeConversation`, `normalize`, `scanRenderability`, `renderabilityProbeText`, `dimStopwords`, `wrap`
 - **Budgets**: `providerImageBudget`, `MAX_FRAMES_DEFAULT`, `FRAME_TOKEN_ESTIMATE`, `HQ_EDGE_FRAMES`
 - **File ops**: `createFileOps`, `computeFileLists`, `upsertFileOperations`
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Enabled contextual snapcompact shape resolution based on rendered text content
+
+### Fixed
+
+- Fixed snapcompact preflight to use the same font-aware renderability probe as compaction, including prior preserved archive text, so CJK history remains renderable through per-glyph Silver fallback across repeated compactions.
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed

@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `silver16-bw` shape with Silver TrueType font support for CJK and non-Latin text
+- Added `resolveShapeForText` to support font-aware shape resolution
+- Added semantic emoji folding to ASCII labels (e.g., [OK], [WARN], [FAIL])
+- Added support for East Asian wide characters across two grid cells in bitmap shapes
+
+- Added the `silver16-bw` snapcompact shape backed by the embedded Silver TrueType font for CJK and other non-Latin text.
+
+### Changed
+
+- Improved normalization to preserve Unicode glyphs supported by the system font or Silver fallback
+- Updated `wrap` and pagination logic to account for wide Character footprint in bitmap shapes
+- Dropped decorative emoji from rendered output instead of printing fallbacks
+- Folded box-drawing and compatibility symbols to their ASCII skeletons
+- Updated provider shape geometries to use updated X.org 8x13 font metrics (11px/22px pitches)
+
+- Improved snapcompact normalization for non-ASCII text: semantic emoji fold to ASCII labels, decorative emoji drop, box drawing and compatibility symbols keep ASCII folds, and Unicode text is preserved when either the selected font or the embedded Silver fallback can render it.
+- Bitmap snapcompact shapes now draw missing glyphs through the embedded Silver TrueType fallback per character instead of switching entire snippets or rendering blanks; East Asian wide characters render full-width across two grid cells (TypeScript capacity/pagination and the native renderer share one wide-character cell model).
+
 ## [16.1.23] - 2026-06-26
 
 ### Added

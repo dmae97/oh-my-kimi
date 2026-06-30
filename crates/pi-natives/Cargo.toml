@@ -20,6 +20,7 @@ base64.workspace = true
 clap.workspace = true
 dashmap.workspace = true
 globset.workspace = true
+fontdue.workspace = true
 grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true

@@ -1315,13 +1315,15 @@ export declare function readImageFromClipboard(): Promise<ClipboardImage | undef
  * The bitmap height hugs the rows the text actually occupies
  * (`usedRows * lineRepeat * cellHeight`), so a partially filled frame never
  * pays for blank padding rows. The glyph grid holds `floor(size/cellWidth) *
- * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
- * (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
- * indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
- * `stretch: false` pins the indexed path, printing natural-size glyphs on the
- * requested cell box; `columns: 2` flows pre-wrapped newline-separated lines
- * down two newspaper columns. `U+000E`/`U+000F` in `text` toggle dim-gray ink
- * spans without occupying a cell.
+ * floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored.
+ * Native-cell bitmap-font shapes encode as indexed PNG; stretched bitmap-font
+ * shapes (target cell != font cell) encode as RGB. TrueType shapes encode RGB
+ * directly from grayscale coverage.
+ * `stretch: false` pins bitmap fonts to the indexed path, printing
+ * natural-size glyphs on the requested cell box; `columns: 2` flows
+ * pre-wrapped newline-separated lines down two newspaper columns.
+ * `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
+ * cell.
  * Returns a promise for the PNG encoded as base64, created as a one-byte
  * (Latin-1) JS string straight from native code — no `Uint8Array` hop or
  * JS-side re-encode.
@@ -1468,8 +1470,8 @@ export interface SnapcompactRenderOptions {
    */
   size: number
   /**
-   * Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF) or `"8x8"`
-   * (unscii-8). Default `"5x8"`.
+   * Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF), `"8x8"`
+   * (unscii-8), or `"silver"` (embedded TrueType). Default `"5x8"`.
    */
   font?: string
   /**
@@ -1503,6 +1505,15 @@ export interface SnapcompactRenderOptions {
    */
   columns?: number
 }
+
+/**
+ * Return the subset of `chars` that the named snapcompact font can render.
+ *
+ * The TypeScript normalizer uses this to keep Unicode text intact only when
+ * the selected native font has a glyph for it; renderer control codes are
+ * considered renderable because they are interpreted outside font lookup.
+ */
+export declare function snapcompactSupportedChars(font: string, chars: string): string
 
 export declare function summarizeCode(options: SummaryOptions): SummaryResult
 

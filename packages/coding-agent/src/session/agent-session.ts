@@ -8871,6 +8871,8 @@ export class AgentSession {
 			const wantsSnapcompact =
 				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
 			const snapcompactReady = wantsSnapcompact;
+			const snapcompactShapeSetting = this.settings.get("snapcompact.shape");
+			let snapcompactShape: snapcompact.Shape | undefined;
 			if (wantsSnapcompact && !this.model.input.includes("image")) {
 				this.emitNotice(
 					"warning",
@@ -8879,8 +8881,16 @@ export class AgentSession {
 				);
 				throw new Error(`snapcompact cannot run locally: ${this.model.id} is text-only.`);
 			} else if (snapcompactReady) {
-				const text = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
-				const renderScan = snapcompact.scanRenderability(text);
+				const text = snapcompact.serializeConversation(
+					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+				);
+				const probeText = snapcompact.renderabilityProbeText(
+					text,
+					preparation.previousPreserveData,
+					preparation.previousSummary,
+				);
+				snapcompactShape = snapcompact.resolveShapeForText(probeText, this.model, snapcompactShapeSetting);
+				const renderScan = snapcompact.scanRenderability(probeText, { shape: snapcompactShape });
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					this.emitNotice(
@@ -8918,10 +8928,14 @@ export class AgentSession {
 					);
 					throw new Error("snapcompact cannot run locally: kept history alone exceeds the context budget.");
 				} else {
+					const shape = snapcompactShape;
+					if (!shape) {
+						throw new Error("snapcompact shape was not resolved before rendering.");
+					}
 					snapcompactResult = await snapcompact.compact(preparation, {
 						convertToLlm,
 						model: this.model,
-						shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
 					});
 					const ctxWindow = this.model?.contextWindow ?? 0;
@@ -11273,7 +11287,14 @@ export class AgentSession {
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 				);
-				const renderScan = snapcompact.scanRenderability(text);
+				const probeText = snapcompact.renderabilityProbeText(
+					text,
+					preparation.previousPreserveData,
+					preparation.previousSummary,
+				);
+				const shapeSetting = this.settings.get("snapcompact.shape");
+				const shape = snapcompact.resolveShapeForText(probeText, this.model, shapeSetting);
+				const renderScan = snapcompact.scanRenderability(probeText, { shape });
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					logger.warn("Snapcompact disabled: high non-ASCII rate detected", {
@@ -11293,7 +11314,7 @@ export class AgentSession {
 						snapcompactResult = await snapcompact.compact(preparation, {
 							convertToLlm,
 							model: this.model,
-							shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
 						});
 						if (snapcompactResult) {

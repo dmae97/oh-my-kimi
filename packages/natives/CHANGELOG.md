@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added support for the silver TrueType font to renderSnapcompactPng
+- Exposed snapcompactSupportedChars to check font capability for characters
+
+- Added embedded Silver TrueType rendering to `renderSnapcompactPng` plus `snapcompactSupportedChars(font, chars)`, including per-glyph Silver fallback when bitmap snapcompact fonts lack a renderable glyph; East Asian wide code points render full-width across two grid cells, with a soft gray fringe on black-ink frames so scaled glyphs read anti-aliased rather than bold.
+
 ## [16.2.5] - 2026-06-28
 
 ### Fixed
