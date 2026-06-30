@@ -13,6 +13,9 @@
 ### Removed
 
 - Removed the built-in `oracle` subagent
+### Fixed
+
+- Fixed `omp debug --profile` failing on Bun with "node:v8 setFlagsFromString is not yet implemented in Bun" by treating the optional `--allow-natives-syntax` flag as best-effort, so the CPU profiler proceeds even on runtimes that don't expose `v8.setFlagsFromString`. ([#3897](https://github.com/can1357/oh-my-pi/issues/3897))
 
 ## [16.2.8] - 2026-06-30
 

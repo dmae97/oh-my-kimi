@@ -114,7 +114,13 @@ function formatProfileAsMarkdown(profileJson: string): string {
  */
 export async function startCpuProfile(): Promise<ProfilerSession> {
 	const v8 = await import("node:v8");
-	v8.setFlagsFromString("--allow-natives-syntax");
+	try {
+		// Enables `%GetOptimizationStatus` and friends when V8 natives are needed
+		// for ad-hoc profiling. Best-effort: Bun does not implement
+		// `setFlagsFromString` (oven-sh/bun#1702) but the CPU profiler itself
+		// works without it, so swallow the error and continue.
+		v8.setFlagsFromString("--allow-natives-syntax");
+	} catch {}
 
 	const { Session } = await import("node:inspector/promises");
 	const session = new Session();
