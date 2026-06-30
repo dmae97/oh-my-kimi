@@ -69,6 +69,36 @@ describe("buildOutputValidator", () => {
 			"required",
 		]);
 	});
+
+	it("exposes per-label sub-validators that accept items (not whole arrays) for elements properties", () => {
+		const { validator } = buildOutputValidator({
+			properties: {
+				overall_correctness: { enum: ["correct", "incorrect"] },
+				explanation: { type: "string" },
+			},
+			optionalProperties: {
+				findings: {
+					elements: {
+						properties: { title: { type: "string" }, body: { type: "string" } },
+					},
+				},
+			},
+		});
+		expect(validator).toBeDefined();
+		const sections = validator?.validateSection;
+		expect(sections).toBeDefined();
+		// Scalar enum: per-section validator enforces the enum directly.
+		expect(sections?.get("overall_correctness")?.("correct").success).toBe(true);
+		expect(sections?.get("overall_correctness")?.("Correct").success).toBe(false);
+		// String property: any string passes, non-strings fail.
+		expect(sections?.get("explanation")?.("ok").success).toBe(true);
+		expect(sections?.get("explanation")?.(123).success).toBe(false);
+		// Array property: each section validates ONE item against the items schema, not the whole array.
+		expect(sections?.get("findings")?.({ title: "t", body: "b" }).success).toBe(true);
+		expect(sections?.get("findings")?.([{ title: "t", body: "b" }]).success).toBe(false);
+		// Unknown labels have no validator so user-defined sections stay loose.
+		expect(sections?.has("scratchpad")).toBe(false);
+	});
 });
 describe("summarizeValidationFailure", () => {
 	it("returns an empty summary when the result is a success", () => {

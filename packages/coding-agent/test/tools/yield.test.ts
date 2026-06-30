@@ -121,6 +121,131 @@ describe("YieldTool", () => {
 		});
 	});
 
+	it("validates incremental sections against per-label sub-schemas with retry feedback", async () => {
+		// Regression for issue #3870: DeepSeek emits `type: ["overall_correctness"]` with
+		// non-enum values like "Correct" or "approved". The yield tool used to skip
+		// validation for incremental yields entirely, so the model got no retry feedback
+		// and the parent saw a fatal `schema_violation` post-mortem.
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						overall_correctness: { enum: ["correct", "incorrect"] },
+						explanation: { type: "string" },
+						confidence: { type: "number" },
+					},
+					optionalProperties: {
+						findings: {
+							elements: { properties: { title: { type: "string" }, body: { type: "string" } } },
+						},
+					},
+				},
+			}),
+		);
+
+		// Attempt 1: off-enum value rejected with the section label in the error.
+		await expect(
+			tool.execute("call-bad-1", { type: ["overall_correctness"], result: { data: "Correct" } } as never),
+		).rejects.toThrow(/Section "overall_correctness" does not match schema.*2 retry attempt\(s\) remain/);
+
+		// Attempt 2 and 3 advertise dwindling retries; attempt 3 names this as the last one.
+		await expect(
+			tool.execute("call-bad-2", { type: ["overall_correctness"], result: { data: "correct." } } as never),
+		).rejects.toThrow(/1 retry attempt\(s\) remain/);
+		await expect(
+			tool.execute("call-bad-3", { type: ["overall_correctness"], result: { data: "approved" } } as never),
+		).rejects.toThrow(/this is the final retry/);
+
+		// 4th invalid yield is accepted with schemaOverridden so the parent still gets a result.
+		const overrideResult = await tool.execute("call-bad-4", {
+			type: ["overall_correctness"],
+			result: { data: "still-wrong" },
+		} as never);
+		expect(overrideResult.details?.schemaOverridden).toBe(true);
+
+		// A fresh tool accepts a valid enum value without ticking the counter.
+		const fresh = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						overall_correctness: { enum: ["correct", "incorrect"] },
+						explanation: { type: "string" },
+						confidence: { type: "number" },
+					},
+				},
+			}),
+		);
+		const valid = await fresh.execute("call-good", {
+			type: ["overall_correctness"],
+			result: { data: "correct" },
+		} as never);
+		expect(valid.details).toEqual({
+			data: "correct",
+			status: "success",
+			error: undefined,
+			type: ["overall_correctness"],
+			useLastTurn: undefined,
+			schemaOverridden: undefined,
+		});
+	});
+
+	it("validates incremental items for array-typed labels against the element schema", async () => {
+		// Each `type: ["findings"]` yield is one finding; the per-call validator runs against the
+		// items schema (not the array schema), so a missing required field surfaces immediately
+		// instead of being swallowed by the post-mortem assembly.
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					optionalProperties: {
+						findings: {
+							elements: {
+								properties: {
+									title: { type: "string" },
+									body: { type: "string" },
+								},
+							},
+						},
+					},
+				},
+			}),
+		);
+
+		const accepted = await tool.execute("call-finding-ok", {
+			type: ["findings"],
+			result: { data: { title: "bug", body: "details" } },
+		} as never);
+		expect(accepted.details?.data).toEqual({ title: "bug", body: "details" });
+
+		await expect(
+			tool.execute("call-finding-missing", {
+				type: ["findings"],
+				result: { data: { title: "only-title" } },
+			} as never),
+		).rejects.toThrow(/Section "findings" does not match schema.*body/);
+	});
+
+	it("leaves user-defined section labels unconstrained", async () => {
+		// Labels that are not top-level properties in the output schema have no per-call
+		// validator — they're scratchpad/streaming sections the agent invents at runtime and
+		// must not be rejected.
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						overall_correctness: { enum: ["correct", "incorrect"] },
+						explanation: { type: "string" },
+						confidence: { type: "number" },
+					},
+				},
+			}),
+		);
+		const result = await tool.execute("call-scratchpad", {
+			type: ["scratchpad"],
+			result: { data: { anything: "goes", n: 3 } },
+		} as never);
+		expect(result.details?.data).toEqual({ anything: "goes", n: 3 });
+	});
+
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {
 		const tool = new YieldTool(createSession());
 		await expect(tool.execute("call-untyped-empty", { result: {} } as never)).rejects.toThrow(
