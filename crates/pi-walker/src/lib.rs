@@ -1444,10 +1444,7 @@ pub struct PreDescendDecision {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum DirectoryIdentity {
 	#[cfg(unix)]
-	Unix {
-		dev: u64,
-		ino: u64,
-	},
+	Unix { dev: u64, ino: u64 },
 	#[cfg(not(unix))]
 	Generic(std::path::PathBuf),
 }

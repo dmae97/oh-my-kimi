@@ -177,6 +177,18 @@ export class ToolArgsRevealController {
 		if (entry) entry.component = component;
 	}
 
+	/** Migrate a live reveal entry from a placeholder key onto the real
+	 *  tool-call id once the owned-dialect parser assigns it. No-op when no
+	 *  entry exists under `from` (smoothing disabled, or the JSON already
+	 *  closed and `finish` cleared it). */
+	rekey(from: string, to: string): void {
+		if (from === to) return;
+		const entry = this.#entries.get(from);
+		if (!entry) return;
+		this.#entries.delete(from);
+		this.#entries.set(to, entry);
+	}
+
 	/** Final arguments arrived (the JSON closed): drop the reveal so the
 	 *  caller's final-args render wins immediately, mirroring how assistant
 	 *  text snaps to the full message at message_end. */
