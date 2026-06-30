@@ -1,5 +1,3 @@
-import * as fs from "node:fs";
-import * as readline from "node:readline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { getBlobsDir, isEnoent, parseJsonlLenient } from "@oh-my-pi/pi-utils";
 import { BlobStore, isBlobRef, resolveImageData, resolveImageDataUrl } from "./blob-store";
@@ -103,40 +101,74 @@ function elideSupersededCompactionEntries(entries: FileEntry[]): void {
 	}
 }
 
-async function loadEntriesFromFileStream(filePath: string): Promise<{
+/** Exported for testing — the ≥8MiB streaming path (works on any file size). */
+export async function loadEntriesFromFileStream(filePath: string): Promise<{
 	entries: FileEntry[];
 	titleSlot: SessionTitleUpdate | undefined;
 }> {
 	const entries: FileEntry[] = [];
 	let titleSlot: SessionTitleUpdate | undefined;
-	let sawBodyLine = false;
-	const input = fs.createReadStream(filePath, { encoding: "utf8" });
-	const lines = readline.createInterface({ input, crlfDelay: Infinity });
+	let sawFirstLine = false;
+	let buffer = "";
 
-	try {
-		for await (const rawLine of lines) {
-			const line = rawLine.trim();
-			if (!line) continue;
-			if (!sawBodyLine) {
-				const slot = parseTitleSlotLine(line);
-				if (slot) {
-					titleSlot = titleUpdateFromSlot(slot);
-					sawBodyLine = true;
-					continue;
-				}
-				sawBodyLine = true;
+	// Lenient streaming JSONL parse via Bun's native parser. Feed file chunks to
+	// Bun.JSONL.parseChunk, consuming complete records and skipping malformed
+	// lines (instead of throwing) — matching the old readline + try/catch loop.
+	// The buffer only ever holds the unparsed remainder (≤ one record + a
+	// chunk), so the ≥8MiB memory guard is preserved (the file is never fully
+	// loaded into memory).
+	const drain = () => {
+		while (buffer.length > 0) {
+			const { values, error, read, done } = Bun.JSONL.parseChunk(buffer);
+			if (values.length > 0) {
+				for (const value of values) entries.push(value as FileEntry);
 			}
-
-			let entry: FileEntry;
-			try {
-				entry = JSON.parse(line) as FileEntry;
-			} catch {
+			if (error) {
+				// Malformed record: skip past the next newline and continue.
+				const nextNewline = buffer.indexOf("\n", read || 0);
+				if (nextNewline === -1) break; // rest of the bad line not yet received
+				buffer = buffer.substring(nextNewline + 1);
 				continue;
 			}
-			entries.push(entry);
+			if (read === 0) break; // incomplete record awaiting more data
+			buffer = buffer.substring(read);
+			if (done) {
+				buffer = "";
+				break;
+			}
 		}
+	};
+
+	try {
+		for await (const chunk of Bun.file(filePath).stream()) {
+			buffer += Buffer.from(chunk).toString("utf8");
+			// The optional fixed-width title slot is a physical first line that is
+			// NOT JSON; peel it before the parser would (correctly) reject it. A
+			// non-slot first line is a real entry and is re-fed to the parser.
+			if (!sawFirstLine) {
+				const newline = buffer.indexOf("\n");
+				if (newline !== -1) {
+					const firstLine = buffer.slice(0, newline);
+					buffer = buffer.slice(newline + 1);
+					sawFirstLine = true;
+					const trimmed = firstLine.trim();
+					if (trimmed) {
+						const slot = parseTitleSlotLine(trimmed);
+						if (slot) {
+							titleSlot = titleUpdateFromSlot(slot);
+						} else {
+							buffer = `${trimmed}\n${buffer}`;
+						}
+					}
+				}
+			}
+			drain();
+		}
+		// A trailing record without a final newline: terminate it so the parser
+		// can complete it (readline yielded it; parseChunk needs the delimiter).
+		if (buffer.length > 0 && !buffer.endsWith("\n")) buffer += "\n";
+		drain();
 	} catch (err) {
-		input.destroy();
 		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
 		throw err;
 	}
