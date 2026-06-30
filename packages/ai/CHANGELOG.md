@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Raised Gemini header runaway threshold to prevent premature interruption of complex reasoning loops
+
 ## [16.2.9] - 2026-06-30
 
 ### Added

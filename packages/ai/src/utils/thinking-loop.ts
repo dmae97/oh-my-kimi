@@ -287,12 +287,17 @@ export class ThinkingLoopDetector {
  * stream that trips the tool-call reminder. Gemini occasionally narrates a long
  * chain of titled summaries ("Examining Result Handling", "Refining Result
  * Rendering", …) without ever calling a tool, burning the whole budget on
- * planning; at this many distinct titles it has almost certainly stalled. This
- * is the over-planning shape {@link ThinkingLoopDetector} misses — those titles
- * are stripped before its similarity analysis precisely because their wording
- * keeps changing, so a genuinely-distinct planning runaway never trips it.
+ * planning. This is the over-planning shape {@link ThinkingLoopDetector} misses —
+ * those titles are stripped before its similarity analysis precisely because their
+ * wording keeps changing, so a genuinely-distinct planning runaway never trips it.
+ *
+ * Set well above legitimate hard-problem depth: a capable model can emit ~10
+ * distinct, progressing hypotheses in a single reasoning block before acting (and
+ * a false trip is costly — the interrupt discards the whole reasoning turn). A
+ * real narration runaway burns dozens-to-hundreds of titles, so this still trips
+ * fast on the actual pathology.
  */
-export const GEMINI_HEADER_RUNAWAY_THRESHOLD = 10;
+export const GEMINI_HEADER_RUNAWAY_THRESHOLD = 24;
 
 /**
  * True when a single trimmed line is a Gemini reasoning-summary title: a markdown

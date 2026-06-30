@@ -15,7 +15,6 @@ import type { OAuthAccess } from "@oh-my-pi/pi-ai/auth-storage";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { $env } from "@oh-my-pi/pi-utils";
-import { buildCompat } from "../src/build";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
@@ -645,7 +644,7 @@ Model Statistics:`);
 function canonicalizeModelCompat(model: ModelSpec<Api>): void {
 	if (!model.compat) return;
 
-	if (model.compat.disableStrictTools === false) {
+	if ("disableStrictTools" in model.compat && model.compat.disableStrictTools === false) {
 		delete model.compat.disableStrictTools;
 	}
 

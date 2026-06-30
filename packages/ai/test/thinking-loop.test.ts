@@ -615,6 +615,12 @@ describe("GeminiHeaderRunDetector", () => {
 		expect(feedHeaders(runaway)).toBe(true);
 	});
 
+	test("does not trip on a legitimate 10-header debugging block (regression)", () => {
+		// A real, productive debugging stretch emitted 10 distinct progressing headers; never interrupt that.
+		expect(feedHeaders(distinctPlanningRunaway(10))).toBe(false);
+		expect(feedHeaders(distinctPlanningRunaway(24))).toBe(true);
+	});
+
 	test("counts headers across intervening paragraphs (one summary = one header)", () => {
 		const detector = new GeminiHeaderRunDetector();
 		let tripped = false;
