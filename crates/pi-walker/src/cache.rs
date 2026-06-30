@@ -4,19 +4,14 @@ use std::{
 	borrow::Cow,
 	fmt,
 	path::{Path, PathBuf},
-	sync::{Arc, LazyLock},
+	sync::LazyLock,
 	time::{Duration, Instant},
 };
 
 use dashmap::DashMap;
-use ignore::{ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
-use parking_lot::Mutex;
 use rayon::{ThreadPool, prelude::*};
 
-use crate::{
-	CollectedEntries, CollectedEntry, EntryScan, FileType, FollowLinks, WalkDetail, WalkError,
-	WalkOptions,
-};
+use crate::{CollectedEntries, CollectedEntry, FileType, WalkError, WalkOptions};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct CacheKey {
@@ -102,11 +97,6 @@ pub fn max_cache_entries() -> usize {
 /// work.
 pub fn walk_workers() -> usize {
 	*WALK_WORKERS
-}
-
-/// Apply the centralized walk worker count to an `ignore` walker.
-fn configure_walk_builder(builder: &mut WalkBuilder) {
-	builder.threads(walk_workers());
 }
 
 /// Run parallel traversal-adjacent work on the centralized walker pool.
@@ -255,260 +245,31 @@ pub fn resolve_search_path(path: &str) -> Result<PathBuf, WalkError<String>> {
 	Ok(std::fs::canonicalize(&root).unwrap_or(root))
 }
 
-fn build_walker_for_options(root: &Path, options: WalkOptions) -> WalkBuilder {
-	build_walker_for_options_inner(root, options, None)
-}
-
-pub fn build_walker_for_options_with_pruned_dirs(
-	root: &Path,
-	options: WalkOptions,
-	pruned_dirs: Arc<Mutex<Vec<PathBuf>>>,
-) -> WalkBuilder {
-	build_walker_for_options_inner(root, options, Some(pruned_dirs))
-}
-
-fn build_walker_for_options_inner(
-	root: &Path,
-	options: WalkOptions,
-	pruned_dirs: Option<Arc<Mutex<Vec<PathBuf>>>>,
-) -> WalkBuilder {
-	let mut builder = WalkBuilder::new(root);
-	builder
-		.hidden(!options.include_hidden)
-		.follow_links(matches!(options.follow_links, FollowLinks::Always))
-		.sort_by_file_path(|a, b| a.cmp(b))
-		.filter_entry(move |entry| {
-			if let Some(pruned_dirs) = &pruned_dirs
-				&& pruned_dirs
-					.lock()
-					.iter()
-					.any(|dir| entry.path().starts_with(dir))
-			{
-				return false;
-			}
-			let name = entry.file_name().to_str().unwrap_or_default();
-			if options.skip_git && name == ".git" {
-				return false;
-			}
-			if options.skip_node_modules && name == "node_modules" {
-				return false;
-			}
-			true
-		});
-	if options.max_depth != usize::MAX {
-		builder.max_depth(Some(options.max_depth));
-	}
-
-	if options.use_gitignore {
-		builder
-			.git_ignore(true)
-			.git_exclude(true)
-			.git_global(true)
-			.ignore(true)
-			.parents(true)
-			.require_git(false);
-	} else {
-		builder
-			.git_ignore(false)
-			.git_exclude(false)
-			.git_global(false)
-			.ignore(false)
-			.parents(false);
-	}
-
-	builder
-}
-
-/// Converts one `ignore` walker entry into owned scan metadata.
-pub fn collect_entry(
-	root: &Path,
-	entry: &ignore::DirEntry,
-	detail: WalkDetail,
-) -> Option<CollectedEntry> {
-	let path = entry.path();
-	let relative = normalize_relative_path(root, path);
-	if relative.is_empty() {
-		return None;
-	}
-
-	let (file_type, mtime, size) = match detail {
-		WalkDetail::Minimal => {
-			let file_type = file_type_from_std(entry.file_type()?)?;
-			(file_type, None, None)
-		},
-		WalkDetail::Full => {
-			let metadata = entry
-				.metadata()
-				.or_else(|_| std::fs::symlink_metadata(path))
-				.ok()?;
-			let file_type = file_type_from_std(metadata.file_type())?;
-			let size = if file_type == FileType::File {
-				Some(metadata.len() as f64)
-			} else {
-				None
-			};
-			(file_type, mtime_ms(&metadata), size)
-		},
-	};
-
-	Some(CollectedEntry { path: relative.into_owned(), file_type, mtime, size })
-}
-
-fn root_entry(root: &Path, detail: WalkDetail) -> Option<CollectedEntry> {
-	let (file_type, mtime, size) = classify_file_type(root)?;
-	let size = if detail == WalkDetail::Full && file_type == FileType::File {
-		size.map(|value| value as f64)
-	} else {
-		None
-	};
-	let mtime = if detail == WalkDetail::Full {
-		mtime
-	} else {
-		None
-	};
-	Some(CollectedEntry { path: String::new(), file_type, mtime, size })
-}
-
-struct EntryVisitor<'a, H> {
-	root:           &'a Path,
-	options:        WalkOptions,
-	heartbeat:      &'a H,
-	entries:        Vec<CollectedEntry>,
-	shared_entries: Arc<Mutex<Vec<Vec<CollectedEntry>>>>,
-	error:          Arc<Mutex<Option<String>>>,
-	visited:        usize,
-}
-
-impl<H> Drop for EntryVisitor<'_, H> {
-	fn drop(&mut self) {
-		if self.entries.is_empty() {
-			return;
-		}
-		let entries = std::mem::take(&mut self.entries);
-		self.shared_entries.lock().push(entries);
-	}
-}
-
-impl<H, E> ParallelVisitor for EntryVisitor<'_, H>
-where
-	H: Fn() -> std::result::Result<(), E> + Sync,
-	E: fmt::Display,
-{
-	fn visit(&mut self, entry: std::result::Result<ignore::DirEntry, ignore::Error>) -> WalkState {
-		if self.visited == 0 || self.visited >= 128 {
-			self.visited = 0;
-			if let Err(err) = (self.heartbeat)() {
-				*self.error.lock() = Some(err.to_string());
-				return WalkState::Quit;
-			}
-		}
-		self.visited += 1;
-
-		let Ok(entry) = entry else {
-			return WalkState::Continue;
-		};
-		if entry.depth() < self.options.min_depth {
-			return WalkState::Continue;
-		}
-		if let Some(entry) = collect_entry(self.root, &entry, self.options.detail) {
-			self.entries.push(entry);
-		}
-		WalkState::Continue
-	}
-}
-
-struct EntryVisitorBuilder<'a, H> {
-	root:           &'a Path,
-	options:        WalkOptions,
-	heartbeat:      &'a H,
-	shared_entries: Arc<Mutex<Vec<Vec<CollectedEntry>>>>,
-	error:          Arc<Mutex<Option<String>>>,
-}
-
-impl<'a, H, E> ParallelVisitorBuilder<'a> for EntryVisitorBuilder<'a, H>
-where
-	H: Fn() -> std::result::Result<(), E> + Sync + 'a,
-	E: fmt::Display + 'a,
-{
-	fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
-		Box::new(EntryVisitor {
-			root:           self.root,
-			options:        self.options,
-			heartbeat:      self.heartbeat,
-			entries:        Vec::new(),
-			shared_entries: Arc::clone(&self.shared_entries),
-			error:          Arc::clone(&self.error),
-			visited:        0,
-		})
-	}
-}
-
 fn collect_entries_uncached<H, E>(
 	root: &Path,
 	mut options: WalkOptions,
 	heartbeat: &H,
-) -> Result<EntryScan, WalkError<String>>
+) -> Result<CollectedEntries, WalkError<String>>
 where
 	H: Fn() -> std::result::Result<(), E> + Sync,
 	E: fmt::Display,
 {
 	options.cache = false;
-	match crate::collect_entries_native(root, options, || {
-		heartbeat().map_err(|err| err.to_string())
-	})? {
-		EntryScan::Entries(scan) => return Ok(EntryScan::Entries(scan)),
-		EntryScan::Unsupported => {},
-	}
-
-	if options.contents_first || options.same_file_system || options.min_depth > options.max_depth {
-		return Ok(EntryScan::Unsupported);
-	}
-
-	let mut entries = Vec::new();
-	if options.emit_root
-		&& options.min_depth == 0
-		&& let Some(entry) = root_entry(root, options.detail)
-	{
-		entries.push(entry);
-	}
-
-	let mut builder = build_walker_for_options(root, options);
-	configure_walk_builder(&mut builder);
-	let shared_entries = Arc::new(Mutex::new(Vec::new()));
-	let error = Arc::new(Mutex::new(None));
-	let mut visitor_builder = EntryVisitorBuilder {
-		root,
-		options,
-		heartbeat,
-		shared_entries: Arc::clone(&shared_entries),
-		error: Arc::clone(&error),
-	};
-	heartbeat().map_err(|err| WalkError::Interrupted(err.to_string()))?;
-	builder.build_parallel().visit(&mut visitor_builder);
-
-	let walk_error = error.lock().take();
-	if let Some(error) = walk_error {
-		return Err(WalkError::Interrupted(error));
-	}
-
-	entries.extend(shared_entries.lock().drain(..).flatten());
-	entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-	Ok(EntryScan::Entries(CollectedEntries { entries, cache_age_ms: 0 }))
+	crate::collect_entries_native(root, options, || heartbeat().map_err(|err| err.to_string()))
 }
 
 fn get_or_scan<H, E>(
 	root: &Path,
 	options: WalkOptions,
 	heartbeat: &H,
-) -> Result<EntryScan, WalkError<String>>
+) -> Result<CollectedEntries, WalkError<String>>
 where
 	H: Fn() -> std::result::Result<(), E> + Sync,
 	E: fmt::Display,
 {
 	let ttl = *CACHE_TTL_MS;
 	if ttl == 0 {
-		let scan = collect_entries_uncached(root, options, heartbeat)?;
-		return Ok(scan);
+		return collect_entries_uncached(root, options, heartbeat);
 	}
 
 	let key = cache_key(root, options);
@@ -516,29 +277,26 @@ where
 	if let Some(entry) = SCAN_CACHE.get(&key) {
 		let age = now.duration_since(entry.created_at);
 		if age < Duration::from_millis(ttl) {
-			return Ok(EntryScan::Entries(CollectedEntries {
+			return Ok(CollectedEntries {
 				entries:      entry.entries.clone(),
 				cache_age_ms: age.as_millis() as u64,
-			}));
+			});
 		}
 		drop(entry);
 		SCAN_CACHE.remove(&key);
 	}
 
 	let scan = collect_entries_uncached(root, options, heartbeat)?;
-	let EntryScan::Entries(scan) = scan else {
-		return Ok(EntryScan::Unsupported);
-	};
 	SCAN_CACHE.insert(key, CacheEntry { created_at: now, entries: scan.entries.clone() });
 	evict_oldest();
-	Ok(EntryScan::Entries(CollectedEntries { entries: scan.entries, cache_age_ms: 0 }))
+	Ok(CollectedEntries { entries: scan.entries, cache_age_ms: 0 })
 }
 
 pub fn collect_entries<H, E>(
 	root: &Path,
 	options: WalkOptions,
 	heartbeat: H,
-) -> Result<EntryScan, WalkError<String>>
+) -> Result<CollectedEntries, WalkError<String>>
 where
 	H: Fn() -> std::result::Result<(), E> + Sync,
 	E: fmt::Display,
@@ -723,9 +481,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(entries) = entries else {
-			panic!("fallback collection should return entries");
-		};
 		let entries = entries.entries;
 		let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
 		assert!(
@@ -737,7 +492,7 @@ mod tests {
 
 	#[cfg(unix)]
 	#[test]
-	fn collect_entries_follow_links_uses_ignore_fallback() {
+	fn collect_entries_follow_links_always() {
 		let root = TempDirGuard::new();
 		fs::create_dir_all(root.path().join("target")).unwrap();
 		fs::write(root.path().join("target/linked.txt"), "linked").unwrap();
@@ -747,9 +502,6 @@ mod tests {
 		options.follow_links = crate::FollowLinks::Always;
 
 		let entries = super::collect_entries(root.path(), options, ok_heartbeat).unwrap();
-		let crate::EntryScan::Entries(entries) = entries else {
-			panic!("follow-links collection should fall back to ignore entries");
-		};
 		let paths: Vec<&str> = entries
 			.entries
 			.iter()
@@ -757,7 +509,7 @@ mod tests {
 			.collect();
 		assert!(
 			paths.iter().any(|path| path == &"link/linked.txt"),
-			"follow-links fallback should yield symlink descendants, got: {paths:?}"
+			"follow-links always should yield symlink descendants, got: {paths:?}"
 		);
 	}
 
@@ -775,9 +527,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(collected) = collected else {
-			panic!("fallback collection should return entries");
-		};
 		let collected = collected.entries;
 		assert!(
 			!collected.iter().any(|entry| entry.path == "ignored.txt"),
@@ -801,9 +550,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(entries) = entries else {
-			panic!("fallback collection should return entries");
-		};
 		let entries = entries.entries;
 		assert_eq!(
 			entries.len(),
@@ -837,9 +583,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(entries) = entries else {
-			panic!("fallback collection should return entries");
-		};
 		let entries = entries.entries;
 		assert_file_entry(&entries, ".hidden-file", 6.0);
 		assert_dir_entry(&entries, ".hidden-dir");
@@ -883,9 +626,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(minimal) = minimal else {
-			panic!("fallback collection should return entries");
-		};
 		let minimal_file = minimal
 			.entries
 			.iter()
@@ -900,9 +640,6 @@ mod tests {
 			ok_heartbeat,
 		)
 		.unwrap();
-		let crate::EntryScan::Entries(full) = full else {
-			panic!("fallback collection should return entries");
-		};
 		let full_file = full
 			.entries
 			.iter()

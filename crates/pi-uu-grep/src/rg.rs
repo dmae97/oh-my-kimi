@@ -1065,7 +1065,6 @@ fn search_dir<W: Write>(
 		Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => {
 			Some(SearchOutcome { any_match: any_match.get(), had_error: had_error.get() })
 		},
-		Ok(pi_walker::WalkStatus::Unsupported) => None,
 		Err(err) => {
 			had_error.set(true);
 			if !opts.no_messages {

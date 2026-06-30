@@ -842,9 +842,6 @@ fn try_search_fast(
 		state.matches = matches;
 		state.had_error = had_error;
 		match status {
-			Ok(pi_walker::WalkStatus::Unsupported) | Err(pi_walker::WalkError::Unsupported) => {
-				return Ok(None);
-			},
 			Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => {},
 			Err(err) => return Err(walker_error_to_io(err)),
 		}
@@ -984,10 +981,6 @@ fn matches_walker_type_filter(
 
 fn walker_error_to_io(err: pi_walker::WalkError<io::Error>) -> io::Error {
 	match err {
-		pi_walker::WalkError::Unsupported => io::Error::new(
-			io::ErrorKind::Unsupported,
-			"native fd traversal is unsupported for this platform or option set",
-		),
 		pi_walker::WalkError::Interrupted(err) => err,
 		pi_walker::WalkError::InvalidData { path, message } => {
 			io::Error::other(format!("{}: {message}", path.display()))
@@ -997,10 +990,6 @@ fn walker_error_to_io(err: pi_walker::WalkError<io::Error>) -> io::Error {
 
 fn walker_collect_error_to_io(err: pi_walker::WalkError<String>) -> io::Error {
 	match err {
-		pi_walker::WalkError::Unsupported => io::Error::new(
-			io::ErrorKind::Unsupported,
-			"native fd traversal is unsupported for this platform or option set",
-		),
 		pi_walker::WalkError::Interrupted(err) => io::Error::other(err),
 		pi_walker::WalkError::InvalidData { path, message } => {
 			io::Error::other(format!("{}: {message}", path.display()))

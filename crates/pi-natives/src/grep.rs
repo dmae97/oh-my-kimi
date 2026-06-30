@@ -1092,7 +1092,6 @@ fn collect_grep_candidates(
 	)?;
 	let mut candidates = match request.collect_file_candidates_with_heartbeat(|| ct.heartbeat()) {
 		Ok(candidates) => candidates,
-		Err(pi_walker::WalkError::Unsupported) => return Ok(None),
 		Err(err) => return Err(iofs::map_walker_error(err)),
 	};
 	if let Some(filter) = type_filter {

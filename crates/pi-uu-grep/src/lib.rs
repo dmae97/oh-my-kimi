@@ -499,17 +499,6 @@ fn search_dir<W: Write>(
 	*had_error |= had_error_state.get();
 	match walk {
 		Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => any,
-		Ok(pi_walker::WalkStatus::Unsupported) | Err(pi_walker::WalkError::Unsupported) => {
-			*had_error = true;
-			if !opts.no_messages {
-				let _ = writeln!(
-					pi_uutils_ctx::stderr(),
-					"grep: {}: native directory scan unsupported",
-					operand.to_string_lossy()
-				);
-			}
-			any
-		},
 		Err(pi_walker::WalkError::Interrupted(err)) => {
 			*had_error = true;
 			if !opts.no_messages {

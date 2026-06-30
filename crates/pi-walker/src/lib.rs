@@ -26,7 +26,6 @@ pub use cache::{
 	parallel_for_each, resolve_search_path, should_parallelize, should_skip_path, walk_workers,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use parking_lot::Mutex;
 
 const HEARTBEAT_INTERVAL: usize = 128;
 
@@ -555,13 +554,11 @@ pub struct WalkOptions {
 	pub min_depth:         usize,
 	/// Maximum depth traversed and yielded. Root depth is 0.
 	pub max_depth:         usize,
-	/// Yield directory entries after their children. Currently returns
-	/// unsupported so callers can use a post-order fallback.
+	/// Yield directory entries after their children.
 	pub contents_first:    bool,
 	/// Directory-open error handling policy.
 	pub directory_errors:  DirectoryErrorMode,
-	/// Stay on the root filesystem. Currently returns unsupported so callers can
-	/// use a device-aware fallback.
+	/// Stay on the root filesystem when supported by the platform.
 	pub same_file_system:  bool,
 	/// Use the shared scan cache when collecting owned entries.
 	pub cache:             bool,
@@ -986,13 +983,7 @@ impl WalkRequest {
 			visitor,
 			predicate,
 		};
-		match walk_entries(&self.root, options, &mut adapter, &mut heartbeat)? {
-			WalkStatus::Unsupported if Self::uses_collected_fallback(options) => {
-				let RequestVisitor { visitor, predicate, .. } = adapter;
-				self.stream_collected_fallback(visitor, predicate, heartbeat, options)
-			},
-			status => Ok(status),
-		}
+		walk_entries(&self.root, options, &mut adapter, &mut heartbeat)
 	}
 
 	/// Run `operation` for each accepted regular file.
@@ -1150,209 +1141,7 @@ impl WalkRequest {
 		H: Fn() -> std::result::Result<(), E> + Sync,
 		E: fmt::Display,
 	{
-		match collect_entries(&self.root, options, heartbeat) {
-			Ok(EntryScan::Entries(scan)) => Ok(scan),
-			Ok(EntryScan::Unsupported) | Err(WalkError::Unsupported)
-				if Self::uses_collected_fallback(options) =>
-			{
-				self.collect_entries_fallback(options, || heartbeat().map_err(|err| err.to_string()))
-			},
-			Ok(EntryScan::Unsupported) | Err(WalkError::Unsupported) => Err(WalkError::Unsupported),
-			Err(err) => Err(err),
-		}
-	}
-
-	const fn uses_collected_fallback(options: WalkOptions) -> bool {
-		options.min_depth <= options.max_depth && (options.contents_first || options.same_file_system)
-	}
-
-	fn collect_entries_fallback<H>(
-		&self,
-		options: WalkOptions,
-		mut heartbeat: H,
-	) -> std::result::Result<CollectedEntries, WalkError<String>>
-	where
-		H: FnMut() -> std::result::Result<(), String>,
-	{
-		let mut collector = FallbackCollector::new(&self.root, options);
-		let status = match walk_entries(
-			&self.root,
-			fallback_walk_options(options),
-			&mut collector,
-			&mut heartbeat,
-		) {
-			Ok(status) => status,
-			Err(WalkError::Unsupported) => WalkStatus::Unsupported,
-			Err(err) => return Err(err),
-		};
-		let mut entries = match status {
-			WalkStatus::Unsupported => {
-				let mut collector = FallbackCollector::new(&self.root, options);
-				let status = walk_entries_with_ignore(
-					&self.root,
-					fallback_walk_options(options),
-					&mut collector,
-					&mut heartbeat,
-				)?;
-				if matches!(status, WalkStatus::Unsupported) {
-					return Err(WalkError::Unsupported);
-				}
-				collector.into_entries()
-			},
-			WalkStatus::Complete | WalkStatus::Stopped => collector.into_entries(),
-		};
-		entries = filter_collected_same_file_system(&self.root, entries, options, &mut heartbeat)?;
-		if options.contents_first {
-			sort_collected_depth_first(&mut entries);
-		}
-		Ok(CollectedEntries { entries, cache_age_ms: 0 })
-	}
-
-	fn stream_collected_fallback<V, P, H>(
-		&self,
-		visitor: &mut V,
-		mut predicate: P,
-		mut heartbeat: H,
-		options: WalkOptions,
-	) -> std::result::Result<WalkStatus, WalkError<V::Error>>
-	where
-		V: EntryVisitor,
-		P: WalkPredicate,
-		H: FnMut() -> std::result::Result<(), V::Error>,
-	{
-		// The collected replay path cannot interleave content-first entry replay with
-		// directory-open errors, so directory errors are forwarded during collection
-		// before the accepted entries are replayed below.
-		let mut collector = FallbackStreamCollector::new(&self.root, options, visitor);
-		let status = match walk_entries(
-			&self.root,
-			fallback_walk_options(options),
-			&mut collector,
-			&mut heartbeat,
-		) {
-			Ok(status) => status,
-			Err(WalkError::Unsupported) => WalkStatus::Unsupported,
-			Err(err) => return Err(err),
-		};
-		let (mut entries, visitor) = match status {
-			WalkStatus::Unsupported => {
-				let (_entries, visitor) = collector.into_parts();
-				let mut collector = FallbackStreamCollector::new(&self.root, options, visitor);
-				let status = walk_entries_with_ignore(
-					&self.root,
-					fallback_walk_options(options),
-					&mut collector,
-					&mut heartbeat,
-				)?;
-				if matches!(status, WalkStatus::Unsupported | WalkStatus::Stopped) {
-					return Ok(status);
-				}
-				collector.into_parts()
-			},
-			WalkStatus::Stopped => return Ok(WalkStatus::Stopped),
-			WalkStatus::Complete => collector.into_parts(),
-		};
-		entries = filter_collected_same_file_system(&self.root, entries, options, &mut heartbeat)?;
-		let mut accepted = Vec::new();
-		let mut pruned_dirs = Vec::new();
-		let mut stopped = false;
-		let mut visited = 0usize;
-		for entry in entries {
-			if visited == 0 || visited >= HEARTBEAT_INTERVAL {
-				visited = 0;
-				heartbeat().map_err(WalkError::Interrupted)?;
-			}
-			visited += 1;
-			if is_under_pruned_relative_dir(&entry.path, &pruned_dirs) {
-				continue;
-			}
-			let meta = EntryMeta {
-				root:          &self.root,
-				absolute_path: Cow::Owned(entry.absolute_path(&self.root)),
-				relative_path: &entry.path,
-				file_type:     entry.file_type,
-				mtime:         entry.mtime,
-				size:          entry.size,
-				depth:         entry.depth(),
-			};
-			match self.filter.stream_decision(&meta) {
-				WalkDecision::Include => {},
-				WalkDecision::Skip => continue,
-				WalkDecision::SkipDescend => {
-					if entry.is_dir() {
-						pruned_dirs.push(entry.path.clone());
-					}
-					continue;
-				},
-				WalkDecision::Stop => {
-					stopped = true;
-					break;
-				},
-			}
-			match predicate.decide(&meta) {
-				WalkDecision::Include => accepted.push(entry),
-				WalkDecision::Skip => {},
-				WalkDecision::SkipDescend => {
-					if entry.is_dir() {
-						pruned_dirs.push(entry.path.clone());
-					}
-				},
-				WalkDecision::Stop => {
-					stopped = true;
-
-					break;
-				},
-			}
-		}
-
-		if matches!(self.visit_order, VisitOrder::ContentsFirst) {
-			sort_collected_depth_first(&mut accepted);
-		}
-		let replay_status = self.replay_collected_entries(visitor, &accepted, &mut heartbeat)?;
-		if replay_status == WalkStatus::Stopped || stopped {
-			Ok(WalkStatus::Stopped)
-		} else {
-			Ok(WalkStatus::Complete)
-		}
-	}
-
-	fn replay_collected_entries<V, H>(
-		&self,
-		visitor: &mut V,
-		entries: &[CollectedEntry],
-		heartbeat: &mut H,
-	) -> std::result::Result<WalkStatus, WalkError<V::Error>>
-	where
-		V: EntryVisitor,
-		H: FnMut() -> std::result::Result<(), V::Error>,
-	{
-		let mut emitted = 0usize;
-		let mut visited = 0usize;
-		let mut pruned_dirs = Vec::new();
-		for entry in entries {
-			if self.limit.is_some_and(|limit| emitted >= limit) {
-				return Ok(WalkStatus::Stopped);
-			}
-			if visited == 0 || visited >= HEARTBEAT_INTERVAL {
-				visited = 0;
-				heartbeat().map_err(WalkError::Interrupted)?;
-			}
-			visited += 1;
-			if is_under_pruned_relative_dir(&entry.path, &pruned_dirs) {
-				continue;
-			}
-			match replay_collected_entry(&self.root, entry, visitor).map_err(WalkError::Interrupted)? {
-				WalkControl::Quit => return Ok(WalkStatus::Stopped),
-				WalkControl::SkipDescend => {
-					if entry.is_dir() {
-						pruned_dirs.push(entry.path.clone());
-					}
-				},
-				WalkControl::Continue => {},
-			}
-			emitted += 1;
-		}
-		Ok(WalkStatus::Complete)
+		collect_entries(&self.root, options, heartbeat)
 	}
 
 	fn should_recheck_empty(&self, cache_age_ms: u64) -> bool {
@@ -1413,8 +1202,6 @@ pub enum WalkControl {
 /// Status returned by native traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WalkStatus {
-	/// The current platform or option set cannot use the native scanner safely.
-	Unsupported,
 	/// Traversal visited every reachable entry.
 	Complete,
 	/// The visitor stopped traversal early.
@@ -1568,6 +1355,37 @@ pub fn is_path_on_root_file_system(
 }
 
 #[cfg(unix)]
+fn is_effective_path_on_root_file_system(
+	path: &Path,
+	depth: usize,
+	follow_links: FollowLinks,
+	root_device: Option<u64>,
+	followed_metadata: Option<&std::fs::Metadata>,
+) -> bool {
+	use std::os::unix::fs::MetadataExt;
+
+	let Some(root_device) = root_device else {
+		return true;
+	};
+	if let Some(metadata) = followed_metadata {
+		return metadata.dev() == root_device;
+	}
+	metadata_for_follow_policy(path, follow_links.follow_at_depth(depth))
+		.is_ok_and(|metadata| metadata.dev() == root_device)
+}
+
+#[cfg(not(unix))]
+fn is_effective_path_on_root_file_system(
+	_path: &Path,
+	_depth: usize,
+	_follow_links: FollowLinks,
+	_root_device: Option<u64>,
+	_followed_metadata: Option<&std::fs::Metadata>,
+) -> bool {
+	true
+}
+
+#[cfg(unix)]
 fn metadata_for_follow_policy(path: &Path, follow: bool) -> io::Result<std::fs::Metadata> {
 	if follow {
 		std::fs::metadata(path)
@@ -1583,15 +1401,6 @@ pub struct CollectedEntries {
 	pub entries:      Vec<CollectedEntry>,
 	/// Age of the cache entry in milliseconds; zero means freshly scanned.
 	pub cache_age_ms: u64,
-}
-
-/// Result of attempting a native directory scan.
-#[derive(Clone, Debug, PartialEq)]
-pub enum EntryScan {
-	/// The native scanner is unavailable for this platform or option set.
-	Unsupported,
-	/// Entries collected with the requested traversal contract.
-	Entries(CollectedEntries),
 }
 
 /// Borrowed entry passed to [`EntryVisitor`].
@@ -1621,6 +1430,61 @@ pub struct DirectoryError<'a> {
 	pub error: &'a io::Error,
 }
 
+/// Pre-descend decision made before a directory's children are traversed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreDescendDecision {
+	/// Whether this entry should be emitted in the requested visit order.
+	pub emit:    bool,
+	/// Whether this directory's descendants should be traversed.
+	pub descend: bool,
+	/// Whether traversal should stop immediately.
+	pub stop:    bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DirectoryIdentity {
+	#[cfg(unix)]
+	Unix {
+		dev: u64,
+		ino: u64,
+	},
+	#[cfg(not(unix))]
+	Generic(std::path::PathBuf),
+}
+
+#[derive(Default)]
+struct SymlinkAncestorStack {
+	stack: Vec<DirectoryIdentity>,
+}
+
+impl SymlinkAncestorStack {
+	fn contains(&self, identity: &DirectoryIdentity) -> bool {
+		self.stack.contains(identity)
+	}
+
+	fn push(&mut self, identity: DirectoryIdentity) {
+		self.stack.push(identity);
+	}
+
+	fn pop(&mut self) {
+		self.stack.pop();
+	}
+}
+
+fn directory_identity(path: &Path) -> io::Result<DirectoryIdentity> {
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::MetadataExt;
+		let metadata = std::fs::metadata(path)?;
+		Ok(DirectoryIdentity::Unix { dev: metadata.dev(), ino: metadata.ino() })
+	}
+	#[cfg(not(unix))]
+	{
+		let canonical = std::fs::canonicalize(path)?;
+		Ok(DirectoryIdentity::Generic(canonical))
+	}
+}
+
 /// Consumer hook invoked for every accepted entry.
 pub trait EntryVisitor {
 	/// Error type used by visitor and heartbeat callbacks.
@@ -1636,8 +1500,23 @@ pub trait EntryVisitor {
 	) -> std::result::Result<WalkControl, Self::Error> {
 		Ok(WalkControl::Continue)
 	}
-}
 
+	/// Optional hook for making pre-descend traversal decisions.
+	fn decide_pre_descend(
+		&mut self,
+		_meta: &EntryMeta<'_>,
+	) -> std::result::Result<PreDescendDecision, Self::Error> {
+		Ok(PreDescendDecision { emit: true, descend: true, stop: false })
+	}
+
+	/// Visit an entry whose filter/predicate decisions have already been made.
+	fn visit_pre_decided(
+		&mut self,
+		entry: Entry<'_>,
+	) -> std::result::Result<WalkControl, Self::Error> {
+		self.visit(entry)
+	}
+}
 struct RequestVisitor<'a, V, P> {
 	root:      &'a Path,
 	filter:    &'a WalkFilter,
@@ -1689,8 +1568,53 @@ where
 	) -> std::result::Result<WalkControl, Self::Error> {
 		self.visitor.visit_directory_error(error)
 	}
-}
 
+	fn visit_pre_decided(
+		&mut self,
+		entry: Entry<'_>,
+	) -> std::result::Result<WalkControl, Self::Error> {
+		if self.limit.is_some_and(|limit| self.emitted >= limit) {
+			return Ok(WalkControl::Quit);
+		}
+		self.emitted += 1;
+		self.visitor.visit(entry)
+	}
+
+	fn decide_pre_descend(
+		&mut self,
+		meta: &EntryMeta<'_>,
+	) -> std::result::Result<PreDescendDecision, Self::Error> {
+		let is_dir = meta.file_type == FileType::Dir;
+
+		match self.filter.stream_decision(meta) {
+			WalkDecision::Include => {},
+			WalkDecision::Skip => {
+				return Ok(PreDescendDecision { emit: false, descend: is_dir, stop: false });
+			},
+			WalkDecision::SkipDescend => {
+				return Ok(PreDescendDecision { emit: false, descend: false, stop: false });
+			},
+			WalkDecision::Stop => {
+				return Ok(PreDescendDecision { emit: false, descend: false, stop: true });
+			},
+		}
+
+		match self.predicate.decide(meta) {
+			WalkDecision::Include => {
+				Ok(PreDescendDecision { emit: true, descend: is_dir, stop: false })
+			},
+			WalkDecision::Skip => {
+				Ok(PreDescendDecision { emit: false, descend: is_dir, stop: false })
+			},
+			WalkDecision::SkipDescend => {
+				Ok(PreDescendDecision { emit: false, descend: false, stop: false })
+			},
+			WalkDecision::Stop => {
+				Ok(PreDescendDecision { emit: false, descend: false, stop: true })
+			},
+		}
+	}
+}
 struct ClosureEntryVisitor<'a, V, D> {
 	root:            &'a Path,
 	visit:           V,
@@ -1736,8 +1660,6 @@ const fn walk_decision_to_control(decision: WalkDecision) -> WalkControl {
 /// Error returned by native traversal.
 #[derive(Debug)]
 pub enum WalkError<E> {
-	/// The native scanner is unavailable for this platform or option set.
-	Unsupported,
 	/// A caller-supplied heartbeat or visitor returned an error.
 	Interrupted(E),
 	/// A platform directory API returned malformed data or an unskippable error.
@@ -1752,7 +1674,6 @@ pub enum WalkError<E> {
 impl<E: fmt::Display> fmt::Display for WalkError<E> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		match self {
-			Self::Unsupported => f.write_str("native directory scan unsupported"),
 			Self::Interrupted(err) => write!(f, "native directory scan interrupted: {err}"),
 			Self::InvalidData { path, message } => {
 				write!(f, "native directory scan failed for {}: {message}", path.display())
@@ -1768,7 +1689,7 @@ where
 	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
 		match self {
 			Self::Interrupted(err) => Some(err),
-			Self::Unsupported | Self::InvalidData { .. } => None,
+			Self::InvalidData { .. } => None,
 		}
 	}
 }
@@ -1798,185 +1719,12 @@ impl<E> EntryVisitor for CollectVisitor<E> {
 	}
 }
 
-const fn fallback_walk_options(mut options: WalkOptions) -> WalkOptions {
-	options.contents_first = false;
-	options.same_file_system = false;
-	options.cache = false;
-	options
-}
-
-fn collected_entry_from_entry(entry: Entry<'_>) -> CollectedEntry {
-	CollectedEntry {
-		path:      entry.relative.to_string(),
-		file_type: entry.file_type,
-		mtime:     entry.mtime,
-		size:      entry.size,
-	}
-}
-
 fn root_device_for_options(root: &Path, options: WalkOptions) -> Option<u64> {
 	if options.same_file_system {
 		root_device_id(root, options.follow_links)
 	} else {
 		None
 	}
-}
-
-fn filter_collected_same_file_system<E, H>(
-	root: &Path,
-	entries: Vec<CollectedEntry>,
-	options: WalkOptions,
-	heartbeat: &mut H,
-) -> std::result::Result<Vec<CollectedEntry>, WalkError<E>>
-where
-	H: FnMut() -> std::result::Result<(), E>,
-{
-	if !options.same_file_system {
-		return Ok(entries);
-	}
-	let Some(root_device) = root_device_for_options(root, options) else {
-		return Ok(entries);
-	};
-	let mut filtered = Vec::with_capacity(entries.len());
-	let mut pruned_dirs = Vec::new();
-	let mut visited = 0usize;
-	for entry in entries {
-		if visited == 0 || visited >= HEARTBEAT_INTERVAL {
-			visited = 0;
-			heartbeat().map_err(WalkError::Interrupted)?;
-		}
-		visited += 1;
-		if is_under_pruned_relative_dir(&entry.path, &pruned_dirs) {
-			continue;
-		}
-		if is_path_on_root_file_system(
-			&entry.absolute_path(root),
-			entry.depth(),
-			options.follow_links,
-			Some(root_device),
-		) {
-			filtered.push(entry);
-		} else if entry.is_dir() {
-			pruned_dirs.push(entry.path);
-		}
-	}
-	Ok(filtered)
-}
-
-struct FallbackCollector<E> {
-	entries:      Vec<CollectedEntry>,
-	root_device:  Option<u64>,
-	follow_links: FollowLinks,
-	_error:       std::marker::PhantomData<fn() -> E>,
-}
-
-impl<E> FallbackCollector<E> {
-	fn new(root: &Path, options: WalkOptions) -> Self {
-		Self {
-			entries:      Vec::new(),
-			root_device:  root_device_for_options(root, options),
-			follow_links: options.follow_links,
-			_error:       std::marker::PhantomData,
-		}
-	}
-
-	fn into_entries(self) -> Vec<CollectedEntry> {
-		self.entries
-	}
-}
-
-impl<E> EntryVisitor for FallbackCollector<E> {
-	type Error = E;
-
-	fn visit(&mut self, entry: Entry<'_>) -> std::result::Result<WalkControl, Self::Error> {
-		if !is_path_on_root_file_system(entry.path, entry.depth, self.follow_links, self.root_device)
-		{
-			return Ok(if entry.file_type == FileType::Dir {
-				WalkControl::SkipDescend
-			} else {
-				WalkControl::Continue
-			});
-		}
-		self.entries.push(collected_entry_from_entry(entry));
-		Ok(WalkControl::Continue)
-	}
-}
-
-struct FallbackStreamCollector<'a, V> {
-	entries:      Vec<CollectedEntry>,
-	root_device:  Option<u64>,
-	follow_links: FollowLinks,
-	visitor:      &'a mut V,
-}
-
-impl<'a, V> FallbackStreamCollector<'a, V> {
-	fn new(root: &Path, options: WalkOptions, visitor: &'a mut V) -> Self {
-		Self {
-			entries: Vec::new(),
-			root_device: root_device_for_options(root, options),
-			follow_links: options.follow_links,
-			visitor,
-		}
-	}
-
-	fn into_parts(self) -> (Vec<CollectedEntry>, &'a mut V) {
-		(self.entries, self.visitor)
-	}
-}
-
-impl<V> EntryVisitor for FallbackStreamCollector<'_, V>
-where
-	V: EntryVisitor,
-{
-	type Error = V::Error;
-
-	fn visit(&mut self, entry: Entry<'_>) -> std::result::Result<WalkControl, Self::Error> {
-		if !is_path_on_root_file_system(entry.path, entry.depth, self.follow_links, self.root_device)
-		{
-			return Ok(if entry.file_type == FileType::Dir {
-				WalkControl::SkipDescend
-			} else {
-				WalkControl::Continue
-			});
-		}
-		self.entries.push(collected_entry_from_entry(entry));
-		Ok(WalkControl::Continue)
-	}
-
-	fn visit_directory_error(
-		&mut self,
-		error: DirectoryError<'_>,
-	) -> std::result::Result<WalkControl, Self::Error> {
-		self.visitor.visit_directory_error(error)
-	}
-}
-
-fn replay_collected_entry<V>(
-	root: &Path,
-	entry: &CollectedEntry,
-	visitor: &mut V,
-) -> std::result::Result<WalkControl, V::Error>
-where
-	V: EntryVisitor,
-{
-	let absolute = entry.absolute_path(root);
-	let name = if entry.path.is_empty() {
-		root.file_name().unwrap_or(root.as_os_str()).to_os_string()
-	} else {
-		Path::new(&entry.path)
-			.file_name()
-			.unwrap_or_else(|| OsStr::new(""))
-			.to_os_string()
-	};
-	visitor.visit(Entry {
-		path:      &absolute,
-		relative:  &entry.path,
-		name:      &name,
-		file_type: entry.file_type,
-		mtime:     entry.mtime,
-		size:      entry.size,
-		depth:     entry.depth(),
-	})
 }
 
 struct RawDirEntry<'a> {
@@ -1997,17 +1745,6 @@ impl RawDirEntry<'_> {
 	fn into_owned(self) -> OwnedDirEntry {
 		OwnedDirEntry {
 			name:      self.name.into_owned(),
-			file_type: self.file_type,
-			mtime:     self.mtime,
-			size:      self.size,
-		}
-	}
-}
-
-impl OwnedDirEntry {
-	fn as_raw(&self) -> RawDirEntry<'_> {
-		RawDirEntry {
-			name:      Cow::Borrowed(self.name.as_os_str()),
 			file_type: self.file_type,
 			mtime:     self.mtime,
 			size:      self.size,
@@ -2104,37 +1841,14 @@ fn is_missing_metadata_error(err: &io::Error) -> bool {
 	matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
 }
 
-fn visit_root<V>(
-	root: &Path,
-	entry: &RootEntry,
-	visitor: &mut V,
-) -> std::result::Result<WalkControl, WalkError<V::Error>>
-where
-	V: EntryVisitor,
-{
-	let name = root.file_name().unwrap_or(root.as_os_str());
-	visitor
-		.visit(Entry {
-			path: root,
-			relative: "",
-			name,
-			file_type: entry.file_type,
-			mtime: entry.mtime,
-			size: entry.size,
-			depth: 0,
-		})
-		.map_err(WalkError::Interrupted)
-}
-
 /// Scans entries using the shared cache when [`WalkOptions::cache`] is true.
 ///
-/// Unsupported native scans fall back to the portable `ignore` walker, so this
-/// is the owned-entry collection API most consumers should call.
+/// The native scanner implements every [`WalkOptions`] traversal contract.
 pub fn collect_entries<E, H>(
 	root: &Path,
 	options: WalkOptions,
 	heartbeat: H,
-) -> std::result::Result<EntryScan, WalkError<String>>
+) -> std::result::Result<CollectedEntries, WalkError<String>>
 where
 	H: Fn() -> std::result::Result<(), E> + Sync,
 	E: fmt::Display,
@@ -2146,222 +1860,470 @@ fn collect_entries_native<E, H>(
 	root: &Path,
 	options: WalkOptions,
 	heartbeat: H,
-) -> std::result::Result<EntryScan, WalkError<E>>
+) -> std::result::Result<CollectedEntries, WalkError<E>>
 where
 	H: FnMut() -> std::result::Result<(), E>,
 {
 	let mut collector = CollectVisitor::new();
-	let status = walk_entries(root, options, &mut collector, heartbeat)?;
-	if matches!(status, WalkStatus::Unsupported) {
-		return Ok(EntryScan::Unsupported);
+	let _status = walk_entries(root, options, &mut collector, heartbeat)?;
+	if options.contents_first {
+		sort_collected_depth_first(&mut collector.entries);
+	} else {
+		collector
+			.entries
+			.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 	}
-	collector
-		.entries
-		.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-	Ok(EntryScan::Entries(CollectedEntries { entries: collector.entries, cache_age_ms: 0 }))
+	Ok(CollectedEntries { entries: collector.entries, cache_age_ms: 0 })
 }
 
 /// Scans entries without cancellation using platform syscalls when supported.
 pub fn collect_entries_without_heartbeat(
 	root: &Path,
 	options: WalkOptions,
-) -> std::result::Result<EntryScan, WalkError<String>> {
+) -> std::result::Result<CollectedEntries, WalkError<String>> {
 	collect_entries(root, options, || Ok::<(), Infallible>(()))
 }
 
-/// Streams entries using the native scanner when the scan contract is
-/// equivalent, otherwise using the portable `ignore` walker when possible.
+/// Streams entries using the native scanner for every [`WalkOptions`]
+/// traversal contract.
 pub fn walk_entries<V, H>(
 	root: &Path,
 	options: WalkOptions,
 	visitor: &mut V,
-	mut heartbeat: H,
+	heartbeat: H,
 ) -> std::result::Result<WalkStatus, WalkError<V::Error>>
 where
 	V: EntryVisitor,
 	H: FnMut() -> std::result::Result<(), V::Error>,
 {
-	if !can_use_fast_scan(options) {
-		return if can_use_ignore_walk(options) {
-			walk_entries_with_ignore(root, options, visitor, heartbeat)
-		} else {
-			Ok(WalkStatus::Unsupported)
-		};
-	}
-	let root_entry = root_entry(root, options.detail, options.follow_links)?;
-	let Some(root_entry) = root_entry else {
-		return Ok(WalkStatus::Complete);
-	};
-	if options.emit_root && options.min_depth == 0 {
-		match visit_root(root, &root_entry, visitor)? {
-			WalkControl::Quit => return Ok(WalkStatus::Stopped),
-			WalkControl::SkipDescend => return Ok(WalkStatus::Complete),
-			WalkControl::Continue => {},
-		}
-	}
-	if root_entry.file_type != FileType::Dir || options.max_depth == 0 {
+	if options.min_depth > options.max_depth {
 		return Ok(WalkStatus::Complete);
 	}
+
+	let root_device = root_device_for_options(root, options);
 	let matcher = FastIgnore::new(options.use_gitignore);
 	let root_ignore = matcher.root_state(root);
-	let mut visited = 0usize;
-	match walk_dir(
-		root,
-		"",
-		0,
-		&root_ignore,
-		&matcher,
+
+	let mut context = WalkContext {
+		root_path: root,
 		options,
-		&mut heartbeat,
-		&mut visited,
-		visitor,
-	) {
-		Ok(true) => Ok(WalkStatus::Stopped),
-		Ok(false) => Ok(WalkStatus::Complete),
-		Err(WalkError::Unsupported) if can_use_ignore_walk(options) => {
-			walk_entries_with_ignore(root, options, visitor, heartbeat)
-		},
-		Err(WalkError::Unsupported) => Ok(WalkStatus::Unsupported),
-		Err(err) => Err(err),
-	}
-}
-
-const fn can_use_fast_scan(options: WalkOptions) -> bool {
-	platform::SUPPORTED
-		&& matches!(options.follow_links, FollowLinks::Never)
-		&& !options.contents_first
-		&& !options.same_file_system
-		&& options.min_depth <= options.max_depth
-}
-
-const fn can_use_ignore_walk(options: WalkOptions) -> bool {
-	!options.contents_first && !options.same_file_system && options.min_depth <= options.max_depth
-}
-
-fn walk_entries_with_ignore<V, H>(
-	root: &Path,
-	options: WalkOptions,
-	visitor: &mut V,
-	mut heartbeat: H,
-) -> std::result::Result<WalkStatus, WalkError<V::Error>>
-where
-	V: EntryVisitor,
-	H: FnMut() -> std::result::Result<(), V::Error>,
-{
-	let root_entry = root_entry(root, options.detail, options.follow_links)?;
-	let Some(root_entry) = root_entry else {
-		return Ok(WalkStatus::Complete);
+		root_device,
+		symlink_ancestors: SymlinkAncestorStack::default(),
+		matcher,
+		visited: 0,
+		heartbeat,
 	};
-	if options.emit_root && options.min_depth == 0 {
-		match visit_root(root, &root_entry, visitor)? {
-			WalkControl::Quit => return Ok(WalkStatus::Stopped),
-			WalkControl::SkipDescend => return Ok(WalkStatus::Complete),
-			WalkControl::Continue => {},
-		}
-	}
-	if root_entry.file_type != FileType::Dir || options.max_depth == 0 {
-		return Ok(WalkStatus::Complete);
-	}
 
-	heartbeat().map_err(WalkError::Interrupted)?;
-	let pruned_dirs = Arc::new(Mutex::new(Vec::new()));
-	let builder =
-		cache::build_walker_for_options_with_pruned_dirs(root, options, Arc::clone(&pruned_dirs));
-	let mut visited = 0usize;
-	for entry in builder.build() {
-		if visited == 0 || visited >= HEARTBEAT_INTERVAL {
-			visited = 0;
-			heartbeat().map_err(WalkError::Interrupted)?;
-		}
-		visited += 1;
+	context.walk_root(root, &root_ignore, visitor)
+}
 
-		let entry = match entry {
-			Ok(entry) => entry,
-			Err(err) => {
-				if handle_ignore_walk_error(root, &pruned_dirs, err, options, visitor)? {
-					return Ok(WalkStatus::Stopped);
-				}
-				continue;
-			},
+struct WalkContext<'a, H> {
+	root_path:         &'a Path,
+	options:           WalkOptions,
+	root_device:       Option<u64>,
+	symlink_ancestors: SymlinkAncestorStack,
+	matcher:           FastIgnore,
+	visited:           usize,
+	heartbeat:         H,
+}
+
+impl<H> WalkContext<'_, H> {
+	fn walk_root<V>(
+		&mut self,
+		root: &Path,
+		root_ignore: &Arc<IgnoreState>,
+		visitor: &mut V,
+	) -> std::result::Result<WalkStatus, WalkError<V::Error>>
+	where
+		V: EntryVisitor,
+		H: FnMut() -> std::result::Result<(), V::Error>,
+	{
+		let root_entry = root_entry(root, self.options.detail, self.options.follow_links)?;
+		let Some(root_entry) = root_entry else {
+			return Ok(WalkStatus::Complete);
 		};
-		if entry.depth() == 0 || is_pruned_path(entry.path(), &pruned_dirs) {
-			continue;
-		}
-		if entry.depth() < options.min_depth {
-			continue;
-		}
-		let Some(collected) = cache::collect_entry(root, &entry, options.detail) else {
-			continue;
-		};
-		match visitor
-			.visit(Entry {
-				path:      entry.path(),
-				relative:  &collected.path,
-				name:      entry.file_name(),
-				file_type: collected.file_type,
-				mtime:     collected.mtime,
-				size:      collected.size,
-				depth:     entry.depth(),
-			})
-			.map_err(WalkError::Interrupted)?
+
+		// Seed the ancestor stack only when descendant symlink traversal can loop.
+		if self.options.follow_links == FollowLinks::Always
+			&& let Ok(id) = directory_identity(root)
 		{
-			WalkControl::Quit => return Ok(WalkStatus::Stopped),
-			WalkControl::SkipDescend => {
-				if collected.file_type == FileType::Dir {
-					pruned_dirs.lock().push(entry.path().to_path_buf());
+			self.symlink_ancestors.push(id);
+		}
+
+		let meta = EntryMeta {
+			root,
+			absolute_path: Cow::Borrowed(root),
+			relative_path: "",
+			file_type: root_entry.file_type,
+			mtime: root_entry.mtime,
+			size: root_entry.size,
+			depth: 0,
+		};
+
+		let decision = visitor
+			.decide_pre_descend(&meta)
+			.map_err(WalkError::Interrupted)?;
+		if decision.stop {
+			return Ok(WalkStatus::Stopped);
+		}
+
+		if !self.options.contents_first
+			&& self.options.emit_root
+			&& self.options.min_depth == 0
+			&& decision.emit
+		{
+			let name = root.file_name().unwrap_or(root.as_os_str());
+			match visitor
+				.visit_pre_decided(Entry {
+					path: root,
+					relative: "",
+					name,
+					file_type: root_entry.file_type,
+					mtime: root_entry.mtime,
+					size: root_entry.size,
+					depth: 0,
+				})
+				.map_err(WalkError::Interrupted)?
+			{
+				WalkControl::Quit => return Ok(WalkStatus::Stopped),
+				WalkControl::SkipDescend => return Ok(WalkStatus::Complete),
+				WalkControl::Continue => {},
+			}
+		}
+
+		let stopped =
+			if root_entry.file_type == FileType::Dir && self.options.max_depth > 0 && decision.descend
+			{
+				self.walk_dir(root, "", 0, root_ignore, visitor)?
+			} else {
+				false
+			};
+
+		if stopped {
+			return Ok(WalkStatus::Stopped);
+		}
+
+		if self.options.contents_first
+			&& self.options.emit_root
+			&& self.options.min_depth == 0
+			&& decision.emit
+		{
+			let name = root.file_name().unwrap_or(root.as_os_str());
+			match visitor
+				.visit_pre_decided(Entry {
+					path: root,
+					relative: "",
+					name,
+					file_type: root_entry.file_type,
+					mtime: root_entry.mtime,
+					size: root_entry.size,
+					depth: 0,
+				})
+				.map_err(WalkError::Interrupted)?
+			{
+				WalkControl::Quit => return Ok(WalkStatus::Stopped),
+				WalkControl::SkipDescend | WalkControl::Continue => {},
+			}
+		}
+
+		Ok(WalkStatus::Complete)
+	}
+
+	fn walk_dir<V>(
+		&mut self,
+		dir: &Path,
+		relative_dir: &str,
+		depth: usize,
+		ignore_state: &Arc<IgnoreState>,
+		visitor: &mut V,
+	) -> std::result::Result<bool, WalkError<V::Error>>
+	where
+		V: EntryVisitor,
+		H: FnMut() -> std::result::Result<(), V::Error>,
+	{
+		let identity = if self.options.follow_links == FollowLinks::Always {
+			directory_identity(dir).ok()
+		} else {
+			None
+		};
+		if let Some(id) = &identity {
+			self.symlink_ancestors.push(id.clone());
+		}
+
+		let result = self.walk_dir_inner(dir, relative_dir, depth, ignore_state, visitor);
+
+		if identity.is_some() {
+			self.symlink_ancestors.pop();
+		}
+		result
+	}
+
+	fn walk_dir_inner<V>(
+		&mut self,
+		dir: &Path,
+		relative_dir: &str,
+		depth: usize,
+		ignore_state: &Arc<IgnoreState>,
+		visitor: &mut V,
+	) -> std::result::Result<bool, WalkError<V::Error>>
+	where
+		V: EntryVisitor,
+		H: FnMut() -> std::result::Result<(), V::Error>,
+	{
+		let mut raw_entries = Vec::new();
+		match self.options.order {
+			WalkOrder::Path => {
+				match platform::read_dir_entries(dir, self.options.detail, |entry| {
+					raw_entries.push(entry.into_owned());
+					Ok(ReadDirControl::Continue)
+				}) {
+					Ok(_) => {},
+					Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
+				}
+				raw_entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+			},
+			WalkOrder::Unordered => {
+				match platform::read_dir_entries(dir, self.options.detail, |entry| {
+					raw_entries.push(entry.into_owned());
+					Ok(ReadDirControl::Continue)
+				}) {
+					Ok(_) => {},
+					Err(err) => return handle_read_dir_error(dir, err, self.options, visitor),
 				}
 			},
-			WalkControl::Continue => {},
 		}
+
+		for entry in raw_entries {
+			if self.visited == 0 || self.visited >= HEARTBEAT_INTERVAL {
+				self.visited = 0;
+				(self.heartbeat)().map_err(WalkError::Interrupted)?;
+			}
+			self.visited += 1;
+
+			let name = entry.name.as_ref();
+			if is_dot_entry(name) {
+				continue;
+			}
+			if !self.options.include_hidden && is_hidden_name(name) {
+				continue;
+			}
+			if (self.options.skip_git && is_git_name(name))
+				|| (self.options.skip_node_modules && is_node_modules_name(name))
+			{
+				continue;
+			}
+
+			let name_str = entry_name(name);
+			if name_str.is_empty() {
+				continue;
+			}
+			let relative = join_relative_path(relative_dir, &name_str);
+			let next_depth = depth + 1;
+			if next_depth > self.options.max_depth {
+				continue;
+			}
+
+			let absolute = dir.join(Path::new(name));
+			let mut file_type = entry.file_type;
+			let mut mtime = entry.mtime;
+			let mut size = entry.size;
+			let mut is_dir = entry.file_type == FileType::Dir;
+			let mut descend = is_dir;
+			let mut followed_symlink_dir = false;
+			let followed_metadata = if entry.file_type == FileType::Symlink
+				&& self.options.follow_links == FollowLinks::Always
+			{
+				match std::fs::metadata(&absolute) {
+					Ok(metadata) => Some(metadata),
+					Err(err) => {
+						if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
+							&& is_skippable_directory_error(&err)
+						{
+							continue;
+						}
+						if self.options.directory_errors == DirectoryErrorMode::Visit {
+							match visitor
+								.visit_directory_error(DirectoryError { path: &absolute, error: &err })
+								.map_err(WalkError::Interrupted)?
+							{
+								WalkControl::Quit => return Ok(true),
+								WalkControl::SkipDescend | WalkControl::Continue => {
+									continue;
+								},
+							}
+						}
+						return Err(WalkError::InvalidData {
+							path:    absolute.clone(),
+							message: err.to_string(),
+						});
+					},
+				}
+			} else {
+				None
+			};
+
+			if let Some(target_metadata) = followed_metadata.as_ref() {
+				let Some(target_file_type) = file_type_from_metadata(target_metadata) else {
+					continue;
+				};
+				file_type = target_file_type;
+				if target_file_type == FileType::Dir {
+					is_dir = true;
+					descend = true;
+					followed_symlink_dir = true;
+				} else {
+					is_dir = false;
+					descend = false;
+				}
+				if self.options.detail == WalkDetail::Full {
+					if target_file_type == FileType::File {
+						size = Some(target_metadata.len() as f64);
+					} else {
+						size = None;
+					}
+					mtime = target_metadata
+						.modified()
+						.ok()
+						.and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+						.map(|duration| duration.as_millis() as f64);
+				}
+			}
+
+			if self.matcher.is_ignored(ignore_state, &absolute, is_dir) {
+				continue;
+			}
+
+			if !is_effective_path_on_root_file_system(
+				&absolute,
+				next_depth,
+				self.options.follow_links,
+				self.root_device,
+				followed_metadata.as_ref(),
+			) {
+				continue;
+			}
+
+			if followed_symlink_dir && descend {
+				match directory_identity(&absolute) {
+					Ok(target_id) => {
+						if self.symlink_ancestors.contains(&target_id) {
+							let loop_err = io::Error::other("filesystem loop detected");
+							if self.options.directory_errors == DirectoryErrorMode::Visit {
+								match visitor
+									.visit_directory_error(DirectoryError {
+										path:  &absolute,
+										error: &loop_err,
+									})
+									.map_err(WalkError::Interrupted)?
+								{
+									WalkControl::Quit => return Ok(true),
+									WalkControl::SkipDescend | WalkControl::Continue => {
+										continue;
+									},
+								}
+							} else if self.options.directory_errors == DirectoryErrorMode::SkipSkippable {
+								continue;
+							}
+							return Err(WalkError::InvalidData {
+								path:    absolute.clone(),
+								message: "filesystem loop detected".to_string(),
+							});
+						}
+					},
+					Err(err) => {
+						if self.options.directory_errors == DirectoryErrorMode::SkipSkippable
+							&& is_skippable_directory_error(&err)
+						{
+							continue;
+						}
+						if self.options.directory_errors == DirectoryErrorMode::Visit {
+							match visitor
+								.visit_directory_error(DirectoryError { path: &absolute, error: &err })
+								.map_err(WalkError::Interrupted)?
+							{
+								WalkControl::Quit => return Ok(true),
+								WalkControl::SkipDescend | WalkControl::Continue => {
+									continue;
+								},
+							}
+						}
+						return Err(WalkError::InvalidData {
+							path:    absolute.clone(),
+							message: err.to_string(),
+						});
+					},
+				}
+			}
+
+			let meta = EntryMeta {
+				root: self.root_path,
+				absolute_path: Cow::Borrowed(&absolute),
+				relative_path: &relative,
+				file_type,
+				mtime,
+				size,
+				depth: next_depth,
+			};
+
+			let decision = visitor
+				.decide_pre_descend(&meta)
+				.map_err(WalkError::Interrupted)?;
+			if decision.stop {
+				return Ok(true);
+			}
+
+			if !self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
+				match visitor
+					.visit_pre_decided(Entry {
+						path: &absolute,
+						relative: &relative,
+						name: entry.name.as_ref(),
+						file_type,
+						mtime,
+						size,
+						depth: next_depth,
+					})
+					.map_err(WalkError::Interrupted)?
+				{
+					WalkControl::Quit => return Ok(true),
+					WalkControl::SkipDescend => continue,
+					WalkControl::Continue => {},
+				}
+			}
+
+			let child_stopped = if descend && next_depth < self.options.max_depth && decision.descend {
+				let child_ignore = self.matcher.child_state(ignore_state, &absolute);
+				self.walk_dir(&absolute, &relative, next_depth, &child_ignore, visitor)?
+			} else {
+				false
+			};
+
+			if child_stopped {
+				return Ok(true);
+			}
+
+			if self.options.contents_first && decision.emit && next_depth >= self.options.min_depth {
+				match visitor
+					.visit_pre_decided(Entry {
+						path: &absolute,
+						relative: &relative,
+						name: entry.name.as_ref(),
+						file_type,
+						mtime,
+						size,
+						depth: next_depth,
+					})
+					.map_err(WalkError::Interrupted)?
+				{
+					WalkControl::Quit => return Ok(true),
+					WalkControl::SkipDescend | WalkControl::Continue => {},
+				}
+			}
+		}
+
+		Ok(false)
 	}
-	Ok(WalkStatus::Complete)
 }
-
-fn handle_ignore_walk_error<V>(
-	root: &Path,
-	pruned_dirs: &Arc<Mutex<Vec<PathBuf>>>,
-	error: ignore::Error,
-	options: WalkOptions,
-	visitor: &mut V,
-) -> std::result::Result<bool, WalkError<V::Error>>
-where
-	V: EntryVisitor,
-{
-	let path = ignore_error_path(&error).map_or_else(|| root.to_path_buf(), Path::to_path_buf);
-	if is_pruned_path(&path, pruned_dirs) {
-		return Ok(false);
-	}
-	let io_error = ignore_error_to_io(&error);
-	handle_read_dir_error(&path, ReadDirError::Io(io_error), options, visitor)
-}
-
-fn ignore_error_path(error: &ignore::Error) -> Option<&Path> {
-	match error {
-		ignore::Error::Partial(errors) => errors.iter().find_map(ignore_error_path),
-		ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
-			ignore_error_path(err)
-		},
-		ignore::Error::WithPath { path, .. } => Some(path),
-		ignore::Error::Loop { child, .. } => Some(child),
-		ignore::Error::Io(_)
-		| ignore::Error::Glob { .. }
-		| ignore::Error::UnrecognizedFileType(_)
-		| ignore::Error::InvalidDefinition => None,
-	}
-}
-
-fn ignore_error_to_io(error: &ignore::Error) -> io::Error {
-	if let Some(io_error) = error.io_error() {
-		io::Error::new(io_error.kind(), error.to_string())
-	} else {
-		io::Error::other(error.to_string())
-	}
-}
-
-fn is_pruned_path(path: &Path, pruned_dirs: &Arc<Mutex<Vec<PathBuf>>>) -> bool {
-	pruned_dirs.lock().iter().any(|dir| path.starts_with(dir))
-}
-
 /// Return whether [`WalkDetail::Full`] provides file sizes without per-entry
 /// metadata syscalls on this platform.
 pub const fn supports_cheap_size_hints() -> bool {
@@ -2527,165 +2489,6 @@ impl FastIgnore {
 	}
 }
 
-#[allow(clippy::too_many_arguments, reason = "hot traversal path keeps state explicit")]
-fn walk_dir<V, H>(
-	dir: &Path,
-	relative_dir: &str,
-	depth: usize,
-	ignore_state: &Arc<IgnoreState>,
-	matcher: &FastIgnore,
-	options: WalkOptions,
-	heartbeat: &mut H,
-	visited: &mut usize,
-	visitor: &mut V,
-) -> std::result::Result<bool, WalkError<V::Error>>
-where
-	V: EntryVisitor,
-	H: FnMut() -> std::result::Result<(), V::Error>,
-{
-	match options.order {
-		WalkOrder::Path => {
-			let mut entries = Vec::new();
-			match platform::read_dir_entries(dir, options.detail, |entry| {
-				entries.push(entry.into_owned());
-				Ok(ReadDirControl::Continue)
-			}) {
-				Ok(_) => {},
-				Err(err) => return handle_read_dir_error(dir, err, options, visitor),
-			}
-			entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-			for entry in entries {
-				if process_entry(
-					dir,
-					relative_dir,
-					depth,
-					ignore_state,
-					matcher,
-					options,
-					heartbeat,
-					visited,
-					visitor,
-					entry.as_raw(),
-				)? == ReadDirControl::Stop
-				{
-					return Ok(true);
-				}
-			}
-			Ok(false)
-		},
-		WalkOrder::Unordered => match platform::read_dir_entries(dir, options.detail, |entry| {
-			process_entry(
-				dir,
-				relative_dir,
-				depth,
-				ignore_state,
-				matcher,
-				options,
-				heartbeat,
-				visited,
-				visitor,
-				entry,
-			)
-		}) {
-			Ok(ReadDirControl::Continue) => Ok(false),
-			Ok(ReadDirControl::Stop) => Ok(true),
-			Err(err) => handle_read_dir_error(dir, err, options, visitor),
-		},
-	}
-}
-
-#[allow(clippy::too_many_arguments, reason = "hot traversal path keeps state explicit")]
-fn process_entry<V, H>(
-	dir: &Path,
-	relative_dir: &str,
-	depth: usize,
-	ignore_state: &Arc<IgnoreState>,
-	matcher: &FastIgnore,
-	options: WalkOptions,
-	heartbeat: &mut H,
-	visited: &mut usize,
-	visitor: &mut V,
-	entry: RawDirEntry<'_>,
-) -> std::result::Result<ReadDirControl, WalkError<V::Error>>
-where
-	V: EntryVisitor,
-	H: FnMut() -> std::result::Result<(), V::Error>,
-{
-	if *visited == 0 || *visited >= HEARTBEAT_INTERVAL {
-		*visited = 0;
-		heartbeat().map_err(WalkError::Interrupted)?;
-	}
-	*visited += 1;
-
-	let name = entry.name.as_ref();
-	if is_dot_entry(name) {
-		return Ok(ReadDirControl::Continue);
-	}
-	if !options.include_hidden && is_hidden_name(name) {
-		return Ok(ReadDirControl::Continue);
-	}
-	if (options.skip_git && is_git_name(name))
-		|| (options.skip_node_modules && is_node_modules_name(name))
-	{
-		return Ok(ReadDirControl::Continue);
-	}
-
-	let name = entry_name(name);
-	if name.is_empty() {
-		return Ok(ReadDirControl::Continue);
-	}
-	let relative = join_relative_path(relative_dir, &name);
-	let next_depth = depth + 1;
-	if next_depth > options.max_depth {
-		return Ok(ReadDirControl::Continue);
-	}
-	let is_dir = entry.file_type == FileType::Dir;
-	let entry_name: &OsStr = entry.name.as_ref();
-	let absolute = dir.join(Path::new(entry_name));
-
-	if matcher.is_ignored(ignore_state, &absolute, is_dir) {
-		return Ok(ReadDirControl::Continue);
-	}
-
-	if next_depth >= options.min_depth {
-		match visitor
-			.visit(Entry {
-				path:      &absolute,
-				relative:  &relative,
-				name:      entry.name.as_ref(),
-				file_type: entry.file_type,
-				mtime:     entry.mtime,
-				size:      entry.size,
-				depth:     next_depth,
-			})
-			.map_err(WalkError::Interrupted)?
-		{
-			WalkControl::Quit => return Ok(ReadDirControl::Stop),
-			WalkControl::SkipDescend => return Ok(ReadDirControl::Continue),
-			WalkControl::Continue => {},
-		}
-	}
-
-	if is_dir && next_depth < options.max_depth {
-		let child_ignore = matcher.child_state(ignore_state, &absolute);
-		if walk_dir(
-			&absolute,
-			&relative,
-			next_depth,
-			&child_ignore,
-			matcher,
-			options,
-			heartbeat,
-			visited,
-			visitor,
-		)? {
-			return Ok(ReadDirControl::Stop);
-		}
-	}
-
-	Ok(ReadDirControl::Continue)
-}
-
 fn handle_read_dir_error<V>(
 	dir: &Path,
 	err: ReadDirError<V::Error>,
@@ -2697,9 +2500,6 @@ where
 {
 	match err {
 		ReadDirError::Walk(err) => Err(err),
-		ReadDirError::Io(err) if err.kind() == io::ErrorKind::Unsupported => {
-			Err(WalkError::Unsupported)
-		},
 		ReadDirError::Io(err)
 			if options.directory_errors == DirectoryErrorMode::SkipSkippable
 				&& is_skippable_directory_error(&err) =>
@@ -2785,6 +2585,7 @@ fn mtime_millis(seconds: i64, nanos: i64) -> Option<f64> {
 #[cfg(target_os = "macos")]
 mod platform {
 	use std::{
+		borrow::Cow,
 		ffi::{CString, OsStr},
 		io,
 		mem::size_of,
@@ -2796,7 +2597,6 @@ mod platform {
 		FileType, RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError, mtime_millis,
 	};
 
-	pub const SUPPORTED: bool = true;
 	pub const CHEAP_SIZE_HINTS: bool = false;
 
 	const BUFFER_SIZE: usize = 256 * 1024;
@@ -2857,7 +2657,10 @@ mod platform {
 				if err.kind() == io::ErrorKind::Interrupted {
 					continue;
 				}
-				return Err(ReadDirError::Io(map_unsupported(err)));
+				if is_unsupported_dir_scan(&err) {
+					return read_dir_entries_std(path, detail, emit);
+				}
+				return Err(ReadDirError::Io(err));
 			}
 
 			let mut offset = 0usize;
@@ -2880,6 +2683,64 @@ mod platform {
 					return Ok(ReadDirControl::Stop);
 				}
 				offset += record_len;
+			}
+		}
+		Ok(ReadDirControl::Continue)
+	}
+
+	fn read_dir_entries_std<F, E>(
+		path: &Path,
+		detail: WalkDetail,
+		mut emit: F,
+	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
+	where
+		F: FnMut(RawDirEntry<'_>) -> std::result::Result<ReadDirControl, WalkError<E>>,
+	{
+		let read_dir = std::fs::read_dir(path)?;
+		for entry in read_dir {
+			let entry = entry?;
+			let file_type = match entry.file_type() {
+				Ok(file_type) => file_type,
+				Err(err) if is_skippable_entry_error(&err) => continue,
+				Err(err) => return Err(err.into()),
+			};
+			let file_type = if file_type.is_symlink() {
+				Some(FileType::Symlink)
+			} else if file_type.is_dir() {
+				Some(FileType::Dir)
+			} else if file_type.is_file() {
+				Some(FileType::File)
+			} else {
+				None
+			};
+			let Some(file_type) = file_type else {
+				continue;
+			};
+
+			let mut mtime = None;
+			let mut size = None;
+			if detail == WalkDetail::Full {
+				match std::fs::symlink_metadata(entry.path()) {
+					Ok(metadata) => {
+						if file_type == FileType::File {
+							size = Some(metadata.len() as f64);
+						}
+						mtime = metadata
+							.modified()
+							.ok()
+							.and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+							.map(|duration| duration.as_millis() as f64);
+					},
+					Err(err) if is_skippable_entry_error(&err) => continue,
+					Err(err) => return Err(err.into()),
+				}
+			}
+
+			let raw_entry =
+				RawDirEntry { name: Cow::Owned(entry.file_name()), file_type, mtime, size };
+
+			if emit(raw_entry).map_err(ReadDirError::Walk)? == ReadDirControl::Stop {
+				return Ok(ReadDirControl::Stop);
 			}
 		}
 		Ok(ReadDirControl::Continue)
@@ -2968,12 +2829,12 @@ mod platform {
 		}
 	}
 
-	fn map_unsupported(err: io::Error) -> io::Error {
-		if matches!(err.raw_os_error(), Some(libc::ENOTSUP | libc::EINVAL)) {
-			io::Error::new(io::ErrorKind::Unsupported, err)
-		} else {
-			err
-		}
+	fn is_unsupported_dir_scan(err: &io::Error) -> bool {
+		matches!(err.raw_os_error(), Some(libc::ENOTSUP | libc::EINVAL))
+	}
+
+	fn is_skippable_entry_error(err: &io::Error) -> bool {
+		matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied)
 	}
 
 	fn invalid_data(message: &'static str) -> io::Error {
@@ -2995,7 +2856,6 @@ mod platform {
 		FileType, RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError, mtime_millis,
 	};
 
-	pub const SUPPORTED: bool = true;
 	pub const CHEAP_SIZE_HINTS: bool = false;
 
 	const BUFFER_SIZE: usize = 256 * 1024;
@@ -3324,7 +3184,6 @@ mod platform {
 		FileType, RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError, mtime_millis,
 	};
 
-	pub const SUPPORTED: bool = true;
 	pub const CHEAP_SIZE_HINTS: bool = true;
 
 	const BUFFER_SIZE: usize = 256 * 1024;
@@ -3475,28 +3334,77 @@ mod platform {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
-	use std::{io, path::Path};
+	use std::{borrow::Cow, io, path::Path};
 
-	use super::{RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError};
+	use super::{FileType, RawDirEntry, ReadDirControl, ReadDirError, WalkDetail, WalkError};
 
-	pub const SUPPORTED: bool = false;
 	pub const CHEAP_SIZE_HINTS: bool = false;
 
 	pub fn read_dir_entries<F, E>(
-		_path: &Path,
-		_detail: WalkDetail,
-		_emit: F,
+		path: &Path,
+		detail: WalkDetail,
+		mut emit: F,
 	) -> std::result::Result<ReadDirControl, ReadDirError<E>>
 	where
 		F: FnMut(RawDirEntry<'_>) -> std::result::Result<ReadDirControl, WalkError<E>>,
 	{
-		Err(
-			io::Error::new(
-				io::ErrorKind::Unsupported,
-				"native directory scan unsupported on this platform",
-			)
-			.into(),
-		)
+		let read_dir = std::fs::read_dir(path)?;
+		for entry in read_dir {
+			let entry = entry?;
+			let file_type_res = entry.file_type();
+			let file_type = match file_type_res {
+				Ok(ft) => ft,
+				Err(err) if is_skippable_entry_error(&err) => continue,
+				Err(err) => return Err(err.into()),
+			};
+			let custom_file_type = if file_type.is_symlink() {
+				Some(FileType::Symlink)
+			} else if file_type.is_dir() {
+				Some(FileType::Dir)
+			} else if file_type.is_file() {
+				Some(FileType::File)
+			} else {
+				None
+			};
+			let Some(custom_file_type) = custom_file_type else {
+				continue; // skip unsupported special files
+			};
+
+			let mut mtime = None;
+			let mut size = None;
+			if detail == WalkDetail::Full {
+				match std::fs::symlink_metadata(entry.path()) {
+					Ok(metadata) => {
+						if custom_file_type == FileType::File {
+							size = Some(metadata.len() as f64);
+						}
+						mtime = metadata
+							.modified()
+							.ok()
+							.and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+							.map(|duration| duration.as_millis() as f64);
+					},
+					Err(err) if is_skippable_entry_error(&err) => continue,
+					Err(err) => return Err(err.into()),
+				}
+			}
+
+			let raw_entry = RawDirEntry {
+				name: Cow::Owned(entry.file_name()),
+				file_type: custom_file_type,
+				mtime,
+				size,
+			};
+
+			if emit(raw_entry).map_err(ReadDirError::Walk)? == ReadDirControl::Stop {
+				return Ok(ReadDirControl::Stop);
+			}
+		}
+		Ok(ReadDirControl::Continue)
+	}
+
+	fn is_skippable_entry_error(err: &io::Error) -> bool {
+		matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied)
 	}
 }
 
@@ -3846,9 +3754,6 @@ mod tests {
 			|| Ok::<(), Infallible>(()),
 		)
 		.expect("collection should not fail");
-		let EntryScan::Entries(scan) = scan else {
-			panic!("collection should return entries");
-		};
 		let paths = scan
 			.entries
 			.into_iter()
@@ -3886,9 +3791,6 @@ mod tests {
 			|| Ok::<(), Infallible>(()),
 		)
 		.expect("collection should not fail");
-		let EntryScan::Entries(scan) = scan else {
-			panic!("expected entries");
-		};
 		let paths = scan
 			.entries
 			.into_iter()
@@ -3919,9 +3821,6 @@ mod tests {
 			|| Ok::<(), Infallible>(()),
 		)
 		.expect("collection should not fail");
-		let EntryScan::Entries(scan) = scan else {
-			return;
-		};
 		let paths = scan
 			.entries
 			.into_iter()
@@ -3985,12 +3884,9 @@ mod tests {
 			.expect("skip file should be written");
 
 		let mut visitor = PruneVisitor { seen: Vec::new() };
-		let status =
+		let _status =
 			walk_entries(tree.path(), test_options(), &mut visitor, || Ok::<(), Infallible>(()))
 				.expect("walk should not fail");
-		if matches!(status, WalkStatus::Unsupported) {
-			return;
-		}
 		assert!(visitor.seen.iter().any(|path| path == "skip"));
 		assert!(visitor.seen.iter().any(|path| path == "keep/file.txt"));
 		assert!(!visitor.seen.iter().any(|path| path == "skip/file.txt"));

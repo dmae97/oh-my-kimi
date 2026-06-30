@@ -282,10 +282,6 @@ fn process_dir_walk_request(
 			}
 			ret_value
 		},
-		Ok(pi_walker::WalkStatus::Unsupported) | Err(pi_walker::WalkError::Unsupported) => {
-			writeln!(&mut stderr(), "Error: directory scan unsupported").unwrap();
-			1
-		},
 		Err(pi_walker::WalkError::Interrupted(err)) => {
 			ret_value = 1;
 			writeln!(&mut stderr(), "Error: {err}").unwrap();

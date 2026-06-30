@@ -35,9 +35,6 @@ pub struct GlobMatch {
 
 fn walker_error_to_napi<E: std::fmt::Display>(err: pi_walker::WalkError<E>) -> Error {
 	match err {
-		pi_walker::WalkError::Unsupported => {
-			Error::from_reason("Native directory scan unsupported".to_string())
-		},
 		pi_walker::WalkError::Interrupted(err) => Error::from_reason(err.to_string()),
 		pi_walker::WalkError::InvalidData { path, message } => Error::from_reason(format!(
 			"Native directory scan failed for {}: {message}",
