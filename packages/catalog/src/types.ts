@@ -421,6 +421,11 @@ export interface AnthropicCompat {
 	 */
 	replayUnsignedThinking?: boolean;
 	/**
+	 * Whether the endpoint requires `thinking.type: "enabled"` whenever the
+	 * model reasons. Use for models that reject omitted or disabled thinking.
+	 */
+	requiresThinkingEnabled?: boolean;
+	/**
 	 * Prefix Anthropic built-in tool names (`web_search`, `code_execution`, ...)
 	 * when they are ordinary client tools. Some Anthropic-compatible gateways
 	 * intercept those exact names as server tools and return raw search/result

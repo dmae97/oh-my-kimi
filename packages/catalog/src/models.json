@@ -75779,6 +75779,7 @@
 				"supportsForcedToolChoice": true,
 				"supportsSamplingParams": true,
 				"requiresToolResultId": false,
+				"requiresThinkingEnabled": false,
 				"replayUnsignedThinking": false,
 				"escapeBuiltinToolNames": false
 			}
