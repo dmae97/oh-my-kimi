@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Added
 
 - Added service tier support for Google Gemini and Vertex AI, including model-specific service tier configurations via ServiceTierByFamily.

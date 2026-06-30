@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Fixed
 
 - Fixed compatibility with Kimi K2.7 Code on native endpoints to ensure thinking mode is preserved and tool choice is not forced.

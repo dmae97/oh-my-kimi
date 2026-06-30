@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Fixed
 
 - Fixed an issue where a fast double-Escape keypress was swallowed and ignored, preventing double-escape gestures and subsequent Escape key handlers from firing.

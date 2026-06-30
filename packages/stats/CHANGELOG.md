@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Fixed
 
 - Improved premium request calculation accuracy by correctly accounting for specific model families.

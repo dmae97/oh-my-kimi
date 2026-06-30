@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Breaking Changes
 
 - Replaced the global `serviceTier` and `fastModeScope` settings with granular, per-family settings (`tier.openai`, `tier.anthropic`, and `tier.google`) to control service tiers, subagents, advisors, and `/fast` mode targets.
@@ -14,7 +16,6 @@
 ### Fixed
 
 - Improved reliability of DuckDuckGo web searches by updating browser request headers and parameters
-
 - Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
 - Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.
 - Fixed an issue where the `irc` inbox missed messages that arrived while the recipient agent was already running.

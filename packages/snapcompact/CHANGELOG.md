@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.7] - 2026-06-30
+
 ### Added
 
 - Added the `silver16-bw` shape backed by an embedded Silver TrueType font to support CJK and other non-Latin text.
