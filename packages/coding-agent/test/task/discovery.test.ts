@@ -3,6 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { disableProvider, enableProvider } from "@oh-my-pi/pi-coding-agent/capability";
+import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
+import {
+	clearOmpExtensionCliRoots,
+	injectOmpExtensionCliRoots,
+} from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -64,6 +69,8 @@ describe("discoverAgents", () => {
 
 	afterEach(async () => {
 		enableProvider("omp-plugins");
+		clearOmpExtensionCliRoots();
+		clearFsCache();
 		await removeWithRetries(tempHome);
 	});
 
@@ -101,5 +108,44 @@ describe("discoverAgents", () => {
 		const names = agents.map(agent => agent.name);
 
 		expect(names).not.toContain("loom-verify-spec");
+	});
+
+	test("CLI extension agents win over project `extensions:` settings on dedup", async () => {
+		// listOmpExtensionRoots returns roots in source-precedence order
+		// (CLI > project settings > user settings > installed plugins). Agents
+		// must honor that order so the `task` surface dedups identically to
+		// the skills/hooks/tools surface in discovery/omp-plugins.ts.
+		const cliExt = path.join(tempHome, "cli-ext");
+		const projectExt = path.join(tempHome, "project-ext");
+		await fs.mkdir(path.join(cliExt, "agents"), { recursive: true });
+		await fs.mkdir(path.join(projectExt, "agents"), { recursive: true });
+		await fs.writeFile(
+			path.join(cliExt, "agents", "collide.md"),
+			["---", "name: collide", "description: from-cli", "---", "cli body"].join("\n"),
+		);
+		await fs.writeFile(
+			path.join(projectExt, "agents", "collide.md"),
+			[
+				"---",
+				"name: collide",
+				"description: from-project-settings",
+				"---",
+				"project body",
+			].join("\n"),
+		);
+
+		await fs.mkdir(path.join(projectDir, ".omp"), { recursive: true });
+		await fs.writeFile(
+			path.join(projectDir, ".omp", "settings.json"),
+			JSON.stringify({ extensions: [projectExt] }),
+		);
+		injectOmpExtensionCliRoots([cliExt], tempHome, projectDir);
+
+		const { agents } = await discoverAgents(projectDir, tempHome);
+		const collide = agents.find(agent => agent.name === "collide");
+
+		expect(collide).toBeDefined();
+		expect(collide?.description).toBe("from-cli");
+		expect(collide?.filePath).toBe(path.join(cliExt, "agents", "collide.md"));
 	});
 });

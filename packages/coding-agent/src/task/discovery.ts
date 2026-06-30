@@ -61,8 +61,10 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
 /**
  * Discover agents from filesystem and merge with bundled agents.
  * Precedence (highest wins): project `.omp/agents`, user `.omp/agents`,
- * OMP extension-package agents (project scope before user), Claude
- * marketplace plugin agents (project scope before user), then bundled.
+ * OMP extension-package agents in `listOmpExtensionRoots` source order
+ * (CLI roots > project `extensions:` settings > user `extensions:` settings >
+ * installed npm/link plugins), Claude marketplace plugin agents (project
+ * scope before user), then bundled.
  * @param cwd - Current working directory for project agent discovery
  */
 export async function discoverAgents(cwd: string, home: string = os.homedir()): Promise<DiscoveryResult> {
@@ -88,18 +90,17 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 	const user = userDirs[0];
 	if (user) orderedDirs.push({ dir: user.path, source: "user" });
 
-	// OMP extension-package agents/ dirs (CLI roots + `extensions:` settings +
-	// enabled npm/link plugins). `listOmpExtensionRoots` already excludes Claude
-	// marketplace installs by realpath so we never double-scan them here. Gate on
-	// `omp-plugins` so disabledProviders suppresses the whole extension package surface.
+	// OMP extension-package agents/ dirs. `listOmpExtensionRoots` returns roots in
+	// source-precedence order (CLI > project `extensions:` settings > user
+	// `extensions:` settings > installed npm/link plugins, with marketplace
+	// installs already excluded by realpath) — consume that order verbatim so the
+	// `task` agent surface dedups identically to the sibling skills/hooks/tools
+	// surface in `discovery/omp-plugins.ts`. Gate on `omp-plugins` so
+	// disabledProviders suppresses the whole extension-package surface.
 	const extensionRoots = isProviderEnabled("omp-plugins")
 		? await listOmpExtensionRoots({ cwd: resolvedCwd, home, repoRoot: null })
 		: [];
-	const sortedExtensionRoots = [...extensionRoots].sort((a, b) => {
-		if (a.level === b.level) return 0;
-		return a.level === "project" ? -1 : 1;
-	});
-	for (const root of sortedExtensionRoots) {
+	for (const root of extensionRoots) {
 		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
 	}
 
