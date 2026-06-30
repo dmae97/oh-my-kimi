@@ -2,9 +2,9 @@
 //! caching.
 //!
 //! # Overview
-//! Resolves a search root, obtains scanned entries via [`fs_cache`], applies
-//! glob matching plus optional file-type filtering, and optionally streams each
-//! accepted match through a callback.
+//! Resolves a search root, scans entries via `pi-walker`, applies glob matching
+//! plus optional file-type filtering, and optionally streams each accepted
+//! match through a callback.
 //!
 //! The walker always skips `.git`, and skips `node_modules` unless explicitly
 //! requested.
@@ -14,15 +14,8 @@
 //! // JS: await native.glob({ pattern: "*.rs", path: "." })
 //! ```
 
-use std::{
-	cmp::Ordering,
-	collections::BinaryHeap,
-	path::Path,
-	sync::{Arc, Mutex},
-};
+use std::{cmp::Ordering, path::Path};
 
-use globset::GlobSet;
-use ignore::{ParallelVisitor, ParallelVisitorBuilder, WalkState};
 use napi::{
 	bindgen_prelude::*,
 	threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode},
@@ -30,8 +23,8 @@ use napi::{
 use napi_derive::napi;
 
 // Re-export entry types so existing `glob::FileType` / `glob::GlobMatch` paths still work.
-pub use crate::fs_cache::{FileType, GlobMatch};
-use crate::{fs_cache, glob_util, task};
+pub use crate::iofs::{FileType, GlobMatch};
+use crate::{glob_util, iofs, task};
 
 /// Input options for `glob`, including traversal, filtering, and cancellation.
 #[napi(object)]
@@ -51,7 +44,7 @@ pub struct GlobOptions<'env> {
 	pub max_results:          Option<u32>,
 	/// Respect .gitignore files (default: true).
 	pub gitignore:            Option<bool>,
-	/// Enable shared filesystem scan cache (default: false).
+	/// Enable walker scan caching (default: false).
 	pub cache:                Option<bool>,
 	/// Sort results by mtime (most recent first) before applying limit.
 	pub sort_by_mtime:        Option<bool>,
@@ -84,38 +77,7 @@ struct GlobConfig {
 	use_gitignore:         bool,
 	mentions_node_modules: bool,
 	sort_by_mtime:         bool,
-	use_cache:             bool,
-}
-
-#[derive(Clone)]
-struct RankedGlobMatch {
-	entry: GlobMatch,
-}
-
-impl PartialEq for RankedGlobMatch {
-	fn eq(&self, other: &Self) -> bool {
-		compare_matches_by_rank(&self.entry, &other.entry) == Ordering::Equal
-	}
-}
-
-impl Eq for RankedGlobMatch {}
-
-impl PartialOrd for RankedGlobMatch {
-	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-		Some(self.cmp(other))
-	}
-}
-
-impl Ord for RankedGlobMatch {
-	fn cmp(&self, other: &Self) -> Ordering {
-		if match_is_worse(&self.entry, &other.entry) {
-			Ordering::Greater
-		} else if match_is_worse(&other.entry, &self.entry) {
-			Ordering::Less
-		} else {
-			Ordering::Equal
-		}
-	}
+	cache:                 bool,
 }
 
 fn match_mtime(entry: &GlobMatch) -> f64 {
@@ -126,33 +88,6 @@ fn compare_matches_by_rank(a: &GlobMatch, b: &GlobMatch) -> Ordering {
 	match_mtime(b)
 		.total_cmp(&match_mtime(a))
 		.then_with(|| a.path.cmp(&b.path))
-}
-
-fn match_is_worse(a: &GlobMatch, b: &GlobMatch) -> bool {
-	compare_matches_by_rank(a, b) == Ordering::Greater
-}
-
-/// Returns `true` when `entry` was admitted into the bounded top-`limit` heap
-/// (either filling free space or evicting a worse existing entry).
-fn push_bounded_match(
-	heap: &mut BinaryHeap<RankedGlobMatch>,
-	entry: GlobMatch,
-	limit: usize,
-) -> bool {
-	if heap.len() < limit {
-		heap.push(RankedGlobMatch { entry });
-		return true;
-	}
-
-	let Some(worst) = heap.peek() else {
-		return false;
-	};
-	if match_is_worse(&worst.entry, &entry) {
-		heap.pop();
-		heap.push(RankedGlobMatch { entry });
-		return true;
-	}
-	false
 }
 
 fn resolve_symlink_target_type(root: &Path, relative_path: &str) -> Option<FileType> {
@@ -190,238 +125,109 @@ fn apply_file_type_filter(entry: &GlobMatch, config: &GlobConfig) -> Option<File
 	}
 }
 
-/// Filter and collect matching entries from a pre-scanned list.
-fn filter_entries(
-	entries: &[GlobMatch],
-	glob_set: &GlobSet,
+fn collect_ranked_matches(
+	request: &pi_walker::WalkRequest,
 	config: &GlobConfig,
-	on_match: Option<&ThreadsafeFunction<GlobMatch>>,
 	ct: &task::CancelToken,
 ) -> Result<Vec<GlobMatch>> {
-	let mut matches = Vec::new();
-	if config.max_results == 0 {
-		return Ok(matches);
-	}
+	let outcome = request
+		.collect_ranked_with_heartbeat(
+			pi_walker::WalkRank::MtimeDescPathAsc,
+			config.max_results,
+			|| ct.heartbeat(),
+		)
+		.map_err(iofs::map_walker_error)?;
+	Ok(outcome.entries.into_iter().map(GlobMatch::from).collect())
+}
 
-	for entry in entries {
+fn collect_native_filtered_matches(
+	request: &pi_walker::WalkRequest,
+	config: &GlobConfig,
+	ct: &task::CancelToken,
+) -> Result<Vec<GlobMatch>> {
+	let outcome = request
+		.collect_with_heartbeat(|| ct.heartbeat())
+		.map_err(iofs::map_walker_error)?;
+	let mut collected = Vec::new();
+	for entry in outcome.entries {
 		ct.heartbeat()?;
-		if fs_cache::should_skip_path(Path::new(&entry.path), config.mentions_node_modules) {
-			// Apply post-scan node_modules policy before glob matching.
-			continue;
-		}
-		if !glob_set.is_match(&entry.path) {
-			continue;
-		}
-		let Some(effective_file_type) = apply_file_type_filter(entry, config) else {
+		let mut matched_entry = GlobMatch::from(entry);
+		let Some(effective_file_type) = apply_file_type_filter(&matched_entry, config) else {
 			continue;
 		};
-		let mut matched_entry = entry.clone();
 		matched_entry.file_type = effective_file_type;
-		if !config.sort_by_mtime
-			&& let Some(callback) = on_match
-		{
-			callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
-		}
-
-		matches.push(matched_entry);
-		// Only early-break when not sorting; mtime sort requires full candidate set.
-		if !config.sort_by_mtime && matches.len() >= config.max_results {
+		collected.push(matched_entry);
+		if !config.sort_by_mtime && collected.len() >= config.max_results {
 			break;
 		}
 	}
-	Ok(matches)
+	Ok(collected)
 }
 
-struct SortedMatchVisitor<'a> {
-	glob_set:    &'a GlobSet,
-	config:      &'a GlobConfig,
-	on_match:    Option<&'a ThreadsafeFunction<GlobMatch>>,
-	top_matches: BinaryHeap<RankedGlobMatch>,
-	shared:      Arc<Mutex<Vec<GlobMatch>>>,
-	error:       Arc<Mutex<Option<String>>>,
-	ct:          &'a task::CancelToken,
-	visited:     usize,
-}
-
-impl Drop for SortedMatchVisitor<'_> {
-	fn drop(&mut self) {
-		if self.top_matches.is_empty() {
-			return;
-		}
-		let drained = std::mem::take(&mut self.top_matches);
-		self
-			.shared
-			.lock()
-			.expect("glob match collection lock poisoned")
-			.extend(drained.into_iter().map(|ranked| ranked.entry));
-	}
-}
-
-impl ParallelVisitor for SortedMatchVisitor<'_> {
-	fn visit(&mut self, entry: std::result::Result<ignore::DirEntry, ignore::Error>) -> WalkState {
-		if self.visited == 0 || self.visited >= 128 {
-			self.visited = 0;
-			if let Err(err) = self.ct.heartbeat() {
-				*self.error.lock().expect("error lock poisoned") = Some(err.to_string());
-				return WalkState::Quit;
-			}
-		}
-		self.visited += 1;
-
-		let Ok(entry) = entry else {
-			return WalkState::Continue;
-		};
-		let Some(mut matched_entry) =
-			fs_cache::collect_entry(&self.config.root, &entry, fs_cache::ScanDetail::Full)
-		else {
-			return WalkState::Continue;
-		};
-		if fs_cache::should_skip_path(
-			Path::new(&matched_entry.path),
-			self.config.mentions_node_modules,
-		) {
-			return WalkState::Continue;
-		}
-		if !self.glob_set.is_match(&matched_entry.path) {
-			return WalkState::Continue;
-		}
-		let Some(effective_file_type) = apply_file_type_filter(&matched_entry, self.config) else {
-			return WalkState::Continue;
-		};
-		matched_entry.file_type = effective_file_type;
-		let streamable = self.on_match.map(|cb| (cb, matched_entry.clone()));
-		// Admission into the per-thread heap over-approximates the global top-N,
-		// so streamed partials are a superset; callers dedup and re-rank.
-		if push_bounded_match(&mut self.top_matches, matched_entry, self.config.max_results)
-			&& let Some((callback, payload)) = streamable
-		{
-			callback.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
-		}
-		WalkState::Continue
-	}
-}
-
-struct SortedMatchVisitorBuilder<'a> {
-	glob_set: &'a GlobSet,
-	config:   &'a GlobConfig,
-	on_match: Option<&'a ThreadsafeFunction<GlobMatch>>,
-	shared:   Arc<Mutex<Vec<GlobMatch>>>,
-	error:    Arc<Mutex<Option<String>>>,
-	ct:       &'a task::CancelToken,
-}
-
-impl<'a> ParallelVisitorBuilder<'a> for SortedMatchVisitorBuilder<'a> {
-	fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
-		Box::new(SortedMatchVisitor {
-			glob_set:    self.glob_set,
-			config:      self.config,
-			on_match:    self.on_match,
-			top_matches: BinaryHeap::with_capacity(self.config.max_results.min(1024)),
-			shared:      Arc::clone(&self.shared),
-			error:       Arc::clone(&self.error),
-			ct:          self.ct,
-			visited:     0,
-		})
-	}
-}
-
-/// Walk the tree in parallel, keeping a bounded top-`max_results` heap per
-/// worker. The union of per-thread heaps always contains the global top-N;
-/// `run_glob` re-sorts and truncates afterwards, so the final ranking is
-/// deterministic (mtime desc, path tiebreak) regardless of walk order.
-fn collect_sorted_matches_uncached(
-	glob_set: &GlobSet,
-	config: &GlobConfig,
-	on_match: Option<&ThreadsafeFunction<GlobMatch>>,
-	ct: &task::CancelToken,
-) -> Result<Vec<GlobMatch>> {
-	let mut builder = fs_cache::build_walker(
-		&config.root,
-		config.include_hidden,
-		config.use_gitignore,
-		!config.mentions_node_modules,
-		false,
-	);
-	let workers = fs_cache::grep_workers();
-	if workers > 0 {
-		builder.threads(workers);
-	}
-	let shared = Arc::new(Mutex::new(Vec::new()));
-	let error = Arc::new(Mutex::new(None));
-	let mut visitor_builder = SortedMatchVisitorBuilder {
-		glob_set,
-		config,
-		on_match,
-		shared: Arc::clone(&shared),
-		error: Arc::clone(&error),
-		ct,
-	};
-	ct.heartbeat()?;
-	builder.build_parallel().visit(&mut visitor_builder);
-
-	let walk_error = error.lock().expect("error lock poisoned").take();
-	if let Some(error) = walk_error {
-		return Err(Error::from_reason(error));
-	}
-
-	let mut matches =
-		std::mem::take(&mut *shared.lock().expect("glob match collection lock poisoned"));
-	matches.sort_by(compare_matches_by_rank);
-	matches.truncate(config.max_results);
-	Ok(matches)
-}
-
-/// Executes matching/filtering over scanned entries and optionally streams each
-/// hit.
+/// Executes walker-owned glob filtering plus optional native file-type
+/// filtering, then optionally streams each returned match.
 fn run_glob(
 	config: GlobConfig,
 	on_match: Option<&ThreadsafeFunction<GlobMatch>>,
 	ct: task::CancelToken,
 ) -> Result<GlobResult> {
-	let glob_set = glob_util::compile_glob(&config.pattern, config.recursive)?;
+	let walk_glob_pattern = glob_util::build_glob_pattern(&config.pattern, config.recursive);
+	let walk_glob = pi_walker::CompiledWalkGlob::new([walk_glob_pattern])
+		.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
 	if config.max_results == 0 {
 		return Ok(GlobResult { matches: Vec::new(), total_matches: 0 });
 	}
 
-	let skip_node_modules = !config.mentions_node_modules;
-	let scan_options = fs_cache::ScanOptions {
-		include_hidden: config.include_hidden,
-		use_gitignore: config.use_gitignore,
-		skip_node_modules,
-		follow_links: false,
-		detail: if config.sort_by_mtime {
-			fs_cache::ScanDetail::Full
-		} else {
-			fs_cache::ScanDetail::Minimal
-		},
-	};
-	let streams_bounded_sorted_partials =
-		config.sort_by_mtime && !config.use_cache && config.max_results != usize::MAX;
-	let mut matches = if streams_bounded_sorted_partials {
-		collect_sorted_matches_uncached(&glob_set, &config, on_match, &ct)?
-	} else if config.use_cache {
-		let scan = fs_cache::get_or_scan(&config.root, scan_options, &ct)?;
-		let mut matches = filter_entries(&scan.entries, &glob_set, &config, on_match, &ct)?;
-		// Empty-result recheck: if we got zero matches from a cached scan that's old
-		// enough, force a rescan and try once more before returning empty.
-		if matches.is_empty() && scan.cache_age_ms >= fs_cache::empty_recheck_ms() {
-			let fresh = fs_cache::force_rescan(&config.root, scan_options, true, &ct)?;
-			matches = filter_entries(&fresh, &glob_set, &config, on_match, &ct)?;
-		}
-		matches
+	let scan_detail = if config.sort_by_mtime {
+		pi_walker::WalkDetail::Full
 	} else {
-		let fresh = fs_cache::force_rescan(&config.root, scan_options, false, &ct)?;
-		filter_entries(&fresh, &glob_set, &config, on_match, &ct)?
+		pi_walker::WalkDetail::Minimal
+	};
+	let base_request = pi_walker::WalkRequest::new(config.root.clone())
+		.hidden(config.include_hidden)
+		.gitignore(config.use_gitignore)
+		.skip_git(true)
+		.skip_node_modules(!config.mentions_node_modules)
+		.follow_links(pi_walker::FollowLinks::Never)
+		.detail(scan_detail)
+		.order(pi_walker::WalkOrder::Path)
+		.emit_root(false)
+		.depth(1, usize::MAX)
+		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
+		.cache(config.cache)
+		.empty_recheck(pi_walker::EmptyRecheck::Configured)
+		.filter(
+			pi_walker::WalkFilter::all()
+				.glob(walk_glob)
+				.node_modules_unless_mentioned(config.mentions_node_modules),
+		);
+
+	let mut matches = if config.sort_by_mtime && config.file_type_filter.is_none() {
+		collect_ranked_matches(&base_request, &config, &ct)?
+	} else {
+		let request = if !config.sort_by_mtime && config.file_type_filter.is_none() {
+			base_request.limit(config.max_results)
+		} else {
+			base_request
+		};
+		collect_native_filtered_matches(&request, &config, &ct)?
 	};
 
 	if config.sort_by_mtime {
 		// Sorting mode: rank by mtime descending, then apply max-results truncation.
 		matches.sort_by(compare_matches_by_rank);
 		matches.truncate(config.max_results);
-		if !streams_bounded_sorted_partials && let Some(callback) = on_match {
+		if let Some(callback) = on_match {
 			for matched_entry in &matches {
 				callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
 			}
+		}
+	}
+	if !config.sort_by_mtime
+		&& let Some(callback) = on_match
+	{
+		for matched_entry in &matches {
+			callback.call(Ok(matched_entry.clone()), ThreadsafeFunctionCallMode::NonBlocking);
 		}
 	}
 	let total_matches = matches.len().min(u32::MAX as usize) as u32;
@@ -433,9 +239,9 @@ fn run_glob(
 /// Resolves the search root, scans entries, applies glob and optional file-type
 /// filters, and optionally streams each accepted match through `on_match`.
 ///
-/// If `sortByMtime` is enabled with a finite `maxResults`, uncached scans keep
-/// only the current top results while traversing instead of collecting the full
-/// tree.
+/// When `sortByMtime` is enabled, the walker ranks matches by mtime before the
+/// native layer applies final symlink-aware file-type filtering and callback
+/// emission.
 ///
 /// # Errors
 /// Returns an error when the search path cannot be resolved, the path is not a
@@ -471,7 +277,7 @@ pub fn glob(
 	task::blocking("glob", ct, move |ct| {
 		run_glob(
 			GlobConfig {
-				root: fs_cache::resolve_search_path(&path)?,
+				root: pi_walker::resolve_search_path(&path).map_err(iofs::map_walker_error)?,
 				include_hidden: hidden.unwrap_or(false),
 				file_type_filter: file_type,
 				recursive: recursive.unwrap_or(true),
@@ -480,11 +286,96 @@ pub fn glob(
 				mentions_node_modules: include_node_modules
 					.unwrap_or_else(|| pattern.contains("node_modules")),
 				sort_by_mtime: sort_by_mtime.unwrap_or(false),
-				use_cache: cache.unwrap_or(false),
+				cache: cache.unwrap_or(false),
 				pattern,
 			},
 			on_match.as_ref(),
 			ct,
 		)
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		fs,
+		path::{Path, PathBuf},
+		sync::atomic::{AtomicU64, Ordering},
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+	struct TempDirGuard(PathBuf);
+
+	impl TempDirGuard {
+		fn new() -> Self {
+			let timestamp = SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.expect("system time is after UNIX_EPOCH")
+				.as_nanos();
+			let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+			let path = std::env::temp_dir().join(format!("pi-glob-test-{timestamp}-{counter}"));
+			fs::create_dir_all(&path).expect("create temp test directory");
+			Self(path)
+		}
+
+		fn path(&self) -> &Path {
+			&self.0
+		}
+	}
+
+	impl Drop for TempDirGuard {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.0);
+		}
+	}
+
+	fn match_paths(result: &super::GlobResult) -> Vec<&str> {
+		result
+			.matches
+			.iter()
+			.map(|entry| entry.path.as_str())
+			.collect()
+	}
+
+	#[test]
+	fn run_glob_with_gitignore_prunes_ignored_directory_but_keeps_matching_sibling() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join(".git")).expect("create repo marker");
+		fs::write(root.path().join(".gitignore"), "ignored/\n").expect("write gitignore");
+		fs::create_dir_all(root.path().join("ignored")).expect("create ignored directory");
+		fs::write(root.path().join("ignored/drop.rs"), "fn ignored() {}\n")
+			.expect("write ignored rust file");
+		fs::write(root.path().join("kept.rs"), "fn kept() {}\n").expect("write kept rust file");
+
+		let result = super::run_glob(
+			super::GlobConfig {
+				root:                  root.path().to_path_buf(),
+				pattern:               "*.rs".to_string(),
+				recursive:             true,
+				include_hidden:        false,
+				file_type_filter:      Some(super::FileType::File),
+				max_results:           usize::MAX,
+				use_gitignore:         true,
+				mentions_node_modules: false,
+				sort_by_mtime:         false,
+				cache:                 false,
+			},
+			None,
+			crate::task::CancelToken::default(),
+		)
+		.expect("glob succeeds");
+
+		let paths = match_paths(&result);
+		assert_eq!(paths, ["kept.rs"]);
+		assert_eq!(result.total_matches, 1);
+		assert!(
+			!result
+				.matches
+				.iter()
+				.any(|entry| entry.path.starts_with("ignored/")),
+			"gitignored directory should be pruned before matching, got {paths:?}"
+		);
+	}
 }

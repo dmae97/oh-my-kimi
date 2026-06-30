@@ -28,6 +28,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 xxhash-rust.workspace = true
+pi-walker.workspace = true
 pi-uutils-ctx = { path = "../pi-uutils-ctx" }
 uu_mkdir = { path = "../vendor/uu-mkdir" }
 uu_head = { path = "../vendor/uu-head" }

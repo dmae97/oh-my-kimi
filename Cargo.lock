@@ -3000,7 +3000,6 @@ dependencies = [
  "ast-grep-core",
  "base64",
  "clap",
- "dashmap",
  "fontdue",
  "globset",
  "grep-matcher",
@@ -3022,6 +3021,7 @@ dependencies = [
  "pi-iso",
  "pi-shell",
  "pi-uutils-ctx",
+ "pi-walker",
  "png",
  "portable-pty",
  "rayon",
@@ -3057,6 +3057,7 @@ dependencies = [
  "libc",
  "os_pipe",
  "pi-uutils-ctx",
+ "pi-walker",
  "pi_uu_grep",
  "regex",
  "serde",
@@ -3089,6 +3090,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-walker"
+version = "16.2.9"
+dependencies = [
+ "dashmap",
+ "globset",
+ "ignore",
+ "libc",
+ "rayon",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pi_uu_grep"
 version = "0.8.0"
 dependencies = [
@@ -3099,6 +3112,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "pi-uutils-ctx",
+ "pi-walker",
 ]
 
 [[package]]
@@ -4873,10 +4887,10 @@ dependencies = [
  "nix 0.29.0",
  "onig",
  "pi-uutils-ctx",
+ "pi-walker",
  "regex",
  "tempfile",
  "uucore 0.0.30",
- "walkdir",
 ]
 
 [[package]]

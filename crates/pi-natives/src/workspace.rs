@@ -9,16 +9,14 @@
 use std::{
 	collections::HashSet,
 	path::{Path, PathBuf},
-	sync::{Arc, LazyLock},
+	sync::LazyLock,
 };
 
-use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use parking_lot::Mutex;
 
 use crate::{
-	fs_cache::{self, FileType, GlobMatch},
+	iofs::{self, FileType, GlobMatch},
 	task,
 };
 
@@ -90,66 +88,33 @@ struct WorkspaceConfig {
 	collect_agents_md: bool,
 }
 
-fn build_workspace_walker(config: &WorkspaceConfig) -> WalkBuilder {
-	let mut builder = WalkBuilder::new(&config.root);
-	builder
-		.hidden(!config.include_hidden)
-		.follow_links(false)
-		.sort_by_file_path(|a, b| a.cmp(b))
-		.max_depth(Some(config.walk_max_depth))
-		.filter_entry(|entry| {
-			let name = entry.file_name().to_str().unwrap_or_default();
-			if name == ".DS_Store" {
-				return false;
-			}
-			if entry
-				.file_type()
-				.is_some_and(|file_type| file_type.is_dir())
-				&& EXCLUDED_DIR_SET.contains(name)
-			{
-				return false;
-			}
-			true
-		});
-
-	if config.use_gitignore {
-		builder
-			.git_ignore(true)
-			.git_exclude(true)
-			.git_global(true)
-			.ignore(true)
-			.parents(true)
-			// Honor .gitignore even when the directory isn't a git repo,
-			// matching what users expect from a plain directory listing.
-			.require_git(false);
-	} else {
-		builder
-			.git_ignore(false)
-			.git_exclude(false)
-			.git_global(false)
-			.ignore(false)
-			.parents(false);
-	}
-
-	builder
+fn build_workspace_walk_request(config: &WorkspaceConfig) -> pi_walker::WalkRequest {
+	pi_walker::WalkRequest::new(config.root.clone())
+		.hidden(config.include_hidden)
+		.gitignore(config.use_gitignore)
+		.skip_git(true)
+		.skip_node_modules(true)
+		.follow_links(pi_walker::FollowLinks::Never)
+		.detail(pi_walker::WalkDetail::Full)
+		.order(pi_walker::WalkOrder::Path)
+		.emit_root(false)
+		.depth(1, config.walk_max_depth)
+		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
+		.cache(false)
 }
 
 fn glob_match_from_path(root: &Path, path: &Path) -> Option<GlobMatch> {
-	let relative = fs_cache::normalize_relative_path(root, path);
+	let relative = pi_walker::normalize_relative_path(root, path);
 	if relative.is_empty() {
 		return None;
 	}
-	let (file_type, mtime, size) = fs_cache::classify_file_type(path)?;
+	let (file_type, mtime, size) = pi_walker::classify_file_type(path)?;
 	Some(GlobMatch {
 		path: relative.into_owned(),
-		file_type,
+		file_type: crate::iofs::from_walker_file_type(file_type),
 		mtime,
 		size: size.map(|value| value as f64),
 	})
-}
-
-fn glob_match_from_entry(root: &Path, entry: &DirEntry) -> Option<GlobMatch> {
-	glob_match_from_path(root, entry.path())
 }
 
 fn is_file_or_file_symlink(path: &Path, file_type: FileType) -> bool {
@@ -158,6 +123,24 @@ fn is_file_or_file_symlink(path: &Path, file_type: FileType) -> bool {
 		FileType::Symlink => std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()),
 		FileType::Dir => false,
 	}
+}
+
+fn is_excluded_workspace_entry(relative: &str, file_type: FileType) -> bool {
+	let mut components = relative
+		.split('/')
+		.filter(|component| !component.is_empty())
+		.peekable();
+	while let Some(component) = components.next() {
+		if component == ".DS_Store" {
+			return true;
+		}
+		let is_final_component = components.peek().is_none();
+		if EXCLUDED_DIR_SET.contains(component) && (!is_final_component || file_type == FileType::Dir)
+		{
+			return true;
+		}
+	}
+	false
 }
 
 fn collect_agents_md_in_directory(
@@ -188,89 +171,6 @@ fn collect_agents_md_in_directory(
 	}
 }
 
-struct WorkspaceVisitor<'a> {
-	config:                 &'a WorkspaceConfig,
-	ct:                     &'a task::CancelToken,
-	entries:                Vec<GlobMatch>,
-	agents_md_files:        Vec<String>,
-	shared_entries:         Arc<Mutex<Vec<Vec<GlobMatch>>>>,
-	shared_agents_md_files: Arc<Mutex<Vec<Vec<String>>>>,
-	error:                  Arc<Mutex<Option<String>>>,
-	visited:                usize,
-}
-
-impl Drop for WorkspaceVisitor<'_> {
-	fn drop(&mut self) {
-		if !self.entries.is_empty() {
-			let entries = std::mem::take(&mut self.entries);
-			self.shared_entries.lock().push(entries);
-		}
-		if !self.agents_md_files.is_empty() {
-			let agents_md_files = std::mem::take(&mut self.agents_md_files);
-			self.shared_agents_md_files.lock().push(agents_md_files);
-		}
-	}
-}
-
-impl ParallelVisitor for WorkspaceVisitor<'_> {
-	fn visit(&mut self, entry: std::result::Result<DirEntry, ignore::Error>) -> WalkState {
-		if self.visited == 0 || self.visited >= 128 {
-			self.visited = 0;
-			if let Err(err) = self.ct.heartbeat() {
-				*self.error.lock() = Some(err.to_string());
-				return WalkState::Quit;
-			}
-		}
-		self.visited += 1;
-
-		let Ok(entry) = entry else {
-			return WalkState::Continue;
-		};
-		let entry_depth = entry.depth();
-		if entry
-			.file_type()
-			.is_some_and(|file_type| file_type.is_dir())
-		{
-			collect_agents_md_in_directory(
-				self.config,
-				entry.path(),
-				entry_depth,
-				&mut self.entries,
-				&mut self.agents_md_files,
-			);
-		}
-		if entry_depth <= self.config.max_depth
-			&& let Some(entry) = glob_match_from_entry(&self.config.root, &entry)
-		{
-			self.entries.push(entry);
-		}
-		WalkState::Continue
-	}
-}
-
-struct WorkspaceVisitorBuilder<'a> {
-	config:                 &'a WorkspaceConfig,
-	ct:                     &'a task::CancelToken,
-	shared_entries:         Arc<Mutex<Vec<Vec<GlobMatch>>>>,
-	shared_agents_md_files: Arc<Mutex<Vec<Vec<String>>>>,
-	error:                  Arc<Mutex<Option<String>>>,
-}
-
-impl<'a> ParallelVisitorBuilder<'a> for WorkspaceVisitorBuilder<'a> {
-	fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
-		Box::new(WorkspaceVisitor {
-			config:                 self.config,
-			ct:                     self.ct,
-			entries:                Vec::new(),
-			agents_md_files:        Vec::new(),
-			shared_entries:         Arc::clone(&self.shared_entries),
-			shared_agents_md_files: Arc::clone(&self.shared_agents_md_files),
-			error:                  Arc::clone(&self.error),
-			visited:                0,
-		})
-	}
-}
-
 fn sort_dedup_entries(entries: &mut Vec<GlobMatch>) {
 	entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 	entries.dedup_by(|a, b| a.path == b.path);
@@ -285,48 +185,38 @@ fn run_list_workspace(
 	config: WorkspaceConfig,
 	ct: task::CancelToken,
 ) -> Result<ListWorkspaceResult> {
-	let mut root_entries = Vec::new();
-	let mut root_agents_md_files = Vec::new();
-	collect_agents_md_in_directory(
-		&config,
-		&config.root,
-		0,
-		&mut root_entries,
-		&mut root_agents_md_files,
-	);
+	let mut entries = Vec::new();
+	let mut agents_md_files = Vec::new();
+	collect_agents_md_in_directory(&config, &config.root, 0, &mut entries, &mut agents_md_files);
 
-	let mut builder = build_workspace_walker(&config);
-	let workers = fs_cache::grep_workers();
-	if workers > 0 {
-		builder.threads(workers);
+	let outcome = build_workspace_walk_request(&config)
+		.collect_with_heartbeat(|| ct.heartbeat())
+		.map_err(iofs::map_walker_error)?;
+
+	for entry in outcome.entries {
+		let file_type = iofs::from_walker_file_type(entry.file_type);
+		if is_excluded_workspace_entry(&entry.path, file_type) {
+			continue;
+		}
+
+		let entry_depth = entry.depth();
+		if file_type == FileType::Dir {
+			let directory = entry.absolute_path(&config.root);
+			collect_agents_md_in_directory(
+				&config,
+				&directory,
+				entry_depth,
+				&mut entries,
+				&mut agents_md_files,
+			);
+		}
+
+		if entry_depth <= config.max_depth {
+			entries.push(entry.into());
+		}
 	}
 
-	let shared_entries = Arc::new(Mutex::new(Vec::new()));
-	let shared_agents_md_files = Arc::new(Mutex::new(Vec::new()));
-	let error = Arc::new(Mutex::new(None));
-	let mut visitor_builder = WorkspaceVisitorBuilder {
-		config:                 &config,
-		ct:                     &ct,
-		shared_entries:         Arc::clone(&shared_entries),
-		shared_agents_md_files: Arc::clone(&shared_agents_md_files),
-		error:                  Arc::clone(&error),
-	};
-
-	ct.heartbeat()?;
-	builder.build_parallel().visit(&mut visitor_builder);
-
-	let walk_error = error.lock().take();
-	if let Some(error) = walk_error {
-		return Err(Error::from_reason(error));
-	}
-
-	let mut entries: Vec<GlobMatch> = shared_entries.lock().drain(..).flatten().collect();
-	entries.extend(root_entries);
 	sort_dedup_entries(&mut entries);
-
-	let mut agents_md_files: Vec<String> =
-		shared_agents_md_files.lock().drain(..).flatten().collect();
-	agents_md_files.extend(root_agents_md_files);
 	sort_dedup_paths(&mut agents_md_files);
 
 	let entries_truncated = entries.len() > MAX_ENTRIES;
@@ -373,7 +263,7 @@ pub fn list_workspace(options: ListWorkspaceOptions<'_>) -> task::Promise<ListWo
 		};
 		run_list_workspace(
 			WorkspaceConfig {
-				root: fs_cache::resolve_search_path(&path)?,
+				root: pi_walker::resolve_search_path(&path).map_err(crate::iofs::map_walker_error)?,
 				max_depth,
 				walk_max_depth,
 				include_hidden: hidden.unwrap_or(false),

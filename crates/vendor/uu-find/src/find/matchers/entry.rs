@@ -12,18 +12,7 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use walkdir::DirEntry;
-
 use super::Follow;
-
-/// Wrapper for a directory entry.
-#[derive(Debug)]
-enum Entry {
-	/// Wraps an explicit path and depth.
-	Explicit(PathBuf, usize),
-	/// Wraps a WalkDir entry.
-	WalkDir(DirEntry),
-}
 
 /// File types.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,22 +152,6 @@ impl From<&io::Error> for WalkError {
 	}
 }
 
-impl From<walkdir::Error> for WalkError {
-	fn from(e: walkdir::Error) -> Self {
-		Self::from(&e)
-	}
-}
-
-impl From<&walkdir::Error> for WalkError {
-	fn from(e: &walkdir::Error) -> Self {
-		Self {
-			path:  e.path().map(|p| p.to_owned()),
-			depth: Some(e.depth()),
-			raw:   e.io_error().and_then(|e| e.raw_os_error()),
-		}
-	}
-}
-
 impl From<WalkError> for io::Error {
 	fn from(e: WalkError) -> Self {
 		Self::from(&e)
@@ -196,8 +169,10 @@ impl From<&WalkError> for io::Error {
 /// A path encountered while walking a file system.
 #[derive(Debug)]
 pub struct WalkEntry {
-	/// The wrapped path/dirent.
-	inner:   Entry,
+	/// Filesystem path for this entry.
+	path:    PathBuf,
+	/// Depth below the traversal root.
+	depth:   usize,
 	/// Whether to follow symlinks.
 	follow:  Follow,
 	/// Cached metadata.
@@ -214,67 +189,17 @@ pub struct WalkEntry {
 impl WalkEntry {
 	/// Create a new WalkEntry for a specific file.
 	pub fn new(path: impl Into<PathBuf>, depth: usize, follow: Follow) -> Self {
-		Self {
-			inner: Entry::Explicit(path.into(), depth),
-			follow,
-			meta: OnceCell::new(),
-			display: None,
-		}
-	}
-
-	/// Convert a [walkdir::DirEntry] to a [WalkEntry].  Errors due to broken
-	/// symbolic links will be converted to valid entries, but other errors will
-	/// be propagated.
-	pub fn from_walkdir(
-		result: walkdir::Result<DirEntry>,
-		follow: Follow,
-	) -> Result<Self, WalkError> {
-		let result = result.map_err(WalkError::from);
-
-		match result {
-			Ok(entry) => {
-				let ret = if entry.depth() == 0 && follow != Follow::Never {
-					// DirEntry::file_type() is wrong for root symlinks when follow_root_links is
-					// set
-					Self::new(entry.path(), 0, follow)
-				} else {
-					Self { inner: Entry::WalkDir(entry), follow, meta: OnceCell::new(), display: None }
-				};
-				Ok(ret)
-			},
-			Err(e) if e.is_not_found() => {
-				// Detect broken symlinks and replace them with explicit entries
-				if let (Some(path), Some(depth)) = (e.path(), e.depth())
-					&& let Ok(meta) = path.symlink_metadata()
-				{
-					return Ok(Self {
-						inner:   Entry::Explicit(path.into(), depth),
-						follow:  Follow::Never,
-						meta:    Ok(meta).into(),
-						display: None,
-					});
-				}
-
-				Err(e)
-			},
-			Err(e) => Err(e),
-		}
+		Self { path: path.into(), depth, follow, meta: OnceCell::new(), display: None }
 	}
 
 	/// Get the path to this entry.
 	pub fn path(&self) -> &Path {
-		match &self.inner {
-			Entry::Explicit(path, _) => path.as_path(),
-			Entry::WalkDir(ent) => ent.path(),
-		}
+		self.path.as_path()
 	}
 
 	/// Get the path to this entry.
 	pub fn into_path(self) -> PathBuf {
-		match self.inner {
-			Entry::Explicit(path, _) => path,
-			Entry::WalkDir(ent) => ent.into_path(),
-		}
+		self.path
 	}
 
 	/// Path used for display (`-print`, `-ls`) and path-based matching
@@ -300,25 +225,18 @@ impl WalkEntry {
 
 	/// Get the name of this entry.
 	pub fn file_name(&self) -> &OsStr {
-		match &self.inner {
-			Entry::Explicit(path, _) => {
-				// Path::file_name() only works if the last component is normal
-				path
-					.components()
-					.next_back()
-					.map(|c| c.as_os_str())
-					.unwrap_or_else(|| path.as_os_str())
-			},
-			Entry::WalkDir(ent) => ent.file_name(),
-		}
+		// Path::file_name() only works if the last component is normal.
+		self
+			.path
+			.components()
+			.next_back()
+			.map(|c| c.as_os_str())
+			.unwrap_or_else(|| self.path.as_os_str())
 	}
 
 	/// Get the depth of this entry below the root.
 	pub fn depth(&self) -> usize {
-		match &self.inner {
-			Entry::Explicit(_, depth) => *depth,
-			Entry::WalkDir(ent) => ent.depth(),
-		}
+		self.depth
 	}
 
 	/// Get whether symbolic links are followed for this entry.
@@ -328,45 +246,35 @@ impl WalkEntry {
 
 	/// Get the metadata on a cache miss.
 	fn get_metadata(&self) -> Result<Metadata, WalkError> {
-		self.follow.metadata_at_depth(self.path(), self.depth())
+		self.follow.metadata_at_depth(&self.path, self.depth)
 	}
 
 	/// Get the [Metadata] for this entry, following symbolic links if
 	/// appropriate. Multiple calls to this function will cache and re-use the
 	/// same [Metadata].
 	pub fn metadata(&self) -> Result<&Metadata, WalkError> {
-		let result = self.meta.get_or_init(|| match &self.inner {
-			Entry::Explicit(..) => Ok(self.get_metadata()?),
-			Entry::WalkDir(ent) => Ok(ent.metadata()?),
-		});
+		let result = self.meta.get_or_init(|| self.get_metadata());
 		result.as_ref().map_err(|e| e.clone())
 	}
 
 	/// Get the file type of this entry.
 	pub fn file_type(&self) -> FileType {
-		match &self.inner {
-			Entry::Explicit(..) => self
-				.metadata()
-				.map(|m| m.file_type().into())
-				.unwrap_or(FileType::Unknown),
-			Entry::WalkDir(ent) => ent.file_type().into(),
-		}
+		self
+			.metadata()
+			.map(|m| m.file_type().into())
+			.unwrap_or(FileType::Unknown)
 	}
 
 	/// Check whether this entry is a symbolic link, regardless of whether links
 	/// are being followed.
 	pub fn path_is_symlink(&self) -> bool {
-		match &self.inner {
-			Entry::Explicit(path, _) => {
-				if self.follow() {
-					path
-						.symlink_metadata()
-						.is_ok_and(|m| m.file_type().is_symlink())
-				} else {
-					self.file_type().is_symlink()
-				}
-			},
-			Entry::WalkDir(ent) => ent.path_is_symlink(),
+		if self.follow() {
+			self
+				.path
+				.symlink_metadata()
+				.is_ok_and(|m| m.file_type().is_symlink())
+		} else {
+			self.file_type().is_symlink()
 		}
 	}
 }

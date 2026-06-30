@@ -1,14 +1,14 @@
 //! Fuzzy file path discovery for autocomplete and @-mention resolution.
 //!
 //! Searches for files and directories whose paths match a query string via
-//! subsequence scoring. Uses the shared [`fs_cache`] for directory scanning.
+//! subsequence scoring. Uses `pi-walker` for directory traversal and caching.
 
 use std::path::Path;
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::{fs_cache, task};
+use crate::{iofs, task};
 
 /// Options for fuzzy file path search.
 #[napi(object)]
@@ -21,7 +21,7 @@ pub struct FuzzyFindOptions<'env> {
 	pub hidden:      Option<bool>,
 	/// Respect .gitignore (default: true).
 	pub gitignore:   Option<bool>,
-	/// Enable shared filesystem scan cache (default: false).
+	/// Enable walker scan caching (default: false).
 	pub cache:       Option<bool>,
 	/// Maximum number of matches to return (default: 100).
 	pub max_results: Option<u32>,
@@ -161,7 +161,7 @@ struct FuzzyFindConfig {
 }
 
 fn score_entries(
-	entries: &[fs_cache::GlobMatch],
+	entries: &[iofs::GlobMatch],
 	query_lower: &str,
 	normalized_query: &str,
 	query_chars: &[char],
@@ -170,11 +170,11 @@ fn score_entries(
 	let mut scored = Vec::with_capacity(entries.len().min(256));
 	for entry in entries {
 		ct.heartbeat()?;
-		if entry.file_type == fs_cache::FileType::Symlink {
+		if entry.file_type == iofs::FileType::Symlink {
 			continue;
 		}
 
-		let is_directory = entry.file_type == fs_cache::FileType::Dir;
+		let is_directory = entry.file_type == iofs::FileType::Dir;
 		let score =
 			score_fuzzy_path(&entry.path, is_directory, query_lower, normalized_query, query_chars);
 		if score == 0 {
@@ -191,7 +191,7 @@ fn score_entries(
 }
 
 fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<FuzzyFindResult> {
-	let root = fs_cache::resolve_search_path(&config.path)?;
+	let root = pi_walker::resolve_search_path(&config.path).map_err(iofs::map_walker_error)?;
 	let include_hidden = config.hidden.unwrap_or(false);
 	let respect_gitignore = config.gitignore.unwrap_or(true);
 	let max_results = config.max_results.unwrap_or(100) as usize;
@@ -206,30 +206,27 @@ fn fuzzy_find_sync(config: FuzzyFindConfig, ct: task::CancelToken) -> Result<Fuz
 		return Ok(FuzzyFindResult { matches: Vec::new(), total_matches: 0 });
 	}
 
-	let use_cache = config.cache.unwrap_or(false);
-	let scan_options = fs_cache::ScanOptions {
-		include_hidden,
-		use_gitignore: respect_gitignore,
-		skip_node_modules: true,
-		follow_links: true,
-		detail: fs_cache::ScanDetail::Minimal,
-	};
-	let mut scored = if use_cache {
-		let scan = fs_cache::get_or_scan(&root, scan_options, &ct)?;
-		let mut scored =
-			score_entries(&scan.entries, &query_lower, &normalized_query, &query_chars, &ct)?;
-		if scored.is_empty()
-			&& !query_lower.is_empty()
-			&& scan.cache_age_ms >= fs_cache::empty_recheck_ms()
-		{
-			let fresh = fs_cache::force_rescan(&root, scan_options, true, &ct)?;
-			scored = score_entries(&fresh, &query_lower, &normalized_query, &query_chars, &ct)?;
-		}
-		scored
-	} else {
-		let fresh = fs_cache::force_rescan(&root, scan_options, false, &ct)?;
-		score_entries(&fresh, &query_lower, &normalized_query, &query_chars, &ct)?
-	};
+	let outcome = pi_walker::WalkRequest::new(root)
+		.hidden(include_hidden)
+		.gitignore(respect_gitignore)
+		.skip_git(true)
+		.skip_node_modules(true)
+		.follow_links(pi_walker::FollowLinks::Always)
+		.detail(pi_walker::WalkDetail::Minimal)
+		.order(pi_walker::WalkOrder::Path)
+		.emit_root(false)
+		.depth(1, usize::MAX)
+		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
+		.cache(config.cache.unwrap_or(false))
+		.empty_recheck(pi_walker::EmptyRecheck::Configured)
+		.collect_with_heartbeat(|| ct.heartbeat())
+		.map_err(iofs::map_walker_error)?;
+	let entries: Vec<iofs::GlobMatch> = outcome
+		.entries
+		.into_iter()
+		.map(iofs::GlobMatch::from)
+		.collect();
+	let mut scored = score_entries(&entries, &query_lower, &normalized_query, &query_chars, &ct)?;
 
 	scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
 	let total_matches = crate::utils::clamp_u32(scored.len() as u64);
@@ -245,4 +242,93 @@ pub fn fuzzy_find(options: FuzzyFindOptions<'_>) -> task::Promise<FuzzyFindResul
 	let ct = task::CancelToken::new(timeout_ms, signal);
 	let config = FuzzyFindConfig { query, path, hidden, gitignore, max_results, cache };
 	task::blocking("fuzzy_find", ct, move |ct| fuzzy_find_sync(config, ct))
+}
+
+#[cfg(test)]
+mod tests {
+	#[cfg(unix)]
+	use std::{
+		fs,
+		os::unix::fs as unix_fs,
+		path::{Path, PathBuf},
+		sync::atomic::{AtomicU64, Ordering},
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	#[cfg(unix)]
+	use super::{FuzzyFindConfig, fuzzy_find_sync};
+	#[cfg(unix)]
+	use crate::task;
+
+	#[cfg(unix)]
+	struct TempDirGuard(PathBuf);
+
+	#[cfg(unix)]
+	impl TempDirGuard {
+		fn new() -> Self {
+			static COUNTER: AtomicU64 = AtomicU64::new(0);
+			let nanos = SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.expect("system time is after UNIX_EPOCH")
+				.as_nanos();
+			let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+			let pid = std::process::id();
+			let path = std::env::temp_dir().join(format!("pi-fd-test-{pid}-{nanos}-{seq}"));
+			fs::create_dir_all(&path).expect("create temp test directory");
+			Self(path)
+		}
+
+		fn path(&self) -> &Path {
+			&self.0
+		}
+	}
+
+	#[cfg(unix)]
+	impl Drop for TempDirGuard {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.0);
+		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn fuzzy_find_without_cache_follows_symlinked_directories() {
+		let root = TempDirGuard::new();
+		let real_dir = root.path().join("zz-real-dir");
+		let link_dir_name = "aa-linked-dir";
+		let link_dir = root.path().join(link_dir_name);
+		let file_name = "follow-links-fuzzy-needle.txt";
+
+		fs::create_dir_all(&real_dir).expect("create real directory");
+		fs::write(real_dir.join(file_name), "needle\n").expect("write symlink target file");
+		unix_fs::symlink(&real_dir, &link_dir).expect("create directory symlink");
+
+		let result = fuzzy_find_sync(
+			FuzzyFindConfig {
+				query:       file_name.to_string(),
+				path:        root.path().to_string_lossy().into_owned(),
+				hidden:      Some(true),
+				gitignore:   Some(false),
+				max_results: Some(4),
+				cache:       Some(false),
+			},
+			task::CancelToken::default(),
+		)
+		.expect("fuzzy find succeeds");
+
+		assert!(!result.matches.is_empty(), "expected at least one fuzzy find match");
+		let expected_path = format!("{link_dir_name}/{file_name}");
+		assert!(
+			result
+				.matches
+				.iter()
+				.any(|entry| entry.path == expected_path),
+			"expected fuzzy find to include symlink traversal path {expected_path:?}, got {:?}",
+			result
+				.matches
+				.iter()
+				.map(|entry| entry.path.as_str())
+				.collect::<Vec<_>>()
+		);
+	}
 }

@@ -1,6 +1,7 @@
-//! In-process `fd` builtin backed by `ignore`, `globset`, and `regex`.
+//! In-process `fd` builtin backed by `pi_walker`, `globset`, and `regex`.
 
 use std::{
+	collections::HashMap,
 	ffi::{OsStr, OsString},
 	fs::{self, Metadata},
 	io::{self, BufWriter, Write},
@@ -22,7 +23,7 @@ use brush_core::{
 };
 use clap::{ArgAction, Parser, ValueEnum, error::ErrorKind};
 use globset::{GlobBuilder, GlobMatcher};
-use ignore::{DirEntry, WalkBuilder};
+use pi_walker::CollectedEntry;
 use regex::{Regex, RegexBuilder};
 
 #[derive(Parser, Debug)]
@@ -308,10 +309,6 @@ impl Excludes {
 		Self(Arc::new(Vec::new()))
 	}
 
-	fn is_empty(&self) -> bool {
-		self.0.is_empty()
-	}
-
 	fn matches(&self, path: &Path, base_dir: &Path) -> bool {
 		if self.0.is_empty() {
 			return false;
@@ -324,6 +321,151 @@ impl Excludes {
 		self.0.iter().any(|pattern| {
 			pattern.is_match(&absolute) || pattern.is_match(&relative) || pattern.is_match(&name)
 		})
+	}
+}
+
+struct FdIgnoreMatcher {
+	enabled: bool,
+	root:    PathBuf,
+	global:  Vec<ignore::gitignore::Gitignore>,
+	states:  HashMap<PathBuf, Arc<FdIgnoreState>>,
+}
+
+struct FdIgnoreState {
+	parent:  Option<Arc<Self>>,
+	matcher: Option<ignore::gitignore::Gitignore>,
+}
+
+impl FdIgnoreMatcher {
+	fn new(base_dir: &Path, root: &Path, cli: &FdCli) -> io::Result<Self> {
+		let root = normalize_fdignore_path(root);
+		let enabled = !no_ignore(cli);
+		let mut matcher =
+			Self { enabled, root: root.clone(), global: Vec::new(), states: HashMap::new() };
+		if !enabled {
+			return Ok(matcher);
+		}
+
+		for ignore_file in &cli.ignore_files {
+			let path = if ignore_file.is_absolute() {
+				ignore_file.clone()
+			} else {
+				base_dir.join(ignore_file)
+			};
+			let mut builder = ignore::gitignore::GitignoreBuilder::new(base_dir);
+			if let Some(err) = builder.add(&path) {
+				return Err(io::Error::other(err.to_string()));
+			}
+			let ignore = builder
+				.build()
+				.map_err(|err| io::Error::other(err.to_string()))?;
+			if !ignore.is_empty() {
+				matcher.global.push(ignore);
+			}
+		}
+
+		let parent = if cli.no_ignore_parent {
+			None
+		} else {
+			build_fdignore_parent_states(root.parent())
+		};
+		let root_state = load_fdignore_state(&root, parent);
+		matcher.states.insert(root, root_state);
+		Ok(matcher)
+	}
+
+	fn is_ignored(&mut self, path: &Path, is_dir: bool) -> bool {
+		if !self.enabled {
+			return false;
+		}
+		let path = normalize_fdignore_path(path);
+		let state_dir = path.parent().unwrap_or(&self.root).to_path_buf();
+		let state = self.state_for_dir(&state_dir);
+		if let Some(ignored) = fdignore_state_match(&state, &path, is_dir) {
+			return ignored;
+		}
+		self
+			.global
+			.iter()
+			.find_map(|ignore| fdignore_match(ignore, &path, is_dir))
+			.unwrap_or(false)
+	}
+
+	fn state_for_dir(&mut self, dir: &Path) -> Arc<FdIgnoreState> {
+		if let Some(state) = self.states.get(dir) {
+			return Arc::clone(state);
+		}
+		if !dir.starts_with(&self.root) {
+			return self
+				.states
+				.get(&self.root)
+				.map_or_else(|| Arc::new(FdIgnoreState { parent: None, matcher: None }), Arc::clone);
+		}
+		let parent = if dir == self.root.as_path() {
+			self
+				.states
+				.get(&self.root)
+				.and_then(|state| state.parent.as_ref().map(Arc::clone))
+		} else {
+			dir.parent().map(|parent| self.state_for_dir(parent))
+		};
+		let state = load_fdignore_state(dir, parent);
+		self.states.insert(dir.to_path_buf(), Arc::clone(&state));
+		state
+	}
+}
+
+fn build_fdignore_parent_states(mut dir: Option<&Path>) -> Option<Arc<FdIgnoreState>> {
+	let mut ancestors = Vec::new();
+	while let Some(path) = dir {
+		ancestors.push(path);
+		dir = path.parent();
+	}
+	let mut parent = None;
+	for ancestor in ancestors.into_iter().rev() {
+		parent = Some(load_fdignore_state(ancestor, parent));
+	}
+	parent
+}
+
+fn normalize_fdignore_path(path: &Path) -> PathBuf {
+	path.components().collect()
+}
+
+fn load_fdignore_state(dir: &Path, parent: Option<Arc<FdIgnoreState>>) -> Arc<FdIgnoreState> {
+	let file = dir.join(".fdignore");
+	let matcher = if file.is_file() {
+		let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+		let _ = builder.add(&file);
+		builder.build().ok().filter(|ignore| !ignore.is_empty())
+	} else {
+		None
+	};
+	Arc::new(FdIgnoreState { parent, matcher })
+}
+
+fn fdignore_state_match(state: &Arc<FdIgnoreState>, path: &Path, is_dir: bool) -> Option<bool> {
+	let mut current = Some(state.as_ref());
+	while let Some(frame) = current {
+		if let Some(matcher) = &frame.matcher
+			&& let Some(ignored) = fdignore_match(matcher, path, is_dir)
+		{
+			return Some(ignored);
+		}
+		current = frame.parent.as_deref();
+	}
+	None
+}
+
+fn fdignore_match(
+	matcher: &ignore::gitignore::Gitignore,
+	path: &Path,
+	is_dir: bool,
+) -> Option<bool> {
+	match matcher.matched(path, is_dir) {
+		ignore::Match::Ignore(_) => Some(true),
+		ignore::Match::Whitelist(_) => Some(false),
+		ignore::Match::None => None,
 	}
 }
 
@@ -580,122 +722,196 @@ fn search(
 		prune: cli.prune,
 	};
 
-	let mut builder = WalkBuilder::new(&search_paths[0].resolved);
-	for path in search_paths.iter().skip(1) {
-		builder.add(&path.resolved);
-	}
-	builder.current_dir(&config.base_dir);
-	if !no_ignore(&cli) {
-		builder.add_custom_ignore_filename(".fdignore");
-	}
-	builder.hidden(!include_hidden(&cli));
-	builder.ignore(!no_ignore(&cli));
-	builder.git_ignore(!(no_ignore(&cli) || no_ignore_vcs(&cli)));
-	builder.git_global(!(no_ignore(&cli) || no_ignore_vcs(&cli)));
-	builder.git_exclude(!(no_ignore(&cli) || no_ignore_vcs(&cli)));
-	builder.parents(!(no_ignore(&cli) || cli.no_ignore_parent));
-	builder.require_git(!cli.no_require_git);
-	builder.follow_links(cli.follow);
-	builder.same_file_system(cli.one_file_system);
-	if let Some(depth) = cli.exact_depth {
-		builder.min_depth(Some(depth));
-		builder.max_depth(Some(depth));
-	} else {
-		builder.min_depth(cli.min_depth);
-		builder.max_depth(cli.max_depth);
-	}
-	if let Some(threads) = cli.threads {
-		builder.threads(threads);
-	}
-	for ignore_file in &cli.ignore_files {
-		let path = if ignore_file.is_absolute() {
-			ignore_file.clone()
-		} else {
-			config.base_dir.join(ignore_file)
-		};
-		if let Some(err) = builder.add_ignore(path) {
-			return Err(io::Error::other(err.to_string()));
-		}
-	}
-	if !config.excludes.is_empty() || !cli.ignore_contains.is_empty() || config.prune {
-		let excludes = config.excludes.clone();
-		let base_dir = config.base_dir.clone();
-		let ignore_contains = cli.ignore_contains;
-		let matcher = Arc::clone(&config.matcher);
-		let prune = config.prune;
-		let full_path = config.full_path;
-		builder.filter_entry(move |entry| {
-			if entry.depth() == 0 {
-				return true;
-			}
-			let path = entry.path();
-			if excludes.matches(path, &base_dir) {
-				return false;
-			}
-			if entry
-				.file_type()
-				.is_some_and(|file_type| file_type.is_dir())
-			{
-				if ignore_contains.iter().any(|name| path.join(name).exists()) {
-					return false;
-				}
-				if prune && matcher.matches(&match_target(path, &base_dir, full_path)) {
-					return false;
-				}
-			}
-			true
-		});
+	if let Some(state) =
+		try_search_fast(&cli, &search_paths, &config, max_results, stdout, stderr, cancelled)?
+	{
+		return Ok(state);
 	}
 
+	let use_gitignore = !(no_ignore(&cli) || no_ignore_vcs(&cli));
 	let mut out = BufWriter::new(stdout);
 	let mut state = SearchState { matches: 0, had_error: false };
-	for entry in builder.build() {
+	for search_path in &search_paths {
 		if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| state.matches >= max) {
 			break;
 		}
-		match entry {
-			Ok(entry) => process_entry(&config, &entry, &mut out, &mut state)?,
-			Err(err) => {
-				if config.show_errors {
-					state.had_error = true;
-					let _ = writeln!(stderr, "fd: {err}");
-				}
-			},
+		let mut fd_ignores = FdIgnoreMatcher::new(&config.base_dir, &search_path.resolved, &cli)?;
+		let request =
+			fd_walk_request(&search_path.resolved, &cli, use_gitignore, cli.one_file_system);
+		let outcome = request
+			.collect_with_heartbeat(|| Ok::<(), io::Error>(()))
+			.map_err(walker_collect_error_to_io)?;
+		let mut pruned_dirs = Vec::new();
+		for entry in &outcome.entries {
+			if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| state.matches >= max)
+			{
+				break;
+			}
+			process_collected_entry(
+				&config,
+				&cli.ignore_contains,
+				&mut fd_ignores,
+				&search_path.resolved,
+				entry,
+				&mut out,
+				&mut state,
+				&mut pruned_dirs,
+			)?;
 		}
 	}
 	out.flush()?;
 	Ok(state)
 }
 
-fn process_entry<W: Write>(
+fn fd_walk_request(
+	root: &Path,
+	cli: &FdCli,
+	use_gitignore: bool,
+	same_file_system: bool,
+) -> pi_walker::WalkRequest {
+	let min_depth = cli.exact_depth.or(cli.min_depth).unwrap_or(0);
+	let max_depth = cli.exact_depth.or(cli.max_depth).unwrap_or(usize::MAX);
+	pi_walker::WalkRequest::new(root)
+		.hidden(include_hidden(cli))
+		.gitignore(use_gitignore)
+		.skip_git(false)
+		.skip_node_modules(false)
+		.follow_links(cli.follow.into())
+		.detail(pi_walker::WalkDetail::Minimal)
+		.order(pi_walker::WalkOrder::Path)
+		.emit_root(true)
+		.depth(min_depth, max_depth)
+		.directory_errors(pi_walker::DirectoryErrorMode::Visit)
+		.same_file_system(same_file_system)
+		.cache(false)
+		.visit_order(pi_walker::VisitOrder::PreOrder)
+}
+
+fn try_search_fast(
+	cli: &FdCli,
+	search_paths: &[SearchPath],
 	config: &SearchConfig,
-	entry: &DirEntry,
+	max_results: Option<usize>,
+	stdout: &mut OpenFile,
+	stderr: &mut OpenFile,
+	cancelled: &AtomicBool,
+) -> io::Result<Option<SearchState>> {
+	if !can_use_fast_search(cli, config) {
+		return Ok(None);
+	}
+
+	let mut out = BufWriter::new(Vec::new());
+	let mut err = Vec::new();
+	let mut state = SearchState { matches: 0, had_error: false };
+	for search_path in search_paths {
+		if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| state.matches >= max) {
+			break;
+		}
+		let mut matches = state.matches;
+		let mut had_error = state.had_error;
+		let request = fd_walk_request(&search_path.resolved, cli, false, false);
+		let status = request.for_each_entry_with_heartbeat(
+			|| Ok::<(), io::Error>(()),
+			|entry| {
+				if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| matches >= max) {
+					return Ok(pi_walker::WalkDecision::Stop);
+				}
+				let decision = process_walker_entry(
+					config,
+					&cli.ignore_contains,
+					entry.absolute_path.as_ref(),
+					entry.depth,
+					entry.file_type,
+					&mut out,
+					&mut matches,
+				)?;
+				if cancelled.load(Ordering::Relaxed) || max_results.is_some_and(|max| matches >= max) {
+					Ok(pi_walker::WalkDecision::Stop)
+				} else {
+					Ok(decision)
+				}
+			},
+			|error| {
+				if config.show_errors {
+					had_error = true;
+					let _ = writeln!(err, "fd: {}", error.error);
+				}
+				Ok(pi_walker::WalkDecision::Include)
+			},
+		);
+		state.matches = matches;
+		state.had_error = had_error;
+		match status {
+			Ok(pi_walker::WalkStatus::Unsupported) | Err(pi_walker::WalkError::Unsupported) => {
+				return Ok(None);
+			},
+			Ok(pi_walker::WalkStatus::Complete | pi_walker::WalkStatus::Stopped) => {},
+			Err(err) => return Err(walker_error_to_io(err)),
+		}
+	}
+	out.flush()?;
+	let output = out.into_inner().map_err(|err| err.into_error())?;
+	stdout.write_all(&output)?;
+	stderr.write_all(&err)?;
+	Ok(Some(state))
+}
+
+const fn can_use_fast_search(cli: &FdCli, config: &SearchConfig) -> bool {
+	no_ignore(cli)
+		&& cli.ignore_files.is_empty()
+		&& !cli.one_file_system
+		&& fast_type_filter_supported(&config.types)
+}
+
+const fn fast_type_filter_supported(filter: &TypeFilter) -> bool {
+	!filter.socket && !filter.pipe && !filter.block && !filter.character
+}
+
+fn process_walker_entry<W: Write>(
+	config: &SearchConfig,
+	ignore_contains: &[OsString],
+	path: &Path,
+	depth: usize,
+	file_type: pi_walker::FileType,
 	out: &mut W,
-	state: &mut SearchState,
-) -> io::Result<()> {
-	if entry.depth() == 0
-		&& entry
-			.file_type()
-			.is_some_and(|file_type| file_type.is_dir())
-	{
-		return Ok(());
+	matches: &mut usize,
+) -> io::Result<pi_walker::WalkDecision> {
+	let is_directory = file_type == pi_walker::FileType::Dir;
+	if depth == 0 && is_directory {
+		return Ok(pi_walker::WalkDecision::Skip);
 	}
-	let path = entry.path();
 	if config.excludes.matches(path, &config.base_dir) {
-		return Ok(());
+		return Ok(if is_directory {
+			pi_walker::WalkDecision::SkipDescend
+		} else {
+			pi_walker::WalkDecision::Skip
+		});
 	}
-	let metadata = entry.metadata().ok();
-	if !matches_filters(config, entry, metadata.as_ref()) {
-		return Ok(());
+	if is_directory {
+		if ignore_contains.iter().any(|name| path.join(name).exists()) {
+			return Ok(pi_walker::WalkDecision::SkipDescend);
+		}
+		if config.prune
+			&& config
+				.matcher
+				.matches(&match_target(path, &config.base_dir, config.full_path))
+		{
+			return Ok(pi_walker::WalkDecision::SkipDescend);
+		}
+	}
+
+	let metadata = fs::symlink_metadata(path).ok();
+	if !matches_walker_filters(config, path, file_type, metadata.as_ref()) {
+		return Ok(pi_walker::WalkDecision::Skip);
 	}
 	let target = match_target(path, &config.base_dir, config.full_path);
 	if !config.matcher.matches(&target) {
-		return Ok(());
+		return Ok(pi_walker::WalkDecision::Skip);
 	}
 
-	state.matches = state.matches.saturating_add(1);
+	*matches = (*matches).saturating_add(1);
 	if config.quiet {
-		return Ok(());
+		return Ok(pi_walker::WalkDecision::Include);
 	}
 	let display = display_path(config, path);
 	let text = if let Some(format) = config.format.as_deref() {
@@ -709,14 +925,19 @@ fn process_entry<W: Write>(
 	} else {
 		out.write_all(b"\n")?;
 	}
-	Ok(())
+	Ok(pi_walker::WalkDecision::Include)
 }
 
-fn matches_filters(config: &SearchConfig, entry: &DirEntry, metadata: Option<&Metadata>) -> bool {
-	if !matches_type_filter(&config.types, entry, metadata) {
+fn matches_walker_filters(
+	config: &SearchConfig,
+	path: &Path,
+	file_type: pi_walker::FileType,
+	metadata: Option<&Metadata>,
+) -> bool {
+	if !matches_walker_type_filter(&config.types, path, file_type, metadata) {
 		return false;
 	}
-	if !config.extensions.is_empty() && !matches_extension(entry.path(), &config.extensions) {
+	if !config.extensions.is_empty() && !matches_extension(path, &config.extensions) {
 		return false;
 	}
 	if !config.sizes.is_empty() && !matches_size_filters(&config.sizes, metadata) {
@@ -733,20 +954,19 @@ fn matches_filters(config: &SearchConfig, entry: &DirEntry, metadata: Option<&Me
 	true
 }
 
-fn matches_type_filter(filter: &TypeFilter, entry: &DirEntry, metadata: Option<&Metadata>) -> bool {
+fn matches_walker_type_filter(
+	filter: &TypeFilter,
+	path: &Path,
+	file_type: pi_walker::FileType,
+	metadata: Option<&Metadata>,
+) -> bool {
 	if filter.is_empty() {
 		return true;
 	}
-	let path = entry.path();
-	let is_symlink = fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
-	let file_type = entry.file_type();
 	let kind_matches = if filter.has_kind() {
-		file_type.is_some_and(|file_type| {
-			(filter.regular && file_type.is_file())
-				|| (filter.directory && file_type.is_dir())
-				|| (filter.symlink && is_symlink)
-				|| matches_unix_file_type(filter, file_type)
-		})
+		(filter.regular && file_type == pi_walker::FileType::File)
+			|| (filter.directory && file_type == pi_walker::FileType::Dir)
+			|| (filter.symlink && file_type == pi_walker::FileType::Symlink)
 	} else {
 		true
 	};
@@ -762,18 +982,104 @@ fn matches_type_filter(filter: &TypeFilter, entry: &DirEntry, metadata: Option<&
 	true
 }
 
-#[cfg(unix)]
-fn matches_unix_file_type(filter: &TypeFilter, file_type: fs::FileType) -> bool {
-	use std::os::unix::fs::FileTypeExt;
-	(filter.socket && file_type.is_socket())
-		|| (filter.pipe && file_type.is_fifo())
-		|| (filter.block && file_type.is_block_device())
-		|| (filter.character && file_type.is_char_device())
+fn walker_error_to_io(err: pi_walker::WalkError<io::Error>) -> io::Error {
+	match err {
+		pi_walker::WalkError::Unsupported => io::Error::new(
+			io::ErrorKind::Unsupported,
+			"native fd traversal is unsupported for this platform or option set",
+		),
+		pi_walker::WalkError::Interrupted(err) => err,
+		pi_walker::WalkError::InvalidData { path, message } => {
+			io::Error::other(format!("{}: {message}", path.display()))
+		},
+	}
 }
 
-#[cfg(not(unix))]
-fn matches_unix_file_type(_filter: &TypeFilter, _file_type: fs::FileType) -> bool {
-	false
+fn walker_collect_error_to_io(err: pi_walker::WalkError<String>) -> io::Error {
+	match err {
+		pi_walker::WalkError::Unsupported => io::Error::new(
+			io::ErrorKind::Unsupported,
+			"native fd traversal is unsupported for this platform or option set",
+		),
+		pi_walker::WalkError::Interrupted(err) => io::Error::other(err),
+		pi_walker::WalkError::InvalidData { path, message } => {
+			io::Error::other(format!("{}: {message}", path.display()))
+		},
+	}
+}
+
+fn process_collected_entry<W: Write>(
+	config: &SearchConfig,
+	ignore_contains: &[OsString],
+	fd_ignores: &mut FdIgnoreMatcher,
+	root: &Path,
+	entry: &CollectedEntry,
+	out: &mut W,
+	state: &mut SearchState,
+	pruned_dirs: &mut Vec<PathBuf>,
+) -> io::Result<()> {
+	let path = entry.absolute_path(root);
+	if pruned_dirs.iter().any(|dir| path.starts_with(dir)) {
+		return Ok(());
+	}
+	let depth = entry.depth();
+	let is_directory = entry.file_type == pi_walker::FileType::Dir;
+	if depth == 0 && is_directory {
+		return Ok(());
+	}
+	if fd_ignores.is_ignored(&path, is_directory) {
+		if is_directory {
+			pruned_dirs.push(path);
+		}
+		return Ok(());
+	}
+	if config.excludes.matches(&path, &config.base_dir) {
+		if is_directory {
+			pruned_dirs.push(path);
+		}
+		return Ok(());
+	}
+	if is_directory {
+		if ignore_contains.iter().any(|name| path.join(name).exists()) {
+			pruned_dirs.push(path);
+			return Ok(());
+		}
+		if config.prune
+			&& config
+				.matcher
+				.matches(&match_target(&path, &config.base_dir, config.full_path))
+		{
+			pruned_dirs.push(path);
+			return Ok(());
+		}
+	}
+
+	let metadata = fs::symlink_metadata(&path).ok();
+	if !matches_walker_filters(config, &path, entry.file_type, metadata.as_ref()) {
+		return Ok(());
+	}
+	let target = match_target(&path, &config.base_dir, config.full_path);
+	if !config.matcher.matches(&target) {
+		return Ok(());
+	}
+
+	state.matches = state.matches.saturating_add(1);
+	if config.quiet {
+		return Ok(());
+	}
+	let display = display_path(config, &path);
+	let text = if let Some(format) = config.format.as_deref() {
+		format_path(format, &path, &display)
+	} else {
+		display
+	};
+	out.write_all(text.as_bytes())?;
+	if config.print0 {
+		out.write_all(b"\0")?;
+	} else {
+		out.write_all(b"\n")?;
+	}
+	Ok(())
 }
 
 #[cfg(unix)]

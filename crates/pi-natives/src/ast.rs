@@ -13,7 +13,7 @@ use pi_ast::{
 	ops::{self as shared_ops},
 };
 
-use crate::{fs_cache, glob_util, task};
+use crate::{glob_util, iofs, task};
 
 const DEFAULT_FIND_LIMIT: u32 = 50;
 
@@ -341,33 +341,6 @@ fn normalize_search_path(path: Option<String>) -> Result<PathBuf> {
 	Ok(std::fs::canonicalize(&absolute).unwrap_or(absolute))
 }
 
-fn collect_from_entries(
-	root: &Path,
-	entries: &[fs_cache::GlobMatch],
-	glob_set: Option<&globset::GlobSet>,
-	mentions_node_modules: bool,
-	ct: &task::CancelToken,
-) -> Result<Vec<FileCandidate>> {
-	let mut files = Vec::new();
-	for entry in entries {
-		ct.heartbeat()?;
-		if entry.file_type != fs_cache::FileType::File {
-			continue;
-		}
-		let relative = entry.path.replace('\\', "/");
-		if fs_cache::should_skip_path(Path::new(&relative), mentions_node_modules) {
-			continue;
-		}
-		if let Some(glob_set) = glob_set
-			&& !glob_set.is_match(&relative)
-		{
-			continue;
-		}
-		files.push(FileCandidate { absolute_path: root.join(&relative), display_path: relative });
-	}
-	Ok(files)
-}
-
 fn collect_candidates(
 	path: Option<String>,
 	glob: Option<&str>,
@@ -393,44 +366,37 @@ fn collect_candidates(
 		)));
 	}
 
-	let glob_set = glob_util::try_compile_glob(glob, false)?;
 	let mentions_node_modules = glob.is_some_and(|value| value.contains("node_modules"));
-	let skip_node_modules = !mentions_node_modules;
-	let scan = fs_cache::get_or_scan(
-		&search_path,
-		fs_cache::ScanOptions {
-			include_hidden: true,
-			use_gitignore: true,
-			skip_node_modules,
-			follow_links: false,
-			detail: fs_cache::ScanDetail::Minimal,
-		},
-		ct,
-	)?;
-	let mut files = collect_from_entries(
-		&search_path,
-		&scan.entries,
-		glob_set.as_ref(),
-		mentions_node_modules,
-		ct,
-	)?;
-
-	if files.is_empty() && scan.cache_age_ms >= fs_cache::empty_recheck_ms() {
-		let fresh = fs_cache::force_rescan(
-			&search_path,
-			fs_cache::ScanOptions {
-				include_hidden: true,
-				use_gitignore: true,
-				skip_node_modules,
-				follow_links: false,
-				detail: fs_cache::ScanDetail::Minimal,
-			},
-			true,
-			ct,
-		)?;
-		files =
-			collect_from_entries(&search_path, &fresh, glob_set.as_ref(), mentions_node_modules, ct)?;
+	let mut filter =
+		pi_walker::WalkFilter::files_only().node_modules_unless_mentioned(mentions_node_modules);
+	if let Some(glob) = glob.map(str::trim).filter(|value| !value.is_empty()) {
+		let pattern = glob_util::build_glob_pattern(glob, false);
+		let compiled = pi_walker::CompiledWalkGlob::new([pattern])
+			.map_err(|err| Error::from_reason(format!("Invalid glob pattern: {err}")))?;
+		filter = filter.glob(compiled);
 	}
+	let request = pi_walker::WalkRequest::new(&search_path)
+		.hidden(true)
+		.gitignore(true)
+		.skip_git(true)
+		.follow_links(pi_walker::FollowLinks::Never)
+		.detail(pi_walker::WalkDetail::Minimal)
+		.order(pi_walker::WalkOrder::Path)
+		.emit_root(false)
+		.depth(1, usize::MAX)
+		.directory_errors(pi_walker::DirectoryErrorMode::SkipSkippable)
+		.cache(true)
+		.empty_recheck(pi_walker::EmptyRecheck::Configured)
+		.filter(filter);
+	let mut files: Vec<_> = request
+		.collect_files_with_heartbeat(|| ct.heartbeat())
+		.map_err(iofs::map_walker_error)?
+		.into_iter()
+		.map(|entry| FileCandidate {
+			absolute_path: entry.absolute_path(&search_path),
+			display_path:  entry.path,
+		})
+		.collect();
 
 	files.sort_by(|a, b| a.display_path.cmp(&b.display_path));
 	Ok(files)
