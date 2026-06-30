@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed large snapcompact archives being reconstructed into unbounded per-request image payloads by adding a frame base64 byte budget and omitting over-budget archive frames from prompt blocks. ([#3792](https://github.com/can1357/oh-my-pi/issues/3792))
+
 ## [16.1.23] - 2026-06-26
 
 ### Added

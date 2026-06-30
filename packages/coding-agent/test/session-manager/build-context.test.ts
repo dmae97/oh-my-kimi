@@ -8,6 +8,7 @@ import type {
 	SessionMessageEntry,
 	ThinkingLevelChangeEntry,
 } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
 	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };
@@ -228,6 +229,44 @@ describe("buildSessionContext", () => {
 				],
 			});
 			expect((ctx.messages[1] as { content: string }).content).toBe("after compact");
+		});
+
+		it("caps snapcompact frame payload in LLM context but preserves transcript frames", () => {
+			const largeFrame = "a".repeat(Math.ceil(snapcompact.FRAME_DATA_BYTES_BUDGET / 2) + 1);
+			const compacted: CompactionEntry = {
+				...compaction("3", "2", "Snapcompact summary", "1"),
+				preserveData: {
+					[snapcompact.PRESERVE_KEY]: {
+						frames: [
+							{ data: largeFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
+							{ data: largeFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
+						],
+						totalChars: 20,
+						truncatedChars: 0,
+						textHead: "old edge",
+						textTail: "new edge",
+					},
+				},
+			};
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "response"),
+				compacted,
+				msg("4", "3", "user", "after compact"),
+			];
+
+			const llmContext = buildSessionContext(entries);
+			const summary = llmContext.messages[0];
+			if (summary?.role !== "compactionSummary") throw new Error("Expected LLM compaction summary");
+			expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(1);
+			expect(
+				summary.blocks?.some(block => block.type === "text" && block.text.includes("image middle omitted")),
+			).toBe(true);
+
+			const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+			const transcriptSummary = transcript.messages[2];
+			if (transcriptSummary?.role !== "compactionSummary") throw new Error("Expected transcript compaction summary");
+			expect(transcriptSummary.blocks?.filter(block => block.type === "image")).toHaveLength(2);
 		});
 
 		it("multiple compactions uses latest", () => {

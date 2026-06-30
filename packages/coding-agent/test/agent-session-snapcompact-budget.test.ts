@@ -163,6 +163,7 @@ describe("AgentSession snapcompact frame-budget sizing", () => {
 		const maxFrames = opts?.maxFrames;
 		expect(maxFrames).toBeDefined();
 		expect(maxFrames).toBeLessThan(snapcompact.MAX_FRAMES_DEFAULT);
+		expect(maxFrames).toBeLessThanOrEqual(snapcompact.maxFramesForDataBudget());
 		expect(maxFrames).toBeGreaterThan(0);
 
 		// Verify the FULL projection — base (non-message + kept-recent) +

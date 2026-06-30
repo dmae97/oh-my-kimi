@@ -404,6 +404,29 @@ export const HQ_EDGE_FRAMES = 3;
  *  undercounting a high-res archive at the raised {@link MAX_FRAMES_DEFAULT}. */
 export const FRAME_TOKEN_ESTIMATE = 5024;
 
+/** Conservative upper bound for one persisted frame's base64 payload. The
+ *  measured high-res Anthropic `8x13`/`11on16` PNG frames sit around 159 KB;
+ *  170 KB leaves margin for denser glyph pages without permitting multi-MB
+ *  standing request bodies at large context windows. */
+export const FRAME_DATA_BYTES_ESTIMATE = 170_000;
+
+/** Maximum snapcompact image base64 carried in every rebuilt provider request.
+ *  Above this, provider backends can accept the HTTP body but fail mid-stream
+ *  with opaque 5xx errors. Keep this independent from visual-token budgeting:
+ *  a 1M-token model can afford 70 images on paper, but not the resulting
+ *  ~11 MB JSON payload on every turn. */
+export const FRAME_DATA_BYTES_BUDGET = 3_000_000;
+
+/** Frame-count cap implied by {@link FRAME_DATA_BYTES_BUDGET}. */
+export function maxFramesForDataBudget(maxFrameDataBytes: number = FRAME_DATA_BYTES_BUDGET): number {
+	return Math.max(1, Math.floor(maxFrameDataBytes / FRAME_DATA_BYTES_ESTIMATE));
+}
+
+/** Base64 byte length for persisted snapcompact frames. */
+export function frameDataBytes(frames: readonly Pick<Frame, "data">[]): number {
+	return frames.reduce((sum, frame) => sum + frame.data.length, 0);
+}
+
 /**
  * Per-request image-count budgets by provider id. These cap how many images an
  * entire request may carry (archive/system-prompt/tool-result imaging combined).
@@ -1313,6 +1336,51 @@ export function archiveSourceText(archive: Archive): string | undefined {
 	return text.length > 0 ? toPlainText(text) : undefined;
 }
 
+/** Options for reconstructing a persisted snapcompact archive into prompt blocks. */
+export interface HistoryBlockOptions {
+	/** Hard cap on image base64 bytes attached to one rebuilt provider request. */
+	maxFrameDataBytes?: number;
+}
+
+function formatFrameDataBytes(bytes: number): string {
+	if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+	if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+	return `${bytes} B`;
+}
+
+function imagesWithinBudget(
+	archive: Archive,
+	maxFrameDataBytes: number | undefined,
+): { images: ImageContent[]; omittedFrames: number; omittedBytes: number } {
+	if (maxFrameDataBytes === undefined) {
+		return { images: images(archive), omittedFrames: 0, omittedBytes: 0 };
+	}
+
+	let usedBytes = 0;
+	let omittedFrames = 0;
+	let omittedBytes = 0;
+	const kept: Frame[] = [];
+	for (const frame of archive.frames) {
+		const bytes = frame.data.length;
+		if (usedBytes + bytes > maxFrameDataBytes) {
+			omittedFrames++;
+			omittedBytes += bytes;
+			continue;
+		}
+		usedBytes += bytes;
+		kept.push(frame);
+	}
+	return { images: images({ ...archive, frames: kept }), omittedFrames, omittedBytes };
+}
+
+function omittedFrameNotice(omittedFrames: number, omittedBytes: number): string {
+	return [
+		"-------------- snapcompact image middle omitted",
+		`${omittedFrames.toLocaleString()} archived image frame${omittedFrames === 1 ? "" : "s"} (${formatFrameDataBytes(omittedBytes)} base64) exceeded the per-request snapcompact payload budget. The compacted summary and visible text edges remain available.`,
+		"--------------",
+	].join("\n");
+}
+
 /** Convert archive frames into LLM image blocks (oldest first). */
 export function images(archive: Archive): ImageContent[] {
 	return archive.frames.map(frame => ({
@@ -1326,23 +1394,35 @@ export function images(archive: Archive): ImageContent[] {
  *  the oldest text region, the imaged middle, then the newest text region.
  *  Runtime-only; reconstructed from {@link Archive} on each context rebuild
  *  instead of persisted on the session entry. */
-export function historyBlocks(archive: Archive): (TextContent | ImageContent)[] {
+export function historyBlocks(archive: Archive, options: HistoryBlockOptions = {}): (TextContent | ImageContent)[] {
 	const blocks: (TextContent | ImageContent)[] = [];
-	const hasImages = archive.frames.length > 0;
+	const budgeted = imagesWithinBudget(archive, options.maxFrameDataBytes);
+	const hasImages = budgeted.images.length > 0;
+	const hasOmittedImages = budgeted.omittedFrames > 0;
 	if (archive.textHead) {
-		const suffix = hasImages ? "\n-------------- imaged middle below\n" : "";
+		const suffix = hasImages
+			? "\n-------------- imaged middle below\n"
+			: hasOmittedImages
+				? `\n${omittedFrameNotice(budgeted.omittedFrames, budgeted.omittedBytes)}\n`
+				: "";
 		blocks.push({ type: "text", text: toPlainText(archive.textHead) + suffix });
+	} else if (hasOmittedImages) {
+		blocks.push({ type: "text", text: omittedFrameNotice(budgeted.omittedFrames, budgeted.omittedBytes) });
 	}
-	blocks.push(...images(archive));
+	blocks.push(...budgeted.images);
+	if (hasImages && hasOmittedImages) {
+		blocks.push({ type: "text", text: omittedFrameNotice(budgeted.omittedFrames, budgeted.omittedBytes) });
+	}
 	if (archive.textTail) {
 		const prefix = hasImages
 			? "-------------- imaged middle above\n"
-			: archive.truncatedChars > 0
+			: archive.truncatedChars > 0 || hasOmittedImages
 				? "\n-------------- middle history omitted above\n"
 				: "";
 		const tail = prefix + toPlainText(archive.textTail);
-		if (blocks.length > 0 && blocks[blocks.length - 1]?.type === "text") {
-			(blocks[blocks.length - 1] as TextContent).text += tail;
+		const lastBlock = blocks[blocks.length - 1];
+		if (lastBlock?.type === "text") {
+			lastBlock.text += tail;
 		} else {
 			blocks.push({ type: "text", text: tail });
 		}
