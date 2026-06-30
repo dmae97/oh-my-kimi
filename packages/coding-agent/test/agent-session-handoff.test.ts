@@ -452,7 +452,11 @@ describe("AgentSession handoff", () => {
 		const fixedPreparation: compactionModule.CompactionPreparation = {
 			firstKeptEntryId: lastEntryId,
 			messagesToSummarize: [
-				{ role: "user", content: [{ type: "text", text: UNRENDERABLE_SNAPCOMPACT_TEXT.repeat(100) }], timestamp: 1 },
+				{
+					role: "user",
+					content: [{ type: "text", text: UNRENDERABLE_SNAPCOMPACT_TEXT.repeat(100) }],
+					timestamp: 1,
+				},
 			],
 			turnPrefixMessages: [],
 			recentMessages: [],
@@ -479,7 +483,11 @@ describe("AgentSession handoff", () => {
 		const fixedPreparation: compactionModule.CompactionPreparation = {
 			firstKeptEntryId: lastEntryId,
 			messagesToSummarize: [
-				{ role: "user", content: [{ type: "text", text: UNRENDERABLE_SNAPCOMPACT_TEXT.repeat(100) }], timestamp: 1 },
+				{
+					role: "user",
+					content: [{ type: "text", text: UNRENDERABLE_SNAPCOMPACT_TEXT.repeat(100) }],
+					timestamp: 1,
+				},
 			],
 			turnPrefixMessages: [],
 			recentMessages: [],
