@@ -171,8 +171,28 @@ describe("issue #3291 — tiny-model downloads keep the worker referenced", () =
 
 			worker.emit({ type: "downloaded", id: downloadRequestId });
 
-			expect(await download).toBe(true);
+			expect(await download).toEqual({ ok: true });
 			expect(worker.unrefCalls).toBe(1);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("returns the worker error for failed download requests", async () => {
+		let downloadRequestId = "";
+		const worker = new FakeTinyWorker(message => {
+			if (message.type === "download") downloadRequestId = message.id;
+		});
+		const client = new TinyTitleClient(() => worker);
+
+		try {
+			const download = client.downloadModel("lfm2-700m");
+
+			expect(downloadRequestId).not.toBe("");
+			worker.emit({ type: "error", id: downloadRequestId, error: "Error: runtime install failed" });
+
+			expect(await download).toEqual({ ok: false, error: "Error: runtime install failed" });
+			expect(worker.terminated).toBe(true);
 		} finally {
 			await client.terminate();
 		}
