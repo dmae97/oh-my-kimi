@@ -21,6 +21,7 @@
 - Improved error reporting for `omp tiny-models download` by displaying the actual worker-side download error.
 - Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
 - Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
+- Fixed the `Working…` loader staying gone for the rest of a parent turn when a long-running tool (e.g. a `task` subagent) finished inside a transient overlay window (auto-snapcompact, auto-context-full, auto-retry). Those overlays null the working loader on start and the overlay-end handler is the only restorer keyed off the missing loader; if the subagent's `tool_execution_end` lands while the overlay is still active (or its end handler errored before re-arming), the spinner stayed gone until the next turn even though the parent kept streaming. `tool_execution_end` now mirrors the `tool_execution_update` self-heal so the working loader survives a subagent completing inside the overlay window ([#3858](https://github.com/can1357/oh-my-pi/issues/3858)).
 
 ## [16.2.6] - 2026-06-29
 
