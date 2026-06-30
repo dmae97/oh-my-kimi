@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `omp://` documentation coverage for managed memory/skill tools, image generation, speech generation, README-only user-facing package CLIs, and docs-index freshness checks. ([#3934](https://github.com/can1357/oh-my-pi/issues/3934))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed

@@ -75,12 +75,12 @@ async function cleanBundleOutputs(): Promise<void> {
 async function main(): Promise<void> {
 	const start = Bun.nanoseconds();
 	await cleanBundleOutputs();
-	// The npm bundle ships no stats dashboard sources or prebuilt dist/client,
-	// so embed the dashboard archive the same way compiled binaries do
-	// (scripts/build-binary.ts). Reset afterwards to keep the checked-in
-	// placeholder empty.
-	await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
+	// The npm bundle ships no repo docs tree or stats dashboard sources, so embed
+	// both generated assets before bundling. Reset afterwards to keep the
+	// checked-in placeholders empty.
 	try {
+		await runCommand(["bun", "run", "gen:docs"]);
+		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 		await runCommand([
 			"bun",
 			"build",
@@ -98,6 +98,7 @@ async function main(): Promise<void> {
 		]);
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		await runCommand(["bun", "run", "gen:docs:reset"]);
 	}
 	await ensureShebang();
 	const stat = await fs.stat(cliPath);
