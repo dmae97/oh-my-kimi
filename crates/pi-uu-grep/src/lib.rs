@@ -654,12 +654,18 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 	let mut any_match = false;
 	let mut had_error = false;
 
+	let mut processed_operand = false;
 	for f in &files {
 		// -q: once something matched, exit immediately; the status is settled
 		// below. Checked at the top so the stdin `continue` path stops too.
 		if opts.quiet && any_match {
 			break;
 		}
+		if processed_operand && pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
+		processed_operand = true;
 		// stdin
 		if f.as_os_str() == OsStr::new("-") {
 			let name: Option<&[u8]> = if show_names {
@@ -682,6 +688,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 						let _ = writeln!(pi_uutils_ctx::stderr(), "grep: (standard input): {e}");
 					}
 				},
+			}
+			if pi_uutils_ctx::is_cancelled() {
+				had_error = true;
+				break;
 			}
 			continue;
 		}
@@ -742,6 +752,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 					let _ = writeln!(pi_uutils_ctx::stderr(), "grep: {}: {e}", f.to_string_lossy());
 				}
 			},
+		}
+		if pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
 		}
 	}
 
@@ -923,14 +937,26 @@ mod tests {
 				.unwrap_or(0)
 		));
 		std::fs::create_dir_all(&tree).expect("temp tree should be created");
-		std::fs::write(tree.join("haystack.txt"), "match-me\n").expect("file should be written");
+		let walk_root = tree.join("walk-root");
+		std::fs::create_dir_all(&walk_root).expect("walk root should be created");
+		std::fs::write(walk_root.join("haystack.txt"), "match-me\n")
+			.expect("walked file should be written");
+		let later_file = tree.join("later.txt");
+		std::fs::write(&later_file, "match-me\n").expect("later file should be written");
 
-		let (code, stdout, stderr) =
-			run_grep_cancelled(&["-r", "match-me", tree.to_str().expect("utf8 path")], &tree);
+		let (code, stdout, stderr) = run_grep_cancelled(
+			&[
+				"-r",
+				"match-me",
+				walk_root.to_str().expect("utf8 path"),
+				later_file.to_str().expect("utf8 path"),
+			],
+			&tree,
+		);
 
-		// Walker must have observed the heartbeat before visiting the file:
-		// no match printed despite the file containing one, and no diagnostic
-		// leaked onto stderr.
+		// Walker must have observed the heartbeat before visiting the file,
+		// and the operand loop must not continue into the later regular file
+		// after cancellation is observed.
 		assert!(stdout.is_empty(), "cancelled walk should not output matches: {stdout:?}");
 		assert!(
 			stderr.is_empty(),

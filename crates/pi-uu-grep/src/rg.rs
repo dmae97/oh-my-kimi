@@ -982,16 +982,26 @@ fn search_collected_files<W: Write>(
 	files.sort_unstable_by(|a, b| b.cmp(a));
 	let mut any_match = false;
 	let mut had_error = false;
+	let mut processed_file = false;
 	for path in files {
 		if opts.quiet && any_match {
 			break;
 		}
+		if processed_file && pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
+		processed_file = true;
 		let display_path = display_path(operand, root, &path);
 		let display_bytes = display_path.as_os_str().as_encoded_bytes().to_vec();
 		let display = show_names.then_some(display_bytes.as_slice());
 		let outcome = process_file(matcher, searcher, &path, display, opts, out);
 		any_match |= outcome.any_match;
 		had_error |= outcome.had_error;
+		if pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
 	}
 	SearchOutcome { any_match, had_error }
 }
@@ -1123,7 +1133,13 @@ fn collect_filtered_files(cli: &RgCli, root: &Path) -> Result<Vec<PathBuf>, Stri
 fn list_files<W: Write>(cli: &RgCli, paths: &[OsString], out: &mut W) -> SearchOutcome {
 	let mut any = false;
 	let mut had_error = false;
+	let mut processed_operand = false;
 	for operand in paths {
+		if processed_operand && pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
+		processed_operand = true;
 		let resolved = pi_uutils_ctx::resolve(operand);
 		match std::fs::metadata(&resolved) {
 			Ok(meta) if meta.is_dir() => {
@@ -1155,6 +1171,10 @@ fn list_files<W: Write>(cli: &RgCli, paths: &[OsString], out: &mut W) -> SearchO
 				let _ = writeln!(pi_uutils_ctx::stderr(), "rg: {}: {err}", operand.to_string_lossy());
 				had_error = true;
 			},
+		}
+		if pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
 		}
 	}
 	SearchOutcome { any_match: any, had_error }
@@ -1250,10 +1270,16 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 	let show_names = show_names_for(&paths, recursive, &cli, &opts);
 	let mut any_match = false;
 	let mut had_error = false;
+	let mut processed_operand = false;
 	for operand in &paths {
 		if opts.quiet && any_match {
 			break;
 		}
+		if processed_operand && pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
+		}
+		processed_operand = true;
 		if operand.as_os_str() == OsStr::new("-") {
 			let display = show_names.then_some(b"<stdin>".as_slice());
 			match process_reader(
@@ -1271,6 +1297,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 						let _ = writeln!(pi_uutils_ctx::stderr(), "rg: <stdin>: {err}");
 					}
 				},
+			}
+			if pi_uutils_ctx::is_cancelled() {
+				had_error = true;
+				break;
 			}
 			continue;
 		}
@@ -1305,6 +1335,10 @@ pub fn run(argv: Vec<OsString>) -> i32 {
 						writeln!(pi_uutils_ctx::stderr(), "rg: {}: {err}", operand.to_string_lossy());
 				}
 			},
+		}
+		if pi_uutils_ctx::is_cancelled() {
+			had_error = true;
+			break;
 		}
 	}
 	let _ = out.flush();
@@ -1395,10 +1429,20 @@ mod tests {
 		// heartbeat to pi_walker, so cancellation was not observed during
 		// directory traversal even after the uutils ctx cancel flag was set.
 		let tree = unique_tree("search");
-		std::fs::write(tree.join("haystack.txt"), "match-me\n").expect("file written");
+		let walk_root = tree.join("walk-root");
+		std::fs::create_dir_all(&walk_root).expect("walk root should be created");
+		std::fs::write(walk_root.join("haystack.txt"), "match-me\n").expect("walked file written");
+		let later_file = tree.join("later.txt");
+		std::fs::write(&later_file, "match-me\n").expect("later file written");
 
-		let (code, stdout, stderr) =
-			run_rg_cancelled(&["match-me", tree.to_str().expect("utf8 path")], &tree);
+		let (code, stdout, stderr) = run_rg_cancelled(
+			&[
+				"match-me",
+				walk_root.to_str().expect("utf8 path"),
+				later_file.to_str().expect("utf8 path"),
+			],
+			&tree,
+		);
 
 		assert!(stdout.is_empty(), "cancelled walk should not output matches: {stdout:?}");
 		assert!(
@@ -1415,16 +1459,26 @@ mod tests {
 		// Regression for #3933: `rg --files <dir>` routes through
 		// `collect_filtered_files`, whose heartbeat was likewise a no-op.
 		let tree = unique_tree("files");
-		std::fs::write(tree.join("alpha.txt"), "alpha\n").expect("file written");
+		let walk_root = tree.join("walk-root");
+		std::fs::create_dir_all(&walk_root).expect("walk root should be created");
+		std::fs::write(walk_root.join("alpha.txt"), "alpha\n").expect("walked file written");
+		let later_file = tree.join("later.txt");
+		std::fs::write(&later_file, "later\n").expect("later file written");
 
-		let (code, stdout, stderr) =
-			run_rg_cancelled(&["--files", tree.to_str().expect("utf8 path")], &tree);
+		let (code, stdout, stderr) = run_rg_cancelled(
+			&[
+				"--files",
+				walk_root.to_str().expect("utf8 path"),
+				later_file.to_str().expect("utf8 path"),
+			],
+			&tree,
+		);
 
 		assert!(stdout.is_empty(), "cancelled --files walk should not enumerate paths: {stdout:?}");
 		assert!(stderr.is_empty(), "cancelled --files walk should stay silent: {stderr:?}");
-		// list_files reports any_match=false / had_error=false when the walker
-		// silently returns no files. The wrapper "no match" mapping yields 1.
-		assert_eq!(code, 1, "cancelled --files walk yields no enumerated files");
+		// Cancellation is an error for standalone utility status; the shell
+		// wrapper rewrites it to the user-visible cancelled status (130).
+		assert_eq!(code, 2, "cancelled --files walk should stop before later operands");
 
 		let _ = std::fs::remove_dir_all(&tree);
 	}
