@@ -130,11 +130,9 @@ function resolveThoughtSignature(isSameProviderAndModel: boolean, signature: str
 	return isSameProviderAndModel && isValidThoughtSignature(signature) ? signature : undefined;
 }
 
-/**
- * Claude models via Google APIs require explicit tool call IDs in function calls/responses.
- */
-export function requiresToolCallId(modelId: string): boolean {
-	return modelId.startsWith("claude-");
+function supportsFunctionPartId<T extends GoogleApiType>(model: Model<T>): boolean {
+	if (model.api === "google-vertex") return false;
+	return model.id.startsWith("claude-") || (model.api === "google-generative-ai" && isGemini3Model(model.id));
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
@@ -160,8 +158,9 @@ function isGemini3Model(modelId: string): boolean {
  */
 export function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
 	const contents: Content[] = [];
+	const emittedToolCallNames = new Map<string, string>();
+
 	const normalizeToolCallId = (id: string): string => {
-		if (!requiresToolCallId(model.id)) return id;
 		return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 	};
 
@@ -247,6 +246,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						});
 					}
 				} else if (block.type === "toolCall") {
+					emittedToolCallNames.set(block.id, block.name);
 					const thoughtSignature = resolveThoughtSignature(isSameProviderAndModel, block.thoughtSignature);
 					const effectiveSignature =
 						thoughtSignature || (isGemini3Model(model.id) ? SKIP_THOUGHT_SIGNATURE : undefined);
@@ -255,11 +255,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						functionCall: {
 							name: block.name,
 							args: block.arguments ?? {},
-							...(requiresToolCallId(model.id) ? { id: block.id } : {}),
+							...(supportsFunctionPartId(model) ? { id: block.id } : {}),
 						},
 					};
 					if (model.provider === "google-vertex" && part?.functionCall?.id) {
-						delete part.functionCall.id; // Vertex AI does not support 'id' in functionCall
+						delete part.functionCall.id; // Vertex AI GenerateContent rejects 'id' in functionCall parts.
 					}
 					if (effectiveSignature) {
 						part.thoughtSignature = effectiveSignature;
@@ -305,10 +305,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 				},
 			}));
 
-			const includeId = requiresToolCallId(model.id);
+			const includeId = supportsFunctionPartId(model);
+			const emittedName = emittedToolCallNames.get(msg.toolCallId);
 			const functionResponsePart: Part = {
 				functionResponse: {
-					name: msg.toolName,
+					name: emittedName ?? msg.toolName,
 					response: msg.isError ? { error: responseValue } : { output: responseValue },
 					...(hasImages && modelSupportsMultimodalFunctionResponse && { parts: imageParts }),
 					...(includeId ? { id: msg.toolCallId } : {}),
@@ -316,7 +317,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			};
 
 			if (model.provider === "google-vertex" && functionResponsePart.functionResponse?.id) {
-				delete functionResponsePart.functionResponse.id; // Vertex AI does not support 'id' in functionResponse
+				delete functionResponsePart.functionResponse.id; // Vertex AI GenerateContent rejects 'id' in functionResponse parts.
 			}
 
 			// Cloud Code Assist API requires all function responses to be in a single user turn.
@@ -533,6 +534,24 @@ export function pushToolCallEvents(
  * `text_start` / `thinking_start` event. `onBeforeStartEvent` lets the SSE consumer
  * inject its `ensureStarted()` first-token side effect into the canonical event order.
  */
+export function startTextOrThinkingBlock(
+	isThinking: true,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	onBeforeStartEvent?: () => void,
+): ThinkingContent;
+export function startTextOrThinkingBlock(
+	isThinking: false,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	onBeforeStartEvent?: () => void,
+): TextContent;
+export function startTextOrThinkingBlock(
+	isThinking: boolean,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	onBeforeStartEvent?: () => void,
+): TextContent | ThinkingContent;
 export function startTextOrThinkingBlock(
 	isThinking: boolean,
 	output: AssistantMessage,
@@ -864,6 +883,8 @@ export interface GoogleGenAIRequestPlan {
 	url: string;
 	headers: Record<string, string>;
 	fetch?: FetchImpl;
+	/** Optional URL retried once when {@link url} returns 404 (regional Vertex endpoint missing a global-only model). */
+	fallbackUrl?: string;
 }
 
 export function streamGoogleGenAI<T extends "google-generative-ai" | "google-vertex">(args: {
@@ -918,8 +939,8 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 
 			const bodyJson = JSON.stringify(paramsToWireBody(params));
 			const fetchImpl = plan.fetch ?? options?.fetch ?? (globalThis.fetch.bind(globalThis) as FetchImpl);
-			const openStream = async (): Promise<ReadableStream<Uint8Array>> => {
-				const response = await fetchImpl(plan.url, {
+			const openStreamAt = async (requestUrl: string): Promise<ReadableStream<Uint8Array>> => {
+				const response = await fetchImpl(requestUrl, {
 					method: "POST",
 					headers: { ...plan.headers, "Content-Type": "application/json", Accept: "text/event-stream" },
 					body: bodyJson,
@@ -940,6 +961,20 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 					});
 				}
 				return response.body as ReadableStream<Uint8Array>;
+			};
+			// A regional Vertex endpoint 404s for models published only on the
+			// global endpoint; retry global once so a stale/ambient region never
+			// breaks a request that worked before regional routing existed.
+			const openStream = async (): Promise<ReadableStream<Uint8Array>> => {
+				if (!plan.fallbackUrl) return openStreamAt(plan.url);
+				try {
+					return await openStreamAt(plan.url);
+				} catch (error) {
+					if (error instanceof AIError.GoogleApiError && error.status === 404) {
+						return openStreamAt(plan.fallbackUrl);
+					}
+					throw error;
+				}
 			};
 
 			let body = await openStream();

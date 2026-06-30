@@ -63,10 +63,19 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 			}
 
 			if (apiKey) {
-				const url = `https://aiplatform.googleapis.com/${API_VERSION}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
+				// Explicit `location` is a deliberate residency choice: honor it and let
+				// a 404 surface. An ambient env-derived region falls back to the global
+				// endpoint so a stray GOOGLE_*_LOCATION never breaks a previously-working
+				// global-only request.
+				const explicitLocation = options?.location;
+				const location = explicitLocation ?? resolveAmbientLocation() ?? "global";
+				const host = resolveEndpointHost(location);
+				const path = `${API_VERSION}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
+				const useGlobalFallback = !explicitLocation && host !== "aiplatform.googleapis.com";
 				return {
 					params,
-					url,
+					url: `https://${host}/${path}`,
+					fallbackUrl: useGlobalFallback ? `https://aiplatform.googleapis.com/${path}` : undefined,
 					headers: {
 						...baseHeaders,
 						"x-goog-api-key": apiKey,
@@ -110,9 +119,14 @@ function resolveProject(options?: GoogleVertexOptions): string {
 function resolveEndpointHost(location: string): string {
 	return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
 }
+function resolveAmbientLocation(): string | undefined {
+	return $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION || undefined;
+}
+function resolveOptionalLocation(options?: GoogleVertexOptions): string | undefined {
+	return options?.location || resolveAmbientLocation();
+}
 function resolveLocation(options?: GoogleVertexOptions): string {
-	const location =
-		options?.location || $env.GOOGLE_VERTEX_LOCATION || $env.GOOGLE_CLOUD_LOCATION || $env.VERTEX_LOCATION;
+	const location = resolveOptionalLocation(options);
 	if (!location) {
 		throw new AIError.ConfigurationError(
 			"Vertex AI requires a location. Set GOOGLE_VERTEX_LOCATION/GOOGLE_CLOUD_LOCATION/VERTEX_LOCATION or pass location in options.",

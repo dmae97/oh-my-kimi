@@ -9,9 +9,6 @@
  *   - `POST {generativelanguage,aiplatform}.googleapis.com/.../models/{model}:streamGenerateContent?alt=sse`
  *   - The Cloud Code Assist endpoint used by `google-gemini-cli.ts`
  */
-
-import type { ServiceTier } from "../types";
-
 /** Mirror of `@google/genai`'s `FinishReason` string enum. */
 export type FinishReason =
 	| "FINISH_REASON_UNSPECIFIED"
@@ -137,7 +134,7 @@ export interface GenerateContentConfig {
 	 * Gemini/Vertex serving tier. Serialized to the request body root as
 	 * `serviceTier` (camelCase) by the transformer in `google-shared.ts`.
 	 */
-	serviceTier?: ServiceTier;
+	serviceTier?: "auto" | "default" | "flex" | "scale" | "priority";
 	abortSignal?: AbortSignal;
 }
 

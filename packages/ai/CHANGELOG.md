@@ -15,11 +15,11 @@
 
 ### Fixed
 
+- Improved Vertex AI reliability by automatically falling back to global endpoints on 404 errors
+
 - Fixed safety setting application for Google Vertex AI models
 - Ensured Gemini service tier is correctly passed through to the API
 - Corrected priority request accounting for supported providers
-### Fixed
-
 - Fixed Kimi Code's Anthropic-compatible request path to keep thinking enabled and downgrade forced tool choice for Kimi K2.7 Code title generation. ([#3852](https://github.com/can1357/oh-my-pi/issues/3852))
 
 ## [16.2.6] - 2026-06-29
