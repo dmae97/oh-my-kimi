@@ -27,6 +27,9 @@
 ### Fixed
 
 - Fixed `/extensions` showing MCP servers as `active` when `/mcp list` reported them as `disabled`, and made `/extensions` re-enable work for every supported source. The dashboard now mirrors `/mcp list` by honoring the per-server `enabled: false` flag plus the user-level `disabledServers` denylist and a new `enabledServers` allowlist; the dashboard's MCP toggle writes through the canonical mcp.json — flipping `enabled` on the loaded source file for config-resident servers (including supported non-primary files such as `.omp/.mcp.json`), force-enabling tool-owned sources (such as `opencode.json`) via the user `enabledServers` allowlist without mutating the foreign config, and using the `disabledServers` denylist for purely discovered third-party servers, so `/mcp list`, the MCP runtime, and the dashboard stay in sync ([#3827](https://github.com/can1357/oh-my-pi/issues/3827)).
+### Fixed
+
+- Isolated branch-mode task merges now preserve the agent's own commits (message and author) instead of collapsing every diff into a single AI-summarized commit. `commitToBranch` detects when the subagent moved HEAD past the baseline, transfers clean-baseline commit objects into the parent repo via `git fetch`, rewrites dirty-baseline commits against the captured baseline WIP so user staged/unstaged/untracked changes are filtered out, and `mergeTaskBranches` cherry-picks the inclusive range `baseSha..omp/task/<id>` so each task commit replays with its original message; any uncommitted leftover on top of the agent's last commit lands as one trailing AI-summarized commit ([#3842](https://github.com/can1357/oh-my-pi/issues/3842)).
 
 ## [16.2.6] - 2026-06-29
 

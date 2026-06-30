@@ -460,12 +460,129 @@ export async function cleanupIsolation(handle: IsolationHandle): Promise<void> {
 export interface CommitToBranchResult {
 	branchName?: string;
 	nestedPatches: NestedRepoPatch[];
+	/**
+	 * SHA of the parent-repo commit the task branch was created on top of, so
+	 * {@link mergeTaskBranches} can cherry-pick the range `baseSha..branchName`
+	 * and preserve every agent commit's message and author.
+	 */
+	baseSha?: string;
+}
+
+function baselineHasRootWip(baseline: RepoBaseline): boolean {
+	return !!(baseline.staged.trim() || baseline.unstaged.trim() || baseline.untrackedPatch.trim());
+}
+
+async function commitPatchToBranchWorktree(
+	tmpDir: string,
+	taskId: string,
+	patchText: string,
+	message: string,
+	author?: git.CommitAuthor,
+): Promise<void> {
+	try {
+		await git.patch.applyText(tmpDir, patchText);
+	} catch (err) {
+		if (err instanceof git.GitCommandError) {
+			const stderr = err.result.stderr.slice(0, 2000);
+			logger.error("commitToBranch: git apply failed", {
+				taskId,
+				exitCode: err.result.exitCode,
+				stderr,
+				patchSize: patchText.length,
+				patchHead: patchText.slice(0, 500),
+			});
+			throw new Error(`git apply failed for task ${taskId}: ${stderr}`);
+		}
+		throw err;
+	}
+	await git.stage.files(tmpDir);
+	await git.commit(tmpDir, message, author ? { author } : {});
+}
+
+interface FilteredAgentReplayOptions {
+	baseline: WorktreeBaseline;
+	branchName: string;
+	commitMessage?: (diff: string) => Promise<string | null>;
+	fallbackMessage: string;
+	isolationDir: string;
+	isolationHead: string;
+	repoRoot: string;
+	rootPatch: string;
+	taskId: string;
+}
+
+async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Promise<void> {
+	const baselineSha = opts.baseline.root.headCommit;
+	await git.branch.create(opts.repoRoot, opts.branchName, baselineSha);
+
+	const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
+	try {
+		await git.worktree.add(opts.repoRoot, tmpDir, opts.branchName);
+		const agentCommits = await git.revList.range(opts.isolationDir, baselineSha, opts.isolationHead);
+		const dirtyBaselineTree = await writeSyntheticTree(opts.isolationDir, baselineSha, [
+			opts.baseline.root.staged,
+			opts.baseline.root.unstaged,
+			opts.baseline.root.untrackedPatch,
+		]);
+		let previousFilteredTree = baselineSha;
+
+		for (const commitSha of agentCommits) {
+			const taskStatePatch = await git.diff.tree(opts.isolationDir, dirtyBaselineTree, `${commitSha}^{tree}`, {
+				allowFailure: true,
+				binary: true,
+			});
+			const currentFilteredTree = await writeSyntheticTree(opts.repoRoot, baselineSha, [taskStatePatch]);
+			const commitPatch = await git.diff.tree(opts.repoRoot, previousFilteredTree, currentFilteredTree, {
+				allowFailure: true,
+				binary: true,
+			});
+			if (commitPatch.trim()) {
+				const details = await git.commitDetails(opts.isolationDir, commitSha);
+				await commitPatchToBranchWorktree(
+					tmpDir,
+					opts.taskId,
+					commitPatch,
+					details.message || commitSha,
+					details.author,
+				);
+			}
+			previousFilteredTree = currentFilteredTree;
+		}
+
+		const finalFilteredTree = await writeSyntheticTree(opts.repoRoot, baselineSha, [opts.rootPatch]);
+		const leftoverPatch = await git.diff.tree(opts.repoRoot, previousFilteredTree, finalFilteredTree, {
+			allowFailure: true,
+			binary: true,
+		});
+		if (leftoverPatch.trim()) {
+			const msg = (opts.commitMessage && (await opts.commitMessage(leftoverPatch))) || opts.fallbackMessage;
+			await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
+		}
+	} finally {
+		await git.worktree.tryRemove(opts.repoRoot, tmpDir);
+		await fs.rm(tmpDir, { recursive: true, force: true });
+	}
 }
 
 /**
- * Commit task-only changes to a new branch.
- * Only root repo changes go on the branch. Nested repo patches are returned
- * separately since the parent git can't track files inside gitlinks.
+ * Capture task-only changes from the isolation worktree onto a parent-repo
+ * branch named `omp/task/${taskId}`. Only root-repo changes go on the branch;
+ * nested-repo patches are returned separately because the parent git can't
+ * track files inside gitlinks.
+ *
+ * If the agent committed inside isolation (HEAD moved past
+ * `baseline.root.headCommit`), clean-baseline runs fetch the raw commit range
+ * into the parent repo and later cherry-pick `baseSha..branchName`, preserving
+ * every message and author verbatim. Dirty-baseline runs rewrite each agent
+ * commit against the captured baseline WIP before committing it to the task
+ * branch, so user staged/unstaged/untracked changes present at isolation
+ * start are not replayed into the parent commit history.
+ *
+ * If the agent did not commit, the captured delta is collapsed onto a single
+ * branch commit with an AI-generated (or fallback) message — the legacy
+ * behaviour.
+ *
+ * Returns `null` when no root or nested changes exist.
  */
 export async function commitToBranch(
 	isolationDir: string,
@@ -474,45 +591,83 @@ export async function commitToBranch(
 	description: string | undefined,
 	commitMessage?: (diff: string) => Promise<string | null>,
 ): Promise<CommitToBranchResult | null> {
+	const baselineSha = baseline.root.headCommit;
+	const isolationHead = (await git.head.sha(isolationDir)) ?? "";
+	const agentCommitted = isolationHead !== "" && isolationHead !== baselineSha;
+
 	const { rootPatch, nestedPatches } = await captureDeltaPatch(isolationDir, baseline);
 	if (!rootPatch.trim() && nestedPatches.length === 0) return null;
+	if (!rootPatch.trim()) return { nestedPatches };
 
 	const repoRoot = baseline.root.repoRoot;
 	const branchName = `omp/task/${taskId}`;
 	const fallbackMessage = description || taskId;
 
-	// Only create a branch if the root repo has changes
-	if (rootPatch.trim()) {
-		await git.branch.create(repoRoot, branchName);
+	let branchCreated = false;
+
+	if (agentCommitted) {
+		if (baselineHasRootWip(baseline.root)) {
+			await replayFilteredAgentCommits({
+				baseline,
+				branchName,
+				commitMessage,
+				fallbackMessage,
+				isolationDir,
+				isolationHead,
+				repoRoot,
+				rootPatch,
+				taskId,
+			});
+		} else {
+			// Transfer the agent's commit objects (which live in isolation's `.git`,
+			// stranded once `cleanupIsolation` tears the overlay down) into the parent
+			// repo's object DB and create the branch at the agent's HEAD. `+HEAD:…`
+			// force-overwrites a stale branch from a prior run.
+			await git.fetch(repoRoot, isolationDir, "HEAD", `refs/heads/${branchName}`);
+
+			// Leftover = anything still uncommitted in isolation on top of the
+			// agent's last commit (staged, unstaged, untracked). The agent didn't
+			// commit it, so it goes in as one AI-summarized trailing commit.
+			const leftoverPatch = await captureRepoDeltaPatch(isolationDir, {
+				repoRoot: isolationDir,
+				headCommit: isolationHead,
+				staged: "",
+				unstaged: "",
+				untracked: [],
+				untrackedPatch: "",
+			});
+			if (leftoverPatch.trim()) {
+				const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
+				try {
+					await git.worktree.add(repoRoot, tmpDir, branchName);
+					const msg = (commitMessage && (await commitMessage(leftoverPatch))) || fallbackMessage;
+					await commitPatchToBranchWorktree(tmpDir, taskId, leftoverPatch, msg);
+				} finally {
+					await git.worktree.tryRemove(repoRoot, tmpDir);
+					await fs.rm(tmpDir, { recursive: true, force: true });
+				}
+			}
+		}
+		branchCreated = true;
+	} else if (rootPatch.trim()) {
+		await git.branch.create(repoRoot, branchName, baselineSha);
+		branchCreated = true;
 		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
 		try {
 			await git.worktree.add(repoRoot, tmpDir, branchName);
-			try {
-				await git.patch.applyText(tmpDir, rootPatch);
-			} catch (err) {
-				if (err instanceof git.GitCommandError) {
-					const stderr = err.result.stderr.slice(0, 2000);
-					logger.error("commitToBranch: git apply failed", {
-						taskId,
-						exitCode: err.result.exitCode,
-						stderr,
-						patchSize: rootPatch.length,
-						patchHead: rootPatch.slice(0, 500),
-					});
-					throw new Error(`git apply failed for task ${taskId}: ${stderr}`);
-				}
-				throw err;
-			}
-			await git.stage.files(tmpDir);
 			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
-			await git.commit(tmpDir, msg);
+			await commitPatchToBranchWorktree(tmpDir, taskId, rootPatch, msg);
 		} finally {
 			await git.worktree.tryRemove(repoRoot, tmpDir);
 			await fs.rm(tmpDir, { recursive: true, force: true });
 		}
 	}
 
-	return { branchName: rootPatch.trim() ? branchName : undefined, nestedPatches };
+	return {
+		branchName: branchCreated ? branchName : undefined,
+		baseSha: baselineSha,
+		nestedPatches,
+	};
 }
 
 export interface MergeBranchResult {
@@ -524,13 +679,17 @@ export interface MergeBranchResult {
 }
 
 /**
- * Cherry-pick task branch commits sequentially onto HEAD.
- * Each branch has a single commit that gets replayed cleanly.
- * Stops on first conflict and reports which branches succeeded.
+ * Cherry-pick task branch commits sequentially onto HEAD. When `baseSha` is
+ * provided the cherry-pick uses the inclusive range `baseSha..branchName`,
+ * replaying every commit individually and preserving each commit's message
+ * and author. When omitted, the branch is cherry-picked as a single commit
+ * (legacy callers).
+ *
+ * Stops on the first conflict and reports which branches succeeded.
  */
 export async function mergeTaskBranches(
 	repoRoot: string,
-	branches: Array<{ branchName: string; taskId: string; description?: string }>,
+	branches: Array<{ branchName: string; taskId: string; description?: string; baseSha?: string }>,
 ): Promise<MergeBranchResult> {
 	// Serialize against other in-process git mutations on this repo: concurrent
 	// background merges interleaving stash push/pop + cherry-pick would corrupt
@@ -546,9 +705,10 @@ export async function mergeTaskBranches(
 		let conflictResult: MergeBranchResult | undefined;
 
 		try {
-			for (const { branchName } of branches) {
+			for (const { branchName, baseSha } of branches) {
 				try {
-					await git.cherryPick(repoRoot, branchName);
+					const target = baseSha ? `${baseSha}..${branchName}` : branchName;
+					await git.cherryPick(repoRoot, target);
 				} catch (err) {
 					try {
 						await git.cherryPick.abort(repoRoot);
