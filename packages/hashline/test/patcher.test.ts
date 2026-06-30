@@ -1,10 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	computeFileHash,
+	formatHashlineHeader,
 	HEADTAIL_DRIFT_WARNING,
 	InMemoryFilesystem,
 	InMemorySnapshotStore,
 	MismatchError,
+	NodeFilesystem,
 	Patch,
 	Patcher,
 } from "@oh-my-pi/hashline";
@@ -31,6 +36,26 @@ describe("Patcher snapshot tag integrity", () => {
 		expect(result.sections[0]?.fileHash).toMatch(/^[0-9A-F]{4}$/);
 		expect(result.sections[0]?.fileHash).not.toBe(tag);
 		expect(fs.get(PATH)).toBe("after\n");
+	});
+
+	it("restores a UTF-8 BOM hidden by Bun text decoding", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hashline-bom-"));
+		try {
+			const filePath = path.join(tempDir, "Program.cs");
+			const source = "using A;\n";
+			await Bun.write(filePath, new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode(source)]));
+			const snapshots = new InMemorySnapshotStore();
+			const tag = snapshots.record(filePath, source);
+			const patch = Patch.parse([formatHashlineHeader(filePath, tag), "SWAP 1.=1:", "+using B;"].join("\n"));
+
+			await new Patcher({ fs: new NodeFilesystem(), snapshots }).apply(patch);
+
+			const bytes = await fs.readFile(filePath);
+			expect(Array.from(bytes.subarray(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
+			expect(new TextDecoder().decode(bytes.subarray(3))).toBe("using B;\n");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("validates any anchor purely from the content hash, even with no recorded snapshot", async () => {

@@ -123,6 +123,16 @@ export class HashlineFilesystem extends Filesystem {
 		return content;
 	}
 
+	async readBinary(relativePath: string): Promise<Uint8Array> {
+		const absolutePath = this.resolveAbsolute(relativePath);
+		try {
+			return await fs.readFile(absolutePath);
+		} catch (error) {
+			if (isEnoent(error)) throw new NotFoundError(relativePath, error);
+			throw error;
+		}
+	}
+
 	async preflightWrite(relativePath: string, options?: PreflightWriteOptions): Promise<void> {
 		const fileOp = options?.fileOp;
 		if (fileOp?.kind === "rem") {
