@@ -972,6 +972,9 @@ fn search_collected_files<W: Write>(
 ) -> SearchOutcome {
 	let mut files = match collect_filtered_files(cli, root) {
 		Ok(files) => files,
+		Err(_) if pi_uutils_ctx::is_cancelled() => {
+			return SearchOutcome { any_match: false, had_error: true };
+		},
 		Err(err) => {
 			if !opts.no_messages {
 				let _ = writeln!(pi_uutils_ctx::stderr(), "{err}");
@@ -1111,9 +1114,7 @@ fn collect_filtered_files(cli: &RgCli, root: &Path) -> Result<Vec<PathBuf>, Stri
 	}) {
 		Ok(outcome) => outcome,
 		Err(pi_walker::WalkError::Interrupted(_)) if pi_uutils_ctx::is_cancelled() => {
-			// Harness cancellation; surface no files and no diagnostic. The
-			// shell wrapper overrides the exit code with 130.
-			return Ok(Vec::new());
+			return Err(String::from("rg: cancelled"));
 		},
 		Err(err) => return Err(format!("rg: {err}")),
 	};
@@ -1145,6 +1146,10 @@ fn list_files<W: Write>(cli: &RgCli, paths: &[OsString], out: &mut W) -> SearchO
 			Ok(meta) if meta.is_dir() => {
 				let mut files = match collect_filtered_files(cli, &resolved) {
 					Ok(files) => files,
+					Err(_) if pi_uutils_ctx::is_cancelled() => {
+						had_error = true;
+						break;
+					},
 					Err(err) => {
 						let _ = writeln!(pi_uutils_ctx::stderr(), "{err}");
 						had_error = true;
