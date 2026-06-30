@@ -73,7 +73,7 @@ describe("DuckDuckGo web search provider", () => {
 		const headers = capturedInit?.headers as Record<string, string>;
 		expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
 		expect(headers["User-Agent"]).toContain("Mozilla/5.0");
-		expect(headers["Referer"]).toBe("https://html.duckduckgo.com/");
+		expect(headers.Referer).toBe("https://html.duckduckgo.com/");
 		expect(headers["Accept-Language"]).toContain("en");
 		expect(headers["Sec-Fetch-Mode"]).toBe("navigate");
 		expect(headers["Sec-Ch-Ua"]).toContain("Chromium");
