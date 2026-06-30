@@ -133,6 +133,15 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 			"onnxruntime-node does not support Qwen3 RotaryEmbedding cache updates in onnx-community/Qwen3-1.7B-ONNX",
 	},
 	{
+		key: "llama3.2:3b",
+		repo: "onnx-community/Llama-3.2-3B-Instruct-ONNX",
+		dtype: "q4",
+		label: "Llama 3.2 3B",
+		description:
+			"Larger Llama 3.2 option for local memory/classifier tasks; higher quality potential at higher disk/RAM/latency cost.",
+		contextNote: "Use when larger model capacity is preferred over faster load times.",
+	},
+	{
 		key: "gemma-3-1b",
 		repo: "onnx-community/gemma-3-1b-it-ONNX",
 		dtype: "q4",
@@ -161,6 +170,7 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 export const TINY_MEMORY_MODEL_VALUES = [
 	ONLINE_MEMORY_MODEL_KEY,
 	"qwen3-1.7b",
+	"llama3.2:3b",
 	"gemma-3-1b",
 	"qwen2.5-1.5b",
 	"lfm2-1.2b",

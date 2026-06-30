@@ -17,9 +17,12 @@ describe("task schema (single-spawn)", () => {
 		expect(parsed instanceof type.errors).toBe(false);
 	});
 
-	it("requires agent", () => {
+	it("defaults agent to `task` when omitted", () => {
 		const parsed = taskSchema({ assignment: "Map the auth module." });
-		expect(parsed instanceof type.errors).toBe(true);
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.agent).toBe("task");
+		}
 	});
 
 	it("requires assignment", () => {
@@ -68,9 +71,11 @@ describe("task spawn validation", () => {
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
 
-	it("rejects a missing agent", async () => {
+	it("defaults a missing agent to `task`", async () => {
+		// With no `agent`, execute() normalizes to the `task` default, so the
+		// failure is unknown-agent (none discovered), not missing-agent.
 		const text = await executeText({ assignment: "..." });
-		expect(text).toContain("Missing `agent`");
+		expect(text).toContain('Unknown agent "task"');
 	});
 
 	it("rejects a missing assignment", async () => {

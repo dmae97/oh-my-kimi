@@ -127,7 +127,7 @@ Extraction favors **precision** (do not pollute long-term memory) → **Qwen3-1.
 pick** (its consolidation is good enough). If running a second model for consolidation, **gemma-3-1b**
 wins that task.
 
-**Shipped local options**: `qwen3-1.7b` (recommended), `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
+**Shipped local options**: `llama3.2:3b`, `qwen3-1.7b` (recommended), `gemma-3-1b`, `qwen2.5-1.5b`, `lfm2-1.2b`.
 **Default**: `online` (the configured smol model).
 
 ### Known Mnemopi parser bugs (surfaced by these experiments)

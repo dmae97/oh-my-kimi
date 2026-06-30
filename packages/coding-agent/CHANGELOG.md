@@ -7,6 +7,7 @@
 - Renamed the built-in `quick_task` subagent to `sonic`; update any `task` spawns or configs that reference `quick_task` by name
 
 ### Added
+- Added the `llama3.2:3b` local tiny model option for memory and auto-thinking tasks; pulls from `onnx-community/Llama-3.2-3B-Instruct-ONNX` with q4 quantization.
 
 - Added a built-in `Tester` subagent that writes high-signal tests defending real contracts (behavior, invariants, edge cases) and refuses worthless tests that assert config/setter echoes, grep the source, or restate the implementation
 - Added a Speech-to-Text submit trigger setting that can auto-submit dictation on release, on complete sentences, or when the utterance ends with a spoken submit command.
