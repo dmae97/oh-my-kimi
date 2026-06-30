@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Avoided reallocating the tab-expansion space string on every `replaceTabs` call by hoisting it to a module constant.
+
 ## [16.2.3] - 2026-06-28
 
 ### Added

@@ -6,6 +6,9 @@
 
 - Improved binary file detection and terminal handling to prevent corruption from non-UTF-8 content, and updated file summaries to explicitly note skipped binary files.
 - Enhanced context compaction (snapcompact) to resolve shapes contextually based on rendered text content.
+- Reduced session branch reconstruction (`pathTo`) from O(n²) to O(n) using `push` plus a single `reverse` instead of repeated `unshift`.
+- Reduced edit-patch fallback cost: `collapseRepeatedBlocks` no longer allocates per-iteration slices (index arithmetic plus an early skip), and shared-line filtering builds the set in O(n+m) via a Set instead of O(n×m) `includes`.
+- Changed streaming patch-preview added-line extraction from O(n²) string concatenation to a single array join.
 
 ### Fixed
 
