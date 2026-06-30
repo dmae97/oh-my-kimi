@@ -888,6 +888,14 @@ export class Markdown implements Component {
 		}
 		const tokens = markdownParser.lexer(text);
 		if (canStream) {
+			// Full lex (non-append edit or cold start): drop any previously-frozen
+			// prefix first. Otherwise #freezeStablePrefix — which only writes when it
+			// finds a freezable boundary — would leave a STALE #streamPrefixText from
+			// the previous text. The render-prefix cache guards on #streamPrefixText,
+			// so a stale value here emits stale prefix lines (correctness regression
+			// on transient non-append replacements with no block boundary).
+			this.#streamPrefixText = undefined;
+			this.#streamPrefixTokens = undefined;
 			this.#freezeStablePrefix(text, tokens);
 		} else {
 			this.#streamPrefixText = undefined;

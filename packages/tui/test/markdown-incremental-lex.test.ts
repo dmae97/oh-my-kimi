@@ -216,6 +216,23 @@ describe("Markdown incremental streaming lex (E2)", () => {
 		);
 	});
 
+	it("a transient non-append replacement with no block boundary is not served stale prefix lines", () => {
+		// Regression: the render-prefix cache guards on #streamPrefixText, which
+		// #freezeStablePrefix leaves untouched when the new text has no freezable
+		// "\n\n" boundary. Without clearing it on the fallback path, a transient
+		// replacement by single-line content emitted the OLD prefix's rendered lines.
+		const streaming = new Markdown("", 0, 0, THEME);
+		streaming.transientRenderCache = true;
+		clearRenderCache();
+		streaming.setText("# First document\n\nOriginal body paragraph one.\n\nOriginal body paragraph two.\n");
+		streaming.render(60);
+		// Replace with unrelated single-line content — no "\n\n" boundary to freeze.
+		clearRenderCache();
+		streaming.setText("a flat replacement with no double newline at all");
+		const replaced = streaming.render(60);
+		expect(replaced).toEqual(renderCold("a flat replacement with no double newline at all", 60));
+	});
+
 	it("CRLF text (fallback path) renders identically to a cold lex", () => {
 		const streaming = new Markdown("", 0, 0, THEME);
 		const crlf = "Para one with content.\r\n\r\nPara two with `code`.\r\n\r\nPara three tail.\r\n";
