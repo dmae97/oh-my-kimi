@@ -364,4 +364,75 @@ describe("task.batch spawning", () => {
 			"# Goal\nShared synchronous context.",
 		]);
 	});
+
+	it("settles the batch async aggregate when a queued spawn is cancelled mid-flight", async () => {
+		mockDiscovery();
+		const started: string[] = [];
+		const gates = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			const id = options.id ?? "?";
+			started.push(id);
+			const { promise, resolve } = Promise.withResolvers<void>();
+			gates.set(id, { promise, resolve });
+			await promise;
+			return makeResult(id);
+		});
+
+		const manager = createManager();
+		const tool = await TaskTool.create(
+			createSession({
+				manager,
+				settings: { "async.enabled": true, "task.batch": true, "task.maxConcurrency": 1 },
+			}),
+		);
+
+		const updates: Array<{ async?: { state?: string }; progress?: Array<{ id: string; status: string }> }> = [];
+		const result = await tool.execute(
+			"tc-batch-cancel",
+			{
+				agent: "task",
+				context: "ctx",
+				tasks: [
+					{ id: "First", assignment: "Do A." },
+					{ id: "Second", assignment: "Do B." },
+				],
+			} as TaskParams,
+			undefined,
+			update => {
+				if (update.details) {
+					updates.push({
+						async: update.details.async,
+						progress: update.details.progress?.map(p => ({ id: p.id, status: p.status })),
+					});
+				}
+			},
+		);
+
+		expect(result.details?.async?.state).toBe("running");
+
+		const firstJob = manager.getJob("First")!;
+		const secondJob = manager.getJob("Second")!;
+		const deadline = Date.now() + 1_000;
+		while (started.length === 0) {
+			if (Date.now() > deadline) throw new Error("First spawn never reached the executor");
+			await Bun.sleep(5);
+		}
+		expect(started).toEqual(["First"]);
+		expect(secondJob.queued).toBe(true);
+
+		expect(manager.cancel(secondJob.id)).toBe(true);
+		await secondJob.promise;
+
+		gates.get("First")!.resolve();
+		await firstJob.promise;
+
+		expect(secondJob.status).toBe("cancelled");
+		const last = updates.at(-1);
+		// The acquire-time abort path has to flow through the same `onSettled`
+		// the post-acquire abort path uses, otherwise the batch aggregate sticks
+		// at "running" forever after the surviving spawn completes.
+		expect(last?.async?.state).toBe("failed");
+		expect(last?.progress?.find(p => p.id === "Second")?.status).toBe("aborted");
+		expect(last?.progress?.find(p => p.id === "First")?.status).toBe("completed");
+	});
 });
