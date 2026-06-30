@@ -4,35 +4,18 @@
 
 ### Changed
 
-- Improved binary file detection to prevent terminal corruption from non-UTF8 content
-- Updated file mention summaries to explicitly note skipped binary files
-
-- Enabled contextual snapcompact shape resolution based on rendered text content
+- Improved binary file detection and terminal handling to prevent corruption from non-UTF-8 content, and updated file summaries to explicitly note skipped binary files.
+- Enhanced context compaction (snapcompact) to resolve shapes contextually based on rendered text content.
 
 ### Fixed
 
-- Fixed snapcompact preflight to use the same font-aware renderability probe as compaction, including prior preserved archive text, so CJK history remains renderable through per-glyph Silver fallback across repeated compactions.
-### Fixed
-
-- Fixed in-TUI `/resume` materializing the previous session's display context (snapcompact archives + OpenAI Responses replay payloads) before switching files, which could exhaust memory on huge pre-fix sessions. `AgentSession.switchSession` now only snapshots the prior context for same-session reloads, where it is needed for rollback comparison. ([#3846](https://github.com/can1357/oh-my-pi/issues/3846))
-### Fixed
-
-- Fixed `irc` inbox drains missing messages that arrived while the recipient agent was already running. ([#3834](https://github.com/can1357/oh-my-pi/issues/3834))
-### Fixed
-
-- Fixed system-prompt GPU detection blocking startup and rerunning failed probes by applying the prep deadline and caching empty results. ([#3835](https://github.com/can1357/oh-my-pi/issues/3835))
-### Fixed
-
-- Fixed `omp tiny-models download` JSON/text failures to include the worker-side download error instead of collapsing every worker failure to `ok:false`. ([#3839](https://github.com/can1357/oh-my-pi/issues/3839))
-### Fixed
-
-- Fixed `/extensions` showing MCP servers as `active` when `/mcp list` reported them as `disabled`, and made `/extensions` re-enable work for every supported source. The dashboard now mirrors `/mcp list` by honoring the per-server `enabled: false` flag plus the user-level `disabledServers` denylist and a new `enabledServers` allowlist; the dashboard's MCP toggle writes through the canonical mcp.json — flipping `enabled` on the loaded source file for config-resident servers (including supported non-primary files such as `.omp/.mcp.json`), force-enabling tool-owned sources (such as `opencode.json`) via the user `enabledServers` allowlist without mutating the foreign config, and using the `disabledServers` denylist for purely discovered third-party servers, so `/mcp list`, the MCP runtime, and the dashboard stay in sync ([#3827](https://github.com/can1357/oh-my-pi/issues/3827)).
-### Fixed
-
-- Isolated branch-mode task merges now preserve the agent's own commits (message and author) instead of collapsing every diff into a single AI-summarized commit. `commitToBranch` detects when the subagent moved HEAD past the baseline, transfers clean-baseline commit objects into the parent repo via `git fetch`, rewrites dirty-baseline commits against the captured baseline WIP so user staged/unstaged/untracked changes are filtered out, and `mergeTaskBranches` cherry-picks the inclusive range `baseSha..omp/task/<id>` so each task commit replays with its original message; any uncommitted leftover on top of the agent's last commit lands as one trailing AI-summarized commit ([#3842](https://github.com/can1357/oh-my-pi/issues/3842)).
-### Fixed
-
-- Fixed isolated branch merges rejecting task edits when the parent checkout had unrelated dirty changes in nearby patch context. ([#3841](https://github.com/can1357/oh-my-pi/issues/3841))
+- Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
+- Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.
+- Fixed an issue where the `irc` inbox missed messages that arrived while the recipient agent was already running.
+- Fixed a startup hang caused by system-prompt GPU detection blocking and repeatedly running failed probes.
+- Improved error reporting for `omp tiny-models download` by displaying the actual worker-side download error.
+- Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
+- Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
 
 ## [16.2.6] - 2026-06-29
 

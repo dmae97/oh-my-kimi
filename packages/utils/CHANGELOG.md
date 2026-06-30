@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added utility to detect binary files based on content sniffing
+- Added a utility to detect binary files based on content sniffing.
 
 ## [16.2.6] - 2026-06-29
 
