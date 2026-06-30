@@ -609,6 +609,15 @@ export class EventController {
 			}
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
+				// Anthropic/OpenAI open a streamed tool block with an empty id (and
+				// `{}` args) before the id/arguments arrive; Gemini assembles the
+				// whole call first, so it never hits this. Keying `pendingTools` by
+				// "" would create a placeholder card, and the later real-id frame —
+				// `pendingTools.has(realId)` false — would create a SECOND card,
+				// orphaning the blank one (no `tool_execution_*` event ever carries
+				// "", so it is never matched, updated, or removed). Defer until the
+				// provider assigns the real id.
+				if (!content.id) continue;
 				if (content.name === "read") {
 					if (!readArgsHaveTarget(content.arguments)) {
 						// Args still streaming — defer until path is parseable so we can route to the

@@ -69330,8 +69330,8 @@
 				"image"
 			],
 			"cost": {
-				"input": 0.2596,
-				"output": 2.3850000000000002,
+				"input": 0.28500000000000003,
+				"output": 2.4,
 				"cacheRead": 0.15,
 				"cacheWrite": 0
 			},
