@@ -65,8 +65,8 @@ export abstract class Filesystem {
 	/** Read the file's full text content. Throw on missing file. */
 	abstract readText(path: string): Promise<string>;
 
-	/** Read the file's raw bytes when text decoding may hide leading bytes such as a UTF-8 BOM. */
-	readBinary?(path: string): Promise<Uint8Array>;
+	/** Read raw bytes for backends whose text is a direct decode of persisted bytes. */
+	readBinary?(path: string): Promise<Uint8Array | undefined>;
 
 	/** Validate that `path` is writable before a prepared batch starts committing. */
 	async preflightWrite(_path: string, _options?: PreflightWriteOptions): Promise<void> {}
