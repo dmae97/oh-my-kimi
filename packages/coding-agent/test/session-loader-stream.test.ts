@@ -85,6 +85,33 @@ describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 		expect(stream.entries.map(e => (e as { id?: string }).id)).toEqual(["s1", "m1", "m2"]);
 	});
 
+	it("matches parseSessionContent on multibyte UTF-8 spanning many stream chunks", async () => {
+		// Fixture larger than Bun's default stream chunk (~64KiB) with multibyte
+		// content (✓ is 3 bytes, emoji 4) that must survive chunk-boundary splits
+		// without U+FFFD corruption — the regression this path had when the buffer
+		// was a decoded string concatenated per chunk.
+		const multibyte = "✓ checkmark, 🚀 emoji, こんにちは unicode ✓ ".repeat(20);
+		const lines: string[] = [JSON.stringify(HEADER)];
+		for (let i = 1; lines.join("\n").length < 128 * 1024; i++) {
+			lines.push(JSON.stringify(msg(`m${i}`, i === 1 ? "s1" : `m${i - 1}`, multibyte)));
+		}
+		const content = lines.join("\n");
+		const file = await writeTemp(content);
+
+		const stream = await loadEntriesFromFileStream(file);
+		const reference = parseSessionContent(content);
+
+		// Parity (a corrupted multibyte sequence would diverge here) ...
+		expect(stream).toEqual(reference);
+		// ... and explicitly: every entry's text round-trips intact, no U+FFFD.
+		for (const entry of stream.entries) {
+			if ((entry as { type: string }).type !== "message") continue;
+			const text = (entry as { message: { content: { text: string }[] } }).message.content[0]!.text;
+			expect(text).toBe(multibyte);
+			expect(text.includes("\uFFFD")).toBe(false);
+		}
+	});
+
 	it("returns empty for a missing file (ENOENT)", async () => {
 		const missing = path.join(os.tmpdir(), `does-not-exist-${Date.now()}.jsonl`);
 		const stream = await loadEntriesFromFileStream(missing);
