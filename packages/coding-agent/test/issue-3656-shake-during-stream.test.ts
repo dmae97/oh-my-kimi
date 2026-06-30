@@ -11,6 +11,7 @@ import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -89,6 +90,7 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 
 	afterEach(async () => {
 		mode?.stop();
+		HistoryStorage.resetInstance();
 		vi.restoreAllMocks();
 		await session?.dispose();
 		authStorage?.close();
