@@ -962,43 +962,65 @@ export class SelectorController {
 		// every project's history when the cwd has nothing to resume. See #3099.
 		const historyStorage = this.ctx.historyStorage;
 		const historyMatcher = historyStorage ? (query: string) => historyStorage.matchingSessionIds(query) : undefined;
-		this.showSelector(done => {
-			const selector = new SessionSelectorComponent(
-				sessions,
-				async (session: SessionInfo) => {
-					done();
-					await this.handleResumeSession(session.path);
+		// Fullscreen session picker on the alternate screen (the /settings idiom):
+		// the overlay borrows the alt buffer and enables mouse tracking (wheel
+		// scroll + click-to-resume) for its lifetime, leaving the transcript
+		// untouched underneath. Anchored top-left at full size so a mouse row maps
+		// directly to a rendered line (the overlay paints from screen row 0), and
+		// `fillHeight` pads the body so the footer pins to the screen bottom.
+		let overlayHandle: OverlayHandle | undefined;
+		const done = () => {
+			overlayHandle?.hide();
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		const selector = new SessionSelectorComponent(
+			sessions,
+			async (session: SessionInfo) => {
+				done();
+				await this.handleResumeSession(session.path);
+			},
+			() => {
+				done();
+			},
+			() => {
+				// Release the alt buffer before teardown: shutdown() awaits flush/save/
+				// dispose/drain before stop() leaves the alt screen, so without this the
+				// fullscreen picker would freeze on screen for that window on Ctrl+C.
+				done();
+				void this.ctx.shutdown();
+			},
+			{
+				onDelete: async (session: SessionInfo) => {
+					if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
+						return false;
+					}
+					const storage = new FileSessionStorage();
+					try {
+						await storage.deleteSessionWithArtifacts(session.path);
+						return true;
+					} catch (err) {
+						throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
+							cause: err,
+						});
+					}
 				},
-				() => {
-					done();
-					this.ctx.ui.requestRender();
-				},
-				() => {
-					void this.ctx.shutdown();
-				},
-				{
-					onDelete: async (session: SessionInfo) => {
-						if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
-							return false;
-						}
-						const storage = new FileSessionStorage();
-						try {
-							await storage.deleteSessionWithArtifacts(session.path);
-							return true;
-						} catch (err) {
-							throw new Error(`Failed to delete session: ${err instanceof Error ? err.message : String(err)}`, {
-								cause: err,
-							});
-						}
-					},
-					historyMatcher,
-					loadAllSessions: () => SessionManager.listAll(),
-					getTerminalRows: () => this.ctx.ui.terminal.rows,
-				},
-			);
-			selector.setOnRequestRender(() => this.ctx.ui.requestRender());
-			return { component: selector, focus: selector };
+				historyMatcher,
+				loadAllSessions: () => SessionManager.listAll(),
+				getTerminalRows: () => this.ctx.ui.terminal.rows,
+				fillHeight: true,
+			},
+		);
+		selector.setOnRequestRender(() => this.ctx.ui.requestRender());
+		overlayHandle = this.ctx.ui.showOverlay(selector, {
+			anchor: "top-left",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
 		});
+		this.ctx.ui.setFocus(selector);
+		this.ctx.ui.requestRender();
 	}
 
 	#refreshSessionTerminalTitle(): void {
