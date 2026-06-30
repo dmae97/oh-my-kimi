@@ -125,20 +125,11 @@ describe("discoverAgents", () => {
 		);
 		await fs.writeFile(
 			path.join(projectExt, "agents", "collide.md"),
-			[
-				"---",
-				"name: collide",
-				"description: from-project-settings",
-				"---",
-				"project body",
-			].join("\n"),
+			["---", "name: collide", "description: from-project-settings", "---", "project body"].join("\n"),
 		);
 
 		await fs.mkdir(path.join(projectDir, ".omp"), { recursive: true });
-		await fs.writeFile(
-			path.join(projectDir, ".omp", "settings.json"),
-			JSON.stringify({ extensions: [projectExt] }),
-		);
+		await fs.writeFile(path.join(projectDir, ".omp", "settings.json"), JSON.stringify({ extensions: [projectExt] }));
 		injectOmpExtensionCliRoots([cliExt], tempHome, projectDir);
 
 		const { agents } = await discoverAgents(projectDir, tempHome);
