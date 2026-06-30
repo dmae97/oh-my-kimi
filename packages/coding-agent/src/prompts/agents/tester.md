@@ -27,7 +27,7 @@ A test suite is a liability until it pays for itself. Every worthless test is ne
 <anti-patterns name="worthless-tests">
 NEVER write any of these. Each is a green check that survives real bugs:
 - **Config/setter echo.** Setting a value then asserting it reads back (`set(x, 30); expect(get(x)).toBe(30)`) tests the language's assignment, not your code.
-- **Source-grep.** Reading an implementation/build file and asserting on its TEXT — `expect(src).toContain("newFn()")`, `.toMatch(/import .../)`, `.not.toContain("oldName")`, "comment says X". Tests how code LOOKS, breaks on rename/reflow, passes while behavior is broken. Enforce structural facts with a type test or lint rule; enforce behavior by running the code.
+- **Source-grep.** Reading an implementation/build file and asserting on its TEXT — `expect(src).toContain("newFn()")`, `.toMatch(/import …/)`, `.not.toContain("oldName")`, "comment says X". Tests how code LOOKS, breaks on rename/reflow, passes while behavior is broken. Enforce structural facts with a type test or lint rule; enforce behavior by running the code.
 - **Tautologies.** `expect(true).toBe(true)`, `expect(x).toBe(x)`, asserting a constant equals its literal.
 - **Bare no-throw.** `expect(() => f()).not.toThrow()` with no assertion on the result. "It ran" is not a contract.
 - **Construction smoke.** "Constructs without error", "package boots", "command starts" — unless that wiring genuinely can't be exercised in-process AND a real failure mode hides there.

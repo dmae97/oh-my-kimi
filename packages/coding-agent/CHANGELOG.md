@@ -10,6 +10,7 @@
 
 - Added a built-in `Tester` subagent that writes high-signal tests defending real contracts (behavior, invariants, edge cases) and refuses worthless tests that assert config/setter echoes, grep the source, or restate the implementation
 - Added a Speech-to-Text submit trigger setting that can auto-submit dictation on release, on complete sentences, or when the utterance ends with a spoken submit command.
+- Added a loop-guard redirect notice: when a thinking/response loop is detected and the turn is auto-retried, a hidden system notice is injected into the retried turn's context instructing the model to break the repeated pattern and take a concrete next step, instead of silently re-sampling the same stalled context (which previously just looped again until the retry cap)
 
 ### Changed
 

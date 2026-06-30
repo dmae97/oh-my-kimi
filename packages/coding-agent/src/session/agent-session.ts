@@ -250,6 +250,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 	type: "text",
 };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
+import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
@@ -346,6 +347,9 @@ const SESSION_STOP_CONTINUATION_CAP = 8;
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
 /** `customType` for the hidden tool-call reminder injected after the interrupt. */
 const GEMINI_TOOL_REMINDER_TYPE = "gemini-tool-call-reminder";
+/** `customType` for the hidden redirect notice injected into a turn retried after a
+ *  thinking/response loop. Steers the model off the repeated content; never displayed. */
+const THINKING_LOOP_REDIRECT_TYPE = "thinking-loop-redirect";
 
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
@@ -12582,6 +12586,11 @@ export class AgentSession {
 		// Remove the failed assistant message from active context before retrying.
 		this.#removeAssistantMessageFromActiveContext(message);
 
+		// A thinking/response loop retried into identical context loops again. Inject a
+		// hidden redirect so the retried turn sees a directive to break the repeated
+		// pattern instead of re-sampling the same stalled reasoning.
+		this.#maybeInjectThinkingLoopRedirect(id);
+
 		// Wait with exponential backoff (abortable).
 		const retryAbortController = new AbortController();
 		this.#retryAbortController?.abort();
@@ -12613,6 +12622,35 @@ export class AgentSession {
 		this.#scheduleAgentContinue({ delayMs: 1, generation });
 
 		return true;
+	}
+
+	/**
+	 * Inject a hidden redirect notice when a thinking/response loop is being retried, so
+	 * the retried turn carries an instruction to break the repeated pattern instead of
+	 * re-sampling the same stalled context. Injected on every {@link AIError.Flag.ThinkingLoop}
+	 * retry (the failed assistant is dropped each attempt, so the notice does not accumulate
+	 * unboundedly). No-op unless `id` carries the ThinkingLoop flag and the loop guard is
+	 * enabled. The notice is generic on purpose — the detector's detail can quote raw model
+	 * text, which must not be interpolated into a higher-priority developer message.
+	 */
+	#maybeInjectThinkingLoopRedirect(id: number): void {
+		if (!AIError.is(id, AIError.Flag.ThinkingLoop)) return;
+		if (this.settings.get("model.loopGuard.enabled") !== true) return;
+		this.agent.appendMessage({
+			role: "custom",
+			customType: THINKING_LOOP_REDIRECT_TYPE,
+			content: thinkingLoopRedirectTemplate,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.sessionManager.appendCustomMessageEntry(
+			THINKING_LOOP_REDIRECT_TYPE,
+			thinkingLoopRedirectTemplate,
+			false,
+			undefined,
+			"agent",
+		);
 	}
 
 	/**

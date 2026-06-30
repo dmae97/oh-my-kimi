@@ -19,6 +19,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { type CustomMessage, convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -235,6 +236,74 @@ describe("AgentSession thinking-loop retry", () => {
 		expect(calls).toEqual(["openrouter/google/gemini-3.5-flash", "openrouter/google/gemini-3.5-flash"]);
 		expect(retryStartEvents).toHaveLength(1);
 		expect(AIError.is(retryStartEvents[0].errorId, AIError.Flag.ThinkingLoop)).toBe(true);
+		const assistants = session.agent.state.messages.filter(
+			(message): message is AssistantMessage => message.role === "assistant",
+		);
+		expect(assistants).toHaveLength(1);
+		expect(assistants[0].content).toEqual([{ type: "text", text: "Recovered after retry." }]);
+	});
+
+	it("injects a redirect notice into the retried turn after a thinking loop", async () => {
+		const model = createMockModel({ provider: "openrouter", id: "google/gemini-3.5-flash" }).model;
+		const modelRegistry = new ModelRegistry(authStorage);
+		const calls: string[] = [];
+		const contexts: Context[] = [];
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			convertToLlm,
+			streamFn: (requestedModel, context, _options?: SimpleStreamOptions) => {
+				calls.push(`${requestedModel.provider}/${requestedModel.id}`);
+				contexts.push(context);
+				return calls.length === 1 ? errorIdOnlyThinkingLoopStream(requestedModel) : successStream(requestedModel);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.enabled": true,
+			"retry.baseDelayMs": 0,
+			"retry.maxDelayMs": 5_000,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+			"todo.enabled": false,
+			"model.loopGuard.enabled": true,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+
+		await session.prompt("Trigger redirect injection after thinking loop");
+		await session.waitForIdle();
+		const retryContext = contexts[1];
+		const extractText = (content: string | Array<{ type: string; text?: string }>): string =>
+			typeof content === "string"
+				? content
+				: content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
+		const redirectDevMsgs = retryContext.messages.filter(
+			message => message.role === "developer" && extractText(message.content).includes("thinking_loop_detected"),
+		);
+		expect(redirectDevMsgs).toHaveLength(1);
+
+		const redirects = session.agent.state.messages.filter(
+			(message): message is CustomMessage =>
+				message.role === "custom" && message.customType === "thinking-loop-redirect",
+		);
+		expect(redirects).toHaveLength(1);
+		expect(redirects[0].display).toBe(false);
+		expect(redirects[0].attribution).toBe("agent");
+		expect(typeof redirects[0].content).toBe("string");
+		expect(redirects[0].content).toContain("thinking_loop_detected");
+
 		const assistants = session.agent.state.messages.filter(
 			(message): message is AssistantMessage => message.role === "assistant",
 		);
