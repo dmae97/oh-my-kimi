@@ -35,6 +35,7 @@ import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/id
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
+import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/stream-markup-healing";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
 import {
 	convertMessages,
@@ -665,21 +666,91 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
 				const blockIndex = () => blocks.length - 1;
+				const visibleTextHealing = new StreamMarkupHealing({ pattern: "thinking" });
 
 				let isBuffering = false;
 				let textBuffer = "";
 				let bufferedTextSignature: string | undefined;
 
-				const emitVisibleText = (delta: string, thoughtSignature?: string) => {
-					if (!delta || !currentBlock || currentBlock.type !== "text") return;
-					currentBlock.text += delta;
-					currentBlock.textSignature = retainThoughtSignature(currentBlock.textSignature, thoughtSignature);
+				const endCurrentBlock = (): void => {
+					if (!currentBlock) return;
+					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
+					currentBlock = null;
+				};
+
+				const startTextBlock = (): TextContent => {
+					let block = currentBlock;
+					if (block?.type !== "text") {
+						endCurrentBlock();
+						block = startTextOrThinkingBlock(false, output, stream, ensureStarted);
+						currentBlock = block;
+					}
+					return block;
+				};
+
+				const startThinkingBlock = (): ThinkingContent => {
+					let block = currentBlock;
+					if (block?.type !== "thinking") {
+						endCurrentBlock();
+						block = startTextOrThinkingBlock(true, output, stream, ensureStarted);
+						currentBlock = block;
+					}
+					return block;
+				};
+
+				const emitVisibleText = (delta: string, thoughtSignature?: string): void => {
+					if (!delta) return;
+					const block = startTextBlock();
+					block.text += delta;
+					block.textSignature = retainThoughtSignature(block.textSignature, thoughtSignature);
 					stream.push({
 						type: "text_delta",
 						contentIndex: blockIndex(),
 						delta,
 						partial: output,
 					});
+				};
+
+				const emitVisibleThinking = (delta: string): void => {
+					if (!delta) return;
+					const block = startThinkingBlock();
+					block.thinking += delta;
+					stream.push({
+						type: "thinking_delta",
+						contentIndex: blockIndex(),
+						delta,
+						partial: output,
+					});
+				};
+
+				const emitHealingEvent = (event: StreamMarkupHealingEvent, thoughtSignature?: string): void => {
+					if (event.type === "text") {
+						emitVisibleText(event.text, thoughtSignature);
+					} else if (event.type === "thinking") {
+						emitVisibleThinking(event.thinking);
+					}
+				};
+
+				const feedVisibleText = (delta: string, thoughtSignature?: string): void => {
+					for (const event of visibleTextHealing.feedEvents(delta)) {
+						emitHealingEvent(event, thoughtSignature);
+					}
+				};
+
+				const flushVisibleText = (thoughtSignature?: string): void => {
+					for (const event of visibleTextHealing.flushEvents()) {
+						emitHealingEvent(event, thoughtSignature);
+					}
+				};
+
+				const retainCurrentBlockThoughtSignature = (thoughtSignature: string): void => {
+					const block = currentBlock;
+					if (!block) return;
+					if (block.type === "thinking") {
+						block.thinkingSignature = retainThoughtSignature(block.thinkingSignature, thoughtSignature);
+					} else {
+						block.textSignature = retainThoughtSignature(block.textSignature, thoughtSignature);
+					}
 				};
 
 				for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(
@@ -710,20 +781,12 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						for (const part of candidate.content.parts) {
 							if (part.text !== undefined && part.text !== "") {
 								const isThinking = isThinkingPart(part);
-								if (
-									!currentBlock ||
-									(isThinking && currentBlock.type !== "thinking") ||
-									(!isThinking && currentBlock.type !== "text")
-								) {
-									if (currentBlock) {
-										pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
-									}
-									currentBlock = startTextOrThinkingBlock(isThinking, output, stream, ensureStarted);
-								}
-								if (currentBlock.type === "thinking") {
-									currentBlock.thinking += part.text;
-									currentBlock.thinkingSignature = retainThoughtSignature(
-										currentBlock.thinkingSignature,
+								if (isThinking) {
+									flushVisibleText();
+									const block = startThinkingBlock();
+									block.thinking += part.text;
+									block.thinkingSignature = retainThoughtSignature(
+										block.thinkingSignature,
 										part.thoughtSignature,
 									);
 									stream.push({
@@ -744,7 +807,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 										textBuffer = part.text;
 										bufferedTextSignature = part.thoughtSignature;
 									} else {
-										emitVisibleText(part.text, part.thoughtSignature);
+										feedVisibleText(part.text, part.thoughtSignature);
 									}
 
 									if (isBuffering) {
@@ -757,32 +820,19 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 											isBuffering = false;
 											textBuffer = "";
 											bufferedTextSignature = undefined;
-											emitVisibleText(buffered.visibleText, visibleSignature);
+											feedVisibleText(buffered.visibleText, visibleSignature);
 										}
 									}
 								}
-							} else if (part.text === "" && part.thoughtSignature && currentBlock && !part.functionCall) {
-								if (currentBlock.type === "thinking") {
-									currentBlock.thinkingSignature = retainThoughtSignature(
-										currentBlock.thinkingSignature,
-										part.thoughtSignature,
-									);
-								} else {
-									currentBlock.textSignature = retainThoughtSignature(
-										currentBlock.textSignature,
-										part.thoughtSignature,
-									);
-								}
+							} else if (part.text === "" && part.thoughtSignature && !part.functionCall) {
+								retainCurrentBlockThoughtSignature(part.thoughtSignature);
 							}
 
 							if (part.functionCall) {
-								if (currentBlock) {
-									pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
-									currentBlock = null;
-								}
+								flushVisibleText();
+								endCurrentBlock();
 								isBuffering = false;
 								textBuffer = "";
-
 								const providedId = part.functionCall.id;
 								const needsNewId =
 									!providedId || output.content.some(b => b.type === "toolCall" && b.id === providedId);
@@ -848,16 +898,15 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						sawLeak = true;
 					}
 					if (buffered.kind !== "incomplete") {
-						emitVisibleText(buffered.visibleText, bufferedTextSignature);
+						feedVisibleText(buffered.visibleText, bufferedTextSignature);
 					}
 					bufferedTextSignature = undefined;
 					isBuffering = false;
 					textBuffer = "";
 				}
 
-				if (currentBlock) {
-					pushBlockEndEvent(currentBlock, blockIndex(), output, stream);
-				}
+				flushVisibleText(bufferedTextSignature);
+				endCurrentBlock();
 
 				return hasMeaningfulGoogleContent(output) || sawLeak;
 			};

@@ -14,9 +14,9 @@
 - Updated service tier logic to avoid global scopes in favor of per-provider configurations
 - Refactored priority request billing to better align with specific provider capabilities
 - Updated internal `coerceServiceTierByFamily` helper to facilitate migration from legacy settings
+- Changed API-key resolution precedence so an explicit environment variable (e.g. `GEMINI_API_KEY`) overrides a stored/broker-migrated static API key; a deliberate OAuth login still takes precedence over the env var.
 
 ### Fixed
-- Changed API-key resolution precedence so an explicit environment variable (e.g. `GEMINI_API_KEY`) overrides a stored/broker-migrated static API key; a deliberate OAuth login still takes precedence over the env var.
 
 - Improved Vertex AI reliability by automatically falling back to global endpoints on 404 errors
 
@@ -24,6 +24,8 @@
 - Ensured Gemini service tier is correctly passed through to the API
 - Corrected priority request accounting for supported providers
 - Fixed Kimi Code's Anthropic-compatible request path to keep thinking enabled and downgrade forced tool choice for Kimi K2.7 Code title generation. ([#3852](https://github.com/can1357/oh-my-pi/issues/3852))
+- Healed leaked reasoning fences (` ```thinking ` / `<think>`) live for every provider via a central stream wrapper, splitting them into structured thinking blocks during streaming.
+- Fixed Codex requests failing with `Unsupported value: 'all_turns' is not supported with this model`: the `reasoning.context: "all_turns"` default is now gated to gpt-5.4+ Codex models. Older ids (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) omit `context` so the server applies its `current_turn` default; an explicit `all_turns` override is also suppressed on those models, while `current_turn`/`auto` always pass through.
 
 ## [16.2.6] - 2026-06-29
 

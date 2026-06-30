@@ -596,11 +596,9 @@ describe("Google Gemini CLI alignment", () => {
 			}
 			const result = await stream.result();
 
-			expect(result.content).toHaveLength(1);
-			expect(result.content[0]).toEqual({
-				type: "text",
-				text: "",
-			});
+			// A fully-discarded planning leak leaves no residual content — no empty
+			// text block survives (the central healing wrapper strips empties too).
+			expect(result.content).toHaveLength(0);
 			expect(result.stopReason).toBe("stop");
 
 			const textDeltaEvents = events.filter(e => e.type === "text_delta");
@@ -838,15 +836,11 @@ describe("Google Gemini CLI alignment", () => {
 			}
 			const result = await stream.result();
 
-			expect(result.content).toHaveLength(2);
-			expect(result.content[0]).toEqual({
-				type: "text",
-				text: "",
-			});
-			expect(result.content[1].type).toBe("toolCall");
-			if (result.content[1].type === "toolCall") {
-				expect(result.content[1].name).toBe("read");
-				expect(result.content[1].arguments).toEqual({ path: "src/main.ts" });
+			expect(result.content).toHaveLength(1);
+			expect(result.content[0].type).toBe("toolCall");
+			if (result.content[0].type === "toolCall") {
+				expect(result.content[0].name).toBe("read");
+				expect(result.content[0].arguments).toEqual({ path: "src/main.ts" });
 			}
 
 			expect(events.filter(e => e.type === "toolcall_start")).toHaveLength(1);
@@ -917,11 +911,7 @@ describe("Google Gemini CLI alignment", () => {
 				events.push(event);
 			}
 			const result = await stream.result();
-			expect(result.content).toHaveLength(1);
-			expect(result.content[0]).toEqual({
-				type: "text",
-				text: "",
-			});
+			expect(result.content).toHaveLength(0);
 		});
 	});
 });

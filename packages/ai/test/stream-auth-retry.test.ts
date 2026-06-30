@@ -153,9 +153,9 @@ describe("streamSimple resolver auth retry", () => {
 
 		expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
 		expect(keys).toEqual(["old-key", "new-key"]);
-		// The buffered `start` of the failed attempt must not leak — the user
-		// sees exactly one clean start/done pair.
-		expect(eventTypes).toEqual(["start", "done"]);
+		// The failed attempt's buffered start must not leak — the user sees a
+		// single start from the successful attempt, then its healed content.
+		expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
 	});
 
 	it("retries on a 401 carried only via errorStatus", async () => {
@@ -206,6 +206,12 @@ describe("streamSimple resolver auth retry", () => {
 				queueMicrotask(() => {
 					stream.push({ type: "start", partial: assistant() });
 					stream.push({ type: "text_start", contentIndex: 0, partial: assistant([""]) });
+					stream.push({
+						type: "text_delta",
+						contentIndex: 0,
+						delta: "partial",
+						partial: assistant(["partial"]),
+					});
 					stream.fail(failure);
 				});
 				return stream;
@@ -398,7 +404,7 @@ describe("streamSimple resolver auth retry", () => {
 
 			expect((await stream.result()).content).toEqual([{ type: "text", text: "ok" }]);
 			expect(keys).toEqual(["credential-A", "credential-B"]);
-			expect(eventTypes).toEqual(["start", "done"]);
+			expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
 			expect(retryContexts.map(ctx => ctx.lastChance)).toEqual([false, true]);
 		}
 	});
