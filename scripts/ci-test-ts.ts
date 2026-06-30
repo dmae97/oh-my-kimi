@@ -442,7 +442,7 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 // credential / cloud-config variables scrubbed (see SCRUBBED_ENV_* above) and
 // GITHUB_ACTIONS cleared so suites resolve only against their own fixtures.
 function buildChildEnv(): Record<string, string | undefined> {
-	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "" };
+	const env: Record<string, string | undefined> = { ...Bun.env, GITHUB_ACTIONS: "", BUN_JSC_useConcurrentGC: "0" };
 	for (const key of Object.keys(env)) {
 		if (isScrubbedEnvVar(key)) {
 			delete env[key];
