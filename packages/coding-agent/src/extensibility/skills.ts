@@ -430,7 +430,10 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 	if (!name) return undefined;
 	const before = text.slice(0, tokenStart).trimEnd();
 	const after = text.slice(tokenEnd).trimStart();
-	const args = [before, after].filter(part => part.length > 0).join(" ").trim();
+	const args = [before, after]
+		.filter(part => part.length > 0)
+		.join(" ")
+		.trim();
 	return { name, args };
 }
 
