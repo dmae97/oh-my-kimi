@@ -12,6 +12,9 @@
 ### Fixed
 
 - Fixed snapcompact preflight to use the same font-aware renderability probe as compaction, including prior preserved archive text, so CJK history remains renderable through per-glyph Silver fallback across repeated compactions.
+### Fixed
+
+- Fixed in-TUI `/resume` materializing the previous session's display context (snapcompact archives + OpenAI Responses replay payloads) before switching files, which could exhaust memory on huge pre-fix sessions. `AgentSession.switchSession` now only snapshots the prior context for same-session reloads, where it is needed for rollback comparison. ([#3846](https://github.com/can1357/oh-my-pi/issues/3846))
 
 ## [16.2.6] - 2026-06-29
 
