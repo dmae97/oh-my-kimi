@@ -25,12 +25,11 @@ export interface OutputValidator {
 	 * Per-label validators for incremental yields (`type: ["<label>"]`). Each entry validates the
 	 * `data` payload of a single section against the matching top-level property's sub-schema —
 	 * array-typed properties (e.g. `findings`) use the items schema since each yield contributes
-	 * one element, while scalar properties use the property schema directly. Unknown labels (not
-	 * top-level properties) have no entry and skip per-call validation. Lets the yield tool give
-	 * the model retry feedback on a section as soon as it arrives, instead of deferring every
-	 * mismatch to the parent's post-mortem `schema_violation`.
+	 * one element, while scalar properties use the property schema directly.
 	 */
 	readonly validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
+	/** Whether top-level schema closure makes unknown incremental yield labels invalid. */
+	readonly rejectUnknownSections: boolean;
 }
 
 export interface BuildOutputValidatorResult {
@@ -83,6 +82,7 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
 			requiredFields: required,
 			validate: value => validateJsonSchemaValue(jsonSchemaRecord, value),
 			validateSection: buildSectionValidators(jsonSchemaRecord),
+			rejectUnknownSections: jsonSchemaRecord.additionalProperties === false,
 		},
 	};
 }
@@ -93,8 +93,8 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
  * Each entry validates the `data` payload of one `type: ["<label>"]` section against the
  * matching property's sub-schema — array-typed properties (e.g. `findings`, derived from JTD
  * `elements`) use the items schema since each yield contributes one element, while scalar
- * properties use the property schema directly. Unknown labels (anything not declared as a
- * top-level property) are deliberately omitted so user-defined section labels still pass.
+ * properties use the property schema directly. Closed top-level schemas reject labels that are
+ * not declared as properties.
  */
 function buildSectionValidators(
 	jsonSchema: Record<string, unknown>,

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed eval `agent()` subagents with caller-provided output schemas receiving stale native incremental `yield` labels by rejecting unknown labels for closed schemas with retry feedback naming the valid labels. ([#3926](https://github.com/can1357/oh-my-pi/issues/3926))
+
 ## [16.2.9] - 2026-06-30
 
 ### Breaking Changes

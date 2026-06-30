@@ -225,12 +225,13 @@ describe("YieldTool", () => {
 	});
 
 	it("leaves user-defined section labels unconstrained", async () => {
-		// Labels that are not top-level properties in the output schema have no per-call
-		// validator — they're scratchpad/streaming sections the agent invents at runtime and
-		// must not be rejected.
+		// Open JSON Schema output contracts can still use scratchpad/streaming
+		// sections that the agent invents at runtime, so unknown labels stay loose.
 		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
+					type: "object",
+					additionalProperties: true,
 					properties: {
 						overall_correctness: { enum: ["correct", "incorrect"] },
 						explanation: { type: "string" },
@@ -244,6 +245,36 @@ describe("YieldTool", () => {
 			result: { data: { anything: "goes", n: 3 } },
 		} as never);
 		expect(result.details?.data).toEqual({ anything: "goes", n: 3 });
+	});
+
+	it("rejects unknown incremental labels for closed caller output schemas", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						issue_key: { type: "string" },
+						verdict: { enum: ["clean", "blockers"] },
+					},
+					optionalProperties: {
+						blockers: {
+							elements: { properties: { title: { type: "string" } } },
+						},
+						non_blocking_notes: {
+							elements: { type: "string" },
+						},
+					},
+				},
+			}),
+		);
+
+		await expect(
+			tool.execute("call-native-reviewer-label", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" does not match schema: type: unknown incremental yield label\(s\): "findings"; valid labels: "issue_key", "verdict", "blockers", "non_blocking_notes"/,
+		);
 	});
 
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {

@@ -213,11 +213,13 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 	readonly #validate?: (value: unknown) => JsonSchemaValidationResult;
 	readonly #validateSection?: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
+	#rejectUnknownSections = false;
 	#schemaValidationFailures = 0;
 
 	constructor(session: ToolSession) {
 		let validate: ((value: unknown) => JsonSchemaValidationResult) | undefined;
 		let validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult> | undefined;
+		let rejectUnknownSections = false;
 		let parameters: TSchema;
 
 		try {
@@ -230,6 +232,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			if (validator) {
 				validate = value => validator.validate(value);
 				validateSection = validator.validateSection;
+				rejectUnknownSections = validator.rejectUnknownSections;
 			}
 
 			const schemaHint = formatSchema(normalizedSchema ?? session.outputSchema);
@@ -280,6 +283,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 		this.#validate = validate;
 		this.#validateSection = validateSection;
+		this.#rejectUnknownSections = rejectUnknownSections;
 		this.parameters = parameters;
 	}
 
@@ -364,15 +368,26 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 	/**
 	 * Validate the `data` payload of an incremental yield (`type: ["<label>", …]`) against
-	 * the matching property's sub-validator. Returns the first failure across all known labels,
-	 * or `undefined` when no label is recognised (user-defined section labels stay loose) or
-	 * when all known labels accept the value. Lets the model see the same retry feedback that
-	 * the terminal-yield path already produces, instead of leaking the mismatch through to
-	 * the parent's post-mortem `schema_violation`.
+	 * the matching property's sub-validator. Closed schemas also reject unknown labels so stale
+	 * agent-native prompt sections receive retry feedback before parent-side finalization.
 	 */
 	#validateIncrementalSection(labels: string[], data: unknown): JsonSchemaValidationResult | undefined {
 		const subValidators = this.#validateSection;
-		if (!subValidators || subValidators.size === 0) return undefined;
+		if (!subValidators) return undefined;
+		const unknownLabels = labels.filter(label => !subValidators.has(label));
+		if (this.#rejectUnknownSections && unknownLabels.length > 0) {
+			const validLabels = subValidators.size > 0 ? formatYieldLabels([...subValidators.keys()]) : "none";
+			return {
+				success: false,
+				issues: [
+					{
+						path: ["type"],
+						message: `unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}; valid labels: ${validLabels}`,
+						keyword: "enum",
+					},
+				],
+			};
+		}
 		for (const label of labels) {
 			const sub = subValidators.get(label);
 			if (!sub) continue;
