@@ -29,13 +29,10 @@ Anything below → `eval` cell, not bash:
 
 <critical>
 - Bash invokes real binaries with simple args; it is NOT a scripting surface. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
-- NEVER shell out to search content or files: `grep/rg` → `grep`.
-- NEVER use `ls` or `find` to list or locate files — `ls` → `read` (a directory path lists entries), `find` → the `glob` tool (globbing). This is non-negotiable, even for a single quick listing.
-- Avoid head/tail/redirections: stderr already merged; long output auto-truncated, FULL capture kept at `artifact://<id>`.
 </critical>
 
 <output>
-- Returns output; exit code shown on non-zero exit.
+- Returns output (stderr merged into stdout); exit code shown on non-zero exit.
 - Truncated output → `artifact://<id>` (linked in metadata).
 </output>
 

@@ -6,11 +6,14 @@
 
 - Added built-in Go coding rules including `go-add-cleanup`, `go-bench-loop`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-new-expr`, `go-rand-v2`, and `go-range-int`
 
+### Changed
+
+- Relaxed strict bash tool constraints regarding the use of search, grep, ls, and find commands
+
 ### Fixed
 
 - Fixed auto-compaction dead-ends by automatically triggering a shake rescue to elide oversized tails
 - Improved compaction warning message to suggest running `/shake images` for irreducible image tails
-
 - Fixed `grep`/`search` direct execution to accept JSON-array string `paths` for string-or-array inputs. ([#3873](https://github.com/can1357/oh-my-pi/issues/3873))
 - Fixed auto-compaction dead-ending with "Compaction freed too little context to make progress" when a single recent turn (large tool output, heavy fenced/XML block) is itself bigger than the recovery band — `findCutPoint` can't cut inside one message, so the summarizer had no lever left. The guard now runs an artifact-backed `shake` elide pass over the oversized tail and re-tests headroom before pausing, and the remaining warning points at `/shake images` for image-only tails it can't elide. ([#3786](https://github.com/can1357/oh-my-pi/issues/3786))
 - Fixed reviewer/`task` subagents whose incremental `yield` (`type: ["overall_correctness"]`, `type: ["findings"]`, …) carried a value that mismatched the matching property's sub-schema being silently accepted and then post-mortem rejected with `schema_violation` — opaquely swapping the agent's accepted output for an error blob. The yield tool now validates each incremental section's `data` against its top-level property's sub-schema (items schema for array-typed labels) and surfaces the same retry feedback as terminal yields, so models like `deepseek-v4-pro` that emit `"Correct"`/`"correct."`/`"approved"` for an enum field get up to three corrective retries; the existing `MAX_SCHEMA_RETRIES` override then accepts the value with `SUBAGENT_WARNING_SCHEMA_OVERRIDDEN` instead of losing the entire result. Unknown labels stay unconstrained ([#3870](https://github.com/can1357/oh-my-pi/issues/3870)).
