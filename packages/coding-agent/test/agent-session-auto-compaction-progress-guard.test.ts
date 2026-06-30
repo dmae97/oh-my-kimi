@@ -694,4 +694,81 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress.length).toBe(1);
 		expect(noProgress[0].level).toBe("warning");
 	});
+
+	it("auto-continues (no warning) when a shake rescue frees the oversized tail", async () => {
+		// The escalation contract: compaction cut at the only turn boundary but the
+		// kept tail (e.g. a huge tool result) still sits over the recovery band. The
+		// guard now runs an elide shake INSIDE that tail; once it frees enough, the
+		// auto-continue proceeds instead of pausing with the no-progress warning.
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		// Residual is over the band until the rescue elides the tail, then drops.
+		let shaken = false;
+		vi.spyOn(session, "getContextUsage").mockImplementation(() =>
+			shaken
+				? { tokens: 1000, contextWindow: 200000, percent: 0.5 }
+				: { tokens: 190000, contextWindow: 200000, percent: 95 },
+		);
+		const shakeSpy = vi.spyOn(session, "shake").mockImplementation(async () => {
+			shaken = true;
+			return { mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 160000, artifactId: "art-1" };
+		});
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(shakeSpy).toHaveBeenCalledWith("elide", expect.anything());
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+		const recovery = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("dead-end recovery"));
+		expect(recovery.length).toBe(1);
+		expect(recovery[0].level).toBe("info");
+	});
+
+	it("still warns when a shake rescue cannot free the irreducible tail", async () => {
+		// When the oversized tail has nothing elide-eligible (image-only or plain
+		// prose), the rescue frees nothing, the residual stays over the band, and
+		// the guard MUST still pause with the single no-progress warning.
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 190000, contextWindow: 200000, percent: 95 });
+		// Nothing eligible: shake reports zero dropped, so residual is unchanged.
+		const shakeSpy = vi
+			.spyOn(session, "shake")
+			.mockResolvedValue({ mode: "elide", toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 });
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(shakeSpy).toHaveBeenCalledWith("elide", expect.anything());
+		expect(promptSpy).not.toHaveBeenCalled();
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(1);
+		expect(noProgress[0].level).toBe("warning");
+		const recovery = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("dead-end recovery"));
+		expect(recovery.length).toBe(0);
+	});
 });
