@@ -69,7 +69,13 @@ describe("tryRunRpcSkillCommand", () => {
 				{
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
-						{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
+						{
+							name: "reviewer",
+							description: "Review code",
+							filePath: skillPath,
+							baseDir: dir,
+							source: "project",
+						},
 					],
 					async promptCustomMessage() {
 						dispatched = true;
