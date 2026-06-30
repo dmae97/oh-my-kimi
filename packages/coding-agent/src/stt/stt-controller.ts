@@ -15,7 +15,7 @@ import {
 	startStreamingRecording,
 	verifyRecordingFile,
 } from "./recorder";
-import { evaluateSubmitTrigger, type SttSubmitTrigger } from "./submit-trigger";
+import { evaluateSubmitTrigger } from "./submit-trigger";
 import { transcribe } from "./transcriber";
 
 export type SttState = "idle" | "recording" | "transcribing";
@@ -34,8 +34,6 @@ interface Editor {
 	setVolatileText(text: string): void;
 	clearVolatileText(): void;
 	commitVolatileText(text: string): void;
-	getText(): string;
-	setText(text: string): void;
 	submit(): void;
 	deleteBeforeCursor(count: number): void;
 }
@@ -285,7 +283,7 @@ export class STTController {
 		if (!failed) options.showStatus(this.#streamCommitted ? "" : "No speech detected.");
 
 		if (this.#streamCommitted && !failed && this.#streamEditor) {
-			const trigger = settings.get("stt.submitTrigger") as SttSubmitTrigger;
+			const trigger = settings.get("stt.submitTrigger");
 			const { submit, trimTrailing } = evaluateSubmitTrigger(this.#streamUtterance, trigger);
 			if (trimTrailing > 0) {
 				this.#streamEditor.deleteBeforeCursor(trimTrailing);
@@ -350,7 +348,7 @@ export class STTController {
 			this.#transcriptionAbort = null;
 			if (this.#disposed) return;
 			if (text.length > 0) {
-				const trigger = settings.get("stt.submitTrigger") as SttSubmitTrigger;
+				const trigger = settings.get("stt.submitTrigger");
 				const { submit, trimTrailing } = evaluateSubmitTrigger(text, trigger);
 				const textToInsert = trimTrailing > 0 ? text.slice(0, -trimTrailing) : text;
 				if (textToInsert.length > 0) {

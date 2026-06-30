@@ -9,10 +9,16 @@
 ### Added
 
 - Added a built-in `Tester` subagent that writes high-signal tests defending real contracts (behavior, invariants, edge cases) and refuses worthless tests that assert config/setter echoes, grep the source, or restate the implementation
+- Added a Speech-to-Text submit trigger setting that can auto-submit dictation on release, on complete sentences, or when the utterance ends with a spoken submit command.
+
+### Changed
+
+- Renamed the STT setting label from "TTS Submit Trigger" to "Speech-to-Text Submit Trigger"
 
 ### Removed
 
 - Removed the built-in `oracle` subagent
+
 ### Fixed
 
 - Fixed `omp debug --profile` failing on Bun with "node:v8 setFlagsFromString is not yet implemented in Bun" by treating the optional `--allow-natives-syntax` flag as best-effort, so the CPU profiler proceeds even on runtimes that don't expose `v8.setFlagsFromString`. ([#3897](https://github.com/can1357/oh-my-pi/issues/3897))

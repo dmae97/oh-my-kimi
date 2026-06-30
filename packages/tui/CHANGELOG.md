@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Editor.submit()` for programmatic composer submission from speech input flows.
+
 ## [16.2.7] - 2026-06-30
 
 ### Fixed

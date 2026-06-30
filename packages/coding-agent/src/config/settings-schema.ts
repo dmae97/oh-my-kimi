@@ -1802,7 +1802,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "interaction",
 			group: "Speech",
-			label: "TTS Submit Trigger",
+			label: "Speech-to-Text Submit Trigger",
 			description:
 				"Choose when speech dictation automatically submits: Never, Release (2+ words), Release with complete sentence, or When I Say Submit.",
 			options: STT_SUBMIT_TRIGGER_OPTIONS,
