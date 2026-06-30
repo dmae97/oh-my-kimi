@@ -65,12 +65,12 @@ describe("tiny-models download model resolution", () => {
 		});
 
 		try {
-			await expect(
-				runTinyModelsCommand({ action: "download", model: "lfm2-700m", flags: {} }),
-			).rejects.toThrow("One or more tiny title models failed to download");
+			await expect(runTinyModelsCommand({ action: "download", model: "lfm2-700m", flags: {} })).rejects.toThrow(
+				"One or more tiny title models failed to download",
+			);
 		} finally {
 			if (isTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", isTtyDescriptor);
-			else delete (process.stdout as typeof process.stdout & { isTTY?: boolean }).isTTY;
+			else Reflect.deleteProperty(process.stdout, "isTTY");
 		}
 
 		expect(output.join("")).toContain("Failed to download LFM2 700M: runtime install failed.");
