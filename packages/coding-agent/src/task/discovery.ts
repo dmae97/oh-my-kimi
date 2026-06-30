@@ -90,8 +90,11 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 
 	// OMP extension-package agents/ dirs (CLI roots + `extensions:` settings +
 	// enabled npm/link plugins). `listOmpExtensionRoots` already excludes Claude
-	// marketplace installs by realpath so we never double-scan them here.
-	const extensionRoots = await listOmpExtensionRoots({ cwd: resolvedCwd, home, repoRoot: null });
+	// marketplace installs by realpath so we never double-scan them here. Gate on
+	// `omp-plugins` so disabledProviders suppresses the whole extension package surface.
+	const extensionRoots = isProviderEnabled("omp-plugins")
+		? await listOmpExtensionRoots({ cwd: resolvedCwd, home, repoRoot: null })
+		: [];
 	const sortedExtensionRoots = [...extensionRoots].sort((a, b) => {
 		if (a.level === b.level) return 0;
 		return a.level === "project" ? -1 : 1;
