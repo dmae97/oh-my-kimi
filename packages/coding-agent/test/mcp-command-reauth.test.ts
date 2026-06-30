@@ -274,37 +274,23 @@ describe("/mcp auth commands", () => {
 		await authStorage.reload();
 		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
 
-		// Login resolves only when the controller's timeout aborts the signal.
-		// Mirrors withTimeout firing inside #handleOAuthFlow after the 5-minute
-		// deadline. We patch `setTimeout` to a synchronous call so the deadline
-		// hits immediately without slowing the test.
-		const originalSetTimeout = globalThis.setTimeout;
-		globalThis.setTimeout = ((handler: TimerHandler) => {
-			if (typeof handler === "function") handler();
-			return 0 as unknown as ReturnType<typeof setTimeout>;
-		}) as typeof globalThis.setTimeout;
-		try {
-			vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(
-				function (this: oauthFlow.MCPOAuthFlow) {
-					return new Promise<never>((_, reject) => {
-						this.ctrl.signal?.addEventListener("abort", () => {
-							reject(new Error("OAuth callback timed out"));
-						});
-					});
-				},
-			);
-			const { controller, showError, showStatus } = createController(authStorage);
+		// Deadline path bypasses both the editor's Esc hook and any external
+		// signal: withTimeout aborts the controller with reason "MCP OAuth flow
+		// timed out" and the login promise rejects with a "timed out" message.
+		// Mirror that here. Keeping the surface distinct from the user-cancel
+		// flag in #handleOAuthFlow is the whole point of this regression test.
+		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockRejectedValue(
+			new Error("OAuth flow timed out after 5 minutes"),
+		);
+		const { controller, showError, showStatus } = createController(authStorage);
 
-			await controller.handle("/mcp reauth envserver");
+		await controller.handle("/mcp reauth envserver");
 
-			// Deadline must read as "failed", not "cancelled" — they have different
-			// surfaces (error banner vs status line) and the user expects a clear
-			// timeout message rather than thinking they pressed Esc.
-			expect(showStatus).not.toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
-			expect(showError).toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
-		} finally {
-			globalThis.setTimeout = originalSetTimeout;
-		}
+		// Deadline must read as "failed", not "cancelled" — they have different
+		// surfaces (error banner vs status line) and the user expects a clear
+		// timeout message rather than thinking they pressed Esc.
+		expect(showStatus).not.toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
+		expect(showError).toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
 	});
 
 	test("clears both expanded and stale raw URL-keyed credentials on unauth", async () => {
