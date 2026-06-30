@@ -509,6 +509,13 @@ describe("parseSkillInvocation", () => {
 			});
 		});
 
+		it("allows leading whitespace before the `/skill:<name>` command", () => {
+			expect(parseSkillInvocation("  /skill:foo focus on auth")).toEqual({
+				name: "foo",
+				args: "focus on auth",
+			});
+		});
+
 		it("returns undefined for the bare `/skill:` prefix", () => {
 			expect(parseSkillInvocation("/skill:")).toBeUndefined();
 		});
@@ -534,6 +541,11 @@ describe("parseSkillInvocation", () => {
 				name: "security-scan",
 				args: "explain this\nthen use",
 			});
+		});
+
+		it("does not hijack another slash command whose args mention a skill", () => {
+			expect(parseSkillInvocation("/compact /skill:security-scan")).toBeUndefined();
+			expect(parseSkillInvocation("/goal set /skill:foo focus on auth")).toBeUndefined();
 		});
 
 		it("returns undefined when no `/skill:<name>` token is present", () => {

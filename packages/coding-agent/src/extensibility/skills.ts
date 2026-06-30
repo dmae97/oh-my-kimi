@@ -408,18 +408,21 @@ const MID_PROMPT_SKILL_RE = /(^|\s)\/skill:([^\s/]+)(\s|$)/;
  *     args=`fix the bug focus on auth` — the surrounding prose collapsed
  *     into a single args string.
  *
- * Mid-prompt detection requires the `/skill:<name>` token to be surrounded
- * by whitespace (or string edges) so it does not fire on substrings inside
- * URLs or words.
+ * Mid-prompt detection is disabled when the draft itself starts with a
+ * different slash command, preserving builtin/custom slash-command precedence
+ * for inputs such as `/compact /skill:foo`.
  */
 export function parseSkillInvocation(text: string): ParsedSkillInvocation | undefined {
-	if (text.startsWith("/skill:")) {
-		const spaceIndex = text.indexOf(" ");
-		const name = spaceIndex === -1 ? text.slice("/skill:".length) : text.slice("/skill:".length, spaceIndex);
+	const trimmedStart = text.trimStart();
+	if (trimmedStart.startsWith("/skill:")) {
+		const spaceIndex = trimmedStart.indexOf(" ");
+		const name =
+			spaceIndex === -1 ? trimmedStart.slice("/skill:".length) : trimmedStart.slice("/skill:".length, spaceIndex);
 		if (!name) return undefined;
-		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const args = spaceIndex === -1 ? "" : trimmedStart.slice(spaceIndex + 1).trim();
 		return { name, args };
 	}
+	if (trimmedStart.startsWith("/")) return undefined;
 	const match = MID_PROMPT_SKILL_RE.exec(text);
 	if (!match) return undefined;
 	const leading = match[1] ?? "";
