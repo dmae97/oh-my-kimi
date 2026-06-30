@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `OAuthCallbackFlowOptions.allowPortFallback` (default `true`) so subclasses that gate random-port fallback per request — e.g. MCP flows whose static `client_id` is already registered against a specific redirect URI — can refuse the silent fallback and surface an actionable `ConfigurationError` before opening the browser, while flows that re-register on demand (dynamic client registration) can keep the existing fallback semantics.
+
+### Changed
+
+- Reworded the `OAuthCallbackFlow` strict-port `ConfigurationError` messages to name the busy port, the configured `oauth.redirectUri` (when set), and concrete remediation steps (free the port, change `oauth.callbackPort`/`oauth.redirectUri`). Existing `redirectUri`-strict callers see the new wording on the same code path.
+
 ## [16.2.7] - 2026-06-30
 
 ### Added
