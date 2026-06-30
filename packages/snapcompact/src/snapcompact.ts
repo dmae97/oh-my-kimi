@@ -1359,8 +1359,10 @@ function imagesWithinBudget(
 	let usedBytes = 0;
 	let omittedFrames = 0;
 	let omittedBytes = 0;
-	const kept: Frame[] = [];
-	for (const frame of archive.frames) {
+	const keptNewestFirst: Frame[] = [];
+	for (let index = archive.frames.length - 1; index >= 0; index--) {
+		const frame = archive.frames[index];
+		if (!frame) continue;
 		const bytes = frame.data.length;
 		if (usedBytes + bytes > maxFrameDataBytes) {
 			omittedFrames++;
@@ -1368,9 +1370,10 @@ function imagesWithinBudget(
 			continue;
 		}
 		usedBytes += bytes;
-		kept.push(frame);
+		keptNewestFirst.push(frame);
 	}
-	return { images: images({ ...archive, frames: kept }), omittedFrames, omittedBytes };
+	keptNewestFirst.reverse();
+	return { images: images({ ...archive, frames: keptNewestFirst }), omittedFrames, omittedBytes };
 }
 
 function omittedFrameNotice(omittedFrames: number, omittedBytes: number): string {

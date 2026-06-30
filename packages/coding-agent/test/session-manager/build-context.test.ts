@@ -232,14 +232,15 @@ describe("buildSessionContext", () => {
 		});
 
 		it("caps snapcompact frame payload in LLM context but preserves transcript frames", () => {
-			const largeFrame = "a".repeat(Math.ceil(snapcompact.FRAME_DATA_BYTES_BUDGET / 2) + 1);
+			const oldFrame = "o".repeat(Math.ceil(snapcompact.FRAME_DATA_BYTES_BUDGET / 2) + 1);
+			const newFrame = "n".repeat(oldFrame.length);
 			const compacted: CompactionEntry = {
 				...compaction("3", "2", "Snapcompact summary", "1"),
 				preserveData: {
 					[snapcompact.PRESERVE_KEY]: {
 						frames: [
-							{ data: largeFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
-							{ data: largeFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
+							{ data: oldFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
+							{ data: newFrame, mimeType: "image/png", cols: 10, rows: 10, chars: 10 },
 						],
 						totalChars: 20,
 						truncatedChars: 0,
@@ -258,7 +259,11 @@ describe("buildSessionContext", () => {
 			const llmContext = buildSessionContext(entries);
 			const summary = llmContext.messages[0];
 			if (summary?.role !== "compactionSummary") throw new Error("Expected LLM compaction summary");
-			expect(summary.blocks?.filter(block => block.type === "image")).toHaveLength(1);
+			const imageBlocks = summary.blocks?.filter(block => block.type === "image");
+			expect(imageBlocks).toHaveLength(1);
+			const keptImage = imageBlocks?.[0];
+			if (keptImage?.type !== "image") throw new Error("Expected kept snapcompact image");
+			expect(keptImage.data).toBe(newFrame);
 			expect(
 				summary.blocks?.some(block => block.type === "text" && block.text.includes("image middle omitted")),
 			).toBe(true);
