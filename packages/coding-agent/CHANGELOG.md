@@ -22,6 +22,7 @@
 ### Fixed
 
 - Fixed Ruff LSP auto-detection for Windows Python virtualenvs by checking `.venv/Scripts`, `venv/Scripts`, and `.env/Scripts` before falling back to PATH. ([#3916](https://github.com/can1357/oh-my-pi/issues/3916))
+- Fixed a rare Bun GC segfault (exit 133) during model discovery: every discovery fetch armed an uncancellable `AbortSignal.timeout(...)` whose timer outlived the request (instantly against a mocked or fast endpoint). The pending timer fired later — sometimes during an unrelated allocation or test teardown — set the signal's abort `reason`, and crashed JSC's concurrent garbage collector while it marked the wrapped reason (`JSAbortSignal::visitAdditionalChildren`). Discovery now runs each fetch under a `withTimeoutSignal` helper that clears the backing timer the instant the operation settles, so the signal is never left armed on the heap.
 
 ## [16.2.9] - 2026-06-30
 

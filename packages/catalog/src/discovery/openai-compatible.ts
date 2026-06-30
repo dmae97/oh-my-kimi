@@ -4,6 +4,27 @@ import type { Api, FetchImpl, ModelSpec, Provider } from "../types";
 const MODELS_PATH = "/models";
 
 /**
+ * Uses a cancellable timer rather than the native abort-timeout helper so
+ * successful fast discovery requests do not leave armed timeout signals for
+ * concurrent GC to trip over later.
+ */
+async function withOpenAICompatibleDiscoveryTimeout<T>(
+	timeoutMs: number,
+	run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const controller = new AbortController();
+	const timer = setTimeout(
+		() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+		timeoutMs,
+	);
+	try {
+		return await run(controller.signal);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
  * Minimal OpenAI-style model entry shape consumed by discovery.
  *
  * Providers may return additional fields; this type only captures
@@ -72,8 +93,10 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
 	apiKey?: string;
 	/** Additional request headers. */
 	headers?: Record<string, string>;
-	/** Optional AbortSignal for request cancellation. */
+	/** Optional AbortSignal for request cancellation; caller owns its lifecycle. */
 	signal?: AbortSignal;
+	/** Optional cancellable request timeout used when `signal` is omitted. */
+	timeoutMs?: number;
 	/** Optional fetch implementation override for testing/custom runtimes. */
 	fetch?: FetchImpl;
 	/**
@@ -115,25 +138,35 @@ export async function fetchOpenAICompatibleModels<TApi extends Api>(
 	}
 
 	const fetchImpl = options.fetch ?? globalThis.fetch;
-	let response: Response;
-	try {
-		response = await fetchImpl(`${baseUrl}${MODELS_PATH}`, {
-			method: "GET",
-			headers: requestHeaders,
-			signal: options.signal,
-		});
-	} catch {
-		return null;
-	}
+	const fetchPayload = async (signal?: AbortSignal): Promise<unknown | null> => {
+		let response: Response;
+		try {
+			response = await fetchImpl(`${baseUrl}${MODELS_PATH}`, {
+				method: "GET",
+				headers: requestHeaders,
+				signal,
+			});
+		} catch {
+			return null;
+		}
 
-	if (!response.ok) {
-		return null;
-	}
+		if (!response.ok) {
+			return null;
+		}
 
-	let payload: unknown;
-	try {
-		payload = await response.json();
-	} catch {
+		try {
+			return await response.json();
+		} catch {
+			return null;
+		}
+	};
+	const payload =
+		options.signal !== undefined
+			? await fetchPayload(options.signal)
+			: options.timeoutMs !== undefined
+				? await withOpenAICompatibleDiscoveryTimeout(options.timeoutMs, fetchPayload)
+				: await fetchPayload();
+	if (payload === null) {
 		return null;
 	}
 

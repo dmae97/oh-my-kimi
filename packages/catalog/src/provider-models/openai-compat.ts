@@ -20,6 +20,25 @@ import {
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
+
+/**
+ * Uses a cancellable timer rather than the native abort-timeout helper so
+ * successful fast discovery requests do not leave armed timeout signals for
+ * concurrent GC to trip over later.
+ */
+async function withCatalogDiscoveryTimeout<T>(timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	const controller = new AbortController();
+	const timer = setTimeout(
+		() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+		timeoutMs,
+	);
+	try {
+		return await run(controller.signal);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
 const ANTHROPIC_OAUTH_BETA =
 	"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11";
@@ -2351,34 +2370,40 @@ export async function fetchLmStudioNativeModelMetadata(
 	options?: LmStudioNativeModelMetadataOptions,
 ): Promise<Map<string, LmStudioNativeModelMetadata> | null> {
 	const nativeBaseUrl = toLmStudioNativeBaseUrl(baseUrl);
-	try {
-		const response = await fetchImpl(`${nativeBaseUrl}/api/v0/models`, {
-			method: "GET",
-			headers: { Accept: "application/json", ...(options?.headers ?? {}) },
-			signal: options?.signal ?? AbortSignal.timeout(LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS),
-		});
-		if (!response.ok) {
-			return null;
-		}
-		const payload = await response.json();
-		if (!isRecord(payload) || !Array.isArray(payload.data)) {
-			return null;
-		}
-		const metadata = new Map<string, LmStudioNativeModelMetadata>();
-		for (const entry of payload.data) {
-			if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) {
-				continue;
-			}
-			const contextWindow = getLmStudioNativeContextWindow(entry);
-			metadata.set(entry.id, {
-				input: getLmStudioNativeInput(entry),
-				...(contextWindow === undefined ? {} : { contextWindow }),
+	const fetchMetadata = async (signal?: AbortSignal): Promise<Map<string, LmStudioNativeModelMetadata> | null> => {
+		try {
+			const response = await fetchImpl(`${nativeBaseUrl}/api/v0/models`, {
+				method: "GET",
+				headers: { Accept: "application/json", ...(options?.headers ?? {}) },
+				signal,
 			});
+			if (!response.ok) {
+				return null;
+			}
+			const payload = await response.json();
+			if (!isRecord(payload) || !Array.isArray(payload.data)) {
+				return null;
+			}
+			const metadata = new Map<string, LmStudioNativeModelMetadata>();
+			for (const entry of payload.data) {
+				if (!isRecord(entry) || typeof entry.id !== "string" || entry.id.length === 0) {
+					continue;
+				}
+				const contextWindow = getLmStudioNativeContextWindow(entry);
+				metadata.set(entry.id, {
+					input: getLmStudioNativeInput(entry),
+					...(contextWindow === undefined ? {} : { contextWindow }),
+				});
+			}
+			return metadata;
+		} catch {
+			return null;
 		}
-		return metadata;
-	} catch {
-		return null;
+	};
+	if (options?.signal !== undefined) {
+		return fetchMetadata(options.signal);
 	}
+	return withCatalogDiscoveryTimeout(LM_STUDIO_NATIVE_METADATA_TIMEOUT_MS, fetchMetadata);
 }
 
 export interface LmStudioModelManagerConfig {
@@ -2869,6 +2894,7 @@ export interface FetchLiteLLMRichModelsOptions<TApi extends Api> {
 	headers?: Record<string, string>;
 	fetch?: FetchImpl;
 	signal?: AbortSignal;
+	timeoutMs?: number;
 	referenceResolver?: (modelId: string) => ModelSpec<TApi> | undefined;
 }
 
@@ -3024,6 +3050,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	options: FetchLiteLLMRichModelsOptions<TApi>,
 	managementBaseUrl: string,
 	runtimeBaseUrl: string,
+	signal?: AbortSignal,
 ): Promise<ModelSpec<TApi>[] | null> {
 	const fetchImpl = options.fetch ?? globalThis.fetch;
 	const requestHeaders: Record<string, string> = {
@@ -3038,7 +3065,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 		response = await fetchImpl(`${managementBaseUrl}${endpoint}`, {
 			method: "GET",
 			headers: requestHeaders,
-			signal: options.signal,
+			signal,
 		});
 	} catch {
 		return null;
@@ -3077,13 +3104,19 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 	if (!managementBaseUrl || !runtimeBaseUrl) {
 		return null;
 	}
-	for (const endpoint of LITELLM_RICH_ENDPOINTS) {
-		const models = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl);
-		if (models) {
-			return models;
+	const fetchModels = async (signal?: AbortSignal): Promise<ModelSpec<TApi>[] | null> => {
+		for (const endpoint of LITELLM_RICH_ENDPOINTS) {
+			const models = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl, signal);
+			if (models) {
+				return models;
+			}
 		}
+		return null;
+	};
+	if (options.signal !== undefined) {
+		return fetchModels(options.signal);
 	}
-	return null;
+	return options.timeoutMs !== undefined ? withCatalogDiscoveryTimeout(options.timeoutMs, fetchModels) : fetchModels();
 }
 
 export function litellmModelManagerOptions(
@@ -3108,7 +3141,7 @@ export function litellmModelManagerOptions(
 				apiKey,
 				fetch: config?.fetch,
 				referenceResolver: resolveReference,
-				signal: AbortSignal.timeout(10_000),
+				timeoutMs: 10_000,
 			});
 			if (richModels && richModels.length > 0) {
 				return richModels;
@@ -3158,7 +3191,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					};
 				},
 				fetch: config?.fetch,
-				signal: AbortSignal.timeout(VLLM_DISCOVERY_TIMEOUT_MS),
+				timeoutMs: VLLM_DISCOVERY_TIMEOUT_MS,
 			}),
 	};
 }
