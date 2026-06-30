@@ -14,6 +14,7 @@ async function runProbeScenario(options: {
 	runs: number;
 	sleepSeconds?: number;
 	holdStdoutOpen?: boolean;
+	descendantHoldsStdout?: boolean;
 }): Promise<ProbeRunResult> {
 	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gpu-probe-"));
 	try {
@@ -25,7 +26,7 @@ async function runProbeScenario(options: {
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,
-			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ "$OMP_GPU_PROBE_HOLD_STDOUT_OPEN" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & wait "$!"; fi\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
+			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ "$OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & exit 0; fi\nif [ "$OMP_GPU_PROBE_HOLD_STDOUT_OPEN" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & wait "$!"; fi\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
 		);
 		await fs.chmod(lspciPath, 0o755);
 
@@ -83,6 +84,11 @@ console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt
 		} else {
 			delete env.OMP_GPU_PROBE_HOLD_STDOUT_OPEN;
 		}
+		if (options.descendantHoldsStdout) {
+			env.OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT = "true";
+		} else {
+			delete env.OMP_GPU_PROBE_DESCENDANT_HOLDS_STDOUT;
+		}
 
 		const childStartedAt = performance.now();
 		const child = Bun.spawn([process.execPath, scenarioPath], { stdout: "pipe", stderr: "pipe", env });
@@ -117,5 +123,15 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 		// Codex#3838: the child process MUST exit shortly after the deadline,
 		// not linger until a descendant holding stdout (sleep 7) exits on its own.
 		expect(result.childElapsedMs).toBeLessThan(6500);
+	}, 15_000);
+
+	it("does not wait on stdout held by a descendant after a successful probe", async () => {
+		const result = await runProbeScenario({ runs: 1, sleepSeconds: 3, descendantHoldsStdout: true });
+
+		expect(result.cached).toEqual({ gpu: null });
+		// Probe exits 0 immediately but leaves a backgrounded sleep holding the stdout
+		// pipe. The success path MUST bound the drain wait, not block until sleep exits.
+		expect(result.elapsedMs).toBeLessThan(2000);
+		expect(result.childElapsedMs).toBeLessThan(2000);
 	}, 15_000);
 });

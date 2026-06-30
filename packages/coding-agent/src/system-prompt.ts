@@ -113,6 +113,8 @@ function parseWmicTable(output: string, header: string): string | null {
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 /** Kept below prep timeout so timed-out probes can still write the null cache before fallback. */
 const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS - 500;
+/** Drop stdout from a probe descendant that inherited the pipe after the probe exited. */
+const GPU_PROBE_STDOUT_DRAIN_MS = 250;
 
 async function runGpuProbe(cmd: string[]): Promise<string | null> {
 	try {
@@ -138,12 +140,17 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			stdout += decoder.decode();
 		})();
 		const exitCode = await proc.exited;
-		if (exitCode !== 0) {
+		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
+		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path.
+		const drained = await Promise.race([
+			stdoutDone.then(() => "ok" as const).catch(() => "err" as const),
+			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
+		]);
+		if (exitCode !== 0 || drained !== "ok") {
 			await stdoutReader.cancel().catch(() => undefined);
 			await stdoutDone.catch(() => undefined);
 			return null;
 		}
-		await stdoutDone;
 		return stdout;
 	} catch {
 		return null;
@@ -531,7 +538,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		gpu: undefined as string | undefined,
 	};
 
-	const deadline = Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS).then(() => "__timeout__" as const);
+	const { promise: deadline, resolve: fireDeadline } = Promise.withResolvers<"__timeout__">();
+	const deadlineTimer = setTimeout(() => fireDeadline("__timeout__"), SYSTEM_PROMPT_PREP_TIMEOUT_MS);
+	// Unref so a fast prep does not hold a one-shot CLI alive waiting for this timer.
+	deadlineTimer.unref();
 	const timedOut: string[] = [];
 	const failed: Array<{ name: string; error: unknown }> = [];
 
@@ -630,6 +640,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
 		withDeadline("getCachedGpu", gpuPromise, prepDefaults.gpu),
 	]);
+	clearTimeout(deadlineTimer);
 	const agentsMdFiles = Array.from(new Set(workspaceTree.agentsMdFiles)).sort().slice(0, AGENTS_MD_LIMIT);
 
 	if (timedOut.length > 0) {
