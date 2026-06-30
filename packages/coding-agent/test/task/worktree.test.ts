@@ -540,6 +540,48 @@ describe("commitToBranch preserves agent commits", () => {
 		expect(subjects).toEqual(["chore: leftover beta wip", "feat: add alpha file"]);
 	});
 
+	it("filters baseline WIP when the agent commits with git add -A", async () => {
+		await fs.writeFile(path.join(parent, "staged.txt"), "baseline staged wip\n");
+		await gitr(parent, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(parent, "user-wip.txt"), "baseline untracked wip\n");
+		await fs.writeFile(path.join(isolation, "staged.txt"), "baseline staged wip\n");
+		await gitr(isolation, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(isolation, "user-wip.txt"), "baseline untracked wip\n");
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(
+			path.join(isolation, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nLINE5-AGENT-WITH-MESSAGE\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(isolation, ["add", "-A"]);
+		const agentMessage = "fix(test): preserve message without baseline wip";
+		await gitr(isolation, ["commit", "-q", "-m", agentMessage]);
+
+		const aiMessage = vi.fn(async () => "fix: generated fallback");
+		const result = await commitToBranch(isolation, baseline, "dirty-baseline", undefined, aiMessage);
+		expect(result?.branchName).toBe("omp/task/dirty-baseline");
+		expect(aiMessage).not.toHaveBeenCalled();
+
+		const branchFiles = (await gitr(parent, ["show", "--name-only", "--pretty=format:", result!.branchName!]))
+			.split("\n")
+			.filter(Boolean);
+		expect(branchFiles).toEqual(["EXP_CLEAN_COMMIT.txt"]);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId: "dirty-baseline", baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: ["omp/task/dirty-baseline"] });
+
+		const [headSubject, status, fixture] = await Promise.all([
+			gitr(parent, ["log", "-1", "--pretty=%s"]),
+			gitr(parent, ["status", "--porcelain=v1"]),
+			fs.readFile(path.join(parent, "EXP_CLEAN_COMMIT.txt"), "utf8"),
+		]);
+		expect(headSubject).toBe(agentMessage);
+		expect(status.split("\n").sort()).toEqual(["?? user-wip.txt", "A  staged.txt"]);
+		expect(fixture).toContain("LINE5-AGENT-WITH-MESSAGE");
+	});
+
 	it("falls back to the AI-generated message when the agent never committed", async () => {
 		const baseline = await captureBaseline(parent);
 
