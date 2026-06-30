@@ -6,12 +6,14 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 
@@ -263,6 +265,43 @@ describe("AgentSession mid-run threshold compaction", () => {
 			})
 			.map(message => message.role);
 		expect(persistedToolTurnRoles).toEqual(["assistant", "toolResult"]);
+	});
+
+	it("treats same-key assistant content variants as persisted before mid-run compaction", async () => {
+		const extensionRuntime = new ExtensionRuntime();
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("message_end", event => {
+					if (event.message.role !== "assistant" || event.message.stopReason !== "toolUse") return;
+					const [block] = event.message.content;
+					if (block?.type !== "toolCall") return;
+					event.message.content = [{ ...block, arguments: { cmd: "display-variant" } }];
+				});
+			},
+			tempDir.path(),
+			new EventBus(),
+			extensionRuntime,
+			"assistant-display-variant",
+		);
+		const extensionAuthStorage = await AuthStorage.create(path.join(tempDir.path(), "extension-auth-variant.db"));
+		cleanups.push(async () => {
+			extensionAuthStorage.close();
+		});
+		const extensionRunner = new ExtensionRunner(
+			[extension],
+			extensionRuntime,
+			tempDir.path(),
+			SessionManager.inMemory(),
+			new ModelRegistry(extensionAuthStorage, path.join(tempDir.path(), "extension-models-variant.yml")),
+		);
+		const { session, observedContexts } = await createHarness({}, { extensionRunner });
+		const compactSpy = mockCompaction("MID-RUN-COMPACTED-WITH-CONTENT-VARIANT");
+
+		await session.prompt("work on the release");
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
+		expect(observedContexts[1].join("\n")).toContain("MID-RUN-COMPACTED-WITH-CONTENT-VARIANT");
 	});
 
 	it("does not compact mid-run outside goal mode when disabled", async () => {

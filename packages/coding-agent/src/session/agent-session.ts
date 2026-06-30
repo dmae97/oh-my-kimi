@@ -2886,10 +2886,10 @@ export class AgentSession {
 	 * the mid-run-compaction planner can ask "is this turn message already on
 	 * the branch?" in O(1) instead of re-walking the branch per check.
 	 *
-	 * The Map's value is the list of branch messages that share a key — almost
-	 * always one. We only need the LIST when content equality matters (rare
-	 * collision tiebreaker via {@link sameMessageContent}); the empty/single-
-	 * entry common case lets the caller's lookup short-circuit at presence.
+	 * The mid-run ordering check uses key identity alone: same-key content
+	 * variants are one logical message at this boundary, because otherwise a
+	 * display-side rewrite can make the assistant look missing after its tool
+	 * results have already persisted.
 	 *
 	 * Pre-#3629 the equivalent was `sessionManager.getBranch()` called twice
 	 * per turn message, each call rebuilding the path via O(n²) `unshift` and
@@ -2897,17 +2897,14 @@ export class AgentSession {
 	 * per `onTurnEnd` on a long session and the load-bearing source of the
 	 * `ui.loop-blocked` warnings in the bug report.
 	 */
-	#indexPersistedMessagesByKey(): Map<string, AgentMessage[]> {
-		const index = new Map<string, AgentMessage[]>();
+	#indexPersistedMessageKeys(): Set<string> {
+		const keys = new Set<string>();
 		for (const entry of this.sessionManager.getBranch()) {
 			if (entry.type !== "message") continue;
 			const key = sessionMessagePersistenceKey(entry.message);
-			if (key === undefined) continue;
-			const existing = index.get(key);
-			if (existing) existing.push(entry.message);
-			else index.set(key, [entry.message]);
+			if (key !== undefined) keys.add(key);
 		}
-		return index;
+		return keys;
 	}
 
 	/**
@@ -3007,17 +3004,17 @@ export class AgentSession {
 		// JSON-compared every entry per turn message, which on long sessions
 		// turned each `onTurnEnd` into a seconds-long sync block (the
 		// `ui.loop-blocked` warnings tagged `subagent:*` in the bug report).
-		const branchIndex = this.#indexPersistedMessagesByKey();
+		const branchKeys = this.#indexPersistedMessageKeys();
 		const turnKeys = turnMessages.map(sessionMessagePersistenceKey);
 		const persistedKeys = new Set<string>();
 		for (let index = 0; index < turnMessages.length; index++) {
 			const key = turnKeys[index];
 			if (key === undefined) continue;
-			const candidates = branchIndex.get(key);
-			if (!candidates) continue;
-			// Key match only counts when content also matches — two distinct
-			// messages that collided on the cheap key must STILL be persisted.
-			if (candidates.some(persisted => sameMessageContent(persisted, turnMessages[index]))) {
+			// Mid-run ordering is keyed by logical identity. A persisted display
+			// variant (for example, redacted/deobfuscated content) must still count;
+			// otherwise the assistant can look missing while later tool results are
+			// present, producing a false out-of-order skip.
+			if (branchKeys.has(key)) {
 				persistedKeys.add(key);
 			}
 		}

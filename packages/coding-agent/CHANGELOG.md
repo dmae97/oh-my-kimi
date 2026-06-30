@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Fixed mid-run compaction falsely skipping when a persisted assistant display variant shared the same persistence key but differed in content from the live turn message.
 - Fixed a bug where streamed tool blocks starting with an empty ID created duplicate placeholder cards
 
 - Fixed `omp debug --profile` failing on Bun with "node:v8 setFlagsFromString is not yet implemented in Bun" by treating the optional `--allow-natives-syntax` flag as best-effort, so the CPU profiler proceeds even on runtimes that don't expose `v8.setFlagsFromString`. ([#3897](https://github.com/can1357/oh-my-pi/issues/3897))
