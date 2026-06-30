@@ -31,9 +31,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { $ } from "bun";
 import {
+	type GeneratedLeafPackage,
 	generateNpmPackages,
 	LEAF_TARGETS,
-	type GeneratedLeafPackage,
 } from "../packages/natives/scripts/gen-npm-packages.ts";
 
 export interface PublishPackage {
@@ -271,7 +271,12 @@ async function publishNativeLeafPackage(tag: string): Promise<void> {
 	const pkgDir = path.join(repoRoot, pkg.dir);
 	const coreManifest = (await Bun.file(path.join(pkgDir, "package.json")).json()) as PackageManifest;
 	if (typeof coreManifest.version !== "string") throw new Error(`Missing version in ${pkg.dir}/package.json`);
-	const leaves = await generateNpmPackages({ packageDir: pkgDir, dryRun: isDryRun, version: coreManifest.version, tags: [tag] });
+	const leaves = await generateNpmPackages({
+		packageDir: pkgDir,
+		dryRun: isDryRun,
+		version: coreManifest.version,
+		tags: [tag],
+	});
 	const leaf = leaves[0];
 	if (!leaf) throw new Error(`No native leaf generated for ${tag}`);
 	await publishGeneratedLeafPackage(leaf);
@@ -283,7 +288,9 @@ async function publishNativePackage(pkg: PublishPackage): Promise<void> {
 	const name = manifest.name ?? path.basename(pkg.dir);
 	if (isDryRun) {
 		console.log(`DRY RUN native core manifest rewrite (${pkg.dir})`);
-		console.log(JSON.stringify({ optionalDependencies: manifest.optionalDependencies, files: manifest.files }, null, "\t"));
+		console.log(
+			JSON.stringify({ optionalDependencies: manifest.optionalDependencies, files: manifest.files }, null, "\t"),
+		);
 	}
 	await packAndPublish(pkgDir, name);
 }

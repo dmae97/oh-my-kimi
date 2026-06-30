@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { runClaudeTraceCommand, type ClaudeTraceCommandArgs } from "../packages/coding-agent/src/cli/claude-trace-cli";
+import { type ClaudeTraceCommandArgs, runClaudeTraceCommand } from "../packages/coding-agent/src/cli/claude-trace-cli";
 
 const HELP = `Usage: bun scripts/claude-trace.ts [options]
 

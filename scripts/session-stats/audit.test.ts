@@ -120,7 +120,10 @@ it("scanFile recovers usage, turns, spawns, residency, and pruned result sizes",
 			},
 		}),
 		// second user turn + final answer with no tools
-		JSON.stringify({ type: "message", message: { role: "user", content: "thanks, also re-read it", timestamp: 4000 } }),
+		JSON.stringify({
+			type: "message",
+			message: { role: "user", content: "thanks, also re-read it", timestamp: 4000 },
+		}),
 		asst({
 			ts: 5000,
 			usage: { input: 400, output: 40, cacheRead: 600, cost: 2.0 },

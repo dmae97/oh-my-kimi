@@ -105,7 +105,12 @@ function parseArgs(argv: readonly string[]): Options {
 				opts.workflow = argv[++i];
 				break;
 			case "--only":
-				opts.only = new Set((argv[++i] ?? "").split(",").map(s => s.trim()).filter(Boolean));
+				opts.only = new Set(
+					(argv[++i] ?? "")
+						.split(",")
+						.map(s => s.trim())
+						.filter(Boolean),
+				);
 				break;
 			default:
 				console.error(`Unknown argument: ${arg}`);
@@ -291,7 +296,10 @@ function placeholderReadme(name: string, target: NativeLeafTarget): string {
 async function publishNativeLeafPlaceholder(name: string, target: NativeLeafTarget, repo: string): Promise<boolean> {
 	const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-placeholder-"));
 	try {
-		await Bun.write(path.join(tmpDir, "package.json"), `${JSON.stringify(placeholderManifest(name, target, repo), null, "\t")}\n`);
+		await Bun.write(
+			path.join(tmpDir, "package.json"),
+			`${JSON.stringify(placeholderManifest(name, target, repo), null, "\t")}\n`,
+		);
 		await Bun.write(path.join(tmpDir, "README.md"), placeholderReadme(name, target));
 		return (await npmInteractive(["publish", tmpDir, "--access", "public"])) === 0;
 	} finally {
@@ -336,7 +344,9 @@ async function main(): Promise<void> {
 	const workflow = opts.workflow;
 
 	if (!(await Bun.file(path.join(repoRoot, ".github", "workflows", workflow)).exists())) {
-		console.warn(`Warning: .github/workflows/${workflow} not found; npm will still accept it, but OIDC won't match a non-existent workflow.`);
+		console.warn(
+			`Warning: .github/workflows/${workflow} not found; npm will still accept it, but OIDC won't match a non-existent workflow.`,
+		);
 	}
 
 	if (opts.dryRun) {
@@ -369,7 +379,9 @@ async function main(): Promise<void> {
 	}
 
 	console.log("The first mutating npm operation triggers 2FA. When prompted, complete it and choose");
-	console.log("'skip 2FA for the next 5 minutes' on the npm site so placeholder publishes and trust setup run unattended.\n");
+	console.log(
+		"'skip 2FA for the next 5 minutes' on the npm site so placeholder publishes and trust setup run unattended.\n",
+	);
 
 	const outcomes = new Map<string, Outcome>();
 	let bootstrapped = 0;

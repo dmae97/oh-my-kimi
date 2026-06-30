@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 /**
  * Codemod: rewrite relative test imports that reach into a package's `src/`
  * into the package's public subpath import.
@@ -17,16 +19,13 @@
  *   bun scripts/fix-test-imports.ts --write  # apply the changes
  */
 import { Glob } from "bun";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const WRITE = process.argv.includes("--write");
 
 // Matches the module specifier of `from "x"`, `import "x"`, `import("x")`,
 // `require("x")` / `export ... from "x"` — but only when it starts with `./`/`../`.
-const SPEC_RE =
-	/(\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(["'])((?:\.\.?\/)[^"']*)\2/g;
+const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(["'])((?:\.\.?\/)[^"']*)\2/g;
 
 // Source-module extensions. A specifier resolving to one of these has a public
 // `./*` -> `./src/*.ts` subpath; anything else (.json/.md/...) is an asset.
@@ -148,7 +147,7 @@ const skippedAssets: string[] = [];
 
 for (const file of [...files].sort()) {
 	const { content, changes, skipped } = rewriteFile(file);
-	if (skipped.length) skippedAssets.push(...skipped.map((s) => `${relative(ROOT, file)}: ${s}`));
+	if (skipped.length) skippedAssets.push(...skipped.map(s => `${relative(ROOT, file)}: ${s}`));
 	if (!changes.length) continue;
 	changedFiles++;
 	totalChanges += changes.length;
@@ -158,9 +157,7 @@ for (const file of [...files].sort()) {
 	if (WRITE) writeFileSync(file, content);
 }
 
-console.log(
-	`\n${WRITE ? "Applied" : "Would apply"} ${totalChanges} rewrite(s) across ${changedFiles} file(s).`,
-);
+console.log(`\n${WRITE ? "Applied" : "Would apply"} ${totalChanges} rewrite(s) across ${changedFiles} file(s).`);
 if (skippedAssets.length) {
 	console.log(`\nSkipped ${skippedAssets.length} asset import(s) into src (no public subpath):`);
 	for (const s of skippedAssets) console.log(`  ${s}`);

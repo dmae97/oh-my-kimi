@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { $, Glob } from "bun";
 import * as path from "node:path";
+import { $, Glob } from "bun";
 
 const CHANGELOG_GLOB = "packages/*/CHANGELOG.md";
 const ORDERED_SECTION_TITLES = ["Breaking Changes", "Added", "Changed", "Fixed", "Removed"] as const;
@@ -96,7 +96,6 @@ interface HistoricalReleaseRecovery {
 	itemKeys: Set<string>;
 	sectionsByTitle: Map<string, ReleaseSection>;
 }
-
 
 function isReleaseHeading(line: string): boolean {
 	return /^## \[[^\]]+\]/.test(line);
@@ -377,7 +376,6 @@ function compactAdjacentListSpacing(lines: readonly string[]): string[] {
 	return flattenedItems;
 }
 
-
 function normalizeSection(section: ReleaseSection): FixCounters {
 	const counters: FixCounters = {
 		promotedItems: 0,
@@ -456,7 +454,6 @@ function sortReleaseSections(document: ChangelogDocument): void {
 	document.sections = [...unreleasedSections, ...releasedSections];
 }
 
-
 function rebuildReleasedSectionsFromHistory(
 	content: string,
 	historicalSectionsByTitle: ReadonlyMap<string, ReleaseSection>,
@@ -501,7 +498,6 @@ function rebuildReleasedSectionsFromHistory(
 	sortReleaseSections(document);
 	return renderChangelog(document);
 }
-
 
 export function renderChangelog(document: ChangelogDocument): string {
 	const output: string[] = [];
@@ -590,7 +586,6 @@ function isAddedReleaseHeadingLine(line: string): boolean {
 	return line.startsWith("+## [");
 }
 
-
 function itemKey(pathName: string, text: string): string {
 	return `${pathName}\0${normalizeItemText(text)}`;
 }
@@ -600,7 +595,6 @@ export function collectPromotableAddedItemLines(diffText: string): Map<string, S
 	const removals: RemovedItemOccurrence[] = [];
 	const addedReleaseHeadingHunks = new Set<string>();
 	let currentPath = "";
-	let oldLine = 0;
 	let newLine = 0;
 	let hunkIndex = -1;
 	for (const rawLine of diffText.replace(/\r\n/g, "\n").split("\n")) {
@@ -617,7 +611,6 @@ export function collectPromotableAddedItemLines(diffText: string): Map<string, S
 
 		const hunkMatch = rawLine.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
 		if (hunkMatch) {
-			oldLine = Number(hunkMatch[1]);
 			newLine = Number(hunkMatch[2]);
 			hunkIndex++;
 			continue;
@@ -655,12 +648,10 @@ export function collectPromotableAddedItemLines(diffText: string): Map<string, S
 					pairedWithAddition: false,
 				});
 			}
-			oldLine++;
 			continue;
 		}
 
 		if (marker === " ") {
-			oldLine++;
 			newLine++;
 		}
 	}
@@ -765,9 +756,7 @@ async function resolveSince(repoRoot: string, since: string | undefined): Promis
  */
 async function recoveryTags(repoRoot: string): Promise<string[]> {
 	const baseline = await changelogBaselineCommit(repoRoot);
-	const listArgs = baseline
-		? ["tag", "--contains", baseline, "--sort=v:refname"]
-		: ["tag", "--sort=v:refname"];
+	const listArgs = baseline ? ["tag", "--contains", baseline, "--sort=v:refname"] : ["tag", "--sort=v:refname"];
 	return (await git(listArgs, repoRoot))
 		.split("\n")
 		.map(tag => tag.trim())
@@ -825,7 +814,6 @@ async function collectHistoricalReleaseRecovery(
 
 	return recoveryByPath;
 }
- 
 
 export async function changelogPaths(repoRoot: string): Promise<string[]> {
 	const glob = new Glob(CHANGELOG_GLOB);

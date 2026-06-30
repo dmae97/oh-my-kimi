@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { $ } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { $ } from "bun";
 import { collectPromotableAddedItemLines, fixChangelogContent, runChangelogFixer } from "./fix-changelogs";
 
 describe("collectPromotableAddedItemLines", () => {
@@ -82,32 +82,34 @@ describe("fixChangelogContent", () => {
 
 		expect(result.promotedItems).toBe(2);
 		expect(result.mergedDuplicateHeadings).toBe(1);
-		expect(result.content).toBe([
-			"# Changelog",
-			"",
-			"## [Unreleased]",
-			"",
-			"### Added",
-			"",
-			"- New addition in released section.",
-			"",
-			"### Fixed",
-			"",
-			"- Existing fix.",
-			"- Second fix.",
-			"- New fix in released section.",
-			"",
-			"## [1.0.0] - 2026-01-01",
-			"",
-			"### Added",
-			"",
-			"- Historical addition.",
-			"",
-			"### Fixed",
-			"",
-			"- Historical fix.",
-			"",
-		].join("\n"));
+		expect(result.content).toBe(
+			[
+				"# Changelog",
+				"",
+				"## [Unreleased]",
+				"",
+				"### Added",
+				"",
+				"- New addition in released section.",
+				"",
+				"### Fixed",
+				"",
+				"- Existing fix.",
+				"- Second fix.",
+				"- New fix in released section.",
+				"",
+				"## [1.0.0] - 2026-01-01",
+				"",
+				"### Added",
+				"",
+				"- Historical addition.",
+				"",
+				"### Fixed",
+				"",
+				"- Historical fix.",
+				"",
+			].join("\n"),
+		);
 	});
 
 	it("drops Unreleased items that already appear verbatim in a released section", () => {

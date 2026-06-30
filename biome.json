@@ -56,6 +56,7 @@
 			"packages/*/examples/**/*.ts",
 			"packages/*/scripts/**/*.ts",
 			"packages/*/*.ts",
+			"scripts/**/*.ts",
 			"!packages/natives/native/index.d.ts",
 			"!**/vendor/**/*",
 			"!**/node_modules/**/*",

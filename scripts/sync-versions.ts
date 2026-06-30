@@ -22,8 +22,8 @@ interface PackageInfo {
 
 const packagesDir = join(process.cwd(), "packages");
 const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
-	.filter((dirent) => dirent.isDirectory())
-	.map((dirent) => dirent.name);
+	.filter(dirent => dirent.isDirectory())
+	.map(dirent => dirent.name);
 
 // Read all package.json files and build version map
 const packages: Record<string, PackageInfo> = {};
@@ -61,7 +61,8 @@ console.log("\n✅ All packages at same version (lockstep)");
 
 // Update all inter-package dependencies
 let totalUpdates = 0;
-for (const [dir, pkg] of Object.entries(packages)) {
+for (const dir in packages) {
+	const pkg = packages[dir];
 	let updated = false;
 
 	// Check dependencies
@@ -98,7 +99,7 @@ for (const [dir, pkg] of Object.entries(packages)) {
 
 	// Write if updated
 	if (updated) {
-		await Bun.write(pkg.path, JSON.stringify(pkg.data, null, "\t") + "\n");
+		await Bun.write(pkg.path, `${JSON.stringify(pkg.data, null, "\t")}\n`);
 	}
 }
 

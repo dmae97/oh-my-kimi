@@ -90,7 +90,10 @@ function parseNumber(text: string): number {
 }
 
 function getCell(text: string, label: string): string | null {
-	const re = new RegExp(`^\\|\\s*\\*?\\*?${escapeRegex(label)}\\*?\\*?\\s*\\|\\s*\\*?\\*?(.+?)\\*?\\*?\\s*\\|\\s*$`, "m");
+	const re = new RegExp(
+		`^\\|\\s*\\*?\\*?${escapeRegex(label)}\\*?\\*?\\s*\\|\\s*\\*?\\*?(.+?)\\*?\\*?\\s*\\|\\s*$`,
+		"m",
+	);
 	const m = text.match(re);
 	return m ? m[1].trim() : null;
 }
@@ -123,12 +126,6 @@ function parseRatePair(value: string | null): { numerator: number; denominator: 
 		numerator: parseNumber(m[2]),
 		denominator: parseNumber(m[3]),
 	};
-}
-
-function parseFraction(value: string | null): { num: number; denom: number } {
-	if (!value) return { num: 0, denom: 0 };
-	const m = value.match(/([0-9,]+)\s*\/\s*([0-9,]+)/);
-	return m ? { num: parseNumber(m[1]), denom: parseNumber(m[2]) } : { num: 0, denom: 0 };
 }
 
 async function parseReport(file: string): Promise<ReportRow> {
@@ -221,11 +218,9 @@ function sortRows(rows: ReportRow[], by: typeof sortBy): ReportRow[] {
 	};
 	const cmp: Record<typeof sortBy, (a: ReportRow, b: ReportRow) => number> = {
 		sep: (a, b) =>
-			sepOrder.indexOf(a.sepSlug) - sepOrder.indexOf(b.sepSlug) ||
-			modelOrder(a.model) - modelOrder(b.model),
+			sepOrder.indexOf(a.sepSlug) - sepOrder.indexOf(b.sepSlug) || modelOrder(a.model) - modelOrder(b.model),
 		model: (a, b) =>
-			modelOrder(a.model) - modelOrder(b.model) ||
-			sepOrder.indexOf(a.sepSlug) - sepOrder.indexOf(b.sepSlug),
+			modelOrder(a.model) - modelOrder(b.model) || sepOrder.indexOf(a.sepSlug) - sepOrder.indexOf(b.sepSlug),
 		task: (a, b) => b.taskSuccessPct - a.taskSuccessPct,
 		edit: (a, b) => b.editSuccessPct - a.editSuccessPct,
 		tokens: (a, b) => a.totalTokensAvg - b.totalTokensAvg,
@@ -236,7 +231,9 @@ function sortRows(rows: ReportRow[], by: typeof sortBy): ReportRow[] {
 const entries = (
 	await Promise.all(
 		resolvedDirs.map(async d =>
-			(await fs.readdir(d, { withFileTypes: true }))
+			(
+				await fs.readdir(d, { withFileTypes: true })
+			)
 				.filter(e => e.isFile() && e.name.endsWith(".md"))
 				.map(e => path.join(d, e.name)),
 		),
@@ -283,13 +280,20 @@ function mergeRows(input: ReportRow[]): ReportRow[] {
 			successfulRuns,
 			taskSuccessPct: ratio(successfulRuns, totalRuns),
 			verifiedPct: ratio(successfulRuns, totalRuns),
-			editToolUsagePct: ratio(sumField(list, r => Math.round((r.editToolUsagePct / 100) * r.totalRuns)), totalRuns),
+			editToolUsagePct: ratio(
+				sumField(list, r => Math.round((r.editToolUsagePct / 100) * r.totalRuns)),
+				totalRuns,
+			),
 			editSuccessPct: ratio(patchAttempts - patchFailures, patchAttempts),
 			patchFailurePct: ratio(patchFailures, patchAttempts),
 			patchFailures,
 			patchAttempts,
-			mutationIntentPct: list.reduce((a, r) => a + (Number.isFinite(r.mutationIntentPct) ? r.mutationIntentPct : 0), 0) / list.length,
-			autocorrectFreePct: list.reduce((a, r) => a + (Number.isFinite(r.autocorrectFreePct) ? r.autocorrectFreePct : 0), 0) / list.length,
+			mutationIntentPct:
+				list.reduce((a, r) => a + (Number.isFinite(r.mutationIntentPct) ? r.mutationIntentPct : 0), 0) /
+				list.length,
+			autocorrectFreePct:
+				list.reduce((a, r) => a + (Number.isFinite(r.autocorrectFreePct) ? r.autocorrectFreePct : 0), 0) /
+				list.length,
 			tasksAllPassing: sumField(list, r => r.tasksAllPassing),
 			tasksFlakyFailing: sumField(list, r => r.tasksFlakyFailing),
 			timeoutRuns: sumField(list, r => r.timeoutRuns),

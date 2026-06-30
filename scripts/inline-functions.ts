@@ -71,7 +71,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import { $ } from "bun";
-import { IndentationText, Node, Project, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 import type {
 	CallExpression,
 	Expression,
@@ -81,6 +80,7 @@ import type {
 	SourceFile,
 	Statement,
 } from "ts-morph";
+import { IndentationText, Node, Project, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,7 +241,8 @@ function isPureExpr(node: Node, strict: boolean): boolean {
 		if (ASSIGNMENT_OPS.has(node.getOperatorToken().getText())) return false;
 		return isPureExpr(node.getLeft(), strict) && isPureExpr(node.getRight(), strict);
 	}
-	if (Node.isTemplateExpression(node)) return node.getTemplateSpans().every((s) => isPureExpr(s.getExpression(), strict));
+	if (Node.isTemplateExpression(node))
+		return node.getTemplateSpans().every(s => isPureExpr(s.getExpression(), strict));
 	// Defining a closure is itself side-effect-free; we substitute the value, never invoke it.
 	if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) return true;
 	return false;
@@ -293,7 +294,7 @@ function argNeedsParens(node: Node): boolean {
 function subText(node: Node, edits: readonly Edit[]): string {
 	const start = node.getStart();
 	const end = node.getEnd();
-	const local = edits.filter((e) => e.start >= start && e.end <= end).sort((a, b) => b.start - a.start);
+	const local = edits.filter(e => e.start >= start && e.end <= end).sort((a, b) => b.start - a.start);
 	let text = node.getText();
 	for (const e of local) text = text.slice(0, e.start - start) + e.text + text.slice(e.end - start);
 	return text;
@@ -349,9 +350,9 @@ function wrap(part: NegatedExpr, minPrec: number): string {
 
 /** Combine leading guard conditions into the single positive run-condition. */
 function combineGuards(guards: readonly Expression[], edits: readonly Edit[]): string {
-	const parts = guards.map((g) => negate(g, edits));
+	const parts = guards.map(g => negate(g, edits));
 	if (parts.length === 1) return parts[0].text;
-	return parts.map((p) => wrap(p, PREC_AND)).join(" && ");
+	return parts.map(p => wrap(p, PREC_AND)).join(" && ");
 }
 
 // ---------------------------------------------------------------------------
@@ -410,15 +411,16 @@ function isNameOnly(id: Identifier): boolean {
  * exception — it names a real value binding even though it lives in a type node.
  */
 function isTypePositioned(id: Identifier): boolean {
-	if (!id.getFirstAncestor((a) => Node.isTypeNode(a))) return false;
-	return !id.getFirstAncestor((a) => Node.isTypeQuery(a));
+	if (!id.getFirstAncestor(a => Node.isTypeNode(a))) return false;
+	return !id.getFirstAncestor(a => Node.isTypeQuery(a));
 }
 
 /** Free identifiers in the body that resolve outside it (module / global) — shadow-sensitive. */
 function computeFreeNames(fn: FunctionDeclaration, paramNames: readonly string[]): Set<string> {
 	const body = fn.getBodyOrThrow();
 	const local = new Set<string>(paramNames);
-	for (const v of body.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) collectBindingNames(v.getNameNode(), local);
+	for (const v of body.getDescendantsOfKind(SyntaxKind.VariableDeclaration))
+		collectBindingNames(v.getNameNode(), local);
 	for (const f of body.getDescendantsOfKind(SyntaxKind.FunctionDeclaration)) {
 		const n = f.getName();
 		if (n) local.add(n);
@@ -536,7 +538,7 @@ function asGuard(stmt: Statement): Expression | null {
 }
 
 function nearestFunction(node: Node): Node | undefined {
-	return node.getFirstAncestor((a) => isFunctionLike(a));
+	return node.getFirstAncestor(a => isFunctionLike(a));
 }
 
 /** Does an unlabeled/labeled `break`/`continue` target something outside `root`? */
@@ -716,13 +718,16 @@ function analyze(fn: FunctionDeclaration, opts: Options): Candidate | null {
 		const stmt = parent.getParent();
 		if (!stmt || !Node.isExpressionStatement(stmt)) return skip(opts, name, "call result is used");
 		const args = parent.getArguments();
-		if (args.some((a) => Node.isSpreadElement(a))) return skip(opts, name, "call uses spread args");
+		if (args.some(a => Node.isSpreadElement(a))) return skip(opts, name, "call uses spread args");
 		if (args.length > params.length) return skip(opts, name, "call passes more args than params");
 		callSites.push({ stmt, call: parent });
 	}
 	if (callSites.length === 0) return skip(opts, name, "no call sites");
 
-	const freeNames = computeFreeNames(fn, params.map((p) => p.name));
+	const freeNames = computeFreeNames(
+		fn,
+		params.map(p => p.name),
+	);
 	for (const cs of callSites) {
 		if (callSiteShadows(cs.call, freeNames)) return skip(opts, name, "would shadow a free identifier at a call site");
 	}
@@ -785,11 +790,7 @@ function reservedFor(call: CallExpression, reserved: Map<Node, Set<string>>): Se
  * land in the caller block — declarations nested in loops, blocks, or functions keep
  * their own scope and never collide, so they are left untouched.
  */
-function renameCollidingLocals(
-	candidate: Candidate,
-	call: CallExpression,
-	reserved: Map<Node, Set<string>>,
-): Edit[] {
+function renameCollidingLocals(candidate: Candidate, call: CallExpression, reserved: Map<Node, Set<string>>): Edit[] {
 	const edits: Edit[] = [];
 	const taken = reservedFor(call, reserved);
 	const lo = candidate.tail[0].getStart();
@@ -890,18 +891,18 @@ function buildReplacement(
 		return {
 			prefix,
 			condition: combineGuards(candidate.guards, paramEdits),
-			tail: candidate.tail.map((s) => subText(s, paramEdits)),
+			tail: candidate.tail.map(s => subText(s, paramEdits)),
 		};
 	}
 
 	const allEdits = paramEdits.concat(renameCollidingLocals(candidate, call, reserved));
-	return { prefix, condition: null, tail: candidate.tail.map((s) => subText(s, allEdits)) };
+	return { prefix, condition: null, tail: candidate.tail.map(s => subText(s, allEdits)) };
 }
 
 function applyReplacement(stmt: Statement, repl: Replacement): void {
 	const parent = stmt.getParent();
 	if (parent && Node.isStatemented(parent)) {
-		const idx = parent.getStatements().findIndex((s) => s === stmt);
+		const idx = parent.getStatements().indexOf(stmt);
 		if (repl.condition === null) {
 			const inserted = parent.insertStatements(idx, [...repl.prefix, ...repl.tail]);
 			stmt.remove();
@@ -934,7 +935,7 @@ function applyReplacement(stmt: Statement, repl: Replacement): void {
 function inlineCandidate(candidate: Candidate, strict: boolean): void {
 	const reserved = new Map<Node, Set<string>>();
 	// Build every replacement before mutating, so positions stay valid.
-	const plans = candidate.callSites.map((cs) => ({
+	const plans = candidate.callSites.map(cs => ({
 		stmt: cs.stmt,
 		repl: buildReplacement(candidate, cs.call, reserved, strict),
 	}));

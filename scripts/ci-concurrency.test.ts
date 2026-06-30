@@ -237,12 +237,8 @@ const workflowYaml = await Bun.file(WORKFLOW_PATH).text();
 const concurrencySection = workflowYaml.slice(workflowYaml.indexOf("\nconcurrency:") + 1);
 const groupRaw = /^\s*group:\s*(\S.*?)\s*$/m.exec(concurrencySection)?.[1];
 const cancelRaw = /^\s*cancel-in-progress:\s*(\S.*?)\s*$/m.exec(concurrencySection)?.[1];
-const groupTemplate =
-	groupRaw && groupRaw.startsWith('"') && groupRaw.endsWith('"') ? groupRaw.slice(1, -1) : groupRaw;
-const cancelTemplate =
-	cancelRaw && cancelRaw.startsWith('"') && cancelRaw.endsWith('"')
-		? cancelRaw.slice(1, -1)
-		: cancelRaw;
+const groupTemplate = groupRaw?.startsWith('"') && groupRaw.endsWith('"') ? groupRaw.slice(1, -1) : groupRaw;
+const cancelTemplate = cancelRaw?.startsWith('"') && cancelRaw.endsWith('"') ? cancelRaw.slice(1, -1) : cancelRaw;
 if (!groupTemplate || !cancelTemplate) {
 	throw new Error("could not locate concurrency.group / cancel-in-progress in ci.yml");
 }

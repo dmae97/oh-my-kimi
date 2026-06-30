@@ -59,7 +59,7 @@ const validModes: Record<Mode, true> = {
 };
 
 // `chunkSize` splits a bucket's file list into that-many-file groups, each run as a
-// separate `bun --smol test` child process. A fresh process per chunk resets Bun's
+// separate `bun test` child process. A fresh process per chunk resets Bun's
 // heap and reaps any dangling spawned children between groups, keeping peak RSS
 // under the CI runner's OOM ceiling (a single 170–370-file invocation gets
 // SIGKILLed at 137). The singleton/global-state bucket is left whole: its suites
@@ -100,8 +100,7 @@ const nativeAndIntegrationPackages = [
 // Packages the CI buckets deliberately skip but a local full run should still
 // cover. mnemopi's embedding suites need a ~270MB fastembed model absent from CI
 // runners (so it flakes/times out there); robomp-web lives under python/robomp
-// and is outside every CI TS bucket. Both run with `--smol` to bound RSS when
-// fanned out alongside everything else.
+// and is outside every CI TS bucket.
 const localOnlyWorkspacePackages = ["packages/mnemopi", "python/robomp/web"];
 
 // Repo-level script tests. CI's `workspace` bucket only runs the concurrency
@@ -194,13 +193,7 @@ const codingAgentUiContentMarkers = [
 	"renderToString",
 ];
 
-const codingAgentRuntimeContentMarkers = [
-	"AgentSession",
-	"SessionManager",
-	"AuthStorage",
-	"Bun.sleep",
-	"setTimeout(",
-];
+const codingAgentRuntimeContentMarkers = ["AgentSession", "SessionManager", "AuthStorage", "Bun.sleep", "setTimeout("];
 
 let codingAgentTestPartitionPromise: Promise<CodingAgentTestPartition> | null = null;
 
@@ -211,16 +204,12 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function workspaceTestCommand(
-	pkg: string,
-	parallel: number,
-	options: { smol?: boolean; extraArgs?: string[] } = {},
-): TestCommand {
-	const { smol = false, extraArgs = [] } = options;
+function workspaceTestCommand(pkg: string, parallel: number, options: { extraArgs?: string[] } = {}): TestCommand {
+	const { extraArgs = [] } = options;
 	return {
 		label: pkg,
 		cwd: pkg,
-		command: ["bun", ...(smol ? ["--smol"] : []), "test", `--parallel=${parallel}`, ...extraArgs],
+		command: ["bun", "test", `--parallel=${parallel}`, ...extraArgs],
 	};
 }
 
@@ -273,10 +262,7 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 	) {
 		return "native";
 	}
-	if (
-		matchesAnyPath(testFile, codingAgentUiPathPatterns) ||
-		hasAnyMarker(content, codingAgentUiContentMarkers)
-	) {
+	if (matchesAnyPath(testFile, codingAgentUiPathPatterns) || hasAnyMarker(content, codingAgentUiContentMarkers)) {
 		return "ui";
 	}
 	if (
@@ -335,7 +321,7 @@ async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestC
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "--smol", "test", `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
+			command: ["bun", "test", `--parallel=${plan.parallel}`, ...onlyFailuresArgs, ...chunk],
 		});
 	}
 	return commands;
@@ -383,12 +369,8 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 		case "local-ts":
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
-				...nativeAndIntegrationPackages.map(pkg =>
-					workspaceTestCommand(pkg, 4, { smol: true, extraArgs: onlyFailuresArgs }),
-				),
-				...localOnlyWorkspacePackages.map(pkg =>
-					workspaceTestCommand(pkg, 4, { smol: true, extraArgs: onlyFailuresArgs }),
-				),
+				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
+				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...(await commandsForMode("coding-agent-heavy")),
 				{
 					label: "scripts",
@@ -616,7 +598,11 @@ export function formatFailureReport(failures: ChunkOutcome[], total: number, rep
 	const header = `${failures.length} of ${total} test chunk(s) FAILED`;
 	const lines: string[] = ["", style.bold(style.red(`━━━ ${header} ━━━`))];
 	for (const failure of failures) {
-		lines.push("", style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)), style.dim(`$ ${failure.command}`));
+		lines.push(
+			"",
+			style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)),
+			style.dim(`$ ${failure.command}`),
+		);
 		const failing = extractFailingTests(failure.output);
 		// Fully attributed only when every failure carries its own bun block;
 		// otherwise (no markers, or a marker with no preceding frame — timeouts,
@@ -703,7 +689,9 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	}
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
-		process.stdout.write(`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`);
+		process.stdout.write(
+			`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`,
+		);
 	}
 	if (failures.length > 0) {
 		process.exitCode = 1;

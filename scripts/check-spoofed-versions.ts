@@ -15,10 +15,7 @@
 
 import * as path from "node:path";
 
-const PROVIDER_FILE = path.join(
-	import.meta.dir,
-	"../packages/catalog/src/wire/gemini-headers.ts",
-);
+const PROVIDER_FILE = path.join(import.meta.dir, "../packages/catalog/src/wire/gemini-headers.ts");
 
 interface VersionCheck {
 	/** Human label for the report. */
@@ -32,7 +29,10 @@ interface VersionCheck {
 }
 
 /** Fetch latest non-prerelease tag from a GitHub repo. */
-async function fetchLatestGitHubRelease(repo: string, parseTag: (tag: string) => string | null): Promise<string | null> {
+async function fetchLatestGitHubRelease(
+	repo: string,
+	parseTag: (tag: string) => string | null,
+): Promise<string | null> {
 	try {
 		// /releases/latest only returns non-prerelease, non-draft releases
 		const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
@@ -53,7 +53,7 @@ const checks: VersionCheck[] = [
 		name: "Gemini CLI",
 		sourcePattern: /PI_AI_GEMINI_CLI_VERSION\s*\|\|\s*"(\d+\.\d+\.\d+)"/,
 		repo: "google-gemini/gemini-cli",
-		parseTag: (tag) => SEMVER_RE.exec(tag)?.[1] ?? null,
+		parseTag: tag => SEMVER_RE.exec(tag)?.[1] ?? null,
 	},
 ];
 

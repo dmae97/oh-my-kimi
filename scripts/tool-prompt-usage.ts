@@ -86,7 +86,7 @@ function parseEncoding(value: string | undefined): Encoding {
 	const normalized = value.toLowerCase().replace(/-/g, "_");
 	if (normalized === "o200k" || normalized === "o200k_base") return Encoding.O200kBase;
 	if (normalized === "cl100k" || normalized === "cl100k_base") return Encoding.Cl100kBase;
-	throw new Error(`Unknown encoding \"${value}\". Expected o200k_base or cl100k_base.`);
+	throw new Error(`Unknown encoding "${value}". Expected o200k_base or cl100k_base.`);
 }
 
 function parseCli(): CliOptions | null {
@@ -116,7 +116,9 @@ function relativePath(filePath: string): string {
 
 async function collectPromptPaths(positionals: readonly string[]): Promise<string[]> {
 	if (positionals.length === 0) {
-		const files = await Array.fromAsync(new Bun.Glob("*.md").scan({ cwd: TOOL_PROMPT_DIR, absolute: true, onlyFiles: true }));
+		const files = await Array.fromAsync(
+			new Bun.Glob("*.md").scan({ cwd: TOOL_PROMPT_DIR, absolute: true, onlyFiles: true }),
+		);
 		return files.sort((a, b) => relativePath(a).localeCompare(relativePath(b)));
 	}
 
@@ -202,8 +204,6 @@ function renderContext(): Record<string, unknown> {
 	};
 }
 
-
-
 async function estimatePrompt(filePath: string, encoding: Encoding): Promise<PromptEstimate> {
 	const template = await Bun.file(filePath).text();
 	const rendered = prompt.render(template, renderContext());
@@ -221,7 +221,11 @@ function printTable(estimates: PromptEstimate[], encoding: Encoding): void {
 	const totalTokens = rows.reduce((sum, row) => sum + row.tokens, 0);
 	const totalChars = rows.reduce((sum, row) => sum + row.chars, 0);
 	const totalLines = rows.reduce((sum, row) => sum + row.lines, 0);
-	const tokenWidth = Math.max("tokens".length, String(totalTokens).length, ...rows.map(row => String(row.tokens).length));
+	const tokenWidth = Math.max(
+		"tokens".length,
+		String(totalTokens).length,
+		...rows.map(row => String(row.tokens).length),
+	);
 	const charWidth = Math.max("chars".length, String(totalChars).length, ...rows.map(row => String(row.chars).length));
 	const lineWidth = Math.max("lines".length, String(totalLines).length, ...rows.map(row => String(row.lines).length));
 
@@ -237,7 +241,9 @@ function printTable(estimates: PromptEstimate[], encoding: Encoding): void {
 		);
 	}
 	console.log(`${"-".repeat(tokenWidth)}  ${"-".repeat(charWidth)}  ${"-".repeat(lineWidth)}  ${"-".repeat(6)}`);
-	console.log(`${String(totalTokens).padStart(tokenWidth)}  ${String(totalChars).padStart(charWidth)}  ${String(totalLines).padStart(lineWidth)}  TOTAL (${rows.length} prompts)`);
+	console.log(
+		`${String(totalTokens).padStart(tokenWidth)}  ${String(totalChars).padStart(charWidth)}  ${String(totalLines).padStart(lineWidth)}  TOTAL (${rows.length} prompts)`,
+	);
 }
 
 async function run(): Promise<void> {

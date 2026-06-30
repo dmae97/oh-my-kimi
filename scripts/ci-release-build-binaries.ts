@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { createRequire } from "node:module";
 
 import * as fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 
 interface BinaryTarget {
@@ -66,11 +66,11 @@ const targets: BinaryTarget[] = [
 ];
 
 function parseRequestedTargets(): Set<string> | null {
-	const flagIndex = process.argv.findIndex(arg => arg === "--targets");
+	const flagIndex = process.argv.indexOf("--targets");
 	const flagValue =
 		flagIndex >= 0
 			? process.argv[flagIndex + 1]
-			: process.argv.find(arg => arg.startsWith("--targets="))?.split("=", 2)[1] ?? Bun.env.RELEASE_TARGETS;
+			: (process.argv.find(arg => arg.startsWith("--targets="))?.split("=", 2)[1] ?? Bun.env.RELEASE_TARGETS);
 
 	if (!flagValue) {
 		return null;
@@ -147,9 +147,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		return;
 	}
 
-	const buildEnv = shouldAdhocSignDarwinBinary(target)
-		? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" }
-		: Bun.env;
+	const buildEnv = shouldAdhocSignDarwinBinary(target) ? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" } : Bun.env;
 	await runCommand(buildCompileCommand(target), repoRoot, buildEnv);
 
 	// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.
@@ -186,9 +184,7 @@ async function resetArtifacts(): Promise<void> {
 
 async function main(): Promise<void> {
 	const requestedTargets = parseRequestedTargets();
-	const selectedTargets = requestedTargets
-		? targets.filter(target => requestedTargets.has(target.id))
-		: targets;
+	const selectedTargets = requestedTargets ? targets.filter(target => requestedTargets.has(target.id)) : targets;
 
 	if (requestedTargets) {
 		const unknownTargets = [...requestedTargets].filter(

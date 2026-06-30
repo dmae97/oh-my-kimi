@@ -414,7 +414,7 @@ describe("inline-functions: type soundness", () => {
 describe("inline-functions: formatting safety", () => {
 	test("wraps the tail exactly one indent level deeper than the inverted guard", () => {
 		const { text } = run(
-			'function dispatch(r: Runtime): void {\n\thandle(r.item);\n}\n' +
+			"function dispatch(r: Runtime): void {\n\thandle(r.item);\n}\n" +
 				'function handle(item: Item | null): void {\n\tif (item?.type !== "x") return;\n\ttouch(item);\n}\n',
 		);
 		// `if` sits at the function-body indent (one tab); its body is one deeper.

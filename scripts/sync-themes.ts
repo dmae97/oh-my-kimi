@@ -12,7 +12,7 @@ const INDEX_FILE = join(THEMES_DIR, "index.ts");
 
 async function main() {
 	const files = await readdir(THEMES_DIR);
-	const jsonFiles = files.filter((f) => f.endsWith(".json")).sort();
+	const jsonFiles = files.filter(f => f.endsWith(".json")).sort();
 
 	const imports: string[] = [];
 	const exportEntries: string[] = [];

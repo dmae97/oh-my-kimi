@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { $ } from "bun";
 import * as path from "node:path";
+import { $ } from "bun";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -21,16 +21,7 @@ const TASK_COMMANDS = {
 	],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
-		[
-			"cargo",
-			"clippy",
-			"--workspace",
-			"--fix",
-			"--allow-dirty",
-			"--no-deps",
-			"--allow-staged",
-			"--allow-no-vcs",
-		],
+		["cargo", "clippy", "--workspace", "--fix", "--allow-dirty", "--no-deps", "--allow-staged", "--allow-no-vcs"],
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
 	"lint:rs": [["cargo", "clippy", "--workspace", "--", "-D", "warnings"]],
@@ -112,9 +103,7 @@ function isRustAffectingPath(changedPath: string): boolean {
 	const normalized = changedPath.replace(/\\/g, "/");
 	const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
 	return (
-		normalized.endsWith(".rs") ||
-		normalized.startsWith(".cargo/") ||
-		isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
+		normalized.endsWith(".rs") || normalized.startsWith(".cargo/") || isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
 	);
 }
 

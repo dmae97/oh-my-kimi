@@ -25,7 +25,7 @@ function parseTargetVariants(): NativeBuildVariant[] {
 	const rawVariants = (Bun.env.TARGET_VARIANTS ?? "").trim();
 	if (!rawVariants) return [];
 
-	return rawVariants.split(/\s+/).map((rawVariant) => {
+	return rawVariants.split(/\s+/).map(rawVariant => {
 		const variant = variantConfigs[rawVariant as keyof typeof variantConfigs];
 		if (!variant) {
 			throw new Error(`Unsupported TARGET_VARIANTS entry: ${rawVariant}. Expected baseline or modern.`);
