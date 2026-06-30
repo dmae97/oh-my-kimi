@@ -323,6 +323,13 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 	};
 }
 
+const OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN =
+	/failed to parse tool call arguments as json|\[json\.exception\.parse_error\.101\]/i;
+
+function shouldRetryOllamaResponse(response: Response, bodyText: string): boolean {
+	return response.status < 500 || !OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN.test(bodyText);
+}
+
 async function captureHttpErrorResponse(response: Response): Promise<CapturedHttpErrorResponse> {
 	let bodyText: string | undefined;
 	let bodyJson: unknown;
@@ -598,6 +605,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 					body: JSON.stringify(body),
 					signal: watchdog.signal,
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
+					shouldRetryResponse: shouldRetryOllamaResponse,
 					fetch: options.fetch,
 					timeout: false,
 				});
@@ -747,6 +755,7 @@ export const streamOllama: StreamFunction<"ollama-chat"> = (
 			}
 			const result = await AIError.finalize(error, {
 				api: model.api,
+				provider: model.provider,
 				signal: options.signal,
 				rawRequestDump,
 				capturedErrorResponse,

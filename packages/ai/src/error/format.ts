@@ -6,13 +6,21 @@ import {
 } from "../utils/http-inspector";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
 
+const OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN =
+	/failed to parse tool call arguments as json|\[json\.exception\.parse_error\.101\]/i;
+
+function rewriteOllamaToolCallJsonError(message: string): string {
+	if (!OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN.test(message)) return message;
+	return `Local Ollama model emitted malformed tool-call JSON and llama.cpp rejected it (HTTP 500). This is usually a deterministic model-output failure after context degradation, not a transient server outage; reload the model or reduce context, then retry.\n${message}`;
+}
+
 /** Inputs that steer {@link formatMessage}'s formatter selection. */
 export interface FormatMessageOptions {
 	/** When present, the raw request is dumped into the message for 400-class failures. */
 	rawRequestDump?: RawHttpRequestDump;
 	/** Captured non-2xx response body, appended to the message when available. */
 	capturedErrorResponse?: CapturedHttpErrorResponse;
-	/** Provider id; `"github-copilot"` triggers the copilot message rewrite. */
+	/** Provider id; gates provider-specific user-facing rewrites. */
 	provider?: string;
 }
 
@@ -31,6 +39,9 @@ export async function formatMessage(error: unknown, opts: FormatMessageOptions =
 		: formatErrorMessageWithRetryAfter(error);
 	if (opts.provider === "github-copilot") {
 		message = rewriteCopilotError(message, error, opts.provider);
+	}
+	if (opts.provider === "ollama") {
+		message = rewriteOllamaToolCallJsonError(message);
 	}
 	return message;
 }
