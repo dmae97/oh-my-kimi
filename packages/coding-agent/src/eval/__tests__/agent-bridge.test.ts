@@ -235,10 +235,12 @@ describe("runEvalAgent", () => {
 		expect(firstOptions.signal).toBe(abortController.signal);
 		expect(firstOptions.parentActiveModelPattern).toBe("p/current");
 		expect(firstOptions.outputSchema).toBe(schema);
+		expect(firstOptions.outputSchemaOverridesAgent).toBe(true);
 		expect(firstOptions.assignment).toBe("hello");
 		expect(firstOptions.description).toBe("My Agent");
 		expect(firstOptions.modelOverride).toEqual(["p/override"]);
 		expect(secondOptions.outputSchema).toBeUndefined();
+		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
 
 	it("forces LSP off for bridge subagents even when task.enableLsp is on", async () => {

@@ -371,6 +371,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		parentActiveModelPattern,
 		thinkingLevel: effectiveAgent.thinkingLevel,
 		outputSchema: structured ? parsed.schema : undefined,
+		outputSchemaOverridesAgent: structured,
 		sessionFile,
 		persistArtifacts: Boolean(sessionFile),
 		artifactsDir,
