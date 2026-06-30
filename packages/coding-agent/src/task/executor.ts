@@ -2053,9 +2053,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					? formatModelSelectorValue(formatModelStringWithRouting(model), resolvedThinkingLevel)
 					: formatModelStringWithRouting(model);
 			}
-			const effectiveThinkingLevel = explicitThinkingLevel
-				? resolvedThinkingLevel
-				: (thinkingLevel ?? resolvedThinkingLevel);
+			const effectiveThinkingLevel = thinkingLevel ?? resolvedThinkingLevel;
 			resolvedAt = performance.now();
 
 			const effectiveCwd = worktree ?? cwd;
