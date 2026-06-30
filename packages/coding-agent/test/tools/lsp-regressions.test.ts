@@ -1077,6 +1077,30 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("detects Ruff in Windows virtualenv Scripts directories", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+
+		const tempDir = TempDir.createSync("@omp-lsp-win32-ruff-");
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		try {
+			await Bun.write(path.join(tempDir.path(), "pyproject.toml"), '[project]\nname = "demo"\n');
+			const scriptsDir = path.join(tempDir.path(), ".venv", "Scripts");
+			await fs.promises.mkdir(scriptsDir, { recursive: true });
+			const localRuff = path.join(scriptsDir, "ruff.exe");
+			await Bun.write(localRuff, "");
+
+			const config = loadConfig(tempDir.path());
+			expect(config.servers.ruff?.resolvedCommand).toBe(localRuff);
+			expect(whichSpy).not.toHaveBeenCalledWith("ruff");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
 	it("detects tlaplus files for LSP startup and language ids", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-tlaplus-");
 		const specPath = path.join(tempDir.path(), "Spec.tla");
