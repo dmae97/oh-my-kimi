@@ -27,6 +27,9 @@
 - Fixed a bug where streamed tool blocks starting with an empty ID created duplicate placeholder cards
 
 - Fixed `omp debug --profile` failing on Bun with "node:v8 setFlagsFromString is not yet implemented in Bun" by treating the optional `--allow-natives-syntax` flag as best-effort, so the CPU profiler proceeds even on runtimes that don't expose `v8.setFlagsFromString`. ([#3897](https://github.com/can1357/oh-my-pi/issues/3897))
+### Fixed
+
+- Fixed release-built `omp-<platform>-<arch>` binaries missing the compiled tiny-model Transformers.js version pin, which made Homebrew Darwin arm64 fall back to resolving `@huggingface/transformers/package.json` from bunfs at runtime. ([#3904](https://github.com/can1357/oh-my-pi/issues/3904))
 
 ## [16.2.8] - 2026-06-30
 

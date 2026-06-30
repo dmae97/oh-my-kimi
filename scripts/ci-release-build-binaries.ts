@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createRequire } from "node:module";
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -11,9 +12,15 @@ interface BinaryTarget {
 	outfile: string;
 }
 
+interface PackageManifest {
+	version: string;
+}
+
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = "./packages/coding-agent/src/cli.ts";
+const transformersManifest: PackageManifest = createRequire(import.meta.url)("@huggingface/transformers/package.json");
+const transformersVersion = transformersManifest.version;
 // Worker threads spawn `new Worker(Bun.main, { argv })` — they re-enter the
 // binary's own entry module — so no separate worker modules are compiled.
 // Legacy pi-* extension compat surfaces are served through an in-process
@@ -107,41 +114,43 @@ async function embedNative(target: BinaryTarget): Promise<void> {
 	});
 }
 
+function buildCompileCommand(target: BinaryTarget): string[] {
+	return [
+		"bun",
+		"build",
+		"--compile",
+		"--no-compile-autoload-bunfig",
+		"--no-compile-autoload-dotenv",
+		"--no-compile-autoload-tsconfig",
+		"--no-compile-autoload-package-json",
+		"--minify-identifiers",
+		"--keep-names",
+		"--define",
+		'process.env.PI_COMPILED="true"',
+		"--define",
+		`process.env.PI_TINY_TRANSFORMERS_VERSION=${JSON.stringify(transformersVersion)}`,
+		"--root",
+		".",
+		"--target",
+		target.target,
+		entrypoint,
+		"--outfile",
+		target.outfile,
+	];
+}
+
 async function buildBinary(target: BinaryTarget): Promise<void> {
 	console.log(`Building ${target.outfile}...`);
 	await embedNative(target);
 	if (isDryRun) {
-		console.log(`DRY RUN bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --no-compile-autoload-tsconfig --no-compile-autoload-package-json --minify-identifiers --keep-names --define process.env.PI_COMPILED="true" --root . --target=${target.target} ${entrypoint} --outfile ${target.outfile}`);
+		console.log(`DRY RUN ${buildCompileCommand(target).join(" ")}`);
 		return;
 	}
 
 	const buildEnv = shouldAdhocSignDarwinBinary(target)
 		? { ...Bun.env, BUN_NO_CODESIGN_MACHO_BINARY: "1" }
 		: Bun.env;
-	await runCommand(
-		[
-			"bun",
-			"build",
-			"--compile",
-			"--no-compile-autoload-bunfig",
-			"--no-compile-autoload-dotenv",
-			"--no-compile-autoload-tsconfig",
-			"--no-compile-autoload-package-json",
-			"--minify-identifiers",
-			"--keep-names",
-			"--define",
-			'process.env.PI_COMPILED="true"',
-			"--root",
-			".",
-			"--target",
-			target.target,
-			entrypoint,
-			"--outfile",
-			target.outfile,
-		],
-		repoRoot,
-		buildEnv,
-	);
+	await runCommand(buildCompileCommand(target), repoRoot, buildEnv);
 
 	// Bun 1.3.12 emits a truncated Mach-O signature on darwin builds.
 	if (shouldAdhocSignDarwinBinary(target)) {
