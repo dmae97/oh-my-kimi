@@ -1077,6 +1077,91 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("detects Ruff in Windows virtualenv Scripts directories", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+
+		const tempDir = TempDir.createSync("@omp-lsp-win32-ruff-");
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		try {
+			await Bun.write(path.join(tempDir.path(), "pyproject.toml"), '[project]\nname = "demo"\n');
+			const scriptsDir = path.join(tempDir.path(), ".venv", "Scripts");
+			await fs.promises.mkdir(scriptsDir, { recursive: true });
+			const localRuff = path.join(scriptsDir, "ruff.exe");
+			await Bun.write(localRuff, "");
+
+			const config = loadConfig(tempDir.path());
+			expect(config.servers.ruff?.resolvedCommand).toBe(localRuff);
+			expect(whichSpy).not.toHaveBeenCalledWith("ruff");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("detects Ruff in Windows virtualenv Scripts directories for Ruff-only roots", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		try {
+			for (const marker of ["ruff.toml", ".ruff.toml"] as const) {
+				const tempDir = TempDir.createSync("@omp-lsp-win32-ruff-marker-");
+				try {
+					await Bun.write(path.join(tempDir.path(), marker), "");
+					const scriptsDir = path.join(tempDir.path(), ".venv", "Scripts");
+					await fs.promises.mkdir(scriptsDir, { recursive: true });
+					const localRuff = path.join(scriptsDir, "ruff.exe");
+					await Bun.write(localRuff, "");
+
+					const config = loadConfig(tempDir.path());
+					expect(config.servers.ruff?.resolvedCommand).toBe(localRuff);
+				} finally {
+					tempDir.removeSync();
+				}
+			}
+			expect(whichSpy).not.toHaveBeenCalledWith("ruff");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			vi.restoreAllMocks();
+		}
+	});
+
+	it("detects pyright and pylsp in Windows virtualenv Scripts for Python-only roots", async () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32", configurable: true, writable: true });
+		const whichSpy = vi.spyOn(Bun, "which").mockReturnValue(null);
+
+		try {
+			const cases: Array<{ marker: string; server: string; binary: string }> = [
+				{ marker: "pyrightconfig.json", server: "pyright", binary: "pyright-langserver.exe" },
+				{ marker: "setup.cfg", server: "pylsp", binary: "pylsp.exe" },
+			];
+			for (const { marker, server, binary } of cases) {
+				const tempDir = TempDir.createSync("@omp-lsp-win32-py-marker-");
+				try {
+					await Bun.write(path.join(tempDir.path(), marker), "");
+					const scriptsDir = path.join(tempDir.path(), ".venv", "Scripts");
+					await fs.promises.mkdir(scriptsDir, { recursive: true });
+					const localBin = path.join(scriptsDir, binary);
+					await Bun.write(localBin, "");
+
+					const config = loadConfig(tempDir.path());
+					expect(config.servers[server]?.resolvedCommand).toBe(localBin);
+				} finally {
+					tempDir.removeSync();
+				}
+			}
+			expect(whichSpy).not.toHaveBeenCalledWith("pyright-langserver");
+			expect(whichSpy).not.toHaveBeenCalledWith("pylsp");
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true, writable: true });
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("detects tlaplus files for LSP startup and language ids", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-tlaplus-");
 		const specPath = path.join(tempDir.path(), "Spec.tla");

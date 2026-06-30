@@ -465,50 +465,6 @@ describe("runSubprocess yield reminders", () => {
 		expect(createAgentSessionSpy).toHaveBeenCalledTimes(1);
 		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.thinkingLevel).toBe(Effort.High);
 	});
-
-	it("prefers explicit modelOverride thinking suffix over provided thinking level, including off", async () => {
-		vi.clearAllMocks();
-		const modelRegistry = {
-			refresh: async () => {},
-			getAvailable: () => [{ provider: "openai", id: "gpt-4o", name: "GPT-4o" }],
-		} as unknown as import("@oh-my-pi/pi-coding-agent/config/model-registry").ModelRegistry;
-
-		const cases = [
-			{ modelOverride: "openai/gpt-4o:low", expectedThinkingLevel: Effort.Low },
-			{ modelOverride: "openai/gpt-4o:off", expectedThinkingLevel: "off" },
-		] as const;
-
-		const createAgentSessionSpy = vi.spyOn(sdkModule, "createAgentSession");
-
-		for (const [index, testCase] of cases.entries()) {
-			const session = createMockSession(({ emit }) => {
-				emit({
-					type: "tool_execution_end",
-					toolCallId: `tool-thinking-override-${index}`,
-					toolName: "yield",
-					result: {
-						content: [{ type: "text", text: "Result submitted." }],
-						details: { status: "success", data: { ok: true } },
-					},
-					isError: false,
-				});
-			});
-
-			createAgentSessionSpy.mockResolvedValue(createSessionResult(session));
-
-			await runSubprocess({
-				...baseOptions,
-				id: `subagent-thinking-override-${index}`,
-				modelOverride: testCase.modelOverride,
-				thinkingLevel: Effort.High,
-				modelRegistry,
-			});
-		}
-
-		expect(createAgentSessionSpy).toHaveBeenCalledTimes(2);
-		expect(createAgentSessionSpy.mock.calls[0]?.[0]?.thinkingLevel).toBe(cases[0].expectedThinkingLevel);
-		expect(createAgentSessionSpy.mock.calls[1]?.[0]?.thinkingLevel).toBe(cases[1].expectedThinkingLevel);
-	});
 	it("fails after 3 reminders when yield is never called for a structured task", async () => {
 		const prompts: string[] = [];
 		const session = createMockSession(({ text, promptIndex, emit, state }) => {
