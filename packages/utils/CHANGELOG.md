@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a response-body retry gate to `fetchWithRetry()` for deterministic provider failures that return retryable HTTP statuses.
+
 ## [16.2.7] - 2026-06-30
 
 ### Added

@@ -130,6 +130,12 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 */
 	fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 	/**
+	 * Optional retry gate for HTTP responses whose status is retryable. Receives a
+	 * cloned body string so callers can fail fast on deterministic provider
+	 * failures that happen to use a 5xx status.
+	 */
+	shouldRetryResponse?: (response: Response, bodyText: string, attempt: number) => boolean | Promise<boolean>;
+	/**
 	 * Bun extension forwarded verbatim to the underlying `fetch` call. `false`
 	 * disables Bun's native ~300s pre-response timeout (callers that own a
 	 * configurable first-event/idle watchdog or an external `AbortSignal`
@@ -160,6 +166,7 @@ export async function fetchWithRetry(
 		maxDelayMs = DEFAULT_MAX_DELAY_MS,
 		defaultDelayMs,
 		prepareInit,
+		shouldRetryResponse,
 		fetch: fetchImpl = fetch,
 		timeout = false,
 		...baseInit
@@ -196,7 +203,10 @@ export async function fetchWithRetry(
 		if (!isRetryableStatus(response.status)) return response;
 		if (attempt + 1 >= maxAttempts) return response;
 
-		const hint = extractRetryHint(response, await response.clone().text());
+		const retryBody = await response.clone().text();
+		if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt))) return response;
+
+		const hint = extractRetryHint(response, retryBody);
 		if (hint !== undefined && hint > maxDelayMs) return response;
 
 		const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);

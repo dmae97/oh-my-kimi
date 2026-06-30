@@ -94,6 +94,14 @@ const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
 const PROVIDER_FINISH_ERROR_PATTERN = /\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b/i;
 const STALE_RESPONSE_ITEM_PATTERNS = [/\bItem with id ['"][^'"]+['"] not found\.?/i, /previous[ _]?response/i] as const;
 const STALE_RESPONSE_ITEM_DETAIL_PATTERN = /not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i;
+/**
+ * Local llama.cpp / Ollama deterministic tool-call argument JSON parse failure.
+ * The model emitted invalid JSON in a tool call and the server returned HTTP 500
+ * with this exact text — replaying the same prompt yields the same malformed
+ * output, so callers strip {@link Flag.Transient} when this matches.
+ */
+export const LLAMA_CPP_TOOL_CALL_PARSE_PATTERN =
+	/failed to parse tool call arguments as json|\[json\.exception\.parse_error\.101\]/i;
 
 // Copilot routing flap: HTTP 400 `model_not_supported` (structural code on the
 // error, also surfaced in text). Treated as transient — a retry usually lands
@@ -441,7 +449,13 @@ export function classifyMessage(message: {
 	const currentStatus = message.errorStatus ?? statusFromId(existingId);
 	const textId = classifyText(message.errorMessage, currentStatus, message.api);
 
-	const kinds = ((existingId ?? 0) | textId) & KIND_MASK;
+	let kinds = ((existingId ?? 0) | textId) & KIND_MASK;
+	if (message.errorMessage && LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(message.errorMessage)) {
+		// Deterministic local-model tool-call JSON parse failure: HTTP 500 is misleading
+		// because the same prompt reproduces the same malformed output, so the agent-level
+		// auto-retry would loop. Strip Transient so the recovery message surfaces immediately.
+		kinds &= ~Flag.Transient;
+	}
 	const id = kinds !== 0 ? create(kinds) : (statusFromId(textId) ?? statusFromId(existingId) ?? currentStatus ?? 0);
 
 	message.errorId = id;

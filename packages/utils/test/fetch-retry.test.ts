@@ -40,4 +40,42 @@ describe("fetchWithRetry", () => {
 		expect(await response.text()).toBe("done");
 		expect(attempt).toBe(2);
 	});
+
+	it("lets callers stop retries for deterministic response bodies", async () => {
+		let attempt = 0;
+		const customFetch = async () => {
+			attempt += 1;
+			return new Response("deterministic provider failure", { status: 500 });
+		};
+
+		const response = await fetchWithRetry("https://example.invalid/z", {
+			fetch: customFetch,
+			defaultDelayMs: 1,
+			maxAttempts: 3,
+			shouldRetryResponse: (_response, bodyText) => !bodyText.includes("deterministic"),
+		});
+
+		expect(response.status).toBe(500);
+		expect(await response.text()).toBe("deterministic provider failure");
+		expect(attempt).toBe(1);
+	});
+
+	it("returns retryable responses immediately when retry hints exceed the delay cap", async () => {
+		let attempt = 0;
+		const customFetch = async () => {
+			attempt += 1;
+			return new Response("slow down", { status: 429, headers: { "Retry-After": "3600" } });
+		};
+
+		const response = await fetchWithRetry("https://example.invalid/rate-limit", {
+			fetch: customFetch,
+			defaultDelayMs: 1,
+			maxAttempts: 3,
+			maxDelayMs: 10,
+		});
+
+		expect(response.status).toBe(429);
+		expect(await response.text()).toBe("slow down");
+		expect(attempt).toBe(1);
+	});
 });
