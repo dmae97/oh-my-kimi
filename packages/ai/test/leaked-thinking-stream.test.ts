@@ -61,6 +61,33 @@ function thinks(message: AssistantMessage): ThinkingContent[] {
 }
 
 describe("wrapLeakedThinkingStream", () => {
+	async function runLeakedText(chunks: readonly string[]): Promise<{
+		events: AssistantMessageEvent[];
+		result: AssistantMessage;
+	}> {
+		let text = "";
+		return runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({ type: "text_start", contentIndex: 0, partial: msg({ content: [{ type: "text", text: "" }] }) });
+			for (const chunk of chunks) {
+				text += chunk;
+				inner.push({
+					type: "text_delta",
+					contentIndex: 0,
+					delta: chunk,
+					partial: msg({ content: [{ type: "text", text }] }),
+				});
+			}
+			inner.push({
+				type: "text_end",
+				contentIndex: 0,
+				content: text,
+				partial: msg({ content: [{ type: "text", text }] }),
+			});
+			inner.push({ type: "done", reason: "stop", message: msg({ content: [{ type: "text", text }] }) });
+		});
+	}
+
 	it("splits a leaked fence into structured blocks live during streaming", async () => {
 		const leaked = "Visible before.```thinking\nplan\n```Visible after.";
 		const { events, result } = await runWrapper(inner => {
@@ -87,6 +114,44 @@ describe("wrapLeakedThinkingStream", () => {
 		// The split happened live, not only in the terminal message.
 		expect(events.some(e => e.type === "thinking_delta")).toBe(true);
 	});
+
+	for (const { name, chunks } of [
+		{
+			name: "whole chunk",
+			chunks: ["Intro.```thinking\nPlan:\n```rs\nfn main() {}\n```\nThen decide.\n```Visible after"],
+		},
+		{
+			name: "character stream",
+			chunks: [..."Intro.```thinking\nPlan:\n```rs\nfn main() {}\n```\nThen decide.\n```Visible after"],
+		},
+	]) {
+		it(`keeps nested Markdown fences inside leaked thinking in ${name}`, async () => {
+			const { events, result } = await runLeakedText(chunks);
+			expect(result.content.map(b => b.type)).toEqual(["text", "thinking", "text"]);
+			expect(texts(result)).toEqual(["Intro.", "Visible after"]);
+			expect(thinks(result).map(b => b.thinking)).toEqual(["Plan:\n```rs\nfn main() {}\n```\nThen decide.\n"]);
+			expect(texts(result).join("")).not.toContain("fn main");
+			expect(events.some(e => e.type === "thinking_delta")).toBe(true);
+		});
+	}
+
+	for (const { suffix, visible } of [
+		{ suffix: "Visible after", visible: "Visible after" },
+		{ suffix: " after", visible: " after" },
+		{ suffix: "Done", visible: "Done" },
+	]) {
+		for (const { name, chunks } of [
+			{ name: "whole chunk", chunks: [`\`\`\`thinking\nplan\n\`\`\`${suffix}`] },
+			{ name: "character stream", chunks: [...`\`\`\`thinking\nplan\n\`\`\`${suffix}`] },
+		]) {
+			it(`treats leaked inline close plus ${JSON.stringify(suffix)} as visible reply in ${name}`, async () => {
+				const { result } = await runLeakedText(chunks);
+				expect(result.content.map(b => b.type)).toEqual(["thinking", "text"]);
+				expect(thinks(result).map(b => b.thinking)).toEqual(["plan\n"]);
+				expect(texts(result)).toEqual([visible]);
+			});
+		}
+	}
 
 	it("preserves text, thinking, and tool-call signatures across the split", async () => {
 		const leaked = "before ```thinking\nhmm\n``` after";

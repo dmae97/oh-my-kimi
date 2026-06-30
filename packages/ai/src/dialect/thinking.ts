@@ -1,7 +1,8 @@
 import { partialSuffixOverlapAny } from "./coercion";
+import { FencedThinkingScanner } from "./fenced-thinking";
 import type { InbandScanEvent, InbandScanner } from "./types";
 
-type Tag = { readonly open: string; readonly close: string };
+type Tag = { readonly open: string; readonly close: string; readonly fenced?: boolean };
 
 /**
  * Every dialect's in-band thinking section in its canonical `renderThinking`
@@ -18,7 +19,7 @@ const TAGS: readonly Tag[] = [
 	{ open: "<think>", close: "</think>" }, // deepseek, glm, hermes, kimi, qwen3 (and anthropic/minimax/xml)
 	{ open: "<thinking>", close: "</thinking>" }, // anthropic, minimax, xml
 	{ open: "<scratchpad>", close: "</scratchpad>" }, // anthropic
-	{ open: "```thinking\n", close: "```" }, // gemini fenced thinking
+	{ open: "```thinking\n", close: "```", fenced: true }, // gemini fenced thinking
 	{ open: "<|channel>thought\n", close: "<channel|>" }, // gemma reasoning channel
 	{ open: "<|start|>assistant<|channel|>analysis<|message|>", close: "<|end|>" }, // harmony analysis (rendered)
 	{ open: "<|channel|>analysis<|message|>", close: "<|end|>" }, // harmony analysis (bare leak)
@@ -29,6 +30,8 @@ export class ThinkingInbandScanner implements InbandScanner {
 	#buffer = "";
 	#closeTag = "";
 	#thinking = "";
+	/** Fence-aware close-matcher while inside a ` ```thinking ` block; undefined otherwise. */
+	#fenced: FencedThinkingScanner | undefined;
 
 	feed(text: string): InbandScanEvent[] {
 		if (text.length === 0) return [];
@@ -52,7 +55,22 @@ export class ThinkingInbandScanner implements InbandScanner {
 
 	#consume(final: boolean): InbandScanEvent[] {
 		const events: InbandScanEvent[] = [];
-		while (this.#buffer.length > 0) {
+		for (;;) {
+			if (this.#fenced) {
+				// Run even with an empty buffer so a held partial close flushes on final.
+				const result = this.#fenced.feed(this.#buffer, final);
+				this.#buffer = result.closed ? result.rest : "";
+				this.#emitThinking(result.thinking, events);
+				if (result.closed || final) {
+					events.push({ type: "thinkingEnd", thinking: this.#thinking });
+					this.#thinking = "";
+					this.#closeTag = "";
+					this.#fenced = undefined;
+				}
+				if (this.#fenced) break;
+				continue;
+			}
+			if (this.#buffer.length === 0) break;
 			if (this.#closeTag) {
 				const close = this.#buffer.indexOf(this.#closeTag);
 				if (close === -1) {
@@ -81,6 +99,7 @@ export class ThinkingInbandScanner implements InbandScanner {
 			this.#buffer = this.#buffer.slice(tag.index + tag.open.length);
 			this.#closeTag = tag.close;
 			this.#thinking = "";
+			if (tag.fenced) this.#fenced = new FencedThinkingScanner();
 			events.push({ type: "thinkingStart" });
 		}
 		return events;

@@ -5,6 +5,7 @@
 ### Fixed
 
 - Raised Gemini header runaway threshold to prevent premature interruption of complex reasoning loops
+- Fixed leaked ` ```thinking ` fences with nested language-tagged Markdown code blocks so inner fences remain inside structured thinking instead of leaking as visible reply text.
 
 ## [16.2.9] - 2026-06-30
 

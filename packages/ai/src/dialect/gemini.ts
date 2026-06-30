@@ -1,5 +1,6 @@
 import type { Message, ToolCall } from "../types";
-import { mintToolCallId, partialSuffixOverlap, partialSuffixOverlapAny } from "./coercion";
+import { mintToolCallId, partialSuffixOverlapAny } from "./coercion";
+import { FencedThinkingScanner } from "./fenced-thinking";
 import dialectPrompt from "./gemini.md" with { type: "text" };
 import { assistantTranscriptParts, collectToolResultRun, joinUserBodies, messageContentText } from "./rendering";
 import type {
@@ -37,6 +38,8 @@ export class GeminiInbandScanner implements InbandScanner {
 	#buffer = "";
 	#state: State = "outside";
 	#thinking = "";
+	/** Fence-aware close-matcher while {@link #state} is "thinking"; undefined otherwise. */
+	#fenced: FencedThinkingScanner | undefined;
 	readonly #parseThinking: boolean;
 
 	constructor(options: InbandScannerOptions = {}) {
@@ -55,21 +58,23 @@ export class GeminiInbandScanner implements InbandScanner {
 
 	#consume(final: boolean): InbandScanEvent[] {
 		const events: InbandScanEvent[] = [];
-		while (this.#buffer.length > 0) {
+		for (;;) {
+			if (this.#state === "thinking") {
+				// Always run on final so the fenced scanner flushes its held tail even
+				// when #buffer is empty (a partial close held from the previous feed).
+				this.#consumeThinking(final, events);
+				if (this.#state === "thinking") break;
+				continue;
+			}
+			if (this.#buffer.length === 0) break;
 			if (this.#state === "outside") {
 				this.#consumeOutside(final, events);
 				if (this.#state === "outside") break;
 				continue;
 			}
-			if (this.#state === "thinking") {
-				this.#consumeThinking(final, events);
-				if (this.#state === "thinking") break;
-				continue;
-			}
 			this.#consumeTool(final, events);
 			if (this.#state === "tool") break;
 		}
-		if (final && this.#state === "thinking") this.#endThinking(events);
 		return events;
 	}
 
@@ -94,6 +99,7 @@ export class GeminiInbandScanner implements InbandScanner {
 		if (isThink) {
 			this.#buffer = this.#buffer.slice(start + THINK_OPEN.length);
 			this.#thinking = "";
+			this.#fenced = new FencedThinkingScanner();
 			events.push({ type: "thinkingStart" });
 			this.#state = "thinking";
 			return;
@@ -103,18 +109,13 @@ export class GeminiInbandScanner implements InbandScanner {
 	}
 
 	#consumeThinking(final: boolean, events: InbandScanEvent[]): void {
-		const close = this.#buffer.indexOf(FENCE);
-		if (close === -1) {
-			const hold = final ? 0 : partialSuffixOverlap(this.#buffer, FENCE);
-			this.#emitThinking(this.#buffer.slice(0, this.#buffer.length - hold), events);
-			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
-			if (final) this.#endThinking(events);
-			return;
+		const result = this.#fenced!.feed(this.#buffer, final);
+		this.#buffer = result.closed ? result.rest : "";
+		this.#emitThinking(result.thinking, events);
+		if (result.closed || final) {
+			this.#endThinking(events);
+			this.#fenced = undefined;
 		}
-		this.#emitThinking(this.#buffer.slice(0, close), events);
-		this.#buffer = this.#buffer.slice(close + FENCE.length);
-		this.#endThinking(events);
-		this.#state = "outside";
 	}
 
 	#emitThinking(delta: string, events: InbandScanEvent[]): void {

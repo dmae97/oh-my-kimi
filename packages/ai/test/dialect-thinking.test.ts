@@ -97,6 +97,38 @@ describe("gemini thinking fence (```thinking … ```)", () => {
 		expect(visibleText(events)).not.toContain("```thinking");
 	});
 
+	for (const charByChar of [false, true]) {
+		const mode = charByChar ? "character stream" : "whole chunk";
+
+		it(`keeps nested Markdown fences inside thinking in ${mode}`, () => {
+			const input = "```thinking\nPlan:\n```rs\nfn main() {}\n```\nThen decide.\n```Visible after";
+			const events = scan("gemini", input, { charByChar });
+			expect(thinkingText(events)).toBe("Plan:\n```rs\nfn main() {}\n```\nThen decide.\n");
+			expect(visibleText(events)).toBe("Visible after");
+			expect(thinkingBoundaries(events)).toBe(1);
+			expect(thinkingEndCount(events)).toBe(1);
+			expect(visibleText(events)).not.toContain("fn main");
+		});
+	}
+
+	for (const { suffix, visible } of [
+		{ suffix: "Visible after", visible: "Visible after" },
+		{ suffix: " after", visible: " after" },
+		{ suffix: "Done", visible: "Done" },
+	]) {
+		for (const charByChar of [false, true]) {
+			const mode = charByChar ? "character stream" : "whole chunk";
+
+			it(`treats inline close plus ${JSON.stringify(suffix)} as visible reply in ${mode}`, () => {
+				const events = scan("gemini", `\`\`\`thinking\nplan\n\`\`\`${suffix}`, { charByChar });
+				expect(thinkingText(events)).toBe("plan\n");
+				expect(visibleText(events)).toBe(visible);
+				expect(thinkingBoundaries(events)).toBe(1);
+				expect(thinkingEndCount(events)).toBe(1);
+			});
+		}
+	}
+
 	it("round-trips renderThinking through the scanner", () => {
 		const rendered = getDialectDefinition("gemini").renderThinking("reasoning");
 		expect(rendered).toBe("```thinking\nreasoning\n```");
