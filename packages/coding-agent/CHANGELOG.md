@@ -2,12 +2,11 @@
 
 ## [Unreleased]
 
-### Changed
+### Breaking Changes
 
-- Replaced the global `serviceTier` setting with `tier.openai`, `tier.anthropic`, and `tier.google` for granular control
-- Updated `/fast` to target the service-tier family of the currently selected model
-- Updated subagent and advisor tier configuration to use the new per-family setting structure
-- Removed `fastModeScope` setting, as per-family scoping is now natively supported via the `tier.*` settings
+- Replaced the global `serviceTier` and `fastModeScope` settings with granular, per-family settings (`tier.openai`, `tier.anthropic`, and `tier.google`) to control service tiers, subagents, advisors, and `/fast` mode targets.
+
+### Changed
 
 - Improved binary file detection and terminal handling to prevent corruption from non-UTF-8 content, and updated file summaries to explicitly note skipped binary files.
 - Enhanced context compaction (snapcompact) to resolve shapes contextually based on rendered text content.
@@ -21,8 +20,7 @@
 - Improved error reporting for `omp tiny-models download` by displaying the actual worker-side download error.
 - Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
 - Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
-- Fixed the `Working…` loader staying gone for the rest of a parent turn when a long-running tool (e.g. a `task` subagent) finished inside a transient overlay window (auto-snapcompact, auto-context-full, auto-retry). Those overlays null the working loader on start and the overlay-end handler is the only restorer keyed off the missing loader; if the subagent's `tool_execution_end` lands while the overlay is still active (or its end handler errored before re-arming), the spinner stayed gone until the next turn even though the parent kept streaming. `tool_execution_end` now mirrors the `tool_execution_update` self-heal so the working loader survives a subagent completing inside the overlay window ([#3858](https://github.com/can1357/oh-my-pi/issues/3858)).
-- Fixed the working loader disappearing after a subagent (`task`) tool completed while the focused session was still streaming: `tool_execution_end` did not re-arm the loader the way `tool_execution_update` did, so a tool result landing after a transient overlay (auto-compaction / auto-retry) left the UI looking idle ([#3857](https://github.com/can1357/oh-my-pi/issues/3857)).
+- Fixed an issue where the `Working...` loader spinner would prematurely disappear or fail to re-arm after a subagent (`task`) tool completed or during transient overlays (such as auto-compaction or auto-retry).
 
 ## [16.2.6] - 2026-06-29
 

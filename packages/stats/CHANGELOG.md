@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Improved premium request calculation logic to account for specific model families
+- Improved premium request calculation accuracy by correctly accounting for specific model families.
 
 ## [16.2.6] - 2026-06-29
 

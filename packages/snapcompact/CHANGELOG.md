@@ -9,9 +9,9 @@
 
 ### Changed
 
-- Improved text normalization for non-ASCII text: semantic emojis fold to ASCII labels (e.g., `[OK]`, `[WARN]`, `[FAIL]`), decorative emojis are dropped, box-drawing/compatibility symbols fold to ASCII skeletons, and Unicode text is preserved when supported by the selected font or the embedded Silver fallback.
-- Updated bitmap shapes to draw missing glyphs per-character using the embedded Silver TrueType fallback instead of rendering blanks or switching entire snippets, with support for East Asian wide characters across two grid cells.
-- Updated text wrapping, pagination, and provider shape geometries to account for wide character footprints and updated X.org 8x13 font metrics (11px/22px pitches).
+- Improved non-ASCII text normalization by folding semantic emojis to ASCII labels (e.g., `[OK]`, `[WARN]`), dropping decorative emojis, and folding box-drawing symbols to ASCII skeletons.
+- Enhanced missing glyph rendering to use the embedded Silver TrueType fallback per-character, including support for East Asian wide characters across two grid cells.
+- Updated text wrapping, pagination, and provider shape geometries to support wide character footprints and updated X.org 8x13 font metrics.
 
 ## [16.1.23] - 2026-06-26
 

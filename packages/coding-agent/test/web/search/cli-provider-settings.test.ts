@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { setExcludedSearchProviders, setPreferredSearchProvider } from "@oh-my-pi/pi-coding-agent/web/search/provider";
+import {
+	SEARCH_PROVIDER_ORDER,
+	setExcludedSearchProviders,
+	setPreferredSearchProvider,
+} from "@oh-my-pi/pi-coding-agent/web/search/provider";
 import { __resetDirsFromEnvForTests, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { runSearchCommand } from "../../../src/cli/web-search-cli";
 
@@ -128,17 +132,22 @@ describe("runSearchCommand provider settings", () => {
 	});
 
 	it("treats explicit --provider auto as a one-shot override of the configured preferred provider", async () => {
-		// Same Tavily preference is configured by `beforeEach`, but no exclusions
-		// hide Jina here, so the auto chain order (Jina before Tavily) decides.
+		// Tavily is the configured preference, but `--provider auto` overrides it and walks the
+		// chain. Restrict eligibility to Jina + Tavily so an ambient broker/OAuth provider
+		// (gemini, anthropic, codex, perplexity…) can't win on a dev machine; the chain order
+		// (Jina before Tavily) still decides between the two.
 		const currentTempDir = tempAgentDir;
 		if (!currentTempDir) throw new Error("tempAgentDir missing");
+		// Drive the exclusion through settings too — Settings.init re-applies
+		// `providers.webSearchExclude`, overwriting a bare setExcludedSearchProviders() call.
+		const onlyJinaTavily = SEARCH_PROVIDER_ORDER.filter(id => id !== "jina" && id !== "tavily");
 		resetSettingsForTest();
 		setPreferredSearchProvider("auto");
-		setExcludedSearchProviders([]);
+		setExcludedSearchProviders(onlyJinaTavily);
 		await Settings.init({
 			inMemory: true,
 			cwd: currentTempDir.path(),
-			overrides: { "providers.webSearch": "tavily" },
+			overrides: { "providers.webSearch": "tavily", "providers.webSearchExclude": onlyJinaTavily },
 		});
 
 		vi.spyOn(globalThis, "fetch").mockImplementation(makeFetchMock());

@@ -4,28 +4,23 @@
 
 ### Added
 
-- Added service tier support for Google Gemini and Vertex AI
-- Introduced `ServiceTierByFamily` to allow model-specific service tier configurations
-- Added Google Vertex AI Interactions API support, sharing one Interactions transport across the direct Google and Vertex providers. Gemini 3+ models use the Interactions API by default — on the official `generativelanguage` endpoint for direct Google, and under ADC/bearer auth for Vertex — with automatic fallback to `:streamGenerateContent` when the model/endpoint can't serve Interactions. Pass `useInteractionsApi: false` to force generateContent.
-- Added support for an explicit Vertex bearer access token via `GOOGLE_CLOUD_ACCESS_TOKEN` / `CLOUDSDK_AUTH_ACCESS_TOKEN`, so `gcloud auth print-access-token` can drive Vertex without a full `application-default login`.
+- Added service tier support for Google Gemini and Vertex AI, including model-specific service tier configurations via ServiceTierByFamily.
+- Added Google Vertex AI Interactions API support for Gemini 3+ models by default, with automatic fallback to :streamGenerateContent and a useInteractionsApi: false option to force standard generation.
+- Added support for explicit Vertex bearer access tokens via GOOGLE_CLOUD_ACCESS_TOKEN or CLOUDSDK_AUTH_ACCESS_TOKEN environment variables.
 
 ### Changed
 
-- Updated service tier logic to avoid global scopes in favor of per-provider configurations
-- Refactored priority request billing to better align with specific provider capabilities
-- Updated internal `coerceServiceTierByFamily` helper to facilitate migration from legacy settings
-- Changed API-key resolution precedence so an explicit environment variable (e.g. `GEMINI_API_KEY`) overrides a stored/broker-migrated static API key; a deliberate OAuth login still takes precedence over the env var.
+- Updated service tier logic to use per-provider configurations instead of global scopes.
+- Refactored priority request billing and accounting to better align with specific provider capabilities.
+- Updated API key resolution precedence so explicit environment variables (e.g., GEMINI_API_KEY) override stored or broker-migrated static API keys, while deliberate OAuth logins still take highest precedence.
 
 ### Fixed
 
-- Improved Vertex AI reliability by automatically falling back to global endpoints on 404 errors
-
-- Fixed safety setting application for Google Vertex AI models
-- Ensured Gemini service tier is correctly passed through to the API
-- Corrected priority request accounting for supported providers
-- Fixed Kimi Code's Anthropic-compatible request path to keep thinking enabled and downgrade forced tool choice for Kimi K2.7 Code title generation. ([#3852](https://github.com/can1357/oh-my-pi/issues/3852))
-- Healed leaked reasoning fences (` ```thinking ` / `<think>`) live for every provider via a central stream wrapper, splitting them into structured thinking blocks during streaming.
-- Fixed Codex requests failing with `Unsupported value: 'all_turns' is not supported with this model`: the `reasoning.context: "all_turns"` default is now gated to gpt-5.4+ Codex models. Older ids (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) omit `context` so the server applies its `current_turn` default; an explicit `all_turns` override is also suppressed on those models, while `current_turn`/`auto` always pass through.
+- Improved Vertex AI reliability by automatically falling back to global endpoints on 404 errors.
+- Fixed safety setting application for Google Vertex AI models.
+- Fixed Kimi Code's Anthropic-compatible request path to keep thinking enabled and downgrade forced tool choice for Kimi K2.7 Code title generation.
+- Fixed leaked reasoning fences (such as ```thinking or <think>) across all providers by splitting them into structured thinking blocks during streaming.
+- Fixed Codex requests failing with unsupported all_turns errors on older models (gpt-5.1 and gpt-5.3) by gating the reasoning.context: "all_turns" default to gpt-5.4+ models.
 
 ## [16.2.6] - 2026-06-29
 

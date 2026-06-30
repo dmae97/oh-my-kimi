@@ -4,6 +4,7 @@ import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import * as aiStream from "@oh-my-pi/pi-ai/stream";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -54,6 +55,9 @@ describe("AgentSession retry delay cap", () => {
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-retry-cap-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		// A live env var now overrides a stored static api_key; these tests rotate stored Anthropic
+		// credentials, so neutralize env resolution (ignores every provider's ambient env key).
+		vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
 		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
