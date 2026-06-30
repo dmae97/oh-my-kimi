@@ -44,6 +44,25 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.summary).toContain("nested repository patches captured");
 	});
 
+	it("surfaces branch preparation errors instead of reporting no changes", async () => {
+		const mergeSpy = vi.spyOn(worktreeModule, "mergeTaskBranches");
+		const outcome = await mergeIsolatedChanges({
+			repoRoot: "/repo",
+			mergeMode: "branch",
+			result: result({
+				error: "Merge failed: git apply --3way failed for task dirty-context: conflict",
+			}),
+		});
+
+		expect(mergeSpy).not.toHaveBeenCalled();
+		expect(outcome.changesApplied).toBe(false);
+		expect(outcome.hadAnyChanges).toBe(false);
+		expect(outcome.mergedBranchForNestedPatches).toBe(false);
+		expect(outcome.summary).toContain("Branch merge failed before a task branch could be created");
+		expect(outcome.summary).toContain("git apply --3way failed");
+		expect(outcome.summary).not.toContain("No changes to apply");
+	});
+
 	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
 		const outcome = await mergeIsolatedChanges({
 			repoRoot: "/repo",

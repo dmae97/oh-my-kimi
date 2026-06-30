@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed isolated branch merges rejecting task edits when the parent checkout had unrelated dirty changes in nearby patch context. ([#3841](https://github.com/can1357/oh-my-pi/issues/3841))
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed
