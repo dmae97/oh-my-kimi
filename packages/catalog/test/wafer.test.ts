@@ -71,7 +71,7 @@ describe("Wafer Serverless provider", () => {
 		expect(dsFlash.compatConfig?.thinkingFormat).toBeUndefined();
 		expect(dsFlash.contextWindow).toBe(1000000);
 		expect(dsFlash.reasoning).toBe(true);
-		expect(dsFlash.compatConfig?.reasoningContentField).toBe("reasoning_content");
+		expect(dsFlash.compat.reasoningContentField).toBe("reasoning_content");
 
 		const dsPro = getBundledModel<"openai-completions">("wafer-serverless", "deepseek-v4-pro");
 		expect(dsPro).toBeDefined();

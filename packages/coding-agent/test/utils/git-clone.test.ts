@@ -21,7 +21,7 @@ const GIT_ENV = {
 } as const;
 
 function gitRun(cwd: string, args: string[]): string {
-	const env = { ...process.env, ...GIT_ENV };
+	const env: Record<string, string | undefined> = { ...process.env, ...GIT_ENV };
 	delete env.GIT_DIR;
 	delete env.GIT_WORK_TREE;
 	delete env.GIT_INDEX_FILE;

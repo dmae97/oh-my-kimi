@@ -953,7 +953,7 @@ export function collapseBuiltModelVariants<TApi extends Api>(models: readonly Mo
 	const collapsed = collapseEffortVariantsAcrossProviders(models);
 	const inputRefs = new Set<Model<TApi>>(models);
 	return collapsed.map(model =>
-		// Resolved compat re-fed as override config resolves to itself.
+		// Rebuild from a projected spec (sparse compatConfig) instead of resolved compat.
 		inputRefs.has(model) ? model : buildModel({ ...model, compat: model.compatConfig } as unknown as ModelSpec<TApi>),
 	);
 }

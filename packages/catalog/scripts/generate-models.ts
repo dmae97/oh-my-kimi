@@ -15,6 +15,7 @@ import type { OAuthAccess } from "@oh-my-pi/pi-ai/auth-storage";
 import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
 import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { $env } from "@oh-my-pi/pi-utils";
+import { buildCompat } from "../src/build";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, fetchAntigravityDiscoveryModels } from "../src/discovery/antigravity";
 import { fetchCodexModels } from "../src/discovery/codex";
 import { buildGitLabDuoWorkflowFallbackModel } from "../src/discovery/gitlab-duo-workflow";
@@ -41,7 +42,7 @@ import {
 	SAKANA_FUGU_STATIC_MODELS,
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
-import type { ModelSpec } from "../src/types";
+import type { Api, ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { collapseEffortVariantsAcrossProviders } from "../src/variant-collapse";
 import { JWT_CLAIM_PATH } from "../src/wire/codex";
@@ -591,6 +592,10 @@ async function generateModels() {
 	// reference. Runs last so canonical ids and explicit policy limits are final.
 	applyCanonicalLimitFallback(allModels);
 
+	for (const model of allModels) {
+		canonicalizeModelCompat(model);
+	}
+
 	// Group by provider and sort each provider's models
 	const providers: Record<string, Record<string, ModelSpec>> = {};
 	for (const model of allModels) {
@@ -634,6 +639,23 @@ Model Statistics:`);
 
 	for (const [provider, models] of Object.entries(MODELS)) {
 		console.log(`  ${provider}: ${Object.keys(models).length} models`);
+	}
+}
+
+function canonicalizeModelCompat(model: ModelSpec<Api>): void {
+	if (!model.compat) return;
+
+	if (model.compat.disableStrictTools === false) {
+		delete model.compat.disableStrictTools;
+	}
+
+	let hasKeys = false;
+	for (const _ in model.compat) {
+		hasKeys = true;
+		break;
+	}
+	if (!hasKeys) {
+		delete model.compat;
 	}
 }
 
