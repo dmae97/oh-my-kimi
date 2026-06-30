@@ -8,10 +8,11 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
@@ -40,7 +41,7 @@ type PromptCustomMessage = Mock<
 	(
 		message: {
 			customType?: string;
-			content?: string | unknown[];
+			content?: string | (TextContent | ImageContent)[];
 			display?: boolean;
 			attribution?: string;
 			details: SkillPromptDetails;
@@ -49,14 +50,14 @@ type PromptCustomMessage = Mock<
 	) => Promise<void>
 >;
 
-async function writeSkillFile(dir: string, skillName: string, body: string): Promise<string> {
+async function writeSkillFile(dir: string, skillName: string, body: string): Promise<Skill> {
 	const skillPath = path.join(dir, `${skillName}.md`);
 	await Bun.write(skillPath, `---\nname: ${skillName}\n---\n${body}\n`);
-	return skillPath;
+	return { name: skillName, description: "", filePath: skillPath, baseDir: dir, source: "test" };
 }
 
 function createStubInputControllerContext(opts: {
-	skillCommands: Map<string, string>;
+	skillCommands: Map<string, Skill>;
 	isStreaming: boolean;
 	isCompacting?: boolean;
 }) {
@@ -132,12 +133,12 @@ function createStubInputControllerContext(opts: {
 
 describe("InputController skill queue chip metadata", () => {
 	let tempDir: TempDir;
-	let skillCommands: Map<string, string>;
+	let skillCommands: Map<string, Skill>;
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-skill-queue-stub-");
-		const skillPath = await writeSkillFile(tempDir.path(), "test-skill", "Do the thing.");
-		skillCommands = new Map<string, string>([["skill:test-skill", skillPath]]);
+		const skill = await writeSkillFile(tempDir.path(), "test-skill", "Do the thing.");
+		skillCommands = new Map<string, Skill>([["skill:test-skill", skill]]);
 	});
 
 	afterEach(() => {
@@ -260,7 +261,7 @@ describe("InputController skill queue chip metadata", () => {
 
 describe("compaction skill re-invocation", () => {
 	let tempDir: TempDir;
-	let skillCommands: Map<string, string>;
+	let skillCommands: Map<string, Skill>;
 
 	function firstPromptCustomCall(promptCustomMessage: PromptCustomMessage) {
 		const call = promptCustomMessage.mock.calls[0];
@@ -299,8 +300,8 @@ describe("compaction skill re-invocation", () => {
 
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-skill-compaction-stub-");
-		const skillPath = await writeSkillFile(tempDir.path(), "test-skill", "Do the thing.");
-		skillCommands = new Map<string, string>([["skill:test-skill", skillPath]]);
+		const skill = await writeSkillFile(tempDir.path(), "test-skill", "Do the thing.");
+		skillCommands = new Map<string, Skill>([["skill:test-skill", skill]]);
 	});
 
 	afterEach(() => {
@@ -323,7 +324,17 @@ describe("compaction skill re-invocation", () => {
 		if (!Array.isArray(message.content)) {
 			throw new Error("expected queued skill prompt to preserve image content blocks");
 		}
-		expect(message.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("Do the thing.") });
+		const renderedText = message.content[0];
+		if (renderedText?.type !== "text") {
+			throw new Error("expected first content block to be rendered skill text");
+		}
+		// Bug fix contract: a re-invoked user skill identifies itself and exposes its
+		// skill directory so relative skill paths resolve after compaction.
+		expect(renderedText.text).toContain("Do the thing.");
+		expect(renderedText.text).toContain('The user has invoked the "test-skill" skill');
+		expect(renderedText.text).toContain(`[Skill directory: ${tempDir.path()}]`);
+		expect(renderedText.text).toMatch(/[Rr]esolve any relative paths/);
+		expect(renderedText.text).toContain("User: arg1 arg2");
 		expect(message.content[1]).toEqual(image);
 		expect(message.details).toMatchObject({ name: "test-skill", args: "arg1 arg2", lineCount: 1 });
 		expect(options).toEqual({

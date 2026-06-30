@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -11,6 +11,8 @@ import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
+import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
+import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
 export interface Skill {
@@ -384,18 +386,39 @@ export function getSkillSlashCommandName(skill: Pick<Skill, "name">): string {
 	return `skill:${skill.name}`;
 }
 
+export type SkillInvocationKind = "user" | "autoload";
+
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath">,
+	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
 	args: string,
+	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
 	const content = await Bun.file(skill.filePath).text();
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-	const metaLines = [`Skill: ${skill.filePath}`];
 	const trimmedArgs = args.trim();
-	if (trimmedArgs) {
-		metaLines.push(`User: ${trimmedArgs}`);
+	let message: string;
+	if (invocation === "user") {
+		// User-invoked skills announce themselves and expose their skill directory
+		// so the model resolves the skill's own relative paths (scripts/, templates/).
+		message = prompt
+			.render(userInvocationTemplate, {
+				name: skill.name,
+				body,
+				baseDir: skill.baseDir,
+				userArgs: trimmedArgs || undefined,
+			})
+			.trim();
+	} else {
+		// Autoload skills are hidden, non-user context — they MUST NOT claim the
+		// user invoked them; this keeps the minimal provenance-only format.
+		message = prompt
+			.render(autoloadTemplate, {
+				body,
+				filePath: skill.filePath,
+				userArgs: trimmedArgs || undefined,
+			})
+			.trim();
 	}
-	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
 	return {
 		message,
 		details: {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed user-invoked skills not identifying themselves as the invoked skill or exposing their skill directory for relative path resolution across typed, steered, follow-up, interrupted/resumed, ACP, and RPC skill command paths.
+
 ## [16.2.8] - 2026-06-30
 
 ### Added

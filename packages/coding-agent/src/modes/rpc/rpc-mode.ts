@@ -94,7 +94,7 @@ export async function tryRunRpcSkillCommand(
 	const skillName = commandName.slice("skill:".length);
 	const skill = session.skills.find(candidate => candidate.name === skillName);
 	if (!skill) return false;
-	const built = await buildSkillPromptMessage(skill, args);
+	const built = await buildSkillPromptMessage(skill, args, "user");
 	await session.promptCustomMessage({
 		customType: SKILL_PROMPT_MESSAGE_TYPE,
 		content: built.message,

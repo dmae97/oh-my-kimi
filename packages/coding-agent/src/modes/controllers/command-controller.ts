@@ -1160,21 +1160,6 @@ export class CommandController {
 		this.ctx.showStatus(formatShakeSummary(result));
 	}
 
-	async handleSkillCommand(skillPath: string, args: string): Promise<void> {
-		try {
-			const content = await Bun.file(skillPath).text();
-			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-			const metaLines = [`Skill: ${skillPath}`];
-			if (args) {
-				metaLines.push(`User: ${args}`);
-			}
-			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-			await this.ctx.session.prompt(message);
-		} catch (err) {
-			this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
-		}
-	}
-
 	async executeCompaction(
 		customInstructionsOrOptions?: string | CompactOptions,
 		isAuto = false,
