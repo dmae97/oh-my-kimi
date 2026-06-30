@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed status-line redraws crashing when tool-call arguments contain `BigInt` values.
+
 ## [16.2.7] - 2026-06-30
 
 ### Breaking Changes
