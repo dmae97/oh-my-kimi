@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarified queued-message skipped tool results so the model does not count a skipped tool as completed work or verification before retrying it when still needed.
+
 ## [16.2.4] - 2026-06-28
 
 ### Changed

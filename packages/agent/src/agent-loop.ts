@@ -2131,7 +2131,12 @@ function createToolSignalAbortedResult(signal: AbortSignal): AgentToolResult<unk
 
 function createSkippedToolResult(): AgentToolResult<any> {
 	return {
-		content: [{ type: "text", text: "Skipped due to queued user message." }],
+		content: [
+			{
+				type: "text",
+				text: "Skipped due to queued user message. Do not count this skipped result as completed work or verification. After the queued message is handled on the next step, retry the skipped tool if it is still needed.",
+			},
+		],
 		details: {},
 	};
 }
