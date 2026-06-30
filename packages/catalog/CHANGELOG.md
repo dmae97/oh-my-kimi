@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.10] - 2026-06-30
+
 ### Added
 
 - Added Claude Sonnet 3.7, Claude Opus 3, and Claude Sonnet 3 model entries to the Anthropic catalog

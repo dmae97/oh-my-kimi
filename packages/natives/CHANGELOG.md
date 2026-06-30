@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.10] - 2026-06-30
+
 ### Added
 
 - Added a platform-native no-ignore filesystem traversal path for `glob`/`grep` scans, using `getattrlistbulk` on macOS, `getdents64`/`statx` on Linux, and `NtQueryDirectoryFile` with `FileIdFullDirectoryInformation` on Windows while preserving the existing `WalkBuilder` path for gitignore-aware scans.
