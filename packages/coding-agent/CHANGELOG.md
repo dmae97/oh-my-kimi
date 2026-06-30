@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed streaming tool-call previews (notably `write`) showing an empty body for the entire streaming phase by surfacing the partial JSON already in hand on the first reveal, then pacing only subsequent growth ([#3881](https://github.com/can1357/oh-my-pi/issues/3881)).
+
 ## [16.2.7] - 2026-06-30
 
 ### Breaking Changes
