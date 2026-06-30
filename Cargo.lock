@@ -3037,6 +3037,7 @@ dependencies = [
  "toml",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+ "windows-sys 0.61.2",
  "winreg 0.56.0",
  "xxhash-rust",
 ]

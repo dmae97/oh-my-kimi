@@ -27,6 +27,7 @@ pub mod ast;
 pub mod block;
 pub mod clipboard;
 pub mod crash_handler;
+pub(crate) mod fast_walk;
 pub mod fd;
 pub mod fs_cache;
 pub mod glob;

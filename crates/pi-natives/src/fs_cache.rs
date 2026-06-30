@@ -22,7 +22,7 @@ use ignore::{ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::{env_uint, task};
+use crate::{env_uint, fast_walk, task};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public types (re-exported by glob for backward compatibility)
@@ -358,6 +358,19 @@ impl<'a> ParallelVisitorBuilder<'a> for EntryVisitorBuilder<'a> {
 	}
 }
 
+/// Attempts the platform-native no-ignore scanner and reports unsupported
+/// configs.
+pub(crate) fn try_fast_collect_entries(
+	root: &Path,
+	options: ScanOptions,
+	ct: &task::CancelToken,
+) -> Result<Option<Vec<GlobMatch>>> {
+	match fast_walk::collect_entries(root, options, ct)? {
+		fast_walk::FastEntryScan::Entries(entries) => Ok(Some(entries)),
+		fast_walk::FastEntryScan::Unsupported => Ok(None),
+	}
+}
+
 /// Scans filesystem entries and records normalized relative paths with file
 /// metadata.
 fn collect_entries(
@@ -365,6 +378,10 @@ fn collect_entries(
 	options: ScanOptions,
 	ct: &task::CancelToken,
 ) -> Result<Vec<GlobMatch>> {
+	if let Some(entries) = try_fast_collect_entries(root, options, ct)? {
+		return Ok(entries);
+	}
+
 	let mut builder = build_walker(
 		root,
 		options.include_hidden,
@@ -626,6 +643,41 @@ mod tests {
 		assert_eq!(rc, 0, "create fifo: {}", std::io::Error::last_os_error());
 	}
 
+	fn full_scan_options(include_hidden: bool, use_gitignore: bool) -> super::ScanOptions {
+		super::ScanOptions {
+			include_hidden,
+			use_gitignore,
+			skip_node_modules: true,
+			follow_links: false,
+			detail: super::ScanDetail::Full,
+		}
+	}
+
+	fn assert_file_entry(entries: &[super::GlobMatch], path: &str, size: f64) {
+		let entry = entries
+			.iter()
+			.find(|entry| entry.path == path)
+			.unwrap_or_else(|| panic!("expected file entry {path}, got {}", entry_paths(entries)));
+		assert_eq!(entry.file_type, super::FileType::File);
+		assert!(entry.mtime.is_some(), "full scan should include mtime for {path}");
+		assert_eq!(entry.size, Some(size));
+	}
+
+	fn assert_dir_entry(entries: &[super::GlobMatch], path: &str) {
+		let entry = entries
+			.iter()
+			.find(|entry| entry.path == path)
+			.unwrap_or_else(|| panic!("expected dir entry {path}, got {}", entry_paths(entries)));
+		assert_eq!(entry.file_type, super::FileType::Dir);
+		assert!(entry.mtime.is_some(), "full scan should include mtime for {path}");
+		assert_eq!(entry.size, None);
+	}
+
+	fn entry_paths(entries: &[super::GlobMatch]) -> String {
+		let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
+		format!("{paths:?}")
+	}
+
 	#[cfg(unix)]
 	#[test]
 	fn classify_file_type_skips_fifo() {
@@ -717,6 +769,86 @@ mod tests {
 			"expected no node_modules entries, got: {paths:?}"
 		);
 		assert!(paths.iter().any(|p| p == &"real.txt"), "expected real.txt, got: {paths:?}");
+	}
+
+	#[test]
+	fn traversal_gitignore_excludes_files_for_collect_entries_and_force_rescan() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join(".git")).unwrap();
+		fs::write(root.path().join(".gitignore"), "ignored.txt\n").unwrap();
+		fs::write(root.path().join("ignored.txt"), "ignored").unwrap();
+		fs::write(root.path().join("kept.txt"), "keep").unwrap();
+
+		let ct = crate::task::CancelToken::default();
+		let options = full_scan_options(true, true);
+
+		let collected = super::collect_entries(root.path(), options, &ct).unwrap();
+		assert!(
+			!collected.iter().any(|entry| entry.path == "ignored.txt"),
+			"collect_entries returned gitignored file: {}",
+			entry_paths(&collected)
+		);
+		assert_file_entry(&collected, "kept.txt", 4.0);
+
+		let rescanned = super::force_rescan(root.path(), options, false, &ct).unwrap();
+		assert!(
+			!rescanned.iter().any(|entry| entry.path == "ignored.txt"),
+			"force_rescan returned gitignored file: {}",
+			entry_paths(&rescanned)
+		);
+		assert_file_entry(&rescanned, "kept.txt", 4.0);
+	}
+
+	#[test]
+	fn traversal_hidden_disabled_excludes_files_and_descendants() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join(".hidden-dir")).unwrap();
+		fs::write(root.path().join(".hidden-dir/child.txt"), "child").unwrap();
+		fs::write(root.path().join(".hidden-file"), "secret").unwrap();
+		fs::write(root.path().join("visible.txt"), "visible").unwrap();
+
+		let ct = crate::task::CancelToken::default();
+		let entries =
+			super::collect_entries(root.path(), full_scan_options(false, false), &ct).unwrap();
+
+		assert_eq!(
+			entries.len(),
+			1,
+			"only visible.txt should be returned when hidden entries are disabled, got {}",
+			entry_paths(&entries)
+		);
+		assert_file_entry(&entries, "visible.txt", 7.0);
+		assert!(
+			!entries
+				.iter()
+				.any(|entry| entry.path.starts_with(".hidden")),
+			"hidden entries should be pruned before yielding files or descendants, got {}",
+			entry_paths(&entries)
+		);
+	}
+
+	#[test]
+	fn traversal_hidden_enabled_includes_non_ignored_hidden_entries() {
+		let root = TempDirGuard::new();
+		fs::create_dir_all(root.path().join(".git")).unwrap();
+		fs::write(root.path().join(".gitignore"), ".ignored-hidden\n").unwrap();
+		fs::create_dir_all(root.path().join(".hidden-dir")).unwrap();
+		fs::write(root.path().join(".hidden-dir/child.txt"), "child").unwrap();
+		fs::write(root.path().join(".hidden-file"), "secret").unwrap();
+		fs::write(root.path().join(".ignored-hidden"), "ignored").unwrap();
+
+		let ct = crate::task::CancelToken::default();
+		let entries =
+			super::collect_entries(root.path(), full_scan_options(true, true), &ct).unwrap();
+
+		assert_file_entry(&entries, ".hidden-file", 6.0);
+		assert_dir_entry(&entries, ".hidden-dir");
+		assert_file_entry(&entries, ".hidden-dir/child.txt", 5.0);
+		assert!(
+			!entries.iter().any(|entry| entry.path == ".ignored-hidden"),
+			"gitignore should still exclude matching hidden files, got {}",
+			entry_paths(&entries)
+		);
 	}
 
 	#[test]

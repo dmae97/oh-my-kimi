@@ -33,7 +33,7 @@ use napi::{
 use napi_derive::napi;
 use smallvec::SmallVec;
 
-use crate::{fs_cache, glob_util, task};
+use crate::{fast_walk, fs_cache, glob_util, task};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const SMALL_FILE_READ_BYTES: u64 = 128 * 1024;
@@ -988,6 +988,24 @@ fn streaming_stop_after(params: SearchParams) -> Option<u64> {
 	params.max_count.filter(|max| *max > 0)
 }
 
+fn search_file_bytes(
+	searcher: &mut Searcher,
+	matcher: &grep_regex::RegexMatcher,
+	bytes: &[u8],
+	params: SearchParams,
+) -> Option<SearchResultInternal> {
+	if params.mode == OutputMode::FilesWithMatches {
+		let matched = matcher.is_match(bytes).ok()?;
+		return Some(SearchResultInternal {
+			matches:       Vec::new(),
+			match_count:   u64::from(matched),
+			collected:     u64::from(matched),
+			limit_reached: false,
+		});
+	}
+	run_search_slice(searcher, matcher, bytes, params).ok()
+}
+
 struct StreamingGrepVisitor<'a> {
 	root:               &'a Path,
 	matcher:            &'a grep_regex::RegexMatcher,
@@ -1070,23 +1088,10 @@ impl ParallelVisitor for StreamingGrepVisitor<'_> {
 			Ok(ReadFile::Skipped) | Err(_) => return WalkState::Continue,
 		};
 		self.files_searched.fetch_add(1, Ordering::Relaxed);
-		let search = if self.params.mode == OutputMode::FilesWithMatches {
-			let Ok(matched) = self.matcher.is_match(bytes.as_slice()) else {
-				return WalkState::Continue;
-			};
-			SearchResultInternal {
-				matches:       Vec::new(),
-				match_count:   u64::from(matched),
-				collected:     u64::from(matched),
-				limit_reached: false,
-			}
-		} else {
-			let Ok(search) =
-				run_search_slice(&mut self.searcher, self.matcher, bytes.as_slice(), self.params)
-			else {
-				return WalkState::Continue;
-			};
-			search
+		let Some(search) =
+			search_file_bytes(&mut self.searcher, self.matcher, bytes.as_slice(), self.params)
+		else {
+			return WalkState::Continue;
 		};
 
 		if search.match_count == 0 {
@@ -1215,22 +1220,9 @@ fn run_sequential_grep(
 			Ok(ReadFile::Skipped) | Err(_) => continue,
 		};
 		files_searched = files_searched.saturating_add(1);
-		let search = if file_params.mode == OutputMode::FilesWithMatches {
-			let Ok(matched) = matcher.is_match(bytes.as_slice()) else {
-				continue;
-			};
-			SearchResultInternal {
-				matches:       Vec::new(),
-				match_count:   u64::from(matched),
-				collected:     u64::from(matched),
-				limit_reached: false,
-			}
-		} else {
-			let Ok(search) = run_search_slice(&mut searcher, matcher, bytes.as_slice(), file_params)
-			else {
-				continue;
-			};
-			search
+		let Some(search) = search_file_bytes(&mut searcher, matcher, bytes.as_slice(), file_params)
+		else {
+			continue;
 		};
 
 		if search.match_count == 0 {
@@ -1255,6 +1247,92 @@ fn run_sequential_grep(
 	Ok((results, skipped_oversized, files_searched))
 }
 
+fn try_run_fast_walk_grep(
+	search_path: &Path,
+	matcher: &grep_regex::RegexMatcher,
+	glob_set: Option<&GlobSet>,
+	type_filter: Option<&TypeFilter>,
+	params: SearchParams,
+	include_hidden: bool,
+	use_gitignore: bool,
+	skip_node_modules: bool,
+	ct: &task::CancelToken,
+	stop_after_matches: Option<u64>,
+) -> Result<Option<(Vec<FileSearchResult>, u64, u64)>> {
+	let file_params = per_file_params(params);
+	let mut searcher = build_searcher_for_params(file_params);
+	let mut results = Vec::new();
+	let mut skipped_oversized = 0u64;
+	let mut files_searched = 0u64;
+	let mut emitted = 0u64;
+
+	let status = fast_walk::walk_entries(
+		search_path,
+		fs_cache::ScanOptions {
+			include_hidden,
+			use_gitignore,
+			skip_node_modules,
+			follow_links: false,
+			detail: fs_cache::ScanDetail::Minimal,
+		},
+		ct,
+		|absolute_path, entry| {
+			if entry.file_type != fs_cache::FileType::File {
+				return Ok(fast_walk::FastWalkControl::Continue);
+			}
+			if let Some(glob_set) = glob_set
+				&& !glob_set.is_match(Path::new(&entry.path))
+			{
+				return Ok(fast_walk::FastWalkControl::Continue);
+			}
+			if let Some(filter) = type_filter
+				&& !matches_type_filter(absolute_path, filter)
+			{
+				return Ok(fast_walk::FastWalkControl::Continue);
+			}
+
+			let bytes = match read_file_bytes(absolute_path) {
+				Ok(ReadFile::Bytes(bytes)) => bytes,
+				Ok(ReadFile::Oversized) => {
+					skipped_oversized = skipped_oversized.saturating_add(1);
+					return Ok(fast_walk::FastWalkControl::Continue);
+				},
+				Ok(ReadFile::Skipped) | Err(_) => return Ok(fast_walk::FastWalkControl::Continue),
+			};
+			files_searched = files_searched.saturating_add(1);
+			let Some(search) =
+				search_file_bytes(&mut searcher, matcher, bytes.as_slice(), file_params)
+			else {
+				return Ok(fast_walk::FastWalkControl::Continue);
+			};
+			if search.match_count == 0 {
+				return Ok(fast_walk::FastWalkControl::Continue);
+			}
+
+			let emitted_in_file = search.collected;
+			results.push(FileSearchResult {
+				relative_path: entry.path,
+				matches:       search.matches,
+				match_count:   search.match_count,
+				limit_reached: search.limit_reached,
+			});
+			if let Some(stop_after_matches) = stop_after_matches {
+				emitted = emitted.saturating_add(emitted_in_file);
+				if emitted >= stop_after_matches {
+					return Ok(fast_walk::FastWalkControl::Stop);
+				}
+			}
+			Ok(fast_walk::FastWalkControl::Continue)
+		},
+	)?;
+
+	if matches!(status, fast_walk::FastWalkStatus::Unsupported) {
+		return Ok(None);
+	}
+	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
+	Ok(Some((results, skipped_oversized, files_searched)))
+}
+
 fn run_streaming_grep(
 	search_path: &Path,
 	matcher: &grep_regex::RegexMatcher,
@@ -1275,6 +1353,20 @@ fn run_streaming_grep(
 	// honors `stop_after_matches`, so larger budgets bound work without losing
 	// parallelism.
 	if workers == 1 || small_budget || (workers > 1 && active_greps > 1) {
+		if let Some(result) = try_run_fast_walk_grep(
+			search_path,
+			matcher,
+			glob_set,
+			type_filter,
+			params,
+			include_hidden,
+			use_gitignore,
+			skip_node_modules,
+			ct,
+			stop_after_matches,
+		)? {
+			return Ok(result);
+		}
 		return run_sequential_grep(
 			search_path,
 			matcher,
