@@ -426,7 +426,7 @@ describe("mcp oauth flow", () => {
 		);
 
 		await expect(flow.login()).rejects.toThrow(
-			"OAuth callback port 80 unavailable; cannot fall back to a random port when oauth.redirectUri is set",
+			"OAuth callback port 80 is in use, but oauth.redirectUri (http://localhost/callback) requires this exact port",
 		);
 		expect(serveSpy).toHaveBeenCalledTimes(1);
 	});
@@ -447,7 +447,7 @@ describe("mcp oauth flow", () => {
 		);
 
 		await expect(flow.login()).rejects.toThrow(
-			"OAuth callback port 3000 unavailable; cannot fall back to a random port when oauth.redirectUri is set",
+			"OAuth callback port 3000 is in use, but oauth.redirectUri (http://localhost:3000/callback) requires this exact port",
 		);
 		expect(serveSpy).toHaveBeenCalledTimes(1);
 	});
@@ -468,7 +468,43 @@ describe("mcp oauth flow", () => {
 			{ signal: AbortSignal.timeout(1_000) },
 		);
 
-		await expect(flow.login()).rejects.toThrow("cannot fall back to a random port when oauth.redirectUri is set");
+		await expect(flow.login()).rejects.toThrow(
+			/oauth\.redirectUri \(https:\/\/public\.example\/slack\/oauth_redirect\) requires this exact port/,
+		);
+	});
+
+	it("fails fast when the preferred port is busy and no redirectUri is configured", async () => {
+		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(options => {
+			expect(options.port).toBe(14572);
+			throw new Error("EADDRINUSE");
+		});
+
+		const progress: string[] = [];
+		const onAuth = vi.fn();
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				clientId: "demo-client",
+				callbackPort: 14572,
+			},
+			{
+				onAuth,
+				onProgress: msg => progress.push(msg),
+				signal: AbortSignal.timeout(1_000),
+			},
+		);
+
+		await expect(flow.login()).rejects.toThrow(
+			/OAuth callback port 14572 is in use\. The OAuth provider validates redirect URIs/,
+		);
+		// Fallback must NOT have been attempted: only the preferred-port serve call.
+		expect(serveSpy).toHaveBeenCalledTimes(1);
+		// Browser must not be opened — the error fires before generateAuthUrl runs.
+		expect(onAuth).not.toHaveBeenCalled();
+		// And the silent "Preferred port X unavailable, using port Y" message must
+		// never reach the user — that's the regression this test guards against.
+		expect(progress.some(msg => msg.includes("Preferred port"))).toBe(false);
 	});
 
 	it("exposes the dynamically registered client_id and client_secret after generateAuthUrl", async () => {

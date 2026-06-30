@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `OAuthCallbackFlowOptions.allowPortFallback` (default `true`) so subclasses representing providers that validate redirect URIs against a registered callback (e.g. MCP servers like Atlassian) can refuse the silent random-port fallback and surface an actionable `ConfigurationError` before opening the browser.
+
+### Changed
+
+- Reworded the `OAuthCallbackFlow` strict-port `ConfigurationError` messages to name the busy port, the configured `oauth.redirectUri` (when set), and concrete remediation steps (free the port, change `oauth.callbackPort`/`oauth.redirectUri`). Existing `redirectUri`-strict callers see the new wording on the same code path.
+
 ## [16.2.7] - 2026-06-30
 
 ### Added

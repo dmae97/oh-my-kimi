@@ -161,6 +161,13 @@ function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOption
 		callbackPath: resolveCallbackPath(config.callbackPath, redirectUri),
 		callbackHostname: resolveCallbackHostname(redirectUri),
 		redirectUri,
+		// MCP providers (Atlassian, GitHub MCP, etc.) generally validate the
+		// redirect URI against a registered callback. Silently advertising a
+		// random port when the preferred one is busy means the authorization
+		// server returns an opaque 500 and the browser callback never fires,
+		// leaving the user staring at the 5-minute timeout. Fail fast so the
+		// caller can show an actionable error before opening the browser.
+		allowPortFallback: false,
 	};
 }
 
