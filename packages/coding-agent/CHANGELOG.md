@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Esc/Ctrl+C teardown now logs a failing compaction/handoff/retry abort at debug instead of silently swallowing it.
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed
