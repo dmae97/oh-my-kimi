@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.8] - 2026-06-30
+
 ### Fixed
 
 - Fixed hashline writes preserving UTF-8 BOM bytes when the host text decoder hides the leading `U+FEFF`. ([#3867](https://github.com/can1357/oh-my-pi/issues/3867))
