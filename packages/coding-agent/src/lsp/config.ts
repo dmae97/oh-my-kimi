@@ -209,7 +209,16 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
  * Local bin directories to check before $PATH, ordered by priority.
  * Each entry maps a root marker to the bin directory to check.
  */
-const PYTHON_ROOT_MARKERS = ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile", "ruff.toml", ".ruff.toml"];
+const PYTHON_ROOT_MARKERS = [
+	"pyproject.toml",
+	"requirements.txt",
+	"setup.py",
+	"setup.cfg",
+	"Pipfile",
+	"pyrightconfig.json",
+	"ruff.toml",
+	".ruff.toml",
+];
 
 const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
 	// Node.js - check node_modules/.bin/
