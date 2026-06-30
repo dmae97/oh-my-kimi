@@ -890,16 +890,12 @@ export class EventController {
 	}
 
 	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
-		// A long-running tool (`task` subagent, async bash poll, …) is the next
-		// streaming event on the parent session when an inner transient overlay
-		// (auto-compaction / auto-retry) clears the status container between this
-		// tool's start and end. `auto_*_end` is the overlay-side restorer; for any
-		// path that nulls the loader without a follow-up overlay-end (e.g. an
-		// errored overlay teardown, or the subagent finishing inside the overlay
-		// window), the next tool event is the only restore point before the turn
-		// settles. `tool_execution_update` already self-heals — keep
-		// `tool_execution_end` symmetric so the spinner survives a subagent
-		// completing inside the overlay window (#3858).
+		// A transient overlay (auto-compaction / auto-retry / handoff) that ran
+		// between this tool's start and end could have detached the working
+		// loader. `tool_execution_update` already reconciles this so the spinner
+		// reappears mid-tool; mirror it here so subagent (`task`) completions —
+		// which only fire `tool_execution_end`, never `_update` — do not leave
+		// the UI looking idle while the session keeps streaming (#3857).
 		this.#ensureWorkingLoaderWhileStreaming();
 		if (event.toolName === "read") {
 			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {

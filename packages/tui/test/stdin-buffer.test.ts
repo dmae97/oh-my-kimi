@@ -181,16 +181,28 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual(["\x1b", "\x1b[<35;22;17M"]);
 		});
 
-		it("flushes a trailing double-ESC as one sequence after the timeout", async () => {
+		it("splits a trailing double-ESC into two ESC events after the timeout", async () => {
+			// A bare `\x1b\x1b` is two real Esc keypresses (or legacy alt+esc).
+			// `parseKey` returns undefined for the combined chunk, so emitting it
+			// as one swallows double-escape gestures (#3857). Split on flush so
+			// downstream handlers fire twice.
 			processInput("\x1b\x1b");
 			expect(emittedSequences).toEqual([]);
-			await waitUntil(() => emittedSequences.length > 0);
-			expect(emittedSequences).toEqual(["\x1b\x1b"]);
+			await waitUntil(() => emittedSequences.length >= 2);
+			expect(emittedSequences).toEqual(["\x1b", "\x1b"]);
 		});
 
-		it("keeps double-ESC followed by a non-CSI byte split as before", () => {
+		it("preserves legacy Alt chords batched after a bare ESC", () => {
 			processInput("\x1b\x1bX");
-			expect(emittedSequences).toEqual(["\x1b\x1b", "X"]);
+			expect(emittedSequences).toEqual(["\x1b", "\x1bX"]);
+
+			emittedSequences = [];
+			processInput("\x1b\x1bd");
+			expect(emittedSequences).toEqual(["\x1b", "\x1bd"]);
+
+			emittedSequences = [];
+			processInput("\x1b\x1b\x7f");
+			expect(emittedSequences).toEqual(["\x1b", "\x1b\x7f"]);
 		});
 
 		it("consumes a whole meta-CSI arrow in one chunk", () => {

@@ -241,13 +241,19 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 					end++;
 					continue;
 				}
-				// "\x1b\x1b" alone parses as "complete" (legacy alt+esc), but when the
-				// next byte opens a CSI/SS3 ("[" or "O") this is really ESC prefixing
-				// another sequence (meta-CSI, or a held Esc keypress joined by a
-				// follower). Consuming two bytes here would tear the follower and leak
-				// its tail as typed text (settings search filling with "[B" or
-				// "[<35;22;17M"). Keep growing; when the buffer ends here, hold the
-				// partial for the flush window so the disambiguating byte can arrive.
+				// "\x1b\x1b" is one of three things:
+				//   1. ESC prefixing CSI/SS3 (meta-CSI, held Esc joined by a follower):
+				//      next byte is "[" or "O" — keep growing so the full sequence stays
+				//      together. Consuming two bytes here would tear the follower and
+				//      leak its tail as typed text (settings search filling with "[B"
+				//      or "[<35;22;17M").
+				//   2. ESC followed by a legacy Alt chord (`\x1bd`, `\x1b\x7f`, …):
+				//      emit the first ESC, then restart at the second ESC so downstream
+				//      parsing still sees the Alt chord as one keypress (#3860 review).
+				//   3. Two real Esc keypresses bursted by terminal input batching:
+				//      when the buffer ends here, hold the partial for the flush window
+				//      so case 1/2 can still arrive; if no follower arrives, `flush()`
+				//      splits the held remainder into two ESC events (#3857).
 				if (candidate === `${ESC}${ESC}`) {
 					if (end >= length) {
 						return { sequences, remainder: buffer.slice(pos) };
@@ -257,6 +263,10 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 						end++;
 						continue;
 					}
+					sequences.push(ESC);
+					pos += 1;
+					consumed = true;
+					break;
 				}
 				// ESC + SGR mouse report is never a meta chord: alt-modified mouse
 				// reports carry the modifier in the button bits, not an ESC prefix.
@@ -605,10 +615,18 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return [];
 		}
 
-		const sequences = [this.#buffer];
+		const buffered = this.#buffer;
 		this.#buffer = "";
 		this.#pendingKittyPrintableCodepoint = undefined;
-		return sequences;
+		// Bare double-ESC remainder (no disambiguating "[" / "O" arrived in time):
+		// two real Esc keypresses bursted by terminal batching, not a meta-CSI/SS3
+		// prefix. `parseKey` returns undefined for the combined chunk, so a single
+		// emission swallows the double-escape gesture (#3857). Mirror the inline
+		// split in `extractCompleteSequences` and deliver two ESC events.
+		if (buffered === `${ESC}${ESC}`) {
+			return [ESC, ESC];
+		}
+		return [buffered];
 	}
 
 	clear(): void {
