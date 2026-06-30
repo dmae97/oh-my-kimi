@@ -517,28 +517,120 @@ interface ChunkOutcome {
 	output: string;
 }
 
-// One-line live progress entry, e.g. `[12/86] ok     3.2s  <label>`. Passes are
-// green; failures are bold red so the eye lands on them in a long scroll. The
-// index is completion order, not launch order.
-export function formatProgressLine(index: number, total: number, outcome: ChunkOutcome): string {
-	const counter = `[${index}/${total}]`;
-	const seconds = `${outcome.seconds.toFixed(1)}s`.padStart(6);
-	const status = outcome.exitCode === 0 ? style.green("ok  ") : style.bold(style.red("FAIL"));
-	return `${style.dim(counter)} ${status} ${style.dim(seconds)}  ${outcome.label}`;
+// Human duration in bun's bracket style: `[264ms]` under a second, `[3.3s]`
+// above. Used by the progress line and footer so timings read like `bun test`.
+function formatDuration(seconds: number): string {
+	return seconds < 1 ? `${Math.round(seconds * 1000)}ms` : `${seconds.toFixed(1)}s`;
 }
 
-// Final report for the chunks that failed. In quiet mode their stdout/stderr was
-// withheld during the run, so it is replayed here (`replayOutput`) under one
-// banner; in verbose mode the output already streamed inline, so only the failing
-// roster + command is shown. The banner is repeated below the bodies so it stays
-// visible whether you scroll to the top or the bottom of the failures.
+// One-line live progress entry in `bun test` style: `✓ <label> [time]` for a
+// pass, `✗ <label> [time]` for a failure (bold red so the eye lands on it in a
+// long scroll). A failure also names the first failing test parsed from the
+// captured output — `— file > test (+N more)` — so the exact break is visible
+// in the stream without waiting for the end-of-run report. Emitted in completion
+// order as each chunk finishes.
+export function formatProgressLine(outcome: ChunkOutcome): string {
+	const time = style.dim(`[${formatDuration(outcome.seconds)}]`);
+	if (outcome.exitCode === 0) {
+		return `${style.green("✓")} ${outcome.label} ${time}`;
+	}
+	const failing = extractFailingTests(outcome.output);
+	const first = failing[0]?.name;
+	const more = failing.length > 1 ? style.dim(` (+${failing.length - 1} more)`) : "";
+	const detail = first ? ` ${style.dim("—")} ${style.red(first)}${more}` : "";
+	return `${style.bold(style.red(`✗ ${outcome.label}`))} ${time}${detail}`;
+}
+
+// Closing tally in `bun test` style, but counting test *chunks* (child commands),
+// not individual tests — the runner never parses child summaries. A green
+// `N chunks passed` line, a `N failed` line (red when non-zero, dim when clean),
+// then the total wall time. Printed after the failure report so a run always
+// ends on an at-a-glance verdict.
+export function formatSummaryFooter(passed: number, failed: number, totalSeconds: number): string {
+	const failLine = failed > 0 ? style.red(`${failed} failed`) : style.dim("0 failed");
+	return [
+		"",
+		` ${style.green(`${passed} chunks passed`)}`,
+		` ${failLine}`,
+		style.dim(`Ran ${passed + failed} test command(s) in ${formatDuration(totalSeconds)}.`),
+	].join("\n");
+}
+
+// A single failing test pulled from a chunk's captured bun output: its
+// `file > test` identifier and the verbatim failure block bun printed for it
+// (source frame, `error:` line, received/expected) — the detail a developer
+// needs to act without re-running.
+export interface FailingTest {
+	name: string;
+	detail: string;
+}
+
+// Parse the failing tests + their detail blocks out of a chunk's captured bun
+// output. Bun emits, per failure, a source code frame and `error:` block
+// *followed by* its `(fail) <name> [<time>]` marker, all under the most recent
+// `<relative/path>.test.ts:` header. We track the current header, buffer the
+// lines since the last marker/header (that's the pending failure's frame), and
+// flush them when the `(fail)` line arrives. ANSI is stripped only to classify
+// lines; the detail keeps bun's original bytes (incl. color). Returns `[]` when
+// the chunk died without per-test markers (e.g. a compile/import crash), so the
+// caller can fall back to replaying the raw log.
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const FILE_HEADER_RE = /^(\S.*\.test\.[cm]?[jt]sx?):$/;
+const FAIL_MARKER_RE = /^\(fail\)\s+(.*?)(?:\s+\[[\d.]+\s*m?s\])?$/;
+export function extractFailingTests(output: string): FailingTest[] {
+	const failing: FailingTest[] = [];
+	let currentFile = "";
+	let buffer: string[] = [];
+	for (const raw of output.split("\n")) {
+		const line = raw.replace(ANSI_RE, "").trim();
+		const header = FILE_HEADER_RE.exec(line);
+		if (header) {
+			currentFile = header[1];
+			buffer = [];
+			continue;
+		}
+		const fail = FAIL_MARKER_RE.exec(line);
+		if (fail) {
+			failing.push({
+				name: currentFile ? `${currentFile} > ${fail[1]}` : fail[1],
+				detail: buffer.join("\n").trim(),
+			});
+			buffer = [];
+			continue;
+		}
+		buffer.push(raw);
+	}
+	return failing;
+}
+
+// Final report for the chunks that failed. Each chunk lists its failing tests,
+// and under each test name bun's own failure block (source frame + `error:` +
+// received/expected) is reproduced verbatim — caret alignment and diffs intact —
+// so it reads like a direct `bun test` failure. In quiet mode (`replayOutput`)
+// the blocks are shown because the run withheld them; in verbose mode they
+// already streamed inline, so only the names are listed. When a chunk crashed
+// without per-test markers (no parseable failures) the raw log is replayed as a
+// fallback in quiet mode. The banner repeats below so it stays visible whether
+// you scroll to the top or the bottom of the failures.
 export function formatFailureReport(failures: ChunkOutcome[], total: number, replayOutput: boolean): string {
 	const header = `${failures.length} of ${total} test chunk(s) FAILED`;
 	const lines: string[] = ["", style.bold(style.red(`━━━ ${header} ━━━`))];
 	for (const failure of failures) {
 		lines.push("", style.bold(style.red(`✗ ${failure.label} (exit ${failure.exitCode})`)), style.dim(`$ ${failure.command}`));
-		if (replayOutput && failure.output.trim().length > 0) {
-			lines.push(failure.output.trimEnd());
+		const failing = extractFailingTests(failure.output);
+		// Fully attributed only when every failure carries its own bun block;
+		// otherwise (no markers, or a marker with no preceding frame — timeouts,
+		// crashes) name what we can and replay the raw log so no error is lost.
+		const fullyAttributed = failing.length > 0 && failing.every(test => test.detail.length > 0);
+		for (const test of failing) {
+			lines.push("", `  ${style.red("✗")} ${style.bold(test.name)}`);
+			// Flush-left and verbatim so bun's caret/diff alignment is preserved.
+			if (replayOutput && fullyAttributed) {
+				lines.push(test.detail);
+			}
+		}
+		if (replayOutput && !fullyAttributed && failure.output.trim().length > 0) {
+			lines.push("", failure.output.trimEnd());
 		}
 	}
 	lines.push("", style.red(header));
@@ -590,7 +682,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 				output: `${stdout}${stderr}`,
 			};
 			if (quiet) {
-				process.stdout.write(`${formatProgressLine(completed, commands.length, outcome)}\n`);
+				process.stdout.write(`${formatProgressLine(outcome)}\n`);
 			} else {
 				const status = exitCode === 0 ? "ok" : `FAILED exit ${exitCode}`;
 				process.stdout.write(
@@ -603,10 +695,17 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		}
 	}
 
+	const runStartedAt = performance.now();
 	await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
 	if (failures.length > 0) {
 		process.stdout.write(`${formatFailureReport(failures, commands.length, quiet)}\n`);
+	}
+	if (quiet) {
+		const totalSeconds = (performance.now() - runStartedAt) / 1000;
+		process.stdout.write(`${formatSummaryFooter(commands.length - failures.length, failures.length, totalSeconds)}\n`);
+	}
+	if (failures.length > 0) {
 		process.exitCode = 1;
 	}
 }
