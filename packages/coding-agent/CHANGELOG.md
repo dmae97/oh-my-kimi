@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added built-in Go coding rules including `go-add-cleanup`, `go-bench-loop`, `go-exp-promoted`, `go-ioutil`, `go-join-hostport`, `go-new-expr`, `go-rand-v2`, and `go-range-int`
+
 ## [16.2.7] - 2026-06-30
 
 ### Breaking Changes
