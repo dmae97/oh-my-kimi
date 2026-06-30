@@ -111,8 +111,8 @@ function parseWmicTable(output: string, header: string): string | null {
 }
 
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
-/** Killed by the OS at this deadline, so a wedged probe cannot outlive the prep race. */
-const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS;
+/** Kept below prep timeout so timed-out probes can still write the null cache before fallback. */
+const GPU_PROBE_TIMEOUT_MS = SYSTEM_PROMPT_PREP_TIMEOUT_MS - 500;
 
 async function runGpuProbe(cmd: string[]): Promise<string | null> {
 	try {
@@ -126,8 +126,25 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 			// dies at the deadline and lets getCachedGpu reach the null-cache write.
 			killSignal: "SIGKILL",
 		});
-		const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-		return exitCode === 0 ? stdout : null;
+		const stdoutReader = proc.stdout.getReader();
+		let stdout = "";
+		const decoder = new TextDecoder();
+		const stdoutDone = (async () => {
+			while (true) {
+				const chunk = await stdoutReader.read();
+				if (chunk.done) break;
+				stdout += decoder.decode(chunk.value, { stream: true });
+			}
+			stdout += decoder.decode();
+		})();
+		const exitCode = await proc.exited;
+		if (exitCode !== 0) {
+			await stdoutReader.cancel().catch(() => undefined);
+			await stdoutDone.catch(() => undefined);
+			return null;
+		}
+		await stdoutDone;
+		return stdout;
 	} catch {
 		return null;
 	}

@@ -10,7 +10,11 @@ interface ProbeRunResult {
 	count: number;
 }
 
-async function runProbeScenario(options: { runs: number; sleepSeconds?: number }): Promise<ProbeRunResult> {
+async function runProbeScenario(options: {
+	runs: number;
+	sleepSeconds?: number;
+	holdStdoutOpen?: boolean;
+}): Promise<ProbeRunResult> {
 	const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gpu-probe-"));
 	try {
 		const binDir = path.join(tempRoot, "bin");
@@ -21,7 +25,7 @@ async function runProbeScenario(options: { runs: number; sleepSeconds?: number }
 		const lspciPath = path.join(binDir, "lspci");
 		await Bun.write(
 			lspciPath,
-			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
+			'#!/usr/bin/env sh\nprintf x >> "$OMP_GPU_PROBE_COUNT"\nif [ "$OMP_GPU_PROBE_HOLD_STDOUT_OPEN" = "true" ]; then sleep "$OMP_GPU_PROBE_SLEEP" & wait "$!"; fi\nif [ -n "$OMP_GPU_PROBE_SLEEP" ]; then exec sleep "$OMP_GPU_PROBE_SLEEP"; fi\nexit 0\n',
 		);
 		await fs.chmod(lspciPath, 0o755);
 
@@ -74,6 +78,11 @@ console.log(JSON.stringify({ elapsedMs: Math.round(performance.now() - startedAt
 		} else {
 			env.OMP_GPU_PROBE_SLEEP = String(options.sleepSeconds);
 		}
+		if (options.holdStdoutOpen) {
+			env.OMP_GPU_PROBE_HOLD_STDOUT_OPEN = "true";
+		} else {
+			delete env.OMP_GPU_PROBE_HOLD_STDOUT_OPEN;
+		}
 
 		const childStartedAt = performance.now();
 		const child = Bun.spawn([process.execPath, scenarioPath], { stdout: "pipe", stderr: "pipe", env });
@@ -101,11 +110,12 @@ describe.skipIf(process.platform !== "linux")("system prompt GPU probe", () => {
 	}, 15_000);
 
 	it("kills the GPU probe at the prep deadline", async () => {
-		const result = await runProbeScenario({ runs: 1, sleepSeconds: 7 });
+		const result = await runProbeScenario({ runs: 1, sleepSeconds: 7, holdStdoutOpen: true });
 
+		expect(result.cached).toEqual({ gpu: null });
 		expect(result.elapsedMs).toBeLessThan(6500);
 		// Codex#3838: the child process MUST exit shortly after the deadline,
-		// not linger until the underlying probe (sleep 7) finishes on its own.
+		// not linger until a descendant holding stdout (sleep 7) exits on its own.
 		expect(result.childElapsedMs).toBeLessThan(6500);
 	}, 15_000);
 });
