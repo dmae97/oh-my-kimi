@@ -26,6 +26,8 @@ async function captureGooglePayload(
 
 	await streamGoogle(model, context, {
 		apiKey: "test-key",
+		// Capture the generateContent request shape; gemini-3 ids auto-route to Interactions by default.
+		useInteractionsApi: false,
 		onPayload: payload => {
 			captured = payload as { config: { systemInstruction?: unknown }; contents: unknown[] };
 		},

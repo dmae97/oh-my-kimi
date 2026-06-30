@@ -6,6 +6,8 @@
 
 - Added service tier support for Google Gemini and Vertex AI
 - Introduced `ServiceTierByFamily` to allow model-specific service tier configurations
+- Added Google Vertex AI Interactions API support, sharing one Interactions transport across the direct Google and Vertex providers. Gemini 3+ models use the Interactions API by default — on the official `generativelanguage` endpoint for direct Google, and under ADC/bearer auth for Vertex — with automatic fallback to `:streamGenerateContent` when the model/endpoint can't serve Interactions. Pass `useInteractionsApi: false` to force generateContent.
+- Added support for an explicit Vertex bearer access token via `GOOGLE_CLOUD_ACCESS_TOKEN` / `CLOUDSDK_AUTH_ACCESS_TOKEN`, so `gcloud auth print-access-token` can drive Vertex without a full `application-default login`.
 
 ### Changed
 

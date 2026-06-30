@@ -89,7 +89,8 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			return calls === 1 ? sse(genaiChunk("")) : sse(genaiChunk("Hello!"));
 		};
 
-		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock });
+		// Pin the generateContent transport: gemini-3 ids now auto-route to Interactions by default.
+		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock, useInteractionsApi: false });
 		const { events, starts } = await drain(stream);
 		const result = await stream.result();
 
@@ -107,7 +108,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			return sse(genaiChunk(""));
 		};
 
-		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock });
+		const stream = streamGoogle(genaiModel, context, { apiKey: "k", fetch: fetchMock, useInteractionsApi: false });
 		const result = await stream.result();
 
 		expect(calls).toBe(3); // MAX_EMPTY_STREAM_RETRIES (2) + 1 initial attempt
@@ -137,6 +138,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			project: "project",
 			location: "location",
 			fetch: fetchMock,
+			useInteractionsApi: false,
 		});
 		const { events } = await drain(stream);
 		const result = await stream.result();
@@ -194,6 +196,7 @@ describe("Google empty-response retry (public + Vertex path)", () => {
 			project: "project",
 			location: "location",
 			fetch: fetchMock,
+			useInteractionsApi: false,
 		});
 		const result = await stream.result();
 

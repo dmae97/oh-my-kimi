@@ -13,6 +13,7 @@
  */
 
 import { Buffer } from "node:buffer";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $envpos, isEnoent, logger } from "@oh-my-pi/pi-utils";
@@ -281,6 +282,11 @@ const SHARED_TOKEN_RESOLVE_TIMEOUT_MS = 30_000;
  * The token is cached in module scope and refreshed `GOOGLE_VERTEX_REFRESH_SKEW_MS` ms before it expires.
  */
 export async function getVertexAccessToken(options?: { signal?: AbortSignal; fetch?: FetchImpl }): Promise<string> {
+	// An explicit access token (e.g. `gcloud auth print-access-token`) bypasses the cache so a
+	// refreshed env token takes effect immediately. `CLOUDSDK_AUTH_ACCESS_TOKEN` is gcloud's own
+	// override var; `GOOGLE_CLOUD_ACCESS_TOKEN` is the omp-facing alias.
+	const explicitToken = Bun.env.GOOGLE_CLOUD_ACCESS_TOKEN || Bun.env.CLOUDSDK_AUTH_ACCESS_TOKEN;
+	if (explicitToken) return explicitToken;
 	const fetchImpl = options?.fetch ?? globalThis.fetch.bind(globalThis);
 	const skew = getRefreshSkewMs();
 	const now = Date.now();
@@ -322,4 +328,23 @@ export async function getVertexAccessToken(options?: { signal?: AbortSignal; fet
 export function __resetVertexTokenCache(): void {
 	tokenCache.clear();
 	inflight.clear();
+}
+
+/**
+ * Sync best-effort probe for a usable Vertex bearer credential source — an explicit access-token
+ * env var, `GOOGLE_APPLICATION_CREDENTIALS`, a user ADC file, or a GCP runtime whose metadata
+ * server can mint ADC (GCE/Cloud Run/App Engine/Functions). Lets callers prefer the bearer
+ * Interactions transport only when ADC is actually reachable, without paying the async
+ * metadata-probe cost for API-key-only setups.
+ */
+export function hasVertexBearerCredentialsHint(): boolean {
+	if (Bun.env.GOOGLE_CLOUD_ACCESS_TOKEN || Bun.env.CLOUDSDK_AUTH_ACCESS_TOKEN) return true;
+	if (Bun.env.GOOGLE_APPLICATION_CREDENTIALS) return true;
+	// GCP-hosted runtimes expose ADC via the metadata server; these env vars mark those runtimes.
+	if (Bun.env.K_SERVICE || Bun.env.FUNCTION_TARGET || Bun.env.GAE_ENV || Bun.env.GCE_METADATA_HOST) return true;
+	try {
+		return fs.existsSync(userAdcPath());
+	} catch {
+		return false;
+	}
 }

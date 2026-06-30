@@ -44,6 +44,8 @@ describe("issue #1270: Vertex AI global endpoint", () => {
 		const stream = streamGoogleVertex(model, context, {
 			project: "vertex-project",
 			location: "global",
+			// This asserts the generateContent URL; gemini-3 ids auto-route to Interactions by default.
+			useInteractionsApi: false,
 			fetch: async input => {
 				const url = input instanceof Request ? input.url : input.toString();
 				urls.push(url);
