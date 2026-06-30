@@ -24,6 +24,9 @@
 ### Fixed
 
 - Fixed `omp tiny-models download` JSON/text failures to include the worker-side download error instead of collapsing every worker failure to `ok:false`. ([#3839](https://github.com/can1357/oh-my-pi/issues/3839))
+### Fixed
+
+- Fixed `/extensions` showing MCP servers as `active` when `/mcp list` reported them as `disabled`, and made `/extensions` re-enable work for every supported source. The dashboard now mirrors `/mcp list` by honoring the per-server `enabled: false` flag plus the user-level `disabledServers` denylist and a new `enabledServers` allowlist; the dashboard's MCP toggle writes through the canonical mcp.json — flipping `enabled` on the loaded source file for config-resident servers (including supported non-primary files such as `.omp/.mcp.json`), force-enabling tool-owned sources (such as `opencode.json`) via the user `enabledServers` allowlist without mutating the foreign config, and using the `disabledServers` denylist for purely discovered third-party servers, so `/mcp list`, the MCP runtime, and the dashboard stay in sync ([#3827](https://github.com/can1357/oh-my-pi/issues/3827)).
 
 ## [16.2.6] - 2026-06-29
 
