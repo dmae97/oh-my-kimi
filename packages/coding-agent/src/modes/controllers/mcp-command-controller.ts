@@ -135,6 +135,22 @@ interface OAuthFlowResult {
 	resource?: string;
 }
 
+/**
+ * Thrown by {@link MCPCommandController}'s OAuth handler when the user (or a
+ * caller-supplied {@link AbortSignal}) cancels the in-flight flow. Distinct
+ * from network/timeout failures so callers can surface a neutral
+ * "cancelled" status instead of an error banner.
+ */
+export class MCPOAuthCancelledError extends Error {
+	constructor(message = "OAuth flow cancelled") {
+		super(message);
+		this.name = "MCPOAuthCancelledError";
+	}
+}
+
+/** Reason recorded on the OAuth flow's AbortController when the user hits Esc. */
+const MCP_OAUTH_USER_CANCEL_REASON = "MCP OAuth flow cancelled by user";
+
 type MCPAddScope = "user" | "project";
 type MCPAddTransport = "http" | "sse";
 
@@ -521,6 +537,10 @@ export class MCPCommandController {
 								userClientSecret: finalConfig.oauth?.clientSecret,
 							});
 						} catch (oauthError) {
+							if (oauthError instanceof MCPOAuthCancelledError) {
+								this.ctx.showStatus(`Add cancelled for "${parsed.initialName}"`);
+								return;
+							}
 							this.ctx.showError(
 								`OAuth flow failed for "${parsed.initialName}": ${oauthError instanceof Error ? oauthError.message : String(oauthError)}`,
 							);
@@ -587,6 +607,14 @@ export class MCPCommandController {
 			serverUrl?: string;
 			resource?: string;
 			stripSameOriginResource?: boolean;
+			/**
+			 * External cancellation source: when this signal aborts, the in-flight
+			 * OAuth flow is torn down and {@link MCPOAuthCancelledError} is thrown.
+			 * Wizards (which own focus and absorb Esc themselves) pass their own
+			 * controller here; editor-focused callers rely on the Esc hook
+			 * installed below instead.
+			 */
+			abortSignal?: AbortSignal;
 		},
 	): Promise<OAuthFlowResult> {
 		const authStorage = this.ctx.session.modelRegistry.authStorage;
@@ -614,6 +642,26 @@ export class MCPCommandController {
 		}
 		let manualInputClaim: { promise: Promise<string>; clear: (reason?: string) => void } | undefined;
 		const oauthTimeout = new AbortController();
+		// User Esc and external aborts route through here; the timeout path sets
+		// its own reason and leaves this flag false so the catch can distinguish
+		// "user cancelled" (status) from "deadline elapsed" (error).
+		let userCancelled = false;
+		const requestUserCancel = (reason: string): void => {
+			userCancelled = true;
+			if (!oauthTimeout.signal.aborted) oauthTimeout.abort(reason);
+		};
+		const originalOnEscape = this.ctx.editor.onEscape;
+		this.ctx.editor.onEscape = () => requestUserCancel(MCP_OAUTH_USER_CANCEL_REASON);
+		const externalSignal = opts?.abortSignal;
+		const onExternalAbort = (): void => {
+			const reason = externalSignal?.reason;
+			requestUserCancel(typeof reason === "string" ? reason : MCP_OAUTH_USER_CANCEL_REASON);
+		};
+		if (externalSignal?.aborted) {
+			onExternalAbort();
+		} else {
+			externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+		}
 		try {
 			// Create OAuth flow
 			const flow = new MCPOAuthFlow(
@@ -641,7 +689,7 @@ export class MCPCommandController {
 						block.addChild(new Spacer(1));
 						block.addChild(
 							new Text(
-								theme.fg("muted", "Waiting for authorization... (Press Ctrl+C to cancel, 5 minute timeout)"),
+								theme.fg("muted", "Waiting for authorization... (Press Esc to cancel, 5 minute timeout)"),
 								1,
 								0,
 							),
@@ -727,6 +775,14 @@ export class MCPCommandController {
 				resource: flow.resource,
 			};
 		} catch (error) {
+			// User-initiated cancel (Esc or external signal) → neutral status, not
+			// a failure. Check the flag we set in `requestUserCancel`, not the
+			// abort reason: the timeout path also aborts but with a different
+			// reason, and we want it to surface as a timeout error below.
+			if (userCancelled) {
+				throw new MCPOAuthCancelledError();
+			}
+
 			const errorMsg = error instanceof Error ? error.message : String(error);
 
 			// Provide helpful error messages based on failure type
@@ -742,6 +798,8 @@ export class MCPCommandController {
 				throw new Error(`OAuth authentication failed: ${errorMsg}`);
 			}
 		} finally {
+			this.ctx.editor.onEscape = originalOnEscape;
+			externalSignal?.removeEventListener("abort", onExternalAbort);
 			manualInputClaim?.clear("Manual MCP OAuth input cleared");
 		}
 	}
@@ -1629,6 +1687,10 @@ export class MCPCommandController {
 			];
 			this.#showMessage(lines.join("\n"));
 		} catch (error) {
+			if (error instanceof MCPOAuthCancelledError) {
+				this.ctx.showStatus(`Reauthorization cancelled for "${name}"`);
+				return;
+			}
 			this.ctx.showError(`Failed to reauthorize server: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}

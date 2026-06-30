@@ -43,6 +43,9 @@ function restoreEnvValue(name: string, value: string | undefined): void {
 }
 function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<string, unknown> = {}) {
 	const showError = vi.fn();
+	const showStatus = vi.fn();
+	const present = vi.fn();
+	const editor: { onEscape?: () => void } = {};
 	const prepareConfig = vi.fn(async (config: MCPServerConfig) => config);
 	const mcpManager = {
 		prepareConfig,
@@ -55,11 +58,11 @@ function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<
 	};
 	const controller = new MCPCommandController({
 		chatContainer: { addChild: vi.fn() },
-		present: vi.fn(),
+		present,
 		ui: { requestRender: vi.fn() },
-		editor: {},
+		editor,
 		showError,
-		showStatus: vi.fn(),
+		showStatus,
 		oauthManualInput: {
 			hasPending: vi.fn(() => false),
 			pendingProviderId: undefined,
@@ -72,7 +75,7 @@ function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<
 		mcpManager,
 	} as never);
 
-	return { controller, showError, prepareConfig, mcpManager };
+	return { controller, showError, showStatus, present, editor, prepareConfig, mcpManager };
 }
 
 describe("/mcp auth commands", () => {
@@ -217,6 +220,91 @@ describe("/mcp auth commands", () => {
 			clientId: "dcr-client",
 			clientSecret: "dcr-secret",
 		});
+	});
+
+	test("Esc aborts the OAuth flow during /mcp reauth", async () => {
+		const authStorage = freshAuthStorage();
+		await authStorage.reload();
+		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
+
+		// Simulate the real flow: login hangs waiting for the OAuth callback and
+		// only resolves when the controller's signal aborts. Mirrors what
+		// OAuthCallbackFlow.#waitForCallback does in production.
+		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(function (this: oauthFlow.MCPOAuthFlow) {
+			return new Promise<never>((_, reject) => {
+				this.ctrl.signal?.addEventListener("abort", () => {
+					reject(new Error(`OAuth callback cancelled: ${String(this.ctrl.signal?.reason ?? "aborted")}`));
+				});
+			});
+		});
+
+		const { controller, showError, showStatus, editor } = createController(authStorage);
+
+		const reauthPromise = controller.handle("/mcp reauth envserver");
+
+		// Wait for #handleOAuthFlow to install its editor.onEscape hook.
+		const deadline = Date.now() + 1_000;
+		while (typeof editor.onEscape !== "function" && Date.now() < deadline) {
+			await Bun.sleep(10);
+		}
+		expect(typeof editor.onEscape).toBe("function");
+
+		const installedEscape = editor.onEscape;
+		editor.onEscape?.();
+
+		// Cancellation must resolve the reauth promise promptly (well under the
+		// 5-minute production timeout); a 2s race exposes a hung flow as a test
+		// failure rather than a suite hang.
+		await Promise.race([
+			reauthPromise,
+			Bun.sleep(2_000).then(() => {
+				throw new Error("reauth did not resolve within 2s of Esc");
+			}),
+		]);
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
+		// onEscape must be restored to its previous value so subsequent user
+		// input does not keep aborting the (now-finished) flow.
+		expect(editor.onEscape).not.toBe(installedEscape);
+	});
+
+	test("OAuth deadline still surfaces as a reauthorization error, not a cancellation", async () => {
+		const authStorage = freshAuthStorage();
+		await authStorage.reload();
+		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
+
+		// Login resolves only when the controller's timeout aborts the signal.
+		// Mirrors withTimeout firing inside #handleOAuthFlow after the 5-minute
+		// deadline. We patch `setTimeout` to a synchronous call so the deadline
+		// hits immediately without slowing the test.
+		const originalSetTimeout = globalThis.setTimeout;
+		globalThis.setTimeout = ((handler: TimerHandler) => {
+			if (typeof handler === "function") handler();
+			return 0 as unknown as ReturnType<typeof setTimeout>;
+		}) as typeof globalThis.setTimeout;
+		try {
+			vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(
+				function (this: oauthFlow.MCPOAuthFlow) {
+					return new Promise<never>((_, reject) => {
+						this.ctrl.signal?.addEventListener("abort", () => {
+							reject(new Error("OAuth callback timed out"));
+						});
+					});
+				},
+			);
+			const { controller, showError, showStatus } = createController(authStorage);
+
+			await controller.handle("/mcp reauth envserver");
+
+			// Deadline must read as "failed", not "cancelled" — they have different
+			// surfaces (error banner vs status line) and the user expects a clear
+			// timeout message rather than thinking they pressed Esc.
+			expect(showStatus).not.toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
+			expect(showError).toHaveBeenCalledWith(expect.stringMatching(/timed out/i));
+		} finally {
+			globalThis.setTimeout = originalSetTimeout;
+		}
 	});
 
 	test("clears both expanded and stale raw URL-keyed credentials on unauth", async () => {
