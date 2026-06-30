@@ -24,7 +24,12 @@ import { getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS, MODEL_ROLES } from "../..
 import type { Settings } from "../../config/settings";
 import { type ThemeColor, theme } from "../../modes/theme/theme";
 import { matchesSelectDown, matchesSelectUp } from "../../modes/utils/keybinding-matchers";
-import { AUTO_THINKING, type ConfiguredThinkingLevel, getConfiguredThinkingLevelMetadata } from "../../thinking";
+import {
+	AUTO_THINKING,
+	type ConfiguredThinkingLevel,
+	getConfiguredThinkingLevelMetadata,
+	parseConfiguredThinkingLevel,
+} from "../../thinking";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -342,10 +347,7 @@ export class ModelSelectorComponent extends Container {
 			if (resolved.model) {
 				nextRoles[role] = {
 					model: resolved.model,
-					thinkingLevel:
-						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
-							? resolved.thinkingLevel
-							: ThinkingLevel.Inherit,
+					thinkingLevel: this.#getResolvedRoleThinkingLevel(role, resolved),
 					autoSelected: false,
 				};
 			}
@@ -363,10 +365,7 @@ export class ModelSelectorComponent extends Container {
 				if (!resolved.model) continue;
 				nextRoles[role] = {
 					model: resolved.model,
-					thinkingLevel:
-						resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined
-							? resolved.thinkingLevel
-							: ThinkingLevel.Inherit,
+					thinkingLevel: this.#getResolvedRoleThinkingLevel(role, resolved),
 					autoSelected: true,
 				};
 			}
@@ -1059,6 +1058,19 @@ export class ModelSelectorComponent extends Container {
 			);
 		}
 	}
+	#getResolvedRoleThinkingLevel(
+		role: string,
+		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ThinkingLevel },
+	): ConfiguredThinkingLevel {
+		if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
+			return resolved.thinkingLevel;
+		}
+		if (role === "default") {
+			return parseConfiguredThinkingLevel(this.#settings.get("defaultThinkingLevel")) ?? ThinkingLevel.Inherit;
+		}
+		return ThinkingLevel.Inherit;
+	}
+
 	#getThinkingLevelsForModel(model: Model): ReadonlyArray<ConfiguredThinkingLevel> {
 		return [ThinkingLevel.Inherit, ThinkingLevel.Off, AUTO_THINKING, ...getSupportedEfforts(model)];
 	}
