@@ -68,10 +68,15 @@ describe("DuckDuckGo web search provider", () => {
 		const form = new URLSearchParams(capturedInit?.body as string);
 		expect(form.get("q")).toBe("how to fix bug in code");
 		expect(form.get("kl")).toBe("us-en");
+		expect(form.get("b")).toBe("");
 		expect(form.get("df")).toBe("w");
 		const headers = capturedInit?.headers as Record<string, string>;
 		expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
 		expect(headers["User-Agent"]).toContain("Mozilla/5.0");
+		expect(headers["Referer"]).toBe("https://html.duckduckgo.com/");
+		expect(headers["Accept-Language"]).toContain("en");
+		expect(headers["Sec-Fetch-Mode"]).toBe("navigate");
+		expect(headers["Sec-Ch-Ua"]).toContain("Chromium");
 	});
 
 	it("omits the df form param when no recency is requested", async () => {

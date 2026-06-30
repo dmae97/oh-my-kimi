@@ -35,7 +35,7 @@ const RECENCY_TO_DDG_DF: Record<NonNullable<SearchParams["recency"]>, string> = 
  * the orchestrator can fall through to the next provider with context.
  */
 const BROWSER_USER_AGENT =
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 interface ParsedResult {
 	title: string;
@@ -130,15 +130,29 @@ async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
 	const form = new URLSearchParams({ q: params.query, kl: "us-en" });
 	const df = params.recency ? RECENCY_TO_DDG_DF[params.recency] : undefined;
 	if (df) form.set("df", df);
+	// Add b: "" parameter as specified in the browser fetch template to match real browser form submission
+	form.set("b", "");
 
 	const response = await (params.fetch ?? fetch)(DUCKDUCKGO_HTML_URL, {
 		method: "POST",
 		body: form.toString(),
 		headers: {
+			Accept:
+				"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+			"Accept-Language": "en,en-US;q=0.9",
+			"Cache-Control": "max-age=0",
 			"Content-Type": "application/x-www-form-urlencoded",
+			Priority: "u=0, i",
+			"Sec-Ch-Ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+			"Sec-Ch-Ua-Mobile": "?0",
+			"Sec-Ch-Ua-Platform": '"macOS"',
+			"Sec-Fetch-Dest": "document",
+			"Sec-Fetch-Mode": "navigate",
+			"Sec-Fetch-Site": "same-origin",
+			"Sec-Fetch-User": "?1",
+			"Upgrade-Insecure-Requests": "1",
 			"User-Agent": BROWSER_USER_AGENT,
-			Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-			"Accept-Language": "en-US,en;q=0.5",
+			Referer: "https://html.duckduckgo.com/",
 		},
 		signal: withHardTimeout(params.signal),
 	});

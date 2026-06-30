@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Improved reliability of DuckDuckGo web searches by updating browser request headers and parameters
+
 - Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
 - Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.
 - Fixed an issue where the `irc` inbox missed messages that arrived while the recipient agent was already running.
