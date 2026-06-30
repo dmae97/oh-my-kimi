@@ -30,7 +30,6 @@ import {
 	completeSimple,
 	type Message,
 	type Model,
-	resolveServiceTier,
 	type ServiceTier,
 	type SimpleStreamOptions,
 	type StopReason,
@@ -752,8 +751,7 @@ function buildChatRequestAttributes(stepNumber: number, request: ChatRequestSnap
 		attrs[GenAIAttr.RequestStopSequences] = [...request.stopSequences];
 	}
 	if (request.serviceTier && shouldSendServiceTier(request.serviceTier, provider)) {
-		const resolved = resolveServiceTier(request.serviceTier, provider);
-		if (resolved) attrs[OpenAIAttr.RequestServiceTier] = resolved;
+		attrs[OpenAIAttr.RequestServiceTier] = request.serviceTier;
 	}
 	if (request.reasoningEffort) attrs[PiGenAIAttr.RequestReasoningEffort] = request.reasoningEffort;
 	const toolChoice = serializeToolChoice(request.toolChoice);

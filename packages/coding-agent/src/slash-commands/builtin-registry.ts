@@ -73,17 +73,9 @@ function refreshStatusLine(ctx: InteractiveModeContext): void {
 	ctx.ui.requestRender();
 }
 
-/** `/fast status` label: "off", "on", or scope-qualified "on (… only)". */
+/** `/fast status` label for the active model: "on" when its family is priority, else "off". */
 function formatFastModeStatus(session: AgentSession): string {
-	if (!session.isFastModeEnabled()) return "off";
-	switch (session.serviceTier) {
-		case "openai-only":
-			return "on (OpenAI only)";
-		case "claude-only":
-			return "on (Claude only)";
-		default:
-			return "on";
-	}
+	return session.isFastModeEnabled() ? "on" : "off";
 }
 
 const AUTOCOMPLETE_DETAIL_LIMIT = 48;

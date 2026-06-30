@@ -14,6 +14,7 @@ import type {
 	FetchImpl,
 	ImageContent,
 	Model,
+	ServiceTier,
 	StopReason,
 	StreamOptions,
 	TextContent,
@@ -21,6 +22,7 @@ import type {
 	Tool,
 	ToolCall,
 } from "../types";
+import { shouldSendServiceTier } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { RawHttpRequestDump } from "../utils/http-inspector";
@@ -73,6 +75,8 @@ export interface GoogleSharedStreamOptions extends StreamOptions {
 		budgetTokens?: number;
 		level?: GoogleThinkingLevel;
 	};
+	/** Gemini/Vertex serving tier (`flex`/`priority`); other values are omitted. */
+	serviceTier?: ServiceTier;
 }
 
 /**
@@ -791,6 +795,14 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 		...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools, model) }),
 	};
 
+	// Gemini API (google-generative-ai) reads the tier from the request body;
+	// Vertex AI ignores a body field and requires the
+	// `X-Vertex-AI-LLM-Shared-Request-Type` header instead (added in
+	// streamGoogleVertex), so only emit the body field for the direct API.
+	if (model.provider === "google" && shouldSendServiceTier(options.serviceTier, model.provider)) {
+		config.serviceTier = options.serviceTier;
+	}
+
 	if (context.tools && context.tools.length > 0 && options.toolChoice) {
 		const choice = options.toolChoice;
 		if (typeof choice === "string") {
@@ -1007,6 +1019,7 @@ function paramsToWireBody(params: GenerateContentParameters): Record<string, unk
 	if (config.toolConfig !== undefined) body.toolConfig = config.toolConfig;
 	if (config.safetySettings !== undefined) body.safetySettings = config.safetySettings;
 	if (config.cachedContent !== undefined) body.cachedContent = config.cachedContent;
+	if (config.serviceTier !== undefined) body.serviceTier = config.serviceTier;
 
 	const gen: Record<string, unknown> = {};
 	if (config.temperature !== undefined) gen.temperature = config.temperature;

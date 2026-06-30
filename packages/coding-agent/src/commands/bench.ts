@@ -1,6 +1,6 @@
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { runBenchCommand } from "../cli/bench-cli";
-import { SERVICE_TIER_SETTING_VALUES } from "../config/service-tier";
+import { SERVICE_TIER_OPENAI_VALUES } from "../config/service-tier";
 
 export default class Bench extends Command {
 	static description =
@@ -19,8 +19,8 @@ export default class Bench extends Command {
 		"max-tokens": Flags.integer({ description: "Max output tokens per request", default: 512 }),
 		prompt: Flags.string({ description: "Custom prompt text (default: bundled bench prompt)" }),
 		"service-tier": Flags.string({
-			description: "Service tier hint (default: configured `serviceTier` setting; `none` omits it)",
-			options: SERVICE_TIER_SETTING_VALUES,
+			description: "Service tier applied per model family (default: configured `tier.*` settings; `none` omits it)",
+			options: SERVICE_TIER_OPENAI_VALUES,
 		}),
 		json: Flags.boolean({ description: "Output JSON" }),
 		par: Flags.integer({ description: "Execute runs with N parallel queries/requests", default: 4 }),

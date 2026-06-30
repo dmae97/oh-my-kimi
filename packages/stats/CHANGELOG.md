@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Improved premium request calculation logic to account for specific model families
+
 ## [16.2.6] - 2026-06-29
 
 ### Fixed

@@ -1,87 +1,116 @@
-import type { ServiceTier } from "@oh-my-pi/pi-ai";
+import type { ServiceTier, ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import type { SubmenuOption } from "./settings-schema";
 
 /**
- * Service-tier setting values shared by every "Service Tier" setting. `"none"`
- * is the omit-the-parameter sentinel; the remaining values mirror
- * {@link ServiceTier}.
+ * Per-family service-tier setting values. `"none"` is the omit-the-parameter
+ * sentinel; the rest mirror the wire {@link ServiceTier} values each provider
+ * family actually realizes. OpenAI accepts the full set; Anthropic realizes
+ * only `priority` (fast mode); Google (Gemini API + Vertex) realizes
+ * `flex`/`priority`.
  */
-export const SERVICE_TIER_SETTING_VALUES = [
+export const SERVICE_TIER_OPENAI_VALUES = ["none", "auto", "default", "flex", "scale", "priority"] as const;
+export const SERVICE_TIER_ANTHROPIC_VALUES = ["none", "priority"] as const;
+export const SERVICE_TIER_GOOGLE_VALUES = ["none", "flex", "priority"] as const;
+
+export type ServiceTierOpenAISettingValue = (typeof SERVICE_TIER_OPENAI_VALUES)[number];
+export type ServiceTierAnthropicSettingValue = (typeof SERVICE_TIER_ANTHROPIC_VALUES)[number];
+export type ServiceTierGoogleSettingValue = (typeof SERVICE_TIER_GOOGLE_VALUES)[number];
+
+/**
+ * Inherit-capable single value for the subagent/advisor tiers. The chosen tier
+ * is broadcast across families and applied to whichever family the spawned
+ * model belongs to (clamped to what that family realizes); `"inherit"` defers
+ * to the main agent's live per-family selection.
+ */
+export const SERVICE_TIER_INHERIT_SETTING_VALUES = [
+	"inherit",
 	"none",
 	"auto",
 	"default",
 	"flex",
 	"scale",
 	"priority",
-	"openai-only",
-	"claude-only",
 ] as const;
-
-export type ServiceTierSettingValue = (typeof SERVICE_TIER_SETTING_VALUES)[number];
-
-/** Variant value set for scoped service-tier settings (subagent/advisor) that can defer to the main agent. */
-export const SERVICE_TIER_INHERIT_SETTING_VALUES = ["inherit", ...SERVICE_TIER_SETTING_VALUES] as const;
 
 export type ServiceTierInheritSettingValue = (typeof SERVICE_TIER_INHERIT_SETTING_VALUES)[number];
 
-/** Submenu descriptions shared by the base `serviceTier` setting. */
-export const SERVICE_TIER_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierSettingValue>> = [
-	{ value: "none", label: "None", description: "Omit service_tier parameter" },
-	{ value: "auto", label: "Auto", description: "Use provider default tier selection (OpenAI)" },
-	{ value: "default", label: "Default", description: "Standard priority processing (OpenAI)" },
-	{ value: "flex", label: "Flex", description: "Flexible capacity tier when available (OpenAI)" },
-	{ value: "scale", label: "Scale", description: "Scale Tier credits when available (OpenAI)" },
+export const SERVICE_TIER_OPENAI_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierOpenAISettingValue>> = [
+	{ value: "none", label: "None", description: "Omit service_tier (standard processing)" },
+	{ value: "auto", label: "Auto", description: "Provider default tier selection" },
+	{ value: "default", label: "Default", description: "Standard priority processing" },
+	{ value: "flex", label: "Flex", description: "Lower cost, higher latency when available" },
+	{ value: "scale", label: "Scale", description: "Scale Tier credits when available" },
+	{ value: "priority", label: "Priority", description: "Faster, higher cost (premium request)" },
+];
+
+export const SERVICE_TIER_ANTHROPIC_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierAnthropicSettingValue>> = [
+	{ value: "none", label: "None", description: "Standard processing" },
 	{
 		value: "priority",
 		label: "Priority",
-		description: "Priority on every supported provider (OpenAI `service_tier`, Anthropic fast mode)",
-	},
-	{
-		value: "openai-only",
-		label: "Priority (OpenAI only)",
-		description: "Priority on OpenAI/OpenAI-Codex requests; ignored elsewhere",
-	},
-	{
-		value: "claude-only",
-		label: "Priority (Claude only)",
-		description: "Anthropic fast mode on direct Claude requests; ignored elsewhere (incl. Bedrock/Vertex)",
+		description: 'Fast mode (`speed: "fast"`) on supported direct Claude models; ignored on Bedrock/Vertex',
 	},
 ];
 
-/** Submenu descriptions for inherit-capable service-tier settings. */
+export const SERVICE_TIER_GOOGLE_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierGoogleSettingValue>> = [
+	{ value: "none", label: "None", description: "Standard processing" },
+	{ value: "flex", label: "Flex", description: "Lower cost, higher latency (Gemini API + Vertex)" },
+	{ value: "priority", label: "Priority", description: "Faster, higher reliability (Gemini API + Vertex)" },
+];
+
 export const SERVICE_TIER_INHERIT_OPTIONS: ReadonlyArray<SubmenuOption<ServiceTierInheritSettingValue>> = [
-	{ value: "inherit", label: "Inherit", description: "Use the main agent's Service Tier" },
-	...SERVICE_TIER_OPTIONS,
+	{ value: "inherit", label: "Inherit", description: "Match the main agent's live per-family tiers" },
+	{ value: "none", label: "None", description: "Standard processing" },
+	{ value: "auto", label: "Auto", description: "Provider default tier selection (OpenAI family)" },
+	{ value: "default", label: "Default", description: "Standard priority processing (OpenAI family)" },
+	{ value: "flex", label: "Flex", description: "Flexible capacity tier (OpenAI/Google families)" },
+	{ value: "scale", label: "Scale", description: "Scale Tier credits (OpenAI family)" },
+	{ value: "priority", label: "Priority", description: "Priority on every supported family of the spawned model" },
 ];
 
-/**
- * Resolve a service-tier setting value to the wire {@link ServiceTier} (or
- * `undefined` to omit). `"inherit"` defers to `inherited`; `"none"` omits.
- */
-export function resolveServiceTierSetting(value: string, inherited: ServiceTier | undefined): ServiceTier | undefined {
-	if (value === "inherit") return inherited;
-	if (value === "none" || value === "") return undefined;
+/** Map a per-family setting value to a wire {@link ServiceTier}, or `undefined` to omit. */
+export function serviceTierSettingToTier(value: string): ServiceTier | undefined {
+	if (value === "none" || value === "" || value === "inherit") return undefined;
 	return value as ServiceTier;
 }
 
+/** Assemble the live per-family tier map from the three `tier.*` setting values. */
+export function buildServiceTierByFamily(openai: string, anthropic: string, google: string): ServiceTierByFamily {
+	const out: ServiceTierByFamily = {};
+	const o = serviceTierSettingToTier(openai);
+	if (o) out.openai = o;
+	const a = serviceTierSettingToTier(anthropic);
+	if (a) out.anthropic = a;
+	const g = serviceTierSettingToTier(google);
+	if (g) out.google = g;
+	return out;
+}
+
 /**
- * Resolve the `serviceTier` *setting value* to stamp onto a subagent's settings
- * snapshot.
- *
- * - A concrete `subagentSetting` (`"none"` or a tier) wins outright.
- * - `"inherit"` defers to the parent's live effective tier when the caller has a
- *   live session (`inherited` passed as `ServiceTier | null`, where `null` means
- *   the parent explicitly has no tier — e.g. `/fast off`). When no live session
- *   is available (`inherited === undefined`, e.g. cold subagent revive) it falls
- *   back to the parent's configured `serviceTier` setting so behavior matches a
- *   plain settings snapshot.
+ * Broadcast a single chosen tier across families, clamped to what each family
+ * realizes: OpenAI takes any tier, Anthropic only `priority`, Google only
+ * `flex`/`priority`. Used by the subagent/advisor single-value settings and the
+ * `omp bench --service-tier` flag, which apply one tier to whatever family the
+ * target model belongs to.
  */
-export function resolveSubagentServiceTier(
-	subagentSetting: string,
-	configuredTier: ServiceTierSettingValue,
-	inherited: ServiceTier | null | undefined,
-): ServiceTierSettingValue {
-	if (subagentSetting !== "inherit") return subagentSetting as ServiceTierSettingValue;
-	if (inherited === undefined) return configuredTier;
-	return inherited ?? "none";
+export function serviceTierForAllFamilies(tier: ServiceTier | undefined): ServiceTierByFamily {
+	if (!tier) return {};
+	const out: ServiceTierByFamily = { openai: tier };
+	if (tier === "priority") out.anthropic = "priority";
+	if (tier === "flex" || tier === "priority") out.google = tier;
+	return out;
+}
+
+/**
+ * Resolve a subagent/advisor service-tier setting to a per-family map.
+ *
+ * - A concrete tier is broadcast across families (see
+ *   {@link serviceTierForAllFamilies}).
+ * - `"none"` yields an empty map.
+ * - `"inherit"` defers to `inherited` — the parent's live per-family tiers when
+ *   a live session supplied them, else the empty map.
+ */
+export function resolveSubagentServiceTier(setting: string, inherited: ServiceTierByFamily): ServiceTierByFamily {
+	if (setting === "inherit") return inherited;
+	return serviceTierForAllFamilies(serviceTierSettingToTier(setting));
 }

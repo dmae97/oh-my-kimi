@@ -39,8 +39,6 @@ import {
 	type Model,
 	OPENAI_MAX_OUTPUT_TOKENS,
 	type Provider,
-	type ResolvedServiceTier,
-	resolveServiceTier,
 	type ServiceTier,
 	type StopReason,
 	type StreamOptions,
@@ -269,14 +267,13 @@ export function resolveOpenAIRequestSetup(
 }
 
 export function applyOpenAIServiceTier(
-	params: { service_tier?: ResolvedServiceTier | "auto" | "default" | null | undefined },
+	params: { service_tier?: ServiceTier | null | undefined },
 	serviceTier: ServiceTier | null | undefined,
 	provider: Provider | undefined,
 ): void {
 	if (!shouldSendServiceTier(serviceTier, provider)) return;
-	const resolved = resolveServiceTier(serviceTier, provider);
-	if (resolved === "flex" || resolved === "scale" || resolved === "priority") {
-		params.service_tier = resolved;
+	if (serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority") {
+		params.service_tier = serviceTier;
 	}
 }
 
@@ -315,10 +312,7 @@ export function applyOpenAIResponsesServiceTierCost(
 	// The response echo is authoritative when present (OpenAI may downgrade a
 	// requested priority/flex turn to default under load); only fall back to the
 	// requested tier when the response omits the echo entirely.
-	const served =
-		typeof responseServiceTier === "string"
-			? responseServiceTier
-			: resolveServiceTier(requestServiceTier, model.provider);
+	const served = typeof responseServiceTier === "string" ? responseServiceTier : (requestServiceTier ?? undefined);
 	const multiplier = getOpenAIResponsesServiceTierCostMultiplier(served);
 	if (multiplier === 1) return;
 	usage.cost.input *= multiplier;
@@ -623,7 +617,7 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 	chat_template_kwargs?: { enable_thinking?: boolean; preserve_thinking?: boolean };
 	reasoning?: { effort?: string } | { enabled: false };
 	reasoning_effort?: string | null;
-	service_tier?: ResolvedServiceTier;
+	service_tier?: ServiceTier;
 	tool_stream?: boolean;
 	provider?: OpenAICompat["openRouterRouting"];
 	providerOptions?: { gateway?: { only?: string[]; order?: string[] } };

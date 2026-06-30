@@ -1,6 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type AssistantMessage, getPriorityPremiumRequests, type ServiceTier } from "@oh-my-pi/pi-ai";
+import {
+	type AssistantMessage,
+	coerceServiceTierByFamily,
+	getPriorityPremiumRequests,
+	resolveModelServiceTier,
+	type ServiceTierByFamily,
+} from "@oh-my-pi/pi-ai";
 import { getSessionsDir, isEnoent } from "@oh-my-pi/pi-utils";
 import type {
 	AgentType,
@@ -130,7 +136,7 @@ function extractStats(
 	sessionFile: string,
 	folder: string,
 	entry: SessionMessageEntry,
-	currentServiceTier: ServiceTier | undefined,
+	currentServiceTier: ServiceTierByFamily | undefined,
 	agentType: AgentType,
 ): MessageStats | null {
 	const msg = entry.message as AssistantMessage;
@@ -143,7 +149,9 @@ function extractStats(
 	// non-zero value already in `usage.premiumRequests` (Copilot multipliers or
 	// the new AI code path) and only synthesise when the field is missing/zero.
 	const recorded = msg.usage.premiumRequests ?? 0;
-	const derived = recorded > 0 ? recorded : getPriorityPremiumRequests(currentServiceTier, msg.provider);
+	const model = { provider: msg.provider, api: msg.api, id: msg.model };
+	const tier = resolveModelServiceTier(currentServiceTier, model);
+	const derived = recorded > 0 ? recorded : getPriorityPremiumRequests(tier, model);
 	const usage = derived === recorded ? msg.usage : { ...msg.usage, premiumRequests: derived };
 
 	return {
@@ -206,10 +214,10 @@ function parseSessionEntriesLenient(bytes: Uint8Array): { entries: SessionEntry[
 	return { entries, read };
 }
 
-function scanLastServiceTier(bytes: Uint8Array): ServiceTier | undefined {
-	let currentServiceTier: ServiceTier | undefined;
+function scanLastServiceTier(bytes: Uint8Array): ServiceTierByFamily | undefined {
+	let currentServiceTier: ServiceTierByFamily | undefined;
 	visitSessionEntriesLenient(bytes, entry => {
-		if (isServiceTierChange(entry)) currentServiceTier = entry.serviceTier ?? undefined;
+		if (isServiceTierChange(entry)) currentServiceTier = coerceServiceTierByFamily(entry.serviceTier);
 	});
 	return currentServiceTier;
 }
@@ -253,13 +261,13 @@ export async function parseSessionFile(sessionPath: string, fromOffset = 0): Pro
 	const start = Math.max(0, Math.min(fromOffset, bytes.length));
 	const unprocessed = bytes.subarray(start);
 	const { entries, read } = parseSessionEntriesLenient(unprocessed);
-	let currentServiceTier: ServiceTier | undefined;
+	let currentServiceTier: ServiceTierByFamily | undefined;
 	if (start > 0) {
 		currentServiceTier = scanLastServiceTier(bytes.subarray(0, start));
 	}
 	for (const entry of entries) {
 		if (isServiceTierChange(entry)) {
-			currentServiceTier = entry.serviceTier ?? undefined;
+			currentServiceTier = coerceServiceTierByFamily(entry.serviceTier);
 			continue;
 		}
 		if (isUserMessage(entry)) {

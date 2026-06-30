@@ -366,7 +366,11 @@ A value of `-1` means "use the provider/model default" — `omp` does not send t
 | `minP` | number | `-1` | Minimum-probability cutoff. |
 | `presencePenalty` | number | `-1` | Presence penalty. |
 | `repetitionPenalty` | number | `-1` | Repetition penalty. |
-| `serviceTier` | enum | `none` | `none`, `auto`, `default`, `flex`, `scale`, `priority`, `openai-only`, `claude-only`. |
+| `tier.openai` | enum | `none` | `none`, `auto`, `default`, `flex`, `scale`, `priority`. Sent as `service_tier` for OpenAI / OpenAI-Codex and OpenAI-family OpenRouter models. |
+| `tier.anthropic` | enum | `none` | `none`, `priority`. `priority` realizes fast mode on supported direct Claude models (ignored on Bedrock/Vertex and via OpenRouter). |
+| `tier.google` | enum | `none` | `none`, `flex`, `priority`. Gemini API sends it in the body; Vertex sends `priority` via header (`flex` is a no-op on Vertex). |
+| `tier.subagent` | enum | `inherit` | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the spawned model's family; `inherit` tracks the main agent. |
+| `tier.advisor` | enum | `none` | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the advisor model's family. |
 | `personality` | enum | `default` | `default`, `friendly`, `pragmatic`, `none`. |
 
 ### Retry and fallback

@@ -105,84 +105,181 @@ export type ToolChoice =
 export type CacheRetention = "none" | "short" | "long";
 
 /**
- * Service tier hint for processing priority / cost control.
+ * Service tier hint for processing priority / cost control. These are the
+ * values providers consume on the wire:
  *
- * The unscoped values (`"auto"`, `"default"`, `"flex"`, `"scale"`,
- * `"priority"`) are passed through to providers that understand them
- * (OpenAI's `service_tier` field directly; Anthropic translates
- * `"priority"` into `speed: "fast"` on supported Opus models).
+ * - OpenAI / OpenAI-Codex: sent verbatim as the `service_tier` field
+ *   (`flex`/`scale`/`priority`).
+ * - Google (Gemini API + Vertex AI): sent as the top-level `serviceTier`
+ *   field (`flex`/`priority`).
+ * - OpenRouter: passed through as `service_tier`; OpenRouter realizes it for
+ *   the OpenAI- and Google-family upstreams it supports and ignores it
+ *   otherwise.
+ * - Direct Anthropic: `"priority"` is translated into `speed: "fast"` plus the
+ *   fast-mode beta on supported Opus models. Other tiers are ignored.
  *
- * The scoped values target a specific provider family and behave as the
- * unscoped value on the matching provider, or `undefined` everywhere else.
- * They let users opt into priority on one family without paying premium
- * costs on the other when switching models mid-session.
- *
- * - `"openai-only"` → `"priority"` on `openai` and `openai-codex`; ignored elsewhere.
- * - `"claude-only"` → `"priority"` on direct `anthropic` (not Bedrock/Vertex Claude).
+ * Per-family scoping is expressed by {@link ServiceTierByFamily}, not by
+ * scoped sentinel values — see {@link serviceTierFamily}.
  */
-export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority" | "openai-only" | "claude-only";
+export type ServiceTier = "auto" | "default" | "flex" | "scale" | "priority";
 
-/** Resolved tier — one of the values that providers actually consume on the wire. */
-export type ResolvedServiceTier = Exclude<ServiceTier, "openai-only" | "claude-only">;
+/** Provider families that expose an independent service-tier knob. */
+export type ServiceTierFamily = "openai" | "anthropic" | "google";
 
 /**
- * Resolves a possibly scoped `ServiceTier` to the effective tier for the
- * given provider. Scoped values match their target family and otherwise
- * collapse to `undefined`; unscoped values pass through unchanged.
+ * Per-family service-tier selection. A request consults only the entry for the
+ * family its model belongs to (see {@link resolveModelServiceTier}), so a user
+ * can opt one family into priority without affecting the others when switching
+ * models mid-session.
  */
-export function resolveServiceTier(
-	serviceTier: ServiceTier | null | undefined,
-	provider: Provider | undefined,
-): ResolvedServiceTier | undefined {
-	if (!serviceTier) return undefined;
-	switch (serviceTier) {
-		case "openai-only":
-			return provider === "openai" || provider === "openai-codex" ? "priority" : undefined;
-		case "claude-only":
-			return provider === "anthropic" ? "priority" : undefined;
-		default:
-			return serviceTier;
+export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>>;
+
+/**
+ * Classify a model into the service-tier family whose knob governs it, or
+ * `undefined` when the model exposes no serving-priority control.
+ *
+ * OpenRouter models are classified by id namespace (`anthropic/`, `google/`,
+ * `openai/`); Claude on Bedrock/Vertex (api `anthropic-messages`) is the
+ * anthropic family even though its provider is `amazon-bedrock`/`google-vertex`.
+ */
+export function serviceTierFamily(model: Pick<Model, "provider" | "api" | "id">): ServiceTierFamily | undefined {
+	const provider = model.provider;
+	if (provider === "openrouter") {
+		const id = model.id.toLowerCase();
+		if (id.startsWith("anthropic/")) return "anthropic";
+		if (id.startsWith("google/")) return "google";
+		if (id.startsWith("openai/")) return "openai";
+		return undefined;
 	}
+	if (provider === "openai" || provider === "openai-codex") return "openai";
+	if (model.api === "anthropic-messages") return "anthropic";
+	if (provider === "google" || provider === "google-vertex") return "google";
+	return undefined;
 }
 
 /**
- * True when the (possibly scoped) tier should be sent on the wire as the
- * `service_tier` request field for the given provider. OpenAI / OpenAI-Codex
- * accept `flex`/`scale`/`priority`; Fireworks Serverless realizes only its
- * Priority serving path (`service_tier: "priority"`) on the OpenAI-compatible
- * chat-completions endpoint. Unsupported tiers (`"auto"`, `"default"`), other
- * providers, and scope mismatches all return false.
+ * Reduce a per-family tier map to the single wire tier for `model` — the entry
+ * for the model's family, or `undefined` when the model has no family.
+ */
+export function resolveModelServiceTier(
+	tiers: ServiceTierByFamily | null | undefined,
+	model: Pick<Model, "provider" | "api" | "id">,
+): ServiceTier | undefined {
+	if (!tiers) return undefined;
+	const family = serviceTierFamily(model);
+	return family ? tiers[family] : undefined;
+}
+
+/**
+ * True when the tier should be sent on the wire as the provider's service-tier
+ * request field. OpenAI / OpenAI-Codex accept `flex`/`scale`/`priority`; Google
+ * (Gemini API + Vertex) and OpenRouter accept `flex`/`priority`; Fireworks
+ * Serverless realizes only its Priority serving path. Anthropic is absent — it
+ * realizes `priority` via `speed: "fast"`, not a service-tier field.
  */
 export function shouldSendServiceTier(
 	serviceTier: ServiceTier | null | undefined,
 	provider: Provider | undefined,
 ): boolean {
-	const resolved = resolveServiceTier(serviceTier, provider);
-	if (provider === "openai" || provider === "openai-codex") {
-		return resolved === "flex" || resolved === "scale" || resolved === "priority";
+	if (!serviceTier) return false;
+	if (provider === "openai" || provider === "openai-codex" || provider === "openrouter") {
+		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
 	}
-	if (provider === "fireworks") {
-		return resolved === "priority";
+	if (provider === "google") {
+		return serviceTier === "flex" || serviceTier === "priority";
+	}
+	// Vertex realizes only priority (via header); flex has no documented control.
+	if (provider === "google-vertex" || provider === "fireworks") {
+		return serviceTier === "priority";
 	}
 	return false;
 }
 
 /**
- * Premium-request weight contributed by sending priority to a provider
- * that supports it. Mirrors GitHub Copilot's `premiumRequests` accounting
- * so the "premium requests" stat aggregates priority traffic across the
- * OpenAI family and Anthropic fast-mode realizations.
+ * True when `priority` will actually be realized on the wire for `model`.
+ * Direct Anthropic realizes fast mode; OpenAI/Google/Fireworks emit the
+ * service-tier field; OpenRouter realizes it only for its OpenAI- and
+ * Google-family upstreams. Bedrock/Vertex Claude and OpenRouter Anthropic
+ * models do not realize priority and return `false`.
+ */
+export function realizesPriorityServiceTier(
+	serviceTier: ServiceTier | null | undefined,
+	model: Pick<Model, "provider" | "api" | "id">,
+): boolean {
+	if (serviceTier !== "priority") return false;
+	if (model.provider === "anthropic") return true;
+	if (model.provider === "openrouter") {
+		const family = serviceTierFamily(model);
+		return family === "openai" || family === "google";
+	}
+	if (model.api === "anthropic-messages") return false;
+	return shouldSendServiceTier(serviceTier, model.provider);
+}
+
+/**
+ * Premium-request weight contributed by a priority request to a provider that
+ * realizes it and bills extra. Mirrors GitHub Copilot's `premiumRequests`
+ * accounting so the "premium requests" stat aggregates priority traffic across
+ * the OpenAI family, direct Anthropic fast mode, and Google priority.
  *
- * Returns 1 per resolved priority request, 0 otherwise.
+ * Returns 1 only when priority is actually realized on the wire for `model`
+ * (see {@link realizesPriorityServiceTier}) and the provider bills it as a
+ * premium request. OpenRouter is excluded — it bills per its own pricing, not
+ * Copilot-premium semantics — as are Bedrock/Vertex Claude, where priority is
+ * silently dropped.
  */
 export function getPriorityPremiumRequests(
 	serviceTier: ServiceTier | null | undefined,
-	provider: Provider | undefined,
+	model: Pick<Model, "provider" | "api" | "id">,
 ): number {
-	if (resolveServiceTier(serviceTier, provider) !== "priority") return 0;
-	// Only providers that realize `priority` on the wire bill the user.
-	// Everywhere else, the field is silently dropped and nothing is charged.
-	return provider === "openai" || provider === "openai-codex" || provider === "anthropic" ? 1 : 0;
+	if (!realizesPriorityServiceTier(serviceTier, model)) return 0;
+	const provider = model.provider;
+	return provider === "openai" ||
+		provider === "openai-codex" ||
+		provider === "anthropic" ||
+		provider === "google" ||
+		provider === "google-vertex"
+		? 1
+		: 0;
+}
+
+/**
+ * Coerce a persisted service-tier value to a {@link ServiceTierByFamily}. Newer
+ * sessions store the family map directly; legacy sessions stored a single
+ * scalar — `"priority"` applied everywhere, `"openai-only"`/`"claude-only"`
+ * scoped to one family, and the remaining values were OpenAI-only semantics.
+ */
+export function coerceServiceTierByFamily(value: unknown): ServiceTierByFamily | undefined {
+	if (value === null || value === undefined) return undefined;
+	if (typeof value === "object") {
+		const src = value as Record<string, unknown>;
+		const out: ServiceTierByFamily = {};
+		for (const family of ["openai", "anthropic", "google"] as const) {
+			const tier = src[family];
+			if (tier === "auto" || tier === "default" || tier === "flex" || tier === "scale" || tier === "priority") {
+				out[family] = tier;
+			}
+		}
+		return Object.keys(out).length > 0 ? out : undefined;
+	}
+	switch (value) {
+		case "priority":
+			return { openai: "priority", anthropic: "priority", google: "priority" };
+		case "openai-only":
+			return { openai: "priority" };
+		case "claude-only":
+			return { anthropic: "priority" };
+		case "auto":
+			return { openai: "auto" };
+		case "default":
+			return { openai: "default" };
+		case "flex":
+			return { openai: "flex" };
+		case "scale":
+			return { openai: "scale" };
+		default:
+			return undefined;
+	}
 }
 
 export interface ProviderSessionState {

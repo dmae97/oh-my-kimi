@@ -7,7 +7,7 @@
 import path from "node:path";
 import type { AgentEvent, AgentIdentity, AgentTelemetryConfig, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
-import type { Api, Model, ServiceTier, Usage } from "@oh-my-pi/pi-ai";
+import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { logger, popLoopPhase, prompt, pushLoopPhase, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Rule } from "../capability/rule";
 import { ModelRegistry } from "../config/model-registry";
@@ -18,7 +18,7 @@ import {
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
-import { resolveSubagentServiceTier } from "../config/service-tier";
+import { buildServiceTierByFamily, resolveSubagentServiceTier } from "../config/service-tier";
 import { Settings } from "../config/settings";
 import { SETTINGS_SCHEMA, type SettingPath } from "../config/settings-schema";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -344,12 +344,12 @@ export interface ExecutorOptions {
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
 	/**
-	 * Parent session's live effective service tier, the source of truth for a
-	 * subagent whose `serviceTierSubagent` is `"inherit"`. `null` = the parent
+	 * Parent session's live per-family service tiers, the source of truth for a
+	 * subagent whose `tier.subagent` is `"inherit"`. `null` = the parent
 	 * explicitly has no tier (e.g. `/fast off`); omitted = no live session, so
-	 * inherit falls back to the configured `serviceTier` setting.
+	 * inherit falls back to the subagent's configured `tier.*` settings.
 	 */
-	parentServiceTier?: ServiceTier | null;
+	parentServiceTier?: ServiceTierByFamily | null;
 	/** Override local:// protocol options so subagent shares parent's local:// root */
 	localProtocolOptions?: LocalProtocolOptions;
 	/**
@@ -739,21 +739,28 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 export function createSubagentSettings(
 	baseSettings: Settings,
 	overrides?: Partial<Record<SettingPath, unknown>>,
-	inheritedServiceTier?: ServiceTier | null,
+	inheritedServiceTier?: ServiceTierByFamily | null,
 ): Settings {
 	const snapshot: Partial<Record<SettingPath, unknown>> = {};
 	for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
 		snapshot[key] = baseSettings.get(key);
 	}
-	// Resolve the subagent's service tier from `serviceTierSubagent` ("inherit" =
-	// match the parent's live tier when a live session supplied one, else the
-	// configured `serviceTier`). The result is stamped back onto the snapshot so
-	// createAgentSession's `settings.get("serviceTier")` read picks it up.
-	snapshot.serviceTier = resolveSubagentServiceTier(
-		baseSettings.get("serviceTierSubagent"),
-		baseSettings.get("serviceTier"),
-		inheritedServiceTier,
-	);
+	// Resolve the subagent's per-family tiers from `tier.subagent` ("inherit" =
+	// match the parent's live tiers when a live session supplied them, else the
+	// subagent's own configured tier.* settings). The result is stamped back onto
+	// the snapshot so createAgentSession's tier.* reads pick it up.
+	const inheritedTiers =
+		inheritedServiceTier === undefined
+			? buildServiceTierByFamily(
+					baseSettings.get("tier.openai"),
+					baseSettings.get("tier.anthropic"),
+					baseSettings.get("tier.google"),
+				)
+			: (inheritedServiceTier ?? {});
+	const subagentTiers = resolveSubagentServiceTier(baseSettings.get("tier.subagent"), inheritedTiers);
+	snapshot["tier.openai"] = subagentTiers.openai ?? "none";
+	snapshot["tier.anthropic"] = subagentTiers.anthropic ?? "none";
+	snapshot["tier.google"] = subagentTiers.google ?? "none";
 	return Settings.isolated({
 		...snapshot,
 		"async.enabled": false,

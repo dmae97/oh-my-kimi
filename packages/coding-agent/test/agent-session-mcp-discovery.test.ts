@@ -774,7 +774,7 @@ describe("AgentSession MCP discovery", () => {
 			settings: Settings.isolated({
 				"mcp.discoveryMode": true,
 				defaultThinkingLevel: "high",
-				serviceTier: "priority",
+				"tier.openai": "priority",
 			}),
 			modelRegistry: {} as never,
 			toolRegistry,
@@ -789,10 +789,10 @@ describe("AgentSession MCP discovery", () => {
 
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		sessionManager.appendThinkingLevelChange(ThinkingLevel.High);
-		sessionManager.appendServiceTierChange("flex");
+		sessionManager.appendServiceTierChange({ openai: "flex" });
 		sessionManager.appendMCPToolSelection(["mcp__docs_search"]);
 		expect(sessionManager.buildSessionContext().thinkingLevel).toBe(ThinkingLevel.High);
-		expect(sessionManager.buildSessionContext().serviceTier).toBe("flex");
+		expect(sessionManager.buildSessionContext().serviceTier).toEqual({ openai: "flex" });
 		expect(sessionManager.buildSessionContext().selectedMCPToolNames).toEqual(["mcp__docs_search"]);
 		expect(sessionManager.buildSessionContext().hasPersistedMCPToolSelection).toBe(true);
 		await sessionManager.rewriteEntries();
@@ -803,7 +803,7 @@ describe("AgentSession MCP discovery", () => {
 		await session.switchSession(olderSessionFile!);
 		expect(session.sessionFile).toBe(olderSessionFile);
 		expect(session.thinkingLevel).toBe(ThinkingLevel.Medium);
-		expect(session.serviceTier).toBe("priority");
+		expect(session.serviceTierByFamily).toEqual({ openai: "priority" });
 		expect(session.getSelectedMCPToolNames()).toEqual([]);
 		expect(session.getActiveToolNames()).toEqual(["read"]);
 		expect(session.systemPrompt).toEqual(["tools:read"]);
@@ -813,7 +813,7 @@ describe("AgentSession MCP discovery", () => {
 		await session.switchSession(originalSessionFile!);
 		expect(session.sessionFile).toBe(originalSessionFile);
 		expect(session.thinkingLevel).toBe(ThinkingLevel.Medium);
-		expect(session.serviceTier).toBe("flex");
+		expect(session.serviceTierByFamily).toEqual({ openai: "flex" });
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__docs_search"]);
 		expect(session.getActiveToolNames()).toEqual(["read", "mcp__docs_search"]);
 		expect(session.systemPrompt).toEqual(["tools:read,mcp__docs_search"]);

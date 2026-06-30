@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Replaced the global `serviceTier` setting with `tier.openai`, `tier.anthropic`, and `tier.google` for granular control
+- Updated `/fast` to target the service-tier family of the currently selected model
+- Updated subagent and advisor tier configuration to use the new per-family setting structure
+- Removed `fastModeScope` setting, as per-family scoping is now natively supported via the `tier.*` settings
+
 - Improved binary file detection and terminal handling to prevent corruption from non-UTF-8 content, and updated file summaries to explicitly note skipped binary files.
 - Enhanced context compaction (snapcompact) to resolve shapes contextually based on rendered text content.
 

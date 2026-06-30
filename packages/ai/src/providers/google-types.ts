@@ -10,6 +10,8 @@
  *   - The Cloud Code Assist endpoint used by `google-gemini-cli.ts`
  */
 
+import type { ServiceTier } from "../types";
+
 /** Mirror of `@google/genai`'s `FinishReason` string enum. */
 export type FinishReason =
 	| "FINISH_REASON_UNSPECIFIED"
@@ -131,6 +133,11 @@ export interface GenerateContentConfig {
 	safetySettings?: Array<Record<string, unknown>>;
 	cachedContent?: string;
 	thinkingConfig?: ThinkingConfig;
+	/**
+	 * Gemini/Vertex serving tier. Serialized to the request body root as
+	 * `serviceTier` (camelCase) by the transformer in `google-shared.ts`.
+	 */
+	serviceTier?: ServiceTier;
 	abortSignal?: AbortSignal;
 }
 

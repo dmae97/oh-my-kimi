@@ -36,10 +36,14 @@ import {
 import { EDIT_MODES } from "../utils/edit-mode";
 import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES, type SearchProviderId } from "../web/search/types";
 import {
+	SERVICE_TIER_ANTHROPIC_OPTIONS,
+	SERVICE_TIER_ANTHROPIC_VALUES,
+	SERVICE_TIER_GOOGLE_OPTIONS,
+	SERVICE_TIER_GOOGLE_VALUES,
 	SERVICE_TIER_INHERIT_OPTIONS,
 	SERVICE_TIER_INHERIT_SETTING_VALUES,
-	SERVICE_TIER_OPTIONS,
-	SERVICE_TIER_SETTING_VALUES,
+	SERVICE_TIER_OPENAI_OPTIONS,
+	SERVICE_TIER_OPENAI_VALUES,
 } from "./service-tier";
 
 /** Unified settings schema - single source of truth for all settings.
@@ -1214,72 +1218,74 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	serviceTier: {
+	"tier.openai": {
 		type: "enum",
-		values: SERVICE_TIER_SETTING_VALUES,
+		values: SERVICE_TIER_OPENAI_VALUES,
 		default: "none",
 		ui: {
 			tab: "model",
 			group: "Sampling",
-			label: "Service Tier",
+			label: "Service Tier — OpenAI",
 			description:
-				'Processing priority hint (none = omit). OpenAI accepts the tier values directly; Anthropic realizes `priority` as `speed: "fast"` on supported Opus models. Scoped values target one family.',
-			options: SERVICE_TIER_OPTIONS,
+				"Processing tier for OpenAI / OpenAI-Codex requests, and OpenAI-family models routed via OpenRouter (none = omit). Sent as `service_tier`.",
+			options: SERVICE_TIER_OPENAI_OPTIONS,
 		},
 	},
 
-	serviceTierSubagent: {
+	"tier.anthropic": {
+		type: "enum",
+		values: SERVICE_TIER_ANTHROPIC_VALUES,
+		default: "none",
+		ui: {
+			tab: "model",
+			group: "Sampling",
+			label: "Service Tier — Anthropic",
+			description:
+				'Processing tier for Claude requests. `priority` realizes fast mode (`speed: "fast"`) on supported direct Anthropic models; ignored on Bedrock/Vertex Claude and via OpenRouter.',
+			options: SERVICE_TIER_ANTHROPIC_OPTIONS,
+		},
+	},
+
+	"tier.google": {
+		type: "enum",
+		values: SERVICE_TIER_GOOGLE_VALUES,
+		default: "none",
+		ui: {
+			tab: "model",
+			group: "Sampling",
+			label: "Service Tier — Google",
+			description:
+				"Processing tier for Gemini (Google AI Studio + Vertex) requests, and Google-family models routed via OpenRouter (none = omit). Sent as the top-level `serviceTier` field.",
+			options: SERVICE_TIER_GOOGLE_OPTIONS,
+		},
+	},
+
+	"tier.subagent": {
 		type: "enum",
 		values: SERVICE_TIER_INHERIT_SETTING_VALUES,
 		default: "inherit",
 		ui: {
 			tab: "model",
 			group: "Sampling",
-			label: "Service Tier - Subagent",
+			label: "Service Tier — Subagent",
 			description:
-				"Service Tier for spawned task/eval subagents. Inherit = match the main agent's live tier (tracks /fast); pick a value to scope subagents independently.",
+				"Service Tier for spawned task/eval subagents. Inherit = match the main agent's live per-family tiers (tracks /fast); pick a value to apply it to whichever family the subagent's model belongs to.",
 			options: SERVICE_TIER_INHERIT_OPTIONS,
 		},
 	},
 
-	serviceTierAdvisor: {
+	"tier.advisor": {
 		type: "enum",
 		values: SERVICE_TIER_INHERIT_SETTING_VALUES,
 		default: "none",
 		ui: {
 			tab: "model",
 			group: "Sampling",
-			label: "Service Tier - Advisor",
+			label: "Service Tier — Advisor",
 			description:
-				"Service Tier for the advisor model. None = standard processing; Inherit = match the main agent's live tier; pick a value (e.g. Priority) to run the advisor on a faster serving path.",
+				"Service Tier for the advisor model. None = standard processing; Inherit = match the main agent's live per-family tiers; pick a value to apply it to the advisor model's family.",
 			options: SERVICE_TIER_INHERIT_OPTIONS,
 			condition: "advisorEnabled",
-		},
-	},
-
-	fastModeScope: {
-		type: "enum",
-		values: ["both", "openai", "claude"] as const,
-		default: "both",
-		ui: {
-			tab: "model",
-			group: "Sampling",
-			label: "Fast Mode Scope",
-			description:
-				'Which providers `/fast on` (and the fast-mode toggle) target. "both" = priority on every supported provider; "openai"/"claude" scope it to one family (mirrors serviceTier openai-only/claude-only).',
-			options: [
-				{ value: "both", label: "Both", description: "Priority on every supported provider" },
-				{
-					value: "openai",
-					label: "OpenAI only",
-					description: "Priority on OpenAI/OpenAI-Codex requests; ignored elsewhere",
-				},
-				{
-					value: "claude",
-					label: "Claude only",
-					description: "Anthropic fast mode on direct Claude requests; ignored elsewhere",
-				},
-			],
 		},
 	},
 
