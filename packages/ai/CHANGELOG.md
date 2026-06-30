@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed OAuth callback flows missing aborts that fired before the local callback wait registered its signal listener, so pre-cancelled flows now stop before opening/waiting on the callback server.
+
 ## [16.2.7] - 2026-06-30
 
 ### Added

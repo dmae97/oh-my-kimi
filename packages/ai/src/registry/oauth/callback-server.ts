@@ -87,18 +87,29 @@ export abstract class OAuthCallbackFlow {
 			.join("");
 	}
 
+	#loginCancelledError(): AIError.LoginCancelledError {
+		return new AIError.LoginCancelledError(`OAuth callback cancelled: ${this.ctrl.signal?.reason}`);
+	}
+
+	#throwIfCancelled(): void {
+		if (this.ctrl.signal?.aborted) throw this.#loginCancelledError();
+	}
+
 	/**
 	 * Execute the OAuth login flow.
 	 */
 	async login(): Promise<OAuthCredentials> {
 		const state = this.generateState();
+		this.#throwIfCancelled();
 
 		// Start callback server first to get actual redirect URI
 		const { server, redirectUri } = await this.#startCallbackServer(state);
 
 		try {
+			this.#throwIfCancelled();
 			// Generate auth URL with the ACTUAL redirect URI (may differ from expected if port was busy)
 			const { url: authUrl, instructions } = await this.generateAuthUrl(state, redirectUri);
+			this.#throwIfCancelled();
 
 			// Notify controller that auth is ready
 			this.ctrl.onAuth?.({ url: authUrl, instructions });
@@ -106,6 +117,7 @@ export abstract class OAuthCallbackFlow {
 
 			// Wait for callback or manual input
 			const { code } = await this.#waitForCallback(state);
+			this.#throwIfCancelled();
 
 			this.ctrl.onProgress?.("Exchanging authorization code for tokens...");
 
@@ -208,17 +220,18 @@ export abstract class OAuthCallbackFlow {
 	#waitForCallback(expectedState: string): Promise<CallbackResult> {
 		const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT);
 		const signal = this.ctrl.signal ? AbortSignal.any([this.ctrl.signal, timeoutSignal]) : timeoutSignal;
+		if (signal.aborted) return Promise.reject(this.#loginCancelledError());
 
-		const callbackPromise = new Promise<CallbackResult>((resolve, reject) => {
-			this.#callbackResolve = resolve;
-			this.#callbackReject = reject;
+		const callback = Promise.withResolvers<CallbackResult>();
+		this.#callbackResolve = callback.resolve;
+		this.#callbackReject = callback.reject;
 
-			signal.addEventListener("abort", () => {
-				this.#callbackResolve = undefined;
-				this.#callbackReject = undefined;
-				reject(new AIError.LoginCancelledError(`OAuth callback cancelled: ${signal.reason}`));
-			});
+		signal.addEventListener("abort", () => {
+			this.#callbackResolve = undefined;
+			this.#callbackReject = undefined;
+			callback.reject(new AIError.LoginCancelledError(`OAuth callback cancelled: ${signal.reason}`));
 		});
+		const callbackPromise = callback.promise;
 
 		// Manual input race (if supported)
 		if (this.ctrl.onManualCodeInput) {

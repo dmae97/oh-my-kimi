@@ -231,11 +231,11 @@ describe("/mcp auth commands", () => {
 		// only resolves when the controller's signal aborts. Mirrors what
 		// OAuthCallbackFlow.#waitForCallback does in production.
 		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(function (this: oauthFlow.MCPOAuthFlow) {
-			return new Promise<never>((_, reject) => {
-				this.ctrl.signal?.addEventListener("abort", () => {
-					reject(new Error(`OAuth callback cancelled: ${String(this.ctrl.signal?.reason ?? "aborted")}`));
-				});
+			const pending = Promise.withResolvers<never>();
+			this.ctrl.signal?.addEventListener("abort", () => {
+				pending.reject(new Error(`OAuth callback cancelled: ${String(this.ctrl.signal?.reason ?? "aborted")}`));
 			});
+			return pending.promise;
 		});
 
 		const { controller, showError, showStatus, editor } = createController(authStorage);
@@ -267,6 +267,38 @@ describe("/mcp auth commands", () => {
 		// onEscape must be restored to its previous value so subsequent user
 		// input does not keep aborting the (now-finished) flow.
 		expect(editor.onEscape).not.toBe(installedEscape);
+	});
+
+	test("Esc cancels even when OAuth login has not registered its signal listener yet", async () => {
+		const authStorage = freshAuthStorage();
+		await authStorage.reload();
+		vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(AUTH_ERROR);
+
+		// Simulates the review race: Esc aborts oauthTimeout before
+		// OAuthCallbackFlow.#waitForCallback has registered its abort listener
+		// (e.g. during dynamic client registration or metadata discovery).
+		// The login promise itself never observes ctrl.signal; #handleOAuthFlow
+		// must race it against oauthTimeout.signal.
+		vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockReturnValue(Promise.withResolvers<never>().promise);
+		const { controller, showError, showStatus, editor } = createController(authStorage);
+
+		const reauthPromise = controller.handle("/mcp reauth envserver");
+		const deadline = Date.now() + 1_000;
+		while (typeof editor.onEscape !== "function" && Date.now() < deadline) {
+			await Bun.sleep(10);
+		}
+		expect(typeof editor.onEscape).toBe("function");
+		editor.onEscape?.();
+
+		await Promise.race([
+			reauthPromise,
+			Bun.sleep(2_000).then(() => {
+				throw new Error("reauth did not resolve within 2s of pre-wait Esc");
+			}),
+		]);
+
+		expect(showError).not.toHaveBeenCalled();
+		expect(showStatus).toHaveBeenCalledWith(expect.stringMatching(/cancel/i));
 	});
 
 	test("OAuth deadline still surfaces as a reauthorization error, not a cancellation", async () => {

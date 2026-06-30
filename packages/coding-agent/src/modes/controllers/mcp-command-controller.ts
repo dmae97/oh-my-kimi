@@ -62,6 +62,16 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string,
 	}, timeoutMs);
 	return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
 }
+function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createError: () => Error): Promise<T> {
+	if (signal.aborted) return Promise.reject(createError());
+
+	const aborted = Promise.withResolvers<never>();
+	const onAbort = (): void => aborted.reject(createError());
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([promise, aborted.promise]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
+	});
+}
 
 /** Renders the MCP OAuth fallback URL without hard-wrapping the copy target. */
 export class MCPAuthorizationLinkPrompt implements Component {
@@ -735,9 +745,18 @@ export class MCPCommandController {
 				},
 			);
 
-			// Execute OAuth flow with 5 minute timeout
+			const createAbortError = (): Error => {
+				const reason = String(oauthTimeout.signal.reason ?? "MCP OAuth flow aborted");
+				return userCancelled ? new MCPOAuthCancelledError() : new Error(reason);
+			};
+			if (oauthTimeout.signal.aborted) throw createAbortError();
+
+			// Execute OAuth flow with 5 minute timeout. Race the login itself
+			// against the abort signal because Esc/external abort may fire before
+			// MCPOAuthFlow reaches OAuthCallbackFlow.#waitForCallback, where the
+			// underlying callback server normally observes the signal.
 			const credentials = await withTimeout(
-				flow.login(),
+				raceAbortSignal(flow.login(), oauthTimeout.signal, createAbortError),
 				5 * 60 * 1000,
 				"OAuth flow timed out after 5 minutes",
 				() => oauthTimeout.abort("MCP OAuth flow timed out"),
