@@ -7,7 +7,7 @@ import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-regis
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ModelSelectorComponent } from "@oh-my-pi/pi-coding-agent/modes/components/model-selector";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "@oh-my-pi/pi-coding-agent/thinking";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 function normalizeRenderedText(text: string): string {
@@ -154,6 +154,26 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(rendered).toContain("Thinking for: Default (gpt-5.5)");
 		expect(rendered).toContain("low medium high xhigh");
 		expect(rendered).not.toContain("low medium high max");
+	});
+
+	test("reloads DEFAULT(auto) from defaultThinkingLevel", async () => {
+		installTestTheme();
+		const model = getBundledModel("openai", "gpt-5.5");
+		if (!model) throw new Error("Expected bundled model openai/gpt-5.5");
+
+		const settings = Settings.isolated({
+			defaultThinkingLevel: AUTO_THINKING,
+			modelRoles: {
+				default: `${model.provider}/${model.id}`,
+			},
+		});
+
+		const selector = createSelector(model, settings);
+		await Bun.sleep(0);
+		installTestTheme();
+
+		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
+		expect(rendered).toContain("DEFAULT (auto)");
 	});
 
 	test("shows compact auto badges for unconfigured role defaults", async () => {
