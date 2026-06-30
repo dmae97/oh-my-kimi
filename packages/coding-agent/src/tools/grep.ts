@@ -122,8 +122,10 @@ export const SINGLE_FILE_MATCHES = 200;
  * pagination headroom so the caller can see total file count. */
 const INTERNAL_TOTAL_CAP = 2000;
 /** Mirrors `MAX_FILE_BYTES` in `crates/pi-natives/src/grep.rs`. Native grep
- * silently returns no matches for files larger than this; surface a warning
- * when the caller explicitly targeted such a file so they know to chunk it. */
+ * searches only the first `MAX_FILE_BYTES` of a larger file (a leading mmap
+ * window) and drops the rest; matches beyond the window are not returned. We
+ * surface a partial-coverage note when the caller explicitly targeted such a
+ * file so they know matches past the window are not shown. */
 const NATIVE_GREP_MAX_FILE_BYTES = 4 * 1024 * 1024;
 /** Wall-clock budget for a single native grep invocation. Without it, an
  * aborted or runaway search (huge tree, network mount) keeps burning CPU on
@@ -1260,8 +1262,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				const { record: recordFile, list: fileList } = createFileRecorder();
 				const fileMatchCounts = new Map<string, number>();
 				// Detect explicit file targets that exceed the native grep size cap.
-				// Native silently returns no matches above the cap; without this note the
-				// caller sees "no matches" for a literal pattern that visibly exists.
+				// Native searches only their first NATIVE_GREP_MAX_FILE_BYTES; without
+				// this note the caller might miss that matches beyond the window
+				// (or "no matches") reflect partial coverage, not the whole file.
 				const oversizedNote = await (async (): Promise<string | undefined> => {
 					const explicitFileTargets: string[] = [];
 					if (exactFilePaths) {
@@ -1285,13 +1288,13 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					);
 					if (oversized.length === 0) return undefined;
 					const limitMb = Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024));
-					return `Skipped oversized files (>${limitMb}MB grep limit; split the file or narrow with \`read\`): ${oversized.join(", ")}`;
+					return `Searched only the first ${limitMb}MB of large files (matches past the ${limitMb}MB window are not shown; use \`read\` for the rest): ${oversized.join(", ")}`;
 				})();
-				// Directory/multi-target scopes: native grep counts oversized skips but
-				// cannot name them; explicit-file scopes are covered (with names) above.
+				// Directory/multi-target scopes: native counts files it could not map
+				// even a prefix of (rare mmap failures), but cannot name them.
 				const oversizedScanNote =
 					!oversizedNote && skippedOversizedCount > 0
-						? `Skipped ${skippedOversizedCount} oversized file(s) (>${Math.floor(NATIVE_GREP_MAX_FILE_BYTES / (1024 * 1024))}MB grep limit); target them directly with \`read\``
+						? `Skipped ${skippedOversizedCount} unreadable large file(s); target them directly with \`read\``
 						: undefined;
 				const archiveNote =
 					archiveUnreadable.length > 0

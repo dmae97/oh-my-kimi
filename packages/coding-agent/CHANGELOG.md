@@ -4,9 +4,10 @@
 
 ### Changed
 
+- Updated grep warnings to clarify that large files are partially searched rather than entirely skipped
+
 - Renamed the filesystem walker worker count environment variable from PI_GREP_WORKERS to PI_WALK_WORKERS
 - Centralized filesystem traversal policy in `pi-walker`.
-
 - Changed the in-session `/resume` session picker to open as a fullscreen window on the terminal's alternate screen, matching the startup `--resume` picker and `/settings`. It borrows the alt buffer for its lifetime (the transcript is untouched underneath) and enables mouse tracking — the wheel scrolls the list and a left click resumes the row under the pointer — with the keybinding hint and bottom border pinned to the screen bottom. Previously it mounted inline in the editor slot and rendered compactly without mouse support.
 
 ### Fixed

@@ -13,7 +13,7 @@ use std::{
 	io::{self, Read},
 	path::{Path, PathBuf},
 	sync::{
-		Arc, Mutex,
+		Mutex,
 		atomic::{AtomicU64, AtomicUsize, Ordering},
 	},
 };
@@ -1109,6 +1109,289 @@ fn file_size_hint(size: Option<f64>) -> Option<u64> {
 		.map(|value| value as u64)
 }
 
+/// How to read a candidate's bytes for searching.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadPolicy {
+	/// Read the whole file; defer oversized files to the prefix pass.
+	Full,
+	/// Map only the leading [`MAX_FILE_BYTES`] window (deferred oversized pass).
+	Prefix,
+}
+
+/// Outcome of attempting to search one candidate.
+enum FileOutcome {
+	/// File was searched (possibly zero matches); counts toward
+	/// `files_searched`.
+	Searched(SearchResultInternal),
+	/// Oversized file deferred to the prefix pass ([`ReadPolicy::Full`] only).
+	Defer,
+	/// Oversized file that could not be mapped even for its prefix.
+	SkippedOversized,
+	/// Unreadable / not a regular file; ignored.
+	Skipped,
+}
+
+/// Shared accumulator across both search passes.
+///
+/// `results` is drained between passes; `deferred` is filled by pass 1 and
+/// consumed by pass 2; the counters accumulate across both.
+#[derive(Default)]
+struct PassState {
+	results:           Mutex<Vec<FileSearchResult>>,
+	deferred:          Mutex<Vec<pi_walker::FileCandidate>>,
+	files_searched:    AtomicU64,
+	skipped_oversized: AtomicU64,
+	emitted:           AtomicU64,
+}
+
+/// Memory-map the first [`MAX_FILE_BYTES`] of a file for searching.
+///
+/// Used by the deferred oversized pass: files larger than the cap are searched
+/// only over their leading window; the remainder is dropped. mmap-only — never
+/// falls back to `read_to_end`, so a multi-gigabyte file never allocates its
+/// full contents. Returns [`ReadFile::Skipped`] when the file cannot be mapped.
+fn read_file_prefix(path: &Path) -> io::Result<ReadFile> {
+	let file = match File::open(path) {
+		Ok(file) => file,
+		Err(err)
+			if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) =>
+		{
+			return Ok(ReadFile::Skipped);
+		},
+		Err(err) => return Err(err),
+	};
+	let metadata = file.metadata()?;
+	if !metadata.is_file() {
+		return Ok(ReadFile::Skipped);
+	}
+	let len = metadata.len();
+	if len == 0 {
+		return Ok(ReadFile::Bytes(FileBytes::Owned(Vec::new())));
+	}
+	let window =
+		usize::try_from(len.min(MAX_FILE_BYTES)).expect("window is bounded by MAX_FILE_BYTES");
+	// SAFETY: read-only mapping tied to the open handle, bounded to `window`
+	// bytes (<= file length). Dropped immediately after the per-file search.
+	let mapping = unsafe { memmap2::MmapOptions::new().len(window).map(&file) };
+	match mapping {
+		Ok(mapped) => Ok(ReadFile::Bytes(FileBytes::Mapped(mapped))),
+		Err(_) => Ok(ReadFile::Skipped),
+	}
+}
+
+/// Read one candidate per `policy` and search it, classifying the result.
+fn search_one_file(
+	searcher: &mut Searcher,
+	matcher: &grep_regex::RegexMatcher,
+	file: &pi_walker::FileCandidate,
+	file_params: SearchParams,
+	policy: ReadPolicy,
+) -> FileOutcome {
+	let read = match policy {
+		ReadPolicy::Full => read_file_bytes_with_size(&file.path, file_size_hint(file.size)),
+		ReadPolicy::Prefix => read_file_prefix(&file.path),
+	};
+	let bytes = match read {
+		Ok(ReadFile::Bytes(bytes)) => bytes,
+		Ok(ReadFile::Oversized) => return FileOutcome::Defer,
+		Ok(ReadFile::Skipped) => {
+			return match policy {
+				ReadPolicy::Prefix => FileOutcome::SkippedOversized,
+				ReadPolicy::Full => FileOutcome::Skipped,
+			};
+		},
+		Err(_) => return FileOutcome::Skipped,
+	};
+	// A searcher error counts as searched-with-no-matches, matching the prior
+	// behavior (the file was read and attempted).
+	let search = search_file_bytes(searcher, matcher, bytes.as_slice(), file_params).unwrap_or(
+		SearchResultInternal {
+			matches:       Vec::new(),
+			match_count:   0,
+			collected:     0,
+			limit_reached: false,
+		},
+	);
+	FileOutcome::Searched(search)
+}
+
+/// Search one candidate and fold its outcome into the shared [`PassState`].
+fn handle_file(
+	file: &pi_walker::FileCandidate,
+	searcher: &mut Searcher,
+	matcher: &grep_regex::RegexMatcher,
+	file_params: SearchParams,
+	policy: ReadPolicy,
+	stop_after_matches: Option<u64>,
+	state: &PassState,
+	ct: &task::CancelToken,
+) -> Result<()> {
+	ct.heartbeat()?;
+	if let Some(stop) = stop_after_matches
+		&& state.emitted.load(Ordering::Relaxed) >= stop
+	{
+		return Ok(());
+	}
+	match search_one_file(searcher, matcher, file, file_params, policy) {
+		FileOutcome::Defer => {
+			state
+				.deferred
+				.lock()
+				.expect("deferred lock poisoned")
+				.push(file.clone());
+		},
+		FileOutcome::SkippedOversized => {
+			state.skipped_oversized.fetch_add(1, Ordering::Relaxed);
+		},
+		FileOutcome::Skipped => {},
+		FileOutcome::Searched(search) => {
+			state.files_searched.fetch_add(1, Ordering::Relaxed);
+			if search.match_count > 0 {
+				let emitted_in_file = search.collected;
+				state
+					.results
+					.lock()
+					.expect("results lock poisoned")
+					.push(FileSearchResult {
+						relative_path: file.relative.clone(),
+						matches:       search.matches,
+						match_count:   search.match_count,
+						limit_reached: search.limit_reached,
+					});
+				if stop_after_matches.is_some() {
+					state.emitted.fetch_add(emitted_in_file, Ordering::Relaxed);
+				}
+			}
+		},
+	}
+	Ok(())
+}
+
+/// Run one search pass over `candidates`, returning its path-sorted results.
+///
+/// Counters and the deferred list accumulate into `state`; `results` is drained
+/// here so the same state can drive a second pass.
+fn run_pass(
+	candidates: &[pi_walker::FileCandidate],
+	matcher: &grep_regex::RegexMatcher,
+	file_params: SearchParams,
+	policy: ReadPolicy,
+	parallel_allowed: bool,
+	stop_after_matches: Option<u64>,
+	state: &PassState,
+	ct: &task::CancelToken,
+) -> Result<Vec<FileSearchResult>> {
+	if parallel_allowed && pi_walker::should_parallelize(candidates.len()) {
+		pi_walker::execute_candidates(candidates, |file| {
+			let mut searcher = build_searcher_for_params(file_params);
+			handle_file(
+				file,
+				&mut searcher,
+				matcher,
+				file_params,
+				policy,
+				stop_after_matches,
+				state,
+				ct,
+			)
+		})?;
+	} else {
+		let mut searcher = build_searcher_for_params(file_params);
+		ct.heartbeat()?;
+		for file in candidates {
+			if let Some(stop) = stop_after_matches
+				&& state.emitted.load(Ordering::Relaxed) >= stop
+			{
+				break;
+			}
+			handle_file(
+				file,
+				&mut searcher,
+				matcher,
+				file_params,
+				policy,
+				stop_after_matches,
+				state,
+				ct,
+			)?;
+		}
+	}
+	let mut results = std::mem::take(&mut *state.results.lock().expect("results lock poisoned"));
+	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
+	Ok(results)
+}
+
+/// Search `candidates` in two passes: normal-sized files first, then oversized
+/// files (mmap of their first [`MAX_FILE_BYTES`]) deferred to the end.
+///
+/// Deferring oversized files lets smaller files surface first and lets a
+/// satisfied match budget skip the oversized pass entirely. Normal results
+/// always precede oversized results; each group is path-sorted internally.
+fn process_candidates(
+	candidates: Vec<pi_walker::FileCandidate>,
+	matcher: &grep_regex::RegexMatcher,
+	params: SearchParams,
+	parallel_allowed: bool,
+	stop_after_matches: Option<u64>,
+	ct: &task::CancelToken,
+) -> Result<(Vec<FileSearchResult>, u64, u64)> {
+	let file_params = per_file_params(params);
+	let state = PassState::default();
+
+	// Partition oversized-by-hint files out of pass 1 up front; files without a
+	// size hint stay in pass 1 and are deferred at read time if oversized.
+	let (normal, oversized_hinted): (Vec<_>, Vec<_>) =
+		candidates
+			.into_iter()
+			.partition(|file| match file_size_hint(file.size) {
+				Some(size) => size <= MAX_FILE_BYTES,
+				None => true,
+			});
+	if !oversized_hinted.is_empty() {
+		state
+			.deferred
+			.lock()
+			.expect("deferred lock poisoned")
+			.extend(oversized_hinted);
+	}
+
+	let mut results = run_pass(
+		&normal,
+		matcher,
+		file_params,
+		ReadPolicy::Full,
+		parallel_allowed,
+		stop_after_matches,
+		&state,
+		ct,
+	)?;
+
+	// Pass 2: deferred oversized files, searched over their leading window —
+	// only when a content-mode budget was not already satisfied in pass 1.
+	let deferred = std::mem::take(&mut *state.deferred.lock().expect("deferred lock poisoned"));
+	let limit_satisfied =
+		stop_after_matches.is_some_and(|stop| state.emitted.load(Ordering::Relaxed) >= stop);
+	if !deferred.is_empty() && !limit_satisfied {
+		let oversized = run_pass(
+			&deferred,
+			matcher,
+			file_params,
+			ReadPolicy::Prefix,
+			parallel_allowed,
+			stop_after_matches,
+			&state,
+			ct,
+		)?;
+		results.extend(oversized);
+	}
+
+	Ok((
+		results,
+		state.skipped_oversized.load(Ordering::Relaxed),
+		state.files_searched.load(Ordering::Relaxed),
+	))
+}
+
 fn run_sequential_grep(
 	search_path: &Path,
 	matcher: &grep_regex::RegexMatcher,
@@ -1134,56 +1417,7 @@ fn run_sequential_grep(
 	else {
 		return Ok((Vec::new(), 0, 0));
 	};
-	let file_params = per_file_params(params);
-	let mut searcher = build_searcher_for_params(file_params);
-	let mut results = Vec::new();
-	let mut skipped_oversized = 0u64;
-	let mut files_searched = 0u64;
-	let mut emitted = 0u64;
-
-	ct.heartbeat()?;
-	for file in candidates {
-		ct.heartbeat()?;
-		if let Some(stop_after_matches) = stop_after_matches
-			&& emitted >= stop_after_matches
-		{
-			break;
-		}
-
-		let bytes = match read_file_bytes_with_size(&file.path, file_size_hint(file.size)) {
-			Ok(ReadFile::Bytes(bytes)) => bytes,
-			Ok(ReadFile::Oversized) => {
-				skipped_oversized = skipped_oversized.saturating_add(1);
-				continue;
-			},
-			Ok(ReadFile::Skipped) | Err(_) => continue,
-		};
-		files_searched = files_searched.saturating_add(1);
-		let Some(search) = search_file_bytes(&mut searcher, matcher, bytes.as_slice(), file_params)
-		else {
-			continue;
-		};
-
-		if search.match_count == 0 {
-			continue;
-		}
-		let emitted_in_file = search.collected;
-		results.push(FileSearchResult {
-			relative_path: file.relative,
-			matches:       search.matches,
-			match_count:   search.match_count,
-			limit_reached: search.limit_reached,
-		});
-		if let Some(stop_after_matches) = stop_after_matches {
-			emitted = emitted.saturating_add(emitted_in_file);
-			if emitted >= stop_after_matches {
-				break;
-			}
-		}
-	}
-
-	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-	Ok((results, skipped_oversized, files_searched))
+	process_candidates(candidates, matcher, params, false, stop_after_matches, ct)
 }
 
 #[allow(
@@ -1221,117 +1455,14 @@ fn try_run_native_walk_grep(
 	else {
 		return Ok(None);
 	};
-
-	let file_params = per_file_params(params);
-	if !parallel_search {
-		let mut searcher = build_searcher_for_params(file_params);
-		let mut results = Vec::new();
-		let mut skipped_oversized = 0u64;
-		let mut files_searched = 0u64;
-		let mut emitted = 0u64;
-
-		ct.heartbeat()?;
-		for file in candidates {
-			ct.heartbeat()?;
-			if let Some(stop_after_matches) = stop_after_matches
-				&& emitted >= stop_after_matches
-			{
-				break;
-			}
-
-			let bytes = match read_file_bytes_with_size(&file.path, file_size_hint(file.size)) {
-				Ok(ReadFile::Bytes(bytes)) => bytes,
-				Ok(ReadFile::Oversized) => {
-					skipped_oversized = skipped_oversized.saturating_add(1);
-					continue;
-				},
-				Ok(ReadFile::Skipped) | Err(_) => continue,
-			};
-			files_searched = files_searched.saturating_add(1);
-
-			let Some(search) =
-				search_file_bytes(&mut searcher, matcher, bytes.as_slice(), file_params)
-			else {
-				continue;
-			};
-			if search.match_count == 0 {
-				continue;
-			}
-
-			let emitted_in_file = search.collected;
-			results.push(FileSearchResult {
-				relative_path: file.relative,
-				matches:       search.matches,
-				match_count:   search.match_count,
-				limit_reached: search.limit_reached,
-			});
-			if let Some(stop_after_matches) = stop_after_matches {
-				emitted = emitted.saturating_add(emitted_in_file);
-				if emitted >= stop_after_matches {
-					break;
-				}
-			}
-		}
-
-		results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-		return Ok(Some((results, skipped_oversized, files_searched)));
-	}
-
-	let results_mutex = Arc::new(Mutex::new(Vec::new()));
-	let skipped_oversized = Arc::new(AtomicU64::new(0));
-	let files_searched = Arc::new(AtomicU64::new(0));
-	let emitted = Arc::new(AtomicU64::new(0));
-
-	pi_walker::execute_candidates(&candidates, |file| -> Result<()> {
-		ct.heartbeat()?;
-		if let Some(stop_after_matches) = stop_after_matches
-			&& emitted.load(Ordering::Relaxed) >= stop_after_matches
-		{
-			return Ok(());
-		}
-
-		let bytes = match read_file_bytes_with_size(&file.path, file_size_hint(file.size)) {
-			Ok(ReadFile::Bytes(bytes)) => bytes,
-			Ok(ReadFile::Oversized) => {
-				skipped_oversized.fetch_add(1, Ordering::Relaxed);
-				return Ok(());
-			},
-			Ok(ReadFile::Skipped) | Err(_) => return Ok(()),
-		};
-		files_searched.fetch_add(1, Ordering::Relaxed);
-
-		let mut searcher = build_searcher_for_params(file_params);
-		if let Some(search) = search_file_bytes(&mut searcher, matcher, bytes.as_slice(), file_params)
-			&& search.match_count > 0
-		{
-			let emitted_in_file = search.collected;
-			results_mutex
-				.lock()
-				.expect("results lock poisoned")
-				.push(FileSearchResult {
-					relative_path: file.relative.clone(),
-					matches:       search.matches,
-					match_count:   search.match_count,
-					limit_reached: search.limit_reached,
-				});
-			if stop_after_matches.is_some() {
-				emitted.fetch_add(emitted_in_file, Ordering::Relaxed);
-			}
-		}
-
-		Ok(())
-	})?;
-
-	let mut results = {
-		let mut locked = results_mutex.lock().expect("results lock poisoned");
-		std::mem::take(&mut *locked)
-	};
-	results.sort_unstable_by(|a, b| a.relative_path.cmp(&b.relative_path));
-	Ok(Some((
-		results,
-		skipped_oversized.load(Ordering::Relaxed),
-		files_searched.load(Ordering::Relaxed),
-	)))
+	Ok(Some(process_candidates(
+		candidates,
+		matcher,
+		params,
+		parallel_search,
+		stop_after_matches,
+		ct,
+	)?))
 }
 
 fn run_streaming_grep(
@@ -1619,15 +1750,18 @@ fn grep_sync(
 
 		let bytes = match read_file_bytes(&search_path) {
 			Ok(ReadFile::Bytes(bytes)) => bytes,
-			Ok(ReadFile::Oversized) => {
-				return Ok(GrepResult {
-					matches:            Vec::new(),
-					total_matches:      0,
-					files_with_matches: 0,
-					files_searched:     0,
-					limit_reached:      None,
-					skipped_oversized:  Some(1),
-				});
+			Ok(ReadFile::Oversized) => match read_file_prefix(&search_path) {
+				Ok(ReadFile::Bytes(bytes)) => bytes,
+				_ => {
+					return Ok(GrepResult {
+						matches:            Vec::new(),
+						total_matches:      0,
+						files_with_matches: 0,
+						files_searched:     0,
+						limit_reached:      None,
+						skipped_oversized:  Some(1),
+					});
+				},
 			},
 			Ok(ReadFile::Skipped) | Err(_) => {
 				return Ok(GrepResult {
@@ -2393,5 +2527,88 @@ mod tests {
 			"expected early stop, collected {} of {file_count} files",
 			results.len(),
 		);
+	}
+
+	#[cfg(unix)]
+	fn write_oversized_file(path: &Path, prefix: &str) {
+		// Exceed MAX_FILE_BYTES (4 MiB) so the file is routed to the deferred
+		// prefix pass. `prefix` lands at the start, inside the searched window.
+		let mut content = String::with_capacity(5 * 1024 * 1024 + prefix.len());
+		content.push_str(prefix);
+		while content.len() <= (super::MAX_FILE_BYTES as usize) + 256 * 1024 {
+			content.push_str("filler line of haystack text\n");
+		}
+		write_file(path, &content);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn oversized_file_is_searched_over_its_prefix_window() {
+		let root = TempDirGuard::new();
+		write_oversized_file(&root.path().join("big.txt"), "needle\n");
+
+		let result = grep_sync(base_grep_config(root.path()), None, task::CancelToken::default())
+			.expect("directory grep should succeed");
+
+		// Match in the leading window is found; the file is counted as searched,
+		// not skipped.
+		assert_eq!(result.total_matches, 1);
+		assert_eq!(result.files_with_matches, 1);
+		assert_eq!(result.files_searched, 1);
+		assert_eq!(result.skipped_oversized, None);
+		assert_eq!(result.matches[0].path, "big.txt");
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn oversized_results_follow_normal_results_regardless_of_path_order() {
+		let root = TempDirGuard::new();
+		// `a_big.txt` sorts before `z_small.txt` lexically, but as an oversized
+		// file it must still be emitted after the normal-sized file.
+		write_oversized_file(&root.path().join("a_big.txt"), "needle\n");
+		write_file(&root.path().join("z_small.txt"), "needle\n");
+
+		let result = grep_sync(base_grep_config(root.path()), None, task::CancelToken::default())
+			.expect("directory grep should succeed");
+
+		let paths: Vec<&str> = result.matches.iter().map(|m| m.path.as_str()).collect();
+		assert_eq!(paths, ["z_small.txt", "a_big.txt"], "normal files precede oversized");
+		assert_eq!(result.files_searched, 2);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn oversized_pass_skipped_when_budget_satisfied_by_normal_files() {
+		let root = TempDirGuard::new();
+		write_file(&root.path().join("small.txt"), "needle\n");
+		write_oversized_file(&root.path().join("big.txt"), "needle\n");
+
+		// Content mode with a budget of 1 is satisfied by the normal file; the
+		// deferred oversized file must never be read (it would add a match).
+		let mut config = base_grep_config(root.path());
+		config.max_count = Some(1);
+
+		let result = grep_sync(config, None, task::CancelToken::default())
+			.expect("directory grep should succeed");
+
+		assert_eq!(result.total_matches, 1, "oversized file must not be searched");
+		assert_eq!(result.files_searched, 1);
+		assert_eq!(result.matches[0].path, "small.txt");
+		assert_eq!(result.limit_reached, Some(true));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn single_oversized_target_searches_prefix() {
+		let root = TempDirGuard::new();
+		let big = root.path().join("big.txt");
+		write_oversized_file(&big, "needle\n");
+
+		let result = grep_sync(base_grep_config(&big), None, task::CancelToken::default())
+			.expect("single-file grep should succeed");
+
+		assert_eq!(result.total_matches, 1);
+		assert_eq!(result.files_searched, 1);
+		assert_eq!(result.skipped_oversized, None);
 	}
 }
