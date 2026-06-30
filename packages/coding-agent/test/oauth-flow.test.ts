@@ -473,7 +473,7 @@ describe("mcp oauth flow", () => {
 		);
 	});
 
-	it("fails fast when the preferred port is busy and no redirectUri is configured", async () => {
+	it("fails fast when the preferred port is busy and a static clientId pins the registered redirect URI", async () => {
 		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(options => {
 			expect(options.port).toBe(14572);
 			throw new Error("EADDRINUSE");
@@ -505,6 +505,86 @@ describe("mcp oauth flow", () => {
 		// And the silent "Preferred port X unavailable, using port Y" message must
 		// never reach the user — that's the regression this test guards against.
 		expect(progress.some(msg => msg.includes("Preferred port"))).toBe(false);
+	});
+
+	it("falls back to a random port when DCR will re-register with the actual loopback URI", async () => {
+		// The bot reviewer's concern: blocking fallback for *every* MCP flow
+		// would break first-install DCR users whose preferred port is busy.
+		// Here `clientId` is unset, so `MCPOAuthFlow.#tryRegisterClient` will
+		// register the actual fallback URI with the provider and the
+		// authorization request will use that fresh client_id.
+		const blocker = Bun.serve({ port: 0, fetch: () => new Response("blocker") });
+		const blockerPort = blocker.port;
+		if (typeof blockerPort !== "number") {
+			blocker.stop(true);
+			throw new Error("Bun.serve({ port: 0 }) did not assign a numeric port");
+		}
+
+		const registrations: unknown[] = [];
+		const fetchImpl: FetchImpl = async (input, init) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url.endsWith("/.well-known/oauth-authorization-server")) {
+				return new Response(JSON.stringify({ registration_endpoint: "https://provider.example/register" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			if (url === "https://provider.example/register") {
+				registrations.push(JSON.parse(String(init?.body)));
+				return new Response(JSON.stringify({ client_id: "dcr-issued-client" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response("not implemented", { status: 501 });
+		};
+
+		const progress: string[] = [];
+		let authCalls = 0;
+		let advertisedUrl = "";
+		try {
+			const flow = new MCPOAuthFlow(
+				{
+					authorizationUrl: "https://provider.example/authorize",
+					tokenUrl: "https://provider.example/token",
+					// No clientId, no redirectUri — pure DCR flow.
+					callbackPort: blockerPort,
+					fetch: fetchImpl,
+				},
+				{
+					onAuth: ({ url }) => {
+						authCalls += 1;
+						advertisedUrl = url;
+					},
+					onProgress: msg => progress.push(msg),
+					// Abort once the flow is waiting for the browser callback we never deliver.
+					signal: AbortSignal.timeout(500),
+				},
+			);
+
+			await expect(flow.login()).rejects.toThrow(); // aborted while awaiting callback
+
+			// 1. The user saw the silent-fallback notice — fallback was attempted, not refused.
+			const fallbackNotice = progress.find(msg => msg.startsWith(`Preferred port ${blockerPort} unavailable`));
+			expect(fallbackNotice).toBeDefined();
+			expect(fallbackNotice).not.toContain(`using port ${blockerPort}`);
+
+			// 2. generateAuthUrl ran with a random-port redirect URI.
+			expect(authCalls).toBe(1);
+			const authParams = new URL(advertisedUrl).searchParams;
+			const advertisedRedirect = authParams.get("redirect_uri") ?? "";
+			expect(advertisedRedirect).toMatch(/^http:\/\/localhost:\d+\/callback$/);
+			expect(advertisedRedirect).not.toContain(`:${blockerPort}/`);
+
+			// 3. DCR re-registered with that same fallback URI, so the
+			//    provider's authorization server will accept it.
+			expect(registrations).toEqual([expect.objectContaining({ redirect_uris: [advertisedRedirect] })]);
+			// And the issued client_id was used in the authorize request.
+			expect(authParams.get("client_id")).toBe("dcr-issued-client");
+			expect(flow.resolvedClientId).toBe("dcr-issued-client");
+		} finally {
+			blocker.stop(true);
+		}
 	});
 
 	it("exposes the dynamically registered client_id and client_secret after generateAuthUrl", async () => {

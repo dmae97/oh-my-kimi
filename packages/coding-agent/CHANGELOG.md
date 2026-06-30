@@ -12,7 +12,7 @@
 
 ### Fixed
 
-- Fixed MCP OAuth flows silently advertising a random-port redirect URI when the preferred callback port (default 3000) was busy. Providers that validate redirect URIs against a registered callback (e.g. Atlassian) returned an opaque 500 page, leaving the local flow waiting until its 5-minute timeout. `MCPOAuthFlow` now opts out of random-port fallback unconditionally, so the flow fails fast with a `ConfigurationError` that names the busy port and the remediation (free the port, or set `oauth.callbackPort`/`oauth.redirectUri` in `mcp.json`). ([#3887](https://github.com/can1357/oh-my-pi/issues/3887))
+- Fixed MCP OAuth flows silently advertising a random-port redirect URI when the preferred callback port (default 3000) was busy. Providers that validate redirect URIs against a registered callback (e.g. Atlassian) returned an opaque 500 page, leaving the local flow waiting until its 5-minute timeout. `MCPOAuthFlow` now opts out of random-port fallback whenever a static `client_id` is already pinned (via `oauth.clientId` or embedded in the authorization URL), failing fast with a `ConfigurationError` that names the busy port and the remediation (free the port, or set `oauth.callbackPort`/`oauth.redirectUri` in `mcp.json`). Fresh dynamic-client-registration flows still fall back so first-install users on a busy default port keep working — DCR registers the actual loopback URI on the fly. ([#3887](https://github.com/can1357/oh-my-pi/issues/3887))
 
 - Fixed auto-compaction dead-ends by automatically triggering a shake rescue to elide oversized tails
 - Improved compaction warning message to suggest running `/shake images` for irreducible image tails

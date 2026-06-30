@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `OAuthCallbackFlowOptions.allowPortFallback` (default `true`) so subclasses representing providers that validate redirect URIs against a registered callback (e.g. MCP servers like Atlassian) can refuse the silent random-port fallback and surface an actionable `ConfigurationError` before opening the browser.
+- Added `OAuthCallbackFlowOptions.allowPortFallback` (default `true`) so subclasses that gate random-port fallback per request — e.g. MCP flows whose static `client_id` is already registered against a specific redirect URI — can refuse the silent fallback and surface an actionable `ConfigurationError` before opening the browser, while flows that re-register on demand (dynamic client registration) can keep the existing fallback semantics.
 
 ### Changed
 

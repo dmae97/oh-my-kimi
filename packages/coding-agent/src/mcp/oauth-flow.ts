@@ -153,21 +153,44 @@ function resolveCallbackHostname(redirectUri: string | undefined): string | unde
 	return parsed.hostname;
 }
 
+/**
+ * Resolve the client_id MCPOAuthFlow would use without doing any I/O —
+ * either the explicitly configured value or one embedded as a query parameter
+ * in the authorization URL. Returns `undefined` when no client_id is known
+ * statically, which is the trigger for dynamic client registration in
+ * {@link MCPOAuthFlow.#tryRegisterClient}.
+ */
+function staticClientIdFromConfig(config: MCPOAuthConfig): string | undefined {
+	const fromConfig = config.clientId?.trim();
+	if (fromConfig) return fromConfig;
+	try {
+		return new URL(config.authorizationUrl).searchParams.get("client_id") ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOptions {
 	const redirectUri = resolveRedirectUri(config.redirectUri);
 	validateRedirectConfig(config, redirectUri);
+	// When a client_id is already pinned (config-supplied or embedded in the
+	// authorization URL), it was registered against a specific redirect URI.
+	// Silently advertising a different port at the authorize endpoint would
+	// be rejected by providers like Atlassian (HTTP 500 in the browser, local
+	// flow hangs until the 5-minute timeout), so fail fast instead.
+	//
+	// When no client_id is pinned, MCPOAuthFlow will attempt dynamic client
+	// registration on demand with whichever loopback URI we actually bound —
+	// the provider issues a client_id tied to *that* URI, so the random-port
+	// fallback remains safe for first-install DCR flows whose preferred port
+	// happens to be occupied.
+	const allowPortFallback = staticClientIdFromConfig(config) === undefined;
 	return {
 		preferredPort: resolveCallbackPort(config.callbackPort, redirectUri),
 		callbackPath: resolveCallbackPath(config.callbackPath, redirectUri),
 		callbackHostname: resolveCallbackHostname(redirectUri),
 		redirectUri,
-		// MCP providers (Atlassian, GitHub MCP, etc.) generally validate the
-		// redirect URI against a registered callback. Silently advertising a
-		// random port when the preferred one is busy means the authorization
-		// server returns an opaque 500 and the browser callback never fires,
-		// leaving the user staring at the 5-minute timeout. Fail fast so the
-		// caller can show an actionable error before opening the browser.
-		allowPortFallback: false,
+		allowPortFallback,
 	};
 }
 
@@ -460,14 +483,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	#resolveClientId(config: MCPOAuthConfig): string | undefined {
-		const fromConfig = config.clientId?.trim();
-		if (fromConfig) return fromConfig;
-
-		try {
-			return new URL(config.authorizationUrl).searchParams.get("client_id") ?? undefined;
-		} catch {
-			return undefined;
-		}
+		return staticClientIdFromConfig(config);
 	}
 	#resourceFromAuthorizationUrl(authorizationUrl: string): string | undefined {
 		try {
