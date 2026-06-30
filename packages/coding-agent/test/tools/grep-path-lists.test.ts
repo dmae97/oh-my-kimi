@@ -164,6 +164,27 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
 	});
 
+	it("search accepts JSON-array string paths in direct execute", async () => {
+		const tools = await createTools(createTestSession(tempDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing grep tool");
+
+		const result = await tool.execute("search-json-array-string-paths", {
+			pattern: "shared-needle",
+			paths: JSON.stringify(["apps/", "packages/", "phases/"]),
+		});
+		const text = getText(result);
+		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
+
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).not.toContain("# other");
+		expect(details?.fileCount).toBe(3);
+		expect(details?.scopePath).toBe("apps/, packages/, phases/");
+	});
+
 	it("search expands delimited path entries", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
