@@ -890,6 +890,13 @@ export class EventController {
 	}
 
 	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
+		// A transient overlay (auto-compaction / auto-retry / handoff) that ran
+		// between this tool's start and end could have detached the working
+		// loader. `tool_execution_update` already reconciles this so the spinner
+		// reappears mid-tool; mirror it here so subagent (`task`) completions —
+		// which only fire `tool_execution_end`, never `_update` — do not leave
+		// the UI looking idle while the session keeps streaming (#3857).
+		this.#ensureWorkingLoaderWhileStreaming();
 		if (event.toolName === "read") {
 			if (this.#inlineReadToolImages(event.toolCallId, event.result)) {
 				const component = this.ctx.pendingTools.get(event.toolCallId);

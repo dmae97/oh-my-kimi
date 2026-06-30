@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `StdinBuffer` swallowing a fast double-Esc that arrived as one `"\x1b\x1b"` chunk: `parseKey` returns `undefined` for the combined chunk, so the editor's double-escape gesture and any single-Esc handler the second press should have hit never fired. The buffer now splits a bare `"\x1b\x1b"` (whether buffered alone or followed by a non-CSI/SS3 byte) into two ESC events, while meta-CSI/SS3 chords like `"\x1b\x1b[A"` still emit as one sequence ([#3857](https://github.com/can1357/oh-my-pi/issues/3857)).
+
 ## [16.2.3] - 2026-06-28
 
 ### Added

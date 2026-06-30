@@ -21,6 +21,7 @@
 - Improved error reporting for `omp tiny-models download` by displaying the actual worker-side download error.
 - Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
 - Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
+- Fixed the working loader disappearing after a subagent (`task`) tool completed while the focused session was still streaming: `tool_execution_end` did not re-arm the loader the way `tool_execution_update` did, so a tool result landing after a transient overlay (auto-compaction / auto-retry) left the UI looking idle ([#3857](https://github.com/can1357/oh-my-pi/issues/3857)).
 
 ## [16.2.6] - 2026-06-29
 
