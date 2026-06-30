@@ -192,9 +192,17 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual(["\x1b", "\x1b"]);
 		});
 
-		it("splits double-ESC followed by a non-CSI byte into two ESC events plus the byte", () => {
+		it("preserves legacy Alt chords batched after a bare ESC", () => {
 			processInput("\x1b\x1bX");
-			expect(emittedSequences).toEqual(["\x1b", "\x1b", "X"]);
+			expect(emittedSequences).toEqual(["\x1b", "\x1bX"]);
+
+			emittedSequences = [];
+			processInput("\x1b\x1bd");
+			expect(emittedSequences).toEqual(["\x1b", "\x1bd"]);
+
+			emittedSequences = [];
+			processInput("\x1b\x1b\x7f");
+			expect(emittedSequences).toEqual(["\x1b", "\x1b\x7f"]);
 		});
 
 		it("consumes a whole meta-CSI arrow in one chunk", () => {

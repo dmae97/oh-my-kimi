@@ -124,7 +124,6 @@ const TASK_TOOL_EXECUTION_END = {
 	isError: false,
 } as unknown as AgentSessionEvent;
 
-
 describe("EventController loader recovery after overflow maintenance", () => {
 	beforeAll(async () => {
 		await initTheme(false);
