@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cerebras `gemma-4-31b` dynamic discovery to mark the model as image-capable so attached images are serialized as OpenAI Chat Completions `image_url` data URIs. ([#3854](https://github.com/can1357/oh-my-pi/issues/3854))
+
 ## [16.2.6] - 2026-06-29
 
 ### Fixed

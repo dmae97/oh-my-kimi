@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import type { AssistantMessage, Context, Model, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai/types";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
@@ -75,6 +76,48 @@ function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessa
 }
 
 describe("openai-completions convertMessages", () => {
+	it("serializes Cerebras gemma image inputs as Chat Completions data URIs", () => {
+		const model = buildModel({
+			id: "gemma-4-31b",
+			name: "Gemma 4 31B",
+			api: "openai-completions",
+			provider: "cerebras",
+			baseUrl: "https://api.cerebras.ai/v1",
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+		});
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Identify the shapes and colors. Return JSON only." },
+						{ type: "image", mimeType: "image/png", data: "ZmFrZQ==" },
+					],
+					timestamp: 1,
+				},
+			],
+		};
+
+		const messages = convertMessages(model, context, compat);
+
+		expect(messages).toEqual([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "Identify the shapes and colors. Return JSON only." },
+					{
+						type: "image_url",
+						image_url: { url: "data:image/png;base64,ZmFrZQ==" },
+					},
+				],
+			},
+		]);
+	});
+
 	it("batches tool-result images after consecutive tool results", () => {
 		const baseModel = getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">;
 		const model: Model<"openai-completions"> = {

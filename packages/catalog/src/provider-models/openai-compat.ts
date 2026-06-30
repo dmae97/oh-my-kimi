@@ -803,6 +803,18 @@ export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelM
 // 3. Cerebras
 // ---------------------------------------------------------------------------
 
+const CEREBRAS_IMAGE_INPUT_MODEL_IDS = new Set(["gemma-4-31b"]);
+
+function applyCerebrasDiscoveryOverrides(model: ModelSpec<"openai-completions">): ModelSpec<"openai-completions"> {
+	if (!CEREBRAS_IMAGE_INPUT_MODEL_IDS.has(model.id)) {
+		return model;
+	}
+	return {
+		...model,
+		input: ["text", "image"],
+	};
+}
+
 export interface CerebrasModelManagerConfig {
 	apiKey?: string;
 	baseUrl?: string;
@@ -812,7 +824,27 @@ export interface CerebrasModelManagerConfig {
 export function cerebrasModelManagerOptions(
 	config?: CerebrasModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("cerebras", "https://api.cerebras.ai/v1", config);
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.cerebras.ai/v1";
+	const references = createBundledReferenceMap<"openai-completions">("cerebras");
+	return {
+		providerId: "cerebras",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "cerebras",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						return applyCerebrasDiscoveryOverrides(model);
+					},
+					fetch: config?.fetch,
+				}),
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
