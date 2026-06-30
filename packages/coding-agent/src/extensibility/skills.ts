@@ -409,8 +409,11 @@ const MID_PROMPT_SKILL_RE = /(^|\s)\/skill:([^\s/]+)(\s|$)/;
  *     into a single args string.
  *
  * Mid-prompt detection is disabled when the draft itself starts with a
- * different slash command, preserving builtin/custom slash-command precedence
- * for inputs such as `/compact /skill:foo`.
+ * different slash command (e.g. `/compact /skill:foo`) or a local-execution
+ * sigil — `!cmd` / `!!cmd` for the bash tool and `$ cmd` / `$$ cmd` for the
+ * python tool. Those handlers run after the skill-command dispatcher and
+ * their bodies routinely contain `/skill:<name>` references that are not
+ * meant as skill invocations.
  */
 export function parseSkillInvocation(text: string): ParsedSkillInvocation | undefined {
 	const trimmedStart = text.trimStart();
@@ -423,6 +426,7 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 		return { name, args };
 	}
 	if (trimmedStart.startsWith("/")) return undefined;
+	if (startsWithLocalExecutionPrefix(trimmedStart)) return undefined;
 	const match = MID_PROMPT_SKILL_RE.exec(text);
 	if (!match) return undefined;
 	const leading = match[1] ?? "";
@@ -438,6 +442,23 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
 		.join(" ")
 		.trim();
 	return { name, args };
+}
+
+/**
+ * Whether the (already left-trimmed) draft begins with a TUI local-execution
+ * sigil that downstream branches will consume verbatim — `!`/`!!` for the bash
+ * tool and `$`/`$$` followed by ASCII whitespace for the python tool. Mirrors
+ * `pythonCommandPrefixLength` in `modes/controllers/input-controller` so the
+ * two checks agree without forcing a circular import.
+ */
+function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
+	if (trimmedStart.startsWith("!")) return true;
+	if (trimmedStart.charCodeAt(0) !== 36 /* $ */) return false;
+	if (trimmedStart.charCodeAt(1) === 123 /* { */) return false;
+	const sigilLength = trimmedStart.charCodeAt(1) === 36 /* $ */ ? 2 : 1;
+	const next = trimmedStart.charCodeAt(sigilLength);
+	if (Number.isNaN(next)) return true;
+	return next === 32 /* space */ || next === 9 /* tab */ || next === 10 /* LF */ || next === 13 /* CR */;
 }
 
 export async function buildSkillPromptMessage(

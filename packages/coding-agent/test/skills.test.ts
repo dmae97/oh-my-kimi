@@ -548,6 +548,31 @@ describe("parseSkillInvocation", () => {
 			expect(parseSkillInvocation("/goal set /skill:foo focus on auth")).toBeUndefined();
 		});
 
+		it("does not hijack the bash tool (`!cmd`) when the body mentions a skill", () => {
+			expect(parseSkillInvocation("!echo /skill:reviewer")).toBeUndefined();
+			expect(parseSkillInvocation("!!echo /skill:reviewer")).toBeUndefined();
+			expect(parseSkillInvocation("   !echo /skill:reviewer")).toBeUndefined();
+		});
+
+		it("does not hijack the python tool (`$ code`) when the body mentions a skill", () => {
+			expect(parseSkillInvocation("$ run.py /skill:foo")).toBeUndefined();
+			expect(parseSkillInvocation("$$ run.py /skill:foo")).toBeUndefined();
+			expect(parseSkillInvocation("$\trun /skill:foo")).toBeUndefined();
+		});
+
+		it("still matches when `$` is followed by prose, not a python whitespace sigil", () => {
+			// `$echo`, `${HOME}`, and `$200` are not python commands — `pythonCommandPrefixLength`
+			// returns 0 for them — so the mid-prompt parser must still see the embedded skill.
+			expect(parseSkillInvocation("$echo /skill:reviewer")).toEqual({
+				name: "reviewer",
+				args: "$echo",
+			});
+			expect(parseSkillInvocation("${HOME}/bin /skill:foo")).toEqual({
+				name: "foo",
+				args: "${HOME}/bin",
+			});
+		});
+
 		it("returns undefined when no `/skill:<name>` token is present", () => {
 			expect(parseSkillInvocation("no skill token here")).toBeUndefined();
 		});
