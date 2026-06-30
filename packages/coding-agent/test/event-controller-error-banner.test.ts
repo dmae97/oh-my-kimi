@@ -299,6 +299,47 @@ describe("EventController working loader reconciliation", () => {
 		expect(ctx.ensureLoadingAnimation).toHaveBeenCalledTimes(1);
 	});
 
+	it("self-heals missing working loader when a task subagent finishes mid-turn (#3858)", async () => {
+		// `task` subagents run inside the parent's streaming turn. While the task is
+		// running a transient overlay (auto-compaction / auto-retry) can drop the
+		// working loader by clearing the status container, and the overlay's end
+		// handler is the only restorer keyed off the missing loader. If the task
+		// finishes between the overlay's start and end (or any other branch where
+		// the loader was nulled without a follow-up overlay-end), `tool_execution_end`
+		// is the next streaming event that lands and must heal the loader, mirroring
+		// the `tool_execution_update` reconciler. Without this the spinner stays
+		// gone for the remainder of the parent turn even though the agent keeps
+		// streaming (the user-visible regression in #3858).
+		const { controller, ctx } = createFixture();
+		(ctx.viewSession as unknown as { isStreaming: boolean }).isStreaming = true;
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "task-1",
+			toolName: "task",
+			isError: false,
+			result: { content: [{ type: "text", text: "ok" }], details: {} },
+		} as Extract<AgentSessionEvent, { type: "tool_execution_end" }>);
+
+		expect(ctx.ensureLoadingAnimation).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not restore the working loader while an overlay loader (auto-retry) owns the status container at tool_execution_end", async () => {
+		const { controller, ctx } = createFixture();
+		ctx.retryLoader = { stop: vi.fn() } as unknown as InteractiveModeContext["retryLoader"];
+		(ctx.viewSession as unknown as { isStreaming: boolean }).isStreaming = true;
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "task-2",
+			toolName: "task",
+			isError: false,
+			result: { content: [{ type: "text", text: "ok" }], details: {} },
+		} as Extract<AgentSessionEvent, { type: "tool_execution_end" }>);
+
+		expect(ctx.ensureLoadingAnimation).not.toHaveBeenCalled();
+	});
+
 	it("keeps transient retry status exclusive while a retry loader is visible", async () => {
 		const { controller, ctx } = createFixture();
 		ctx.retryLoader = { stop: vi.fn() } as unknown as InteractiveModeContext["retryLoader"];
