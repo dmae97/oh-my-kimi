@@ -13150,7 +13150,15 @@ export class AgentSession {
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
-		const previousSessionContext = this.buildDisplaySessionContext();
+		// Only same-session reloads compare against the prior context to detect
+		// rollback edits (`#didSessionMessagesChange` below). Building it for a
+		// different-session switch is a pure waste — and on huge pre-fix sessions
+		// it materializes every persisted snapcompact frame plus the
+		// `openaiRemoteCompaction.replacementHistory` payload into messages,
+		// blowing the heap before the new session even loads (issue #3846). The
+		// error-recovery path rebuilds the context on demand from the restored
+		// state instead.
+		const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
 		// switchSession replaces these arrays wholesale during load/rollback, so retaining
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
@@ -13189,7 +13197,7 @@ export class AgentSession {
 
 			const sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
-				!switchingToDifferentSession &&
+				previousSessionContext !== undefined &&
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
@@ -13305,7 +13313,12 @@ export class AgentSession {
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 			let restoreMcpError: unknown;
 			try {
-				await this.#restoreMCPSelectionsForSessionContext(previousSessionContext, {
+				// `previousSessionContext` was skipped on different-session switches to
+				// avoid materializing the previous session's heavy compaction payload
+				// in the success path; rebuild it here on demand from the restored
+				// state so MCP selection restoration still has its inputs.
+				const mcpRestoreContext = previousSessionContext ?? this.buildDisplaySessionContext();
+				await this.#restoreMCPSelectionsForSessionContext(mcpRestoreContext, {
 					fallbackSelectedMCPToolNames: previousFallbackSelectedMCPToolNames,
 				});
 			} catch (mcpError) {
