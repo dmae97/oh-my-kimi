@@ -270,6 +270,28 @@ describe("AsyncJobManager", () => {
 		expect(manager.hasPendingDeliveries()).toBe(false);
 	});
 
+	test("dispose honors timeout when a cancelled job never settles", async () => {
+		const manager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+
+		manager.register("bash", "ignores-abort", async () => {
+			await Promise.withResolvers<never>().promise;
+			return "unreachable";
+		});
+
+		const startedAt = Date.now();
+		const result = await Promise.race([
+			manager.dispose({ timeoutMs: 25 }).then(drained => ({ drained, settled: true })),
+			Bun.sleep(150).then(() => ({ drained: true, settled: false })),
+		]);
+
+		expect(result.settled).toBe(true);
+		expect(result.drained).toBe(false);
+		expect(Date.now() - startedAt).toBeLessThan(150);
+		expect(manager.getAllJobs()).toHaveLength(0);
+	});
+
 	test("scoped delivery drain returns once matching owner deliveries finish", async () => {
 		let mainJobId = "";
 		let releaseMainDelivery = (): void => {};

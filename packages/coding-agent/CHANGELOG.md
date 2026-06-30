@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed async job manager disposal honoring the timeout before all cancelled jobs settle, and made queued task spawns leave the session semaphore when their abort signal fires. ([#3930](https://github.com/can1357/oh-my-pi/issues/3930))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed

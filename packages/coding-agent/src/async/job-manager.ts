@@ -397,6 +397,27 @@ export class AsyncJobManager {
 		await Promise.all(Array.from(this.#jobs.values()).map(job => job.promise));
 	}
 
+	async #waitForAllUntil(deadline: number): Promise<boolean> {
+		const promises = Array.from(this.#jobs.values()).map(job => job.promise);
+		if (promises.length === 0) return true;
+		if (deadline === Number.POSITIVE_INFINITY) {
+			await Promise.all(promises);
+			return true;
+		}
+		const remainingMs = deadline - Date.now();
+		if (remainingMs <= 0) return false;
+
+		const timeout = Promise.withResolvers<"timeout">();
+		const timer = setTimeout(() => timeout.resolve("timeout"), remainingMs);
+		timer.unref();
+		try {
+			const result = await Promise.race([Promise.all(promises).then(() => "settled" as const), timeout.promise]);
+			return result === "settled";
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
 	async drainDeliveries(options?: { timeoutMs?: number; filter?: AsyncJobFilter }): Promise<boolean> {
 		const timeoutMs = options?.timeoutMs;
 		const filter = options?.filter;
@@ -445,8 +466,10 @@ export class AsyncJobManager {
 		this.#disposed = true;
 		this.#clearEvictionTimers();
 		this.cancelAll();
-		await this.waitForAll();
-		const drained = await this.drainDeliveries({ timeoutMs: options?.timeoutMs ?? 3_000 });
+		const timeoutMs = Math.max(options?.timeoutMs ?? 3_000, 0);
+		const deadline = Date.now() + timeoutMs;
+		const jobsSettled = await this.#waitForAllUntil(deadline);
+		const drained = await this.drainDeliveries({ timeoutMs: Math.max(deadline - Date.now(), 0) });
 		this.#clearEvictionTimers();
 		this.#jobs.clear();
 		this.#deliveries.length = 0;
@@ -454,7 +477,7 @@ export class AsyncJobManager {
 		this.#suppressedDeliveries.clear();
 		this.#watchedJobs.clear();
 		this.#pollEscalation.clear();
-		return drained;
+		return jobsSettled && drained;
 	}
 
 	#resolveJobId(preferredId?: string): string {
@@ -483,6 +506,7 @@ export class AsyncJobManager {
 	}
 
 	#scheduleEviction(jobId: string): void {
+		if (this.#disposed) return;
 		if (this.#retentionMs <= 0) {
 			this.#jobs.delete(jobId);
 			this.#suppressedDeliveries.delete(jobId);

@@ -803,7 +803,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			async ({ jobId: ownJobId, signal: runSignal, reportProgress, markRunning }) => {
 				const startedAt = Date.now();
 				const semaphore = this.#getSpawnSemaphore();
-				await semaphore.acquire();
+				await semaphore.acquire(runSignal);
 				const acquiredAt = Date.now();
 				if (runSignal.aborted) {
 					semaphore.release();
@@ -909,7 +909,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const semaphore = this.#getSpawnSemaphore();
 		if (spawnItems.length === 1) {
 			const invokedAt = Date.now();
-			await semaphore.acquire();
+			await semaphore.acquire(signal);
 			const acquiredAt = Date.now();
 			try {
 				return await this.#executeSync(
@@ -948,7 +948,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			spawnItems.length,
 			async (item, index, workerSignal) => {
 				const invokedAt = Date.now();
-				await semaphore.acquire();
+				await semaphore.acquire(workerSignal);
 				const acquiredAt = Date.now();
 				try {
 					const itemOnUpdate: AgentToolUpdateCallback<TaskToolDetails> | undefined = onUpdate
