@@ -230,4 +230,74 @@ describe("task spawn routing", () => {
 			]);
 		});
 	}
+
+	it("re-reads task.maxConcurrency on each spawn so a mid-session change applies on the next acquire", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+		const started: string[] = [];
+		const gates = new Map<string, Deferred>();
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			const id = options.id ?? "?";
+			started.push(id);
+			const gate = deferred();
+			gates.set(id, gate);
+			await gate.promise;
+			return makeResult(id);
+		});
+
+		const manager = createManager();
+		const settings = Settings.isolated({ "task.maxConcurrency": 4 });
+		const tool = await TaskTool.create({
+			cwd: "/tmp",
+			hasUI: false,
+			settings,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			asyncJobManager: manager,
+		} as unknown as ToolSession);
+
+		// Prime the semaphore at the initial high cap.
+		const first = await tool.execute("tc-1", { agent: "task", id: "First", assignment: "Work A." } as TaskParams);
+		await pollUntil(() => started.length === 1);
+
+		// Tighten the cap mid-session. The next spawn MUST see the new ceiling.
+		settings.override("task.maxConcurrency", 1);
+		const second = await tool.execute("tc-2", { agent: "task", id: "Second", assignment: "Work B." } as TaskParams);
+		const secondJob = manager.getJob(second.details!.async!.jobId)!;
+
+		// First is still running (and holding the only slot under the new cap),
+		// so Second is parked at the semaphore — queued, not running.
+		await Bun.sleep(20);
+		expect(started).toEqual(["First"]);
+		expect(secondJob.queued).toBe(true);
+
+		// Releasing First admits Second.
+		gates.get("First")!.resolve();
+		await manager.getJob(first.details!.async!.jobId)!.promise;
+		await pollUntil(() => started.length === 2);
+		expect(started).toEqual(["First", "Second"]);
+
+		gates.get("Second")!.resolve();
+		await secondJob.promise;
+	});
+
+	it("surfaces task.maxConcurrency in the tool description so the model can self-throttle", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [taskAgent],
+			projectAgentsDir: null,
+		});
+
+		const cappedTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": 1 } }));
+		expect(cappedTool.description).toContain("At most 1 subagent");
+		expect(cappedTool.description).toContain("Concurrency cap");
+
+		const fanoutTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": 4 } }));
+		expect(fanoutTool.description).toContain("At most 4 subagents");
+
+		// `0` = Unlimited in the settings UI; the prompt must NOT advertise a cap.
+		const unboundedTool = await TaskTool.create(createSession({ settings: { "task.maxConcurrency": 0 } }));
+		expect(unboundedTool.description).not.toContain("Concurrency cap");
+	});
 });

@@ -24,7 +24,7 @@ import {
 	runIsolatedSubprocess,
 } from "../task/isolation-runner";
 import { AgentOutputManager } from "../task/output-manager";
-import type { AgentDefinition, AgentProgress, SingleResult } from "../task/types";
+import { type AgentDefinition, type AgentProgress, canSpawnAtDepth, type SingleResult } from "../task/types";
 import { type NestedRepoPatch, parseIsolationMode } from "../task/worktree";
 import type { ToolSession } from "../tools";
 import { ToolError } from "../tools/tool-errors";
@@ -36,7 +36,11 @@ import "../tools/review";
 /** Synthetic bridge name reserved for the `agent()` helper across both runtimes. */
 export const EVAL_AGENT_BRIDGE_NAME = "__agent__";
 
-/** Hard recursion limit for eval-driven subagents. */
+/**
+ * Hard recursion ceiling for eval-driven subagents. The user setting
+ * `task.maxRecursionDepth` is honored on top of this — whichever is tighter
+ * wins, so a maintainer-friendly cap can't get raised by a user setting.
+ */
 export const EVAL_AGENT_MAX_DEPTH = 3;
 
 const DEFAULT_AGENT_TYPE = "task";
@@ -131,9 +135,15 @@ function parseAgentArgs(args: unknown): EvalAgentArgs {
 
 function assertDepthAllowed(session: ToolSession): void {
 	const taskDepth = session.taskDepth ?? 0;
-	if (taskDepth >= EVAL_AGENT_MAX_DEPTH) {
+	// Honor the user's `task.maxRecursionDepth` (mirroring the task tool's gate
+	// in tools/index.ts) but never above the hard ceiling. `< 0` means
+	// "Unlimited" in the same schema `canSpawnAtDepth` reads, so it falls back
+	// to the hard ceiling instead of going past it.
+	const settingMax = session.settings.get("task.maxRecursionDepth") ?? 2;
+	const effectiveMax = settingMax < 0 ? EVAL_AGENT_MAX_DEPTH : Math.min(settingMax, EVAL_AGENT_MAX_DEPTH);
+	if (!canSpawnAtDepth(effectiveMax, taskDepth)) {
 		throw new ToolError(
-			`agent() cannot spawn another agent at task depth ${taskDepth}; maximum depth is ${EVAL_AGENT_MAX_DEPTH}.`,
+			`agent() cannot spawn another agent at task depth ${taskDepth}; maximum depth is ${effectiveMax} (task.maxRecursionDepth=${settingMax}, hard ceiling=${EVAL_AGENT_MAX_DEPTH}).`,
 		);
 	}
 }
