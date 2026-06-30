@@ -10892,7 +10892,7 @@ export class AgentSession {
 	 */
 	#computeSnapcompactMaxFrames(preparation: CompactionPreparation, settings: CompactionSettings): number {
 		const ctxWindow = this.model?.contextWindow ?? 0;
-		if (ctxWindow <= 0) return snapcompact.MAX_FRAMES_DEFAULT;
+		if (ctxWindow <= 0) return Math.min(snapcompact.MAX_FRAMES_DEFAULT, snapcompact.maxFramesForDataBudget());
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
 		let baseTokens = computeNonMessageTokens(this);
 		for (const message of preparation.recentMessages) {
