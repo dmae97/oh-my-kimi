@@ -13,6 +13,7 @@ import {
 	parseAnthropicModel,
 	parseGlmModel,
 	parseKnownModel,
+	parseOpenAIModel,
 	semverGte,
 } from "./classify";
 
@@ -119,6 +120,22 @@ export const isOpenAIGptOssModelId = memo((modelId: string): boolean => {
 /** OpenAI model ids (gpt-*, o1-*, o3-*, o4-*, or prefixed with openai/). */
 export const isOpenAIModelId = memo((modelId: string): boolean => {
 	return /(^|\/)(gpt|o1|o3|o4)[-.]/i.test(modelId) || modelId.toLowerCase().includes("openai/");
+});
+
+/**
+ * OpenAI Codex models that honor `reasoning.context: "all_turns"` (full
+ * cross-turn reasoning replay). The `reasoning.context` field itself exists for
+ * the whole gpt-5/o-series family, but the `all_turns` value is only accepted
+ * from gpt-5.4 onward; earlier ids (`gpt-5.1-codex`, `gpt-5.3-codex`, and
+ * `gpt-5.3-codex-spark`) reject it with
+ * `Unsupported value: 'all_turns' is not supported with this model`. Version
+ * floor (not an allowlist) so 5.6/6.x inherit support automatically. Callers
+ * fall back to omitting `context`, letting the server default to `current_turn`.
+ */
+export const supportsAllTurnsReasoningContext = memo((modelId: string): boolean => {
+	const parsed = parseOpenAIModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return semverGte(parsed.version, "5.4");
 });
 
 /**

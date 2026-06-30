@@ -83,21 +83,21 @@ function createCodexFetchMock(sse: string, onRequest: (captured: CapturedCodexRe
 }
 
 describe("openai-codex reasoning.context", () => {
-	it("forwards an explicit reasoning.context and defaults to all_turns", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+	it("defaults to all_turns on gpt-5.4+ models and forwards explicit overrides", async () => {
+		const model = createCodexModel("gpt-5.4");
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning?.context).toBe("all_turns");
 
 		const explicit = await transformRequestBody({ model: model.id }, model, {
 			reasoningEffort: "medium",
 			reasoningContext: "current_turn",
 		});
 		expect(explicit.reasoning?.context).toBe("current_turn");
-
-		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
-		expect(defaulted.reasoning?.context).toBe("all_turns");
 	});
 
-	it("defaults reasoning.context to all_turns under Responses Lite unless overridden", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+	it("keeps the all_turns default for the lite transport on supported models", async () => {
+		const model = createCodexModel("gpt-5.5");
 
 		const lite = await transformRequestBody({ model: model.id }, model, {
 			reasoningEffort: "medium",
@@ -111,6 +111,39 @@ describe("openai-codex reasoning.context", () => {
 			reasoningContext: "auto",
 		});
 		expect(overridden.reasoning?.context).toBe("auto");
+	});
+
+	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `all_turns`
+	// ("Unsupported value: 'all_turns' is not supported with this model").
+	it.each([
+		"gpt-5.1-codex",
+		"gpt-5.3-codex",
+		"gpt-5.3-codex-spark",
+	])("omits the all_turns default for pre-5.4 model %s", async modelId => {
+		const model = createCodexModel(modelId);
+
+		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+		expect(defaulted.reasoning).toBeDefined();
+		expect(defaulted.reasoning?.context).toBeUndefined();
+		expect("context" in (defaulted.reasoning ?? {})).toBe(false);
+
+		// A supported override (current_turn/auto) is still honored.
+		const overridden = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningContext: "current_turn",
+		});
+		expect(overridden.reasoning?.context).toBe("current_turn");
+	});
+
+	it("suppresses an explicit all_turns override on a pre-5.4 model", async () => {
+		const model = createCodexModel("gpt-5.3-codex-spark");
+
+		const forced = await transformRequestBody({ model: model.id }, model, {
+			reasoningEffort: "medium",
+			reasoningContext: "all_turns",
+		});
+		expect(forced.reasoning).toBeDefined();
+		expect(forced.reasoning?.context).toBeUndefined();
 	});
 });
 
