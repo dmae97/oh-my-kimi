@@ -63,7 +63,6 @@ This is your only way to return a final result. For structured results, you NEVE
 
 {{#if outputSchemaOverridesAgent}}
 Caller schema overrides agent-native output instructions. Ignore ROLE-provided output/yield labels, field names, examples, and procedures that conflict with the interface below. Use ONLY labels/fields from the caller schema; safest path: omit `type` and terminal-yield the full `result.data` object.
-
 {{/if}}
 {{#if outputSchema}}
 Your result MUST match this TypeScript interface:
