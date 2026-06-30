@@ -648,7 +648,8 @@ function matchModel(
 	// fuzzy matching so raw IDs that contain slashes (for example OpenRouter model
 	// IDs like "openai/gpt-4o:extended") still resolve as IDs instead of being
 	// misread as a provider-qualified selector.
-	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === modelPattern.toLowerCase());
+	const lowerPattern = modelPattern.toLowerCase();
+	const exactMatches = availableModels.filter(m => m.id.toLowerCase() === lowerPattern);
 	if (exactMatches.length > 0) {
 		return pickPreferredModel(exactMatches, context);
 	}
@@ -665,7 +666,8 @@ function matchModel(
 	const bareAlias = resolveBareVariantAlias(modelPattern);
 	const bareAliasTargetId = bareAlias?.id ?? stripThinkingVariantToken(modelPattern);
 	if (bareAliasTargetId) {
-		const aliasMatches = availableModels.filter(m => m.id.toLowerCase() === bareAliasTargetId.toLowerCase());
+		const lowerAliasTarget = bareAliasTargetId.toLowerCase();
+		const aliasMatches = availableModels.filter(m => m.id.toLowerCase() === lowerAliasTarget);
 		if (aliasMatches.length > 0) {
 			const preferred = bareAlias ? aliasMatches.filter(m => bareAlias.providers.includes(m.provider)) : [];
 			return pickPreferredModel(preferred.length > 0 ? preferred : aliasMatches, context);
@@ -676,7 +678,8 @@ function matchModel(
 	if (slashIndex !== -1) {
 		const provider = modelPattern.substring(0, slashIndex);
 		const modelId = modelPattern.substring(slashIndex + 1);
-		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === provider.toLowerCase());
+		const lowerProvider = provider.toLowerCase();
+		const providerModels = availableModels.filter(m => m.provider.toLowerCase() === lowerProvider);
 		if (providerModels.length === 0) {
 			// The prefix is not a known provider in this candidate set, so treat the
 			// slash as part of the raw model ID and continue with generic matching.
@@ -717,9 +720,7 @@ function matchModel(
 
 	// No exact match - fall back to partial matching
 	const matches = availableModels.filter(
-		m =>
-			m.id.toLowerCase().includes(modelPattern.toLowerCase()) ||
-			m.name?.toLowerCase().includes(modelPattern.toLowerCase()),
+		m => m.id.toLowerCase().includes(lowerPattern) || m.name?.toLowerCase().includes(lowerPattern),
 	);
 
 	if (matches.length === 0) {
@@ -826,13 +827,13 @@ function parseModelPatternWithContext(
 	return result;
 }
 
-export function parseModelPattern(
+/** Match a single pattern with a pre-built preference context (direct + `@upstream` routing fallback). */
+function matchPatternWithContext(
 	pattern: string,
 	availableModels: Model<Api>[],
-	preferences?: ModelMatchPreferences,
+	context: ModelPreferenceContext,
 	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
 ): ParsedModelResult {
-	const context = buildPreferenceContext(availableModels, preferences);
 	const direct = parseModelPatternWithContext(pattern, availableModels, context, options);
 	if (direct.model) return direct;
 
@@ -847,6 +848,15 @@ export function parseModelPattern(
 		}
 	}
 	return direct;
+}
+export function parseModelPattern(
+	pattern: string,
+	availableModels: Model<Api>[],
+	preferences?: ModelMatchPreferences,
+	options?: { allowInvalidThinkingSelectorFallback?: boolean; modelRegistry?: CanonicalModelRegistry },
+): ParsedModelResult {
+	const context = buildPreferenceContext(availableModels, preferences);
+	return matchPatternWithContext(pattern, availableModels, context, options);
 }
 
 const PREFIX_MODEL_ROLE = "pi/";
@@ -1053,8 +1063,12 @@ export function resolveModelRoleValue(
 
 	let warning: string | undefined;
 	const matchPreferences = mergeModelMatchPreferences(options?.settings, options?.matchPreferences);
+	// Build the O(n) preference context once and reuse it across every fallback
+	// pattern instead of rebuilding it (modelOrder map over all available models)
+	// once per pattern inside parseModelPattern.
+	const preferenceContext = buildPreferenceContext(availableModels, matchPreferences);
 	for (const effectivePattern of effectivePatterns) {
-		const resolved = parseModelPattern(effectivePattern, availableModels, matchPreferences, {
+		const resolved = matchPatternWithContext(effectivePattern, availableModels, preferenceContext, {
 			modelRegistry: options?.modelRegistry,
 		});
 		if (resolved.model) {

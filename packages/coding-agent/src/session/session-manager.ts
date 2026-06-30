@@ -235,10 +235,14 @@ class SessionEntryIndex {
 
 		while (cursor && !seen.has(cursor.id)) {
 			seen.add(cursor.id);
-			branch.unshift(cursor);
+			// push (O(1)) + a single reverse beats unshift, which shifts the whole
+			// array on every node — O(n²) over the branch length. pathTo() backs
+			// getBranch(), called at ~17 sites per turn.
+			branch.push(cursor);
 			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
 		}
 
+		branch.reverse();
 		return branch;
 	}
 

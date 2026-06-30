@@ -6,6 +6,12 @@
 
 - Reduced streaming reveal CPU cost: the smooth-reveal grapheme slice now resumes segmentation from the cached boundary cluster each tick instead of re-segmenting the whole revealed prefix, so per-tick work scales with the newly revealed delta rather than the message length.
 - Reduced streaming render cost: Markdown now caches the rendered content lines for the stable streaming-lex prefix and re-renders only the changed tail each tick, so per-tick render work scales with the delta rather than the whole revealed message.
+- Reduced per-turn session traversal cost: the leaf→root branch path (`getBranch`/`pathTo`, hit at ~17 sites per turn) now appends and reverses instead of `unshift`-ing each node, turning O(n²) work into O(n) over the branch length.
+- Reduced subagent streaming CPU cost: the recent-output window no longer re-splits the full (up to 8 KB) tail on every streamed text token. Fragments without a newline extend the current last line in place, and a full recompute runs only when line boundaries actually change.
+- Reduced task-render CPU cost: the task result frame (repainted ~30×/sec via the spinner) previously did 7+ full passes over the result set (`some`/`filter`/`reduce`); a single pass now derives the status booleans, footer counts, and request total, and incremental review extraction reuses the yield data the caller already normalized instead of re-normalizing it.
+- Reduced edit-hunk normalization cost: the shared-line collapse passes in the patch edit mode built an O(old×new) membership set per hunk via `newLines.includes`; precomputing a `Set` of the new lines makes each lookup O(1).
+- Reduced model-resolution cost: `resolveModelRoleValue` now builds the preference context (an O(n) model-order map over all available models) once and reuses it across every fallback pattern instead of rebuilding it per pattern, and `matchModel` hoists the case-folded pattern once instead of `.toLowerCase()`-ing it for every candidate across each filter pass.
+- Reduced read-tool allocation: line counting counts newlines directly instead of allocating via `split("\n")`, and the hashline formatter no longer counts the same content twice.
 
 ### Fixed
 

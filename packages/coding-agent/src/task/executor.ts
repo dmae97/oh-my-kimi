@@ -855,6 +855,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const finalOutputChunks: string[] = [];
 	const RECENT_OUTPUT_TAIL_BYTES = 8 * 1024;
 	let recentOutputTail = "";
+	let tailLastLineRepresentable = false;
 	let resolved = false;
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
@@ -1033,17 +1034,35 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	};
 
 	const updateRecentOutputLines = () => {
-		const lines = recentOutputTail.split("\n").filter(line => line.trim());
-		progress.recentOutput = lines.slice(-8).reverse();
+		const lines = recentOutputTail.split("\n");
+		const filtered = lines.filter(line => line.trim());
+		progress.recentOutput = filtered.slice(-8).reverse();
+		// The tail's last raw segment (after its final newline) is "represented"
+		// in recentOutput only when it trims non-empty — an empty/whitespace-only
+		// trailing segment is filtered out, so recentOutput[0] is then the line
+		// before it, not the tail's true last line.
+		tailLastLineRepresentable = lines[lines.length - 1].trim().length > 0;
 	};
 
 	const appendRecentOutputTail = (text: string) => {
 		if (!text) return;
 		recentOutputTail += text;
-		if (recentOutputTail.length > RECENT_OUTPUT_TAIL_BYTES) {
+		const truncated = recentOutputTail.length > RECENT_OUTPUT_TAIL_BYTES;
+		if (truncated) {
 			recentOutputTail = recentOutputTail.slice(-RECENT_OUTPUT_TAIL_BYTES);
 		}
-		updateRecentOutputLines();
+		// Fast path: a token without a newline only extends the current last line.
+		// This runs on every text_delta token (hundreds/thousands per second while
+		// streaming), so skip re-splitting the whole (up to 8KB) tail unless the line
+		// structure actually changed. Requires no truncation AND the tail's last line
+		// already represented (trims non-empty) — otherwise boundaries shift and a
+		// full recompute is required. Appending to a non-empty line keeps it non-empty,
+		// so the flag stays valid across consecutive fast-path tokens.
+		if (truncated || text.includes("\n") || !tailLastLineRepresentable || progress.recentOutput.length === 0) {
+			updateRecentOutputLines();
+		} else {
+			progress.recentOutput = [progress.recentOutput[0] + text, ...progress.recentOutput.slice(1)];
+		}
 	};
 
 	const replaceRecentOutputFromContent = (content: unknown[]) => {
@@ -1063,6 +1082,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 
 	const resetRecentOutput = () => {
 		recentOutputTail = "";
+		tailLastLineRepresentable = false;
 		progress.recentOutput = [];
 	};
 

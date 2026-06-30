@@ -455,7 +455,8 @@ function trimCommonContext(oldLines: string[], newLines: string[]): HunkVariant 
 }
 
 function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
+	const newLineSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newLineSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const out: string[] = [];
 		let i = 0;
@@ -480,7 +481,8 @@ function collapseConsecutiveSharedLines(oldLines: string[], newLines: string[]):
 }
 
 function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVariant | undefined {
-	const shared = new Set(oldLines.filter(line => newLines.includes(line)));
+	const newLineSet = new Set(newLines);
+	const shared = new Set(oldLines.filter(line => newLineSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
 		const output = [...lines];
 		let changed = false;

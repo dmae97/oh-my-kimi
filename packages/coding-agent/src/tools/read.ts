@@ -308,7 +308,14 @@ function formatMergedBraceLine(
 
 function countTextLines(text: string): number {
 	if (text.length === 0) return 0;
-	return text.split("\n").length;
+	// Count newlines directly instead of allocating an array via split("\n").
+	// Called on every read of file content; the result is identical (N newlines
+	// ⇒ N+1 lines for non-empty text).
+	let lines = 1;
+	for (let i = 0; i < text.length; i++) {
+		if (text.charCodeAt(i) === 10) lines++;
+	}
+	return lines;
 }
 
 function contiguousLineNumbers(startLine: number, count: number): number[] {
@@ -1309,7 +1316,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				startLine: startNum,
 				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
 			};
-			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, countTextLines(content));
+			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, lineCount);
 			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
