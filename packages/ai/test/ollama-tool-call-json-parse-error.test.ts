@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { streamOllama } from "@oh-my-pi/pi-ai/providers/ollama";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -50,5 +51,18 @@ describe("Ollama malformed tool-call JSON errors", () => {
 		expect(result.errorStatus).toBe(500);
 		expect(result.errorMessage).toContain("Local Ollama model emitted malformed tool-call JSON");
 		expect(result.errorMessage).toContain("reload the model");
+	});
+
+	it("strips Transient so agent-level auto-retry will not replay the deterministic failure", async () => {
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		const fetchMock = async () => new Response(llamaToolParseFailure, { status: 500 });
+
+		const result = await streamOllama(model, context, {
+			apiKey: "ollama",
+			fetch: fetchMock,
+		}).result();
+
+		expect(AIError.is(result.errorId, AIError.Flag.Transient)).toBe(false);
+		expect(AIError.retriable(result.errorId)).toBe(false);
 	});
 });

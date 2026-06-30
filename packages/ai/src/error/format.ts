@@ -5,12 +5,10 @@ import {
 	rewriteCopilotError,
 } from "../utils/http-inspector";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
-
-const OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN =
-	/failed to parse tool call arguments as json|\[json\.exception\.parse_error\.101\]/i;
+import { LLAMA_CPP_TOOL_CALL_PARSE_PATTERN } from "./flags";
 
 function rewriteOllamaToolCallJsonError(message: string): string {
-	if (!OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN.test(message)) return message;
+	if (!LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(message)) return message;
 	return `Local Ollama model emitted malformed tool-call JSON and llama.cpp rejected it (HTTP 500). This is usually a deterministic model-output failure after context degradation, not a transient server outage; reload the model or reduce context, then retry.\n${message}`;
 }
 

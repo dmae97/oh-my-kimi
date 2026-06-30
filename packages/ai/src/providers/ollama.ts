@@ -323,11 +323,8 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 	};
 }
 
-const OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN =
-	/failed to parse tool call arguments as json|\[json\.exception\.parse_error\.101\]/i;
-
 function shouldRetryOllamaResponse(response: Response, bodyText: string): boolean {
-	return response.status < 500 || !OLLAMA_TOOL_CALL_ARGUMENTS_PARSE_PATTERN.test(bodyText);
+	return response.status < 500 || !AIError.LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(bodyText);
 }
 
 async function captureHttpErrorResponse(response: Response): Promise<CapturedHttpErrorResponse> {

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed local Ollama/llama.cpp malformed tool-call JSON failures being retried as generic 500 errors, surfacing a clearer recovery message instead. ([#3899](https://github.com/can1357/oh-my-pi/issues/3899))
+- Fixed local Ollama/llama.cpp malformed tool-call JSON failures being retried as generic 500 errors by both the provider transport and the agent-level auto-retry, surfacing a clearer recovery message instead. ([#3899](https://github.com/can1357/oh-my-pi/issues/3899))
 
 ## [16.2.7] - 2026-06-30
 
