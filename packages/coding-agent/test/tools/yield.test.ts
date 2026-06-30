@@ -306,6 +306,40 @@ describe("YieldTool", () => {
 		).rejects.toThrow(/Section "verdict" does not match schema.*2 retry attempt\(s\) remain/);
 	});
 
+	it("rejects unknown incremental labels when the closed caller schema is a root $ref into $defs", async () => {
+		// Caller schemas exported as `{ $ref: "#/$defs/Closed", $defs: { Closed: ... } }` MUST
+		// resolve the root ref before the yield tool derives the valid-label set and the
+		// closed-schema flag. Otherwise stale labels slip past the yield gate and only fail
+		// later as a parent-side schema_violation (#3927 follow-up review).
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					$ref: "#/$defs/Closed",
+					$defs: {
+						Closed: {
+							type: "object",
+							properties: {
+								issue_key: { type: "string" },
+								verdict: { enum: ["clean", "blockers"] },
+							},
+							required: ["issue_key", "verdict"],
+							additionalProperties: false,
+						},
+					},
+				},
+			}),
+		);
+
+		await expect(
+			tool.execute("call-rooted-ref-stale-label", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict"\./,
+		);
+	});
+
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {
 		const tool = new YieldTool(createSession());
 		await expect(tool.execute("call-untyped-empty", { result: {} } as never)).rejects.toThrow(

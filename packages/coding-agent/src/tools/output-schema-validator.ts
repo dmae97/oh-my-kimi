@@ -8,6 +8,7 @@
  * cannot be rejected post-mortem (or vice versa).
  */
 import {
+	dereferenceJsonSchema,
 	isValidJsonSchema,
 	type JsonSchemaValidationIssue,
 	type JsonSchemaValidationResult,
@@ -75,14 +76,24 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
 
 	const jsonSchemaRecord = jsonSchema as Record<string, unknown>;
 	const required = extractRequiredFields(jsonSchemaRecord);
+	// Resolve a root `$ref` (e.g. caller schemas exported as `{ $ref: "#/$defs/Closed", $defs: ... }`)
+	// before deriving incremental-label metadata. AJV-style validation chases the ref at runtime, so
+	// `validate()` accepts the resolved object — but `properties` and `additionalProperties` live on
+	// the inlined node, not the wrapper. Without this, unknown labels slipped past the yield gate and
+	// only fired as parent-side schema_violations.
+	const dereferenced = dereferenceJsonSchema(jsonSchemaRecord);
+	const labelSchema =
+		dereferenced && typeof dereferenced === "object" && !Array.isArray(dereferenced)
+			? (dereferenced as Record<string, unknown>)
+			: jsonSchemaRecord;
 	return {
 		normalized,
 		jsonSchema: jsonSchemaRecord,
 		validator: {
 			requiredFields: required,
 			validate: value => validateJsonSchemaValue(jsonSchemaRecord, value),
-			validateSection: buildSectionValidators(jsonSchemaRecord),
-			rejectUnknownSections: jsonSchemaRecord.additionalProperties === false,
+			validateSection: buildSectionValidators(labelSchema),
+			rejectUnknownSections: labelSchema.additionalProperties === false,
 		},
 	};
 }
