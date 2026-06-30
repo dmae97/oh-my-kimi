@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { type Component, type Focusable, TUI } from "@oh-my-pi/pi-tui";
+import { StressRenderScheduler } from "./render-stress-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class MutableLinesComponent implements Component {
@@ -38,12 +39,11 @@ class ArrowSelectorComponent implements Component, Focusable {
 
 const ERASE_SCROLLBACK = /\x1b\[3J/g;
 
-async function settle(term: VirtualTerminal): Promise<void> {
+async function settle(term: VirtualTerminal, scheduler: StressRenderScheduler): Promise<void> {
 	const nextTick = Promise.withResolvers<void>();
 	process.nextTick(nextTick.resolve);
 	await nextTick.promise;
-	await Bun.sleep(40);
-	await term.flush();
+	await scheduler.drain(term);
 }
 
 function captureWrites(term: VirtualTerminal): string[] {
@@ -62,8 +62,9 @@ describe("issue #1962: arrow navigation after dirty scrollback", () => {
 	});
 
 	it("does not clear and replay the whole transcript for a focused arrow-key frame", async () => {
+		const scheduler = new StressRenderScheduler();
 		const term = new VirtualTerminal(40, 6);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const transcript = new MutableLinesComponent(Array.from({ length: 12 }, (_value, index) => `history-${index}`));
 		const selector = new ArrowSelectorComponent();
 		tui.addChild(transcript);
@@ -72,18 +73,18 @@ describe("issue #1962: arrow navigation after dirty scrollback", () => {
 
 		try {
 			tui.start();
-			await settle(term);
+			await settle(term, scheduler);
 
 			transcript.setLines([
 				"history-0 updated",
 				...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
 			]);
 			tui.requestRender();
-			await settle(term);
+			await settle(term, scheduler);
 
 			const writes = captureWrites(term);
 			term.sendInput("\x1b[B");
-			await settle(term);
+			await settle(term, scheduler);
 
 			const output = writes.join("");
 			expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
@@ -102,8 +103,9 @@ describe("issue #1962: arrow navigation after dirty scrollback", () => {
 	});
 
 	it("does not clear and replay the whole transcript for a focused arrow-key frame inside an overlay", async () => {
+		const scheduler = new StressRenderScheduler();
 		const term = new VirtualTerminal(40, 6);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const transcript = new MutableLinesComponent(Array.from({ length: 12 }, (_value, index) => `history-${index}`));
 		tui.addChild(transcript);
 		const selector = new ArrowSelectorComponent();
@@ -111,18 +113,18 @@ describe("issue #1962: arrow navigation after dirty scrollback", () => {
 
 		try {
 			tui.start();
-			await settle(term);
+			await settle(term, scheduler);
 
 			transcript.setLines([
 				"history-0 updated",
 				...Array.from({ length: 11 }, (_value, index) => `history-${index + 1}`),
 			]);
 			tui.requestRender();
-			await settle(term);
+			await settle(term, scheduler);
 
 			const writes = captureWrites(term);
 			term.sendInput("\x1b[B");
-			await settle(term);
+			await settle(term, scheduler);
 
 			const output = writes.join("");
 			expect(output.match(ERASE_SCROLLBACK) ?? []).toHaveLength(0);
