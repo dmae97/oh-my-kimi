@@ -4,32 +4,31 @@
 
 ### Breaking Changes
 
-- Renamed the built-in `quick_task` subagent to `sonic`; update any `task` spawns or configs that reference `quick_task` by name
+- Renamed the built-in quick_task subagent to sonic; update any task spawns or configurations referencing quick_task by name.
 
 ### Added
-- Added the `llama3.2:3b` local tiny model option for memory and auto-thinking tasks; pulls from `onnx-community/Llama-3.2-3B-Instruct-ONNX` with q4 quantization.
 
-- Added a built-in `Tester` subagent that writes high-signal tests defending real contracts (behavior, invariants, edge cases) and refuses worthless tests that assert config/setter echoes, grep the source, or restate the implementation
-- Added a Speech-to-Text submit trigger setting that can auto-submit dictation on release, on complete sentences, or when the utterance ends with a spoken submit command.
-- Added a loop-guard redirect notice: when a thinking/response loop is detected and the turn is auto-retried, a hidden system notice is injected into the retried turn's context instructing the model to break the repeated pattern and take a concrete next step, instead of silently re-sampling the same stalled context (which previously just looped again until the retry cap)
+- Added the llama3.2:3b local model option for memory and auto-thinking tasks, utilizing a quantized ONNX model.
+- Added a built-in Tester subagent designed to write high-signal tests for behavior, invariants, and edge cases while avoiding redundant or low-value tests.
+- Added a Speech-to-Text submit trigger setting to auto-submit dictation on release, on complete sentences, or via a spoken submit command.
+- Added a loop-guard mechanism that detects thinking/response loops and injects a system notice during auto-retries to guide the model to break the pattern and take a concrete next step.
 
 ### Changed
 
-- Renamed the STT setting label from "TTS Submit Trigger" to "Speech-to-Text Submit Trigger"
+- Renamed the Speech-to-Text (STT) setting label from "TTS Submit Trigger" to "Speech-to-Text Submit Trigger".
+
+### Fixed
+
+- Fixed an issue where mid-run compaction was incorrectly skipped when a persisted assistant display variant shared a persistence key but differed in content from the live message.
+- Fixed duplicate placeholder cards being created when streamed tool blocks started with an empty ID.
+- Fixed omp debug --profile failing on Bun by treating the optional --allow-natives-syntax flag as best-effort when v8.setFlagsFromString is unavailable.
+- Fixed release binaries missing the compiled tiny-model Transformers.js version pin, preventing runtime resolution issues on certain platforms like Homebrew Darwin arm64.
+- Fixed MCP OAuth flows silently falling back to a random redirect port when the preferred port (default 3000) was busy, which caused authentication failures with strict providers. The flow now fails fast with a configuration error when a static client ID is pinned, while dynamic registration flows continue to use fallback ports.
+- Fixed /mcp reauth and /mcp add commands ignoring the Escape key during OAuth authentication, allowing users to cancel the flow immediately instead of waiting for the timeout.
 
 ### Removed
 
-- Removed the built-in `oracle` subagent
-
-### Fixed
-
-- Fixed mid-run compaction falsely skipping when a persisted assistant display variant shared the same persistence key but differed in content from the live turn message.
-- Fixed a bug where streamed tool blocks starting with an empty ID created duplicate placeholder cards
-
-- Fixed `omp debug --profile` failing on Bun with "node:v8 setFlagsFromString is not yet implemented in Bun" by treating the optional `--allow-natives-syntax` flag as best-effort, so the CPU profiler proceeds even on runtimes that don't expose `v8.setFlagsFromString`. ([#3897](https://github.com/can1357/oh-my-pi/issues/3897))
-### Fixed
-
-- Fixed release-built `omp-<platform>-<arch>` binaries missing the compiled tiny-model Transformers.js version pin, which made Homebrew Darwin arm64 fall back to resolving `@huggingface/transformers/package.json` from bunfs at runtime. ([#3904](https://github.com/can1357/oh-my-pi/issues/3904))
+- Removed the built-in oracle subagent.
 
 ## [16.2.8] - 2026-06-30
 
@@ -43,8 +42,6 @@
 
 ### Fixed
 
-- Fixed MCP OAuth flows silently advertising a random-port redirect URI when the preferred callback port (default 3000) was busy. Providers that validate redirect URIs against a registered callback (e.g. Atlassian) returned an opaque 500 page, leaving the local flow waiting until its 5-minute timeout. `MCPOAuthFlow` now opts out of random-port fallback whenever a static `client_id` is already pinned (via `oauth.clientId` or embedded in the authorization URL), failing fast with a `ConfigurationError` that names the busy port and the remediation (free the port, or set `oauth.callbackPort`/`oauth.redirectUri` in `mcp.json`). Fresh dynamic-client-registration flows still fall back so first-install users on a busy default port keep working — DCR registers the actual loopback URI on the fly. ([#3887](https://github.com/can1357/oh-my-pi/issues/3887))
-
 - Fixed auto-compaction dead-ends by automatically triggering a shake rescue to elide oversized tails
 - Improved compaction warning message to suggest running `/shake images` for irreducible image tails
 - Fixed `grep`/`search` direct execution to accept JSON-array string `paths` for string-or-array inputs. ([#3873](https://github.com/can1357/oh-my-pi/issues/3873))
@@ -55,7 +52,6 @@
 - Fixed slow local LLM streams by forwarding persisted stream timeout settings (`providers.streamFirstEventTimeoutSeconds`, `providers.streamIdleTimeoutSeconds`) into model requests, so users can widen or disable watchdogs without environment variables. ([#3878](https://github.com/can1357/oh-my-pi/issues/3878))
 - Fixed the bash interceptor blocking `echo` / `printf` redirects to `/dev/null`, `/dev/tty`, `/dev/stdout`, and `/dev/stderr` device sinks while still directing real file writes to the write tool. ([#3763](https://github.com/can1357/oh-my-pi/issues/3763))
 - Fixed long snapcompact sessions re-sending multi-megabyte standing image archives on every provider request by enforcing a per-request frame byte budget, letting auto-compaction fall back to context-full summaries when snapcompact output is too large, and omitting legacy over-budget frames from rebuilt LLM contexts. ([#3792](https://github.com/can1357/oh-my-pi/issues/3792))
-- Fixed `/mcp reauth` and `/mcp add` ignoring Esc during the OAuth wait, leaving the user stuck for the full 5-minute deadline. Esc now aborts the in-flight OAuth flow (`#handleOAuthFlow` installs an `editor.onEscape` hook, races the OAuth login against its `AbortController`, and the wizard threads its own abort signal through so its OAuth wait is also cancellable even before the callback wait is registered). Cancellation surfaces as a neutral status ("Reauthorization cancelled for …"/"Add cancelled for …") rather than an error banner, and the misleading "(Press Ctrl+C to cancel, 5 minute timeout)" message now correctly reads "Press Esc". ([#3888](https://github.com/can1357/oh-my-pi/issues/3888))
 
 ## [16.2.7] - 2026-06-30
 

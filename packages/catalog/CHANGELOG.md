@@ -4,17 +4,11 @@
 
 ### Added
 
-- Added adaptive thinking display, API restrictions, and mid-conversation system message support for Claude Sonnet 5
-- Extended 5-tier adaptive reasoning effort map support on OpenRouter and direct APIs to Claude Sonnet 5 and higher
-- Added compatibility flags and routines for Claude Sonnet 5, aligning its capabilities with Claude Opus 4.8 and Fable 5. Specifically:
-- Enabled adaptive thinking display support (`supportsAdaptiveThinkingDisplay`).
-- Applied sampling parameter and default thinking omission API restrictions (`hasOpus47ApiRestrictions`).
-- Added mid-conversation system message support (`supportsMidConversationSystemMessages`).
-- Extended the 5-tier adaptive reasoning effort map (including real `xhigh` and `max` levels) and Bedrock Converse/OpenRouter adaptive reasoning support.
+- Added full capability support for Claude Sonnet 5, aligning it with Claude Opus 4.8 and Fable 5. This includes adaptive thinking display, mid-conversation system messages, sampling parameter and thinking omission API restrictions, and 5-tier adaptive reasoning effort mapping (including xhigh and max levels) across direct APIs, OpenRouter, and Bedrock Converse.
 
 ### Changed
 
-- Updated input and output costs for the model in the catalog
+- Updated input and output costs for models in the catalog.
 
 ## [16.2.7] - 2026-06-30
 

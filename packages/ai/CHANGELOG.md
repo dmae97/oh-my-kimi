@@ -4,17 +4,16 @@
 
 ### Added
 
-- Added `OAuthCallbackFlowOptions.allowPortFallback` (default `true`) so subclasses that gate random-port fallback per request — e.g. MCP flows whose static `client_id` is already registered against a specific redirect URI — can refuse the silent fallback and surface an actionable `ConfigurationError` before opening the browser, while flows that re-register on demand (dynamic client registration) can keep the existing fallback semantics.
+- Added `OAuthCallbackFlowOptions.allowPortFallback` to allow disabling random-port fallback, enabling strict port enforcement and early configuration errors for OAuth flows with static redirect URIs.
 
 ### Changed
 
-- Reworded the `OAuthCallbackFlow` strict-port `ConfigurationError` messages to name the busy port, the configured `oauth.redirectUri` (when set), and concrete remediation steps (free the port, change `oauth.callbackPort`/`oauth.redirectUri`). Existing `redirectUri`-strict callers see the new wording on the same code path.
+- Improved `OAuthCallbackFlow` port conflict error messages to include the busy port, configured redirect URI, and actionable remediation steps.
+
 ### Fixed
 
-- Fixed local Ollama/llama.cpp malformed tool-call JSON failures being retried as generic 500 errors by both the provider transport and the agent-level auto-retry, surfacing a clearer recovery message instead. ([#3899](https://github.com/can1357/oh-my-pi/issues/3899))
-### Fixed
-
-- Fixed OAuth callback flows missing aborts that fired before the local callback wait registered its signal listener, so pre-cancelled flows now stop before opening/waiting on the callback server.
+- Fixed an issue where malformed tool-call JSON from local Ollama or llama.cpp models was incorrectly retried as generic 500 errors, now surfacing a clear recovery message.
+- Fixed a race condition in OAuth callback flows where abort signals triggered before the callback listener was registered were ignored.
 
 ## [16.2.7] - 2026-06-30
 

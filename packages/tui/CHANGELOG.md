@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `Editor.submit()` for programmatic composer submission from speech input flows.
+- Added `Editor.submit()` to allow programmatic composer submission, enabling integration with speech input and other automated flows.
 
 ## [16.2.7] - 2026-06-30
 
