@@ -28,6 +28,7 @@ import { invalidateFsScanAfterWrite } from "../../tools/fs-cache-invalidation";
 import { isInternalUrlPath } from "../../tools/path-utils";
 import { enforcePlanModeWrite, resolvePlanPath, targetsLocalSandbox } from "../../tools/plan-mode-guard";
 import { canonicalSnapshotKey } from "../file-snapshot-store";
+import { isNotebookPath } from "../notebook";
 import { readEditFileText, serializeEditFileText } from "../read-file";
 import type { LspBatchRequest } from "../renderer";
 
@@ -121,6 +122,17 @@ export class HashlineFilesystem extends Filesystem {
 		// Refuse edits against generated files (lockfiles, models.json, …).
 		assertEditableFileContent(content, relativePath);
 		return content;
+	}
+
+	async readBinary(relativePath: string): Promise<Uint8Array | undefined> {
+		const absolutePath = this.resolveAbsolute(relativePath);
+		if (isNotebookPath(absolutePath)) return undefined;
+		try {
+			return await fs.readFile(absolutePath);
+		} catch (error) {
+			if (isEnoent(error)) throw new NotFoundError(relativePath, error);
+			throw error;
+		}
 	}
 
 	async preflightWrite(relativePath: string, options?: PreflightWriteOptions): Promise<void> {

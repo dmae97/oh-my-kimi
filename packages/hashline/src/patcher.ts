@@ -148,6 +148,10 @@ function mergeWarnings(...sources: ReadonlyArray<readonly string[] | undefined>)
 	return out;
 }
 
+function hasUtf8Bom(bytes: Uint8Array | undefined): boolean {
+	return bytes !== undefined && bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+}
+
 function assertUniqueCanonicalPaths(prepared: readonly PreparedSection[]): void {
 	const seen = new Map<string, string>();
 	for (const entry of prepared) {
@@ -295,7 +299,8 @@ export class Patcher {
 			throw new Error(`MV destination is the same as ${target.path}.`);
 		}
 
-		const { bom, text } = stripBom(read.rawContent);
+		const { bom: bomFromText, text } = stripBom(read.rawContent);
+		const bom = bomFromText || (await this.#readBinaryBom(target.path));
 		const lineEnding = detectLineEnding(text);
 		const normalized = normalizeToLF(text);
 
@@ -451,6 +456,12 @@ export class Patcher {
 			blockResolutions: applyResult.blockResolutions,
 			warnings,
 		};
+	}
+
+	async #readBinaryBom(path: string): Promise<string> {
+		if (!this.fs.readBinary) return "";
+		const bytes = await this.fs.readBinary(path);
+		return hasUtf8Bom(bytes) ? "\uFEFF" : "";
 	}
 
 	async #tryRead(path: string): Promise<{ exists: boolean; rawContent: string }> {
