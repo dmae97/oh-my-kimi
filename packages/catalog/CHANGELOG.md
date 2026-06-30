@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.9] - 2026-06-30
+
 ### Added
 
 - Added full capability support for Claude Sonnet 5, aligning it with Claude Opus 4.8 and Fable 5. This includes adaptive thinking display, mid-conversation system messages, sampling parameter and thinking omission API restrictions, and 5-tier adaptive reasoning effort mapping (including xhigh and max levels) across direct APIs, OpenRouter, and Bedrock Converse.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.9] - 2026-06-30
+
 ### Added
 
 - Improved resilience in `fetchWithRetry()` by adding a response-body retry gate to handle deterministic provider failures that return retryable HTTP statuses.

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.9] - 2026-06-30
+
 ### Breaking Changes
 
 - Renamed the built-in quick_task subagent to sonic; update any task spawns or configurations referencing quick_task by name.

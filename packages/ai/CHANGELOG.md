@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [16.2.9] - 2026-06-30
+
 ### Added
 
 - Added `OAuthCallbackFlowOptions.allowPortFallback` to allow disabling random-port fallback, enabling strict port enforcement and early configuration errors for OAuth flows with static redirect URIs.
