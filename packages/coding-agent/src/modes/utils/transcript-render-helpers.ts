@@ -99,9 +99,9 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 	const block = new TranscriptBlock();
 	for (const file of files) {
 		let suffix: string;
-		if (file.skippedReason === "tooLarge") {
+		if (file.skippedReason === "tooLarge" || file.skippedReason === "binary") {
 			const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
-			suffix = `(skipped: ${size})`;
+			suffix = file.skippedReason === "binary" ? `(skipped: binary, ${size})` : `(skipped: ${size})`;
 		} else {
 			suffix = file.image
 				? "(image)"

@@ -1,138 +1,149 @@
 import { describe, expect, it } from "bun:test";
-import { getPriorityPremiumRequests, resolveServiceTier, shouldSendServiceTier } from "@oh-my-pi/pi-ai/types";
+import type { Api } from "@oh-my-pi/pi-ai/types";
+import {
+	coerceServiceTierByFamily,
+	getPriorityPremiumRequests,
+	realizesPriorityServiceTier,
+	resolveModelServiceTier,
+	serviceTierFamily,
+	shouldSendServiceTier,
+} from "@oh-my-pi/pi-ai/types";
 
-describe("getPriorityPremiumRequests", () => {
-	it("counts priority tier as one premium request on OpenAI", () => {
-		expect(getPriorityPremiumRequests("priority", "openai")).toBe(1);
+const m = (provider: string, api: Api, id: string): { provider: string; api: Api; id: string } => ({
+	provider,
+	api,
+	id,
+});
+
+const openai = m("openai", "openai-responses", "gpt-5");
+const codex = m("openai-codex", "openai-codex-responses", "gpt-5.5");
+const anthropic = m("anthropic", "anthropic-messages", "claude-opus-4-6");
+const vertexClaude = m("google-vertex", "anthropic-messages", "claude-opus-4-6");
+const gemini = m("google", "google-generative-ai", "gemini-3-flash");
+const vertexGemini = m("google-vertex", "google-vertex", "gemini-3-flash");
+const fireworks = m("fireworks", "openai-completions", "qwen3");
+const orOpenAI = m("openrouter", "openai-responses", "openai/gpt-5.5");
+const orGoogle = m("openrouter", "openai-completions", "google/gemini-3-flash");
+const orAnthropic = m("openrouter", "openai-completions", "anthropic/claude-opus-4-6");
+
+describe("serviceTierFamily", () => {
+	it("classifies first-party providers by provider/api", () => {
+		expect(serviceTierFamily(openai)).toBe("openai");
+		expect(serviceTierFamily(codex)).toBe("openai");
+		expect(serviceTierFamily(anthropic)).toBe("anthropic");
+		expect(serviceTierFamily(vertexClaude)).toBe("anthropic"); // Claude on Vertex is the anthropic family
+		expect(serviceTierFamily(gemini)).toBe("google");
+		expect(serviceTierFamily(vertexGemini)).toBe("google");
+		expect(serviceTierFamily(fireworks)).toBeUndefined();
 	});
 
-	it("counts priority tier as one premium request on OpenAI Codex", () => {
-		expect(getPriorityPremiumRequests("priority", "openai-codex")).toBe(1);
-	});
-
-	it("ignores non-priority paid tiers", () => {
-		expect(getPriorityPremiumRequests("flex", "openai")).toBe(0);
-		expect(getPriorityPremiumRequests("scale", "openai")).toBe(0);
-	});
-
-	it("ignores default and auto tiers", () => {
-		expect(getPriorityPremiumRequests("default", "openai")).toBe(0);
-		expect(getPriorityPremiumRequests("auto", "openai")).toBe(0);
-	});
-
-	it("ignores priority tier on providers that drop service_tier", () => {
-		// `priority` is realized on `openai`, `openai-codex`, and direct `anthropic`
-		// (as fast mode). Everywhere else it's silently dropped, so it must not
-		// be billed as premium.
-		expect(getPriorityPremiumRequests("priority", "github-copilot")).toBe(0);
-		expect(getPriorityPremiumRequests("priority", "azure")).toBe(0);
-		expect(getPriorityPremiumRequests("priority", "bedrock")).toBe(0);
-	});
-
-	it("counts priority on direct Anthropic as one premium request (fast mode)", () => {
-		expect(getPriorityPremiumRequests("priority", "anthropic")).toBe(1);
-	});
-
-	it("returns zero when service tier is unset", () => {
-		expect(getPriorityPremiumRequests(undefined, "openai")).toBe(0);
-		expect(getPriorityPremiumRequests(null, "openai")).toBe(0);
-	});
-
-	describe("scoped tiers", () => {
-		it("treats `openai-only` as priority on OpenAI and OpenAI-Codex", () => {
-			expect(getPriorityPremiumRequests("openai-only", "openai")).toBe(1);
-			expect(getPriorityPremiumRequests("openai-only", "openai-codex")).toBe(1);
-		});
-
-		it("treats `openai-only` as inactive on Anthropic and everywhere else", () => {
-			expect(getPriorityPremiumRequests("openai-only", "anthropic")).toBe(0);
-			expect(getPriorityPremiumRequests("openai-only", "github-copilot")).toBe(0);
-			expect(getPriorityPremiumRequests("openai-only", "bedrock")).toBe(0);
-		});
-
-		it("treats `claude-only` as priority on direct Anthropic", () => {
-			expect(getPriorityPremiumRequests("claude-only", "anthropic")).toBe(1);
-		});
-
-		it("treats `claude-only` as inactive on OpenAI, Bedrock/Vertex, and elsewhere", () => {
-			expect(getPriorityPremiumRequests("claude-only", "openai")).toBe(0);
-			expect(getPriorityPremiumRequests("claude-only", "openai-codex")).toBe(0);
-			expect(getPriorityPremiumRequests("claude-only", "bedrock")).toBe(0);
-			expect(getPriorityPremiumRequests("claude-only", "vertex")).toBe(0);
-		});
+	it("classifies OpenRouter models by id namespace", () => {
+		expect(serviceTierFamily(orOpenAI)).toBe("openai");
+		expect(serviceTierFamily(orGoogle)).toBe("google");
+		expect(serviceTierFamily(orAnthropic)).toBe("anthropic");
+		expect(serviceTierFamily(m("openrouter", "openai-completions", "z-ai/glm-4.7"))).toBeUndefined();
 	});
 });
 
-describe("resolveServiceTier", () => {
-	it("passes unscoped tiers through unchanged for any provider", () => {
-		expect(resolveServiceTier("flex", "openai")).toBe("flex");
-		expect(resolveServiceTier("priority", "anthropic")).toBe("priority");
-		expect(resolveServiceTier("auto", "openai-codex")).toBe("auto");
-		expect(resolveServiceTier("default", "github-copilot")).toBe("default");
-	});
-
-	it("scopes `openai-only` to OpenAI providers", () => {
-		expect(resolveServiceTier("openai-only", "openai")).toBe("priority");
-		expect(resolveServiceTier("openai-only", "openai-codex")).toBe("priority");
-		expect(resolveServiceTier("openai-only", "anthropic")).toBeUndefined();
-		expect(resolveServiceTier("openai-only", "bedrock")).toBeUndefined();
-		expect(resolveServiceTier("openai-only", undefined)).toBeUndefined();
-	});
-
-	it("scopes `claude-only` to direct Anthropic", () => {
-		expect(resolveServiceTier("claude-only", "anthropic")).toBe("priority");
-		expect(resolveServiceTier("claude-only", "openai")).toBeUndefined();
-		expect(resolveServiceTier("claude-only", "bedrock")).toBeUndefined();
-		expect(resolveServiceTier("claude-only", "vertex")).toBeUndefined();
-	});
-
-	it("returns undefined for null/undefined input", () => {
-		expect(resolveServiceTier(undefined, "openai")).toBeUndefined();
-		expect(resolveServiceTier(null, "openai")).toBeUndefined();
+describe("resolveModelServiceTier", () => {
+	it("reduces a per-family map to the model's family entry", () => {
+		const tiers = { openai: "priority", anthropic: "priority", google: "flex" } as const;
+		expect(resolveModelServiceTier(tiers, openai)).toBe("priority");
+		expect(resolveModelServiceTier(tiers, gemini)).toBe("flex");
+		expect(resolveModelServiceTier(tiers, orAnthropic)).toBe("priority");
+		expect(resolveModelServiceTier(tiers, fireworks)).toBeUndefined(); // no family
+		expect(resolveModelServiceTier(undefined, openai)).toBeUndefined();
+		expect(resolveModelServiceTier({ google: "priority" }, openai)).toBeUndefined();
 	});
 });
 
 describe("shouldSendServiceTier", () => {
-	it("returns false for non-OpenAI/non-Fireworks providers", () => {
-		expect(shouldSendServiceTier("flex", "azure-openai-responses")).toBe(false);
-		expect(shouldSendServiceTier("scale", "firepass")).toBe(false);
+	it("sends flex/scale/priority on the OpenAI family and OpenRouter", () => {
+		for (const p of ["openai", "openai-codex", "openrouter"]) {
+			expect(shouldSendServiceTier("flex", p)).toBe(true);
+			expect(shouldSendServiceTier("scale", p)).toBe(true);
+			expect(shouldSendServiceTier("priority", p)).toBe(true);
+			expect(shouldSendServiceTier("default", p)).toBe(false);
+			expect(shouldSendServiceTier("auto", p)).toBe(false);
+		}
+	});
+
+	it("sends flex/priority on direct Google, priority-only on Vertex (no scale)", () => {
+		expect(shouldSendServiceTier("flex", "google")).toBe(true);
+		expect(shouldSendServiceTier("priority", "google")).toBe(true);
+		expect(shouldSendServiceTier("scale", "google")).toBe(false);
+		expect(shouldSendServiceTier("priority", "google-vertex")).toBe(true);
+		expect(shouldSendServiceTier("flex", "google-vertex")).toBe(false); // Vertex flex has no wire control
+	});
+
+	it("sends only priority on Fireworks, nothing on Anthropic", () => {
+		expect(shouldSendServiceTier("priority", "fireworks")).toBe(true);
+		expect(shouldSendServiceTier("flex", "fireworks")).toBe(false);
 		expect(shouldSendServiceTier("priority", "anthropic")).toBe(false);
 	});
 
-	it("returns true for fireworks only with the priority tier", () => {
-		expect(shouldSendServiceTier("priority", "fireworks")).toBe(true);
-		// Fireworks realizes only the Priority serving path — flex/scale are OpenAI-only.
-		expect(shouldSendServiceTier("flex", "fireworks")).toBe(false);
-		expect(shouldSendServiceTier("scale", "fireworks")).toBe(false);
-		expect(shouldSendServiceTier("auto", "fireworks")).toBe(false);
-		expect(shouldSendServiceTier("default", "fireworks")).toBe(false);
-		expect(shouldSendServiceTier(undefined, "fireworks")).toBe(false);
-	});
-
-	it("returns true for openai with priority/flex/scale tiers", () => {
-		expect(shouldSendServiceTier("priority", "openai")).toBe(true);
-		expect(shouldSendServiceTier("flex", "openai")).toBe(true);
-		expect(shouldSendServiceTier("scale", "openai")).toBe(true);
-	});
-
-	it("returns true for openai-codex with priority/flex/scale tiers", () => {
-		expect(shouldSendServiceTier("priority", "openai-codex")).toBe(true);
-		expect(shouldSendServiceTier("flex", "openai-codex")).toBe(true);
-		expect(shouldSendServiceTier("scale", "openai-codex")).toBe(true);
-	});
-
-	it("returns false for default tier on OpenAI providers", () => {
-		expect(shouldSendServiceTier("default", "openai")).toBe(false);
-		expect(shouldSendServiceTier("default", "openai-codex")).toBe(false);
-	});
-
-	it("returns false for auto tier on OpenAI providers", () => {
-		expect(shouldSendServiceTier("auto", "openai")).toBe(false);
-		expect(shouldSendServiceTier("auto", "openai-codex")).toBe(false);
-	});
-
-	it("returns false for undefined/null tier", () => {
+	it("returns false for unset tiers", () => {
 		expect(shouldSendServiceTier(undefined, "openai")).toBe(false);
 		expect(shouldSendServiceTier(null, "openai")).toBe(false);
+	});
+});
+
+describe("realizesPriorityServiceTier", () => {
+	it("realizes priority where the wire actually applies it", () => {
+		expect(realizesPriorityServiceTier("priority", openai)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", anthropic)).toBe(true); // direct fast mode
+		expect(realizesPriorityServiceTier("priority", gemini)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", vertexGemini)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", fireworks)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", orOpenAI)).toBe(true);
+		expect(realizesPriorityServiceTier("priority", orGoogle)).toBe(true);
+	});
+
+	it("does not realize priority where the wire drops it", () => {
+		expect(realizesPriorityServiceTier("priority", vertexClaude)).toBe(false); // no fast mode on Vertex
+		expect(realizesPriorityServiceTier("priority", orAnthropic)).toBe(false); // OpenRouter Anthropic
+		expect(realizesPriorityServiceTier("flex", openai)).toBe(false);
+		expect(realizesPriorityServiceTier(undefined, openai)).toBe(false);
+	});
+});
+
+describe("getPriorityPremiumRequests", () => {
+	it("counts one premium request per realized priority on billing providers", () => {
+		expect(getPriorityPremiumRequests("priority", openai)).toBe(1);
+		expect(getPriorityPremiumRequests("priority", codex)).toBe(1);
+		expect(getPriorityPremiumRequests("priority", anthropic)).toBe(1);
+		expect(getPriorityPremiumRequests("priority", gemini)).toBe(1);
+		expect(getPriorityPremiumRequests("priority", vertexGemini)).toBe(1);
+	});
+
+	it("does not bill OpenRouter, unrealized, or non-priority traffic", () => {
+		expect(getPriorityPremiumRequests("priority", orOpenAI)).toBe(0); // OpenRouter bills its own way
+		expect(getPriorityPremiumRequests("priority", vertexClaude)).toBe(0); // not realized
+		expect(getPriorityPremiumRequests("priority", fireworks)).toBe(0); // realized but not Copilot-premium
+		expect(getPriorityPremiumRequests("flex", openai)).toBe(0);
+		expect(getPriorityPremiumRequests(undefined, openai)).toBe(0);
+	});
+});
+
+describe("coerceServiceTierByFamily", () => {
+	it("migrates legacy scalar values to a per-family map", () => {
+		expect(coerceServiceTierByFamily("priority")).toEqual({
+			openai: "priority",
+			anthropic: "priority",
+			google: "priority",
+		});
+		expect(coerceServiceTierByFamily("openai-only")).toEqual({ openai: "priority" });
+		expect(coerceServiceTierByFamily("claude-only")).toEqual({ anthropic: "priority" });
+		expect(coerceServiceTierByFamily("flex")).toEqual({ openai: "flex" });
+		expect(coerceServiceTierByFamily("none")).toBeUndefined();
+		expect(coerceServiceTierByFamily(null)).toBeUndefined();
+	});
+
+	it("passes a per-family map through, dropping invalid entries", () => {
+		expect(coerceServiceTierByFamily({ openai: "priority", google: "flex" })).toEqual({
+			openai: "priority",
+			google: "flex",
+		});
+		expect(coerceServiceTierByFamily({ openai: "bogus" })).toBeUndefined();
 	});
 });

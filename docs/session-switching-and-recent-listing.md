@@ -179,7 +179,7 @@ Lifecycle/state transition:
 15. restore model via `getRestorableSessionModels(sessionContext.models, lastModelChangeRole)` — tries the recorded models in fallback order and uses the first one present in the model registry
 16. restore thinking level and service tier:
     - thinking uses persisted `thinking_level_change`, otherwise the configured default clamped to model capability
-    - service tier uses persisted `service_tier_change`, otherwise the configured `serviceTier` setting (`"none"` becomes unset)
+    - service tier uses persisted `service_tier_change`, otherwise the configured per-family `tier.openai`/`tier.anthropic`/`tier.google` settings (`"none"` becomes unset)
 17. reconnect agent listeners, run the registered session-switch reconciler if any (interactive mode re-enters persisted modes; errors logged, not fatal), and return `true`
 
 ## UI state rebuild after interactive switch

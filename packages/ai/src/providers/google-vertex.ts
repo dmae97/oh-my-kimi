@@ -30,17 +30,47 @@ export const streamGoogleVertex: StreamFunction<"google-vertex"> = (
 		prepare: async (): Promise<GoogleGenAIRequestPlan> => {
 			const apiKey = resolveApiKey(options);
 			const params = buildGoogleGenerateContentParams(model, context, options ?? {});
+			params.config ||= {};
+			if (!params.config.safetySettings) {
+				params.config.safetySettings = [
+					{
+						category: "HARM_CATEGORY_HATE_SPEECH",
+						threshold: "OFF",
+					},
+					{
+						category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+						threshold: "OFF",
+					},
+					{
+						category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+						threshold: "OFF",
+					},
+					{
+						category: "HARM_CATEGORY_HARASSMENT",
+						threshold: "OFF",
+					},
+				];
+			}
 			const baseHeaders: Record<string, string> = {
 				...(model.headers ?? {}),
 				...(options?.headers ?? {}),
 			};
+			// Vertex AI ignores a `serviceTier` request-body field (unlike the direct
+			// Gemini API); priority must travel as a request header. Only `priority`
+			// has a documented Vertex request control — `flex` has none, so it's a no-op.
+			if (options?.serviceTier === "priority") {
+				baseHeaders["X-Vertex-AI-LLM-Shared-Request-Type"] = "priority";
+			}
 
 			if (apiKey) {
 				const url = `https://aiplatform.googleapis.com/${API_VERSION}/publishers/google/models/${model.id}:streamGenerateContent?alt=sse`;
 				return {
 					params,
 					url,
-					headers: { ...baseHeaders, "x-goog-api-key": apiKey },
+					headers: {
+						...baseHeaders,
+						"x-goog-api-key": apiKey,
+					},
 					fetch: options?.fetch,
 				};
 			}

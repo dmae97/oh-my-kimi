@@ -92,6 +92,8 @@ import type {
 	ResetCreditRedeemOutcome,
 	ResetCreditTarget,
 	ServiceTier,
+	ServiceTierByFamily,
+	ServiceTierFamily,
 	SimpleStreamOptions,
 	TextContent,
 	ToolCall,
@@ -105,7 +107,9 @@ import {
 	deriveClaudeDeviceId,
 	Effort,
 	parseRateLimitReason,
-	resolveServiceTier,
+	realizesPriorityServiceTier,
+	resolveModelServiceTier,
+	serviceTierFamily,
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -168,7 +172,7 @@ import {
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
-import { resolveServiceTierSetting } from "../config/service-tier";
+import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
@@ -506,6 +510,8 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** Initial per-family service tiers (OpenAI / Anthropic / Google) for the live session. */
+	serviceTierByFamily?: ServiceTierByFamily;
 	/** Prompt templates for expansion */
 	promptTemplates?: PromptTemplate[];
 	/** File-based slash commands for expansion */
@@ -1787,6 +1793,7 @@ export class AgentSession {
 		// toggle scopes priority to Fireworks alone, without mutating the shared
 		// session `serviceTier` that drives `/fast` and OpenAI/Anthropic priority.
 		this.agent.serviceTierResolver = model => this.#effectiveServiceTier(model);
+		this.#serviceTierByFamily = config.serviceTierByFamily ?? {};
 		this.#advisorTools = config.advisorTools;
 		this.#advisorWatchdogPrompt = config.advisorWatchdogPrompt;
 		this.#advisorSharedInstructions = config.advisorSharedInstructions;
@@ -2045,15 +2052,20 @@ export class AgentSession {
 		const legacy = !this.#advisorConfigs?.length;
 		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
 
-		// Advisor service tier (`serviceTierAdvisor`): "none" (default) runs the
-		// advisor on standard processing; "inherit" tracks the session's live tier
-		// per request (like the main agent, including /fast toggles) via a resolver;
-		// a concrete value pins the advisor to that tier. One value for all advisors.
-		const advisorTierSetting = this.settings.get("serviceTierAdvisor");
-		const advisorServiceTier =
-			advisorTierSetting === "inherit" ? undefined : resolveServiceTierSetting(advisorTierSetting, undefined);
-		const advisorServiceTierResolver =
-			advisorTierSetting === "inherit" ? (model: Model) => this.#effectiveServiceTier(model) : undefined;
+		// Advisor service tier (`tier.advisor`): "none" (default) runs the advisor
+		// on standard processing; "inherit" tracks the session's live per-family
+		// tiers per request (like the main agent, including /fast toggles); a
+		// concrete value is broadcast across families and applied to the advisor
+		// model's family. One value for all advisors.
+		const advisorTierSetting = this.settings.get("tier.advisor");
+		const advisorTierMap =
+			advisorTierSetting === "inherit"
+				? undefined
+				: serviceTierForAllFamilies(serviceTierSettingToTier(advisorTierSetting));
+		const advisorServiceTierResolver = (model: Model): ServiceTier | undefined =>
+			advisorTierSetting === "inherit"
+				? this.#effectiveServiceTier(model)
+				: resolveModelServiceTier(advisorTierMap, model);
 
 		const usedSlugs = new Set<string>();
 		for (const config of roster) {
@@ -2152,7 +2164,7 @@ export class AgentSession {
 				transformProviderContext: this.#transformProviderContext,
 				intentTracing: false,
 				telemetry: advisorTelemetry,
-				serviceTier: advisorServiceTier,
+				serviceTier: undefined,
 				serviceTierResolver: advisorServiceTierResolver,
 			});
 			advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
@@ -3215,10 +3227,11 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
-				const currentGrantsAnthropicPriority =
-					this.serviceTier === "priority" || this.serviceTier === "claude-only";
-				if (assistantMsg.disabledFeatures?.includes("priority") && currentGrantsAnthropicPriority) {
-					this.setServiceTier(undefined);
+				if (
+					assistantMsg.disabledFeatures?.includes("priority") &&
+					this.#serviceTierByFamily.anthropic === "priority"
+				) {
+					this.setServiceTierFamily("anthropic", undefined);
 					this.emitNotice(
 						"warning",
 						"Priority/fast mode rejected for this model; retried without it. Fast mode is now off.",
@@ -5203,8 +5216,11 @@ export class AgentSession {
 		return this.#autoResolvedLevel;
 	}
 
-	get serviceTier(): ServiceTier | undefined {
-		return this.agent.serviceTier;
+	#serviceTierByFamily: ServiceTierByFamily = {};
+
+	/** Live per-family service tiers (OpenAI / Anthropic / Google). */
+	get serviceTierByFamily(): ServiceTierByFamily {
+		return this.#serviceTierByFamily;
 	}
 
 	/** Whether agent is currently streaming a response */
@@ -7892,7 +7908,7 @@ export class AgentSession {
 		this.#scheduledHiddenNextTurnGeneration = undefined;
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
-		this.sessionManager.appendServiceTierChange(this.serviceTier ?? null);
+		this.sessionManager.appendServiceTierChange(this.#serviceTierEntry());
 		if (nextDiscoverySessionToolNames) {
 			await this.#applyActiveToolsByName(nextDiscoverySessionToolNames, { persistMCPSelection: false });
 			if (this.getSelectedMCPToolNames().length > 0) {
@@ -8434,38 +8450,36 @@ export class AgentSession {
 	}
 
 	/**
-	 * True when *any* fast-mode-granting service tier is configured, regardless
-	 * of whether the active model's provider actually realizes it. Used by the
-	 * toggle (`/fast on|off`) so re-toggling a scoped tier (`openai-only`,
-	 * `claude-only`) doesn't silently broaden it to unscoped `priority`.
+	 * True when the currently selected model's family is set to `priority` — the
+	 * `/fast` on/off state for the active model. Returns false when no model is
+	 * selected or the model exposes no service-tier family (e.g. Fireworks, which
+	 * has its own Providers › Fireworks Tier toggle).
 	 *
-	 * For "is fast mode actually applied to the next request?" use
-	 * {@link isFastModeActive} instead — that one respects the model's provider.
+	 * For "is priority actually applied to the next request?" use
+	 * {@link isFastModeActive} instead.
 	 */
 	isFastModeEnabled(): boolean {
-		return (
-			this.serviceTier === "priority" || this.serviceTier === "claude-only" || this.serviceTier === "openai-only"
-		);
+		const family = this.model ? serviceTierFamily(this.model) : undefined;
+		return family ? this.#serviceTierByFamily[family] === "priority" : false;
 	}
 
 	/**
-	 * True when the configured `serviceTier` resolves to `"priority"` for the
-	 * *currently selected model's provider*. Returns false for scoped tiers
-	 * that don't match (e.g. `"openai-only"` on an anthropic model) and when
-	 * no model is selected.
+	 * True when `priority` is actually realized on the wire for the currently
+	 * selected model (OpenAI/Google `service_tier`, direct Anthropic fast mode,
+	 * or Fireworks priority). Returns false for tiers the active model can't
+	 * realize and when no model is selected.
 	 */
 	isFastModeActive(): boolean {
-		return resolveServiceTier(this.#effectiveServiceTier(), this.model?.provider) === "priority";
+		const model = this.model;
+		return !!model && realizesPriorityServiceTier(this.#effectiveServiceTier(model), model);
 	}
 
 	/**
-	 * Effective wire service-tier for a request to `model`. Fireworks models
-	 * take the Priority serving path only when the Providers › Fireworks Tier
-	 * setting is `"priority"` — that toggle is the sole opt-in, so a global
-	 * `serviceTier: "priority"` (for OpenAI/Anthropic) never silently incurs
-	 * Fireworks priority costs — and never for `-fast` variants, whose Fast
-	 * serving path is mutually exclusive with Priority. Every other provider
-	 * uses the session `serviceTier` unchanged.
+	 * Effective wire service-tier for a request to `model`. Fireworks models take
+	 * the Priority serving path only when the Providers › Fireworks Tier setting
+	 * is `"priority"` (and never for `-fast` variants, whose Fast serving path is
+	 * mutually exclusive with Priority). Every other model resolves the live
+	 * per-family tier map down to the entry for its family.
 	 */
 	#effectiveServiceTier(model: Model | undefined = this.model): ServiceTier | undefined {
 		if (model?.provider === "fireworks") {
@@ -8473,40 +8487,56 @@ export class AgentSession {
 				? "priority"
 				: undefined;
 		}
-		return this.serviceTier;
+		if (!model) return undefined;
+		return resolveModelServiceTier(this.#serviceTierByFamily, model);
 	}
 
-	setServiceTier(serviceTier: ServiceTier | undefined): void {
-		if (this.serviceTier === serviceTier) return;
-		// Re-arming priority on Anthropic? Clear the per-session auto-fallback
-		// sticky disable so the next request actually carries `speed: "fast"`
-		// again. Without this, `/fast on` (or user switching to a tier that
-		// grants anthropic priority) after an auto-disable is a silent no-op
-		// and the warning notice fires every turn.
-		if (serviceTier === "priority" || serviceTier === "claude-only") {
+	/** The live per-family tier map, or `null` when empty (for session persistence). */
+	#serviceTierEntry(): ServiceTierByFamily | null {
+		return Object.keys(this.#serviceTierByFamily).length > 0 ? this.#serviceTierByFamily : null;
+	}
+
+	/** Set one family's tier (or clear it with `undefined`); persists the change. */
+	setServiceTierFamily(family: ServiceTierFamily, tier: ServiceTier | undefined): void {
+		if (this.#serviceTierByFamily[family] === tier) return;
+		const next: ServiceTierByFamily = { ...this.#serviceTierByFamily };
+		if (tier) next[family] = tier;
+		else delete next[family];
+		this.#applyServiceTierByFamily(next);
+	}
+
+	/** Replace the whole per-family tier map; persists + re-arms Anthropic fast mode. */
+	#applyServiceTierByFamily(next: ServiceTierByFamily): void {
+		// Re-arming Anthropic priority clears the per-session fast-mode auto-disable
+		// so the next request actually carries `speed: "fast"` again.
+		if (next.anthropic === "priority" && this.#serviceTierByFamily.anthropic !== "priority") {
 			clearAnthropicFastModeFallback(this.#providerSessionState);
 		}
-		this.agent.serviceTier = serviceTier;
-		this.sessionManager.appendServiceTierChange(serviceTier ?? null);
+		this.#serviceTierByFamily = next;
+		this.sessionManager.appendServiceTierChange(this.#serviceTierEntry());
 	}
 
+	/**
+	 * `/fast on|off` targets the family of the currently selected model: it sets
+	 * (or clears) that family's `priority` tier. Models without a service-tier
+	 * family (Fireworks, or providers with no tier knob) have nothing to toggle.
+	 */
 	setFastMode(enabled: boolean): void {
-		if (enabled && this.isFastModeEnabled()) {
-			// Already on under any scope — keep the user's scoped value.
+		const family = this.model ? serviceTierFamily(this.model) : undefined;
+		if (!family) {
+			this.emitNotice("info", "The current model has no service-tier control for /fast to toggle.", "priority");
 			return;
 		}
 		if (!enabled) {
-			this.setServiceTier(undefined);
+			if (this.#serviceTierByFamily[family] === "priority") this.setServiceTierFamily(family, undefined);
 			return;
 		}
-		const scope = this.settings.get("fastModeScope");
-		this.setServiceTier(scope === "openai" ? "openai-only" : scope === "claude" ? "claude-only" : "priority");
+		this.setServiceTierFamily(family, "priority");
 	}
 
 	toggleFastMode(): boolean {
-		const enabled = !this.isFastModeEnabled();
-		this.setFastMode(enabled);
-		return enabled;
+		this.setFastMode(!this.isFastModeEnabled());
+		return this.isFastModeEnabled();
 	}
 
 	/**
@@ -8871,6 +8901,8 @@ export class AgentSession {
 			const wantsSnapcompact =
 				compactionPrep.kind !== "fromHook" && effectiveSettings.strategy === "snapcompact" && !customInstructions;
 			const snapcompactReady = wantsSnapcompact;
+			const snapcompactShapeSetting = this.settings.get("snapcompact.shape");
+			let snapcompactShape: snapcompact.Shape | undefined;
 			if (wantsSnapcompact && !this.model.input.includes("image")) {
 				this.emitNotice(
 					"warning",
@@ -8879,8 +8911,16 @@ export class AgentSession {
 				);
 				throw new Error(`snapcompact cannot run locally: ${this.model.id} is text-only.`);
 			} else if (snapcompactReady) {
-				const text = snapcompact.serializeConversation(convertToLlm(preparation.messagesToSummarize));
-				const renderScan = snapcompact.scanRenderability(text);
+				const text = snapcompact.serializeConversation(
+					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+				);
+				const probeText = snapcompact.renderabilityProbeText(
+					text,
+					preparation.previousPreserveData,
+					preparation.previousSummary,
+				);
+				snapcompactShape = snapcompact.resolveShapeForText(probeText, this.model, snapcompactShapeSetting);
+				const renderScan = snapcompact.scanRenderability(probeText, { shape: snapcompactShape });
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					this.emitNotice(
@@ -8918,10 +8958,14 @@ export class AgentSession {
 					);
 					throw new Error("snapcompact cannot run locally: kept history alone exceeds the context budget.");
 				} else {
+					const shape = snapcompactShape;
+					if (!shape) {
+						throw new Error("snapcompact shape was not resolved before rendering.");
+					}
 					snapcompactResult = await snapcompact.compact(preparation, {
 						convertToLlm,
 						model: this.model,
-						shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
 					});
 					const ctxWindow = this.model?.contextWindow ?? 0;
@@ -11273,7 +11317,14 @@ export class AgentSession {
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
 				);
-				const renderScan = snapcompact.scanRenderability(text);
+				const probeText = snapcompact.renderabilityProbeText(
+					text,
+					preparation.previousPreserveData,
+					preparation.previousSummary,
+				);
+				const shapeSetting = this.settings.get("snapcompact.shape");
+				const shape = snapcompact.resolveShapeForText(probeText, this.model, shapeSetting);
+				const renderScan = snapcompact.scanRenderability(probeText, { shape });
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					logger.warn("Snapcompact disabled: high non-ASCII rate detected", {
@@ -11293,7 +11344,7 @@ export class AgentSession {
 						snapcompactResult = await snapcompact.compact(preparation, {
 							convertToLlm,
 							model: this.model,
-							shape: snapcompact.resolveShape(this.model, this.settings.get("snapcompact.shape")),
+							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
 						});
 						if (snapcompactResult) {
@@ -12840,6 +12891,50 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
+	 * Surfaces (and consumes) IRC incoming asides that have reached this running
+	 * session but have not yet been folded into the next model step.
+	 *
+	 * The inbox tool injects the formatted body into the tool result, so the
+	 * model sees it once via the result. Leaving the record in
+	 * {@link #pendingIrcAsides} would let the aside provider deliver it a second
+	 * time at the next step boundary — including on `peek`, which is why peek
+	 * also drains here.
+	 */
+	drainPendingIrcInboxMessages(agentId: string): IrcMessage[] {
+		const messages: IrcMessage[] = [];
+		const remaining: CustomMessage[] = [];
+		for (const record of this.#pendingIrcAsides) {
+			if (record.customType !== "irc:incoming") {
+				remaining.push(record);
+				continue;
+			}
+			const details = record.details;
+			if (!details || typeof details !== "object") {
+				remaining.push(record);
+				continue;
+			}
+			const id = Reflect.get(details, "id");
+			const from = Reflect.get(details, "from");
+			const body = Reflect.get(details, "message");
+			const replyTo = Reflect.get(details, "replyTo");
+			if (typeof id !== "string" || typeof from !== "string" || typeof body !== "string") {
+				remaining.push(record);
+				continue;
+			}
+			messages.push({
+				id,
+				from,
+				to: agentId,
+				body,
+				ts: record.timestamp,
+				...(typeof replyTo === "string" ? { replyTo } : {}),
+			});
+		}
+		this.#pendingIrcAsides = remaining;
+		return messages;
+	}
+
+	/**
 	 * Deliver an IRC message into this session (recipient side; called by the
 	 * IrcBus). Emits the `irc_message` session event for UI cards and injects
 	 * the rendered message into the model's context as an `irc:incoming`
@@ -13150,7 +13245,15 @@ export class AgentSession {
 		// Flush pending writes before switching so restore snapshots reflect committed state.
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
-		const previousSessionContext = this.buildDisplaySessionContext();
+		// Only same-session reloads compare against the prior context to detect
+		// rollback edits (`#didSessionMessagesChange` below). Building it for a
+		// different-session switch is a pure waste — and on huge pre-fix sessions
+		// it materializes every persisted snapcompact frame plus the
+		// `openaiRemoteCompaction.replacementHistory` payload into messages,
+		// blowing the heap before the new session even loads (issue #3846). The
+		// error-recovery path rebuilds the context on demand from the restored
+		// state instead.
+		const previousSessionContext = switchingToDifferentSession ? undefined : this.buildDisplaySessionContext();
 		// switchSession replaces these arrays wholesale during load/rollback, so retaining
 		// the existing message objects is sufficient and avoids structured-clone failures for
 		// extension/custom metadata that is valid to persist but not cloneable.
@@ -13163,7 +13266,7 @@ export class AgentSession {
 		const previousThinkingLevel = this.#thinkingLevel;
 		const previousAutoThinking = this.#autoThinking;
 		const previousAutoResolvedLevel = this.#autoResolvedLevel;
-		const previousServiceTier = this.agent.serviceTier;
+		const previousServiceTierByFamily = this.#serviceTierByFamily;
 		const previousSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
@@ -13189,7 +13292,7 @@ export class AgentSession {
 
 			const sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
-				!switchingToDifferentSession &&
+				previousSessionContext !== undefined &&
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
@@ -13249,7 +13352,11 @@ export class AgentSession {
 				.getBranch()
 				.some(entry => entry.type === "service_tier_change");
 			const defaultThinkingLevel = parseConfiguredThinkingLevel(this.settings.get("defaultThinkingLevel"));
-			const configuredServiceTier = this.settings.get("serviceTier");
+			const configuredServiceTierByFamily = buildServiceTierByFamily(
+				this.settings.get("tier.openai"),
+				this.settings.get("tier.anthropic"),
+				this.settings.get("tier.google"),
+			);
 			// Restore the thinking selector. Each change persists the configured
 			// selector (`auto` or a concrete level), so prefer it: an `auto` session
 			// resumes in auto mode (reclassifying the next turn) instead of freezing at
@@ -13278,11 +13385,9 @@ export class AgentSession {
 				this.#thinkingLevel = resolveThinkingLevelForModel(this.model, restoredThinkingLevel);
 			}
 			this.#applyThinkingLevelToAgent(this.#thinkingLevel);
-			this.agent.serviceTier = hasServiceTierEntry
-				? sessionContext.serviceTier
-				: configuredServiceTier === "none"
-					? undefined
-					: configuredServiceTier;
+			this.#serviceTierByFamily = hasServiceTierEntry
+				? (sessionContext.serviceTier ?? {})
+				: configuredServiceTierByFamily;
 
 			if (switchingToDifferentSession) {
 				await this.#resetMemoryContextForNewTranscript();
@@ -13305,7 +13410,12 @@ export class AgentSession {
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 			let restoreMcpError: unknown;
 			try {
-				await this.#restoreMCPSelectionsForSessionContext(previousSessionContext, {
+				// `previousSessionContext` was skipped on different-session switches to
+				// avoid materializing the previous session's heavy compaction payload
+				// in the success path; rebuild it here on demand from the restored
+				// state so MCP selection restoration still has its inputs.
+				const mcpRestoreContext = previousSessionContext ?? this.buildDisplaySessionContext();
+				await this.#restoreMCPSelectionsForSessionContext(mcpRestoreContext, {
 					fallbackSelectedMCPToolNames: previousFallbackSelectedMCPToolNames,
 				});
 			} catch (mcpError) {
@@ -13334,7 +13444,7 @@ export class AgentSession {
 			this.#autoThinking = previousAutoThinking;
 			this.#autoResolvedLevel = previousAutoResolvedLevel;
 			this.#applyThinkingLevelToAgent(previousThinkingLevel);
-			this.agent.serviceTier = previousServiceTier;
+			this.#serviceTierByFamily = previousServiceTierByFamily;
 			this.#syncTodoPhasesFromBranch();
 			this.#resetAllAdvisorRuntimes();
 			this.#reconnectToAgent();
@@ -14288,7 +14398,7 @@ export class AgentSession {
 		const payload = {
 			model: this.agent.state.model ?? null,
 			thinkingLevel: this.#thinkingLevel ?? null,
-			serviceTier: this.agent.serviceTier ?? null,
+			serviceTier: this.#serviceTierEntry(),
 			systemPrompt: this.agent.state.systemPrompt,
 			tools: this.agent.state.tools.map(tool => ({
 				name: tool.name,

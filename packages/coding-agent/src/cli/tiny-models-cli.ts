@@ -28,10 +28,19 @@ interface ProgressReporter {
 interface DownloadResult {
 	model: TinyLocalModelKey;
 	ok: boolean;
+	error?: string;
 }
 
 function writeLine(text = ""): void {
 	process.stdout.write(`${text}\n`);
+}
+
+function downloadErrorSummary(error: string | undefined): string | undefined {
+	return error
+		?.split(/\r?\n/)
+		.map(line => line.trim())
+		.find(line => line.length > 0)
+		?.replace(/^Error:\s*/, "");
 }
 
 export function resolveModels(model: string | undefined): TinyLocalModelKey[] {
@@ -101,10 +110,15 @@ async function downloadOne(modelKey: TinyLocalModelKey, json: boolean | undefine
 	const label = getTinyLocalModelSpec(modelKey)?.label ?? modelKey;
 	if (!json && !process.stdout.isTTY) writeLine(`Downloading ${label} (${modelKey})...`);
 	const progress = makeProgressReporter(modelKey, json);
-	const ok = await tinyTitleClient.downloadModel(modelKey, { onProgress: progress.onProgress });
-	progress.finish(ok);
-	if (!json && !process.stdout.isTTY) writeLine(ok ? `Downloaded ${label}.` : `Failed to download ${label}.`);
-	return { model: modelKey, ok };
+	const result = await tinyTitleClient.downloadModel(modelKey, { onProgress: progress.onProgress });
+	progress.finish(result.ok);
+	const error = downloadErrorSummary(result.error);
+	if (!json && !process.stdout.isTTY) {
+		writeLine(result.ok ? `Downloaded ${label}.` : `Failed to download ${label}${error ? `: ${error}` : ""}.`);
+	} else if (!json && !result.ok && error) {
+		writeLine(`${label} failed: ${error}`);
+	}
+	return result.error ? { model: modelKey, ok: result.ok, error: result.error } : { model: modelKey, ok: result.ok };
 }
 
 export async function runTinyModelsCommand(command: TinyModelsCommandArgs): Promise<void> {

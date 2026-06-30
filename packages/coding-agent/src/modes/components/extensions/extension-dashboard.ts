@@ -24,7 +24,9 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { getMCPConfigPath, logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../../config/settings";
+import { setMcpServerEnabled } from "../../../mcp/config-writer";
 import { getTabBarTheme } from "../../../modes/shared";
 import { theme } from "../../../modes/theme/theme";
 import { matchesAppInterrupt } from "../../../modes/utils/keybinding-matchers";
@@ -263,6 +265,14 @@ export class ExtensionDashboard implements Component {
 		const sm = this.settings ?? Settings.instance;
 		if (!sm) return;
 
+		// MCP toggles route through the canonical denylist in
+		// `~/.omp/agent/mcp.json` so `/mcp list`, the MCP runtime, and this
+		// dashboard agree on every server's enabled state (issue #3827).
+		if (extensionId.startsWith("mcp:")) {
+			void this.#toggleMcpExtension(extensionId, enabled, sm);
+			return;
+		}
+
 		const disabled = ((sm.get("disabledExtensions") as string[]) ?? []).slice();
 		if (enabled) {
 			const index = disabled.indexOf(extensionId);
@@ -279,6 +289,42 @@ export class ExtensionDashboard implements Component {
 
 		this.#applyDisabledExtensions(disabled);
 		void this.#refreshFromState();
+	}
+
+	async #toggleMcpExtension(extensionId: string, enabled: boolean, sm: Settings): Promise<void> {
+		const name = extensionId.slice("mcp:".length);
+		try {
+			await setMcpServerEnabled({
+				userPath: getMCPConfigPath("user", this.cwd),
+				projectPath: getMCPConfigPath("project", this.cwd),
+				sourcePath: this.#writableMcpSourcePath(extensionId),
+				name,
+				enabled,
+			});
+		} catch (error) {
+			logger.warn("Failed to persist MCP toggle", { name, enabled, error: String(error) });
+		}
+
+		// Reconcile `settings.disabledExtensions` with the canonical mcp.json
+		// state so a legacy `mcp:<name>` flag from before this routing change
+		// doesn't keep the server marked disabled after the user re-enables it
+		// via the UI.
+		const stored = ((sm.get("disabledExtensions") as string[]) ?? []).slice();
+		const had = stored.indexOf(extensionId);
+		if (enabled && had !== -1) {
+			stored.splice(had, 1);
+			sm.set("disabledExtensions", stored);
+			this.#applyDisabledExtensions(stored);
+		}
+
+		await this.#refreshFromState();
+	}
+
+	#writableMcpSourcePath(extensionId: string): string | undefined {
+		const extension = this.#state.extensions.find(ext => ext.id === extensionId);
+		if (!extension) return undefined;
+		if (extension.source.provider !== "native" && extension.source.provider !== "mcp-json") return undefined;
+		return extension.path;
 	}
 
 	async #refreshFromState(): Promise<void> {

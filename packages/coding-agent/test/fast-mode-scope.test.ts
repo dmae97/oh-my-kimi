@@ -9,9 +9,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-type FastModeScope = "both" | "openai" | "claude";
-
-describe("fast mode scope", () => {
+describe("/fast targets the current model's service-tier family", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let session: AgentSession;
@@ -29,77 +27,54 @@ describe("fast mode scope", () => {
 		tempDir.removeSync();
 	});
 
-	async function createSession(fastModeScope?: FastModeScope): Promise<AgentSession> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	async function createSession(provider: "anthropic" | "openai", modelId: string): Promise<AgentSession> {
+		const model = getBundledModel(provider, modelId);
 		if (!model) {
-			throw new Error("Expected bundled test model to exist");
+			throw new Error(`Expected bundled test model ${provider}/${modelId} to exist`);
 		}
-
-		const settings = fastModeScope === undefined ? Settings.isolated() : Settings.isolated({ fastModeScope });
 		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});
-
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.setRuntimeApiKey(model.provider, "anthropic-token");
+		authStorage.setRuntimeApiKey(model.provider, "token");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
-			settings,
+			settings: Settings.isolated(),
 			modelRegistry,
 		});
 		session.subscribe(() => {});
 		return session;
 	}
 
-	it("scopes enabled fast mode to OpenAI when configured", async () => {
-		const session = await createSession("openai");
-
+	it("enables priority on the Anthropic family for a Claude model", async () => {
+		const session = await createSession("anthropic", "claude-sonnet-4-5");
 		session.setFastMode(true);
-
-		expect(session.serviceTier).toBe("openai-only");
+		expect(session.serviceTierByFamily).toEqual({ anthropic: "priority" });
+		expect(session.isFastModeEnabled()).toBe(true);
 	});
 
-	it("scopes enabled fast mode to Claude when configured", async () => {
-		const session = await createSession("claude");
-
+	it("enables priority on the OpenAI family for an OpenAI model", async () => {
+		const session = await createSession("openai", "gpt-5.2");
 		session.setFastMode(true);
-
-		expect(session.serviceTier).toBe("claude-only");
+		expect(session.serviceTierByFamily).toEqual({ openai: "priority" });
+		expect(session.isFastModeEnabled()).toBe(true);
 	});
 
-	it("defaults enabled fast mode to priority for both providers", async () => {
-		const session = await createSession();
-
+	it("clears only the current model's family when disabled", async () => {
+		const session = await createSession("anthropic", "claude-sonnet-4-5");
 		session.setFastMode(true);
-
-		expect(session.serviceTier).toBe("priority");
-	});
-
-	it("clears the service tier when disabled", async () => {
-		const session = await createSession("openai");
-		session.setFastMode(true);
-
 		session.setFastMode(false);
-
-		expect(session.serviceTier).toBeUndefined();
+		expect(session.serviceTierByFamily).toEqual({});
+		expect(session.isFastModeEnabled()).toBe(false);
 	});
 
-	it("does not broaden an already enabled scoped tier", async () => {
-		const session = await createSession("claude");
-		session.setFastMode(true);
-		expect(session.serviceTier).toBe("claude-only");
-		session.settings.set("fastModeScope", "both");
-
-		session.setFastMode(true);
-
-		expect(session.serviceTier).toBe("claude-only");
+	it("toggle reports the resulting state", async () => {
+		const session = await createSession("anthropic", "claude-sonnet-4-5");
+		expect(session.toggleFastMode()).toBe(true);
+		expect(session.serviceTierByFamily.anthropic).toBe("priority");
+		expect(session.toggleFastMode()).toBe(false);
+		expect(session.serviceTierByFamily.anthropic).toBeUndefined();
 	});
 });

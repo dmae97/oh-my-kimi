@@ -81,12 +81,16 @@ describe("scanRenderability", () => {
 		expect(res.unrenderableRatio).toBe(0);
 	});
 
-	it("detects high unrenderable rates in CJK text and marks it unsafe", () => {
-		// Mix of ASCII and CJK: "const a = '你好世界';"
-		// Total graphics: ~15. Unrenderable: 4. Ratio > 5% (0.05).
+	it("uses the embedded Silver fallback for CJK text", () => {
 		const res = snapcompact.scanRenderability("const a = '你好世界';");
+		expect(res.isSafe).toBe(true);
+		expect(res.unrenderableRatio).toBe(0);
+	});
+
+	it("detects high unrenderable rates when neither bitmap fonts nor Silver cover the text", () => {
+		const res = snapcompact.scanRenderability("\u{e000}".repeat(10));
 		expect(res.isSafe).toBe(false);
-		expect(res.unrenderableRatio).toBeGreaterThan(0.05);
+		expect(res.unrenderableRatio).toBe(1);
 	});
 
 	it("ignores whitespace, ANSI, and zero-width markers in ratio calculations", () => {
@@ -210,7 +214,7 @@ describe("normalize", () => {
 		expect(snapcompact.normalize("a \t b   c")).toBe("a b c");
 		expect(snapcompact.normalize("x → y ✓ “quoted” — em…")).toBe(`x -> y v "quoted" - em...`);
 		expect(snapcompact.normalize("café größe")).toBe("café größe"); // Latin-1 has glyphs
-		expect(snapcompact.normalize("box │─┌ emoji 🎞")).toBe("box |-+ emoji ?");
+		expect(snapcompact.normalize("box │─┌ emoji 🎞")).toBe("box |-+ emoji");
 	});
 
 	it("folds newline runs to one full-block glyph, trimming the edges", () => {
@@ -232,6 +236,17 @@ describe("normalize", () => {
 		);
 	});
 
+	it("preserves Silver-supported kana and Hangul for bitmap font fallback", () => {
+		expect(snapcompact.normalize("こんにちは")).toBe("こんにちは");
+		expect(snapcompact.normalize("カタカナ")).toBe("カタカナ");
+		expect(snapcompact.normalize("안녕하세요")).toBe("안녕하세요");
+	});
+
+	it("folds semantic emoji and drops decorative emoji", () => {
+		expect(snapcompact.normalize("✅ pass ⚠️ warn ❌ fail 😄")).toBe("[OK] pass [WARN] warn [FAIL] fail");
+		expect(snapcompact.normalize("✗ ✘")).toBe("x x");
+	});
+
 	it("folds compatibility characters to their ASCII skeleton via NFKD", () => {
 		expect(snapcompact.normalize("x⁵")).toBe("x5"); // superscript outside Latin-1
 		expect(snapcompact.normalize("ＨＥＬＬＯ")).toBe("HELLO"); // fullwidth forms
@@ -241,8 +256,8 @@ describe("normalize", () => {
 		expect(snapcompact.normalize("⅓ cup")).toBe("1/3 cup"); // vulgar fraction
 		expect(snapcompact.normalize("𝐇𝐞𝐥𝐥𝐨")).toBe("Hello"); // math-styled alphanumerics
 		expect(snapcompact.normalize("™ ‹q› ′ ″ ⇐ ↑")).toBe(`TM <q> ' " <= ^`);
-		// No decomposition and no glyph still falls back to ? (unchanged contract).
-		expect(snapcompact.normalize("emoji 🎞")).toBe("emoji ?");
+		// Emoji drops, while characters missing from both selected font and Silver fall back to ?.
+		expect(snapcompact.normalize("emoji 🎞 \u{e000}")).toBe("emoji ?");
 	});
 });
 
@@ -357,6 +372,17 @@ describe("shape resolution", () => {
 		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, imageDetail: "original" })).toBe(true);
 	});
 
+	it("keeps selected shapes while Silver fallback covers non-Latin glyphs", () => {
+		const text = "こんにちは 你好 안녕";
+		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
+		expect(snapcompact.scanRenderability(text).isSafe).toBe(true);
+		expect(snapcompact.scanRenderability(text, { shape: silver }).isSafe).toBe(true);
+		expect(snapcompact.normalize(text)).toBe(text);
+		expect(snapcompact.normalize(text, { shape: silver })).toBe(text);
+		expect(snapcompact.resolveShapeForText(text).font).not.toBe("silver");
+		expect(snapcompact.resolveShapeForText("plain ascii").font).not.toBe("silver");
+	});
+
 	it("images forwards the per-frame detail hint", () => {
 		const archive: snapcompact.Archive = {
 			frames: [
@@ -450,6 +476,33 @@ describe("render", () => {
 		expect(frame.cols).toBe(Math.floor(TEST_FRAME_SIZE / 6));
 	});
 
+	it("renders Silver TrueType Unicode text as truecolor RGB", async () => {
+		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
+		const frame = await snapcompact.render("你好안녕", silver, 64);
+		const png = Buffer.from(frame.data, "base64");
+		expect(png[25]).toBe(2);
+		expect(png.readUInt32BE(16)).toBe(64);
+		expect(png.readUInt32BE(20)).toBe(16);
+		expect(frame.cols).toBe(4);
+		expect(frame.chars).toBe(4);
+	});
+
+	it("renders a Silver fallback glyph across two cells in a bitmap frame", async () => {
+		const bitmap = snapcompact.resolveShape(undefined, "8on16-bw"); // 8px-wide cells at 64px → cols 8
+		const frame = await snapcompact.render("你", bitmap, 64);
+		const decoded = decodePng(Buffer.from(frame.data, "base64"));
+		expect(decoded.colorType).toBe(3);
+		expect(frame.chars).toBe(1);
+		// The wide glyph fills the full two-cell (16px) span, not a single 8px cell.
+		let inkBeyondFirstCell = false;
+		for (let y = 0; y < decoded.height; y++) {
+			for (let x = 8; x < 16; x++) {
+				if (decoded.pixels[y * decoded.width + x] === 7) inkBeyondFirstCell = true;
+			}
+		}
+		expect(inkBeyondFirstCell).toBe(true);
+	});
+
 	it("caps printed characters at frame capacity", async () => {
 		const { capacity } = snapcompact.geometry(snapcompact.SHAPES.legacy, TEST_FRAME_SIZE);
 		const frame = await snapcompact.render("x".repeat(capacity + 500), snapcompact.SHAPES.legacy, TEST_FRAME_SIZE);
@@ -499,6 +552,20 @@ describe("renderMany", () => {
 		const frames = await snapcompact.renderMany(text, { shape, frameSize: TEST_FRAME_SIZE });
 		expect(frames).toHaveLength(3);
 		expect(snapcompact.frames(text, { shape, frameSize: TEST_FRAME_SIZE })).toBe(3);
+	});
+
+	it("counts wide CJK as two grid cells in bitmap shapes and one in Silver", () => {
+		const bitmap = snapcompact.resolveShape(undefined, "8on16-bw"); // cols 8 (even) at 64px
+		const cap = snapcompact.geometry(bitmap, 64).capacity;
+		// Wide glyphs take two cells, so half a frame's worth of cells fits as chars.
+		expect(snapcompact.frames("你".repeat(cap / 2), { shape: bitmap, frameSize: 64 })).toBe(1);
+		expect(snapcompact.frames("你".repeat(cap / 2 + 1), { shape: bitmap, frameSize: 64 })).toBe(2);
+		// ASCII stays one cell per char on the same shape.
+		expect(snapcompact.frames("a".repeat(cap), { shape: bitmap, frameSize: 64 })).toBe(1);
+		// The square-celled Silver shape draws CJK one cell each (no doubling).
+		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
+		const silverCap = snapcompact.geometry(silver, 64).capacity;
+		expect(snapcompact.frames("你".repeat(silverCap), { shape: silver, frameSize: 64 })).toBe(1);
 	});
 
 	it("honors maxFrames and propagates the shape's detail hint", async () => {
@@ -791,6 +858,18 @@ describe("compact", () => {
 		expect(cols.slice(0, 3)).toEqual([hiCols, hiCols, hiCols]);
 		expect(cols.slice(-3)).toEqual([hiCols, hiCols, hiCols]);
 		expect(cols[3]).toBeGreaterThan(hiCols);
+	});
+
+	it("keeps foveated Silver archives on the Silver font", async () => {
+		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
+		const result = await snapcompact.compact(
+			makePreparation({ messagesToSummarize: [createUserMessage("你好世界".repeat(200))] }),
+			{ shape: silver, frameSize: 64, maxFrames: 1 },
+		);
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		expect(archive).toBeDefined();
+		expect(archive?.frames.length).toBeGreaterThan(0);
+		expect(archive?.frames.every(frame => frame.font === "silver")).toBe(true);
 	});
 
 	it("re-renders later compactions from the kept source text", async () => {

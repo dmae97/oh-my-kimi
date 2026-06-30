@@ -173,13 +173,16 @@ describe("bench empty-output guard", () => {
 
 function settingsStub(serviceTier: string | undefined): Settings | undefined {
 	if (serviceTier === undefined) return undefined;
-	return { get: (key: string) => (key === "serviceTier" ? serviceTier : undefined) } as unknown as Settings;
+	return {
+		get: (key: string) =>
+			key === "tier.openai" ? serviceTier : key === "tier.anthropic" || key === "tier.google" ? "none" : undefined,
+	} as unknown as Settings;
 }
 
 async function captureServiceTier(opts: {
 	flag?: string;
 	setting?: string;
-}): Promise<{ wire: SimpleStreamOptions["serviceTier"]; summary: BenchSummary["serviceTier"] }> {
+}): Promise<{ wire: SimpleStreamOptions["serviceTier"]; summary: BenchSummary["serviceTierByFamily"] }> {
 	const registry = fakeRegistry({ models: [fakeModel("openai-codex", "gpt-5.5")], authedProviders: ["openai-codex"] });
 	let captured: SimpleStreamOptions | undefined;
 	const summary = await runBenchCommand(
@@ -205,7 +208,7 @@ async function captureServiceTier(opts: {
 			stdoutIsTTY: false,
 		},
 	);
-	return { wire: captured?.serviceTier, summary: summary.serviceTier };
+	return { wire: captured?.serviceTier, summary: summary.serviceTierByFamily };
 }
 
 describe("bench provider session state and websocket preference", () => {
@@ -245,24 +248,24 @@ describe("bench service tier", () => {
 	it("sends the configured serviceTier setting when no flag is passed", async () => {
 		const { wire, summary } = await captureServiceTier({ setting: "flex" });
 		expect(wire).toBe("flex");
-		expect(summary).toBe("flex");
+		expect(summary).toEqual({ openai: "flex" });
 	});
 
 	it("lets an explicit --service-tier override the configured setting", async () => {
 		const { wire, summary } = await captureServiceTier({ flag: "priority", setting: "flex" });
 		expect(wire).toBe("priority");
-		expect(summary).toBe("priority");
+		expect(summary).toEqual({ openai: "priority", anthropic: "priority", google: "priority" });
 	});
 
 	it("omits service_tier when the setting is none and no flag is passed", async () => {
 		const { wire, summary } = await captureServiceTier({ setting: "none" });
 		expect(wire).toBeUndefined();
-		expect(summary).toBeUndefined();
+		expect(summary).toEqual({});
 	});
 
 	it("omits service_tier when neither flag nor settings are present", async () => {
 		const { wire, summary } = await captureServiceTier({});
 		expect(wire).toBeUndefined();
-		expect(summary).toBeUndefined();
+		expect(summary).toEqual({});
 	});
 });

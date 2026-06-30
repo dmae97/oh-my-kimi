@@ -43,7 +43,6 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { resolveServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import {
@@ -1595,7 +1594,7 @@ const streamAnthropicOnce = (
 				isOAuthToken = false;
 			} else {
 				const extraBetas = normalizeExtraBetas(options?.betas);
-				const wantsAnthropicPriority = resolveServiceTier(options?.serviceTier, model.provider) === "priority";
+				const wantsAnthropicPriority = model.provider === "anthropic" && options?.serviceTier === "priority";
 				// Skip the fast-mode beta when this session already learned the
 				// endpoint+model rejects fast mode; `speed` is dropped from the params
 				// too (dropFastMode), so the request stays a faithful non-fast request.
@@ -2191,7 +2190,8 @@ const streamAnthropicOnce = (
 					}
 					if (
 						!dropFastMode &&
-						resolveServiceTier(options?.serviceTier, model.provider) === "priority" &&
+						model.provider === "anthropic" &&
+						options?.serviceTier === "priority" &&
 						firstTokenTime === undefined &&
 						AIError.isFastModeUnsupported(streamFailure)
 					) {
@@ -2259,7 +2259,7 @@ const streamAnthropicOnce = (
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			if (dropFastMode && resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+			if (dropFastMode && model.provider === "anthropic" && options?.serviceTier === "priority") {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
 			}
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -2876,9 +2876,10 @@ function buildParams(
 	let thinking: MessageCreateParamsStreaming["thinking"] | undefined;
 	let outputConfigEffort: AnthropicOutputEffort | undefined;
 	if (model.reasoning) {
-		if (options?.thinkingEnabled) {
+		if (options?.thinkingEnabled || model.compat.requiresThinkingEnabled) {
+			const thinkingOptions = options ?? {};
 			const mode = model.thinking?.mode;
-			const effort = resolveAnthropicAdaptiveEffort(model, options);
+			const effort = resolveAnthropicAdaptiveEffort(model, thinkingOptions);
 			const compat = model.compat;
 			if (mode === "anthropic-adaptive" && !compat.disableAdaptiveThinking) {
 				const adaptive: { type: "adaptive"; display?: AnthropicThinkingDisplay } = { type: "adaptive" };
@@ -2889,15 +2890,15 @@ function buildParams(
 				// support: Opus 4.6 / Sonnet 4.6+ reject it with a 400, so an explicit
 				// `thinkingDisplay` MUST NOT force it onto a model that can't accept it.
 				if (model.thinking?.supportsDisplay) {
-					adaptive.display = options.thinkingDisplay ?? "summarized";
+					adaptive.display = thinkingOptions.thinkingDisplay ?? "summarized";
 				}
 				thinking = adaptive;
 				if (effort && effort !== "adaptive") outputConfigEffort = effort;
 			} else {
 				thinking = {
 					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
-					display: options.thinkingDisplay ?? "summarized",
+					budget_tokens: thinkingOptions.thinkingBudgetTokens || 1024,
+					display: thinkingOptions.thinkingDisplay ?? "summarized",
 				};
 				if (mode === "anthropic-budget-effort" && effort && effort !== "adaptive") outputConfigEffort = effort;
 			}
@@ -2996,7 +2997,7 @@ function buildParams(
 			seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX ? seqs.slice(0, ANTHROPIC_STOP_SEQUENCES_MAX) : seqs;
 	}
 
-	if (resolveServiceTier(options?.serviceTier, model.provider) === "priority") {
+	if (model.provider === "anthropic" && options?.serviceTier === "priority") {
 		params.speed = "fast";
 	}
 

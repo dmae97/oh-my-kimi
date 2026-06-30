@@ -227,3 +227,124 @@ export async function setServerDisabled(filePath: string, name: string, disabled
 
 	await writeMCPConfigFile(filePath, updated);
 }
+
+/**
+ * Read the user-level force-enable list (allowlist that overrides a
+ * non-writable source config's `enabled: false`).
+ */
+export async function readEnabledServers(filePath: string): Promise<string[]> {
+	const config = await readMCPConfigFile(filePath);
+	return Array.isArray(config.enabledServers) ? config.enabledServers : [];
+}
+
+/**
+ * Add or remove a server name from the user-level force-enable list.
+ * The list overrides a discovered server's `enabled: false` flag but does
+ * NOT override the `disabledServers` denylist.
+ */
+export async function setServerForceEnabled(filePath: string, name: string, force: boolean): Promise<void> {
+	const config = await readMCPConfigFile(filePath);
+	const current = new Set(config.enabledServers ?? []);
+
+	if (force) {
+		current.add(name);
+	} else {
+		current.delete(name);
+	}
+
+	const updated: MCPConfigFile = {
+		...config,
+		enabledServers: current.size > 0 ? Array.from(current).sort() : undefined,
+	};
+
+	if (!updated.enabledServers) {
+		delete updated.enabledServers;
+	}
+
+	await writeMCPConfigFile(filePath, updated);
+}
+
+/** Paths and target state for toggling one MCP server across known config files. */
+export interface SetMcpServerEnabledOptions {
+	userPath: string;
+	projectPath: string;
+	/**
+	 * Absolute path to the loaded row's source mcp.json. Provide ONLY for
+	 * formats this codebase owns (native `.omp/mcp.json` and `mcp-json`
+	 * `mcp.json`/`.mcp.json`). Tool-owned configs (opencode.json, claude.json,
+	 * settings.json …) MUST be omitted; we never mutate another tool's file.
+	 */
+	sourcePath?: string;
+	name: string;
+	enabled: boolean;
+}
+
+/**
+ * Flip a server's enabled/disabled state regardless of where it lives.
+ *
+ * Resolution order, mirroring `/mcp enable` / `/mcp disable` plus the dashboard
+ * fix for non-writable source configs:
+ *
+ * - Server found in `sourcePath` (writable) → write `enabled` on that entry.
+ * - Else server in project mcp.json → write `enabled` there.
+ * - Else server in user mcp.json → write `enabled` there.
+ * - Else (server defined in a tool-owned source like opencode.json, OR a
+ *   purely discovered server):
+ *   - Disable → add to the user-level `disabledServers` denylist.
+ *   - Enable → add to the user-level `enabledServers` allowlist so the
+ *     dashboard / runtime override the non-writable source's
+ *     `enabled: false` flag.
+ *
+ * Cleanup invariants — on every call:
+ * - Re-enable clears any stale denylist entry so a server disabled via
+ *   `/mcp disable` and re-enabled here doesn't stay suppressed.
+ * - Disable clears any stale allowlist entry so re-disabling a
+ *   force-enabled server actually takes effect.
+ */
+export async function setMcpServerEnabled(options: SetMcpServerEnabledOptions): Promise<void> {
+	const { userPath, projectPath, sourcePath, name, enabled } = options;
+	const candidatePaths = [...new Set([sourcePath, projectPath, userPath].filter(path => path !== undefined))];
+	let updatedInConfig = false;
+
+	for (const filePath of candidatePaths) {
+		const config = await readMCPConfigFile(filePath);
+		const server = config.mcpServers?.[name];
+		if (server === undefined) continue;
+
+		await updateMCPServer(filePath, name, { ...server, enabled });
+		updatedInConfig = true;
+		break;
+	}
+
+	if (enabled) {
+		// Either we just wrote `enabled: true` on a writable source, or the
+		// server lives in a non-writable source whose `enabled: false` flag we
+		// need to override via the user allowlist. Either way the denylist
+		// entry (if any) must clear so the row becomes active.
+		const denied = await readDisabledServers(userPath);
+		if (denied.includes(name)) {
+			await setServerDisabled(userPath, name, false);
+		}
+
+		const forced = await readEnabledServers(userPath);
+		const isForced = forced.includes(name);
+		if (!updatedInConfig && !isForced) {
+			await setServerForceEnabled(userPath, name, true);
+		} else if (updatedInConfig && isForced) {
+			// Writable source now carries `enabled: true`; the override is
+			// redundant. Drop it so the user's allowlist stays tidy.
+			await setServerForceEnabled(userPath, name, false);
+		}
+		return;
+	}
+
+	// Disable path. Clear any force-enable override regardless of source so the
+	// disable actually sticks.
+	const forced = await readEnabledServers(userPath);
+	if (forced.includes(name)) {
+		await setServerForceEnabled(userPath, name, false);
+	}
+	if (!updatedInConfig) {
+		await setServerDisabled(userPath, name, true);
+	}
+}

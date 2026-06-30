@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added service tier support for Google Gemini and Vertex AI
+- Introduced `ServiceTierByFamily` to allow model-specific service tier configurations
+
+### Changed
+
+- Updated service tier logic to avoid global scopes in favor of per-provider configurations
+- Refactored priority request billing to better align with specific provider capabilities
+- Updated internal `coerceServiceTierByFamily` helper to facilitate migration from legacy settings
+
+### Fixed
+
+- Fixed safety setting application for Google Vertex AI models
+- Ensured Gemini service tier is correctly passed through to the API
+- Corrected priority request accounting for supported providers
+### Fixed
+
+- Fixed Kimi Code's Anthropic-compatible request path to keep thinking enabled and downgrade forced tool choice for Kimi K2.7 Code title generation. ([#3852](https://github.com/can1357/oh-my-pi/issues/3852))
+
 ## [16.2.6] - 2026-06-29
 
 ### Fixed

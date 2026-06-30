@@ -6,6 +6,8 @@ import {
 	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
+	cleanupTaskBranches,
+	commitToBranch,
 	ensureIsolation,
 	getGitNoIndexNullPath,
 	getRepoRoot,
@@ -233,6 +235,44 @@ describe("worktree isolation helpers", () => {
 				expect(stashList).toBe("");
 			});
 
+			it("commits isolated edits when parent dirt only changes nearby context", async () => {
+				const fixtureName = "EXP_DIRTY_TEST.txt";
+				const fixturePath = path.join(repo, fixtureName);
+				const cleanLines = Array.from({ length: 10 }, (_, index) => `line${index + 1}`);
+				await fs.writeFile(fixturePath, `${cleanLines.join("\n")}\n`);
+				await runGit(repo, ["add", fixtureName]);
+				await runGit(repo, ["commit", "-q", "-m", "add dirty merge fixture"]);
+
+				const parentDirtyLines = cleanLines.map((line, index) => (index === 1 ? "LINE2-DIRTY-PARENT" : line));
+				await fs.writeFile(fixturePath, `${parentDirtyLines.join("\n")}\n`);
+				const baseline = await captureBaseline(repo);
+
+				const isoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-iso-"));
+				tempDirs.push(isoRoot);
+				const iso = path.join(isoRoot, "repo");
+				await runGit(isoRoot, ["clone", "-q", repo, iso]);
+				await runGit(iso, ["config", "user.email", "test@example.com"]);
+				await runGit(iso, ["config", "user.name", "Test User"]);
+				const isolatedLines = parentDirtyLines.map((line, index) => (index === 4 ? "LINE5-AGENT-EDIT" : line));
+				await fs.writeFile(path.join(iso, fixtureName), `${isolatedLines.join("\n")}\n`);
+
+				const taskId = `dirty-context-${path.basename(isoRoot)}`;
+				let branchName = `omp/task/${taskId}`;
+				try {
+					const commitResult = await commitToBranch(iso, baseline, taskId, "dirty context merge");
+					if (!commitResult?.branchName) throw new Error("expected task branch");
+					branchName = commitResult.branchName;
+
+					const mergeResult = await mergeTaskBranches(repo, [{ branchName, taskId }]);
+					const finalContent = await fs.readFile(fixturePath, "utf8");
+
+					expect(mergeResult).toEqual({ failed: [], merged: [branchName] });
+					expect(finalContent).toBe(`${isolatedLines.join("\n")}\n`);
+				} finally {
+					await cleanupTaskBranches(repo, [branchName]);
+				}
+			});
+
 			it("subtracts baseline dirty state even when the task commits it", async () => {
 				await Promise.all([
 					fs.writeFile(path.join(repo, "merged.txt"), "baseline dirty change\n"),
@@ -424,5 +464,181 @@ describe("applyNestedPatches", () => {
 		]);
 		expect(committedFiles.trim()).toBe("file.txt");
 		expect(stashList).toContain("omp-isolation-");
+	});
+});
+
+describe("commitToBranch preserves agent commits", () => {
+	let parent: string;
+	let isolation: string;
+
+	async function gitr(repo: string, args: string[]): Promise<string> {
+		return runGit(repo, args);
+	}
+
+	beforeEach(async () => {
+		parent = await fs.mkdtemp(path.join(os.tmpdir(), "omp-commit-parent-"));
+		isolation = await fs.mkdtemp(path.join(os.tmpdir(), "omp-commit-iso-"));
+		await gitr(parent, ["init", "-q", "-b", "main"]);
+		await gitr(parent, ["config", "user.email", "user@example.com"]);
+		await gitr(parent, ["config", "user.name", "Parent User"]);
+		await fs.writeFile(
+			path.join(parent, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(parent, ["add", "."]);
+		await gitr(parent, ["commit", "-q", "-m", "add clean test fixture"]);
+
+		// Simulate copy-on-write isolation: a real local clone so the agent's
+		// commit objects live in `isolation/.git`, just like the overlay/rcopy
+		// isolation backends would arrange them at runtime.
+		await fs.rm(isolation, { recursive: true, force: true });
+		await gitr(parent, ["clone", "-q", "--no-hardlinks", "--local", parent, isolation]);
+		await gitr(isolation, ["config", "user.email", "agent@example.com"]);
+		await gitr(isolation, ["config", "user.name", "Agent User"]);
+	});
+
+	afterEach(async () => {
+		await Promise.all([removeWithRetries(parent), removeWithRetries(isolation)]);
+	});
+
+	// Reproduces issue #3842: agent commits with a specific message inside
+	// isolation; the merged commit on the parent branch must keep that exact
+	// message instead of an AI-generated summary.
+	it("preserves the agent's commit message after merge", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(
+			path.join(isolation, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nLINE5-AGENT-WITH-MESSAGE\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(isolation, ["add", "EXP_CLEAN_COMMIT.txt"]);
+		const agentMessage = "fix(test): agent committed with specific message for preservation check";
+		await gitr(isolation, ["commit", "-q", "-m", agentMessage]);
+
+		const taskId = "preservation-check";
+		const aiMessage = vi.fn(async () => "fix: update line5 in clean commit example");
+		const result = await commitToBranch(isolation, baseline, taskId, undefined, aiMessage);
+
+		expect(result?.branchName).toBe(`omp/task/${taskId}`);
+		expect(result?.baseSha).toBe(baseline.root.headCommit);
+		// commitMessage callback must NOT have been invoked — the agent's
+		// message is taken verbatim.
+		expect(aiMessage).not.toHaveBeenCalled();
+
+		const branchSubject = await gitr(parent, ["log", "-1", "--pretty=%s", result!.branchName!]);
+		expect(branchSubject).toBe(agentMessage);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId, baseSha: result!.baseSha! },
+		]);
+		expect(merge.failed).toEqual([]);
+		expect(merge.merged).toEqual([result!.branchName!]);
+
+		const headSubject = await gitr(parent, ["log", "-1", "--pretty=%s"]);
+		expect(headSubject).toBe(agentMessage);
+	});
+
+	it("preserves every message when the agent makes multiple commits", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+		await gitr(isolation, ["add", "a.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "feat: add alpha file"]);
+		await fs.writeFile(path.join(isolation, "b.txt"), "beta\n");
+		await gitr(isolation, ["add", "b.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "test: add beta coverage"]);
+
+		const result = await commitToBranch(isolation, baseline, "multi", undefined);
+		expect(result?.branchName).toBe("omp/task/multi");
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId: "multi", baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: ["omp/task/multi"] });
+
+		const subjects = (await gitr(parent, ["log", "-2", "--pretty=%s"])).split("\n");
+		expect(subjects).toEqual(["test: add beta coverage", "feat: add alpha file"]);
+	});
+
+	it("appends one trailing commit when the agent leaves uncommitted work after committing", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+		await gitr(isolation, ["add", "a.txt"]);
+		await gitr(isolation, ["commit", "-q", "-m", "feat: add alpha file"]);
+		// Uncommitted change on top of the agent's commit — should land as one
+		// extra commit with the AI-generated message, NOT silently dropped.
+		await fs.writeFile(path.join(isolation, "b.txt"), "beta\n");
+
+		const aiMessage = vi.fn(async () => "chore: leftover beta wip");
+		const result = await commitToBranch(isolation, baseline, "leftover", undefined, aiMessage);
+		expect(result?.branchName).toBe("omp/task/leftover");
+		expect(aiMessage).toHaveBeenCalledTimes(1);
+
+		const subjects = (await gitr(parent, ["log", "-2", "--pretty=%s", result!.branchName!])).split("\n");
+		expect(subjects).toEqual(["chore: leftover beta wip", "feat: add alpha file"]);
+	});
+
+	it("filters baseline WIP when the agent commits with git add -A", async () => {
+		await fs.writeFile(path.join(parent, "staged.txt"), "baseline staged wip\n");
+		await gitr(parent, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(parent, "user-wip.txt"), "baseline untracked wip\n");
+		await fs.writeFile(path.join(isolation, "staged.txt"), "baseline staged wip\n");
+		await gitr(isolation, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(isolation, "user-wip.txt"), "baseline untracked wip\n");
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(
+			path.join(isolation, "EXP_CLEAN_COMMIT.txt"),
+			"line1\nline2\nline3\nline4\nLINE5-AGENT-WITH-MESSAGE\nline6\nline7\nline8\nline9\nline10\n",
+		);
+		await gitr(isolation, ["add", "-A"]);
+		const agentMessage = "fix(test): preserve message without baseline wip";
+		await gitr(isolation, ["commit", "-q", "-m", agentMessage]);
+
+		const aiMessage = vi.fn(async () => "fix: generated fallback");
+		const result = await commitToBranch(isolation, baseline, "dirty-baseline", undefined, aiMessage);
+		expect(result?.branchName).toBe("omp/task/dirty-baseline");
+		expect(aiMessage).not.toHaveBeenCalled();
+
+		const branchFiles = (await gitr(parent, ["show", "--name-only", "--pretty=format:", result!.branchName!]))
+			.split("\n")
+			.filter(Boolean);
+		expect(branchFiles).toEqual(["EXP_CLEAN_COMMIT.txt"]);
+
+		const merge = await mergeTaskBranches(parent, [
+			{ branchName: result!.branchName!, taskId: "dirty-baseline", baseSha: result!.baseSha! },
+		]);
+		expect(merge).toEqual({ failed: [], merged: ["omp/task/dirty-baseline"] });
+
+		const [headSubject, status, fixture] = await Promise.all([
+			gitr(parent, ["log", "-1", "--pretty=%s"]),
+			gitr(parent, ["status", "--porcelain=v1"]),
+			fs.readFile(path.join(parent, "EXP_CLEAN_COMMIT.txt"), "utf8"),
+		]);
+		expect(headSubject).toBe(agentMessage);
+		expect(status.split("\n").sort()).toEqual(["?? user-wip.txt", "A  staged.txt"]);
+		expect(fixture).toContain("LINE5-AGENT-WITH-MESSAGE");
+	});
+
+	it("falls back to the AI-generated message when the agent never committed", async () => {
+		const baseline = await captureBaseline(parent);
+
+		await fs.writeFile(path.join(isolation, "a.txt"), "alpha\n");
+
+		const aiMessage = vi.fn(async () => "feat: add alpha");
+		const result = await commitToBranch(isolation, baseline, "nocommit", undefined, aiMessage);
+
+		expect(result?.branchName).toBe("omp/task/nocommit");
+		expect(aiMessage).toHaveBeenCalledTimes(1);
+
+		const branchSubject = await gitr(parent, ["log", "-1", "--pretty=%s", result!.branchName!]);
+		expect(branchSubject).toBe("feat: add alpha");
+	});
+
+	it("returns null when nothing changed in isolation", async () => {
+		const baseline = await captureBaseline(parent);
+		const result = await commitToBranch(isolation, baseline, "empty", undefined);
+		expect(result).toBeNull();
 	});
 });

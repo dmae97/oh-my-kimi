@@ -39,6 +39,20 @@ const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
 const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/**
+ * Native Kimi K2.7 Code requires `thinking.type: "enabled"` and rejects
+ * disabled thinking. Match the public id, its Fast variant, and the
+ * `kimi-code/kimi-for-coding` alias (which keeps the family name).
+ * Caller-disabled requests on non-native dialects (Fireworks `openai`,
+ * OpenRouter `openrouter`, …) MUST keep their per-dialect disable shape —
+ * gating on `isMoonshotKimi` is the caller's responsibility.
+ */
+const KIMI_K27_CODE_MODEL_PATTERN = /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code(?:[-._]?highspeed)?$/i;
+
+function matchesKimiK27CodeFamily(spec: ModelSpec<"openai-completions">): boolean {
+	if (KIMI_K27_CODE_MODEL_PATTERN.test(spec.id)) return true;
+	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
+}
 /** Xiaomi MiMo Pro on api.xiaomimimo.com can stall ~2min before the first event (issue #1770). */
 const XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /** Alibaba Coding Plan (coding-intl.dashscope) qwen models idle before the first event (issue #1770). */
@@ -231,6 +245,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isKimiModel = isKimiModelId(spec.id);
 	const isMoonshotNative = modelMatchesHost(hostModel, "moonshotNative");
 	const isMoonshotKimi = isKimiModel && isMoonshotNative;
+	const requiresEnabledThinking = isMoonshotKimi && matchesKimiK27CodeFamily(spec);
 	const usesMoonshotKimiPreservedThinking = isMoonshotKimi && isKimiK26ModelId(spec.id);
 	const isAnthropicModel =
 		modelMatchesHost(hostModel, "anthropic") || isClaudeModelId(spec.id) || isAnthropicNamespacedModelId(spec.id);
@@ -403,7 +418,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
 		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(spec.reasoning) && !isOpenRouter,
 		supportsToolChoice: !isDirectDeepseekReasoning,
-		supportsForcedToolChoice: true,
+		supportsForcedToolChoice: !requiresEnabledThinking,
 		supportsNamedToolChoice: provider !== "llama.cpp",
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: isMistral,
@@ -509,7 +524,9 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 
 	applyCompatOverrides(compat, spec.compat);
 	if (spec.compat?.reasoningDisableMode === undefined) {
-		compat.reasoningDisableMode = resolveReasoningDisableMode(compat.thinkingFormat);
+		compat.reasoningDisableMode = requiresEnabledThinking
+			? "omit"
+			: resolveReasoningDisableMode(compat.thinkingFormat);
 	}
 	if (spec.compat?.omitReasoningEffort === undefined && !compat.supportsReasoningEffort) {
 		compat.omitReasoningEffort = true;

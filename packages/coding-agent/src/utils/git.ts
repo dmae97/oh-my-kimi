@@ -74,8 +74,20 @@ export interface StatusOptions {
 	readonly z?: boolean;
 }
 
+export interface CommitAuthor {
+	readonly date?: string;
+	readonly email: string;
+	readonly name: string;
+}
+
+export interface CommitDetails {
+	readonly author: CommitAuthor;
+	readonly message: string;
+}
+
 export interface CommitOptions {
 	readonly allowEmpty?: boolean;
+	readonly author?: CommitAuthor;
 	readonly files?: readonly string[];
 	readonly signal?: AbortSignal;
 }
@@ -91,6 +103,7 @@ export interface PatchOptions {
 	readonly cached?: boolean;
 	readonly check?: boolean;
 	readonly env?: Record<string, string | undefined>;
+	readonly threeWay?: boolean;
 	readonly signal?: AbortSignal;
 }
 
@@ -359,6 +372,7 @@ function buildApplyArgs(patchPath: string, options: PatchOptions): string[] {
 	const args = ["apply"];
 	if (options.check) args.push("--check");
 	if (options.cached) args.push("--cached");
+	if (options.threeWay) args.push("--3way");
 	args.push("--binary", patchPath);
 	return args;
 }
@@ -1122,6 +1136,10 @@ export const stage = {
 /** Create a commit with the given message (passed via stdin). */
 export async function commit(cwd: string, message: string, options: CommitOptions = {}): Promise<GitCommandResult> {
 	const args = ["commit", "-F", "-"];
+	if (options.author) {
+		args.push(`--author=${options.author.name} <${options.author.email}>`);
+		if (options.author.date) args.push(`--date=${options.author.date}`);
+	}
 	if (options.allowEmpty) args.push("--allow-empty");
 	if (options.files?.length) args.push("--", ...options.files);
 	return runChecked(cwd, args, { signal: options.signal, stdin: message });
@@ -1195,6 +1213,19 @@ export const show = Object.assign(
 	},
 );
 
+/** Read commit message and author metadata for replay/rewrite flows. */
+export async function commitDetails(cwd: string, revision: string, signal?: AbortSignal): Promise<CommitDetails> {
+	const raw = await runText(cwd, ["show", "-s", "--format=%an%x00%ae%x00%aI%x00%B", revision], {
+		readOnly: true,
+		signal,
+	});
+	const [name = "", email = "", date = "", ...messageParts] = raw.split("\0");
+	return {
+		author: { date, email, name },
+		message: messageParts.join("\0").replace(/\n$/, ""),
+	};
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // API: log
 // ════════════════════════════════════════════════════════════════════════════
@@ -1209,6 +1240,13 @@ export const log = {
 		return splitLines(
 			await runText(cwd, ["log", `-${count}`, "--oneline", "--no-decorate"], { readOnly: true, signal }),
 		);
+	},
+};
+
+export const revList = {
+	/** Commits in `base..head`, oldest first. */
+	async range(cwd: string, base: string, head: string, signal?: AbortSignal): Promise<string[]> {
+		return splitLines(await runText(cwd, ["rev-list", "--reverse", `${base}..${head}`], { readOnly: true, signal }));
 	},
 };
 

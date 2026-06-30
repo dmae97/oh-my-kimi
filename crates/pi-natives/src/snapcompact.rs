@@ -8,6 +8,7 @@
 //! - `8x8`  — unscii-8 hex font (Latin-1 subset), the square cell that won the
 //!   snapcompact `SQuAD` evals.
 //! - `6x12` / `8x13` — X.org misc BDF fonts (higher-density eval winners).
+//! - `silver` — bundled TrueType font for CJK and other non-Latin text.
 //!
 //! Shape controls, all eval-validated in `packages/snapcompact`:
 //!
@@ -38,9 +39,15 @@
 //! management live in `packages/snapcompact/src/snapcompact.ts`; this module
 //! is only the hot `text -> PNG bytes` path.
 
-use std::{borrow::Cow, collections::HashMap, f32::consts::PI, sync::LazyLock};
+use std::{
+	borrow::Cow,
+	collections::{HashMap, HashSet},
+	f32::consts::PI,
+	sync::LazyLock,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use fontdue::{Font as TtfFace, FontSettings, Metrics};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -84,6 +91,8 @@ static FONT_6X12: LazyLock<Font> =
 	LazyLock::new(|| parse_bdf(include_str!("fonts/6x12.bdf"), 6, 12));
 static FONT_8X13: LazyLock<Font> =
 	LazyLock::new(|| parse_bdf(include_str!("fonts/8x13.bdf"), 8, 13));
+static FONT_SILVER: LazyLock<TtfFont> =
+	LazyLock::new(|| parse_ttf(include_bytes!("fonts/Silver.ttf"), 16.0, 16, 16));
 
 struct Glyph {
 	/// Glyph width in pixels (≤ 8 for the bundled fonts).
@@ -104,6 +113,20 @@ struct Font {
 	cell_w: usize,
 	/// Natural cell pitch (y) in pixels.
 	cell_h: usize,
+}
+
+struct TtfFont {
+	face:      TtfFace,
+	supported: HashSet<char>,
+	px:        f32,
+	ascent:    f32,
+	cell_w:    usize,
+	cell_h:    usize,
+}
+
+struct RasterizedGlyph {
+	metrics: Metrics,
+	bitmap:  Vec<u8>,
 }
 
 fn parse_bdf(text: &str, cell_w: usize, cell_h: usize) -> Font {
@@ -168,12 +191,54 @@ fn parse_hex(text: &str) -> Font {
 	Font { glyphs, ascent: 7, cell_w: 8, cell_h: 8 }
 }
 
-fn resolve_font(name: &str) -> Option<&'static Font> {
+fn parse_ttf(data: &'static [u8], px: f32, cell_w: usize, cell_h: usize) -> TtfFont {
+	let face =
+		TtfFace::from_bytes(data, FontSettings::default()).expect("bundled Silver.ttf must parse");
+	let supported = face.chars().keys().copied().collect();
+	let ascent = face
+		.horizontal_line_metrics(px)
+		.map_or(px * 0.8, |metrics| metrics.ascent);
+	TtfFont { face, supported, px, ascent, cell_w, cell_h }
+}
+
+enum RenderFont<'a> {
+	Bitmap(&'a Font),
+	Ttf(&'a TtfFont),
+}
+
+impl RenderFont<'_> {
+	const fn cell_w(&self) -> usize {
+		match self {
+			Self::Bitmap(font) => font.cell_w,
+			Self::Ttf(font) => font.cell_w,
+		}
+	}
+
+	const fn cell_h(&self) -> usize {
+		match self {
+			Self::Bitmap(font) => font.cell_h,
+			Self::Ttf(font) => font.cell_h,
+		}
+	}
+
+	fn supports(&self, code: u32) -> bool {
+		if matches!(code, DIM_ON | DIM_OFF | FULL_BLOCK | 0x0a) {
+			return true;
+		}
+		match self {
+			Self::Bitmap(font) => font.glyphs.contains_key(&code),
+			Self::Ttf(font) => char::from_u32(code).is_some_and(|ch| font.supported.contains(&ch)),
+		}
+	}
+}
+
+fn resolve_font(name: &str) -> Option<RenderFont<'static>> {
 	match name {
-		"5x8" => Some(&FONT_5X8),
-		"8x8" => Some(&FONT_8X8),
-		"6x12" => Some(&FONT_6X12),
-		"8x13" => Some(&FONT_8X13),
+		"5x8" => Some(RenderFont::Bitmap(&FONT_5X8)),
+		"8x8" => Some(RenderFont::Bitmap(&FONT_8X8)),
+		"6x12" => Some(RenderFont::Bitmap(&FONT_6X12)),
+		"8x13" => Some(RenderFont::Bitmap(&FONT_8X13)),
+		"silver" => Some(RenderFont::Ttf(&FONT_SILVER)),
 		_ => None,
 	}
 }
@@ -191,21 +256,79 @@ struct Grid {
 	cell_h: usize,
 }
 
+/// East Asian Wide / Fullwidth code points that occupy two grid cells when
+/// drawn through the Silver fallback in a narrow bitmap shape. The same ranges
+/// are mirrored in `packages/snapcompact/src/snapcompact.ts` so the TypeScript
+/// capacity/pagination math and this layout never disagree on cell counts.
+const fn is_wide(cp: u32) -> bool {
+	matches!(cp,
+		0x1100..=0x115F
+		| 0x2E80..=0x2EFF
+		| 0x2F00..=0x2FDF
+		| 0x3000..=0x303E
+		| 0x3041..=0x33FF
+		| 0x3400..=0x4DBF
+		| 0x4E00..=0x9FFF
+		| 0xA000..=0xA4CF
+		| 0xAC00..=0xD7A3
+		| 0xF900..=0xFAFF
+		| 0xFE30..=0xFE4F
+		| 0xFF00..=0xFF60
+		| 0xFFE0..=0xFFE6
+		| 0x20000..=0x2FFFD
+		| 0x30000..=0x3FFFD
+	)
+}
+
+/// Cells one code point consumes in a grid of `wide_cells`-capable shape: zero
+/// for the zero-width dim toggles, two for wide code points when the shape uses
+/// a narrow bitmap cell (so CJK draws full-width through Silver), one
+/// otherwise.
+const fn cell_units(code: u32, wide_cells: bool) -> usize {
+	match code {
+		DIM_ON | DIM_OFF => 0,
+		_ if wide_cells && is_wide(code) => 2,
+		_ => 1,
+	}
+}
+
+/// Advance the running cell cursor for one code point, inserting a one-cell pad
+/// when a wide glyph would straddle the right edge so it starts the next row.
+/// Returns `(cell_at_which_to_draw, units, next_cursor)`, or `None` for a
+/// zero-width toggle.
+const fn place_cell(
+	cursor: usize,
+	cols: usize,
+	code: u32,
+	wide_cells: bool,
+) -> Option<(usize, usize, usize)> {
+	let units = cell_units(code, wide_cells);
+	if units == 0 {
+		return None;
+	}
+	let mut cell = cursor;
+	if units == 2 && cols >= 2 && cell % cols == cols - 1 {
+		cell += 1; // pad: never split a wide glyph across two rows
+	}
+	Some((cell, units, cell + units))
+}
+
 /// Grid rows the text actually occupies, so the canvas height hugs the
 /// content instead of padding the frame to a full square. Mirrors the
-/// renderers' cell accounting: dim toggles are zero-width, every other code
-/// point (including `U+2588` and glyphs missing from the font) consumes one
-/// cell; doc layout fills one row per `\n`-separated line down the first
-/// column before spilling into the second.
-fn used_rows(text: &str, grid: &Grid, doc: bool) -> usize {
+/// renderers' cell accounting: dim toggles are zero-width, wide code points
+/// take two cells in bitmap shapes (with a straddle pad), every other code
+/// point one; doc layout fills one row per `\n`-separated line.
+fn used_rows(text: &str, grid: &Grid, doc: bool, wide_cells: bool) -> usize {
 	let rows = if doc {
 		text.split('\n').count()
 	} else {
-		let cells = text
-			.chars()
-			.filter(|&ch| !matches!(ch as u32, DIM_ON | DIM_OFF))
-			.count();
-		cells.div_ceil(grid.cols)
+		let mut cursor = 0usize;
+		for ch in text.chars() {
+			if let Some((_, _, next)) = place_cell(cursor, grid.cols, ch as u32, wide_cells) {
+				cursor = next;
+			}
+		}
+		cursor.div_ceil(grid.cols)
 	};
 	rows.clamp(1, grid.rows)
 }
@@ -278,6 +401,175 @@ fn fill_cell(
 	}
 }
 
+fn fill_repeat_bands_rgb(pixels: &mut [u8], width: usize, height: usize, grid: &Grid) {
+	if grid.repeat <= 1 {
+		return;
+	}
+	let band = PALETTE[BG_REPEAT as usize];
+	for row in 0..grid.rows {
+		for copy in 1..grid.repeat {
+			let band_top = (row * grid.repeat + copy) * grid.cell_h;
+			for y in band_top..(band_top + grid.cell_h).min(height) {
+				for px in pixels[y * width * 3..(y + 1) * width * 3].chunks_exact_mut(3) {
+					px.copy_from_slice(&band);
+				}
+			}
+		}
+	}
+}
+
+fn fill_cell_rgb(
+	pixels: &mut [u8],
+	width: usize,
+	height: usize,
+	grid: &Grid,
+	x_origin: usize,
+	row: usize,
+	ink: u8,
+) {
+	let x0 = x_origin.min(width);
+	let x1 = (x_origin + grid.cell_w).min(width);
+	if x0 >= x1 {
+		return;
+	}
+	let color = PALETTE[ink as usize];
+	for copy in 0..grid.repeat {
+		let top = (row * grid.repeat + copy) * grid.cell_h;
+		for y in top..(top + grid.cell_h).min(height) {
+			let row = &mut pixels[y * width * 3..(y + 1) * width * 3];
+			for x in x0..x1 {
+				row[x * 3..x * 3 + 3].copy_from_slice(&color);
+			}
+		}
+	}
+}
+
+fn ttf_pixel_size(font: &TtfFont, grid: &Grid) -> f32 {
+	let sx = grid.cell_w as f32 / font.cell_w as f32;
+	let sy = grid.cell_h as f32 / font.cell_h as f32;
+	font.px * sx.min(sy)
+}
+
+/// Pixel size for a full-width fallback glyph spanning two grid cells: scaled
+/// to the two-cell box so CJK fills the doubled width instead of a single
+/// narrow ASCII cell.
+fn ttf_wide_pixel_size(font: &TtfFont, grid: &Grid) -> f32 {
+	let sx = (2 * grid.cell_w) as f32 / font.cell_w as f32;
+	let sy = grid.cell_h as f32 / font.cell_h as f32;
+	font.px * sx.min(sy)
+}
+
+fn ttf_ascent(font: &TtfFont, px: f32) -> f32 {
+	font
+		.face
+		.horizontal_line_metrics(px)
+		.map_or(font.ascent * px / font.px, |metrics| metrics.ascent)
+}
+
+fn cached_ttf_glyph<'a>(
+	cache: &'a mut HashMap<char, RasterizedGlyph>,
+	font: &TtfFont,
+	ch: char,
+	px: f32,
+) -> Option<&'a RasterizedGlyph> {
+	if !font.supported.contains(&ch) {
+		return None;
+	}
+	Some(cache.entry(ch).or_insert_with(|| {
+		let (metrics, bitmap) = font.face.rasterize(ch, px);
+		RasterizedGlyph { metrics, bitmap }
+	}))
+}
+
+fn blit_ttf_glyph(
+	pixels: &mut [u8],
+	width: usize,
+	height: usize,
+	glyph: &RasterizedGlyph,
+	left: i32,
+	top: i32,
+	ink: u8,
+) {
+	if glyph.metrics.width == 0 || glyph.metrics.height == 0 {
+		return;
+	}
+	let color = PALETTE[ink as usize];
+	for y in 0..glyph.metrics.height {
+		let dst_y = top + y as i32;
+		if dst_y < 0 || dst_y >= height as i32 {
+			continue;
+		}
+		for x in 0..glyph.metrics.width {
+			let alpha = u16::from(glyph.bitmap[y * glyph.metrics.width + x]);
+			if alpha == 0 {
+				continue;
+			}
+			let dst_x = left + x as i32;
+			if dst_x < 0 || dst_x >= width as i32 {
+				continue;
+			}
+			let offset = (dst_y as usize * width + dst_x as usize) * 3;
+			let inv = 255 - alpha;
+			for c in 0..3 {
+				let bg = u16::from(pixels[offset + c]);
+				let fg = u16::from(color[c]);
+				pixels[offset + c] = ((bg * inv + fg * alpha + 127) / 255) as u8;
+			}
+		}
+	}
+}
+
+fn blit_ttf_glyph_indexed(
+	pixels: &mut [u8],
+	width: usize,
+	height: usize,
+	glyph: &RasterizedGlyph,
+	left: i32,
+	top: i32,
+	ink: u8,
+) {
+	if glyph.metrics.width == 0 || glyph.metrics.height == 0 {
+		return;
+	}
+	for y in 0..glyph.metrics.height {
+		let dst_y = top + y as i32;
+		if dst_y < 0 || dst_y >= height as i32 {
+			continue;
+		}
+		let row_base = dst_y as usize * width;
+		for x in 0..glyph.metrics.width {
+			// Two-level anti-alias for the on/off indexed palette: a solid core
+			// only where coverage is high, and a single dim-gray fringe on the
+			// partially covered edges, so scaled CJK reads lighter than a
+			// flat-thresholded (and visibly bold) glyph. Dim spans stay dim.
+			let coverage = glyph.bitmap[y * glyph.metrics.width + x];
+			let cell = if coverage >= 170 {
+				ink
+			} else if ink == INK_BLACK && coverage >= 56 {
+				INK_DIM // soft gray fringe only on black ink (one neutral palette slot)
+			} else if coverage >= 110 {
+				ink
+			} else {
+				continue;
+			};
+			let dst_x = left + x as i32;
+			if dst_x >= 0 && dst_x < width as i32 {
+				pixels[row_base + dst_x as usize] = cell;
+			}
+		}
+	}
+}
+
+fn ttf_glyph_origin(x_origin: usize, cell_w: usize, metrics: &Metrics) -> i32 {
+	let advance = metrics.advance_width.ceil() as i32;
+	let pad = (cell_w as i32 - advance).max(0) / 2;
+	x_origin as i32 + pad + metrics.xmin
+}
+
+fn ttf_glyph_top(cell_top: usize, ascent: f32, metrics: &Metrics) -> i32 {
+	(cell_top as f32 + ascent - metrics.height as f32 - metrics.ymin as f32).round() as i32
+}
+
 /// Rasterize `text` onto a `width` x `height` palette-indexed bitmap on the
 /// grid's cell box, row-major with no word wrap. Glyphs keep their natural
 /// size with the baseline at the font's ascent from the cell top, so a cell
@@ -288,8 +580,8 @@ fn fill_cell(
 /// pins it to black; `U+000E`/`U+000F` toggle dim gray ink without occupying a
 /// cell, and dim wins over both variants. `U+2588` fills its whole cell with
 /// pitch-black ink, ignoring hue and dim state. Characters beyond
-/// `cols * rows` are ignored; code points missing from the font leave their
-/// cell blank.
+/// `cols * rows` are ignored; code points missing from the bitmap font draw
+/// through the embedded Silver TrueType fallback when it has a glyph.
 fn render_bitmap(
 	text: &str,
 	width: usize,
@@ -305,11 +597,14 @@ fn render_bitmap(
 	}
 	fill_repeat_bands(&mut pixels, width, height, grid);
 	let codes: Vec<u32> = text.chars().map(|ch| ch as u32).collect();
+	let narrow_px = ttf_pixel_size(&FONT_SILVER, grid);
+	let wide_px = ttf_wide_pixel_size(&FONT_SILVER, grid);
+	let mut fallback_cache = HashMap::new();
 	let mut sentence = 0usize;
 	let mut dim = false;
-	let mut cell = 0usize;
+	let mut cursor = 0usize;
 	for i in 0..codes.len() {
-		if cell >= capacity {
+		if cursor >= capacity {
 			break;
 		}
 		let code = codes[i];
@@ -336,24 +631,111 @@ fn render_bitmap(
 		{
 			sentence += 1;
 		}
-		let row = cell / grid.cols;
-		let col = cell - row * grid.cols;
-		cell += 1;
+		let Some((at, units, next)) = place_cell(cursor, grid.cols, code, true) else {
+			continue;
+		};
+		cursor = next;
+		if at >= capacity {
+			break;
+		}
+		let row = at / grid.cols;
+		let col = at - row * grid.cols;
 		if code == FULL_BLOCK {
 			fill_cell(&mut pixels, width, height, grid, col * grid.cell_w, row, INK_BLACK);
 			continue;
 		}
-		let Some(glyph) = font.glyphs.get(&code) else {
-			continue;
+		if let Some(glyph) = font.glyphs.get(&code) {
+			if glyph.rows.is_empty() {
+				continue;
+			}
+			let left = (col * grid.cell_w) as i32 + glyph.xoff;
+			for copy in 0..grid.repeat {
+				let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
+				let top = cell_top + font.ascent - glyph.h - glyph.yoff;
+				blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
+			}
+		} else if let Some(ch) = char::from_u32(code) {
+			let px = if units == 2 { wide_px } else { narrow_px };
+			let Some(glyph) = cached_ttf_glyph(&mut fallback_cache, &FONT_SILVER, ch, px) else {
+				continue;
+			};
+			let span = units * grid.cell_w;
+			let left = ttf_glyph_origin(col * grid.cell_w, span, &glyph.metrics);
+			for copy in 0..grid.repeat {
+				let cell_top = (row * grid.repeat + copy) * grid.cell_h;
+				let top = ttf_glyph_top(cell_top, font.ascent as f32, &glyph.metrics);
+				blit_ttf_glyph_indexed(&mut pixels, width, height, glyph, left, top, ink);
+			}
+		}
+	}
+	pixels
+}
+
+fn render_ttf_rgb(
+	text: &str,
+	width: usize,
+	height: usize,
+	font: &TtfFont,
+	grid: &Grid,
+	black_ink: bool,
+) -> Vec<u8> {
+	let mut pixels = vec![255u8; width * height * 3];
+	let capacity = grid.cols * grid.rows;
+	if capacity == 0 {
+		return pixels;
+	}
+	fill_repeat_bands_rgb(&mut pixels, width, height, grid);
+	let px = ttf_pixel_size(font, grid);
+	let ascent = ttf_ascent(font, px);
+	let codes: Vec<char> = text.chars().collect();
+	let mut cache = HashMap::new();
+	let mut sentence = 0usize;
+	let mut dim = false;
+	let mut cell = 0usize;
+	for i in 0..codes.len() {
+		if cell >= capacity {
+			break;
+		}
+		let ch = codes[i];
+		let code = ch as u32;
+		match code {
+			DIM_ON => {
+				dim = true;
+				continue;
+			},
+			DIM_OFF => {
+				dim = false;
+				continue;
+			},
+			_ => {},
+		}
+		let ink = if dim {
+			INK_DIM
+		} else if black_ink {
+			INK_BLACK
+		} else {
+			(1 + sentence % INK_COLORS) as u8
 		};
-		if glyph.rows.is_empty() {
+		if matches!(code, 0x2e | 0x21 | 0x3f)
+			&& matches!(codes.get(i + 1).map(|next| *next as u32), Some(0x20 | FULL_BLOCK))
+		{
+			sentence += 1;
+		}
+		let row = cell / grid.cols;
+		let col = cell - row * grid.cols;
+		cell += 1;
+		if code == FULL_BLOCK {
+			fill_cell_rgb(&mut pixels, width, height, grid, col * grid.cell_w, row, INK_BLACK);
 			continue;
 		}
-		let left = (col * grid.cell_w) as i32 + glyph.xoff;
+		let Some(glyph) = cached_ttf_glyph(&mut cache, font, ch, px) else {
+			continue;
+		};
+		let left = ttf_glyph_origin(col * grid.cell_w, grid.cell_w, &glyph.metrics);
 		for copy in 0..grid.repeat {
-			let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
-			let top = cell_top + font.ascent - glyph.h - glyph.yoff;
-			blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
+			let cell_top = (row * grid.repeat + copy) * grid.cell_h;
+			let top = ttf_glyph_top(cell_top, ascent, &glyph.metrics);
+			blit_ttf_glyph(&mut pixels, width, height, glyph, left, top, ink);
 		}
 	}
 	pixels
@@ -387,6 +769,9 @@ fn render_doc_bitmap(
 	}
 	fill_repeat_bands(&mut pixels, width, height, grid);
 	let codes: Vec<u32> = text.chars().map(|ch| ch as u32).collect();
+	let narrow_px = ttf_pixel_size(&FONT_SILVER, grid);
+	let wide_px = ttf_wide_pixel_size(&FONT_SILVER, grid);
+	let mut fallback_cache = HashMap::new();
 	let mut sentence = 0usize;
 	let mut dim = false;
 	let mut line = 0usize;
@@ -424,32 +809,125 @@ fn render_doc_bitmap(
 		{
 			sentence += 1;
 		}
-		let cell = col;
-		col += 1;
-		if cell >= col_w {
+		let units = cell_units(code, true);
+		let mut cell = col;
+		if units == 2 && col_w >= 2 && cell == col_w - 1 {
+			cell += 1; // pad: never split a wide glyph across the column edge
+		}
+		col = cell + units;
+		if cell + units > col_w {
 			continue; // clip past the column width
-		}
-		if code == FULL_BLOCK {
-			let column = line / grid.rows;
-			let row = line - column * grid.rows;
-			let x_origin = (column * (col_w + GUTTER) + cell) * grid.cell_w;
-			fill_cell(&mut pixels, width, height, grid, x_origin, row, INK_BLACK);
-			continue;
-		}
-		let Some(glyph) = font.glyphs.get(&code) else {
-			continue;
-		};
-		if glyph.rows.is_empty() {
-			continue;
 		}
 		let column = line / grid.rows;
 		let row = line - column * grid.rows;
 		let x_origin = column * (col_w + GUTTER) * grid.cell_w;
-		let left = (x_origin + cell * grid.cell_w) as i32 + glyph.xoff;
+		if code == FULL_BLOCK {
+			fill_cell(&mut pixels, width, height, grid, x_origin + cell * grid.cell_w, row, INK_BLACK);
+			continue;
+		}
+		if let Some(glyph) = font.glyphs.get(&code) {
+			if glyph.rows.is_empty() {
+				continue;
+			}
+			let left = (x_origin + cell * grid.cell_w) as i32 + glyph.xoff;
+			for copy in 0..grid.repeat {
+				let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
+				let top = cell_top + font.ascent - glyph.h - glyph.yoff;
+				blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
+			}
+		} else if let Some(ch) = char::from_u32(code) {
+			let px = if units == 2 { wide_px } else { narrow_px };
+			let Some(glyph) = cached_ttf_glyph(&mut fallback_cache, &FONT_SILVER, ch, px) else {
+				continue;
+			};
+			let span = units * grid.cell_w;
+			let left = ttf_glyph_origin(x_origin + cell * grid.cell_w, span, &glyph.metrics);
+			for copy in 0..grid.repeat {
+				let cell_top = (row * grid.repeat + copy) * grid.cell_h;
+				let top = ttf_glyph_top(cell_top, font.ascent as f32, &glyph.metrics);
+				blit_ttf_glyph_indexed(&mut pixels, width, height, glyph, left, top, ink);
+			}
+		}
+	}
+	pixels
+}
+
+fn render_ttf_doc_rgb(
+	text: &str,
+	width: usize,
+	height: usize,
+	font: &TtfFont,
+	grid: &Grid,
+	black_ink: bool,
+) -> Vec<u8> {
+	let mut pixels = vec![255u8; width * height * 3];
+	let col_w = grid.cols.saturating_sub(GUTTER) / 2;
+	if col_w == 0 || grid.rows == 0 {
+		return pixels;
+	}
+	fill_repeat_bands_rgb(&mut pixels, width, height, grid);
+	let px = ttf_pixel_size(font, grid);
+	let ascent = ttf_ascent(font, px);
+	let codes: Vec<char> = text.chars().collect();
+	let mut cache = HashMap::new();
+	let mut sentence = 0usize;
+	let mut dim = false;
+	let mut line = 0usize;
+	let mut col = 0usize;
+	for i in 0..codes.len() {
+		let ch = codes[i];
+		let code = ch as u32;
+		match code {
+			DIM_ON => {
+				dim = true;
+				continue;
+			},
+			DIM_OFF => {
+				dim = false;
+				continue;
+			},
+			0x0a => {
+				line += 1;
+				col = 0;
+				if line >= grid.rows * 2 {
+					break;
+				}
+				continue;
+			},
+			_ => {},
+		}
+		let ink = if dim {
+			INK_DIM
+		} else if black_ink {
+			INK_BLACK
+		} else {
+			(1 + sentence % INK_COLORS) as u8
+		};
+		if matches!(code, 0x2e | 0x21 | 0x3f)
+			&& matches!(codes.get(i + 1).map(|next| *next as u32), Some(0x20 | 0x0a | FULL_BLOCK))
+		{
+			sentence += 1;
+		}
+		let cell = col;
+		col += 1;
+		if cell >= col_w {
+			continue;
+		}
+		let column = line / grid.rows;
+		let row = line - column * grid.rows;
+		let x_origin = (column * (col_w + GUTTER) + cell) * grid.cell_w;
+		if code == FULL_BLOCK {
+			fill_cell_rgb(&mut pixels, width, height, grid, x_origin, row, INK_BLACK);
+			continue;
+		}
+		let Some(glyph) = cached_ttf_glyph(&mut cache, font, ch, px) else {
+			continue;
+		};
+		let left = ttf_glyph_origin(x_origin, grid.cell_w, &glyph.metrics);
 		for copy in 0..grid.repeat {
-			let cell_top = ((row * grid.repeat + copy) * grid.cell_h) as i32;
-			let top = cell_top + font.ascent - glyph.h - glyph.yoff;
-			blit_glyph(&mut pixels, width, height, glyph, left, top, ink);
+			let cell_top = (row * grid.repeat + copy) * grid.cell_h;
+			let top = ttf_glyph_top(cell_top, ascent, &glyph.metrics);
+			blit_ttf_glyph(&mut pixels, width, height, glyph, left, top, ink);
 		}
 	}
 	pixels
@@ -650,8 +1128,8 @@ pub struct SnapcompactRenderOptions {
 	/// (`floor(size/cellHeight/lineRepeat)`). Output height hugs the rows the
 	/// text actually uses instead of padding to a square.
 	pub size:        u32,
-	/// Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF) or `"8x8"`
-	/// (unscii-8). Default `"5x8"`.
+	/// Bundled font: `"5x8"`, `"6x12"`, `"8x13"` (X.org BDF), `"8x8"`
+	/// (unscii-8), or `"silver"` (embedded TrueType). Default `"5x8"`.
 	pub font:        Option<String>,
 	/// Target cell advance in pixels. Differing from the font's natural cell
 	/// triggers the Lanczos stretch path. Default: font natural width.
@@ -675,19 +1153,43 @@ pub struct SnapcompactRenderOptions {
 	pub columns:     Option<u32>,
 }
 
+/// Return the subset of `chars` that the named snapcompact font can render.
+///
+/// The TypeScript normalizer uses this to keep Unicode text intact only when
+/// the selected native font has a glyph for it; renderer control codes are
+/// considered renderable because they are interpreted outside font lookup.
+#[napi]
+pub fn snapcompact_supported_chars(font: String, chars: String) -> Result<String> {
+	let font = resolve_font(&font).ok_or_else(|| {
+		Error::from_reason(format!(
+			"Unknown snapcompact font {font:?}: expected \"5x8\", \"8x8\", \"6x12\", \"8x13\", or \
+			 \"silver\""
+		))
+	})?;
+	let mut supported = String::new();
+	for ch in chars.chars() {
+		if matches!(ch as u32, DIM_ON | DIM_OFF | FULL_BLOCK | 0x0a) || font.supports(ch as u32) {
+			supported.push(ch);
+		}
+	}
+	Ok(supported)
+}
+
 /// Render one snapcompact frame on a libuv worker: print pre-normalized text
 /// onto a `size`-wide bitmap and encode it as PNG.
 ///
 /// The bitmap height hugs the rows the text actually occupies
 /// (`usedRows * lineRepeat * cellHeight`), so a partially filled frame never
 /// pays for blank padding rows. The glyph grid holds `floor(size/cellWidth) *
-/// floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored
-/// (the caller chunks text to capacity). Native-cell shapes encode as 4-bit
-/// indexed PNG; stretched shapes (target cell != font cell) encode as RGB.
-/// `stretch: false` pins the indexed path, printing natural-size glyphs on the
-/// requested cell box; `columns: 2` flows pre-wrapped newline-separated lines
-/// down two newspaper columns. `U+000E`/`U+000F` in `text` toggle dim-gray ink
-/// spans without occupying a cell.
+/// floor(size/cellHeight/lineRepeat)` characters; input beyond that is ignored.
+/// Native-cell bitmap-font shapes encode as indexed PNG; stretched bitmap-font
+/// shapes (target cell != font cell) encode as RGB. TrueType shapes encode RGB
+/// directly from grayscale coverage.
+/// `stretch: false` pins bitmap fonts to the indexed path, printing
+/// natural-size glyphs on the requested cell box; `columns: 2` flows
+/// pre-wrapped newline-separated lines down two newspaper columns.
+/// `U+000E`/`U+000F` in `text` toggle dim-gray ink spans without occupying a
+/// cell.
 /// Returns a promise for the PNG encoded as base64, created as a one-byte
 /// (Latin-1) JS string straight from native code — no `Uint8Array` hop or
 /// JS-side re-encode.
@@ -712,7 +1214,8 @@ fn render_snapcompact_png_sync(
 	let font_name = options.font.as_deref().unwrap_or("5x8");
 	let font = resolve_font(font_name).ok_or_else(|| {
 		Error::from_reason(format!(
-			"Unknown snapcompact font {font_name:?}: expected \"5x8\", \"8x8\", \"6x12\", or \"8x13\""
+			"Unknown snapcompact font {font_name:?}: expected \"5x8\", \"8x8\", \"6x12\", \"8x13\", \
+			 or \"silver\""
 		))
 	})?;
 	let black_ink = match options.variant.as_deref().unwrap_or("sent") {
@@ -724,8 +1227,10 @@ fn render_snapcompact_png_sync(
 			)));
 		},
 	};
-	let target_w = options.cell_width.unwrap_or(font.cell_w as u32).max(1) as usize;
-	let target_h = options.cell_height.unwrap_or(font.cell_h as u32).max(1) as usize;
+	let natural_w = font.cell_w();
+	let natural_h = font.cell_h();
+	let target_w = options.cell_width.unwrap_or(natural_w as u32).max(1) as usize;
+	let target_h = options.cell_height.unwrap_or(natural_h as u32).max(1) as usize;
 	let repeat = options.line_repeat.unwrap_or(1).max(1) as usize;
 	let columns = options.columns.unwrap_or(1);
 	if !matches!(columns, 1 | 2) {
@@ -748,58 +1253,75 @@ fn render_snapcompact_png_sync(
 		)));
 	}
 	// Tight canvas: width stays the frame edge (the reading geometry the
-	// caller derives cols from), height hugs the rows the text needs.
-	let used = used_rows(&text, &grid, doc);
+	// caller derives cols from), height hugs the rows the text needs. Bitmap
+	// shapes draw wide code points through Silver across two cells, so they
+	// count double here; the square-celled Silver shape keeps one cell each.
+	let wide_cells = matches!(font, RenderFont::Bitmap(_));
+	let used = used_rows(&text, &grid, doc, wide_cells);
 	let height = used * grid.repeat * grid.cell_h;
 
-	let stretch =
-		options.stretch != Some(false) && (target_w, target_h) != (font.cell_w, font.cell_h);
-	if !stretch {
-		// Indexed path: rasterize straight onto the frame at the requested
-		// cell box (the natural cell, or natural glyphs on a padded pitch
-		// when `stretch: false`).
-		let pixels = if doc {
-			render_doc_bitmap(&text, size, height, font, &grid, black_ink)
-		} else {
-			render_bitmap(&text, size, height, font, &grid, black_ink)
-		};
-		return Ok(STANDARD
-			.encode(encode_indexed_png(&pixels, size, height, png::Compression::High)?)
-			.into());
-	}
+	match font {
+		RenderFont::Ttf(font) => {
+			let pixels = if doc {
+				render_ttf_doc_rgb(&text, size, height, font, &grid, black_ink)
+			} else {
+				render_ttf_rgb(&text, size, height, font, &grid, black_ink)
+			};
+			Ok(STANDARD
+				.encode(encode_rgb_png(&pixels, size, height, png::Compression::High)?)
+				.into())
+		},
+		RenderFont::Bitmap(font) => {
+			let stretch =
+				options.stretch != Some(false) && (target_w, target_h) != (natural_w, natural_h);
+			if !stretch {
+				// Indexed path: rasterize straight onto the frame at the requested
+				// cell box (the natural cell, or natural glyphs on a padded pitch
+				// when `stretch: false`).
+				let pixels = if doc {
+					render_doc_bitmap(&text, size, height, font, &grid, black_ink)
+				} else {
+					render_bitmap(&text, size, height, font, &grid, black_ink)
+				};
+				return Ok(STANDARD
+					.encode(encode_indexed_png(&pixels, size, height, png::Compression::High)?)
+					.into());
+			}
 
-	// Stretch shape: rasterize at the font's natural cell on a tight canvas
-	// (layout stays in character cells from the target grid), Lanczos3-
-	// resample to the target cell, paste onto the white frame.
-	let native = Grid { cell_w: font.cell_w, cell_h: font.cell_h, ..grid };
-	let src_w = grid.cols * font.cell_w;
-	let src_h = used * grid.repeat * font.cell_h;
-	let dst_w = grid.cols * target_w;
-	let dst_h = used * grid.repeat * target_h;
-	let indexed = if doc {
-		render_doc_bitmap(&text, src_w, src_h, font, &native, black_ink)
-	} else {
-		render_bitmap(&text, src_w, src_h, font, &native, black_ink)
-	};
-	let mut rgb = vec![0f32; src_w * src_h * 3];
-	for (dst, &idx) in rgb.chunks_exact_mut(3).zip(&indexed) {
-		let [r, g, b] = PALETTE[idx as usize];
-		dst[0] = f32::from(r);
-		dst[1] = f32::from(g);
-		dst[2] = f32::from(b);
+			// Stretch shape: rasterize at the font's natural cell on a tight canvas
+			// (layout stays in character cells from the target grid), Lanczos3-
+			// resample to the target cell, paste onto the white frame.
+			let native = Grid { cell_w: natural_w, cell_h: natural_h, ..grid };
+			let src_w = grid.cols * natural_w;
+			let src_h = used * grid.repeat * natural_h;
+			let dst_w = grid.cols * target_w;
+			let dst_h = used * grid.repeat * target_h;
+			let indexed = if doc {
+				render_doc_bitmap(&text, src_w, src_h, font, &native, black_ink)
+			} else {
+				render_bitmap(&text, src_w, src_h, font, &native, black_ink)
+			};
+			let mut rgb = vec![0f32; src_w * src_h * 3];
+			for (dst, &idx) in rgb.chunks_exact_mut(3).zip(&indexed) {
+				let [r, g, b] = PALETTE[idx as usize];
+				dst[0] = f32::from(r);
+				dst[1] = f32::from(g);
+				dst[2] = f32::from(b);
+			}
+			let resized = resize_rgb(&rgb, src_w, src_h, dst_w, dst_h);
+			let mut frame = vec![255u8; size * dst_h * 3];
+			for y in 0..dst_h {
+				let src_row = &resized[y * dst_w * 3..(y + 1) * dst_w * 3];
+				let dst_row = &mut frame[y * size * 3..];
+				for (d, &s) in dst_row[..dst_w.min(size) * 3].iter_mut().zip(src_row) {
+					*d = s.round().clamp(0.0, 255.0) as u8;
+				}
+			}
+			Ok(STANDARD
+				.encode(encode_rgb_png(&frame, size, dst_h, png::Compression::High)?)
+				.into())
+		},
 	}
-	let resized = resize_rgb(&rgb, src_w, src_h, dst_w, dst_h);
-	let mut frame = vec![255u8; size * dst_h * 3];
-	for y in 0..dst_h {
-		let src_row = &resized[y * dst_w * 3..(y + 1) * dst_w * 3];
-		let dst_row = &mut frame[y * size * 3..];
-		for (d, &s) in dst_row[..dst_w.min(size) * 3].iter_mut().zip(src_row) {
-			*d = s.round().clamp(0.0, 255.0) as u8;
-		}
-	}
-	Ok(STANDARD
-		.encode(encode_rgb_png(&frame, size, dst_h, png::Compression::High)?)
-		.into())
 }
 
 #[cfg(test)]
@@ -819,6 +1341,13 @@ mod tests {
 				assert!(font.glyphs.contains_key(&cp), "missing glyph for U+{cp:04X}");
 			}
 		}
+	}
+
+	#[test]
+	fn silver_font_covers_cjk_scripts() {
+		assert!(FONT_SILVER.supported.contains(&'こ'), "Silver must cover Japanese kana");
+		assert!(FONT_SILVER.supported.contains(&'你'), "Silver must cover Han text");
+		assert!(FONT_SILVER.supported.contains(&'안'), "Silver must cover Hangul syllables");
 	}
 
 	#[test]
@@ -942,6 +1471,22 @@ mod tests {
 		assert_eq!(stretched[25], 2);
 		let legacy = png_bytes(render_snapcompact_png_sync("Hi. Ok.".into(), opts(40)).unwrap());
 		assert_eq!(legacy[25], 3, "default shape stays the legacy 5x8 indexed path");
+
+		let silver = png_bytes(
+			render_snapcompact_png_sync(
+				"こんにちは 你好 안녕".into(),
+				SnapcompactRenderOptions {
+					size: 128,
+					font: Some("silver".into()),
+					cell_width: Some(16),
+					cell_height: Some(16),
+					variant: Some("bw".into()),
+					..Default::default()
+				},
+			)
+			.unwrap(),
+		);
+		assert_eq!(silver[25], 2, "TrueType frames render as RGB");
 	}
 
 	#[test]

@@ -44,8 +44,8 @@
  * re-attached to the compaction summary message on every context rebuild.
  */
 
-import type { Api, ImageContent, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
-import { renderSnapcompactPng } from "@oh-my-pi/pi-natives";
+import type { Api, ImageContent, Message, TextContent } from "@oh-my-pi/pi-ai";
+import { renderSnapcompactPng, snapcompactSupportedChars } from "@oh-my-pi/pi-natives";
 import { formatGroupedPaths, prompt } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import fileOperationsTemplate from "./prompts/file-operations.md" with { type: "text" };
@@ -58,7 +58,7 @@ import snapcompactSummaryPrompt from "./prompts/snapcompact-summary.md" with { t
 /** One eval-validated frame shape: font, cell, ink, repetition, and size. */
 export interface Shape {
 	/** Bundled font in the native renderer. */
-	font: "5x8" | "8x8" | "6x12" | "8x13";
+	font: "5x8" | "8x8" | "6x12" | "8x13" | "silver";
 	/** Target cell advance in pixels; differing from the font's natural cell
 	 *  renders via Lanczos stretch (anti-aliased RGB frame). */
 	cellWidth: number;
@@ -97,9 +97,10 @@ export type ShapeGeometry = Omit<Shape, "frameTokenEstimate" | "imageDetail">;
  * and `8x13` the X.org misc fonts, `8on16` 8x13 glyphs on an 8x16 cell pitch
  * (no stretch, extra leading), `8on22` the same glyphs on a 22px pitch (more
  * leading), `11on16` the same glyphs on an 11px advance (more tracking),
- * `doc-` prefixed shapes a two-column word-wrapped newspaper layout. Ink:
- * `sent` cycles six hues at sentence boundaries, `bw` is plain black, `-dim`
- * suffix prints stopwords in gray.
+ * `silver16` the embedded Silver TrueType font on a 16px grid for CJK and
+ * other non-Latin text, and `doc-` prefixed shapes a two-column word-wrapped
+ * newspaper layout. Ink: `sent` cycles six hues at sentence boundaries, `bw`
+ * is plain black, `-dim` suffix prints stopwords in gray.
  */
 export const SHAPE_VARIANTS = {
 	"8x8r-bw": { font: "8x8", cellWidth: 8, cellHeight: 8, variant: "bw", lineRepeat: 2, frameSize: 1568 },
@@ -143,6 +144,14 @@ export const SHAPE_VARIANTS = {
 		cellWidth: 11,
 		cellHeight: 16,
 		stretch: false,
+		variant: "bw",
+		lineRepeat: 1,
+		frameSize: 1568,
+	},
+	"silver16-bw": {
+		font: "silver",
+		cellWidth: 16,
+		cellHeight: 16,
 		variant: "bw",
 		lineRepeat: 1,
 		frameSize: 1568,
@@ -271,7 +280,7 @@ export function isShape(value: unknown): value is Shape {
 	const variant = shape.variant;
 	const detail = shape.imageDetail;
 	return (
-		(font === "5x8" || font === "8x8" || font === "6x12" || font === "8x13") &&
+		(font === "5x8" || font === "8x8" || font === "6x12" || font === "8x13" || font === "silver") &&
 		typeof shape.cellWidth === "number" &&
 		shape.cellWidth > 0 &&
 		typeof shape.cellHeight === "number" &&
@@ -374,6 +383,17 @@ export function resolveShape(model?: ShapeTarget, variant?: ShapeVariantName | "
 	if (name === FAMILY_VARIANT[family] && ideal?.frameSize === undefined) return FAMILY_SHAPE[family];
 	const base = SHAPE_VARIANTS[name];
 	return priceShape(ideal?.frameSize ? { ...base, frameSize: ideal.frameSize } : base, family);
+}
+
+/**
+ * Pick the frame shape for `text` without changing the selected shape.
+ *
+ * Glyph-level Silver fallback happens during normalization/rendering, so this
+ * helper exists for callers that need a text-aware API name while preserving
+ * explicit and provider-selected shapes.
+ */
+export function resolveShapeForText(_text: string, model?: ShapeTarget, variant?: ShapeVariantName | "auto"): Shape {
+	return resolveShape(model, variant);
 }
 
 // ============================================================================
@@ -492,8 +512,8 @@ export interface Geometry {
 export interface Options<TMessage = Message> extends SerializeOptions {
 	/** App-level message transformer (same contract as agent-core's `SummaryOptions.convertToLlm`). */
 	convertToLlm?: ConvertToLlm<TMessage>;
-	/** Model whose provider API selects the frame shape. */
-	model?: Pick<Model, "api">;
+	/** Model whose provider API and id select the frame shape. */
+	model?: ShapeTarget;
 	/** Explicit shape override; wins over `model`. */
 	shape?: Shape;
 	/** Frame edge in pixels. Defaults to the shape's `frameSize`. */
@@ -918,6 +938,48 @@ const UNRENDERABLE = /[\p{Cc}\p{Mn}\p{Me}\p{Cs}]/u;
  *  letter prints without the diacritic the bundled fonts cannot compose. */
 const COMBINING_MARKS = /\p{M}+/gu;
 
+/** Status-like pictographs that carry meaning in tool output; all other emoji
+ *  pictographs drop instead of burning cells as `?`. */
+const EMOJI_FOLD: Record<string, string> = {
+	"✅": "[OK]",
+	"☑": "[OK]",
+	"✔": "[OK]",
+	"❌": "[FAIL]",
+	"❎": "[FAIL]",
+	"✖": "[FAIL]",
+	"⚠": "[WARN]",
+	"🚨": "[ALERT]",
+	ℹ: "[INFO]",
+	"🐛": "[BUG]",
+	"💥": "[CRASH]",
+	"🔥": "[HOT]",
+	"🔒": "[LOCK]",
+	"🔓": "[UNLOCK]",
+	"📁": "[DIR]",
+	"📂": "[DIR]",
+	"📄": "[FILE]",
+	"📝": "[NOTE]",
+	"🧪": "[TEST]",
+	"⏳": "[WAIT]",
+	"⌛": "[WAIT]",
+	"🚀": "[RUN]",
+};
+
+const EMOJI_PICTOGRAPH = /\p{Extended_Pictographic}/u;
+
+export interface NormalizeOptions {
+	/** Shape whose font is tried before the embedded Silver fallback. */
+	shape?: Pick<Shape, "font">;
+	/** Native font name when a full shape is not available. */
+	font?: Shape["font"];
+}
+
+interface NormalizedText {
+	text: string;
+	totalGraphics: number;
+	fallbackCount: number;
+}
+
 /**
  * Aggressive single-code-point ASCII fold via Unicode NFKD: decompose the
  * compatibility form (fullwidth, super/subscripts, ligatures, circled and
@@ -927,13 +989,17 @@ const COMBINING_MARKS = /\p{M}+/gu;
  * point has no decomposition or still leaves an undrawable glyph, so the
  * caller falls back to `?`.
  */
+function isAsciiOrLatin1(cp: number): boolean {
+	return (cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff);
+}
+
 function foldToAscii(ch: string): string | undefined {
 	const decomposed = ch.normalize("NFKD").replace(COMBINING_MARKS, "");
 	if (decomposed === ch) return undefined;
 	let out = "";
 	for (const part of decomposed) {
-		const cp = part.codePointAt(0) as number;
-		if ((cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff)) {
+		const cp = part.codePointAt(0);
+		if (cp !== undefined && isAsciiOrLatin1(cp)) {
 			out += part;
 			continue;
 		}
@@ -944,90 +1010,126 @@ function foldToAscii(ch: string): string | undefined {
 	return out;
 }
 
-/**
- * Prepare text for printing: strip ANSI escape sequences, collapse horizontal
- * whitespace runs to single spaces and newline-bearing runs to one
- * {@link NEWLINE_GLYPH} (drawn as a pitch-black cell), then fold everything
- * outside the fonts' ASCII + Latin-1 coverage to ASCII approximations — first
- * through the {@link CHAR_FOLD} punctuation table, then via an NFKD
- * decomposition that recovers the ASCII skeleton of compatibility characters
- * (fullwidth, super/subscripts, ligatures, circled/math-styled alphanumerics,
- * Roman numerals, vulgar fractions). Unrenderable control/format/combining
- * characters are dropped without occupying a cell; `?` remains the fallback
- * for unsupported graphic characters. The zero-width ink toggles
- * {@link DIM_ON}/{@link DIM_OFF} pass through untouched.
- */
-export function normalize(text: string): string {
+function renderableUnicodeChars(chars: readonly string[], font: Shape["font"] | undefined): ReadonlySet<string> {
+	if (chars.length === 0) return new Set();
+	const text = chars.join("");
+	const primaryFont = font ?? "5x8";
+	const supported = new Set(snapcompactSupportedChars(primaryFont, text));
+	if (primaryFont !== "silver") {
+		for (const ch of snapcompactSupportedChars("silver", text)) supported.add(ch);
+	}
+	return supported;
+}
+
+function normalizedInputChars(text: string): string[] {
 	const stripped = text.includes("\u001b") ? Bun.stripANSI(text) : text;
 	const collapsed = stripped
 		// A run of pure format chars (BOM is both \s and Cf) vanishes; only a
 		// run containing genuine whitespace separates words.
 		.replace(COLLAPSIBLE, run => (LINE_BREAK.test(run) ? NEWLINE_GLYPH : /[^\p{Cf}]/u.test(run) ? " " : ""))
 		.replace(EDGE_RUNS, "");
-	let out = "";
-	for (const ch of collapsed) {
-		const cp = ch.codePointAt(0) as number;
-		if ((cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff)) {
-			out += ch;
+	return [...collapsed];
+}
+
+function candidateUnicodeChars(chars: readonly string[]): string[] {
+	const unique = new Set<string>();
+	for (const ch of chars) {
+		const cp = ch.codePointAt(0);
+		if (cp === undefined || isAsciiOrLatin1(cp) || ch === DIM_ON || ch === DIM_OFF || ch === NEWLINE_GLYPH) {
+			continue;
+		}
+		if (
+			CHAR_FOLD[ch] !== undefined ||
+			(cp >= 0x2500 && cp <= 0x257f) ||
+			EMOJI_FOLD[ch] !== undefined ||
+			EMOJI_PICTOGRAPH.test(ch) ||
+			foldToAscii(ch) !== undefined ||
+			UNRENDERABLE.test(ch)
+		) {
+			continue;
+		}
+		unique.add(ch);
+	}
+	return [...unique];
+}
+
+function normalizeWithStats(text: string, options?: NormalizeOptions): NormalizedText {
+	const chars = normalizedInputChars(text);
+	const font = options?.font ?? options?.shape?.font;
+	const supported = renderableUnicodeChars(candidateUnicodeChars(chars), font);
+	const out: string[] = [];
+	let totalGraphics = 0;
+	let fallbackCount = 0;
+
+	for (const ch of chars) {
+		const cp = ch.codePointAt(0);
+		if (cp === undefined) continue;
+		if (isAsciiOrLatin1(cp)) {
+			out.push(ch);
+			totalGraphics++;
 			continue;
 		}
 		if (ch === DIM_ON || ch === DIM_OFF || ch === NEWLINE_GLYPH) {
-			out += ch;
+			out.push(ch);
+			continue;
+		}
+		const emoji = EMOJI_FOLD[ch];
+		if (emoji !== undefined) {
+			out.push(emoji);
+			totalGraphics++;
 			continue;
 		}
 		const fold = CHAR_FOLD[ch];
 		if (fold !== undefined) {
-			out += fold;
-		} else if (cp >= 0x2500 && cp <= 0x257f) {
-			// Box drawing: keep table skeletons legible.
-			out += cp === 0x2502 || cp === 0x2503 ? "|" : cp === 0x2500 || cp === 0x2501 ? "-" : "+";
-		} else {
-			const folded = foldToAscii(ch);
-			if (folded !== undefined) out += folded;
-			else if (!UNRENDERABLE.test(ch)) out += "?";
+			out.push(fold);
+			totalGraphics++;
+			continue;
+		}
+		if (cp >= 0x2500 && cp <= 0x257f) {
+			out.push(cp === 0x2502 || cp === 0x2503 ? "|" : cp === 0x2500 || cp === 0x2501 ? "-" : "+");
+			totalGraphics++;
+			continue;
+		}
+		if (!EMOJI_PICTOGRAPH.test(ch) && supported.has(ch)) {
+			out.push(ch);
+			totalGraphics++;
+			continue;
+		}
+		const folded = foldToAscii(ch);
+		if (folded !== undefined) {
+			out.push(folded);
+			totalGraphics++;
+		} else if (EMOJI_PICTOGRAPH.test(ch)) {
+		} else if (!UNRENDERABLE.test(ch)) {
+			out.push("?");
+			totalGraphics++;
+			fallbackCount++;
 		}
 	}
-	return out;
+
+	return { text: out.join("").replace(/ +/g, " ").replace(EDGE_RUNS, ""), totalGraphics, fallbackCount };
 }
 
 /**
- * Scan text to determine the proportion of graphic characters that will hit the
- * `?` fallback during {@link normalize}. Used as a preflight check to abort
- * snapcompact and fall back to the text summarizer when the input is heavily
- * non-renderable (e.g., CJK).
+ * Prepare text for printing: strip ANSI escape sequences, collapse horizontal
+ * whitespace runs, fold unsupported symbols (including box drawing to ASCII),
+ * preserve Unicode glyphs that either the selected font or embedded Silver
+ * fallback can render, and drop decorative emoji instead of printing `?`.
  */
-export function scanRenderability(text: string): { isSafe: boolean; unrenderableRatio: number } {
-	const stripped = text.includes("\u001b") ? Bun.stripANSI(text) : text;
-	const collapsed = stripped
-		.replace(COLLAPSIBLE, run => (LINE_BREAK.test(run) ? NEWLINE_GLYPH : /[^\p{Cf}]/u.test(run) ? " " : ""))
-		.replace(EDGE_RUNS, "");
-	let totalGraphics = 0;
-	let fallbackCount = 0;
-	for (const ch of collapsed) {
-		const cp = ch.codePointAt(0) as number;
-		if ((cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff)) {
-			totalGraphics++;
-			continue;
-		}
-		if (ch === DIM_ON || ch === DIM_OFF || ch === NEWLINE_GLYPH) {
-			continue;
-		}
-		const fold = CHAR_FOLD[ch];
-		if (fold !== undefined) {
-			totalGraphics++;
-		} else if (cp >= 0x2500 && cp <= 0x257f) {
-			totalGraphics++;
-		} else {
-			const folded = foldToAscii(ch);
-			if (folded !== undefined) {
-				totalGraphics++;
-			} else if (!UNRENDERABLE.test(ch)) {
-				totalGraphics++;
-				fallbackCount++;
-			}
-		}
-	}
-	const unrenderableRatio = totalGraphics > 0 ? fallbackCount / totalGraphics : 0;
+export function normalize(text: string, options?: NormalizeOptions): string {
+	return normalizeWithStats(text, options).text;
+}
+
+/**
+ * Scan text with the same font-aware path as {@link normalize}; unsafe means
+ * more than 5% of graphic characters would hit the `?` fallback.
+ */
+export function scanRenderability(
+	text: string,
+	options?: NormalizeOptions,
+): { isSafe: boolean; unrenderableRatio: number } {
+	const normalized = normalizeWithStats(text, options);
+	const unrenderableRatio = normalized.totalGraphics > 0 ? normalized.fallbackCount / normalized.totalGraphics : 0;
 	return { isSafe: unrenderableRatio <= 0.05, unrenderableRatio };
 }
 
@@ -1086,34 +1188,131 @@ export function dimStopwords(text: string): string {
 /** Char cells between the two doc columns (research exp14 `GUTTER`). */
 const DOC_GUTTER = 3;
 
+/** East Asian Wide / Fullwidth code points that occupy two grid cells when a
+ *  narrow bitmap shape draws them through the Silver fallback. Mirrors
+ *  `is_wide` in `crates/pi-natives/src/snapcompact.rs`; the two MUST stay in
+ *  sync or native layout and this capacity math disagree on cell counts. */
+function isWideCodePoint(cp: number): boolean {
+	return (
+		(cp >= 0x1100 && cp <= 0x115f) ||
+		(cp >= 0x2e80 && cp <= 0x2eff) ||
+		(cp >= 0x2f00 && cp <= 0x2fdf) ||
+		(cp >= 0x3000 && cp <= 0x303e) ||
+		(cp >= 0x3041 && cp <= 0x33ff) ||
+		(cp >= 0x3400 && cp <= 0x4dbf) ||
+		(cp >= 0x4e00 && cp <= 0x9fff) ||
+		(cp >= 0xa000 && cp <= 0xa4cf) ||
+		(cp >= 0xac00 && cp <= 0xd7a3) ||
+		(cp >= 0xf900 && cp <= 0xfaff) ||
+		(cp >= 0xfe30 && cp <= 0xfe4f) ||
+		(cp >= 0xff00 && cp <= 0xff60) ||
+		(cp >= 0xffe0 && cp <= 0xffe6) ||
+		(cp >= 0x20000 && cp <= 0x2fffd) ||
+		(cp >= 0x30000 && cp <= 0x3fffd)
+	);
+}
+
+/** Cells one character occupies: 0 for the zero-width dim toggles, 2 for wide
+ *  code points in narrow bitmap shapes, 1 otherwise. Mirrors native
+ *  `cell_units`. */
+function charCells(ch: string, wideCells: boolean): number {
+	if (ch === DIM_ON || ch === DIM_OFF) return 0;
+	const cp = ch.codePointAt(0);
+	return wideCells && cp !== undefined && isWideCodePoint(cp) ? 2 : 1;
+}
+
+/** Wide code points span two cells in every shape except the square-celled
+ *  Silver shape, which sizes each cell for a full-width glyph already. */
+function usesWideCells(shape: Pick<Shape, "font">): boolean {
+	return shape.font !== "silver";
+}
+
+/** Total grid cells a string occupies (ignoring row wrapping/pads). */
+function cellLength(text: string, wideCells: boolean): number {
+	let cells = 0;
+	for (const ch of text) cells += charCells(ch, wideCells);
+	return cells;
+}
+
+/** Longest prefix of `text` that fits `width` cells (at least one char). */
+function sliceCells(text: string, width: number, wideCells: boolean): string {
+	let cells = 0;
+	let out = "";
+	let placed = false;
+	for (const ch of text) {
+		const w = charCells(ch, wideCells);
+		if (placed && cells + w > width) break;
+		out += ch;
+		cells += w;
+		if (w > 0) placed = true;
+	}
+	return out;
+}
+
+/** Split `text` into pages that each fill at most `capacity` grid cells,
+ *  inserting a one-cell pad before a wide glyph that would straddle the right
+ *  edge (mirrors native `place_cell`). Pages are contiguous substrings, so each
+ *  renders independently starting at cell 0. A single char wider than the whole
+ *  budget still rides its page; the native renderer clips it. */
+function paginateCells(text: string, capacity: number, cols: number, wideCells: boolean): string[] {
+	const chars = [...text];
+	const pages: string[] = [];
+	let start = 0;
+	let cell = 0;
+	let hasCell = false;
+	for (let i = 0; i < chars.length; i++) {
+		const w = charCells(chars[i] ?? "", wideCells);
+		if (w === 0) continue;
+		let at = cell;
+		if (w === 2 && cols >= 2 && at % cols === cols - 1) at += 1;
+		if (hasCell && at + w > capacity) {
+			pages.push(chars.slice(start, i).join(""));
+			start = i;
+			at = 0;
+		}
+		cell = at + w;
+		hasCell = true;
+	}
+	if (hasCell) pages.push(chars.slice(start).join(""));
+	return pages;
+}
+
 /**
  * Greedy word-wrap, no mid-word breaks (hard split only for width+ words) —
  * ported verbatim from `research/exp14_bestgpt.py` `wrap()`. Zero-width dim
  * markers count toward word length here; serialized history places them at
  * word boundaries, so the drift is at most one cell per affected line.
  */
-export function wrap(text: string, width: number): string[] {
+export function wrap(text: string, width: number, wideCells = false): string[] {
 	const lines: string[] = [];
 	let cur = "";
+	let curCells = 0;
 	for (const token of text.split(/\s+/)) {
 		if (token.length === 0) continue;
 		let word = token;
-		while (word.length > width) {
+		let wordCells = cellLength(word, wideCells);
+		while (wordCells > width) {
 			// Pathological; never hit on prose.
 			if (cur) {
 				lines.push(cur);
 				cur = "";
+				curCells = 0;
 			}
-			lines.push(word.slice(0, width));
-			word = word.slice(width);
+			const head = sliceCells(word, width, wideCells);
+			lines.push(head);
+			word = word.slice(head.length);
+			wordCells = cellLength(word, wideCells);
 		}
 		if (!cur) {
 			cur = word;
-		} else if (cur.length + 1 + word.length <= width) {
+			curCells = wordCells;
+		} else if (curCells + 1 + wordCells <= width) {
 			cur += ` ${word}`;
+			curCells += 1 + wordCells;
 		} else {
 			lines.push(cur);
 			cur = word;
+			curCells = wordCells;
 		}
 	}
 	if (cur) lines.push(cur);
@@ -1126,8 +1325,8 @@ export function wrap(text: string, width: number): string[] {
  * Every input character lands on exactly one page (whitespace becomes the
  * wrap points).
  */
-function docPages(normalized: string, geo: Geometry): string[] {
-	const lines = wrap(normalized, geo.cols);
+function docPages(normalized: string, geo: Geometry, wideCells: boolean): string[] {
+	const lines = wrap(normalized, geo.cols, wideCells);
 	const perPage = 2 * geo.rows;
 	const pages: string[] = [];
 	for (let offset = 0; offset < lines.length; offset += perPage) {
@@ -1165,18 +1364,35 @@ function nativeRenderOptions(shape: Shape, size: number) {
 	};
 }
 
-function renderedChars(text: string, shape: Shape, capacity: number): number {
-	let visible = text.length - (text.match(DIM_MARKERS)?.length ?? 0);
-	// Doc line separators consume no cell; in the grid they print as a blank.
-	if (shape.columns === 2) visible -= text.match(NEWLINES)?.length ?? 0;
-	return Math.min(visible, capacity);
+function renderedChars(text: string, shape: Shape, geo: Geometry): number {
+	if (shape.columns === 2) {
+		let visible = [...text].length - (text.match(DIM_MARKERS)?.length ?? 0);
+		visible -= text.match(NEWLINES)?.length ?? 0;
+		return Math.min(visible, geo.capacity);
+	}
+	// Grid: count visible chars that fit within the frame's cell budget, with
+	// wide glyphs taking two cells (and a straddle pad) exactly as the renderer.
+	const wideCells = usesWideCells(shape);
+	let cell = 0;
+	let count = 0;
+	for (const ch of text) {
+		const w = charCells(ch, wideCells);
+		if (w === 0) continue;
+		let at = cell;
+		if (w === 2 && geo.cols >= 2 && at % geo.cols === geo.cols - 1) at += 1;
+		if (at + w > geo.capacity) break;
+		cell = at + w;
+		count++;
+	}
+	return count;
 }
 
 /** Render one snapcompact frame from already-normalized text. Doc shapes
  *  (`columns === 2`) expect one page of `\n`-joined pre-wrapped lines. */
 export async function render(text: string, shape: Shape, size: number = shape.frameSize): Promise<RenderedFrame> {
-	const { cols, rows, capacity } = geometry(shape, size);
-	const chars = renderedChars(text, shape, capacity);
+	const geo = geometry(shape, size);
+	const { cols, rows } = geo;
+	const chars = renderedChars(text, shape, geo);
 	const data = await renderSnapcompactPng(text, nativeRenderOptions(shape, size));
 	return { data, cols, rows, chars };
 }
@@ -1197,8 +1413,8 @@ function pageFinisher(shape: Shape): (page: string) => string {
 export interface RenderManyOptions {
 	/** Explicit shape; wins over `model`. */
 	shape?: Shape;
-	/** Model whose `api` selects the eval-optimal shape. */
-	model?: Pick<Model, "api">;
+	/** Model whose provider API and id select the frame shape. */
+	model?: ShapeTarget;
 	/** Frame edge in px; defaults to the shape's `frameSize`. */
 	frameSize?: number;
 	/** Hard cap on frames produced; omit for unbounded (caller decides usage). */
@@ -1210,27 +1426,26 @@ export interface RenderManyOptions {
  * (first page first). Empty/whitespace-only input yields no frames.
  */
 export async function renderMany(text: string, options?: RenderManyOptions): Promise<ImageContent[]> {
-	const shape = options?.shape ?? resolveShape(options?.model);
+	const shape = options?.shape ?? resolveShapeForText(text, options?.model);
 	const frameSize = options?.frameSize ?? shape.frameSize;
 	const geo = geometry(shape, frameSize);
-	const normalized = normalize(text);
+	const normalized = normalize(text, { shape });
 	const cap = options?.maxFrames;
 	// Build the per-frame texts in order first (cheap, synchronous), then fan
 	// the native PNG renders out concurrently — render() is async/off-thread,
 	// so awaiting each before starting the next leaves throughput on the table.
 	const pageTexts: string[] = [];
+	const wideCells = usesWideCells(shape);
 	if (shape.columns === 2) {
 		const finish = pageFinisher(shape);
-		for (const page of docPages(normalized, geo)) {
+		for (const page of docPages(normalized, geo, wideCells)) {
 			if (cap !== undefined && pageTexts.length >= cap) break;
 			pageTexts.push(finish(page));
 		}
 	} else {
-		for (let offset = 0; offset < normalized.length; offset += geo.capacity) {
+		for (const page of paginateCells(normalized, geo.capacity, geo.cols, wideCells)) {
 			if (cap !== undefined && pageTexts.length >= cap) break;
-			let chunk = normalized.slice(offset, offset + geo.capacity);
-			if (shape.stopwordDim) chunk = dimStopwords(chunk);
-			pageTexts.push(chunk);
+			pageTexts.push(shape.stopwordDim ? dimStopwords(page) : page);
 		}
 	}
 	const rendered = await Promise.all(pageTexts.map(page => render(page, shape, frameSize)));
@@ -1246,11 +1461,12 @@ export async function renderMany(text: string, options?: RenderManyOptions): Pro
  *  For doc shapes this wraps the text once and counts pages of `2 * rows`
  *  lines; for grid shapes it divides by the frame capacity. */
 export function frames(text: string, options?: Pick<RenderManyOptions, "shape" | "model" | "frameSize">): number {
-	const shape = options?.shape ?? resolveShape(options?.model);
+	const shape = options?.shape ?? resolveShapeForText(text, options?.model);
 	const geo = geometry(shape, options?.frameSize ?? shape.frameSize);
-	const normalized = normalize(text);
-	if (shape.columns === 2) return Math.ceil(wrap(normalized, geo.cols).length / (2 * geo.rows));
-	return Math.ceil(normalized.length / geo.capacity);
+	const normalized = normalize(text, { shape });
+	const wideCells = usesWideCells(shape);
+	if (shape.columns === 2) return Math.ceil(wrap(normalized, geo.cols, wideCells).length / (2 * geo.rows));
+	return paginateCells(normalized, geo.capacity, geo.cols, wideCells).length;
 }
 
 // ============================================================================
@@ -1313,6 +1529,19 @@ export function archiveSourceText(archive: Archive): string | undefined {
 	return text.length > 0 ? toPlainText(text) : undefined;
 }
 
+/** Build the text used to choose and preflight a font-aware snapcompact shape. */
+export function renderabilityProbeText(
+	serialized: string,
+	previousPreserveData?: Record<string, unknown>,
+	previousSummary?: string,
+): string {
+	const previousArchive = getPreservedArchive(previousPreserveData);
+	const previousText = previousArchive ? (archiveSourceText(previousArchive) ?? "") : "";
+	if (previousText.length > 0) return `${previousText}${NEWLINE_GLYPH}${serialized}`;
+	if (previousSummary) return `${previousSummary}${NEWLINE_GLYPH}${serialized}`;
+	return serialized;
+}
+
 /** Convert archive frames into LLM image blocks (oldest first). */
 export function images(archive: Archive): ImageContent[] {
 	return archive.frames.map(frame => ({
@@ -1356,9 +1585,10 @@ export function historyBlocks(archive: Archive): (TextContent | ImageContent)[] 
 
 /** Denser companion of `high` for the foveated archive middle: same family and
  *  frame size (identical per-frame bill) but a tighter cell. Returns `high`
- *  unchanged for doc layouts or when no denser variant exists (foveation off). */
+ *  unchanged for doc layouts, TrueType Unicode shapes, or when no denser
+ *  variant exists (foveation off). */
 function denseCompanion(high: Shape, api: Api | undefined): Shape {
-	if (high.columns === 2) return high;
+	if (high.columns === 2 || high.font === "silver") return high;
 	const family = billingFamily(api);
 	const low = priceShape({ ...SHAPE_VARIANTS[FAMILY_VARIANT_LOW[family]], frameSize: high.frameSize }, family);
 	return geometry(low).capacity > geometry(high).capacity ? low : high;
@@ -1381,13 +1611,9 @@ interface ArchiveLayout {
 	truncatedChars: number;
 }
 
-/** Slice `text` into `capacity`-char frames at one shape (tier). */
-function sliceFrames(text: string, capacity: number, shape: Shape): PlanFrame[] {
-	const out: PlanFrame[] = [];
-	for (let offset = 0; offset < text.length; offset += capacity) {
-		out.push({ text: text.slice(offset, offset + capacity), shape });
-	}
-	return out;
+/** Wrap each page string as a planned frame at one shape (tier). */
+function planFrames(pages: readonly string[], shape: Shape): PlanFrame[] {
+	return pages.map(text => ({ text, shape }));
 }
 
 /**
@@ -1425,7 +1651,7 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
 	// Doc layouts wrap (no char-slicing) and don't foveate: one tier, keep the
 	// newest pages with the session head pinned, drop the oldest middle.
 	if (high.columns === 2) {
-		const pages = docPages(imageText, geometry(high));
+		const pages = docPages(imageText, geometry(high), usesWideCells(high));
 		let kept = pages;
 		let truncatedChars = 0;
 		if (pages.length > maxFrames) {
@@ -1435,7 +1661,7 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
 		}
 		const flat = kept.map(page => page.replaceAll("\n", " ")).join(" ");
 		return {
-			frames: kept.map(page => ({ text: page, shape: high })),
+			frames: planFrames(kept, high),
 			textHead,
 			textTail,
 			keptText: textHead + flat + textTail,
@@ -1443,10 +1669,12 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
 		};
 	}
 
-	// Grid: render all-HQ when the image region fits the budget outright.
-	if (Math.ceil(imageText.length / capHi) <= maxFrames) {
+	// Grid: paginate the imaged region into HQ frames (cell-aware, so wide CJK
+	// glyphs spanning two cells never overflow a frame's capacity).
+	const hiPages = paginateCells(imageText, capHi, geometry(high).cols, usesWideCells(high));
+	if (hiPages.length <= maxFrames) {
 		return {
-			frames: sliceFrames(imageText, capHi, high),
+			frames: planFrames(hiPages, high),
 			textHead,
 			textTail,
 			keptText: textHead + imageText + textTail,
@@ -1457,22 +1685,23 @@ function planArchive(text: string, high: Shape, low: Shape, maxFrames: number): 
 	// Foveate the imaged middle: HQ edges, dense center, drop the oldest dense slice.
 	const capLo = geometry(low).capacity;
 	const imageEdgeFrames = Math.min(HQ_EDGE_FRAMES, Math.floor((maxFrames - 1) / 2));
-	const imageEdgeCap = imageEdgeFrames * capHi;
-	const imageHead = imageText.slice(0, imageEdgeCap);
-	const imageTail = imageEdgeCap > 0 ? imageText.slice(imageText.length - imageEdgeCap) : "";
-	let middleText = imageText.slice(imageEdgeCap, imageText.length - imageEdgeCap);
+	const headPages = hiPages.slice(0, imageEdgeFrames);
+	const tailPages = imageEdgeFrames > 0 ? hiPages.slice(hiPages.length - imageEdgeFrames) : [];
+	const imageHead = headPages.join("");
+	const imageTail = tailPages.join("");
+	const middleSource = imageText.slice(imageHead.length, imageText.length - imageTail.length);
+	let middlePages = paginateCells(middleSource, capLo, geometry(low).cols, usesWideCells(low));
+	const middleBudget = maxFrames - 2 * imageEdgeFrames;
 	let truncatedChars = 0;
-	const middleCap = (maxFrames - 2 * imageEdgeFrames) * capLo;
-	if (middleText.length > middleCap) {
-		truncatedChars = middleText.length - middleCap;
-		middleText = middleText.slice(truncatedChars);
+	let middleText = middleSource;
+	if (middlePages.length > middleBudget) {
+		const dropped = middlePages.slice(0, middlePages.length - middleBudget).join("");
+		truncatedChars = dropped.length;
+		middleText = middleSource.slice(dropped.length);
+		middlePages = middlePages.slice(middlePages.length - middleBudget);
 	}
 	return {
-		frames: [
-			...sliceFrames(imageHead, capHi, high),
-			...sliceFrames(middleText, capLo, low),
-			...sliceFrames(imageTail, capHi, high),
-		],
+		frames: [...planFrames(headPages, high), ...planFrames(middlePages, low), ...planFrames(tailPages, high)],
 		textHead,
 		textTail,
 		keptText: textHead + imageHead + middleText + imageTail + textTail,
@@ -1501,19 +1730,9 @@ export async function compact<TMessage = Message>(
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no ID - session may need migration");
 	}
-	const baseShape = options?.shape ?? resolveShape(options?.model);
-	const frameSize = options?.frameSize ?? baseShape.frameSize;
-	const high = frameSize === baseShape.frameSize ? baseShape : { ...baseShape, frameSize };
-	const low = denseCompanion(high, options?.model?.api);
-	const geo = geometry(high);
-	// The engine default caps archive growth; a caller-supplied maxFrames only
-	// lowers it further (an upper limit), never raising it past the default.
-	const maxFrames = Math.max(1, Math.min(options?.maxFrames ?? MAX_FRAMES_DEFAULT, MAX_FRAMES_DEFAULT));
-
 	const messages = preparation.messagesToSummarize.concat(preparation.turnPrefixMessages);
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	let archiveText = normalize(serializeConversation(llmMessages, options));
-
+	const serialized = serializeConversation(llmMessages, options);
 	const previousArchive = getPreservedArchive(previousPreserveData);
 	const previousText =
 		previousArchive?.text ??
@@ -1522,8 +1741,20 @@ export async function compact<TMessage = Message>(
 			.join(NEWLINE_GLYPH);
 	const hasPreviousText = previousText.length > 0;
 	const includedPreviousSummary = !hasPreviousText && !!previousSummary;
+	const shapeProbeText = renderabilityProbeText(serialized, previousPreserveData, previousSummary);
+	const baseShape = options?.shape ?? resolveShapeForText(shapeProbeText, options?.model);
+	const frameSize = options?.frameSize ?? baseShape.frameSize;
+	const high = frameSize === baseShape.frameSize ? baseShape : { ...baseShape, frameSize };
+	const low = denseCompanion(high, options?.model?.api);
+	const geo = geometry(high);
+	// The engine default caps archive growth; a caller-supplied maxFrames only
+	// lowers it further (an upper limit), never raising it past the default.
+	const maxFrames = Math.max(1, Math.min(options?.maxFrames ?? MAX_FRAMES_DEFAULT, MAX_FRAMES_DEFAULT));
+
+	let archiveText = normalize(serialized, { shape: high });
+
 	if (includedPreviousSummary && previousSummary) {
-		const head = `[Summary of earlier history] ${normalize(previousSummary)}`;
+		const head = `[Summary of earlier history] ${normalize(previousSummary, { shape: high })}`;
 		archiveText = archiveText.length > 0 ? `${head} [Recent conversation] ${archiveText}` : head;
 	}
 

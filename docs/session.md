@@ -177,11 +177,11 @@ Stores an `AgentMessage` directly.
   "id": "c1d2e3f4",
   "parentId": "b1c2d3e4",
   "timestamp": "2026-02-16T10:21:45.000Z",
-  "serviceTier": "flex"
+  "serviceTier": { "openai": "priority", "google": "flex" }
 }
 ```
 
-`serviceTier` can also be `null`.
+`serviceTier` is a per-family map keyed by `openai`/`anthropic`/`google` (each value `auto`/`default`/`flex`/`scale`/`priority`), or `null` when no tier is active. Legacy entries that stored a single string (`"flex"`, `"openai-only"`, `"claude-only"`, …) are normalized to this map on read.
 
 ### `thinking_level_change`
 

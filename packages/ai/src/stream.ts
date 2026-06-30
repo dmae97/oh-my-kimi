@@ -1565,6 +1565,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (!reasoning || !model.reasoning) {
 				return castApi<"google-generative-ai">({
 					...base,
+					serviceTier: options?.serviceTier,
 					thinking: { enabled: false },
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -1578,6 +1579,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (googleModel.thinking?.mode === "google-level") {
 				return castApi<"google-generative-ai">({
 					...base,
+					serviceTier: options?.serviceTier,
 					thinking: {
 						enabled: true,
 						level: mapEffortToGoogleThinkingLevel(effort),
@@ -1661,6 +1663,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (!reasoning || !model.reasoning) {
 				return castApi<"google-vertex">({
 					...base,
+					serviceTier: options?.serviceTier,
 					thinking: { enabled: false },
 					toolChoice: mapGoogleToolChoice(options?.toolChoice),
 				});
@@ -1673,6 +1676,7 @@ function mapOptionsForApi<TApi extends Api>(
 			if (geminiModel.thinking?.mode === "google-level") {
 				return castApi<"google-vertex">({
 					...base,
+					serviceTier: options?.serviceTier,
 					thinking: {
 						enabled: true,
 						level: mapEffortToGoogleThinkingLevel(effort),
@@ -1683,6 +1687,7 @@ function mapOptionsForApi<TApi extends Api>(
 
 			return castApi<"google-vertex">({
 				...base,
+				serviceTier: options?.serviceTier,
 				thinking: {
 					enabled: true,
 					budgetTokens: getGoogleBudget(geminiModel, effort, options?.thinkingBudgets),

@@ -16,6 +16,23 @@
 ### Fixed
 
 - Fixed the assistant-message fast path dropping the transient flag on streaming updates, so in-flight renders correctly skip per-tick code syntax highlighting (now applied once at message finalization) and avoid redundant L2 cache-key work.
+- Replaced the global `serviceTier` setting with `tier.openai`, `tier.anthropic`, and `tier.google` for granular control
+- Updated `/fast` to target the service-tier family of the currently selected model
+- Updated subagent and advisor tier configuration to use the new per-family setting structure
+- Removed `fastModeScope` setting, as per-family scoping is now natively supported via the `tier.*` settings
+
+- Improved binary file detection and terminal handling to prevent corruption from non-UTF-8 content, and updated file summaries to explicitly note skipped binary files.
+- Enhanced context compaction (snapcompact) to resolve shapes contextually based on rendered text content.
+
+### Fixed
+
+- Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
+- Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.
+- Fixed an issue where the `irc` inbox missed messages that arrived while the recipient agent was already running.
+- Fixed a startup hang caused by system-prompt GPU detection blocking and repeatedly running failed probes.
+- Improved error reporting for `omp tiny-models download` by displaying the actual worker-side download error.
+- Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
+- Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
 
 ## [16.2.6] - 2026-06-29
 

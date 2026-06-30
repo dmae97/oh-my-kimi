@@ -28,6 +28,14 @@ export function isOfficialAnthropicApiUrl(baseUrl?: string): boolean {
 	return lower === OFFICIAL_ANTHROPIC_URL || lower.startsWith(`${OFFICIAL_ANTHROPIC_URL}/`);
 }
 
+/** Mirrors `compat/openai.ts`; native-only host gating is the caller's responsibility. */
+const KIMI_K27_CODE_MODEL_PATTERN = /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code(?:[-._]?highspeed)?$/i;
+
+function matchesKimiK27CodeFamily(spec: ModelSpec<"anthropic-messages">): boolean {
+	if (KIMI_K27_CODE_MODEL_PATTERN.test(spec.id)) return true;
+	return spec.id === "kimi-for-coding" && /k2\.?7 code/i.test(spec.name ?? "");
+}
+
 /** Build the resolved anthropic-messages compat record for a model spec. */
 export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): ResolvedAnthropicCompat {
 	const baseUrl = spec.baseUrl;
@@ -40,6 +48,7 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// doesn't whitelist the `fine-grained-tool-streaming-2025-05-14` beta either
 	// (issue #2558), so eager tool-input streaming is unavailable on this host.
 	const isCopilot = modelMatchesHost(spec, "githubCopilot");
+	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		disableStrictTools: false,
@@ -53,12 +62,13 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 		// detection requires the canonical api.anthropic.com host plus a
 		// supported model id.
 		supportsMidConversationSystem: official && supportsMidConversationSystemMessages(spec.id),
-		supportsForcedToolChoice: !isAnthropicFableOrMythosModel(spec.id),
+		supportsForcedToolChoice: !requiresThinkingEnabled && !isAnthropicFableOrMythosModel(spec.id),
 		// Opus 4.7+ and Fable/Mythos reject temperature/top_p/top_k with a 400.
 		supportsSamplingParams: !hasOpus47ApiRestrictions(spec.id),
 		// Z.AI workaround (issue #814): its proxy deserializes tool_result blocks
 		// into a class that reads `.id`.
 		requiresToolResultId: isZai,
+		requiresThinkingEnabled,
 		// Official Anthropic enforces signature-based thinking-chain integrity, so
 		// unsigned thinking blocks must stay text there. Anthropic-compatible
 		// reasoning endpoints commonly emit unsigned thinking blocks while still
