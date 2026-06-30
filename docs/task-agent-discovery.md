@@ -44,7 +44,7 @@ Bundled agents are embedded at build time (`src/task/agents.ts`) using text impo
 `EMBEDDED_AGENT_DEFS` defines:
 
 - `explore`, `plan`, `designer`, `reviewer`, `librarian`, `oracle` from prompt files
-- `task` and `quick_task` from shared `task.md` body plus injected frontmatter
+- `task` and `sonic` from shared `task.md` body plus injected frontmatter
 
 Loading path:
 
@@ -130,7 +130,7 @@ Runtime output schema precedence in `TaskTool.#runSpawn`:
 
 (`effectiveOutputSchema = effectiveAgent.output ?? this.session.outputSchema` — the task call itself never carries a schema; ad-hoc structured workflows go through the eval bridge's `agent(prompt, schema)`.)
 
-The model-facing prompt (`src/prompts/tools/task.md`) no longer carries the old structured-output mismatch warning; it tags read-only agents and warns against offloading reasoning to `explore`/`quick_task` instead.
+The model-facing prompt (`src/prompts/tools/task.md`) no longer carries the old structured-output mismatch warning; it tags read-only agents and warns against offloading reasoning to `explore`/`sonic` instead.
 
 ## Command discovery interaction
 

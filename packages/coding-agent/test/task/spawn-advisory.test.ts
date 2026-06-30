@@ -31,7 +31,7 @@ describe("buildSpecializationAdvisory", () => {
 	});
 
 	it("treats a whitespace-only role as absent and nudges", () => {
-		expect(buildSpecializationAdvisory("quick_task", [item("   ")], true)).toBeDefined();
+		expect(buildSpecializationAdvisory("sonic", [item("   ")], true)).toBeDefined();
 	});
 
 	it("nudges when one call clones the same agent twice without roles", () => {

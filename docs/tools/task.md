@@ -106,7 +106,7 @@ Artifacts and side channels:
   - off — single spawn per call; `tasks`/`context` are rejected and removed from the schema.
 - Isolation mode (`task.isolation.mode`): `none`, `auto`, `apfs`, `btrfs`, `zfs`, `reflink`, `overlayfs`, `projfs`, `block-clone`, `rcopy` (legacy `worktree`, `fuse-overlay`, `fuse-projfs` accepted for back-compat); the PAL resolves the actual backend with fallback.
 - Isolation merge strategy: patch mode (capture/apply root patches) or branch mode (commit to `omp/task/<id>`, cherry-pick into parent).
-- Agent source precedence: project custom agents, then user custom agents, then bundled agents (`explore`, `plan`, `designer`, `reviewer`, `task`, `quick_task`, `librarian`, `oracle`).
+- Agent source precedence: project custom agents, then user custom agents, then bundled agents (`explore`, `plan`, `designer`, `reviewer`, `task`, `sonic`, `librarian`, `oracle`).
 
 ## Side Effects
 - Filesystem

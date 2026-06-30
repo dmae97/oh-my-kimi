@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the built-in `quick_task` subagent to `sonic`; update any `task` spawns or configs that reference `quick_task` by name
+
+### Added
+
+- Added a built-in `Tester` subagent that writes high-signal tests defending real contracts (behavior, invariants, edge cases) and refuses worthless tests that assert config/setter echoes, grep the source, or restate the implementation
+
+### Removed
+
+- Removed the built-in `oracle` subagent
+
 ## [16.2.8] - 2026-06-30
 
 ### Added
