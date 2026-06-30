@@ -305,7 +305,8 @@ fn build_walker_for_options_inner(
 			.git_exclude(true)
 			.git_global(true)
 			.ignore(true)
-			.parents(true);
+			.parents(true)
+			.require_git(false);
 	} else {
 		builder
 			.git_ignore(false)

@@ -2490,7 +2490,6 @@ impl FastIgnore {
 			saw_git = saw_git || frame.has_git;
 			current = frame.parent.as_deref();
 		}
-
 		match ignore_match {
 			ignore::Match::Ignore(_) => return true,
 			ignore::Match::Whitelist(_) => return false,
@@ -3863,6 +3862,42 @@ mod tests {
 		assert!(
 			!paths.iter().any(|path| path == "ignored.txt"),
 			"collect_entries should exclude .gitignore matches without a .git marker, got: {paths:?}"
+		);
+	}
+
+	#[test]
+	fn collect_entries_with_exact_workspace_options() {
+		let tree = temp_tree("exact-options");
+		fs::write(tree.path().join(".gitignore"), "ignored.txt\n")
+			.expect(".gitignore should be written");
+		fs::write(tree.path().join("ignored.txt"), "ignored")
+			.expect("ignored file should be written");
+		fs::write(tree.path().join("kept.txt"), "keep").expect("kept file should be written");
+
+		let scan = collect_entries(
+			tree.path(),
+			WalkOptions {
+				include_hidden: false,
+				use_gitignore: true,
+				detail: WalkDetail::Full,
+				max_depth: 4,
+				..test_options()
+			},
+			|| Ok::<(), Infallible>(()),
+		)
+		.expect("collection should not fail");
+		let EntryScan::Entries(scan) = scan else {
+			panic!("expected entries");
+		};
+		let paths = scan
+			.entries
+			.into_iter()
+			.map(|entry| entry.path)
+			.collect::<Vec<_>>();
+
+		assert!(
+			!paths.iter().any(|path| path == "ignored.txt"),
+			"should exclude ignored.txt, got: {paths:?}"
 		);
 	}
 
