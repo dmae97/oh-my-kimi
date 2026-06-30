@@ -247,7 +247,7 @@ describe("YieldTool", () => {
 		expect(result.details?.data).toEqual({ anything: "goes", n: 3 });
 	});
 
-	it("rejects unknown incremental labels for closed caller output schemas", async () => {
+	it("rejects unknown incremental labels for closed caller output schemas without consuming retries", async () => {
 		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
@@ -267,14 +267,30 @@ describe("YieldTool", () => {
 			}),
 		);
 
+		// Unknown labels are a hard contract mismatch with the caller schema. They MUST
+		// reject every time with the schema's labels listed and never bump the retry
+		// counter — otherwise the MAX_SCHEMA_RETRIES override accepts the stale-label
+		// payload and the post-mortem finalizer takes it as success (issue #3927 review).
+		for (let attempt = 1; attempt <= 5; attempt++) {
+			await expect(
+				tool.execute(`call-native-reviewer-label-${attempt}`, {
+					type: ["findings"],
+					result: { data: { title: "native reviewer finding" } },
+				} as never),
+			).rejects.toThrow(
+				/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict", "blockers", "non_blocking_notes"\./,
+			);
+		}
+
+		// Schema-retry budget intact: a separate, shape-only mismatch still fires the
+		// first-attempt retry hint (`2 retry attempt(s) remain`), proving the unknown-label
+		// path didn't burn the override.
 		await expect(
-			tool.execute("call-native-reviewer-label", {
-				type: ["findings"],
-				result: { data: { title: "native reviewer finding" } },
+			tool.execute("call-shape-error", {
+				type: ["verdict"],
+				result: { data: "approved" },
 			} as never),
-		).rejects.toThrow(
-			/Section "findings" does not match schema: type: unknown incremental yield label\(s\): "findings"; valid labels: "issue_key", "verdict", "blockers", "non_blocking_notes"/,
-		);
+		).rejects.toThrow(/Section "verdict" does not match schema.*2 retry attempt\(s\) remain/);
 	});
 
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {

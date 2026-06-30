@@ -325,6 +325,22 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			if (data === null) {
 				throw new Error("data is required when yield indicates success");
 			}
+			// Unknown incremental labels are a hard contract mismatch with the closed
+			// caller schema, not a shape error a retry can fix. Reject them every time
+			// without touching the schema-retry counter so the override path never
+			// accepts a stale agent-native section name.
+			if (isIncremental) {
+				const unknownLabels = this.#unknownIncrementalLabels(yieldType as string[]);
+				if (unknownLabels.length > 0) {
+					const validLabels =
+						this.#validateSection && this.#validateSection.size > 0
+							? formatYieldLabels([...this.#validateSection.keys()])
+							: "none";
+					throw new Error(
+						`Section ${formatYieldLabels(yieldType as string[])} uses unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}. Resubmit with one of the schema's labels: ${validLabels}.`,
+					);
+				}
+			}
 			const sectionFailure = isIncremental
 				? this.#validateIncrementalSection(yieldType as string[], data)
 				: this.#validate
@@ -367,27 +383,28 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	}
 
 	/**
+	 * Return incremental yield labels that are not declared as top-level properties of a closed
+	 * caller schema. Open schemas (no `additionalProperties: false`) accept any label.
+	 */
+	#unknownIncrementalLabels(labels: string[]): string[] {
+		if (!this.#rejectUnknownSections) return [];
+		const subValidators = this.#validateSection;
+		if (!subValidators) return [];
+		return labels.filter(label => !subValidators.has(label));
+	}
+
+	/**
 	 * Validate the `data` payload of an incremental yield (`type: ["<label>", …]`) against
-	 * the matching property's sub-validator. Closed schemas also reject unknown labels so stale
-	 * agent-native prompt sections receive retry feedback before parent-side finalization.
+	 * the matching property's sub-validator. Returns the first failure across all known labels,
+	 * or `undefined` when no label is recognised (user-defined section labels stay loose) or
+	 * when all known labels accept the value. Lets the model see the same retry feedback that
+	 * the terminal-yield path already produces, instead of leaking the mismatch through to
+	 * the parent's post-mortem `schema_violation`. Unknown labels under a closed schema are
+	 * handled separately by `#unknownIncrementalLabels` and never reach this validator.
 	 */
 	#validateIncrementalSection(labels: string[], data: unknown): JsonSchemaValidationResult | undefined {
 		const subValidators = this.#validateSection;
-		if (!subValidators) return undefined;
-		const unknownLabels = labels.filter(label => !subValidators.has(label));
-		if (this.#rejectUnknownSections && unknownLabels.length > 0) {
-			const validLabels = subValidators.size > 0 ? formatYieldLabels([...subValidators.keys()]) : "none";
-			return {
-				success: false,
-				issues: [
-					{
-						path: ["type"],
-						message: `unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}; valid labels: ${validLabels}`,
-						keyword: "enum",
-					},
-				],
-			};
-		}
+		if (!subValidators || subValidators.size === 0) return undefined;
 		for (const label of labels) {
 			const sub = subValidators.get(label);
 			if (!sub) continue;
