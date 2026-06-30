@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `grep`/`rg` in-process builtins ignoring shell `abort`/`timeout` during recursive directory walks. The grep and ripgrep builtins passed no-op heartbeats to `pi_walker`, so a cancelled bash command could not interrupt a large directory traversal even after the shell flipped the uutils cancel flag (it only unblocked stdin reads). The walkers now check `pi_uutils_ctx::is_cancelled()` on each heartbeat tick, returning a `WalkError::Interrupted` that the utility silently maps to an interrupted result (the shell wrapper still overrides the exit code with 130). ([#3933](https://github.com/can1357/oh-my-pi/issues/3933))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed
