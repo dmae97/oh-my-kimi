@@ -578,15 +578,27 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Use :1 to read from the start, or :3 to read the last line.");
 		});
 
-		it("should emit a binary notice instead of mojibake for files with NUL bytes", async () => {
-			const testFile = path.join(testDir, "blob.bin");
-			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+		it("should refuse binary files (NUL or invalid UTF-8) instead of emitting mojibake", async () => {
+			const nulFile = path.join(testDir, "blob.bin");
+			fs.writeFileSync(nulFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0xff, 0xfe, 0x64, 0x65]));
+			// A header with no NUL but invalid UTF-8 (lone 0xFF/0xC0) must also refuse.
+			const invalidUtf8File = path.join(testDir, "font.ttfish");
+			fs.writeFileSync(invalidUtf8File, Buffer.from([0x4d, 0x5a, 0xff, 0xfe, 0xc0, 0xc0, 0x90, 0x91]));
 
-			const result = await readTool.execute("test-call-binary-nul", { path: testFile });
-			const output = getTextOutput(result);
+			for (const file of [nulFile, invalidUtf8File]) {
+				const output = getTextOutput(await readTool.execute("test-call-binary", { path: file }));
+				expect(output).toContain("Cannot read binary file");
+				expect(output).not.toContain("\u0000");
+				expect(output).not.toContain("\uFFFD");
+			}
+		});
 
-			expect(output).toContain("Cannot read binary file");
-			expect(output).toContain("NUL bytes");
+		it("reads a binary file verbatim when :raw is requested", async () => {
+			const testFile = path.join(testDir, "raw-blob.bin");
+			fs.writeFileSync(testFile, Buffer.from([0x61, 0x62, 0x63, 0x00, 0x64, 0x65]));
+
+			const output = getTextOutput(await readTool.execute("test-call-binary-raw", { path: `${testFile}:raw` }));
+			expect(output).not.toContain("Cannot read binary file");
 		});
 
 		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {

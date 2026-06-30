@@ -488,7 +488,7 @@ export interface FileMentionMessage {
 		/** File size in bytes, if known. */
 		byteSize?: number;
 		/** Why the file contents were omitted from auto-read. */
-		skippedReason?: "tooLarge";
+		skippedReason?: "tooLarge" | "binary";
 		image?: ImageContent;
 	}>;
 	timestamp: number;

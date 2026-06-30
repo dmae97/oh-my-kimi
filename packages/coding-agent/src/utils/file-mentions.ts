@@ -10,7 +10,7 @@ import path from "node:path";
 import { formatHashlineHeader, formatNumberedLines, type SnapshotStore } from "@oh-my-pi/hashline";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { formatAge, formatBytes, readImageMetadata } from "@oh-my-pi/pi-utils";
+import { formatAge, formatBytes, isProbablyBinary, readImageMetadata } from "@oh-my-pi/pi-utils";
 import { canonicalSnapshotKey } from "../edit/file-snapshot-store";
 import { normalizeToLF } from "../edit/normalize";
 import type { FileMentionMessage } from "../session/messages";
@@ -254,6 +254,15 @@ export async function generateFileMentionMessages(
 					content: `(skipped auto-read: too large, ${formatBytes(stat.size)})`,
 					byteSize: stat.size,
 					skippedReason: "tooLarge",
+				});
+				continue;
+			}
+			if (await isProbablyBinary(absolutePath)) {
+				files.push({
+					path: resolvedPath,
+					content: `(skipped auto-read: binary file, ${formatBytes(stat.size)})`,
+					byteSize: stat.size,
+					skippedReason: "binary",
 				});
 				continue;
 			}

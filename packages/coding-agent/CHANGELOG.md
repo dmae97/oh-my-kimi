@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Improved binary file detection to prevent terminal corruption from non-UTF8 content
+- Updated file mention summaries to explicitly note skipped binary files
+
 - Enabled contextual snapcompact shape resolution based on rendered text content
 
 ### Fixed
