@@ -18,6 +18,9 @@
 ### Fixed
 
 - Fixed `irc` inbox drains missing messages that arrived while the recipient agent was already running. ([#3834](https://github.com/can1357/oh-my-pi/issues/3834))
+### Fixed
+
+- Fixed system-prompt GPU detection blocking startup and rerunning failed probes by applying the prep deadline and caching empty results. ([#3835](https://github.com/can1357/oh-my-pi/issues/3835))
 
 ## [16.2.6] - 2026-06-29
 
