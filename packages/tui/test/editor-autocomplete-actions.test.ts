@@ -134,7 +134,7 @@ class SyncSlashProvider implements AutocompleteProvider {
 }
 
 describe("Editor Enter handler sync slash completion", () => {
-	it("opens mid-prompt skill autocomplete and replaces the draft on Tab", async () => {
+	it("opens mid-prompt skill autocomplete and inserts the skill token without wiping the draft on Tab", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
 			new CombinedAutocompleteProvider(
@@ -155,7 +155,10 @@ describe("Editor Enter handler sync slash completion", () => {
 		editor.handleInput("security");
 		editor.handleInput("\t");
 
-		expect(editor.getText()).toBe("/skill:security-scan");
+		// Regression for issue #3913: the prior prose ("explain this\n") MUST
+		// survive a mid-prompt skill acceptance — only the partial `/sec` slash
+		// token at the cursor is replaced with `/skill:security-scan `.
+		expect(editor.getText()).toBe("explain this\n/skill:security-scan ");
 	});
 
 	it("preserves Tab file completion for an absolute path token after prose", async () => {

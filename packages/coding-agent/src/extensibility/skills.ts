@@ -384,6 +384,56 @@ export function getSkillSlashCommandName(skill: Pick<Skill, "name">): string {
 	return `skill:${skill.name}`;
 }
 
+/**
+ * Parsed `/skill:<name>` invocation: either at the start of the draft (the
+ * traditional slash-command position) or as a `/skill:<name>` token embedded
+ * mid-prompt. For the mid-prompt form the surrounding prose is threaded
+ * through as `args` so the skill sees the full user request.
+ */
+export interface ParsedSkillInvocation {
+	/** Bare skill name without the leading `skill:` prefix. */
+	name: string;
+	/** User-supplied arguments (everything outside the `/skill:<name>` token). */
+	args: string;
+}
+
+const MID_PROMPT_SKILL_RE = /(^|\s)\/skill:([^\s/]+)(\s|$)/;
+
+/**
+ * Detect a `/skill:<name>` invocation in a user draft.
+ *
+ * Returns `undefined` when the text contains no skill token. Otherwise:
+ *   - Leading form (`/skill:foo bar baz`): name=`foo`, args=`bar baz`.
+ *   - Mid-prompt form (`fix the bug /skill:foo focus on auth`): name=`foo`,
+ *     args=`fix the bug focus on auth` — the surrounding prose collapsed
+ *     into a single args string.
+ *
+ * Mid-prompt detection requires the `/skill:<name>` token to be surrounded
+ * by whitespace (or string edges) so it does not fire on substrings inside
+ * URLs or words.
+ */
+export function parseSkillInvocation(text: string): ParsedSkillInvocation | undefined {
+	if (text.startsWith("/skill:")) {
+		const spaceIndex = text.indexOf(" ");
+		const name = spaceIndex === -1 ? text.slice("/skill:".length) : text.slice("/skill:".length, spaceIndex);
+		if (!name) return undefined;
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		return { name, args };
+	}
+	const match = MID_PROMPT_SKILL_RE.exec(text);
+	if (!match) return undefined;
+	const leading = match[1] ?? "";
+	const trailing = match[3] ?? "";
+	const tokenStart = match.index + leading.length;
+	const tokenEnd = match.index + match[0].length - trailing.length;
+	const name = match[2] ?? "";
+	if (!name) return undefined;
+	const before = text.slice(0, tokenStart).trimEnd();
+	const after = text.slice(tokenEnd).trimStart();
+	const args = [before, after].filter(part => part.length > 0).join(" ").trim();
+	return { name, args };
+}
+
 export async function buildSkillPromptMessage(
 	skill: Pick<Skill, "name" | "filePath">,
 	args: string,

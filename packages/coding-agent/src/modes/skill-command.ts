@@ -1,4 +1,5 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -20,11 +21,6 @@ type SkillPromptOptions = {
 	queueChipText: string;
 };
 
-interface ParsedSkillCommand {
-	commandName: string;
-	args: string;
-}
-
 interface InvokeSkillCommandOptions {
 	propagateErrors?: boolean;
 	queueOnly?: boolean;
@@ -37,19 +33,11 @@ export interface BuiltSkillCommandPrompt {
 	options: SkillPromptOptions;
 }
 
-function parseSkillCommand(text: string): ParsedSkillCommand | undefined {
-	if (!text.startsWith("/skill:")) return undefined;
-	const spaceIndex = text.indexOf(" ");
-	const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-	const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-	return { commandName, args };
-}
-
-/** Return true when `text` names a registered `/skill:<name>` command. */
+/** Return true when `text` invokes a registered `/skill:<name>` command. */
 export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolean {
-	const parsed = parseSkillCommand(text);
+	const parsed = parseSkillInvocation(text);
 	if (!parsed) return false;
-	return ctx.skillCommands.has(parsed.commandName);
+	return ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name }));
 }
 
 /** Build the user-attributed custom message for a registered `/skill:<name>` command. */
@@ -59,9 +47,10 @@ export async function buildSkillCommandPrompt(
 	streamingBehavior: "steer" | "followUp",
 	images?: ImageContent[],
 ): Promise<BuiltSkillCommandPrompt | undefined> {
-	const parsed = parseSkillCommand(text);
+	const parsed = parseSkillInvocation(text);
 	if (!parsed) return undefined;
-	const skillPath = ctx.skillCommands.get(parsed.commandName);
+	const commandName = getSkillSlashCommandName({ name: parsed.name });
+	const skillPath = ctx.skillCommands.get(commandName);
 	if (!skillPath) return undefined;
 
 	const content = await Bun.file(skillPath).text();
@@ -73,9 +62,8 @@ export async function buildSkillCommandPrompt(
 	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
 	const textBlock: TextContent = { type: "text", text: message };
 	const promptContent = images && images.length > 0 ? [textBlock, ...images] : message;
-	const skillName = parsed.commandName.slice("skill:".length);
 	const details: SkillPromptDetails = {
-		name: skillName || parsed.commandName,
+		name: parsed.name,
 		path: skillPath,
 		args: parsed.args || undefined,
 		lineCount: body ? body.split("\n").length : 0,

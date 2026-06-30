@@ -522,12 +522,23 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, trailingSlashStart) &&
 			findTrailingSlashCommandStart(prefix) !== null;
 
-		if (isMidPromptSkillLookup) {
-			const newLine = `/${item.value}`;
+		if (isMidPromptSkillLookup && trailingSlashStart !== null) {
+			// Replace ONLY the partial slash token (e.g. "/sec") at the cursor with
+			// `/skill:<name> `; the rest of the user's draft — prose typed before
+			// the slash, text after the cursor, and any other lines — is preserved.
+			// The submit-time parser (`parseSkillInvocation` in coding-agent/skills)
+			// detects the mid-prompt `/skill:<name>` token and threads the surrounding
+			// prose through as `args`, so the skill still invokes (issue #3913, after
+			// the original mid-prompt autocomplete landed in #3654 wiped the draft).
+			const beforeSlash = currentLine.slice(0, trailingSlashStart);
+			const insert = `/${item.value} `;
+			const newLine = `${beforeSlash}${insert}${afterCursor}`;
+			const newLines = [...lines];
+			newLines[cursorLine] = newLine;
 			return {
-				lines: [newLine],
-				cursorLine: 0,
-				cursorCol: newLine.length,
+				lines: newLines,
+				cursorLine,
+				cursorCol: beforeSlash.length + insert.length,
 			};
 		}
 
