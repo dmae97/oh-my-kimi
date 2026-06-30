@@ -346,6 +346,56 @@ describe("AgentTranscriptViewer", () => {
 		}
 	});
 
+	it("stops polling after an oversized remote JSONL entry cannot fit in one host read", async () => {
+		const transcriptReadCap = 4 * 1024 * 1024;
+		const oversizedLine = `${JSON.stringify({
+			type: "message",
+			id: "oversized",
+			parentId: null,
+			timestamp: TS,
+			message: {
+				role: "user",
+				synthetic: true,
+				attribution: "agent",
+				content: "x".repeat(transcriptReadCap + 1),
+				timestamp: 0,
+			},
+		})}\n`;
+		const transcript = Buffer.from(oversizedLine, "utf-8");
+		const calls: number[] = [];
+		const remote: AgentHubRemote = {
+			chat: () => {},
+			kill: () => {},
+			revive: () => {},
+			readTranscript: async (_id: string, fromByte: number) => {
+				calls.push(fromByte);
+				const slice = transcript.subarray(fromByte, fromByte + transcriptReadCap);
+				const lastNewline = slice.lastIndexOf(0x0a);
+				if (lastNewline < 0) {
+					return {
+						text: "",
+						newSize: fromByte,
+						error: `transcript entry exceeds transcript fetch cap (${transcriptReadCap} bytes)`,
+					};
+				}
+				const complete = slice.subarray(0, lastNewline + 1);
+				return { text: complete.toString("utf-8"), newSize: fromByte + complete.byteLength };
+			},
+		};
+		const viewer = makeViewer("", remote);
+		try {
+			await Bun.sleep(650);
+			const body = viewer
+				.render(80)
+				.map(l => Bun.stripANSI(l))
+				.join("\n");
+			expect(calls.filter(offset => offset === 0).length).toBe(1);
+			expect(body).toContain("entry exceeds transcript fetch cap");
+		} finally {
+			viewer.dispose();
+		}
+	});
+
 	it("drops stale rendered rows when the host transcript rotates", async () => {
 		const header = `${JSON.stringify({
 			type: "session",

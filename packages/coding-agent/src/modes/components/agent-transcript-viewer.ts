@@ -137,6 +137,7 @@ export class AgentTranscriptViewer implements Component {
 	#remoteFetchInFlight = false;
 	#remoteToken = 0;
 	#remoteUnavailable = false;
+	#remoteError = "";
 	#hasRemoteData = false;
 
 	#model: string | undefined;
@@ -177,12 +178,15 @@ export class AgentTranscriptViewer implements Component {
 
 	dispose(): void {
 		this.#disposed = true;
-		if (this.#pollTimer) {
-			clearInterval(this.#pollTimer);
-			this.#pollTimer = undefined;
-		}
+		this.#stopPolling();
 		this.#remoteToken++;
 		this.#builder.dispose();
+	}
+
+	#stopPolling(): void {
+		if (!this.#pollTimer) return;
+		clearInterval(this.#pollTimer);
+		this.#pollTimer = undefined;
 	}
 
 	// ========================================================================
@@ -345,11 +349,20 @@ export class AgentTranscriptViewer implements Component {
 					}
 					return;
 				}
+				if (result.error) {
+					this.#remoteError = result.error;
+					this.#hasRemoteData = true;
+					this.#remoteUnavailable = false;
+					this.#stopPolling();
+					this.deps.requestRender();
+					return;
+				}
 				if (result.newSize < fromByte) {
 					// Host transcript rotated/truncated — drop the stale rendered rows
 					// before restarting; otherwise the post-rotation fetch would stack
 					// new content under the pre-rotation history.
 					this.#remoteBytes = 0;
+					this.#remoteError = "";
 					this.#hasRemoteData = false;
 					this.#model = undefined;
 					this.#rebuild([]);
@@ -357,6 +370,7 @@ export class AgentTranscriptViewer implements Component {
 					return;
 				}
 				this.#remoteUnavailable = false;
+				this.#remoteError = "";
 				const firstData = !this.#hasRemoteData;
 				this.#hasRemoteData = true;
 				const lastNewline = result.text.lastIndexOf("\n");
@@ -608,6 +622,7 @@ export class AgentTranscriptViewer implements Component {
 
 	#placeholder(): string {
 		if (this.deps.remote) {
+			if (this.#remoteError) return this.#remoteError;
 			if (this.#remoteUnavailable) return "Transcript lives on the host — not available.";
 			return this.#hasRemoteData ? "No messages yet." : "Loading transcript from host…";
 		}

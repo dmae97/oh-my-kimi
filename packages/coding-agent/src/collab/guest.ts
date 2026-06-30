@@ -16,7 +16,7 @@ import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { getConfigRootDir, logger } from "@oh-my-pi/pi-utils";
-import type { AgentHubRemote } from "../modes/components/agent-hub";
+import type { AgentHubRemote, AgentHubRemoteTranscript } from "../modes/components/agent-hub";
 import type { InteractiveModeContext } from "../modes/types";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session";
@@ -155,7 +155,7 @@ export class CollabGuestLink {
 	readonly agentRegistry = new AgentRegistry();
 	/** Per-agent `hasSessionFile` from the last snapshot; gates remote transcript fetches. */
 	#agentHasTranscript = new Map<string, boolean>();
-	#pendingTranscripts = new Map<number, (r: { text: string; newSize: number } | null) => void>();
+	#pendingTranscripts = new Map<number, (r: AgentHubRemoteTranscript | null) => void>();
 	#nextReqId = 1;
 	readonly #hubRemote: AgentHubRemote = {
 		chat: (id, text) => {
@@ -176,7 +176,7 @@ export class CollabGuestLink {
 				return Promise.resolve(null);
 			}
 			const reqId = this.#nextReqId++;
-			const { promise, resolve } = Promise.withResolvers<{ text: string; newSize: number } | null>();
+			const { promise, resolve } = Promise.withResolvers<AgentHubRemoteTranscript | null>();
 			const timer = setTimeout(() => {
 				this.#pendingTranscripts.delete(reqId);
 				resolve(null);
@@ -484,7 +484,7 @@ export class CollabGuestLink {
 				const resolve = this.#pendingTranscripts.get(frame.reqId);
 				if (resolve) {
 					this.#pendingTranscripts.delete(frame.reqId);
-					resolve(frame.error ? null : { text: frame.text, newSize: frame.newSize });
+					resolve({ text: frame.text, newSize: frame.newSize, error: frame.error });
 				}
 				break;
 			}
