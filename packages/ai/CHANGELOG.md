@@ -14,6 +14,7 @@
 - Updated internal `coerceServiceTierByFamily` helper to facilitate migration from legacy settings
 
 ### Fixed
+- Changed API-key resolution precedence so an explicit environment variable (e.g. `GEMINI_API_KEY`) overrides a stored/broker-migrated static API key; a deliberate OAuth login still takes precedence over the env var.
 
 - Improved Vertex AI reliability by automatically falling back to global endpoints on 404 errors
 
