@@ -154,6 +154,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				return {
 					...result,
 					branchName: commitResult?.branchName,
+					branchBaseSha: commitResult?.baseSha,
 					nestedPatches: commitResult?.nestedPatches,
 				};
 			} catch (mergeErr) {
@@ -235,7 +236,12 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				};
 			}
 			const mergeResult = await mergeTaskBranches(repoRoot, [
-				{ branchName: result.branchName, taskId: result.id, description: result.description },
+				{
+					branchName: result.branchName,
+					taskId: result.id,
+					description: result.description,
+					baseSha: result.branchBaseSha,
+				},
 			]);
 			const mergedBranchForNestedPatches = mergeResult.merged.includes(result.branchName);
 			const changesApplied = mergeResult.failed.length === 0;
