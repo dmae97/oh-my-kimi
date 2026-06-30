@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- Fixed slow local LLM streams by forwarding persisted stream timeout settings (`providers.streamFirstEventTimeoutSeconds`, `providers.streamIdleTimeoutSeconds`) into model requests, so users can widen or disable watchdogs without environment variables. ([#3878](https://github.com/can1357/oh-my-pi/issues/3878))
 - Improved reliability of DuckDuckGo web searches by updating browser request headers and parameters
 - Fixed an issue where CJK (Chinese, Japanese, Korean) history could become unrenderable during repeated context compactions.
 - Fixed a memory exhaustion bug in the TUI when using `/resume` on large previous sessions.

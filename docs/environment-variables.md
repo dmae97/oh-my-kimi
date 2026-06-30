@@ -207,8 +207,8 @@ OAuth host chain: `KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 | `PI_CODEX_WEBSOCKET_IDLE_TIMEOUT_MS`       | Positive integer override (default 300000)           |
 | `PI_CODEX_WEBSOCKET_RETRY_BUDGET`          | Non-negative integer override (default 5)            |
 | `PI_CODEX_WEBSOCKET_RETRY_DELAY_MS`        | Positive integer base backoff override (default 500) |
-| `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`  | Positive integer OpenAI first-event timeout override |
-| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`         | Positive integer OpenAI stream idle timeout override |
+| `PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS`  | Positive integer OpenAI first-event timeout override; `0` disables. `omp config set providers.streamFirstEventTimeoutSeconds <seconds>` provides the persisted config equivalent |
+| `PI_OPENAI_STREAM_IDLE_TIMEOUT_MS`         | Positive integer OpenAI stream idle timeout override; `0` disables. `omp config set providers.streamIdleTimeoutSeconds <seconds>` provides the persisted config equivalent |
 
 ### Cursor provider debug
 
