@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed release-built `omp-<platform>-<arch>` binaries missing the compiled tiny-model Transformers.js version pin, which made Homebrew Darwin arm64 fall back to resolving `@huggingface/transformers/package.json` from bunfs at runtime. ([#3904](https://github.com/can1357/oh-my-pi/issues/3904))
+
 ## [16.2.8] - 2026-06-30
 
 ### Added
