@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	hasOpus47ApiRestrictions,
 	isClaudeModelId,
 	isGlmVisionModelId,
 	isGrokReasoningEffortCapable,
@@ -11,6 +12,7 @@ import {
 	isReasoningGlmModelId,
 	modelFamilyToken,
 	supportsAdaptiveThinkingDisplay,
+	supportsMidConversationSystemMessages,
 } from "@oh-my-pi/pi-catalog/identity";
 
 describe("isKimiModelId", () => {
@@ -44,10 +46,12 @@ describe("isClaudeModelId", () => {
 });
 
 describe("supportsAdaptiveThinkingDisplay", () => {
-	test("allows Claude Fable 5 and Opus 4.7 or newer only", () => {
+	test("allows Claude Fable 5, Opus 4.7 or newer, and Sonnet 5 or newer only", () => {
 		expect(supportsAdaptiveThinkingDisplay("claude-fable-5")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-7")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-5-0")).toBe(true);
+		expect(supportsAdaptiveThinkingDisplay("claude-sonnet-5")).toBe(true);
+		expect(supportsAdaptiveThinkingDisplay("us.anthropic.claude-sonnet-5")).toBe(true);
 		// Dotted and dashed version separators are equivalent.
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4.7")).toBe(true);
 		expect(supportsAdaptiveThinkingDisplay("anthropic/claude-opus-4.8")).toBe(true);
@@ -55,6 +59,30 @@ describe("supportsAdaptiveThinkingDisplay", () => {
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4.6")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-opus-4-20250514")).toBe(false);
 		expect(supportsAdaptiveThinkingDisplay("claude-sonnet-4-6")).toBe(false);
+	});
+});
+
+describe("hasOpus47ApiRestrictions", () => {
+	test("allows Claude Fable 5, Opus 4.7 or newer, and Sonnet 5 or newer only", () => {
+		expect(hasOpus47ApiRestrictions("claude-fable-5")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-opus-4-7")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-opus-4.8")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-sonnet-5")).toBe(true);
+		expect(hasOpus47ApiRestrictions("us.anthropic.claude-sonnet-5")).toBe(true);
+		expect(hasOpus47ApiRestrictions("claude-opus-4-6")).toBe(false);
+		expect(hasOpus47ApiRestrictions("claude-sonnet-4-6")).toBe(false);
+		expect(hasOpus47ApiRestrictions("claude-sonnet-4-5")).toBe(false);
+	});
+});
+
+describe("supportsMidConversationSystemMessages", () => {
+	test("allows Claude Fable 5, Opus 4.8 or newer, and Sonnet 5 or newer only", () => {
+		expect(supportsMidConversationSystemMessages("claude-fable-5")).toBe(true);
+		expect(supportsMidConversationSystemMessages("claude-opus-4-8")).toBe(true);
+		expect(supportsMidConversationSystemMessages("claude-sonnet-5")).toBe(true);
+		expect(supportsMidConversationSystemMessages("us.anthropic.claude-sonnet-5")).toBe(true);
+		expect(supportsMidConversationSystemMessages("claude-opus-4-7")).toBe(false);
+		expect(supportsMidConversationSystemMessages("claude-sonnet-4-6")).toBe(false);
 	});
 });
 
