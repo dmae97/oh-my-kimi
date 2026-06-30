@@ -141,17 +141,17 @@ async function runGpuProbe(cmd: string[]): Promise<string | null> {
 		})();
 		const exitCode = await proc.exited;
 		// Even on exit 0, a probe wrapper can leave a descendant holding stdout open.
-		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path.
+		// Bound the EOF wait so getCachedGpu cannot outlive the probe in either path;
+		// keep whatever bytes the reader already captured before cancelling.
 		const drained = await Promise.race([
 			stdoutDone.then(() => "ok" as const).catch(() => "err" as const),
 			Bun.sleep(GPU_PROBE_STDOUT_DRAIN_MS).then(() => "timeout" as const),
 		]);
-		if (exitCode !== 0 || drained !== "ok") {
+		if (drained !== "ok") {
 			await stdoutReader.cancel().catch(() => undefined);
 			await stdoutDone.catch(() => undefined);
-			return null;
 		}
-		return stdout;
+		return exitCode === 0 ? stdout : null;
 	} catch {
 		return null;
 	}
