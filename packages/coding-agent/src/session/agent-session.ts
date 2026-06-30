@@ -12861,6 +12861,50 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
+	 * Surfaces (and consumes) IRC incoming asides that have reached this running
+	 * session but have not yet been folded into the next model step.
+	 *
+	 * The inbox tool injects the formatted body into the tool result, so the
+	 * model sees it once via the result. Leaving the record in
+	 * {@link #pendingIrcAsides} would let the aside provider deliver it a second
+	 * time at the next step boundary — including on `peek`, which is why peek
+	 * also drains here.
+	 */
+	drainPendingIrcInboxMessages(agentId: string): IrcMessage[] {
+		const messages: IrcMessage[] = [];
+		const remaining: CustomMessage[] = [];
+		for (const record of this.#pendingIrcAsides) {
+			if (record.customType !== "irc:incoming") {
+				remaining.push(record);
+				continue;
+			}
+			const details = record.details;
+			if (!details || typeof details !== "object") {
+				remaining.push(record);
+				continue;
+			}
+			const id = Reflect.get(details, "id");
+			const from = Reflect.get(details, "from");
+			const body = Reflect.get(details, "message");
+			const replyTo = Reflect.get(details, "replyTo");
+			if (typeof id !== "string" || typeof from !== "string" || typeof body !== "string") {
+				remaining.push(record);
+				continue;
+			}
+			messages.push({
+				id,
+				from,
+				to: agentId,
+				body,
+				ts: record.timestamp,
+				...(typeof replyTo === "string" ? { replyTo } : {}),
+			});
+		}
+		this.#pendingIrcAsides = remaining;
+		return messages;
+	}
+
+	/**
 	 * Deliver an IRC message into this session (recipient side; called by the
 	 * IrcBus). Emits the `irc_message` session event for UI cards and injects
 	 * the rendered message into the model's context as an `irc:incoming`

@@ -172,7 +172,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			case "wait":
 				return this.#executeWait(senderId, params, signal);
 			case "inbox":
-				return this.#executeInbox(senderId, params);
+				return this.#executeInbox(registry, senderId, params);
 			default:
 				return errorResult("Unknown irc op.", { op: params.op });
 		}
@@ -371,8 +371,14 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		};
 	}
 
-	#executeInbox(senderId: string, params: IrcParams): AgentToolResult<IrcDetails> {
-		const messages = IrcBus.global().inbox(senderId, { peek: params.peek });
+	#executeInbox(registry: AgentRegistry, senderId: string, params: IrcParams): AgentToolResult<IrcDetails> {
+		const busMessages = IrcBus.global().inbox(senderId, { peek: params.peek });
+		const session = registry.get(senderId)?.session;
+		const pendingMessages =
+			typeof session?.drainPendingIrcInboxMessages === "function"
+				? session.drainPendingIrcInboxMessages(senderId)
+				: [];
+		const messages = [...busMessages, ...pendingMessages].sort((a, b) => a.ts - b.ts);
 		if (messages.length === 0) {
 			return {
 				content: [{ type: "text", text: "Inbox empty." }],
