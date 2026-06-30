@@ -63,6 +63,14 @@ export interface MCPAddWizardOAuthResult {
 interface MCPAddWizardOAuthOptions {
 	serverUrl?: string;
 	resource?: string;
+	/**
+	 * External cancellation source. Aborting it tears down the in-flight OAuth
+	 * flow and surfaces a neutral cancellation error. The wizard wires its own
+	 * controller here so Esc cancels the OAuth wait instead of stepping back
+	 * through the form (the wizard is focused, so the editor's Esc hook does
+	 * not fire).
+	 */
+	abortSignal?: AbortSignal;
 }
 
 interface WizardState {
@@ -135,6 +143,12 @@ export class MCPAddWizard extends Container {
 		| null = null;
 	#onTestConnectionCallback: ((config: MCPServerConfig) => Promise<void>) | null = null;
 	#onRenderCallback: (() => void) | null = null;
+	/**
+	 * Set while the OAuth callback is in flight; populated by
+	 * {@link #launchOAuthFlow} and consumed by {@link handleInput} so Esc
+	 * cancels the OAuth wait instead of stepping back through the form.
+	 */
+	#oauthAbort: AbortController | null = null;
 
 	constructor(
 		onComplete: (name: string, config: MCPServerConfig, scope: Scope) => void,
@@ -473,6 +487,15 @@ export class MCPAddWizard extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		// While an OAuth callback is being awaited, Esc/Ctrl+C aborts the flow
+		// rather than stepping back through the form: the wizard advertises
+		// "(Press Esc to cancel)" during the wait, and stepping back would
+		// leave the OAuth login orphaned.
+		if (this.#oauthAbort && (keyData === "\x03" || matchesAppInterrupt(keyData))) {
+			this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
+			return;
+		}
+
 		// Handle Ctrl+C to cancel wizard immediately
 		if (keyData === "\x03") {
 			// Ctrl+C pressed - cancel wizard
@@ -1153,6 +1176,7 @@ export class MCPAddWizard extends Container {
 		this.#contentContainer.addChild(new Text(theme.fg("muted", "(Press Esc to cancel)"), 0, 0));
 		this.#requestRender();
 
+		this.#oauthAbort = new AbortController();
 		try {
 			// Call OAuth handler
 			const oauthResource = this.#state.oauthResource || (this.#state.transport === "stdio" ? "" : this.#state.url);
@@ -1165,6 +1189,7 @@ export class MCPAddWizard extends Container {
 				{
 					serverUrl: this.#state.url || undefined,
 					resource: oauthResource || undefined,
+					abortSignal: this.#oauthAbort.signal,
 				},
 			);
 
@@ -1237,16 +1262,29 @@ export class MCPAddWizard extends Container {
 				healthPassed ? 1000 : 2000,
 			);
 		} catch (error) {
-			// Show error with options to retry or go back
+			// User cancellation has its own neutral heading + tip; everything else
+			// keeps the "OAuth authentication failed" framing so the existing tips
+			// stay meaningful. Name-matching avoids importing controller types.
+			const cancelled = error instanceof Error && error.name === "MCPOAuthCancelledError";
 			const errorMsg = sanitize(error instanceof Error ? error.message : String(error));
 			this.#contentContainer.clear();
-			this.#contentContainer.addChild(new Text(theme.fg("error", "✗ OAuth authentication failed"), 0, 0));
+			this.#contentContainer.addChild(
+				new Text(
+					cancelled ? theme.fg("muted", "○ OAuth cancelled") : theme.fg("error", "✗ OAuth authentication failed"),
+					0,
+					0,
+				),
+			);
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(errorMsg, 0, 0));
 			this.#contentContainer.addChild(new Spacer(1));
 
 			// Provide helpful tips based on error type
-			if (errorMsg.includes("timeout") || errorMsg.includes("timed out")) {
+			if (cancelled) {
+				this.#contentContainer.addChild(
+					new Text(theme.fg("muted", "Tip: Choose Retry to launch the browser again."), 0, 0),
+				);
+			} else if (errorMsg.includes("timeout") || errorMsg.includes("timed out")) {
 				this.#contentContainer.addChild(
 					new Text(theme.fg("muted", "Tip: Complete authorization faster next time"), 0, 0),
 				);
@@ -1272,6 +1310,8 @@ export class MCPAddWizard extends Container {
 			// Set up as a selector step
 			this.#selectedIndex = 0;
 			this.#currentStep = "oauth-error";
+		} finally {
+			this.#oauthAbort = null;
 		}
 	}
 

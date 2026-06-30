@@ -12,6 +12,9 @@
 ### Fixed
 
 - Fixed local Ollama/llama.cpp malformed tool-call JSON failures being retried as generic 500 errors by both the provider transport and the agent-level auto-retry, surfacing a clearer recovery message instead. ([#3899](https://github.com/can1357/oh-my-pi/issues/3899))
+### Fixed
+
+- Fixed OAuth callback flows missing aborts that fired before the local callback wait registered its signal listener, so pre-cancelled flows now stop before opening/waiting on the callback server.
 
 ## [16.2.7] - 2026-06-30
 

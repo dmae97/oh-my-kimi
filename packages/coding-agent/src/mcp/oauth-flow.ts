@@ -430,6 +430,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 				"Content-Type": "application/x-www-form-urlencoded",
 			},
 			body: params.toString(),
+			signal: this.ctrl.signal,
 		});
 
 		if (!response.ok) {
@@ -518,6 +519,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 					"Content-Type": "application/json",
 					Accept: "application/json",
 				},
+				signal: this.ctrl.signal,
 				body: JSON.stringify({
 					client_name: "oh-my-pi",
 					redirect_uris: [redirectUri],
@@ -583,6 +585,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			const response = await this.#fetch(wellKnownUrl, {
 				method: "GET",
 				headers: { Accept: "application/json" },
+				signal: this.ctrl.signal,
 			});
 			if (!response.ok) return null;
 			const metadata = (await response.json()) as { registration_endpoint?: string };
@@ -601,6 +604,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 				method: "GET",
 				redirect: "manual",
 				headers: { Accept: "text/plain,text/html,application/json" },
+				signal: this.ctrl.signal,
 			});
 			if (response.status < 400) return;
 			const body = await response.text();
