@@ -672,7 +672,7 @@ describe("InputController escape behavior", () => {
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
 	});
-	it("clears typed editor text on Esc without opening selectors or aborting", () => {
+	it("preserves typed editor text on Esc without opening selectors or aborting", () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
 
@@ -680,24 +680,26 @@ describe("InputController escape behavior", () => {
 		editor.setText("draft message");
 		editor.onEscape?.();
 
-		expect(editor.getText()).toBe("");
-		expect(spies.requestRender).toHaveBeenCalledTimes(1);
+		expect(editor.getText()).toBe("draft message");
+		expect(spies.requestRender).not.toHaveBeenCalled();
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).not.toHaveBeenCalled();
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("does not treat the Esc after a text-clearing Esc as a double-Esc", () => {
+	it("does not treat the Esc after a text-preserving Esc as a double-Esc", () => {
 		const { ctx, editor } = createContext();
 		const controller = new InputController(ctx);
 
 		controller.setupKeyHandlers();
 		editor.onEscape?.(); // empty editor: arms double-Esc timer
 		editor.setText("draft");
-		editor.onEscape?.(); // clears text, must also reset the timer
+		editor.onEscape?.(); // preserves text, must also reset the timer
+		editor.setText("");
 		editor.onEscape?.(); // empty again: should only re-arm, not trigger
 
+		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
 	});
 });

@@ -387,9 +387,7 @@ export class InputController {
 			} else if (this.ctx.session.isStreaming) {
 				this.#handleStreamingEscape();
 			} else if (this.ctx.editor.getText().trim()) {
-				// Esc with typed text clears the draft instead of (or before) any double-Esc action
-				this.ctx.editor.setText("");
-				this.ctx.ui.requestRender();
+				// Esc must not destroy an in-progress draft; it only disarms a previous empty-editor Esc.
 				this.ctx.lastEscapeTime = 0;
 				this.#clearStreamingEscapeArm();
 			} else {

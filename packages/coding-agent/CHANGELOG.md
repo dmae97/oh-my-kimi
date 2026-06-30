@@ -192,6 +192,9 @@
 
 - Fixed status-line redraws crashing when tool-call arguments contain `BigInt` values.
 - Fixed committed native scrollback rows retaining the previous palette after committed theme switches; direct-terminal theme swaps now replay the transcript so scrolling history matches the live viewport without making theme previews destructive.
+### Fixed
+
+- Fixed Esc preserving typed TUI prompt drafts instead of clearing unrecoverable input. ([#3869](https://github.com/can1357/oh-my-pi/issues/3869))
 
 ## [16.2.7] - 2026-06-30
 
