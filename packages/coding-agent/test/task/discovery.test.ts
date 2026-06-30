@@ -13,6 +13,14 @@ const OMP_AGENT_MD = [
 	"You are an OMP task agent.",
 ].join("\n");
 
+const OMP_PLUGIN_AGENT_MD = [
+	"---",
+	"name: loom-verify-spec",
+	"description: Plugin-shipped verification agent.",
+	"---",
+	"You verify the loom spec.",
+].join("\n");
+
 const CLAUDE_AGENT_MD = [
 	"---",
 	"name: cc-test-agent",
@@ -53,5 +61,30 @@ describe("discoverAgents", () => {
 		expect(names).toContain("omp-test-agent");
 		expect(names).not.toContain("cc-test-agent");
 		expect(projectAgentsDir).toBe(path.join(projectDir, ".omp", "agents"));
+	});
+
+	test("loads agents from OMP npm plugins under <home>/.omp/plugins/node_modules", async () => {
+		// Project .omp/agents is unrelated — only the plugin's agents/ dir should surface the agent.
+		const userPluginsRoot = path.join(tempHome, ".omp", "plugins");
+		const pluginRoot = path.join(userPluginsRoot, "node_modules", "loom");
+		await fs.mkdir(path.join(pluginRoot, "agents"), { recursive: true });
+		await fs.writeFile(
+			path.join(pluginRoot, "package.json"),
+			JSON.stringify({ name: "loom", version: "1.0.0", omp: { version: "1.0.0" } }),
+		);
+		await fs.writeFile(
+			path.join(userPluginsRoot, "package.json"),
+			JSON.stringify({
+				name: "omp-plugins-root",
+				version: "0.0.0",
+				dependencies: { loom: "1.0.0" },
+			}),
+		);
+		await fs.writeFile(path.join(pluginRoot, "agents", "loom-verify-spec.md"), OMP_PLUGIN_AGENT_MD);
+
+		const { agents } = await discoverAgents(projectDir, tempHome);
+		const names = agents.map(agent => agent.name);
+
+		expect(names).toContain("loom-verify-spec");
 	});
 });

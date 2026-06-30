@@ -4,6 +4,11 @@
  * Discovers agent definitions from OMP-native task-agent roots:
  *   - ~/.omp/agent/agents/*.md (user-level)
  *   - .omp/agents/*.md (project-level)
+ *   - <ext>/agents/*.md for every OMP extension package wired through
+ *     `listOmpExtensionRoots` (CLI `--extension` roots, `extensions:` in
+ *     settings, and enabled npm/link plugins under `<plugins>/node_modules/`).
+ *     Mirrors the same sub-discovery convention applied to `skills/`,
+ *     `hooks/`, `tools/`, etc. by `discovery/omp-plugins.ts`.
  *
  * Claude Code marketplace plugin agents are discovered separately via the
  * claude-plugins provider. Direct cross-harness roots such as .claude/agents
@@ -19,6 +24,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { isProviderEnabled } from "../capability";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { listClaudePluginRoots } from "../discovery/helpers";
+import { listOmpExtensionRoots } from "../discovery/omp-extension-roots";
 import { loadBundledAgents, parseAgent } from "./agents";
 import type { AgentDefinition, AgentSource } from "./types";
 
@@ -54,8 +60,9 @@ async function loadAgentsFromDir(dir: string, source: AgentSource): Promise<Agen
 
 /**
  * Discover agents from filesystem and merge with bundled agents.
- *
- * Precedence (highest wins): project .omp, user .omp, Claude plugin agents, then bundled
+ * Precedence (highest wins): project `.omp/agents`, user `.omp/agents`,
+ * OMP extension-package agents (project scope before user), Claude
+ * marketplace plugin agents (project scope before user), then bundled.
  * @param cwd - Current working directory for project agent discovery
  */
 export async function discoverAgents(cwd: string, home: string = os.homedir()): Promise<DiscoveryResult> {
@@ -80,6 +87,18 @@ export async function discoverAgents(cwd: string, home: string = os.homedir()): 
 	if (project) orderedDirs.push({ dir: project.path, source: "project" });
 	const user = userDirs[0];
 	if (user) orderedDirs.push({ dir: user.path, source: "user" });
+
+	// OMP extension-package agents/ dirs (CLI roots + `extensions:` settings +
+	// enabled npm/link plugins). `listOmpExtensionRoots` already excludes Claude
+	// marketplace installs by realpath so we never double-scan them here.
+	const extensionRoots = await listOmpExtensionRoots({ cwd: resolvedCwd, home, repoRoot: null });
+	const sortedExtensionRoots = [...extensionRoots].sort((a, b) => {
+		if (a.level === b.level) return 0;
+		return a.level === "project" ? -1 : 1;
+	});
+	for (const root of sortedExtensionRoots) {
+		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
+	}
 
 	// Load agents from Claude Code marketplace plugins (respects disabledProviders)
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
