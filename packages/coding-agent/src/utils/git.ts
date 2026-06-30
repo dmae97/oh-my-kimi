@@ -175,6 +175,14 @@ const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[]
 	["core.untrackedCache", "false"],
 ];
 const REMOTE_ALREADY_EXISTS = /remote .* already exists/i;
+const AMBIENT_GIT_ENV = {
+	GIT_DIR: undefined,
+	GIT_COMMON_DIR: undefined,
+	GIT_WORK_TREE: undefined,
+	GIT_INDEX_FILE: undefined,
+	GIT_OBJECT_DIRECTORY: undefined,
+	GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
+} satisfies Record<string, undefined>;
 
 interface CommandOptions {
 	readonly env?: Record<string, string | undefined>;
@@ -188,6 +196,15 @@ function normalizeStdin(input: CommandOptions["stdin"]): "ignore" | Uint8Array {
 	if (typeof input === "string") return new TextEncoder().encode(input);
 	if (input instanceof Uint8Array) return input;
 	return new Uint8Array(input);
+}
+
+function buildGitEnv(overrides?: Record<string, string | undefined>): Record<string, string | undefined> {
+	return {
+		...process.env,
+		GIT_OPTIONAL_LOCKS: "0",
+		...AMBIENT_GIT_ENV,
+		...overrides,
+	};
 }
 
 function ensureAvailable(): void {
@@ -211,7 +228,7 @@ async function git(cwd: string, args: readonly string[], options: CommandOptions
 	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : [...args]);
 	const child = Bun.spawn(["git", ...commandArgs], {
 		cwd,
-		env: options.env ? { ...process.env, GIT_OPTIONAL_LOCKS: "0", ...options.env } : undefined,
+		env: buildGitEnv(options.env),
 		signal: options.signal,
 		stdin: normalizeStdin(options.stdin),
 		stdout: "pipe",
@@ -707,6 +724,7 @@ function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState |
 	const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", "HEAD"]));
 	const symResult = Bun.spawnSync(["git", ...symArgs], {
 		cwd: repository.repoRoot,
+		env: buildGitEnv(),
 		stdout: "pipe",
 		stderr: "pipe",
 		windowsHide: true,
@@ -715,6 +733,7 @@ function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState |
 	const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", "HEAD"]));
 	const revResult = Bun.spawnSync(["git", ...revArgs], {
 		cwd: repository.repoRoot,
+		env: buildGitEnv(),
 		stdout: "pipe",
 		stderr: "pipe",
 		windowsHide: true,
@@ -748,6 +767,7 @@ function readRefSync(repository: GitRepository, targetRef: string): string | nul
 		const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", targetRef]));
 		const symResult = Bun.spawnSync(["git", ...symArgs], {
 			cwd: repository.repoRoot,
+			env: buildGitEnv(),
 			stdout: "pipe",
 			stderr: "pipe",
 			windowsHide: true,
@@ -759,6 +779,7 @@ function readRefSync(repository: GitRepository, targetRef: string): string | nul
 		const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", targetRef]));
 		const revResult = Bun.spawnSync(["git", ...revArgs], {
 			cwd: repository.repoRoot,
+			env: buildGitEnv(),
 			stdout: "pipe",
 			stderr: "pipe",
 			windowsHide: true,
