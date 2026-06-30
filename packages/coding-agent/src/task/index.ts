@@ -243,8 +243,11 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string 
 }
 
 /**
- * Validate the spawn parameter contract against the wire shapes. `agent` is
- * always required. With `task.batch` the model-facing shape is
+ * Validate the spawn parameter contract against the wire shapes. `agent`
+ * defaults to `task` (the schema default; `execute` normalizes the same way for
+ * direct callers), so the missing-`agent` guard only fires for callers that
+ * invoke this validator with an unnormalized blank agent. With `task.batch` the
+ * model-facing shape is
  * `{ agent, context, tasks[] }` — `tasks` non-empty with per-item assignments
  * and unique ids, `context` non-empty, no top-level `assignment` alongside.
  * The flat `{ agent, ...item }` form stays accepted at runtime under either
@@ -328,14 +331,17 @@ function spawnParamsFor(params: TaskParams, item: TaskItem): TaskParams {
 	return spawn;
 }
 
+/** Agent type spawned when a `task` call omits `agent`; mirrors the schema default in `getTaskSchema`. */
+const DEFAULT_TASK_AGENT = "task";
+
 /** Generic worker agents whose output sharpens with a tailored `role` rather than the bare type. */
-const GENERIC_SPAWN_AGENTS: ReadonlySet<string> = new Set(["task", "quick_task"]);
+const GENERIC_SPAWN_AGENTS: ReadonlySet<string> = new Set(["task", "sonic"]);
 
 /**
  * Advisory — never a rejection — nudging the spawner toward tailored
  * specialists when it spawns generic role-less workers and still holds spawn
  * capacity (DepthCapacity: it currently has the `task` tool). Fires when a
- * generic `task`/`quick_task` spawn carries no `role`, or when one call clones
+ * generic `task`/`sonic` spawn carries no `role`, or when one call clones
  * the same agent ≥2× all without roles. Returns undefined when no nudge applies.
  */
 export function buildSpecializationAdvisory(
@@ -559,7 +565,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
-		const params = repairTaskParams(rawParams as TaskParams);
+		const repaired = repairTaskParams(rawParams as TaskParams);
+		// The schema defaults `agent` to `task` for model calls, but internal
+		// callers and stale transcripts build params directly and bypass arktype.
+		// Normalize once here so every downstream path sees the resolved agent.
+		const params =
+			typeof repaired.agent === "string" && repaired.agent.trim() !== ""
+				? repaired
+				: { ...repaired, agent: DEFAULT_TASK_AGENT };
 		const batchEnabled = this.#isBatchEnabled();
 		const validationError = validateShapeParams(batchEnabled, params) ?? validateSpawnParams(params, batchEnabled);
 		if (validationError) {
