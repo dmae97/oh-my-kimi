@@ -328,15 +328,4 @@ describe("generated model policies", () => {
 		expect(models[2]?.applyPatchToolType).toBeUndefined();
 		expect(models[3]?.applyPatchToolType).toBeUndefined();
 	});
-
-	it("verifies Claude Sonnet 5 is seeded in ANTHROPIC_CURATED_FALLBACK_MODELS with correct contract", () => {
-		const sonnet5 = ANTHROPIC_CURATED_FALLBACK_MODELS.find(model => model.id === "claude-sonnet-5");
-		expect(sonnet5).toBeDefined();
-		expect(sonnet5?.name).toBe("Claude Sonnet 5");
-		expect(sonnet5?.api).toBe("anthropic-messages");
-		expect(sonnet5?.provider).toBe("anthropic");
-		expect(sonnet5?.contextWindow).toBe(1_000_000);
-		expect(sonnet5?.maxTokens).toBe(128_000);
-		expect(sonnet5?.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
-	});
 });

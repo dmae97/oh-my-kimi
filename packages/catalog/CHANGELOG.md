@@ -4,12 +4,17 @@
 
 ### Added
 
+- Added Claude Sonnet 3.7, Claude Opus 3, and Claude Sonnet 3 model entries to the Anthropic catalog
+- Added Anthropic Claude Sonnet 5 model entry to the Kilo provider catalog
+- Added first-party catalog discovery support for the Anthropic provider
+
 - Added Gemini 3.1 Flash Lite Image model entry to the Kilo provider catalog
 - Added Anthropic Claude Sonnet 5 model variants with low, medium, high, xhigh, and max thinking efforts to the Devin provider catalog
-
 - Added Claude Sonnet 5 model entry to the Anthropic curated catalog.
 
 ### Changed
+
+- Updated the base API URL for the Claude Sonnet 5 model in the Anthropic catalog
 
 - Updated pricing metrics for DeepSeek R1 and DeepSeek V3 model entries to reflect new rates
 

@@ -10758,6 +10758,50 @@
 			"contextWindow": 200000,
 			"maxTokens": 8192
 		},
+		"claude-3-7-sonnet-20250219": {
+			"id": "claude-3-7-sonnet-20250219",
+			"name": "Claude Sonnet 3.7",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 3,
+				"output": 15,
+				"cacheRead": 0.3,
+				"cacheWrite": 3.75
+			},
+			"contextWindow": 200000,
+			"maxTokens": 64000,
+			"thinking": {
+				"mode": "budget",
+				"efforts": [
+					"minimal",
+					"low",
+					"medium",
+					"high",
+					"xhigh"
+				]
+			},
+			"compat": {
+				"officialEndpoint": true,
+				"disableStrictTools": false,
+				"disableAdaptiveThinking": false,
+				"supportsEagerToolInputStreaming": true,
+				"supportsLongCacheRetention": true,
+				"supportsMidConversationSystem": false,
+				"supportsForcedToolChoice": true,
+				"supportsSamplingParams": true,
+				"requiresToolResultId": false,
+				"requiresThinkingEnabled": false,
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
+			}
+		},
 		"claude-3-haiku-20240307": {
 			"id": "claude-3-haiku-20240307",
 			"name": "Claude Haiku 3",
@@ -10777,6 +10821,74 @@
 			},
 			"contextWindow": 200000,
 			"maxTokens": 4096
+		},
+		"claude-3-opus-20240229": {
+			"id": "claude-3-opus-20240229",
+			"name": "Claude Opus 3",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 15,
+				"output": 75,
+				"cacheRead": 1.5,
+				"cacheWrite": 18.75
+			},
+			"contextWindow": 200000,
+			"maxTokens": 4096,
+			"compat": {
+				"officialEndpoint": true,
+				"disableStrictTools": false,
+				"disableAdaptiveThinking": false,
+				"supportsEagerToolInputStreaming": true,
+				"supportsLongCacheRetention": true,
+				"supportsMidConversationSystem": false,
+				"supportsForcedToolChoice": true,
+				"supportsSamplingParams": true,
+				"requiresToolResultId": false,
+				"requiresThinkingEnabled": false,
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
+			}
+		},
+		"claude-3-sonnet-20240229": {
+			"id": "claude-3-sonnet-20240229",
+			"name": "Claude Sonnet 3",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com/v1",
+			"reasoning": false,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 3,
+				"output": 15,
+				"cacheRead": 0.3,
+				"cacheWrite": 0.3
+			},
+			"contextWindow": 200000,
+			"maxTokens": 4096,
+			"compat": {
+				"officialEndpoint": true,
+				"disableStrictTools": false,
+				"disableAdaptiveThinking": false,
+				"supportsEagerToolInputStreaming": true,
+				"supportsLongCacheRetention": true,
+				"supportsMidConversationSystem": false,
+				"supportsForcedToolChoice": true,
+				"supportsSamplingParams": true,
+				"requiresToolResultId": false,
+				"requiresThinkingEnabled": false,
+				"replayUnsignedThinking": false,
+				"escapeBuiltinToolNames": false
+			}
 		},
 		"claude-fable-5": {
 			"id": "claude-fable-5",
@@ -11361,7 +11473,7 @@
 			"name": "Claude Sonnet 5",
 			"api": "anthropic-messages",
 			"provider": "anthropic",
-			"baseUrl": "https://api.anthropic.com",
+			"baseUrl": "https://api.anthropic.com/v1",
 			"reasoning": true,
 			"input": [
 				"text",
@@ -24499,6 +24611,25 @@
 					"xhigh"
 				]
 			}
+		},
+		"anthropic/claude-sonnet-5": {
+			"id": "anthropic/claude-sonnet-5",
+			"name": "Claude Sonnet 5",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000
 		},
 		"arcee-ai/coder-large": {
 			"id": "arcee-ai/coder-large",

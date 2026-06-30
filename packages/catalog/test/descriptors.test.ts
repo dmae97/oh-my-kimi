@@ -20,6 +20,19 @@ describe("catalog provider descriptors", () => {
 		expect(DEFAULT_MODEL_PER_PROVIDER).not.toHaveProperty("kagi");
 	});
 
+	test("anthropic descriptor opts into first-party catalog discovery", () => {
+		const anthropic = PROVIDER_DESCRIPTORS.find(descriptor => descriptor.providerId === "anthropic");
+		expect(anthropic).toBeDefined();
+		expect(anthropic?.catalogDiscovery).toEqual({
+			label: "Anthropic",
+			envVars: ["ANTHROPIC_API_KEY"],
+		});
+
+		const options = anthropic?.createModelManagerOptions({ apiKey: "k" });
+		expect(options?.providerId).toBe("anthropic");
+		expect(typeof options?.fetchDynamicModels).toBe("function");
+	});
+
 	test("every descriptor has a default model and a factory that preserves provider identity", () => {
 		for (const descriptor of PROVIDER_DESCRIPTORS) {
 			expect(descriptor.defaultModel).toBeTruthy();
