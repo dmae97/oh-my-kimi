@@ -103,6 +103,46 @@ describe("transformMessages drops malformed (empty-name) tool calls", () => {
 		expect(continuation).toMatchObject({ role: "user", content: "continue" });
 	});
 
+	it("treats an empty tool-call id as malformed and preserves surrounding replayable content", () => {
+		const messages: Message[] = [
+			{ role: "user", content: "Read both files", timestamp: 1 },
+			assistant(
+				[
+					{ type: "text", text: "Reading the files." },
+					{ type: "toolCall", id: "", name: "read", arguments: { path: "bad.ts" } },
+					{ type: "toolCall", id: "call_keep", name: "read", arguments: { path: "good.ts" } },
+				],
+				2,
+			),
+			toolResult("", "empty-id result that Anthropic cannot match", 3),
+			toolResult("call_keep", "good file contents", 4),
+			{ role: "user", content: "continue", timestamp: 5 },
+		];
+
+		const transformed = transformMessages(messages, model);
+
+		const survivingCalls = getToolCalls(transformed);
+		expect(survivingCalls).toHaveLength(1);
+		expect(survivingCalls[0]).toMatchObject({
+			id: "call_keep",
+			name: "read",
+			arguments: { path: "good.ts" },
+		});
+
+		const assistantOut = transformed.find((m): m is AssistantMessage => m.role === "assistant");
+		expect(assistantOut?.content).toEqual([
+			{ type: "text", text: "Reading the files." },
+			{ type: "toolCall", id: "call_keep", name: "read", arguments: { path: "good.ts" } },
+		]);
+
+		const toolResults = transformed.filter((m): m is ToolResultMessage => m.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]).toMatchObject({ toolCallId: "call_keep", toolName: "read" });
+		expect(toolResults[0]?.content).toEqual([{ type: "text", text: "good file contents" }]);
+		expect(transformed.find(m => m.role === "toolResult" && m.toolCallId === "")).toBeUndefined();
+		expect(transformed.findLast(m => m.role === "user")).toMatchObject({ role: "user", content: "continue" });
+	});
+
 	it("drops the whole assistant turn when only the malformed tool call was emitted", () => {
 		const messages: Message[] = [
 			{ role: "user", content: "Help me out", timestamp: 1 },

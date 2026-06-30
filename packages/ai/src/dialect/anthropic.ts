@@ -132,7 +132,7 @@ export class AnthropicInbandScanner implements InbandScanner {
 					progressed = this.#consumeInvoke(final, events);
 					break;
 				case "parameter":
-					progressed = this.#consumeParameter(final);
+					progressed = this.#consumeParameter(final, events);
 					break;
 				case "thinking":
 					progressed = this.#consumeThinking(final, events);
@@ -272,7 +272,7 @@ export class AnthropicInbandScanner implements InbandScanner {
 		return true;
 	}
 
-	#consumeParameter(final: boolean): boolean {
+	#consumeParameter(final: boolean, events: InbandScanEvent[]): boolean {
 		const tagStart = this.#buffer.indexOf("<");
 		if (tagStart === -1) {
 			if (final) {
@@ -280,14 +280,14 @@ export class AnthropicInbandScanner implements InbandScanner {
 				this.#buffer = "";
 				return false;
 			}
-			this.#appendParameterValue(this.#buffer);
+			this.#appendParameterValue(this.#buffer, events);
 			this.#rawBlock += this.#buffer;
 			this.#buffer = "";
 			return false;
 		}
 		if (tagStart > 0) {
 			const consumed = this.#buffer.slice(0, tagStart);
-			this.#appendParameterValue(consumed);
+			this.#appendParameterValue(consumed, events);
 			this.#rawBlock += consumed;
 			this.#buffer = this.#buffer.slice(tagStart);
 			return true;
@@ -307,7 +307,7 @@ export class AnthropicInbandScanner implements InbandScanner {
 			return false;
 		}
 		const consumed = this.#buffer[0]!;
-		this.#appendParameterValue(consumed);
+		this.#appendParameterValue(consumed, events);
 		this.#rawBlock += consumed;
 		this.#buffer = this.#buffer.slice(1);
 		return true;
@@ -378,10 +378,22 @@ export class AnthropicInbandScanner implements InbandScanner {
 		this.#state = "parameter";
 	}
 
-	#appendParameterValue(delta: string): void {
+	#appendParameterValue(delta: string, events: InbandScanEvent[]): void {
 		if (delta.length === 0) return;
 		const remaining = MAX_PARAMETER_VALUE_LENGTH - this.#paramValue.length;
-		if (remaining > 0) this.#paramValue += delta.slice(0, remaining);
+		const accepted = remaining > 0 ? delta.slice(0, remaining) : "";
+		if (accepted.length > 0) {
+			this.#paramValue += accepted;
+			if (this.#started && this.#paramName.length > 0) {
+				events.push({
+					type: "toolArgDelta",
+					id: this.#id,
+					name: this.#name,
+					key: this.#paramName,
+					delta: accepted,
+				});
+			}
+		}
 		if (delta.length > remaining) this.#paramTruncated = true;
 	}
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { wrapInbandToolStream } from "../src/dialect/owned-stream";
 import type { AssistantMessage, AssistantMessageEvent, ThinkingContent, ToolCall, Usage } from "../src/types";
+import { getStreamingPartialJson, setStreamingPartialJson } from "../src/utils/block-symbols";
 import { AssistantMessageEventStream } from "../src/utils/event-stream";
 
 const TOOLS = [
@@ -70,6 +71,44 @@ function geminiNativeOnly(): AssistantMessageEventStream {
 	});
 }
 
+function controlledNativeToolArgGrowth(): {
+	stream: AssistantMessageEventStream;
+	pushStart: () => void;
+	pushFirstDelta: () => void;
+	pushSecondDelta: () => void;
+	pushEnd: () => void;
+	finish: () => void;
+} {
+	const stream = new AssistantMessageEventStream();
+	const out = makeAssistant([]);
+	const block: ToolCall = { type: "toolCall", id: "tool_todo_streaming", name: "todo", arguments: {} };
+	stream.push({ type: "start", partial: out });
+
+	return {
+		stream,
+		pushStart: () => {
+			out.content.push(block);
+			stream.push({ type: "toolcall_start", contentIndex: 0, partial: out });
+		},
+		pushFirstDelta: () => {
+			setStreamingPartialJson(block, '{"ops":[');
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"ops":[', partial: out });
+		},
+		pushSecondDelta: () => {
+			block.arguments = { ops: [{ op: "view" }] };
+			setStreamingPartialJson(block, '{"ops":[{"op":"view"}]}');
+			stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"op":"view"}]}', partial: out });
+		},
+		pushEnd: () => {
+			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: block, partial: out });
+		},
+		finish: () => {
+			stream.push({ type: "done", reason: "toolUse", message: out });
+			stream.end(out);
+		},
+	};
+}
+
 // A nameless native "ghost" part (Gemini emits these beside a real call) must be
 // dropped, while the real native call is still forwarded.
 function ghostThenRealNative(): AssistantMessageEventStream {
@@ -111,6 +150,60 @@ function inbandPlusNative(): AssistantMessageEventStream {
 	});
 }
 
+function cloneArgs(args: Record<string, unknown>): Record<string, unknown> {
+	return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+}
+
+type ToolCallSnapshot = {
+	type: "toolcall_start" | "toolcall_delta" | "toolcall_end";
+	delta?: string;
+	id: string;
+	name: string;
+	arguments: Record<string, unknown>;
+	partialJson: string | undefined;
+	endToolCall?: {
+		id: string;
+		name: string;
+		arguments: Record<string, unknown>;
+		partialJson: string | undefined;
+	};
+};
+
+function snapshotToolCallEvent(event: AssistantMessageEvent): ToolCallSnapshot | undefined {
+	if (event.type !== "toolcall_start" && event.type !== "toolcall_delta" && event.type !== "toolcall_end") {
+		return undefined;
+	}
+	const block = event.partial.content[event.contentIndex];
+	if (block?.type !== "toolCall") return undefined;
+	return {
+		type: event.type,
+		...(event.type === "toolcall_delta" ? { delta: event.delta } : {}),
+		id: block.id,
+		name: block.name,
+		arguments: cloneArgs(block.arguments),
+		partialJson: getStreamingPartialJson(block),
+		...(event.type === "toolcall_end"
+			? {
+					endToolCall: {
+						id: event.toolCall.id,
+						name: event.toolCall.name,
+						arguments: cloneArgs(event.toolCall.arguments),
+						partialJson: getStreamingPartialJson(event.toolCall),
+					},
+				}
+			: {}),
+	};
+}
+
+async function nextToolCallSnapshot(iterator: AsyncIterator<AssistantMessageEvent>): Promise<ToolCallSnapshot> {
+	for (;;) {
+		const next = await iterator.next();
+		if (next.done) throw new Error("stream ended before the next tool-call event");
+		const snapshot = snapshotToolCallEvent(next.value);
+		if (snapshot) return snapshot;
+	}
+}
+
 async function collect(stream: AssistantMessageEventStream): Promise<{ message: AssistantMessage; events: string[] }> {
 	const events: string[] = [];
 	for await (const event of stream) events.push(event.type);
@@ -118,6 +211,76 @@ async function collect(stream: AssistantMessageEventStream): Promise<{ message: 
 }
 
 describe("wrapInbandToolStream native tool-call passthrough", () => {
+	it("preserves the provider call id and streamed argument state across native deltas", async () => {
+		const controlled = controlledNativeToolArgGrowth();
+		const stream = wrapInbandToolStream(controlled.stream, TOOLS, "gemini");
+		const iterator = stream[Symbol.asyncIterator]();
+
+		const startPromise = nextToolCallSnapshot(iterator);
+		controlled.pushStart();
+		const start = await startPromise;
+
+		const firstDeltaPromise = nextToolCallSnapshot(iterator);
+		controlled.pushFirstDelta();
+		const firstDelta = await firstDeltaPromise;
+
+		const secondDeltaPromise = nextToolCallSnapshot(iterator);
+		controlled.pushSecondDelta();
+		const secondDelta = await secondDeltaPromise;
+
+		const endPromise = nextToolCallSnapshot(iterator);
+		controlled.pushEnd();
+		const end = await endPromise;
+
+		controlled.finish();
+		const message = await stream.result();
+
+		expect([start, firstDelta, secondDelta, end]).toEqual([
+			{
+				type: "toolcall_start",
+				id: "tool_todo_streaming",
+				name: "todo",
+				arguments: {},
+				partialJson: undefined,
+			},
+			{
+				type: "toolcall_delta",
+				delta: '{"ops":[',
+				id: "tool_todo_streaming",
+				name: "todo",
+				arguments: {},
+				partialJson: '{"ops":[',
+			},
+			{
+				type: "toolcall_delta",
+				delta: '{"op":"view"}]}',
+				id: "tool_todo_streaming",
+				name: "todo",
+				arguments: { ops: [{ op: "view" }] },
+				partialJson: '{"ops":[{"op":"view"}]}',
+			},
+			{
+				type: "toolcall_end",
+				id: "tool_todo_streaming",
+				name: "todo",
+				arguments: { ops: [{ op: "view" }] },
+				partialJson: '{"ops":[{"op":"view"}]}',
+				endToolCall: {
+					id: "tool_todo_streaming",
+					name: "todo",
+					arguments: { ops: [{ op: "view" }] },
+					partialJson: '{"ops":[{"op":"view"}]}',
+				},
+			},
+		]);
+
+		const calls = message.content.filter((b): b is ToolCall => b.type === "toolCall");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]!.id).toBe("tool_todo_streaming");
+		expect(calls[0]!.name).toBe("todo");
+		expect(calls[0]!.arguments).toEqual({ ops: [{ op: "view" }] });
+	});
+
 	it("streams a provider-native tool call that arrives without in-band text", async () => {
 		const { message, events } = await collect(wrapInbandToolStream(geminiNativeOnly(), TOOLS, "gemini"));
 

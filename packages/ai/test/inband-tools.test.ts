@@ -94,6 +94,61 @@ function expectRawBlock(dialect: Dialect, text: string, expected: string): void 
 	expect(firstRawBlock(dialect, text), dialect).toBe(expected);
 }
 
+function parameterDeltaEvents(
+	events: readonly InbandScanEvent[],
+): Extract<InbandScanEvent, { type: "toolArgDelta" }>[] {
+	return events.filter((event): event is Extract<InbandScanEvent, { type: "toolArgDelta" }> => {
+		return event.type === "toolArgDelta";
+	});
+}
+
+const XML_PARAMETER_STREAMS: readonly { dialect: Dialect; chunks: readonly string[] }[] = [
+	{
+		dialect: "anthropic",
+		chunks: [
+			'<function_calls>\n<invoke name="read"><parameter name="path">',
+			"src/",
+			"a.ts</para",
+			'meter><parameter name="count" string="false">',
+			"2</para",
+			"meter></invoke>\n</function_calls>",
+		],
+	},
+	{
+		dialect: "xml",
+		chunks: [
+			'<function_calls>\n<invoke name="read"><parameter name="path">',
+			"src/",
+			"a.ts</para",
+			'meter><parameter name="count" string="false">',
+			"2</para",
+			"meter></invoke>\n</function_calls>",
+		],
+	},
+	{
+		dialect: "minimax",
+		chunks: [
+			'<minimax:tool_call>\n<invoke name="read"><parameter name="path">',
+			"src/",
+			"a.ts</para",
+			'meter><parameter name="count" string="false">',
+			"2</para",
+			"meter></invoke>\n</minimax:tool_call>",
+		],
+	},
+	{
+		dialect: "deepseek",
+		chunks: [
+			'<｜DSML｜tool_calls>\n<｜DSML｜invoke name="read"><｜DSML｜parameter name="path" string="true">',
+			"src/",
+			"a.ts</｜DSML｜para",
+			'meter><｜DSML｜parameter name="count" string="false">',
+			"2</｜DSML｜para",
+			"meter></｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+		],
+	},
+];
+
 describe("in-band tool dialects", () => {
 	it("renders a tool prompt for every dialect", () => {
 		for (const dialect of DIALECTS) {
@@ -119,6 +174,44 @@ describe("in-band tool dialects", () => {
 			expect(calls, dialect).toHaveLength(1);
 			expect(calls[0]!.name).toBe("read");
 			expect(calls[0]!.arguments).toEqual({ path: "src/a.ts", count: 2 });
+		}
+	});
+
+	it("streams keyed parameter argument deltas before the final XML-family tool end", () => {
+		for (const { dialect, chunks } of XML_PARAMETER_STREAMS) {
+			const scanner = createInbandScanner(dialect, { tools: TOOLS, parseThinking: true });
+			const perFeedEvents = chunks.map(chunk => scanner.feed(chunk));
+			const events = perFeedEvents.flat();
+			events.push(...scanner.flush());
+			const starts = events.filter((event): event is Extract<InbandScanEvent, { type: "toolStart" }> => {
+				return event.type === "toolStart";
+			});
+			expect(starts, dialect).toHaveLength(1);
+
+			const callId = starts[0]!.id;
+			expect(starts[0], dialect).toMatchObject({ id: callId, name: "read" });
+			expect(parameterDeltaEvents(perFeedEvents[1]!), dialect).toEqual([
+				{ type: "toolArgDelta", id: callId, name: "read", key: "path", delta: "src/" },
+			]);
+			expect(parameterDeltaEvents(perFeedEvents[2]!), dialect).toEqual([
+				{ type: "toolArgDelta", id: callId, name: "read", key: "path", delta: "a.ts" },
+			]);
+			expect(toolEnds(perFeedEvents[2]!), dialect).toHaveLength(0);
+			expect(parameterDeltaEvents(perFeedEvents[4]!), dialect).toEqual([
+				{ type: "toolArgDelta", id: callId, name: "read", key: "count", delta: "2" },
+			]);
+
+			const calls = toolEnds(events);
+			expect(calls, dialect).toHaveLength(1);
+			expect(calls[0], dialect).toMatchObject({
+				id: callId,
+				name: "read",
+				arguments: { path: "src/a.ts", count: 2 },
+			});
+			const finalIndex = events.findIndex(event => event.type === "toolEnd");
+			const lastDeltaIndex = events.findLastIndex(event => event.type === "toolArgDelta");
+			expect(lastDeltaIndex, dialect).toBeGreaterThan(-1);
+			expect(finalIndex, dialect).toBeGreaterThan(lastDeltaIndex);
 		}
 	});
 
