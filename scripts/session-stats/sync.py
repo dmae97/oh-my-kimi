@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS ss_tool_calls (
     UNIQUE(session_file, call_id, seq)
 );
 CREATE INDEX IF NOT EXISTS ss_tc_tool_ts   ON ss_tool_calls(tool_name, timestamp);
+CREATE INDEX IF NOT EXISTS ss_tc_ts_tool   ON ss_tool_calls(timestamp, tool_name);
 CREATE INDEX IF NOT EXISTS ss_tc_sess_seq  ON ss_tool_calls(session_file, seq);
 
 CREATE TABLE IF NOT EXISTS ss_tool_results (
