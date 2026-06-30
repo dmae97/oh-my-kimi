@@ -99,6 +99,16 @@ function parseYieldType(value: unknown): string | string[] | undefined {
 }
 
 /**
+ * Render an incremental yield's `type: [...]` labels as a quoted, comma-separated list for
+ * model-facing retry messages — keeps the failed section labelled even when the yield carried
+ * multiple labels at once.
+ */
+function formatYieldLabels(labels: readonly string[]): string {
+	if (labels.length === 0) return '""';
+	return labels.map(label => `"${label}"`).join(", ");
+}
+
+/**
  * Expand a plain-object `data` schema into a strict union that ALSO accepts each
  * top-level section value (and array element) on its own. Agents that yield
  * incrementally (`type: ["findings"]`, `type: ["confidence"]`, …) submit one
@@ -202,10 +212,12 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	lenientArgValidation = true;
 
 	readonly #validate?: (value: unknown) => JsonSchemaValidationResult;
+	readonly #validateSection?: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
 	#schemaValidationFailures = 0;
 
 	constructor(session: ToolSession) {
 		let validate: ((value: unknown) => JsonSchemaValidationResult) | undefined;
+		let validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult> | undefined;
 		let parameters: TSchema;
 
 		try {
@@ -217,6 +229,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			} = buildOutputValidator(session.outputSchema);
 			if (validator) {
 				validate = value => validator.validate(value);
+				validateSection = validator.validateSection;
 			}
 
 			const schemaHint = formatSchema(normalizedSchema ?? session.outputSchema);
@@ -266,6 +279,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		}
 
 		this.#validate = validate;
+		this.#validateSection = validateSection;
 		this.parameters = parameters;
 	}
 
@@ -307,22 +321,25 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			if (data === null) {
 				throw new Error("data is required when yield indicates success");
 			}
-			if (this.#validate && !isIncremental) {
-				const parsed = this.#validate(data);
-				if (!parsed.success) {
-					this.#schemaValidationFailures++;
-					if (this.#schemaValidationFailures <= MAX_SCHEMA_RETRIES) {
-						const remaining = MAX_SCHEMA_RETRIES - this.#schemaValidationFailures;
-						const retryHint =
-							remaining > 0
-								? ` Call yield again with the corrected shape — ${remaining} retry attempt(s) remain before the schema constraint is dropped.`
-								: " Call yield again with the corrected shape — this is the final retry before the schema constraint is dropped.";
-						throw new Error(
-							`Output does not match schema: ${formatAllValidationIssues(parsed.issues)}.${retryHint}`,
-						);
-					}
-					schemaValidationOverridden = true;
+			const sectionFailure = isIncremental
+				? this.#validateIncrementalSection(yieldType as string[], data)
+				: this.#validate
+					? this.#validate(data)
+					: undefined;
+			if (sectionFailure && !sectionFailure.success) {
+				this.#schemaValidationFailures++;
+				if (this.#schemaValidationFailures <= MAX_SCHEMA_RETRIES) {
+					const remaining = MAX_SCHEMA_RETRIES - this.#schemaValidationFailures;
+					const retryHint =
+						remaining > 0
+							? ` Call yield again with the corrected shape — ${remaining} retry attempt(s) remain before the schema constraint is dropped.`
+							: " Call yield again with the corrected shape — this is the final retry before the schema constraint is dropped.";
+					const scope = isIncremental ? `Section ${formatYieldLabels(yieldType as string[])}` : "Output";
+					throw new Error(
+						`${scope} does not match schema: ${formatAllValidationIssues(sectionFailure.issues)}.${retryHint}`,
+					);
 				}
+				schemaValidationOverridden = true;
 			}
 		}
 
@@ -343,6 +360,26 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				schemaOverridden: schemaValidationOverridden || undefined,
 			},
 		};
+	}
+
+	/**
+	 * Validate the `data` payload of an incremental yield (`type: ["<label>", …]`) against
+	 * the matching property's sub-validator. Returns the first failure across all known labels,
+	 * or `undefined` when no label is recognised (user-defined section labels stay loose) or
+	 * when all known labels accept the value. Lets the model see the same retry feedback that
+	 * the terminal-yield path already produces, instead of leaking the mismatch through to
+	 * the parent's post-mortem `schema_violation`.
+	 */
+	#validateIncrementalSection(labels: string[], data: unknown): JsonSchemaValidationResult | undefined {
+		const subValidators = this.#validateSection;
+		if (!subValidators || subValidators.size === 0) return undefined;
+		for (const label of labels) {
+			const sub = subValidators.get(label);
+			if (!sub) continue;
+			const parsed = sub(data);
+			if (!parsed.success) return parsed;
+		}
+		return undefined;
 	}
 }
 

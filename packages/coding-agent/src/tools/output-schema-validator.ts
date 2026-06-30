@@ -21,6 +21,16 @@ export interface OutputValidator {
 	validate(value: unknown): JsonSchemaValidationResult;
 	/** Top-level required property names. Empty if the schema has no `required` array at root. */
 	readonly requiredFields: readonly string[];
+	/**
+	 * Per-label validators for incremental yields (`type: ["<label>"]`). Each entry validates the
+	 * `data` payload of a single section against the matching top-level property's sub-schema —
+	 * array-typed properties (e.g. `findings`) use the items schema since each yield contributes
+	 * one element, while scalar properties use the property schema directly. Unknown labels (not
+	 * top-level properties) have no entry and skip per-call validation. Lets the yield tool give
+	 * the model retry feedback on a section as soon as it arrives, instead of deferring every
+	 * mismatch to the parent's post-mortem `schema_violation`.
+	 */
+	readonly validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
 }
 
 export interface BuildOutputValidatorResult {
@@ -72,8 +82,36 @@ export function buildOutputValidator(schema: unknown): BuildOutputValidatorResul
 		validator: {
 			requiredFields: required,
 			validate: value => validateJsonSchemaValue(jsonSchemaRecord, value),
+			validateSection: buildSectionValidators(jsonSchemaRecord),
 		},
 	};
+}
+
+/**
+ * Build per-top-level-property validators for incremental yields.
+ *
+ * Each entry validates the `data` payload of one `type: ["<label>"]` section against the
+ * matching property's sub-schema — array-typed properties (e.g. `findings`, derived from JTD
+ * `elements`) use the items schema since each yield contributes one element, while scalar
+ * properties use the property schema directly. Unknown labels (anything not declared as a
+ * top-level property) are deliberately omitted so user-defined section labels still pass.
+ */
+function buildSectionValidators(
+	jsonSchema: Record<string, unknown>,
+): ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult> {
+	const validators = new Map<string, (value: unknown) => JsonSchemaValidationResult>();
+	const properties = jsonSchema.properties;
+	if (properties === null || typeof properties !== "object") return validators;
+	for (const [label, raw] of Object.entries(properties as Record<string, unknown>)) {
+		if (raw === null || typeof raw !== "object") continue;
+		const propRecord = raw as Record<string, unknown>;
+		const sectionSchema =
+			propRecord.type === "array" && propRecord.items !== undefined && propRecord.items !== null
+				? (propRecord.items as Record<string, unknown>)
+				: propRecord;
+		validators.set(label, value => validateJsonSchemaValue(sectionSchema, value));
+	}
+	return validators;
 }
 
 /** Produce the executor's headline+missing-required summary from a failed validation. */
