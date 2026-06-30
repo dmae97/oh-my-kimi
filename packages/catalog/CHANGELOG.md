@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Kimi K2.7 Code compatibility to avoid disabled thinking and forced tool choice on native Kimi endpoints that require thinking mode. ([#3852](https://github.com/can1357/oh-my-pi/issues/3852))
+
 ## [16.2.6] - 2026-06-29
 
 ### Fixed
