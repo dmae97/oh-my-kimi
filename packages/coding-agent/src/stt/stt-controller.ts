@@ -15,6 +15,7 @@ import {
 	startStreamingRecording,
 	verifyRecordingFile,
 } from "./recorder";
+import { evaluateSubmitTrigger, type SttSubmitTrigger } from "./submit-trigger";
 import { transcribe } from "./transcriber";
 
 export type SttState = "idle" | "recording" | "transcribing";
@@ -33,6 +34,10 @@ interface Editor {
 	setVolatileText(text: string): void;
 	clearVolatileText(): void;
 	commitVolatileText(text: string): void;
+	getText(): string;
+	setText(text: string): void;
+	submit(): void;
+	deleteBeforeCursor(count: number): void;
 }
 
 export class STTController {
@@ -53,6 +58,7 @@ export class STTController {
 	#streamEditor: Editor | null = null;
 	#streamCommitted = false;
 	#streamAbort: AbortController | null = null;
+	#streamUtterance = "";
 
 	get state(): SttState {
 		return this.#state;
@@ -190,6 +196,7 @@ export class STTController {
 		const language = settings.get("stt.language") as string | undefined;
 		this.#streamEditor = editor;
 		this.#streamCommitted = false;
+		this.#streamUtterance = "";
 		this.#streamAbort = new AbortController();
 		const stream = sttClient.startStream(modelKey, {
 			language: language || undefined,
@@ -205,6 +212,7 @@ export class STTController {
 				if (prefixed) {
 					this.#streamEditor?.commitVolatileText(prefixed);
 					this.#streamCommitted = true;
+					this.#streamUtterance += prefixed;
 				} else {
 					this.#streamEditor?.clearVolatileText();
 				}
@@ -266,13 +274,27 @@ export class STTController {
 			return;
 		}
 		if (!this.#streamCommitted && finalText) {
-			this.#streamEditor?.commitVolatileText(this.#prefixed(finalText));
+			const prefixed = this.#prefixed(finalText);
+			this.#streamEditor?.commitVolatileText(prefixed);
 			this.#streamCommitted = true;
+			this.#streamUtterance = prefixed;
 		} else {
 			this.#streamEditor?.clearVolatileText();
 		}
 		options.requestRender?.();
 		if (!failed) options.showStatus(this.#streamCommitted ? "" : "No speech detected.");
+
+		if (this.#streamCommitted && !failed && this.#streamEditor) {
+			const trigger = settings.get("stt.submitTrigger") as SttSubmitTrigger;
+			const { submit, trimTrailing } = evaluateSubmitTrigger(this.#streamUtterance, trigger);
+			if (trimTrailing > 0) {
+				this.#streamEditor.deleteBeforeCursor(trimTrailing);
+			}
+			if (submit) {
+				this.#streamEditor.submit();
+			}
+		}
+
 		this.#cleanupStream();
 		this.#setState("idle", options);
 	}
@@ -283,6 +305,7 @@ export class STTController {
 		this.#streamEditor = null;
 		this.#streamCommitted = false;
 		this.#streamAbort = null;
+		this.#streamUtterance = "";
 	}
 
 	// ── Batch (single-shot) ─────────────────────────────────────────
@@ -327,8 +350,16 @@ export class STTController {
 			this.#transcriptionAbort = null;
 			if (this.#disposed) return;
 			if (text.length > 0) {
-				editor.insertText(text);
+				const trigger = settings.get("stt.submitTrigger") as SttSubmitTrigger;
+				const { submit, trimTrailing } = evaluateSubmitTrigger(text, trigger);
+				const textToInsert = trimTrailing > 0 ? text.slice(0, -trimTrailing) : text;
+				if (textToInsert.length > 0) {
+					editor.insertText(textToInsert);
+				}
 				options.showStatus("");
+				if (submit) {
+					editor.submit();
+				}
 			} else {
 				options.showStatus("No speech detected.");
 			}

@@ -73,6 +73,10 @@ describe("STTController preflight", () => {
 			setVolatileText: vi.fn(),
 			clearVolatileText: vi.fn(),
 			commitVolatileText: vi.fn(),
+			getText: vi.fn().mockReturnValue(""),
+			setText: vi.fn(),
+			submit: vi.fn(),
+			deleteBeforeCursor: vi.fn(),
 		};
 	}
 

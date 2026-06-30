@@ -3,6 +3,7 @@ import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { DEFAULT_RELAY_URL } from "../collab/protocol";
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../stt/models";
+import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../stt/submit-trigger";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -1792,6 +1793,19 @@ export const SETTINGS_SCHEMA = {
 			description:
 				"Local on-device speech model. Parakeet TDT v3 (sherpa-onnx) is the SoTA default; Whisper base/small/large-v3-turbo tiers (transformers.js) trade size for multilingual coverage. Downloaded on first use.",
 			options: STT_MODEL_OPTIONS,
+		},
+	},
+	"stt.submitTrigger": {
+		type: "enum",
+		values: STT_SUBMIT_TRIGGER_VALUES,
+		default: "never",
+		ui: {
+			tab: "interaction",
+			group: "Speech",
+			label: "TTS Submit Trigger",
+			description:
+				"Choose when speech dictation automatically submits: Never, Release (2+ words), Release with complete sentence, or When I Say Submit.",
+			options: STT_SUBMIT_TRIGGER_OPTIONS,
 		},
 	},
 
@@ -4081,7 +4095,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
-				"Soft per-subagent request budget (assistant requests per run). Crossing it injects one steering notice asking the subagent to wrap up; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/quick_task agents use a lower built-in budget.",
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects one steering notice asking the subagent to wrap up; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/sonic agents use a lower built-in budget.",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "40", label: "40 requests" },
