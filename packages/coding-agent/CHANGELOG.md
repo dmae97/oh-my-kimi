@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed multi-target `ast_grep` searches retaining every target page before global pagination; the wrapper now keeps only the final page window and preserves exact match/file counts. ([#3935](https://github.com/can1357/oh-my-pi/issues/3935))
+
 ## [16.2.10] - 2026-06-30
 
 ### Changed

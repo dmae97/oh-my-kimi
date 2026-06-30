@@ -114,6 +114,41 @@ describe("ast_grep parse errors", () => {
 		}
 	});
 
+	it("keeps multi-target paging globally ordered without truncating match totals", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-multi-page-"));
+		try {
+			const earlyDir = path.join(tempDir, "a");
+			const lateDir = path.join(tempDir, "z");
+			await fs.mkdir(earlyDir, { recursive: true });
+			await fs.mkdir(lateDir, { recursive: true });
+			await Bun.write(path.join(earlyDir, "early.ts"), 'marker("early");\n');
+			for (let index = 0; index < 60; index++) {
+				await Bun.write(path.join(lateDir, `late-${index.toString().padStart(2, "0")}.ts`), 'marker("late");\n');
+			}
+
+			const tools = await createTools(createTestSession(tempDir));
+			const tool = tools.find(entry => entry.name === "ast_grep");
+			expect(tool).toBeDefined();
+
+			const result = await tool!.execute("ast-grep-multi-page", {
+				pat: "marker($A)",
+				paths: [lateDir, earlyDir],
+			});
+
+			const text = result.content.find(content => content.type === "text")?.text ?? "";
+			const details = result.details as
+				| { matchCount?: number; fileCount?: number; limitReached?: boolean }
+				| undefined;
+
+			expect(text).toMatch(/^## early\.ts#[0-9A-F]{4}/m);
+			expect(details?.matchCount).toBe(61);
+			expect(details?.fileCount).toBe(61);
+			expect(details?.limitReached).toBe(true);
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("parses PlusCal content through the tlaplus language aliases", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-tlaplus-"));
 		try {
