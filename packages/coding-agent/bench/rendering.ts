@@ -7,7 +7,7 @@ import { AssistantMessageComponent } from "../src/modes/components/assistant-mes
 import { TranscriptContainer } from "../src/modes/components/transcript-container";
 import { Settings } from "../src/config/settings";
 import { getEditorTheme } from "../src/modes/theme/theme";
-import { buildDisplayMessage, nextStep, visibleUnits } from "../src/modes/controllers/streaming-reveal";
+import { BlockUnitCounter, buildDisplayMessage, nextStep, visibleUnits } from "../src/modes/controllers/streaming-reveal";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -55,11 +55,12 @@ bench("WelcomeComponent.render", () => {
 
 // ── A2: streaming reveal + editor render baselines ──────────────────────────
 //
-// Diagnostic series, not a fixed-iteration micro-op. `streamingReveal` proves
-// or refutes the O(N^2) reveal hypothesis: per-step cost (visibleUnits +
-// buildDisplayMessage, the work every stream delta/30fps tick does) is sampled
-// at growing revealed lengths. Rising per-step ms => O(N) per tick => O(N^2)
-// over the message. Flat per-step => already linear.
+// Diagnostic series, not a fixed-iteration micro-op. The full-reveal loops
+// mirror the controller: a per-episode BlockUnitCounter feeds countOf + sliceOf
+// (memoized, O(delta)/tick). `streamingReveal` (C1) instead measures the DEFAULT
+// pure-sliceGraphemes path at a fixed revealed length — the un-memoized cost the
+// counter avoids. Representative controller-path throughput lives in
+// bench/streaming-throughput.bench.ts.
 
 function makeMarkdownCorpus(targetGraphemes: number): string {
 	const para =
@@ -106,7 +107,7 @@ const REVEAL_CORPUS = makeMarkdownCorpus(6000);
 const REVEAL_CHECKPOINTS = [1000, 2000, 3000, 4000, 5000, 6000];
 const STEP_REPS = 40;
 
-console.log("\nstreamingReveal (isolated C1: visibleUnits + buildDisplayMessage per delta):");
+console.log("\nstreamingReveal (C1: default pure-slice path, fixed revealed length, no memoization):");
 for (const n of REVEAL_CHECKPOINTS) {
 	const msg = makeTextMessage(REVEAL_CORPUS.slice(0, n));
 	const revealed = Math.floor(n * 0.9);
@@ -117,13 +118,18 @@ for (const n of REVEAL_CHECKPOINTS) {
 	console.log(`  len=${n}: ${ms.toFixed(4)}ms/step`);
 }
 
-// Real streaming cost: text GROWS every tick, so Markdown's text-keyed cache
-// misses each step (the actual interactive path). Total ms to fully reveal an
-// N-grapheme message in nextStep increments — the number C1+C2 reduce.
-console.log("\nstreamingRevealFull (C1+C2: full incremental reveal, growing text => cache-miss/tick):");
+// Controller path: a per-episode BlockUnitCounter memoizes count + slice, so
+// buildDisplayMessage is O(delta)/tick. The Markdown render (component.render)
+// still re-lexes the growing text each step here (no { transient: true }), so
+// total ms is dominated by the render, not the slice. Total ms to fully reveal
+// an N-grapheme message in nextStep increments.
+console.log("\nstreamingRevealFull (controller-path counter + Markdown render, growing text):");
 try {
 	for (const n of REVEAL_CHECKPOINTS) {
 		const full = makeTextMessage(REVEAL_CORPUS.slice(0, n));
+		const counter = new BlockUnitCounter();
+		const countOf = (index: number, text: string): number => counter.count(index, text);
+		const sliceOf = (index: number, text: string, units: number): string => counter.slice(index, text, units);
 		const total = visibleUnits(full, false);
 		const component = new AssistantMessageComponent();
 		const start = Bun.nanoseconds();
@@ -131,7 +137,7 @@ try {
 		let steps = 0;
 		while (revealed < total) {
 			revealed = Math.min(total, revealed + nextStep(total - revealed));
-			component.updateContent(buildDisplayMessage(full, revealed, false));
+			component.updateContent(buildDisplayMessage(full, revealed, false, countOf, sliceOf));
 			component.render(WIDTH);
 			steps++;
 		}
@@ -153,6 +159,9 @@ try {
 	const thinking = makeMarkdownCorpus(2500);
 	for (const n of [2000, 4000, 6000]) {
 		const full = makeThinkingPlusText(thinking, REVEAL_CORPUS.slice(0, n));
+		const counter = new BlockUnitCounter();
+		const countOf = (index: number, text: string): number => counter.count(index, text);
+		const sliceOf = (index: number, text: string, units: number): string => counter.slice(index, text, units);
 		const total = visibleUnits(full, false);
 		const component = new AssistantMessageComponent();
 		const start = Bun.nanoseconds();
@@ -160,7 +169,7 @@ try {
 		let steps = 0;
 		while (revealed < total) {
 			revealed = Math.min(total, revealed + nextStep(total - revealed));
-			component.updateContent(buildDisplayMessage(full, revealed, false));
+			component.updateContent(buildDisplayMessage(full, revealed, false, countOf, sliceOf));
 			component.render(WIDTH);
 			steps++;
 		}

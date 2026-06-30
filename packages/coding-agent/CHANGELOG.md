@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sped up smooth streaming reveal ~10x for large messages: each 30fps tick now slices only the per-step grapheme delta via memoized incremental slicing in `BlockUnitCounter`, instead of re-segmenting the whole revealed prefix every tick.
+
 ## [16.2.6] - 2026-06-29
 
 ### Changed
