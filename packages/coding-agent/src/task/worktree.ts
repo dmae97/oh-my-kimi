@@ -148,21 +148,33 @@ export async function captureBaseline(repoRoot: string): Promise<WorktreeBaselin
 	return { root, nested };
 }
 
-async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline): Promise<string> {
+async function captureRepoDeltaPatch(repoDir: string, rb: RepoBaseline, objectRepoDir = repoDir): Promise<string> {
 	const currentHead = (await git.head.sha(repoDir)) ?? "";
 	const currentStaged = await git.diff(repoDir, { binary: true, cached: true });
 	const currentUnstaged = await git.diff(repoDir, { binary: true });
 	const currentUntracked = await git.ls.untracked(repoDir);
 	const currentUntrackedPatch = await captureUntrackedPatch(repoDir, currentUntracked);
+	const committedPatch =
+		currentHead && currentHead !== rb.headCommit
+			? await git.diff.tree(repoDir, rb.headCommit, currentHead, {
+					allowFailure: true,
+					binary: true,
+				})
+			: "";
 
-	const baselineTree = await writeSyntheticTree(repoDir, rb.headCommit, [rb.staged, rb.unstaged, rb.untrackedPatch]);
-	const currentTree = await writeSyntheticTree(repoDir, currentHead, [
+	const baselineTree = await writeSyntheticTree(objectRepoDir, rb.headCommit, [
+		rb.staged,
+		rb.unstaged,
+		rb.untrackedPatch,
+	]);
+	const currentTree = await writeSyntheticTree(objectRepoDir, rb.headCommit, [
+		committedPatch,
 		currentStaged,
 		currentUnstaged,
 		currentUntrackedPatch,
 	]);
 
-	return git.diff.tree(repoDir, baselineTree, currentTree, {
+	return git.diff.tree(objectRepoDir, baselineTree, currentTree, {
 		allowFailure: true,
 		binary: true,
 	});
@@ -212,7 +224,7 @@ export interface DeltaPatchResult {
 }
 
 export async function captureDeltaPatch(isolationDir: string, baseline: WorktreeBaseline): Promise<DeltaPatchResult> {
-	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root);
+	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root, baseline.root.repoRoot);
 	const nestedPatches: NestedRepoPatch[] = [];
 
 	for (const { relativePath, baseline: nb } of baseline.nested) {
@@ -222,7 +234,7 @@ export async function captureDeltaPatch(isolationDir: string, baseline: Worktree
 		} catch {
 			continue;
 		}
-		const patch = await captureRepoDeltaPatch(nestedDir, nb);
+		const patch = await captureRepoDeltaPatch(nestedDir, nb, nb.repoRoot);
 		if (patch.trim()) nestedPatches.push({ relativePath, patch });
 	}
 
@@ -482,18 +494,26 @@ async function commitPatchToBranchWorktree(
 	try {
 		await git.patch.applyText(tmpDir, patchText);
 	} catch (err) {
-		if (err instanceof git.GitCommandError) {
-			const stderr = err.result.stderr.slice(0, 2000);
-			logger.error("commitToBranch: git apply failed", {
-				taskId,
-				exitCode: err.result.exitCode,
-				stderr,
-				patchSize: patchText.length,
-				patchHead: patchText.slice(0, 500),
-			});
-			throw new Error(`git apply failed for task ${taskId}: ${stderr}`);
+		if (!(err instanceof git.GitCommandError)) throw err;
+		// Plain apply rejects when the parent checkout carries unrelated dirty
+		// context near the task's edits; retry with --3way before giving up.
+		try {
+			await git.patch.applyText(tmpDir, patchText, { threeWay: true });
+		} catch (threeWayErr) {
+			if (threeWayErr instanceof git.GitCommandError) {
+				const stderr = threeWayErr.result.stderr.slice(0, 2000);
+				logger.error("commitToBranch: git apply --3way failed", {
+					taskId,
+					exitCode: threeWayErr.result.exitCode,
+					stderr,
+					initialStderr: err.result.stderr.slice(0, 2000),
+					patchSize: patchText.length,
+					patchHead: patchText.slice(0, 500),
+				});
+				throw new Error(`git apply --3way failed for task ${taskId}: ${stderr}`);
+			}
+			throw threeWayErr;
 		}
-		throw err;
 	}
 	await git.stage.files(tmpDir);
 	await git.commit(tmpDir, message, author ? { author } : {});
@@ -655,6 +675,7 @@ export async function commitToBranch(
 		const tmpDir = path.join(os.tmpdir(), `omp-branch-${Snowflake.next()}`);
 		try {
 			await git.worktree.add(repoRoot, tmpDir, branchName);
+
 			const msg = (commitMessage && (await commitMessage(rootPatch))) || fallbackMessage;
 			await commitPatchToBranchWorktree(tmpDir, taskId, rootPatch, msg);
 		} finally {

@@ -6,6 +6,7 @@ import {
 	applyNestedPatches,
 	captureBaseline,
 	captureDeltaPatch,
+	cleanupTaskBranches,
 	commitToBranch,
 	ensureIsolation,
 	getGitNoIndexNullPath,
@@ -232,6 +233,44 @@ describe("worktree isolation helpers", () => {
 				expect(status).toBe("M  staged.txt");
 				expect(cached).toContain("+local staged change");
 				expect(stashList).toBe("");
+			});
+
+			it("commits isolated edits when parent dirt only changes nearby context", async () => {
+				const fixtureName = "EXP_DIRTY_TEST.txt";
+				const fixturePath = path.join(repo, fixtureName);
+				const cleanLines = Array.from({ length: 10 }, (_, index) => `line${index + 1}`);
+				await fs.writeFile(fixturePath, `${cleanLines.join("\n")}\n`);
+				await runGit(repo, ["add", fixtureName]);
+				await runGit(repo, ["commit", "-q", "-m", "add dirty merge fixture"]);
+
+				const parentDirtyLines = cleanLines.map((line, index) => (index === 1 ? "LINE2-DIRTY-PARENT" : line));
+				await fs.writeFile(fixturePath, `${parentDirtyLines.join("\n")}\n`);
+				const baseline = await captureBaseline(repo);
+
+				const isoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-worktree-iso-"));
+				tempDirs.push(isoRoot);
+				const iso = path.join(isoRoot, "repo");
+				await runGit(isoRoot, ["clone", "-q", repo, iso]);
+				await runGit(iso, ["config", "user.email", "test@example.com"]);
+				await runGit(iso, ["config", "user.name", "Test User"]);
+				const isolatedLines = parentDirtyLines.map((line, index) => (index === 4 ? "LINE5-AGENT-EDIT" : line));
+				await fs.writeFile(path.join(iso, fixtureName), `${isolatedLines.join("\n")}\n`);
+
+				const taskId = `dirty-context-${path.basename(isoRoot)}`;
+				let branchName = `omp/task/${taskId}`;
+				try {
+					const commitResult = await commitToBranch(iso, baseline, taskId, "dirty context merge");
+					if (!commitResult?.branchName) throw new Error("expected task branch");
+					branchName = commitResult.branchName;
+
+					const mergeResult = await mergeTaskBranches(repo, [{ branchName, taskId }]);
+					const finalContent = await fs.readFile(fixturePath, "utf8");
+
+					expect(mergeResult).toEqual({ failed: [], merged: [branchName] });
+					expect(finalContent).toBe(`${isolatedLines.join("\n")}\n`);
+				} finally {
+					await cleanupTaskBranches(repo, [branchName]);
+				}
 			});
 
 			it("subtracts baseline dirty state even when the task commits it", async () => {

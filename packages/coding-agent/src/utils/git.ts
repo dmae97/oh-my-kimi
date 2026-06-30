@@ -103,6 +103,7 @@ export interface PatchOptions {
 	readonly cached?: boolean;
 	readonly check?: boolean;
 	readonly env?: Record<string, string | undefined>;
+	readonly threeWay?: boolean;
 	readonly signal?: AbortSignal;
 }
 
@@ -371,6 +372,7 @@ function buildApplyArgs(patchPath: string, options: PatchOptions): string[] {
 	const args = ["apply"];
 	if (options.check) args.push("--check");
 	if (options.cached) args.push("--cached");
+	if (options.threeWay) args.push("--3way");
 	args.push("--binary", patchPath);
 	return args;
 }

@@ -30,6 +30,9 @@
 ### Fixed
 
 - Isolated branch-mode task merges now preserve the agent's own commits (message and author) instead of collapsing every diff into a single AI-summarized commit. `commitToBranch` detects when the subagent moved HEAD past the baseline, transfers clean-baseline commit objects into the parent repo via `git fetch`, rewrites dirty-baseline commits against the captured baseline WIP so user staged/unstaged/untracked changes are filtered out, and `mergeTaskBranches` cherry-picks the inclusive range `baseSha..omp/task/<id>` so each task commit replays with its original message; any uncommitted leftover on top of the agent's last commit lands as one trailing AI-summarized commit ([#3842](https://github.com/can1357/oh-my-pi/issues/3842)).
+### Fixed
+
+- Fixed isolated branch merges rejecting task edits when the parent checkout had unrelated dirty changes in nearby patch context. ([#3841](https://github.com/can1357/oh-my-pi/issues/3841))
 
 ## [16.2.6] - 2026-06-29
 
