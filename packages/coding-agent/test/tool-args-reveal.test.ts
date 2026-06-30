@@ -86,11 +86,7 @@ describe("tool args reveal", () => {
 		controller.bind("call-1", component);
 
 		// More bytes arrive later — the controller now paces the new backlog.
-		controller.setTarget(
-			"call-1",
-			target,
-			jsonTarget({ fullArgs: { path: "a.ts" }, exposeRawPartialJson: true }),
-		);
+		controller.setTarget("call-1", target, jsonTarget({ fullArgs: { path: "a.ts" }, exposeRawPartialJson: true }));
 		drain(100);
 
 		const partials = component.frames.map(partialOf);
