@@ -1294,7 +1294,7 @@ export function clampFireworksKimiMaxTokens(modelId: string, candidate: number |
 export const KIMI_K27_CODE_RECOMMENDED_MAX_TOKENS = 32_768;
 
 export function isKimiK27CodeModelId(modelId: string): boolean {
-	return /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code$/i.test(modelId);
+	return /(?:^|\/)kimi[-._]?k2(?:[._-]?|p)7[-._]?code(?:[-._]?highspeed)?$/i.test(modelId);
 }
 
 export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number): number;
