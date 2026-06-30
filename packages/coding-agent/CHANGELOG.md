@@ -11,6 +11,9 @@
 ### Fixed
 
 - Fixed reviewer/`task` subagents whose incremental `yield` (`type: ["overall_correctness"]`, `type: ["findings"]`, …) carried a value that mismatched the matching property's sub-schema being silently accepted and then post-mortem rejected with `schema_violation` — opaquely swapping the agent's accepted output for an error blob. The yield tool now validates each incremental section's `data` against its top-level property's sub-schema (items schema for array-typed labels) and surfaces the same retry feedback as terminal yields, so models like `deepseek-v4-pro` that emit `"Correct"`/`"correct."`/`"approved"` for an enum field get up to three corrective retries; the existing `MAX_SCHEMA_RETRIES` override then accepts the value with `SUBAGENT_WARNING_SCHEMA_OVERRIDDEN` instead of losing the entire result. Unknown labels stay unconstrained ([#3870](https://github.com/can1357/oh-my-pi/issues/3870)).
+### Fixed
+
+- Fixed streaming tool-call previews (notably `write`) showing an empty body for the entire streaming phase by surfacing the partial JSON already in hand on the first reveal, then pacing only subsequent growth ([#3881](https://github.com/can1357/oh-my-pi/issues/3881)).
 
 ## [16.2.7] - 2026-06-30
 
