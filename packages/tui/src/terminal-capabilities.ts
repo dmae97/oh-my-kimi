@@ -144,6 +144,18 @@ export function isInsideTmux(env: NodeJS.ProcessEnv = Bun.env): boolean {
 	return Boolean(env.TMUX);
 }
 
+/** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
+export function isInsideTerminalMultiplexer(env: NodeJS.ProcessEnv = Bun.env): boolean {
+	// TMUX/STY/ZELLIJ/CMUX workspace+surface ids are authoritative session
+	// signals. TERM can also survive when those are stripped (`sudo` without -E,
+	// `su`, env-sanitizing launchers/ssh). Do not use CMUX_SOCKET_PATH here: it is
+	// a CLI socket override and can be set outside a CMUX terminal.
+	if (env.TMUX || env.STY || env.ZELLIJ) return true;
+	if (env.CMUX_WORKSPACE_ID || env.CMUX_SURFACE_ID) return true;
+	const term = env.TERM?.toLowerCase() ?? "";
+	return term.startsWith("tmux") || term.startsWith("screen");
+}
+
 /**
  * Wrap a control-sequence payload in tmux's DCS passthrough envelope. Each
  * ESC byte inside `payload` is doubled per tmux's escape rules. tmux strips
@@ -256,8 +268,7 @@ export function shouldEnableSynchronizedOutputByDefault(
 	// older tmux/screen synchronized-output handling is flaky and a mux may not
 	// pass DEC 2026 to the outer host. The DECRQM probe re-enables sync when the
 	// mux reports `?2026` supported.
-	const term = env.TERM?.toLowerCase() ?? "";
-	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+	if (isInsideTerminalMultiplexer(env)) {
 		return false;
 	}
 
@@ -301,8 +312,7 @@ export function detectRectangularSgrSupport(terminalId: TerminalId, env: NodeJS.
 	if (terminalId !== "kitty") return false;
 	const kill = env.PI_NO_DECCARA;
 	if (kill && kill !== "0" && kill.toLowerCase() !== "false") return false;
-	const term = env.TERM?.toLowerCase() ?? "";
-	if (env.TMUX || env.STY || env.ZELLIJ || term.startsWith("tmux") || term.startsWith("screen")) {
+	if (isInsideTerminalMultiplexer(env)) {
 		return false;
 	}
 	return true;
