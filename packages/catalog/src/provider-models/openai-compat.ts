@@ -156,11 +156,23 @@ function buildAnthropicReferenceMap(
  * first-party `/v1/models` endpoint but that models.dev has not catalogued yet.
  * Seeded into model generation so the bundled catalog is never gated on
  * models.dev's update cadence; deduped behind upstream catalog / models.dev
- * entries once those appear. Token limits and pricing are pinned
- * authoritatively in `applyAnthropicCatalogPolicy`, and `thinking` is re-baked
+ * entries once those appear. Token limits and pricing are pinned either directly or
+ * in `applyAnthropicCatalogPolicy`, and `thinking` is re-baked
  * by the generator's policy pass (scripts/generated-policies.ts).
  */
 export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
+	{
+		id: "claude-sonnet-5",
+		name: "Claude Sonnet 5",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	},
 	{
 		id: "claude-fable-5",
 		name: "Claude Fable 5",
