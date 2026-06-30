@@ -14,6 +14,9 @@
 - Improved non-ASCII text normalization by folding semantic emojis to ASCII labels (e.g., `[OK]`, `[WARN]`), dropping decorative emojis, and folding box-drawing symbols to ASCII skeletons.
 - Enhanced missing glyph rendering to use the embedded Silver TrueType fallback per-character, including support for East Asian wide characters across two grid cells.
 - Updated text wrapping, pagination, and provider shape geometries to support wide character footprints and updated X.org 8x13 font metrics.
+### Fixed
+
+- Fixed large snapcompact archives being reconstructed into unbounded per-request image payloads by adding a frame base64 byte budget and omitting over-budget archive frames from prompt blocks. ([#3792](https://github.com/can1357/oh-my-pi/issues/3792))
 
 ## [16.1.23] - 2026-06-26
 

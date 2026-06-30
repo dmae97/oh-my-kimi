@@ -8968,6 +8968,22 @@ export class AgentSession {
 						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
 					});
+					const framePayloadBytes = this.#snapcompactFramePayloadBytes(snapcompactResult);
+					if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
+						logger.warn("Snapcompact exceeded the per-request frame payload budget", {
+							model: this.model?.id,
+							framePayloadBytes,
+							budget: snapcompact.FRAME_DATA_BYTES_BUDGET,
+						});
+						this.emitNotice(
+							"warning",
+							"snapcompact produced too much standing image payload. No LLM fallback was attempted.",
+							"compaction",
+						);
+						throw new Error(
+							"snapcompact cannot run locally: standing image payload exceeds the per-request budget.",
+						);
+					}
 					const ctxWindow = this.model?.contextWindow ?? 0;
 					const budget =
 						ctxWindow > 0
@@ -10930,7 +10946,7 @@ export class AgentSession {
 	 */
 	#computeSnapcompactMaxFrames(preparation: CompactionPreparation, settings: CompactionSettings): number {
 		const ctxWindow = this.model?.contextWindow ?? 0;
-		if (ctxWindow <= 0) return snapcompact.MAX_FRAMES_DEFAULT;
+		if (ctxWindow <= 0) return Math.min(snapcompact.MAX_FRAMES_DEFAULT, snapcompact.maxFramesForDataBudget());
 		const reserve = effectiveReserveTokens(ctxWindow, settings);
 		let baseTokens = computeNonMessageTokens(this);
 		for (const message of preparation.recentMessages) {
@@ -10969,7 +10985,16 @@ export class AgentSession {
 		const capReserve = textEdgeTokens + SUMMARY_TEMPLATE_TOKENS;
 		const frameBudget = totalBudget - baseTokens - capReserve;
 		if (frameBudget < snapcompact.FRAME_TOKEN_ESTIMATE) return 1;
-		return Math.min(Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE), snapcompact.MAX_FRAMES_DEFAULT);
+		return Math.min(
+			Math.floor(frameBudget / snapcompact.FRAME_TOKEN_ESTIMATE),
+			snapcompact.MAX_FRAMES_DEFAULT,
+			snapcompact.maxFramesForDataBudget(),
+		);
+	}
+
+	#snapcompactFramePayloadBytes(result: snapcompact.CompactionResult): number {
+		const archive = snapcompact.getPreservedArchive(result.preserveData);
+		return archive ? snapcompact.frameDataBytes(archive.frames) : 0;
 	}
 
 	/**
@@ -10982,7 +11007,9 @@ export class AgentSession {
 	 */
 	#projectSnapcompactContextTokens(preparation: CompactionPreparation, result: snapcompact.CompactionResult): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
-		const blocks = archive ? snapcompact.historyBlocks(archive) : undefined;
+		const blocks = archive
+			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET })
+			: undefined;
 		const summaryMessage = createCompactionSummaryMessage(
 			result.summary,
 			result.tokensBefore,
@@ -11347,6 +11374,17 @@ export class AgentSession {
 							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
 						});
+						const framePayloadBytes = this.#snapcompactFramePayloadBytes(snapcompactResult);
+						if (framePayloadBytes > snapcompact.FRAME_DATA_BYTES_BUDGET) {
+							logger.warn("Snapcompact exceeded the per-request frame payload budget", {
+								model: this.model?.id,
+								framePayloadBytes,
+								budget: snapcompact.FRAME_DATA_BYTES_BUDGET,
+							});
+							snapcompactBlocker =
+								"snapcompact produced too much standing image payload; using context-full auto-compaction instead.";
+							snapcompactResult = undefined;
+						}
 						if (snapcompactResult) {
 							const ctxWindow = this.model?.contextWindow ?? 0;
 							const budget =
