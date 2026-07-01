@@ -117,10 +117,18 @@ export interface RestoreOptions {
 	readonly worktree?: boolean;
 }
 
+export interface FetchOptions {
+	readonly signal?: AbortSignal;
+	/** Deadline for the network transfer. Defaults to {@link GIT_NETWORK_TIMEOUT_MS}. */
+	readonly timeoutMs?: number;
+}
+
 export interface CloneOptions {
 	readonly ref?: string;
 	readonly sha?: string;
 	readonly signal?: AbortSignal;
+	/** Deadline for the network transfer. Defaults to {@link GIT_NETWORK_TIMEOUT_MS}. */
+	readonly timeoutMs?: number;
 }
 
 interface GitHeadBase extends GitRepository {
@@ -199,6 +207,13 @@ const GH_NON_INTERACTIVE_ENV = {
 
 /** Default deadline for git and gh subprocesses spawned by the coding agent. */
 export const GIT_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Default deadline for git subprocesses that perform network transfers
+ * (`clone`/`fetch`). Large-repo transfers legitimately outlive
+ * {@link GIT_COMMAND_TIMEOUT_MS}, so they get a wider deadline; local plumbing
+ * commands keep the short one.
+ */
+export const GIT_NETWORK_TIMEOUT_MS = 30 * 60 * 1000;
 /** Maximum captured stdout or stderr bytes retained from git and gh subprocesses. */
 export const GIT_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
@@ -208,9 +223,9 @@ const GIT_COMMAND_TERMINATE_GRACE_MS = 5_000;
 
 type CommandName = "git" | "gh";
 
-function resolveTimeoutMs(timeoutMs: number | undefined): number {
-	if (timeoutMs === undefined) return GIT_COMMAND_TIMEOUT_MS;
-	if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return GIT_COMMAND_TIMEOUT_MS;
+function resolveTimeoutMs(timeoutMs: number | undefined, fallback: number = GIT_COMMAND_TIMEOUT_MS): number {
+	if (timeoutMs === undefined) return fallback;
+	if (!Number.isFinite(timeoutMs) || timeoutMs < 0) return fallback;
 	return Math.trunc(timeoutMs);
 }
 
@@ -1337,15 +1352,18 @@ export async function checkout(cwd: string, ref: string, signal?: AbortSignal): 
 	await runEffect(cwd, ["checkout", ref], { signal });
 }
 
-/** Fetch a specific refspec from a remote. */
+/** Fetch a specific refspec from a remote. Network transfer: defaults to the {@link GIT_NETWORK_TIMEOUT_MS} deadline. */
 export async function fetch(
 	cwd: string,
 	remote: string,
 	source: string,
 	target: string,
-	signal?: AbortSignal,
+	options: FetchOptions = {},
 ): Promise<void> {
-	await runEffect(cwd, ["fetch", remote, `+${source}:${target}`], { signal });
+	await runEffect(cwd, ["fetch", remote, `+${source}:${target}`], {
+		signal: options.signal,
+		timeoutMs: resolveTimeoutMs(options.timeoutMs, GIT_NETWORK_TIMEOUT_MS),
+	});
 }
 
 /** Read a tree-ish into the index. */
@@ -1755,7 +1773,10 @@ export async function clone(url: string, targetDir: string, options: CloneOption
 	args.push(url, absoluteTarget);
 
 	try {
-		await runEffect(path.dirname(absoluteTarget), args, { signal: options.signal });
+		await runEffect(path.dirname(absoluteTarget), args, {
+			signal: options.signal,
+			timeoutMs: resolveTimeoutMs(options.timeoutMs, GIT_NETWORK_TIMEOUT_MS),
+		});
 		if (options.sha) {
 			try {
 				await checkout(absoluteTarget, options.sha, options.signal);
