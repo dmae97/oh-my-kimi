@@ -27,6 +27,7 @@
 use std::{
 	alloc::Layout,
 	backtrace::Backtrace,
+	cell::Cell,
 	ffi::OsStr,
 	fmt::Write as _,
 	fs::{self, OpenOptions},
@@ -53,22 +54,38 @@ const APP_NAME: &str = "omp";
 static INSTALL: Once = Once::new();
 static ALLOC_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+thread_local! {
+	/// Active `task::blocking` panic recovery frames on this thread.
+	///
+	/// The panic hook runs before [`std::panic::catch_unwind`] returns. A
+	/// borrow-free `Cell` lets the hook recognize panics that are already inside
+	/// a known recovery boundary without touching potentially borrowed task
+	/// state while the stack is unwinding.
+	static BLOCKING_TASK_PANIC_SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PanicDisposition {
+	Fatal,
+	LoggedRecoverable,
+	SilentRecoverable,
+}
+
 /// Install the panic and allocation-error hooks. Idempotent.
 pub fn install() {
 	INSTALL.call_once(|| {
 		let prev_panic = std::panic::take_hook();
-		std::panic::set_hook(Box::new(move |info| {
-			let report = format_panic_report(info);
-			// A panic raised while a uutils scope is active is caught at the
-			// uutils boundary (pi-shell `run_uutil`): the command fails with a
-			// non-zero exit instead of crashing the host. Record it to the log
-			// for diagnosis, but keep the recovered panic out of the user-facing
-			// stderr crash dump and skip the default abort hook.
-			let recoverable = pi_uutils_ctx::is_active();
-			persist(&report, CrashKind::Panic, !recoverable);
-			if !recoverable {
+		std::panic::set_hook(Box::new(move |info| match panic_disposition() {
+			PanicDisposition::SilentRecoverable => {},
+			PanicDisposition::LoggedRecoverable => {
+				let report = format_panic_report(info);
+				persist(&report, CrashKind::Panic, false);
+			},
+			PanicDisposition::Fatal => {
+				let report = format_panic_report(info);
+				persist(&report, CrashKind::Panic, true);
 				prev_panic(info);
-			}
+			},
 		}));
 
 		std::alloc::set_alloc_error_hook(|layout| {
@@ -85,6 +102,40 @@ pub fn install() {
 			process::abort();
 		});
 	});
+}
+
+/// Run `f` inside a `task::blocking` panic recovery boundary.
+///
+/// The global panic hook checks this thread-local scope before reporting a
+/// panic. When a blocking worker closure panics, [`std::panic::catch_unwind`]
+/// will turn it into a rejected JS Promise, so the hook must not emit a crash
+/// report or chain to the default hook while this scope is active.
+pub(crate) fn blocking_task_panic_scope<R>(f: impl FnOnce() -> R) -> R {
+	struct Guard;
+
+	impl Drop for Guard {
+		fn drop(&mut self) {
+			BLOCKING_TASK_PANIC_SCOPE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+		}
+	}
+
+	BLOCKING_TASK_PANIC_SCOPE_DEPTH.with(|d| d.set(d.get() + 1));
+	let _guard = Guard;
+	f()
+}
+
+fn blocking_task_panic_scope_active() -> bool {
+	BLOCKING_TASK_PANIC_SCOPE_DEPTH.with(|d| d.get() > 0)
+}
+
+fn panic_disposition() -> PanicDisposition {
+	if blocking_task_panic_scope_active() {
+		PanicDisposition::SilentRecoverable
+	} else if pi_uutils_ctx::is_active() {
+		PanicDisposition::LoggedRecoverable
+	} else {
+		PanicDisposition::Fatal
+	}
 }
 
 #[derive(Clone, Copy)]
@@ -326,6 +377,30 @@ fn unix_millis() -> u128 {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn blocking_task_panic_scope_silences_crash_reporting() {
+		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
+		blocking_task_panic_scope(|| {
+			assert_eq!(panic_disposition(), PanicDisposition::SilentRecoverable);
+		});
+		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
+	}
+
+	#[test]
+	fn blocking_task_panic_scope_restores_after_unwind() {
+		// `std::panic::set_hook` is process-global; serialize the swap with
+		// every other hook-mutating test so a parallel take/set cannot pin the
+		// noop hook as the global default (see `crate::testing`).
+		let _hook_guard = crate::testing::lock_panic_hook();
+		let prev = std::panic::take_hook();
+		std::panic::set_hook(Box::new(|_| {}));
+		let unwound = std::panic::catch_unwind(|| blocking_task_panic_scope(|| panic!("boom")));
+		std::panic::set_hook(prev);
+
+		assert!(unwound.is_err(), "panic propagated to catch_unwind");
+		assert_eq!(panic_disposition(), PanicDisposition::Fatal);
+	}
 
 	#[test]
 	fn alloc_report_contains_size_alignment_and_backtrace() {

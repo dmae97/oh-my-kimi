@@ -5,6 +5,9 @@
 ### Added
 
 - Added `workingDir` to `ShellRunResult` so hosts can sync session cwd without running a hidden probe command.
+### Fixed
+
+- Fixed `task::blocking` native worker panics aborting the host process instead of rejecting the returned JS Promise. `Blocking::compute` now catches unwinds before they cross napi-rs's plain `extern "C"` async-work callback and maps the payload to a `GenericFailure` `Error` — the FFI edge is not `C-unwind`, so a stray panic was force-aborting under Rust's stabilized C-unwind rules. Affects every `task::blocking`-backed native (grep, ast, glob, listWorkspace, html-to-markdown, snapcompact, fuzzy find, clipboard image read) ([#4071](https://github.com/can1357/oh-my-pi/issues/4071)).
 
 ## [16.2.11] - 2026-07-01
 

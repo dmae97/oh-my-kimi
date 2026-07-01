@@ -27,9 +27,12 @@
 //! }
 //! ```
 
-use std::future::Future;
+use std::{
+	future::Future,
+	panic::{AssertUnwindSafe, catch_unwind},
+};
 
-use napi::{Env, Error, Result, Task, bindgen_prelude::*};
+use napi::{Env, Error, Result, Status, Task, bindgen_prelude::*};
 use pi_shell::cancel as core_cancel;
 
 use crate::prof::profile_region;
@@ -172,11 +175,42 @@ where
 			.work
 			.take()
 			.ok_or_else(|| Error::from_reason("BlockingTask: work already consumed"))?;
-		work(self.cancel_token.clone())
+		let cancel_token = self.cancel_token.clone();
+		let tag = self.tag;
+		// Guard the napi-rs async-work FFI boundary. `execute` is registered as
+		// a plain `unsafe extern "C" fn` (napi 3.9.4 `src/async_work.rs:109`),
+		// so an unwind escaping this frame would cross a non-`C-unwind` FFI
+		// edge and force-abort the host under Rust's stabilized C-unwind rules
+		// (RFC 2945, stable since 1.81). The crash handler scope tells the
+		// global panic hook this panic is about to be caught and mapped to a
+		// `GenericFailure`, so it must not emit a native crash report.
+		match catch_unwind(AssertUnwindSafe(move || {
+			crate::crash_handler::blocking_task_panic_scope(move || work(cancel_token))
+		})) {
+			Ok(result) => result,
+			Err(payload) => Err(Error::new(
+				Status::GenericFailure,
+				format!("native task `{tag}` panicked: {}", panic_payload_message(&*payload)),
+			)),
+		}
 	}
 
 	fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
 		Ok(output)
+	}
+}
+
+/// Extract a printable message from a panic payload captured by
+/// [`std::panic::catch_unwind`]. Handles the two shapes `panic!` produces —
+/// `&'static str` (literal) and `String` (formatted) — and degrades to a
+/// sentinel for arbitrary `panic_any` payloads.
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+	if let Some(s) = payload.downcast_ref::<&'static str>() {
+		(*s).to_owned()
+	} else if let Some(s) = payload.downcast_ref::<String>() {
+		s.clone()
+	} else {
+		String::from("<non-string panic payload>")
 	}
 }
 
@@ -255,4 +289,111 @@ where
 		let _guard = profile_region(tag);
 		work.await
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	//! Regression coverage for the FFI-boundary panic guard in
+	//! [`Blocking::compute`]. These exercise the trait method directly on the
+	//! caller thread — libuv's async-work queue isn't running under
+	//! `cargo test`, but the guard sits inside `compute`, so calling it
+	//! synchronously proves the invariant: a panicking closure MUST NOT unwind
+	//! past this method.
+
+	use super::*;
+
+	/// Boxed panic hook signature, factored out so the [`SilenceHook`] wrapper
+	/// stays readable — matches [`std::panic::take_hook`]'s return type.
+	type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+	/// Suppress the default panic hook for a single `catch_unwind`, so injected
+	/// panic tests don't dump backtraces onto the test output.
+	///
+	/// [`std::panic::set_hook`] is process-global, so `SilenceHook` holds
+	/// [`crate::testing::lock_panic_hook`] for the entire take → set → run →
+	/// restore window. Without that lock, two parallel tests could interleave
+	/// their hook swaps and permanently install the noop hook, muting crash
+	/// diagnostics for every later test in the crate.
+	struct SilenceHook {
+		prev:   Option<PanicHook>,
+		_guard: std::sync::MutexGuard<'static, ()>,
+	}
+
+	impl SilenceHook {
+		fn new() -> Self {
+			let guard = crate::testing::lock_panic_hook();
+			let prev = std::panic::take_hook();
+			std::panic::set_hook(Box::new(|_| {}));
+			Self { prev: Some(prev), _guard: guard }
+		}
+	}
+
+	impl Drop for SilenceHook {
+		fn drop(&mut self) {
+			if let Some(prev) = self.prev.take() {
+				std::panic::set_hook(prev);
+			}
+		}
+	}
+
+	fn blocking_task<T, F>(tag: &'static str, work: F) -> Blocking<T>
+	where
+		T: Send + 'static,
+		F: FnOnce(CancelToken) -> Result<T> + Send + 'static,
+	{
+		Blocking { tag, cancel_token: CancelToken::default(), work: Some(Box::new(work)) }
+	}
+
+	#[test]
+	fn compute_forwards_ok_result() {
+		let mut task = blocking_task("t_ok", |_| Ok(42_u32));
+		assert_eq!(task.compute().unwrap(), 42);
+	}
+
+	#[test]
+	fn compute_forwards_err_result() {
+		let mut task = blocking_task::<u32, _>("t_err", |_| Err(Error::from_reason("boom")));
+		let err = task.compute().unwrap_err();
+		assert_eq!(err.status, Status::GenericFailure);
+		assert_eq!(err.reason, "boom");
+	}
+
+	#[test]
+	fn compute_catches_str_literal_panic() {
+		let _silence = SilenceHook::new();
+		let mut task = blocking_task::<u32, _>("t_panic_str", |_| panic!("kaboom"));
+		let err = task.compute().unwrap_err();
+		assert_eq!(err.status, Status::GenericFailure);
+		assert!(err.reason.contains("t_panic_str"), "reason = {}", err.reason);
+		assert!(err.reason.contains("kaboom"), "reason = {}", err.reason);
+	}
+
+	#[test]
+	fn compute_catches_formatted_panic() {
+		let _silence = SilenceHook::new();
+		let mut task = blocking_task::<u32, _>("t_panic_fmt", |_| {
+			let n = 7;
+			panic!("fmt {n}");
+		});
+		let err = task.compute().unwrap_err();
+		assert!(err.reason.contains("fmt 7"), "reason = {}", err.reason);
+	}
+
+	#[test]
+	fn compute_catches_non_string_panic() {
+		let _silence = SilenceHook::new();
+		let mut task = blocking_task::<u32, _>("t_panic_any", |_| {
+			std::panic::panic_any(0xdead_beef_u32);
+		});
+		let err = task.compute().unwrap_err();
+		assert!(err.reason.contains("<non-string panic payload>"), "reason = {}", err.reason);
+	}
+
+	#[test]
+	fn compute_rejects_second_call() {
+		let mut task = blocking_task("t_double", |_| Ok(1_u32));
+		assert_eq!(task.compute().unwrap(), 1);
+		let err = task.compute().unwrap_err();
+		assert!(err.reason.contains("work already consumed"), "reason = {}", err.reason);
+	}
 }
