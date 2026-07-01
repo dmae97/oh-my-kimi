@@ -126,6 +126,38 @@ describe("Patcher snapshot tag integrity", () => {
 		}
 		expect(fs.get(PATH)).toBe("current\n");
 	});
+
+	// A 16-bit snapshot tag can collide across two different file states.
+	// When the model authored line-anchored edits against snapshot A but the
+	// live file is a colliding text B, `computeFileHash` alone cannot tell them
+	// apart. The patcher must NOT take the no-drift path against B: it either
+	// recovers against the stored A (3-way merge) or rejects as stale.
+	// Regression for issue #4075.
+	it("refuses to accept a colliding live text as the tagged snapshot", async () => {
+		// These two texts both hash to `1D84`.
+		const SNAPSHOT_TEXT = "line one 263\nline two 4471\n";
+		const LIVE_TEXT = "line one 410\nline two 6970\n";
+		expect(computeFileHash(SNAPSHOT_TEXT)).toBe(computeFileHash(LIVE_TEXT));
+
+		const fs = new InMemoryFilesystem([[PATH, LIVE_TEXT]]);
+		const snapshots = new InMemorySnapshotStore();
+		// Tag was minted from SNAPSHOT_TEXT; live is the colliding LIVE_TEXT.
+		const tag = snapshots.record(PATH, SNAPSHOT_TEXT, [1, 2]);
+
+		const patcher = new Patcher({ fs, snapshots });
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=2:\n+edited from snapshot`));
+			throw new Error("expected MismatchError");
+		} catch (error) {
+			expect(error).toBeInstanceOf(MismatchError);
+			const message = (error as MismatchError).displayMessage;
+			// The tag IS a known snapshot, so we land on the drift branch.
+			expect(message).toMatch(/file changed between read and edit/);
+		}
+		// Live file untouched: line 2 must NOT have been overwritten with the
+		// model's edit anchored against the collider.
+		expect(fs.get(PATH)).toBe(LIVE_TEXT);
+	});
 });
 
 describe("Patcher mandatory snapshot tag policy", () => {

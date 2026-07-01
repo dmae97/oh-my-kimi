@@ -109,4 +109,47 @@ describe("InMemorySnapshotStore", () => {
 		// A tag no retained version carries yields no matches.
 		expect(store.findByHash(tag === "0000" ? "FFFF" : "0000")).toEqual([]);
 	});
+
+	// 4-hex tags are the low 16 bits of a non-cryptographic hash, so two
+	// genuinely different file states can collide (birthday collisions at
+	// ~256 distinct texts). The store must retain them as DISTINCT versions
+	// so downstream tag→text lookups can still tell them apart. Regression
+	// for issue #4075.
+	describe("hash collisions", () => {
+		// These two texts both hash to `1D84` under `computeFileHash`.
+		const COLLIDE_A = "line one 263\nline two 4471\n";
+		const COLLIDE_B = "line one 410\nline two 6970\n";
+
+		it("keeps two colliding texts as separate versions with separate seenLines", () => {
+			expect(computeFileHash(COLLIDE_A)).toBe(computeFileHash(COLLIDE_B));
+
+			const store = new InMemorySnapshotStore();
+			const tagA = store.record(PATH, COLLIDE_A, [1]);
+			const tagB = store.record(PATH, COLLIDE_B, [2]);
+			expect(tagA).toBe(tagB);
+
+			// The two texts must round-trip independently via byContent.
+			expect(store.byContent(PATH, COLLIDE_A)?.text).toBe(COLLIDE_A);
+			expect(store.byContent(PATH, COLLIDE_B)?.text).toBe(COLLIDE_B);
+			// seenLines never cross-contaminate: the [1] and [2] reads stay on
+			// their own snapshots even though both tags say `1D84`.
+			expect(store.byContent(PATH, COLLIDE_A)?.seenLines).toEqual(new Set([1]));
+			expect(store.byContent(PATH, COLLIDE_B)?.seenLines).toEqual(new Set([2]));
+			// byHash surfaces the most-recently-recorded version among the
+			// colliders (B was recorded second → head).
+			expect(store.byHash(PATH, tagA)?.text).toBe(COLLIDE_B);
+			expect(store.head(PATH)?.text).toBe(COLLIDE_B);
+		});
+
+		it("still fuses identical repeated reads of one colliding text onto one snapshot", () => {
+			const store = new InMemorySnapshotStore();
+			const first = store.record(PATH, COLLIDE_A, [1]);
+			const again = store.record(PATH, COLLIDE_A, [2]);
+			expect(again).toBe(first);
+			// One snapshot, seenLines union. The collider B is not present, so
+			// byContent(B) is null even though the tag matches.
+			expect(store.byContent(PATH, COLLIDE_A)?.seenLines).toEqual(new Set([1, 2]));
+			expect(store.byContent(PATH, COLLIDE_B)).toBeNull();
+		});
+	});
 });

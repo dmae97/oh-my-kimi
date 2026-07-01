@@ -38,7 +38,7 @@ import {
 import { MismatchError } from "./mismatch";
 import { detectLineEnding, type LineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { Recovery, type RecoveryResult } from "./recovery";
-import type { SnapshotStore } from "./snapshots";
+import type { Snapshot, SnapshotStore } from "./snapshots";
 import type { ApplyResult, BlockResolution, BlockResolver, Edit, FileOp } from "./types";
 
 export interface PatcherOptions {
@@ -480,14 +480,15 @@ export class Patcher {
 
 	/**
 	 * Reject an anchored edit that references a line the read which minted
-	 * `expected` never displayed. The snapshot's `seenLines` is the set of
-	 * 1-indexed lines a producer (read/search) actually showed under that tag;
-	 * absent or empty means no provenance was recorded, so the edit applies as
-	 * before. Only runs on the no-drift path, where anchor line numbers index
-	 * the tagged content 1:1.
+	 * `expected` never displayed. `matchedSnapshot` is the store version whose
+	 * text equals the live normalized content — the exact snapshot the model
+	 * anchored against. Absent means no provenance was recorded (the tag was
+	 * externally minted or aged out), so the edit applies as before. Only runs
+	 * on the no-drift path, where anchor line numbers index the tagged content
+	 * 1:1.
 	 */
-	#assertSeenLines(section: PatchSection, canonicalPath: string, expected: string): void {
-		const seen = this.snapshots.byHash(canonicalPath, expected)?.seenLines;
+	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
+		const seen = matchedSnapshot?.seenLines;
 		if (!seen || seen.size === 0) return;
 		const unseen = section.collectAnchorLines().filter(line => !seen.has(line));
 		if (unseen.length === 0) return;
@@ -520,7 +521,17 @@ export class Patcher {
 	}): ApplyResult {
 		const { section, canonicalPath, exists, normalized, edits } = args;
 		const expected = exists ? section.fileHash : undefined;
-		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
+		// A 16-bit tag can collide across two different file states, so equality
+		// on `computeFileHash(normalized) === expected` alone is not enough to
+		// prove the live text IS the snapshot the tag names. Also require that,
+		// when a snapshot for `(path, expected)` is retained, its stored text
+		// matches the live text. Otherwise the tag collides and we route through
+		// recovery/mismatch instead of applying line-anchored edits to unrelated
+		// live content (issue #4075).
+		const hashMatches = expected !== undefined && computeFileHash(normalized) === expected;
+		const matchedSnapshot = hashMatches ? this.snapshots.byContent(canonicalPath, normalized) : null;
+		const anyStoredForTag = hashMatches ? this.snapshots.byHash(canonicalPath, expected as string) : null;
+		const liveMatches = hashMatches && (anyStoredForTag === null || matchedSnapshot !== null);
 
 		// Resolve `replace_block N:` edits to concrete ranges before recovery
 		// runs. Block anchors are expressed against the snapshot the section tag
@@ -559,7 +570,7 @@ export class Patcher {
 			// The line numbers in `edits` index the exact content the tag names.
 			// Reject any anchor the read never displayed: editing lines the model
 			// has not seen is the off-by-memory mistake that mangles files.
-			if (expected !== undefined) this.#assertSeenLines(section, canonicalPath, expected);
+			if (expected !== undefined) this.#assertSeenLines(section, expected, matchedSnapshot);
 			const result = applyEdits(normalized, resolved);
 			return withResolveWarnings(blockResolutions.length > 0 ? { ...result, blockResolutions } : result);
 		}
