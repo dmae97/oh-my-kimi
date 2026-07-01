@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the interactive bash status line staying on the old working directory after `cd` changed the persistent shell directory. ([#3958](https://github.com/can1357/oh-my-pi/issues/3958))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

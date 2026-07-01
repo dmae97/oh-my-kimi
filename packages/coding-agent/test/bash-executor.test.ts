@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { syncBashSessionCwd } from "@oh-my-pi/pi-coding-agent/exec/bash-cwd-sync";
 import { buildMinimizerOptions, executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
@@ -119,6 +120,26 @@ describe("executeBash", () => {
 	it("honors cwd", async () => {
 		const result = await executeBash("pwd", { cwd: tempDir, timeout: 5000 });
 		expect(result.output.trim()).toBe(fs.realpathSync(tempDir));
+	});
+
+	it("syncs persistent shell directory changes back to the session", async () => {
+		const childDir = path.join(tempDir, "child");
+		fs.mkdirSync(childDir);
+		const sessionKey = `cwd-sync-${Date.now()}`;
+		await executeBash(`cd ${shellQuote(childDir)}`, { sessionKey, timeout: 5000, useUserShell: true });
+
+		const applied: string[] = [];
+		const synced = await syncBashSessionCwd({
+			sessionKey,
+			currentCwd: tempDir,
+			useUserShell: true,
+			applyCwd: async cwd => {
+				applied.push(cwd);
+			},
+		});
+
+		expect(synced).toBe(childDir);
+		expect(applied).toEqual([childDir]);
 	});
 
 	it("canonicalizes symlinked cwd before execution", async () => {

@@ -130,6 +130,7 @@ import {
 	prompt,
 	relativePathWithinRoot,
 	Snowflake,
+	setProjectDir,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
@@ -172,6 +173,7 @@ import {
 } from "../config/model-resolver";
 import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
+import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
 import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
@@ -188,6 +190,7 @@ import {
 } from "../eval/py/executor";
 import { disposeRubyKernelSessionsByOwner } from "../eval/rb/executor";
 import { defaultEvalSessionId } from "../eval/session-id";
+import { syncBashSessionCwd } from "../exec/bash-cwd-sync";
 import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
@@ -12772,6 +12775,19 @@ export class AgentSession {
 				timeout: clampTimeout("bash") * 1000,
 				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
 				useUserShell: options?.useUserShell,
+			});
+
+			await syncBashSessionCwd({
+				sessionKey: this.sessionId,
+				currentCwd: cwd,
+				useUserShell: options?.useUserShell,
+				applyCwd: async nextCwd => {
+					await this.sessionManager.moveTo(nextCwd);
+					setProjectDir(nextCwd);
+					await this.settings.reloadForCwd(nextCwd);
+					applyProviderGlobalsFromSettings(this.settings);
+					resetCapabilities();
+				},
 			});
 
 			this.recordBashResult(command, result, options);
