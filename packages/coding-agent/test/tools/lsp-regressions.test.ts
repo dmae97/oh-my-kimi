@@ -2146,12 +2146,7 @@ describe("lsp regressions", () => {
 			expect(loadConfigSpy).toHaveBeenCalledTimes(3);
 			expect(starOutput).toContain("Reloaded test-lsp");
 			expect(omittedOutput).toContain("Reloaded test-lsp");
-			expect(lspClient.getOrCreateClient).toHaveBeenCalledWith(
-				server,
-				tempDir.path(),
-				undefined,
-				expect.anything(),
-			);
+			expect(lspClient.getOrCreateClient).toHaveBeenCalledWith(server, tempDir.path(), undefined, expect.anything());
 		} finally {
 			vi.restoreAllMocks();
 			tempDir.removeSync();
@@ -2340,9 +2335,7 @@ describe("lsp regressions", () => {
 						const message = JSON.parse(pendingBytes.toString("utf-8", start, end)) as RpcMessage;
 						pendingBytes = pendingBytes.subarray(end);
 						if (message.method === "initialize") {
-							stdoutController?.enqueue(
-								frame({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } }),
-							);
+							stdoutController?.enqueue(frame({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } }));
 						}
 					}
 				});

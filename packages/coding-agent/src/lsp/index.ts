@@ -1786,12 +1786,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 					for (const { oldUri } of pairs) {
 						if (client.openFiles.has(oldUri)) {
-							await sendNotification(
-								client,
-								"textDocument/didClose",
-								{ textDocument: { uri: oldUri } },
-								signal,
-							);
+							await sendNotification(client, "textDocument/didClose", { textDocument: { uri: oldUri } }, signal);
 							client.openFiles.delete(oldUri);
 						}
 					}
@@ -2006,7 +2001,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [workspaceServerName, workspaceServerConfig] of servers) {
 				throwIfAborted(signal);
 				try {
-					const workspaceClient = await getOrCreateClient(workspaceServerConfig, this.session.cwd, undefined, signal);
+					const workspaceClient = await getOrCreateClient(
+						workspaceServerConfig,
+						this.session.cwd,
+						undefined,
+						signal,
+					);
 					const workspaceResult = (await sendRequest(
 						workspaceClient,
 						"workspace/symbol",
@@ -2077,7 +2077,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [workspaceServerName, workspaceServerConfig] of servers) {
 				throwIfAborted(signal);
 				try {
-					const workspaceClient = await getOrCreateClient(workspaceServerConfig, this.session.cwd, undefined, signal);
+					const workspaceClient = await getOrCreateClient(
+						workspaceServerConfig,
+						this.session.cwd,
+						undefined,
+						signal,
+					);
 					outputs.push(await reloadServer(workspaceClient, workspaceServerName, signal));
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
