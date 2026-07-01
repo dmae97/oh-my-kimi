@@ -298,4 +298,115 @@ describe("HookSelectorComponent", () => {
 		expect(done).not.toContain(theme.checkbox.checked);
 		expect(done).not.toContain(theme.checkbox.unchecked);
 	});
+
+	it("paints a selectedBg focus band across the highlighted checkbox row (outlined)", () => {
+		// Bug #4157: multi-select checkbox picker used only an accent fg to signal
+		// focus, which vanished on themes where accent ≈ text. The focused row
+		// must now carry the selectedBg band regardless of accent/text contrast.
+		const component = new HookSelectorComponent(
+			"Pick many",
+			["Apple", "Banana", "Cherry", "Done selecting", "Other (type your own)"],
+			() => {},
+			() => {},
+			{
+				outline: true,
+				selectionMarker: "checkbox",
+				markableCount: 3,
+				checkedIndices: [],
+				initialIndex: 0,
+			},
+		);
+		const bgProbe = theme.bg("selectedBg", "|");
+		const openBg = bgProbe.slice(0, bgProbe.indexOf("|"));
+
+		const rendered = component.render(80);
+		const appleRow = rendered.find(line => Bun.stripANSI(line).includes("Apple"));
+		const bananaRow = rendered.find(line => Bun.stripANSI(line).includes("Banana"));
+		const otherRow = rendered.find(line => Bun.stripANSI(line).includes("Other"));
+		expect(appleRow).toBeDefined();
+		expect(bananaRow).toBeDefined();
+		expect(otherRow).toBeDefined();
+		expect(appleRow).toContain(openBg);
+		expect(bananaRow).not.toContain(openBg);
+		expect(otherRow).not.toContain(openBg);
+	});
+
+	it("moves the selectedBg band with the cursor and paints control rows too", () => {
+		const build = (initialIndex: number) =>
+			new HookSelectorComponent(
+				"Pick many",
+				["Apple", "Banana", "Cherry", "Done selecting", "Other (type your own)"],
+				() => {},
+				() => {},
+				{
+					outline: true,
+					selectionMarker: "checkbox",
+					markableCount: 3,
+					checkedIndices: [],
+					initialIndex,
+				},
+			);
+		const bgProbe = theme.bg("selectedBg", "|");
+		const openBg = bgProbe.slice(0, bgProbe.indexOf("|"));
+		const bandedLabel = (component: HookSelectorComponent) => {
+			const rendered = component.render(80);
+			const banded = rendered.filter(line => line.includes(openBg));
+			const labels = ["Apple", "Banana", "Cherry", "Done selecting", "Other"];
+			return labels.find(label => banded.some(line => Bun.stripANSI(line).includes(label)));
+		};
+		expect(bandedLabel(build(1))).toBe("Banana");
+		// Control rows past markableCount ("Other") still receive the focus band
+		// even though they carry no checkbox marker.
+		expect(bandedLabel(build(4))).toBe("Other");
+	});
+
+	it("highlights the whole selected block including wrapped description rows", () => {
+		const component = new HookSelectorComponent(
+			"Choose",
+			[
+				{
+					label: "Alpha",
+					description:
+						"Detailed first-choice explanation long enough to wrap across multiple rendered rows once outlined inside a tight width.",
+				},
+				{ label: "Beta", description: "Second." },
+			],
+			() => {},
+			() => {},
+			{ outline: true, initialIndex: 0 },
+		);
+		const bgProbe = theme.bg("selectedBg", "|");
+		const openBg = bgProbe.slice(0, bgProbe.indexOf("|"));
+
+		const rendered = component.render(60);
+		const bandedRows = rendered.filter(line => line.includes(openBg));
+		// Label row plus at least one wrapped description continuation, all under
+		// the Alpha option; Beta must stay unbanded.
+		expect(bandedRows.length).toBeGreaterThanOrEqual(2);
+		const bandedContainsBeta = bandedRows.some(line => Bun.stripANSI(line).includes("Beta"));
+		expect(bandedContainsBeta).toBe(false);
+	});
+
+	it("paints the selectedBg band on the non-outlined plain list too", () => {
+		const component = new HookSelectorComponent(
+			"Pick",
+			["Apple", "Banana", "Cherry"],
+			() => {},
+			() => {},
+			{ initialIndex: 1 },
+		);
+		const bgProbe = theme.bg("selectedBg", "|");
+		const openBg = bgProbe.slice(0, bgProbe.indexOf("|"));
+
+		const rendered = component.render(80);
+		const appleRow = rendered.find(line => Bun.stripANSI(line).includes("Apple"));
+		const bananaRow = rendered.find(line => Bun.stripANSI(line).includes("Banana"));
+		const cherryRow = rendered.find(line => Bun.stripANSI(line).includes("Cherry"));
+		expect(appleRow).toBeDefined();
+		expect(bananaRow).toBeDefined();
+		expect(cherryRow).toBeDefined();
+		expect(bananaRow).toContain(openBg);
+		expect(appleRow).not.toContain(openBg);
+		expect(cherryRow).not.toContain(openBg);
+	});
 });
