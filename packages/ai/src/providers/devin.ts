@@ -284,10 +284,7 @@ export const streamDevin: StreamFunction<"devin-agent"> = (
 								: previousJson + tc.argumentsJson;
 							const delta = accumulated.slice(previousJson.length);
 							toolPartialJson.set(toolCallId, accumulated);
-							const throttled = parseStreamingJsonThrottled(
-								accumulated,
-								toolLastParseLen.get(toolCallId) ?? 0,
-							);
+							const throttled = parseStreamingJsonThrottled(accumulated, toolLastParseLen.get(toolCallId) ?? 0);
 							if (throttled) {
 								block.arguments = throttled.value;
 								toolLastParseLen.set(toolCallId, throttled.parsedLen);

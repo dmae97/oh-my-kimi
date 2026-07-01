@@ -102,7 +102,13 @@ import {
 	WriteSuccessSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { $env, parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled, sanitizeText } from "@oh-my-pi/pi-utils";
+import {
+	$env,
+	parseJsonWithRepair,
+	parseStreamingJson,
+	parseStreamingJsonThrottled,
+	sanitizeText,
+} from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type {
 	Api,
@@ -2112,10 +2118,7 @@ export function processInteractionUpdate(
 			// Throttle mid-stream parses to keep total parse work O(N) instead of O(N²)
 			// in the argument-buffer length; the authoritative full parse runs in
 			// `toolCallCompleted` (mcp branch) and the fallback end-of-stream path.
-			const throttled = parseStreamingJsonThrottled(
-				nextBuffer,
-				state.currentToolCall[kStreamingLastParseLen] ?? 0,
-			);
+			const throttled = parseStreamingJsonThrottled(nextBuffer, state.currentToolCall[kStreamingLastParseLen] ?? 0);
 			if (throttled) {
 				state.currentToolCall.arguments = throttled.value;
 				state.currentToolCall[kStreamingLastParseLen] = throttled.parsedLen;
