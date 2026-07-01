@@ -291,11 +291,11 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				hadAnyChanges = false;
 			} else {
 				const normalized = patchText.endsWith("\n") ? patchText : `${patchText}\n`;
-				changesApplied = await git.patch.canApplyText(repoRoot, normalized);
+				changesApplied = await git.patch.canApplyText(repoRoot, normalized, { threeWay: true });
 				hadAnyChanges = false;
 				if (changesApplied) {
 					try {
-						await git.patch.applyText(repoRoot, normalized);
+						await git.patch.applyText(repoRoot, normalized, { threeWay: true });
 						hadAnyChanges = true;
 					} catch {
 						changesApplied = false;

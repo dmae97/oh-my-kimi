@@ -1,3 +1,7 @@
+import { $ } from "bun";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { applyEligibleNestedPatches, mergeIsolatedChanges } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import type { SingleResult } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -22,9 +26,39 @@ function result(overrides: Partial<SingleResult> = {}): SingleResult {
 	};
 }
 
+const tempRoots: string[] = [];
+
+async function git(repoRoot: string, ...args: string[]): Promise<string> {
+	const result = await $`git ${args}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode !== 0) {
+		throw new Error(`git ${args.join(" ")} failed: ${result.stderr.toString()}`);
+	}
+	return result.text();
+}
+
+async function makeAlreadyAppliedPatchRepo(): Promise<{ repoRoot: string; patchPath: string }> {
+	const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolation-merge-"));
+	tempRoots.push(repoRoot);
+
+	await git(repoRoot, "init");
+	await git(repoRoot, "config", "user.email", "repro@example.com");
+	await git(repoRoot, "config", "user.name", "Repro");
+	await Bun.write(path.join(repoRoot, "foo.txt"), "old\n");
+	await git(repoRoot, "add", "foo.txt");
+	await git(repoRoot, "commit", "-m", "base");
+	await Bun.write(path.join(repoRoot, "foo.txt"), "new\n");
+	await git(repoRoot, "commit", "-am", "change");
+
+	const patchPath = path.join(repoRoot, "task.patch");
+	const patchText = await git(repoRoot, "diff-tree", "--binary", "--full-index", "--no-commit-id", "-p", "HEAD");
+	await Bun.write(patchPath, patchText);
+	return { repoRoot, patchPath };
+}
+
 describe("mergeIsolatedChanges", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
 	});
 
 	it("allows nested-only branch-mode patches to apply when no root branch was created", async () => {
@@ -61,6 +95,20 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.summary).toContain("Branch merge failed before a task branch could be created");
 		expect(outcome.summary).toContain("git apply --3way failed");
 		expect(outcome.summary).not.toContain("No changes to apply");
+	});
+
+	it("treats already-applied patch-mode diffs as successful no-ops", async () => {
+		const { repoRoot, patchPath } = await makeAlreadyAppliedPatchRepo();
+
+		const outcome = await mergeIsolatedChanges({
+			repoRoot,
+			mergeMode: "patch",
+			result: result({ patchPath }),
+		});
+
+		expect(outcome.changesApplied).toBe(true);
+		expect(outcome.summary).not.toContain("Patches were not applied");
+		expect(await git(repoRoot, "status", "--porcelain", "--", "foo.txt")).toBe("");
 	});
 
 	it("does not mark failed branch-mode runs as nested-patch eligible", async () => {
