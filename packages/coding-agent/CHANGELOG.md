@@ -43,6 +43,9 @@
 - Fixed performance degradation in session context and branch path reconstruction on deep linear histories.
 - Fixed agents repeating the same tool call across turns without corrective steering by wiring the cross-turn tool-call loop guard into sessions.
 - Fixed OpenAI-compatible model discovery (including LM Studio) reporting flat default context windows when proxies omit context length metadata, by resolving discovered IDs against the bundled model reference catalog to inherit accurate context windows, output limits, display names, modalities, and reasoning support.
+### Fixed
+
+- Fixed the interactive bash status line staying on the old working directory after `cd` changed the persistent shell directory. ([#3958](https://github.com/can1357/oh-my-pi/issues/3958))
 
 ## [16.2.11] - 2026-07-01
 

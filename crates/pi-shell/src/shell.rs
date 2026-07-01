@@ -59,6 +59,24 @@ impl ShellAbortState {
 	}
 }
 
+fn shell_working_dir_matches(shell: &BrushShell, cwd: &str) -> bool {
+	let requested = std::path::Path::new(cwd);
+	if !requested.is_absolute() {
+		return false;
+	}
+	let current = shell.working_dir();
+	current == requested
+}
+
+fn set_shell_working_dir_if_changed(shell: &mut BrushShell, cwd: &str) -> Result<()> {
+	if shell_working_dir_matches(shell, cwd) {
+		return Ok(());
+	}
+	shell
+		.set_working_dir(cwd)
+		.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))
+}
+
 #[derive(Clone)]
 struct ShellConfig {
 	session_env:   Option<HashMap<String, String>>,
@@ -99,10 +117,11 @@ pub struct MinimizerResult {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellRunResult {
-	pub exit_code: Option<i32>,
-	pub cancelled: bool,
-	pub timed_out: bool,
-	pub minimized: Option<MinimizerResult>,
+	pub exit_code:   Option<i32>,
+	pub cancelled:   bool,
+	pub timed_out:   bool,
+	pub minimized:   Option<MinimizerResult>,
+	pub working_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -322,10 +341,11 @@ async fn run_shell_session(
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellRunResult {
-				exit_code: None,
-				cancelled: matches!(reason, AbortReason::Signal),
-				timed_out: matches!(reason, AbortReason::Timeout),
-				minimized: None,
+				exit_code:   None,
+				cancelled:   matches!(reason, AbortReason::Signal),
+				timed_out:   matches!(reason, AbortReason::Timeout),
+				minimized:   None,
+				working_dir: None,
 			});
 		}
 	};
@@ -335,15 +355,16 @@ async fn run_shell_session(
 	let _ = process_cancel_bridge.await;
 	abort_state.clear().await;
 
-	let keepalive = res.as_ref().is_ok_and(|pair| session_keepalive(&pair.0));
+	let keepalive = res.as_ref().is_ok_and(|(exec, ..)| session_keepalive(exec));
 	if !keepalive {
 		*session.lock().await = None;
 	}
-	let (exec, minimized) = res?;
+	let (exec, minimized, working_dir) = res?;
 	Ok(ShellRunResult {
 		exit_code: Some(exit_code(&exec)),
 		cancelled: false,
 		timed_out: false,
+		working_dir,
 		minimized,
 	})
 }
@@ -390,10 +411,11 @@ async fn run_shell_oneshot(
 			}
 			let _ = process_cancel_bridge.await;
 			return Ok(ShellExecuteResult {
-				exit_code: None,
-				cancelled: matches!(reason, AbortReason::Signal),
-				timed_out: matches!(reason, AbortReason::Timeout),
-				minimized: None,
+				exit_code:   None,
+				cancelled:   matches!(reason, AbortReason::Signal),
+				timed_out:   matches!(reason, AbortReason::Timeout),
+				minimized:   None,
+				working_dir: None,
 			});
 		},
 	};
@@ -402,11 +424,12 @@ async fn run_shell_oneshot(
 	let _ = process_cancel_bridge.await;
 	let res = run_result
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
-	let (exec, minimized) = res?;
+	let (exec, minimized, working_dir) = res?;
 	Ok(ShellExecuteResult {
 		exit_code: Some(exit_code(&exec)),
 		cancelled: false,
 		timed_out: false,
+		working_dir,
 		minimized,
 	})
 }
@@ -458,6 +481,7 @@ async fn run_shell_oneshot_streams(
 				cancelled: matches!(reason, AbortReason::Signal),
 				timed_out: matches!(reason, AbortReason::Timeout),
 				minimized: None,
+				working_dir: None,
 			});
 		},
 	};
@@ -466,11 +490,12 @@ async fn run_shell_oneshot_streams(
 	let _ = process_cancel_bridge.await;
 	let res = run_result
 		.unwrap_or_else(|err| Err(Error::msg(format!("Shell execution task failed: {err}"))));
-	let exec = res?;
+	let (exec, working_dir) = res?;
 	Ok(ShellExecuteResult {
 		exit_code: Some(exit_code(&exec)),
 		cancelled: false,
 		timed_out: false,
+		working_dir,
 		minimized: None,
 	})
 }
@@ -760,12 +785,9 @@ async fn run_shell_command(
 	on_chunk: Option<Sender<String>>,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
-) -> Result<(ExecutionResult, Option<MinimizerResult>)> {
+) -> Result<(ExecutionResult, Option<MinimizerResult>, Option<String>)> {
 	if let Some(cwd) = options.cwd.as_deref() {
-		session
-			.shell
-			.set_working_dir(cwd)
-			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
+		set_shell_working_dir_if_changed(&mut session.shell, cwd)?;
 	}
 
 	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
@@ -802,7 +824,10 @@ async fn run_shell_command(
 			.map_err(|err| Error::msg(format!("Failed to pop env scope: {err}")))?;
 	}
 
-	result
+	result.map(|(exec, minimized)| {
+		let working_dir = Some(session.shell.working_dir().to_string_lossy().into_owned());
+		(exec, minimized, working_dir)
+	})
 }
 
 async fn run_shell_command_single(
@@ -1162,12 +1187,9 @@ async fn run_shell_command_streams(
 	streams: StreamSinks,
 	cancel_token: CancellationToken,
 	spawn_registry: Arc<process::SpawnRegistry>,
-) -> Result<ExecutionResult> {
+) -> Result<(ExecutionResult, Option<String>)> {
 	if let Some(cwd) = options.cwd.as_deref() {
-		session
-			.shell
-			.set_working_dir(cwd)
-			.map_err(|err| Error::msg(format!("Failed to set cwd: {err}")))?;
+		set_shell_working_dir_if_changed(&mut session.shell, cwd)?;
 	}
 
 	let env_scope_pushed = apply_command_env(&mut session.shell, options.env.as_ref())?;
@@ -1288,7 +1310,8 @@ async fn run_shell_command_streams(
 	let _ = cancel_bridge.await;
 
 	let result = result.map_err(|err| Error::msg(format!("Shell execution failed: {err}")))?;
-	Ok(result)
+	let working_dir = Some(session.shell.working_dir().to_string_lossy().into_owned());
+	Ok((result, working_dir))
 }
 
 async fn read_output_bytes(

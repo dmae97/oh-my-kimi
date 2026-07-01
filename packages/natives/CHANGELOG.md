@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `workingDir` to `ShellRunResult` so hosts can sync session cwd without running a hidden probe command.
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

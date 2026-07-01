@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { syncBashSessionCwd } from "@oh-my-pi/pi-coding-agent/exec/bash-cwd-sync";
 import { buildMinimizerOptions, executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
@@ -29,6 +30,22 @@ function makeTempDir(): string {
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function configureBashUserShell(homeDir: string): boolean {
+	if (process.platform === "win32" || !fs.existsSync("/bin/bash")) return false;
+	Settings.instance.set("shellPath", "/bin/bash");
+	vi.spyOn(Settings.prototype, "getShellConfig").mockReturnValue({
+		shell: "/bin/bash",
+		args: ["-c"],
+		env: {
+			PATH: Bun.env.PATH ?? "",
+			HOME: homeDir,
+			SHELL: "/bin/bash",
+		},
+		prefix: undefined,
+	});
+	return true;
 }
 
 /** Resolve once `predicate()` holds or `deadlineMs` passes, polling every 2ms. */
@@ -118,21 +135,101 @@ describe("executeBash", () => {
 
 	it("honors cwd", async () => {
 		const result = await executeBash("pwd", { cwd: tempDir, timeout: 5000 });
-		expect(result.output.trim()).toBe(fs.realpathSync(tempDir));
+		expect(result.output.trim()).toBe(tempDir);
 	});
 
-	it("canonicalizes symlinked cwd before execution", async () => {
+	it("returns and syncs persistent shell directory changes back to the session", async () => {
+		if (!configureBashUserShell(tempDir)) return;
+		const childDir = path.join(tempDir, "child");
+		fs.mkdirSync(childDir);
+		const realChildDir = fs.realpathSync(childDir);
+		const sessionKey = `cwd-sync-${Date.now()}`;
+		const result = await executeBash(`cd ${shellQuote(childDir)}`, { sessionKey, timeout: 5000, useUserShell: true });
+
+		expect(result.workingDir ? fs.realpathSync(result.workingDir) : undefined).toBe(realChildDir);
+
+		const applied: string[] = [];
+		const synced = await syncBashSessionCwd({
+			result,
+			currentCwd: tempDir,
+			applyCwd: async cwd => {
+				applied.push(cwd);
+			},
+		});
+
+		expect(synced ? fs.realpathSync(synced) : undefined).toBe(realChildDir);
+		expect(applied.map(cwd => fs.realpathSync(cwd))).toEqual([realChildDir]);
+	});
+
+	it("does not clobber the persistent shell status while syncing cwd", async () => {
+		if (!configureBashUserShell(tempDir)) return;
+		const childDir = path.join(tempDir, "child-status");
+		fs.mkdirSync(childDir);
+		const sessionKey = `cwd-status-${Date.now()}`;
+		const result = await executeBash(`cd ${shellQuote(childDir)}; false`, {
+			sessionKey,
+			cwd: tempDir,
+			timeout: 5000,
+			useUserShell: true,
+		});
+
+		expect(result.exitCode).toBe(1);
+		await syncBashSessionCwd({
+			result,
+			currentCwd: tempDir,
+			applyCwd: async () => {},
+		});
+
+		const status = await executeBash(`printf '%s\n' "$?"`, { sessionKey, timeout: 5000, useUserShell: true });
+		expect(status.output.trim()).toBe("1");
+	});
+
+	it("does not reset OLDPWD when synchronized cwd is passed to the next command", async () => {
+		if (!configureBashUserShell(tempDir)) return;
+		const childDir = path.join(tempDir, "child-oldpwd");
+		fs.mkdirSync(childDir);
+		const realTempDir = fs.realpathSync(tempDir);
+		const realChildDir = fs.realpathSync(childDir);
+		const sessionKey = `cwd-oldpwd-${Date.now()}`;
+		const result = await executeBash(`cd ${shellQuote(childDir)}`, {
+			sessionKey,
+			cwd: tempDir,
+			timeout: 5000,
+			useUserShell: true,
+		});
+		const synced = await syncBashSessionCwd({
+			result,
+			currentCwd: tempDir,
+			applyCwd: async () => {},
+		});
+
+		expect(synced ? fs.realpathSync(synced) : undefined).toBe(realChildDir);
+		const back = await executeBash("cd - >/dev/null; pwd", {
+			sessionKey,
+			cwd: synced ?? childDir,
+			timeout: 5000,
+			useUserShell: true,
+		});
+		expect(back.output.trim() ? fs.realpathSync(back.output.trim()) : undefined).toBe(realTempDir);
+	});
+
+	it("honors symlinked cwd requests in persistent shells", async () => {
 		if (process.platform === "win32") {
 			return;
 		}
+		if (!configureBashUserShell(tempDir)) return;
 
 		const realDir = path.join(tempDir, "real");
 		const linkDir = path.join(tempDir, "link");
 		fs.mkdirSync(realDir);
 		fs.symlinkSync(realDir, linkDir, "dir");
+		const sessionKey = `cwd-symlink-${Date.now()}`;
 
-		const result = await executeBash("pwd", { cwd: linkDir, timeout: 5000 });
-		expect(result.output.trim()).toBe(fs.realpathSync(linkDir));
+		await executeBash("pwd", { sessionKey, cwd: realDir, timeout: 5000, useUserShell: true });
+		const result = await executeBash("pwd", { sessionKey, cwd: linkDir, timeout: 5000, useUserShell: true });
+
+		expect(result.output.trim()).toBe(linkDir);
+		expect(result.workingDir).toBe(linkDir);
 	});
 
 	it("passes env vars", async () => {

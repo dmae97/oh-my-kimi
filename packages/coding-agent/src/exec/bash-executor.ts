@@ -3,7 +3,6 @@
  *
  * Uses brush-core via native bindings for shell execution.
  */
-import * as fs from "node:fs/promises";
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
 import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
@@ -51,6 +50,7 @@ export interface BashResult {
 	outputLines: number;
 	outputBytes: number;
 	artifactId?: string;
+	workingDir?: string;
 }
 
 const shellSessions = new Map<string, Shell>();
@@ -115,16 +115,10 @@ function quarantineShellSession(
 		.catch(() => undefined);
 }
 
-async function resolveShellCwd(cwd: string | undefined): Promise<string | undefined> {
-	if (!cwd) return undefined;
-
-	try {
-		// Brush preserves the working directory string verbatim, so resolve symlinks
-		// up front to keep `pwd` aligned with tools like `git worktree list`.
-		return await fs.realpath(cwd);
-	} catch {
-		return cwd;
-	}
+function resolveShellCwd(cwd: string | undefined): string | undefined {
+	// Preserve the caller's logical cwd string. Brush uses this value to update `PWD` and its
+	// internal working directory, so realpathing here collapses symlinks before the shell sees them.
+	return cwd;
 }
 
 /** Translate `ShellMinimizerSettings` into native `MinimizerOptions`, or `undefined` when disabled. */
@@ -219,7 +213,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 	const minimizer = buildMinimizerOptions(settings.getGroup("shellMinimizer"));
 
-	const commandCwd = await resolveShellCwd(options?.cwd);
+	const commandCwd = resolveShellCwd(options?.cwd);
 	const commandEnv = buildNonInteractiveEnv(options?.env);
 
 	// Apply command prefix if configured
@@ -429,6 +423,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		return {
 			exitCode: winner.result.exitCode,
 			cancelled: false,
+			workingDir: winner.result.workingDir,
 			...(await sink.dump()),
 		};
 	} catch (err) {
