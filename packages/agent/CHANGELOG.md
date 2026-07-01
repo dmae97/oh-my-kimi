@@ -6,6 +6,7 @@
 
 - Clarified queued-message skipped tool results so the model does not count a skipped tool as completed work or verification before retrying it when still needed.
 - Fixed branch summaries to preserve informative tool results from abandoned branches while still dropping useless tool output. ([#4076](https://github.com/can1357/oh-my-pi/issues/4076))
+- Fixed interruptible tool waits to also abort for host-provided IRC interrupts, not only user steering. ([#4160](https://github.com/can1357/oh-my-pi/issues/4160))
 
 ## [16.2.4] - 2026-06-28
 

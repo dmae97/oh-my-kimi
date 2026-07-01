@@ -200,6 +200,15 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	hasSteeringMessages?: () => boolean | Promise<boolean>;
 
 	/**
+	 * Peeks whether IRC messages should interrupt an interruptible waiting tool.
+	 *
+	 * Uses the same delivery rules as steering: the poll is non-consuming, only
+	 * runs for interruptible tools, and is ignored when interruptMode is "wait".
+	 * The host owns message injection at the next boundary.
+	 */
+	hasIrcInterrupts?: () => boolean | Promise<boolean>;
+
+	/**
 	 * Returns follow-up messages to process after the agent would otherwise stop.
 	 *
 	 * Called when the agent has no more tool calls and no steering messages.

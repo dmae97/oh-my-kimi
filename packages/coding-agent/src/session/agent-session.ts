@@ -240,6 +240,7 @@ import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
+import parentIrcSteerTemplate from "../prompts/steering/parent-irc.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -260,6 +261,7 @@ import toolCallLoopRedirectTemplate from "../prompts/system/tool-call-loop-redir
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
+import { AgentRegistry } from "../registry/agent-registry";
 import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
@@ -1515,8 +1517,10 @@ export class AgentSession {
 	#activeEvalExecutions = new Set<Promise<unknown>>();
 	#evalExecutionDisposing = false;
 
-	// Incoming IRC messages received while a turn was streaming; drained as
-	// non-interrupting asides at the next step boundary (see the aside provider).
+	// Incoming IRC messages received while a turn was streaming. Parent IRCs
+	// enter the steering queue; peer IRCs enter the interrupt queue and drain as
+	// asides at the next boundary; passive IRC records stay in the aside queue.
+	#pendingIrcInterrupts: CustomMessage[] = [];
 	#pendingIrcAsides: CustomMessage[] = [];
 	// Agent identity (registry id) used for IRC routing and job ownership.
 	#agentId: string | undefined;
@@ -1741,16 +1745,17 @@ export class AgentSession {
 		this.#resumeStrandedIrcAsides();
 	}
 
-	/** IRC asides that arrive after the loop's final aside poll — or while an abort skipped that
-	 *  poll — land in #pendingIrcAsides with no loop left to drain them; the queued-message drain's
-	 *  gate (agent.hasQueuedMessages()) does not count them. Once idle, wake a turn so the agent
-	 *  responds to the peer. Skip only when a queued steer/follow-up will itself drive a resume turn
-	 *  whose aside poll already consumes these (no double-wake). */
+	/** IRC records that arrive after the loop's final aside poll — or while an abort skipped that
+	 *  poll — land in pending IRC queues with no loop left to drain them; the queued-message drain's
+	 *  gate (agent.hasQueuedMessages()) does not count peer IRC interrupts. Once idle, wake a turn so
+	 *  the agent responds to the peer. Skip only when a queued steer/follow-up will itself drive a
+	 *  resume turn whose aside poll already consumes these (no double-wake). */
 	#resumeStrandedIrcAsides(): void {
 		if (this.#isDisposed || this.isStreaming) return;
-		if (this.#pendingIrcAsides.length === 0) return;
+		if (this.#pendingIrcInterrupts.length === 0 && this.#pendingIrcAsides.length === 0) return;
 		if (this.#canAutoContinueForFollowUp() && this.agent.hasQueuedMessages()) return;
-		const records = this.#pendingIrcAsides;
+		const records = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
+		this.#pendingIrcInterrupts = [];
 		this.#pendingIrcAsides = [];
 		this.#wakeForIrc(records);
 	}
@@ -1961,10 +1966,13 @@ export class AgentSession {
 			},
 		});
 		// Background-job completions / late diagnostics are pulled into the run at
-		// each step boundary as non-interrupting asides (see Agent.getAsideMessages),
-		// so they reach the model between requests without waiting for a yield.
+		// each step boundary as non-interrupting asides. Peer IRCs share the aside
+		// injection boundary, but also expose a non-consuming interrupt peek so
+		// `job poll` / `irc wait` can return early before the boundary drains them.
+		this.agent.hasIrcInterrupts = () => this.#pendingIrcInterrupts.length > 0;
 		this.agent.setAsideMessageProvider(() => {
-			const pendingIrc = this.#pendingIrcAsides;
+			const pendingIrc = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
+			this.#pendingIrcInterrupts = [];
 			this.#pendingIrcAsides = [];
 			const thunks: AsideMessage[] = pendingIrc.map(record => () => record);
 			thunks.push(...this.yieldQueue.drainLazy());
@@ -5219,6 +5227,7 @@ export class AgentSession {
 		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
+		this.agent.hasIrcInterrupts = undefined;
 		this.#stopAdvisorRuntime();
 		this.#evalExecutionDisposing = true;
 	}
@@ -13382,46 +13391,53 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Surfaces (and consumes) IRC incoming asides that have reached this running
-	 * session but have not yet been folded into the next model step.
+	 * Surfaces (and consumes) pending IRC incoming records before the next model
+	 * step can inject them automatically.
 	 *
 	 * The inbox tool injects the formatted body into the tool result, so the
-	 * model sees it once via the result. Leaving the record in
-	 * {@link #pendingIrcAsides} would let the aside provider deliver it a second
-	 * time at the next step boundary — including on `peek`, which is why peek
-	 * also drains here.
+	 * model sees it once via the result. Leaving the record in either pending
+	 * IRC queue would deliver it a second time at the next step boundary —
+	 * including on `peek`, which is why peek also drains here.
 	 */
 	drainPendingIrcInboxMessages(agentId: string): IrcMessage[] {
 		const messages: IrcMessage[] = [];
-		const remaining: CustomMessage[] = [];
-		for (const record of this.#pendingIrcAsides) {
-			if (record.customType !== "irc:incoming") {
-				remaining.push(record);
-				continue;
+		const remainingInterrupts: CustomMessage[] = [];
+		const remainingAsides: CustomMessage[] = [];
+		const queues = [
+			{ records: this.#pendingIrcInterrupts, remaining: remainingInterrupts },
+			{ records: this.#pendingIrcAsides, remaining: remainingAsides },
+		];
+		for (const queue of queues) {
+			for (const record of queue.records) {
+				if (record.customType !== "irc:incoming") {
+					queue.remaining.push(record);
+					continue;
+				}
+				const details = record.details;
+				if (!details || typeof details !== "object") {
+					queue.remaining.push(record);
+					continue;
+				}
+				const id = Reflect.get(details, "id");
+				const from = Reflect.get(details, "from");
+				const body = Reflect.get(details, "message");
+				const replyTo = Reflect.get(details, "replyTo");
+				if (typeof id !== "string" || typeof from !== "string" || typeof body !== "string") {
+					queue.remaining.push(record);
+					continue;
+				}
+				messages.push({
+					id,
+					from,
+					to: agentId,
+					body,
+					ts: record.timestamp,
+					...(typeof replyTo === "string" ? { replyTo } : {}),
+				});
 			}
-			const details = record.details;
-			if (!details || typeof details !== "object") {
-				remaining.push(record);
-				continue;
-			}
-			const id = Reflect.get(details, "id");
-			const from = Reflect.get(details, "from");
-			const body = Reflect.get(details, "message");
-			const replyTo = Reflect.get(details, "replyTo");
-			if (typeof id !== "string" || typeof from !== "string" || typeof body !== "string") {
-				remaining.push(record);
-				continue;
-			}
-			messages.push({
-				id,
-				from,
-				to: agentId,
-				body,
-				ts: record.timestamp,
-				...(typeof replyTo === "string" ? { replyTo } : {}),
-			});
 		}
-		this.#pendingIrcAsides = remaining;
+		this.#pendingIrcInterrupts = remainingInterrupts;
+		this.#pendingIrcAsides = remainingAsides;
 		return messages;
 	}
 
@@ -13459,6 +13475,7 @@ export class AgentSession {
 				message: msg.body,
 				replyTo: msg.replyTo ?? "",
 				autoReplied: autoReply,
+				interrupting: this.isStreaming,
 			}),
 			display: true,
 			details: { id: msg.id, from: msg.from, message: msg.body, ...(msg.replyTo ? { replyTo: msg.replyTo } : {}) },
@@ -13467,7 +13484,18 @@ export class AgentSession {
 		};
 		void this.#emitSessionEvent({ type: "irc_message", message: record });
 		if (this.isStreaming) {
-			this.#pendingIrcAsides.push(record);
+			const recipientParentId = AgentRegistry.global().get(msg.to)?.parentId;
+			if (recipientParentId === msg.from) {
+				this.agent.steer({
+					role: "user",
+					content: prompt.render(parentIrcSteerTemplate, { from: msg.from, message: msg.body }),
+					attribution: "agent",
+					timestamp: msg.ts,
+					steering: true,
+				});
+			} else {
+				this.#pendingIrcInterrupts.push(record);
+			}
 			if (autoReply) void this.#runIrcAutoReply(msg);
 			return "injected";
 		}
@@ -13678,8 +13706,9 @@ export class AgentSession {
 	 * of the next prompt so the model still sees them.
 	 */
 	#flushPendingIrcAsides(): void {
-		if (this.#pendingIrcAsides.length === 0) return;
-		const records = this.#pendingIrcAsides;
+		if (this.#pendingIrcInterrupts.length === 0 && this.#pendingIrcAsides.length === 0) return;
+		const records = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
+		this.#pendingIrcInterrupts = [];
 		this.#pendingIrcAsides = [];
 		for (const record of records) {
 			// emitExternalEvent on message_end appends to agent state and dispatches

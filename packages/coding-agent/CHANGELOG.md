@@ -87,6 +87,7 @@
 ### Fixed
 
 - Fixed the `eval` tool's live `agent()`/`parallel()` subagent progress tree overlapping and duplicating rows in the TUI under heavy concurrent fan-out. The progress block was reported commit-stable while still mutating (rows ticking stats/duration and inserting/removing a "current tool" line), letting still-changing rows get promoted into native scrollback and then repeatedly re-displayed. It now stays commit-unstable until the eval cell settles, matching the existing `ssh` tool's handling of the same class of bug.
+- Fixed parent and peer IRC messages being delayed until `job poll` / `irc wait` completed by routing them through interruptible delivery. ([#4160](https://github.com/can1357/oh-my-pi/issues/4160))
 
 ## [16.2.11] - 2026-07-01
 
