@@ -216,7 +216,7 @@ async function syncFileContent(
 			if (serverConfig.createClient) {
 				return;
 			}
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			throwIfAborted(signal);
 			await syncContent(client, absolutePath, content, signal);
 		}),
@@ -244,7 +244,7 @@ async function notifyFileSaved(
 			if (serverConfig.createClient) {
 				return;
 			}
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			await notifySaved(client, absolutePath, signal);
 		}),
 	);
@@ -469,7 +469,7 @@ async function reloadServer(client: LspClient, serverName: string, signal?: Abor
 	// as a request hangs until the tool deadline on servers that route it to
 	// the notification handler and never respond.
 	try {
-		await sendNotification(client, "workspace/didChangeConfiguration", { settings: {} });
+		await sendNotification(client, "workspace/didChangeConfiguration", { settings: {} }, signal);
 		return `Reloaded ${serverName}`;
 	} catch {
 		client.proc.kill();
@@ -643,12 +643,13 @@ async function captureDiagnosticVersions(
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
 	initTimeoutMs?: number,
+	signal?: AbortSignal,
 ): Promise<ServerVersionMap> {
 	const versions = new Map<string, number>();
 	await Promise.allSettled(
 		servers.map(async ([serverName, serverConfig]) => {
 			if (serverConfig.createClient) return;
-			const client = await getOrCreateClient(serverConfig, cwd, initTimeoutMs);
+			const client = await getOrCreateClient(serverConfig, cwd, initTimeoutMs, signal);
 			versions.set(serverName, client.diagnosticsVersion);
 		}),
 	);
@@ -659,12 +660,13 @@ async function captureOpenFileVersions(
 	absolutePath: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	signal?: AbortSignal,
 ): Promise<ServerVersionMap> {
 	const uri = fileToUri(absolutePath);
 	const versions = new Map<string, number>();
 	await Promise.allSettled(
 		servers.map(async ([serverName, serverConfig]) => {
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			const version = client.openFiles.get(uri)?.version;
 			if (version !== undefined) {
 				versions.set(serverName, version);
@@ -711,7 +713,7 @@ async function getDiagnosticsForFile(
 			}
 
 			// Default: use LSP
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			throwIfAborted(signal);
 			if (isProjectAwareLspServer(serverConfig)) {
 				await waitForProjectLoaded(client, signal);
@@ -812,7 +814,7 @@ async function formatContent(
 			}
 
 			// Default: use LSP
-			const client = await getOrCreateClient(serverConfig, cwd);
+			const client = await getOrCreateClient(serverConfig, cwd, undefined, signal);
 			throwIfAborted(signal);
 
 			const caps = client.serverCapabilities;
@@ -1118,7 +1120,7 @@ async function runLspWritethrough(
 	// Capture diagnostic versions BEFORE syncing to detect stale diagnostics
 	// Bound client creation by the writethrough budget: a hung/broken server
 	// must not add its full init wait (30s default) to every edit.
-	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers, 5_000) : undefined;
+	const minVersions = enableDiagnostics ? await captureDiagnosticVersions(cwd, servers, 5_000, signal) : undefined;
 	let expectedDocumentVersions: ServerVersionMap | undefined;
 
 	let formatter: FileFormatResult | undefined;
@@ -1163,7 +1165,7 @@ async function runLspWritethrough(
 			}
 
 			if (enableDiagnostics) {
-				expectedDocumentVersions = await captureOpenFileVersions(dst, cwd, lspServers);
+				expectedDocumentVersions = await captureOpenFileVersions(dst, cwd, lspServers, operationSignal);
 			}
 
 			// 5. Notify saved to LSP servers
@@ -1460,7 +1462,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 							allDiagnostics.push(...diagnostics);
 							continue;
 						}
-						const client = await getOrCreateClient(serverConfig, this.session.cwd);
+						const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 						if (isProjectAwareLspServer(serverConfig)) {
 							await waitForProjectLoaded(client, signal);
 							throwIfAborted(signal);
@@ -1634,7 +1636,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [serverName, serverConfig] of servers) {
 				throwIfAborted(signal);
 				try {
-					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 					if (isProjectAwareLspServer(serverConfig)) {
 						await waitForProjectLoaded(client, signal);
 					}
@@ -1781,16 +1783,14 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 			for (const [serverName, serverConfig] of servers) {
 				try {
-					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 					for (const { oldUri } of pairs) {
 						if (client.openFiles.has(oldUri)) {
-							await sendNotification(client, "textDocument/didClose", {
-								textDocument: { uri: oldUri },
-							});
+							await sendNotification(client, "textDocument/didClose", { textDocument: { uri: oldUri } }, signal);
 							client.openFiles.delete(oldUri);
 						}
 					}
-					await sendNotification(client, "workspace/didRenameFiles", lspParams);
+					await sendNotification(client, "workspace/didRenameFiles", lspParams, signal);
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
 						throw err;
@@ -1844,7 +1844,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [serverName, serverConfig] of serverList) {
 				throwIfAborted(signal);
 				try {
-					const client = await getOrCreateClient(serverConfig, this.session.cwd);
+					const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 					respondingServers.add(serverName);
 					const caps = client.serverCapabilities ?? {};
 					sections.push(`${serverName}:`);
@@ -1930,7 +1930,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			try {
-				const client = await getOrCreateClient(chosenConfig, this.session.cwd);
+				const client = await getOrCreateClient(chosenConfig, this.session.cwd, undefined, signal);
 				if (resolvedTarget) {
 					await ensureFileOpen(client, resolvedTarget, signal);
 				}
@@ -2001,7 +2001,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [workspaceServerName, workspaceServerConfig] of servers) {
 				throwIfAborted(signal);
 				try {
-					const workspaceClient = await getOrCreateClient(workspaceServerConfig, this.session.cwd);
+					const workspaceClient = await getOrCreateClient(
+						workspaceServerConfig,
+						this.session.cwd,
+						undefined,
+						signal,
+					);
 					const workspaceResult = (await sendRequest(
 						workspaceClient,
 						"workspace/symbol",
@@ -2072,7 +2077,12 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			for (const [workspaceServerName, workspaceServerConfig] of servers) {
 				throwIfAborted(signal);
 				try {
-					const workspaceClient = await getOrCreateClient(workspaceServerConfig, this.session.cwd);
+					const workspaceClient = await getOrCreateClient(
+						workspaceServerConfig,
+						this.session.cwd,
+						undefined,
+						signal,
+					);
 					outputs.push(await reloadServer(workspaceClient, workspaceServerName, signal));
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
@@ -2099,7 +2109,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		const [serverName, serverConfig] = serverInfo;
 
 		try {
-			const client = await getOrCreateClient(serverConfig, this.session.cwd);
+			const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
 			const targetFile = resolvedFile;
 			const isRustAnalyzerServer =
 				serverName === "rust-analyzer" ||
