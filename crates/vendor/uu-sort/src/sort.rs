@@ -45,7 +45,7 @@ use custom_str_cmp::custom_str_cmp;
 use ext_sort::ext_sort;
 use foldhash::{HashMap, SharedSeed, fast::FoldHasher};
 use numeric_str_cmp::{NumInfo, NumInfoParseSettings, human_numeric_str_cmp, numeric_str_cmp};
-use pi_uutils_ctx::format_usage;
+use pi_uutils_ctx::{format_usage, rayon_global_pool_available};
 use rand::{RngExt as _, rng};
 #[cfg(not(target_os = "wasi"))]
 use rayon::slice::ParallelSliceMut;
@@ -2108,13 +2108,15 @@ fn uu_sort(matches: &ArgMatches, legacy_warnings: &[LegacyKeyWarning]) -> UResul
 			.map_or_else(|| "0".to_string(), String::from);
 		#[cfg(not(target_os = "wasi"))]
 		{
-			let num_threads = match settings.threads.parse::<usize>() {
-				Ok(0) | Err(_) => std::thread::available_parallelism().map_or(1, NonZero::get),
-				Ok(n) => n,
-			};
-			let _ = rayon::ThreadPoolBuilder::new()
-				.num_threads(num_threads)
-				.build_global();
+			if rayon_global_pool_available() {
+				let num_threads = match settings.threads.parse::<usize>() {
+					Ok(0) | Err(_) => std::thread::available_parallelism().map_or(1, NonZero::get),
+					Ok(n) => n,
+				};
+				let _ = rayon::ThreadPoolBuilder::new()
+					.num_threads(num_threads)
+					.build_global();
+			}
 		}
 	}
 
@@ -2584,15 +2586,25 @@ fn exec(
 fn sort_by<'a>(unsorted: &mut Vec<Line<'a>>, settings: &GlobalSettings, line_data: &LineData<'a>) {
 	let cmp = |a: &Line<'a>, b: &Line<'a>| compare_by(a, b, settings, line_data, line_data);
 	// WASI does not support threads, so use non-parallel sort to avoid
-	// rayon's thread pool which triggers an unreachable trap.
+	// rayon's thread pool which triggers an unreachable trap. Windows can also
+	// force sequential sort when pi-natives could not safely configure Rayon's
+	// process-global worker pool under commit pressure.
 	if settings.stable || settings.unique {
 		#[cfg(not(target_os = "wasi"))]
-		unsorted.par_sort_by(cmp);
+		if rayon_global_pool_available() {
+			unsorted.par_sort_by(cmp);
+		} else {
+			unsorted.sort_by(cmp);
+		}
 		#[cfg(target_os = "wasi")]
 		unsorted.sort_by(cmp);
 	} else {
 		#[cfg(not(target_os = "wasi"))]
-		unsorted.par_sort_unstable_by(cmp);
+		if rayon_global_pool_available() {
+			unsorted.par_sort_unstable_by(cmp);
+		} else {
+			unsorted.sort_unstable_by(cmp);
+		}
 		#[cfg(target_os = "wasi")]
 		unsorted.sort_unstable_by(cmp);
 	}

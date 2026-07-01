@@ -20,6 +20,9 @@
 
 - Added embedded Silver TrueType font rendering support to `renderSnapcompactPng`, featuring automatic per-glyph fallback for missing bitmap characters and anti-aliased scaling for East Asian wide code points.
 - Added the `snapcompactSupportedChars` function to check font capability for specific characters.
+### Fixed
+
+- Fixed `pi-natives` aborting on Windows under low commit charge when Rayon's global pool lazily spawned one worker per logical CPU for `count_tokens` or vendored `sort`. The post-load native runtime installer now configures Rayon's global pool through the same Windows thread-spawn probe used for Tokio and keeps patched Rayon callsites sequential if no worker remains after reserving capacity for native helper threads ([#3770](https://github.com/can1357/oh-my-pi/issues/3770)).
 
 ## [16.2.5] - 2026-06-28
 

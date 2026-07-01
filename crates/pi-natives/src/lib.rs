@@ -76,6 +76,15 @@ const NAPI_TOKIO_MAX_WORKER_THREADS: usize = 4;
 #[cfg(target_os = "windows")]
 const NAPI_TOKIO_MAX_BLOCKING_THREADS: usize = 8;
 
+/// Upper bound on Rayon's global pool on Windows. Rayon is used for CPU-bound
+/// helpers (`count_tokens`, vendored `sort`), but the global pool cannot
+/// recover if its first lazy initialization fails after Windows refuses worker
+/// threads.
+#[cfg(any(target_os = "windows", test))]
+const RAYON_MAX_THREADS: usize = 8;
+#[cfg(any(target_os = "windows", test))]
+const RAYON_RESERVED_NON_RAYON_THREADS: usize = 1;
+
 /// Windows worker count we'd *like*, before checking what the OS will actually
 /// grant: the Tokio default (one per core) clamped to
 /// [`NAPI_TOKIO_MAX_WORKER_THREADS`].
@@ -84,6 +93,36 @@ fn desired_worker_threads() -> usize {
 	std::thread::available_parallelism()
 		.map_or(1, |threads| threads.get())
 		.clamp(1, NAPI_TOKIO_MAX_WORKER_THREADS)
+}
+
+#[cfg(target_os = "windows")]
+fn desired_rayon_threads() -> usize {
+	clamped_rayon_threads(std::thread::available_parallelism().map_or(1, |threads| threads.get()))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn clamped_rayon_threads(threads: usize) -> usize {
+	threads.clamp(1, RAYON_MAX_THREADS)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(target_os = "windows", test))]
+enum RayonPoolPlan {
+	WorkerThreads(usize),
+	SkipGlobalPool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn rayon_pool_plan(desired: usize, spawnable: usize) -> RayonPoolPlan {
+	let desired = clamped_rayon_threads(desired);
+	let workers = spawnable
+		.saturating_sub(RAYON_RESERVED_NON_RAYON_THREADS)
+		.min(desired);
+	if workers > 0 {
+		RayonPoolPlan::WorkerThreads(workers)
+	} else {
+		RayonPoolPlan::SkipGlobalPool
+	}
 }
 
 /// Probe how many worker threads Windows will let us hold alive
@@ -127,6 +166,35 @@ fn probe_spawnable_workers(target: usize) -> usize {
 		let _ = handle.join();
 	}
 	spawned
+}
+
+/// Install Rayon's global pool before any `par_iter` or vendored uutils sort
+/// path can lazily initialize it with Rayon's default one-thread-per-core
+/// policy. When the probe sees fewer workers than requested, reserve capacity
+/// for native code that must still perform its own `thread::spawn` (notably
+/// vendored `sort`'s external-sort helper) and build the global pool with the
+/// remaining spawnable count; when no worker remains after that reserve, leave
+/// the global pool untouched and keep patched Rayon callsites on sequential
+/// paths.
+/// Rayon stores global initialization in a `Once`, so a failed
+/// `build_global()` call would permanently poison the process for later
+/// parallel work.
+#[cfg(target_os = "windows")]
+fn configure_rayon_pool() {
+	let desired = desired_rayon_threads();
+	let plan = rayon_pool_plan(desired, probe_spawnable_workers(desired));
+	let result = match plan {
+		RayonPoolPlan::WorkerThreads(threads) => rayon::ThreadPoolBuilder::new()
+			.num_threads(threads)
+			.build_global(),
+		RayonPoolPlan::SkipGlobalPool => {
+			pi_uutils_ctx::set_rayon_global_pool_available(false);
+			return;
+		},
+	};
+	if result.is_ok() {
+		pi_uutils_ctx::set_rayon_global_pool_available(true);
+	}
 }
 
 /// Build the custom Tokio runtime napi-rs uses on Windows, sized to what the
@@ -198,21 +266,29 @@ fn install_native_crash_handler() {
 #[cfg(target_os = "windows")]
 static TOKIO_RUNTIME_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-/// Install the bounded Tokio runtime napi-rs adopts for async exports.
+/// Install the bounded Tokio runtime napi-rs adopts for async exports and the
+/// bounded Rayon global pool used by native parallel iterators.
 ///
 /// The JS loader calls this exactly once, synchronously, right *after* `dlopen`
-/// returns and *before* any async native runs — never from `#[module_init]`.
-/// Building a multi-thread runtime eagerly spawns worker threads, and doing
-/// that during module init (while the dynamic-loader lock is held) deadlocks on
-/// some hosts: a fresh worker blocks acquiring the loader lock that the init
-/// thread still owns. napi-rs only materializes its runtime on the first async
-/// call (`RT` is a `LazyLock`) and `create_custom_tokio_runtime` merely records
-/// the runtime in a `OnceLock`, so installing it post-load is still honored.
-/// Without it napi builds its own default (one worker per CPU, spawned eagerly)
-/// which aborts the process (`os error 1455`) on a memory-constrained Windows
-/// host before any JS error can surface; [`create_windows_napi_tokio_runtime`]
-/// pre-flights the spawn instead. If no runtime can be built we leave napi-rs
-/// to its default. Idempotent.
+/// returns and *before* any async native or parallel iterator runs — never from
+/// `#[module_init]`. Building a multi-thread runtime eagerly spawns worker
+/// threads, and doing that during module init (while the dynamic-loader lock is
+/// held) deadlocks on some hosts: a fresh worker blocks acquiring the loader
+/// lock that the init thread still owns. napi-rs only materializes its runtime
+/// on the first async call (`RT` is a `LazyLock`) and
+/// `create_custom_tokio_runtime` merely records the runtime in a `OnceLock`, so
+/// installing it post-load is still honored.
+///
+/// Without the Tokio override napi builds its own default (one worker per CPU,
+/// spawned eagerly), which aborts the process (`os error 1455`) on a
+/// memory-constrained Windows host before any JS error can surface;
+/// [`create_windows_napi_tokio_runtime`] pre-flights the spawn instead. Rayon
+/// has the same one-thread-per-core lazy default, so [`configure_rayon_pool`]
+/// installs a probed global pool before `count_tokens` or vendored `sort` can
+/// trigger it across a N-API nounwind boundary. If no worker thread is
+/// spawnable, patched Rayon callsites stay sequential rather than registering a
+/// current-thread-only global pool that cannot steal work from later native
+/// calls. Idempotent.
 #[napi(js_name = "__ompInstallTokioRuntime")]
 #[allow(clippy::missing_const_for_fn, reason = "napi macro is incompatible with const fn")]
 pub fn omp_install_tokio_runtime() {
@@ -223,5 +299,40 @@ pub fn omp_install_tokio_runtime() {
 	#[cfg(target_os = "windows")]
 	if let Some(runtime) = create_windows_napi_tokio_runtime() {
 		create_custom_tokio_runtime(runtime);
+	}
+	#[cfg(target_os = "windows")]
+	configure_rayon_pool();
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{RAYON_MAX_THREADS, RayonPoolPlan, clamped_rayon_threads, rayon_pool_plan};
+
+	#[test]
+	fn rayon_threads_are_capped_for_windows_commit_pressure() {
+		assert_eq!(clamped_rayon_threads(0), 1);
+		assert_eq!(clamped_rayon_threads(1), 1);
+		assert_eq!(clamped_rayon_threads(RAYON_MAX_THREADS + 1), RAYON_MAX_THREADS);
+	}
+
+	#[test]
+	fn rayon_uses_requested_pool_when_probe_covers_request_and_reserve() {
+		assert_eq!(rayon_pool_plan(4, 5), RayonPoolPlan::WorkerThreads(4));
+		assert_eq!(
+			rayon_pool_plan(RAYON_MAX_THREADS + 4, usize::MAX),
+			RayonPoolPlan::WorkerThreads(RAYON_MAX_THREADS)
+		);
+	}
+
+	#[test]
+	fn rayon_uses_worker_pool_after_reserving_non_rayon_capacity() {
+		assert_eq!(rayon_pool_plan(4, 3), RayonPoolPlan::WorkerThreads(2));
+		assert_eq!(rayon_pool_plan(1, 2), RayonPoolPlan::WorkerThreads(1));
+	}
+
+	#[test]
+	fn rayon_skips_global_pool_when_only_reserved_capacity_can_spawn() {
+		assert_eq!(rayon_pool_plan(4, 1), RayonPoolPlan::SkipGlobalPool);
+		assert_eq!(rayon_pool_plan(1, 0), RayonPoolPlan::SkipGlobalPool);
 	}
 }

@@ -51,6 +51,8 @@ thread_local! {
 	static SCOPE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
+static RAYON_GLOBAL_POOL_AVAILABLE: AtomicBool = AtomicBool::new(!cfg!(target_os = "windows"));
+
 /// I/O streams, working directory, environment, and cancel flag for a single
 /// utility invocation. Grouped into one value to keep [`scope`] readable.
 pub struct ScopeIo {
@@ -122,6 +124,20 @@ pub fn scope<R>(io: ScopeIo, f: impl FnOnce() -> R) -> R {
 #[must_use]
 pub fn is_active() -> bool {
 	SCOPE_DEPTH.with(|d| d.get() > 0)
+}
+
+/// Records whether patched native callsites may use Rayon's process-global
+/// worker pool without risking lazy initialization under Windows commit
+/// pressure.
+pub fn set_rayon_global_pool_available(available: bool) {
+	RAYON_GLOBAL_POOL_AVAILABLE.store(available, Ordering::SeqCst);
+}
+
+/// Returns whether patched native callsites may enter Rayon's process-global
+/// worker pool.
+#[must_use]
+pub fn rayon_global_pool_available() -> bool {
+	RAYON_GLOBAL_POOL_AVAILABLE.load(Ordering::SeqCst)
 }
 
 /// Returns the exit code accumulated via [`set_exit_code`] during the current
