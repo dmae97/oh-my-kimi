@@ -204,6 +204,7 @@ export const GIT_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
 const GIT_COMMAND_TIMEOUT_EXIT_CODE = 124;
 const GIT_OUTPUT_TRUNCATED_MARKER = "\n[git subprocess output truncated after 8 MiB]\n";
+const GIT_COMMAND_TERMINATE_GRACE_MS = 5_000;
 
 type CommandName = "git" | "gh";
 
@@ -223,13 +224,38 @@ function formatCommandLabel(command: CommandName, args: readonly string[]): stri
 	return `${command} ${args.join(" ")}`.trim();
 }
 
+async function waitForChildExit(child: Subprocess, timeoutMs: number): Promise<boolean> {
+	if (timeoutMs <= 0) return false;
+	const timeout = Promise.withResolvers<false>();
+	const timer = setTimeout(() => timeout.resolve(false), timeoutMs);
+	timer.unref?.();
+	try {
+		return await Promise.race([
+			child.exited.then(
+				() => true,
+				() => true,
+			),
+			timeout.promise,
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+async function terminateTimedOutChild(child: Subprocess): Promise<void> {
+	child.kill("SIGTERM");
+	if (await waitForChildExit(child, GIT_COMMAND_TERMINATE_GRACE_MS)) return;
+	child.kill("SIGKILL");
+	await waitForChildExit(child, GIT_COMMAND_TERMINATE_GRACE_MS);
+}
+
 async function waitForExitWithTimeout(
 	child: Subprocess,
 	commandLabel: string,
 	timeoutMs: number,
 ): Promise<{ exitCode: number | null; timedOut: false } | { timedOut: true; stderr: string }> {
 	if (timeoutMs === 0) {
-		child.kill("SIGTERM");
+		await terminateTimedOutChild(child);
 		return { timedOut: true, stderr: `${commandLabel} timed out after 0ms` };
 	}
 	const timeout = Promise.withResolvers<"timeout">();
@@ -243,7 +269,7 @@ async function waitForExitWithTimeout(
 		if (result.kind === "exit") {
 			return { timedOut: false, exitCode: result.exitCode };
 		}
-		child.kill("SIGTERM");
+		await terminateTimedOutChild(child);
 		return { timedOut: true, stderr: `${commandLabel} timed out after ${timeoutMs}ms` };
 	} finally {
 		clearTimeout(timer);

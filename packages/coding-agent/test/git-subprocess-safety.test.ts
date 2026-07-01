@@ -76,9 +76,15 @@ describe("git subprocess safety", () => {
 		expect(output).toContain("truncated");
 	});
 
-	it("kills git commands that exceed the subprocess timeout", async () => {
+	it("kills git commands that exceed the subprocess timeout before returning", async () => {
 		vi.useFakeTimers();
-		const child = createFakeProcess("", "", 0, new Promise<number>(() => {}));
+		const exited = Promise.withResolvers<number>();
+		const child = createFakeProcess("", "", 0, exited.promise);
+		const kill = vi.fn((signal?: NodeJS.Signals) => {
+			if (signal === "SIGKILL") exited.resolve(1);
+			return true;
+		});
+		child.kill = kill;
 		vi.spyOn(Bun, "spawn").mockImplementation(createSpawnMock(() => child));
 
 		const failure = git.push("/work/pi").then(
@@ -87,9 +93,13 @@ describe("git subprocess safety", () => {
 		);
 		vi.advanceTimersByTime(git.GIT_COMMAND_TIMEOUT_MS);
 		await flushMicrotasks();
+		expect(kill).toHaveBeenCalledWith("SIGTERM");
+
+		vi.advanceTimersByTime(5_000);
+		await flushMicrotasks();
 		const error = await failure;
 
-		expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(kill).toHaveBeenCalledWith("SIGKILL");
 		expect(error).toBeInstanceOf(git.GitCommandError);
 		expect(String(error.message)).toContain("timed out");
 	});
