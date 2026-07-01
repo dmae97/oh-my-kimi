@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed extension `tool_call` handlers running without a timeout, so a hung third-party extension could indefinitely block tool execution. `ExtensionRunner.emitToolCall` now bounds each handler by `extensionHandlerTimeoutMs` (30s default) with a fail-closed policy — on timeout the runner emits an `ExtensionError`, logs a warning, and returns `{ block: true, reason: "Extension <path> timed out after <ms>ms" }`, symmetric with the existing per-handler error path and with `emitToolResult`'s timeout wrapping. ([#3948](https://github.com/can1357/oh-my-pi/issues/3948))
+- Fixed extension `tool_call` handlers running without a timeout, so a hung third-party extension could indefinitely block tool execution. `ExtensionRunner.emitToolCall` now bounds each handler by `extensionHandlerTimeoutMs` (30s default) with a fail-closed policy — on timeout the runner emits an `ExtensionError`, logs a warning, and returns `{ block: true, reason: "Extension <path> timed out after <ms>ms" }`, symmetric with the existing per-handler error path and with `emitToolResult`'s timeout wrapping. The internal timeout race also switched from `Bun.sleep(ms).then(...)` (which left an uncancellable timer registered with the event loop after every successful handler) to `setTimeout`/`clearTimeout`, so a completed `tool_call`/`tool_result` handler no longer keeps a non-interactive CLI alive for up to 30s past exit. ([#3948](https://github.com/can1357/oh-my-pi/issues/3948))
 
 ## [16.2.10] - 2026-06-30
 

@@ -98,6 +98,32 @@ function handlerTimeoutForEvent(eventType: string): number {
 
 const EXTENSION_HANDLER_TIMEOUT = Symbol("extensionHandlerTimeout");
 
+/**
+ * Race `work` against a `timeoutMs` budget, clearing the pending timer the
+ * instant the work settles.
+ *
+ * We deliberately avoid `Bun.sleep(timeoutMs).then(...)` here: that leaves an
+ * uncancellable timer registered with the event loop, so every successful
+ * handler race leaks a timer that keeps the process alive until the deadline
+ * fires — up to the default 30s cap, which stalls non-interactive CLI exit
+ * after any subscribed `tool_call`/`tool_result` handler runs (issue #3948
+ * review, `chatgpt-codex-connector[bot]`). `setTimeout` returns a handle we
+ * can `clearTimeout` on the winning branch.
+ */
+async function raceHandlerWithTimeout<T>(
+	work: Promise<T>,
+	timeoutMs: number,
+): Promise<T | typeof EXTENSION_HANDLER_TIMEOUT> {
+	const { promise: timeoutPromise, resolve: resolveTimeout } =
+		Promise.withResolvers<typeof EXTENSION_HANDLER_TIMEOUT>();
+	const timer = setTimeout(() => resolveTimeout(EXTENSION_HANDLER_TIMEOUT), timeoutMs);
+	try {
+		return await Promise.race([work, timeoutPromise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 const MAX_PENDING_CREDENTIAL_DISABLED = 32;
 
 /**
@@ -555,10 +581,7 @@ export class ExtensionRunner {
 		timeoutMs: number,
 	): Promise<TResult | undefined> {
 		try {
-			const handlerResult = await Promise.race([
-				Promise.resolve(handler(event, ctx)),
-				Bun.sleep(timeoutMs).then(() => EXTENSION_HANDLER_TIMEOUT),
-			]);
+			const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
 			if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 				const error = `handler timed out after ${timeoutMs}ms`;
 				logger.warn("Extension handler timed out", {
@@ -719,10 +742,7 @@ export class ExtensionRunner {
 
 			for (const handler of handlers) {
 				try {
-					const handlerResult = await Promise.race([
-						Promise.resolve(handler(event, ctx)),
-						Bun.sleep(timeoutMs).then(() => EXTENSION_HANDLER_TIMEOUT),
-					]);
+					const handlerResult = await raceHandlerWithTimeout(Promise.resolve(handler(event, ctx)), timeoutMs);
 
 					if (handlerResult === EXTENSION_HANDLER_TIMEOUT) {
 						const error = `handler timed out after ${timeoutMs}ms`;
