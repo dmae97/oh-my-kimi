@@ -6666,9 +6666,8 @@ export class AgentSession {
 
 		const planFilePath = this.#planReferencePath;
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, this.#localProtocolOptions());
-		let planContent: string;
 		try {
-			planContent = await Bun.file(resolvedPlanPath).text();
+			await fs.promises.access(resolvedPlanPath, fs.constants.R_OK);
 		} catch (error) {
 			if (isEnoent(error)) {
 				return null;
@@ -6678,7 +6677,6 @@ export class AgentSession {
 
 		const content = prompt.render(planModeReferencePrompt, {
 			planFilePath,
-			planContent,
 		});
 
 		this.#planReferenceSent = true;

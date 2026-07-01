@@ -50,6 +50,9 @@
 ### Fixed
 
 - Fixed the multi-select (checkbox) `ask` picker showing no visible cursor on themes where `accent` fg is close to the terminal foreground; the focused option now renders as a full-width `selectedBg` highlight band spanning label and wrapped description rows, matching the Ctrl+R history overlay ([#4157](https://github.com/can1357/oh-my-pi/issues/4157)).
+### Fixed
+
+- Fixed approved plan execution prompts embedding the full plan instead of requiring the executor to read the durable `local://<slug>-plan.md` file. ([#4164](https://github.com/can1357/oh-my-pi/issues/4164))
 
 ## [16.2.12] - 2026-07-01
 
