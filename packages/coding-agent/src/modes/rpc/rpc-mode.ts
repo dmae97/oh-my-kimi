@@ -12,7 +12,7 @@
  */
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { isZodSchema, zodToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { $env, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
+import { $env, isRecord, readJsonl, Snowflake } from "@oh-my-pi/pi-utils";
 import { reset as resetCapabilities } from "../../capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -41,8 +41,11 @@ import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
+	RpcHostToolResult,
+	RpcHostToolUpdate,
 	RpcHostUriCancelRequest,
 	RpcHostUriRequest,
+	RpcHostUriResult,
 	RpcResponse,
 	RpcSessionState,
 	RpcSubagentSubscriptionLevel,
@@ -211,6 +214,97 @@ export function watchAndReportLocalOnlyPromptResult(input: {
 		hasExtensionAgentMessageTask: trackedPrompt.hasAgentMessageTask,
 		waitForExtensionAgentMessageTasks: trackedPrompt.waitForAgentMessageTasks,
 	});
+}
+
+/**
+ * Dependencies for {@link dispatchRpcInputFrame}. Provided by the RPC mode
+ * entrypoint; broken out so tests can drive the input loop with stubs.
+ */
+export interface RpcInputFrameDeps {
+	handleCommand: (command: RpcCommand) => Promise<RpcResponse>;
+	output: RpcOutput;
+	errorResponse: (id: string | undefined, command: string, message: string) => RpcResponse;
+	pendingExtensionRequests: Map<string, PendingExtensionRequest>;
+	onHostToolResult: (frame: RpcHostToolResult) => void;
+	onHostToolUpdate: (frame: RpcHostToolUpdate) => void;
+	onHostUriResult: (frame: RpcHostUriResult) => void;
+}
+
+/**
+ * Structural guard for a well-formed extension UI response frame. Mirrors the
+ * shape declared in {@link RpcExtensionUIResponse} — a truthy record with
+ * `type === "extension_ui_response"` and a string `id`. Payload variants (value,
+ * confirmed, cancelled) are validated at the read site.
+ */
+export function isRpcExtensionUIResponse(value: unknown): value is RpcExtensionUIResponse {
+	if (!isRecord(value)) return false;
+	return value.type === "extension_ui_response" && typeof value.id === "string";
+}
+
+/**
+ * Dispatch a single parsed frame from the RPC input stream.
+ *
+ * Bash commands are dispatched in the background so the caller (the stdin loop
+ * in {@link runRpcMode}) can keep reading subsequent frames while a shell
+ * command is still running. This lets a client send `abort_bash` (or any other
+ * command) while a long-running `bash` is in flight. Response correlation is
+ * preserved via each command's `id`; ordering across concurrent commands is
+ * not guaranteed and clients MUST match on `id`.
+ *
+ * @returns `undefined` when the frame was routed to a side-channel handler
+ *   (extension UI response, host tool/URI frames) or dispatched in the
+ *   background (`bash`). Otherwise a promise that resolves once the response
+ *   for the command has been emitted via `output`. Errors from `handleCommand`
+ *   on non-`bash` commands propagate; the caller is expected to wrap them.
+ */
+export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps): Promise<void> | undefined {
+	// Side-channel: extension UI responses resolve a pending dialog promise.
+	if (isRpcExtensionUIResponse(parsed)) {
+		const pending = deps.pendingExtensionRequests.get(parsed.id);
+		if (pending) pending.resolve(parsed);
+		return undefined;
+	}
+
+	if (isRpcHostToolResult(parsed)) {
+		deps.onHostToolResult(parsed);
+		return undefined;
+	}
+
+	if (isRpcHostToolUpdate(parsed)) {
+		deps.onHostToolUpdate(parsed);
+		return undefined;
+	}
+
+	if (isRpcHostUriResult(parsed)) {
+		deps.onHostUriResult(parsed);
+		return undefined;
+	}
+
+	// Regular RPC command. The transport contract states each remaining frame
+	// is an {@link RpcCommand}; `handleCommand`'s `default` arm surfaces
+	// unknown discriminants as an error response, so we do not shape-check
+	// the union here.
+	const command = parsed as RpcCommand;
+
+	// `bash` can run for a long time. Dispatch it in the background so a
+	// subsequent `abort_bash` frame can be read and handled without waiting
+	// for the shell command to finish on its own. The response is emitted
+	// when `handleCommand` resolves; clients correlate via `command.id`.
+	if (command.type === "bash") {
+		void (async () => {
+			try {
+				deps.output(await deps.handleCommand(command));
+			} catch (err: unknown) {
+				const message = err instanceof Error ? err.message : String(err);
+				deps.output(deps.errorResponse(command.id, "bash", message));
+			}
+		})();
+		return undefined;
+	}
+
+	return (async () => {
+		deps.output(await deps.handleCommand(command));
+	})();
 }
 
 export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
@@ -1110,41 +1204,29 @@ export async function runRpcMode(
 		process.exit(0);
 	}
 
-	// Listen for JSON input using Bun's stdin
+	const dispatchFrameDeps: RpcInputFrameDeps = {
+		handleCommand,
+		output,
+		errorResponse: error,
+		pendingExtensionRequests,
+		onHostToolResult: frame => hostToolBridge.handleResult(frame),
+		onHostToolUpdate: frame => hostToolBridge.handleUpdate(frame),
+		onHostUriResult: frame => hostUriBridge.handleResult(frame),
+	};
+
+	// Listen for JSON input using Bun's stdin. Frame dispatch lives in
+	// dispatchRpcInputFrame so it can be exercised directly by tests; see the
+	// helper's docstring for the concurrency contract.
 	for await (const parsed of readJsonl(Bun.stdin.stream())) {
 		try {
-			// Handle extension UI responses
-			if ((parsed as RpcExtensionUIResponse).type === "extension_ui_response") {
-				const response = parsed as RpcExtensionUIResponse;
-				const pending = pendingExtensionRequests.get(response.id);
-				if (pending) {
-					pending.resolve(response);
-				}
-				continue;
+			const awaited = dispatchRpcInputFrame(parsed, dispatchFrameDeps);
+			if (awaited) {
+				await awaited;
+				// Check for deferred shutdown request (idle between commands).
+				// Skipped when a bash command was just dispatched in the
+				// background — shutdown checks run after subsequent frames.
+				await checkShutdownRequested();
 			}
-
-			if (isRpcHostToolResult(parsed)) {
-				hostToolBridge.handleResult(parsed);
-				continue;
-			}
-
-			if (isRpcHostToolUpdate(parsed)) {
-				hostToolBridge.handleUpdate(parsed);
-				continue;
-			}
-
-			if (isRpcHostUriResult(parsed)) {
-				hostUriBridge.handleResult(parsed);
-				continue;
-			}
-
-			// Handle regular commands
-			const command = parsed as RpcCommand;
-			const response = await handleCommand(command);
-			output(response);
-
-			// Check for deferred shutdown request (idle between commands)
-			await checkShutdownRequested();
 		} catch (e: unknown) {
 			const message = e instanceof Error ? e.message : String(e);
 			output(error(undefined, "parse", `Failed to parse command: ${message}`));
