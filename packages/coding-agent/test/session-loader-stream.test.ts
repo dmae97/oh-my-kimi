@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { loadEntriesFromFileStream, parseSessionContent } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
 // Parity contract for the ≥8MiB streaming loader (now Bun.JSONL-based): it must
 // produce the SAME entries + titleSlot as the common-path parser
@@ -38,6 +39,39 @@ async function writeTemp(content: string): Promise<string> {
 	return file;
 }
 
+function entryTypes(entries: FileEntry[]): string[] {
+	return entries.map(entry => entry.type);
+}
+
+function entryIds(entries: FileEntry[]): string[] {
+	return entries.map(entry => entry.id);
+}
+
+function messageIds(entries: FileEntry[]): string[] {
+	return entries.filter(entry => entry.type === "message").map(entry => entry.id);
+}
+
+function messageTexts(entries: FileEntry[]): string[] {
+	const texts: string[] = [];
+	for (const entry of entries) {
+		if (entry.type !== "message") continue;
+		const content = entry.message.content;
+		if (!Array.isArray(content)) continue;
+		const first = content[0];
+		if (
+			first &&
+			typeof first === "object" &&
+			"type" in first &&
+			first.type === "text" &&
+			"text" in first &&
+			typeof first.text === "string"
+		) {
+			texts.push(first.text);
+		}
+	}
+	return texts;
+}
+
 describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 	it("matches parseSessionContent on title slot + valid + malformed + blank lines", async () => {
 		const slotLine = serializeTitleSlot({ title: "Hello world", source: "user", updatedAt: ISO });
@@ -60,10 +94,8 @@ describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 		expect(stream).toEqual(reference);
 		// And the concrete contracts that parity implies:
 		expect(stream.titleSlot?.title).toBe("Hello world"); // title slot peeled + folded
-		expect(stream.entries.map(e => (e as { type: string }).type)).toEqual(["session", "message", "message"]);
-		const ids = stream.entries
-			.filter(e => (e as { type: string }).type === "message")
-			.map(e => (e as { id?: string }).id);
+		expect(entryTypes(stream.entries)).toEqual(["session", "message", "message"]);
+		const ids = messageIds(stream.entries);
 		expect(ids).toEqual(["m1", "m2"]); // valid entries kept in order, malformed skipped
 	});
 
@@ -82,7 +114,7 @@ describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 
 		expect(stream).toEqual(reference);
 		expect(stream.titleSlot).toBeUndefined();
-		expect(stream.entries.map(e => (e as { id?: string }).id)).toEqual(["s1", "m1", "m2"]);
+		expect(entryIds(stream.entries)).toEqual(["s1", "m1", "m2"]);
 	});
 
 	it("matches parseSessionContent on multibyte UTF-8 spanning many stream chunks", async () => {
@@ -104,9 +136,7 @@ describe("loadEntriesFromFileStream (Bun.JSONL parity)", () => {
 		// Parity (a corrupted multibyte sequence would diverge here) ...
 		expect(stream).toEqual(reference);
 		// ... and explicitly: every entry's text round-trips intact, no U+FFFD.
-		for (const entry of stream.entries) {
-			if ((entry as { type: string }).type !== "message") continue;
-			const text = (entry as { message: { content: { text: string }[] } }).message.content[0]!.text;
+		for (const text of messageTexts(stream.entries)) {
 			expect(text).toBe(multibyte);
 			expect(text.includes("\uFFFD")).toBe(false);
 		}
