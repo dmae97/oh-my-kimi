@@ -11,6 +11,258 @@ type ToolArgsRevealControllerOptions = {
 	requestRender(): void;
 };
 
+type StreamingJsonStringExtractorResult = {
+	values: Record<string, string>;
+	changed: boolean;
+};
+
+function decodeJsonStringEscape(ch: string): string {
+	switch (ch) {
+		case '"':
+		case "\\":
+		case "/":
+			return ch;
+		case "b":
+			return "\b";
+		case "f":
+			return "\f";
+		case "n":
+			return "\n";
+		case "r":
+			return "\r";
+		case "t":
+			return "\t";
+		default:
+			return ch;
+	}
+}
+
+function isHexDigit(ch: string): boolean {
+	return (ch >= "0" && ch <= "9") || (ch >= "a" && ch <= "f") || (ch >= "A" && ch <= "F");
+}
+
+type StreamingJsonStringExtractorState = "scan" | "candidate" | "afterCandidate" | "beforeValue" | "target";
+
+class StreamingJsonStringExtractor {
+	readonly #keys: Set<string>;
+	#source = "";
+	#offset = 0;
+	#state: StreamingJsonStringExtractorState = "scan";
+	#candidate = "";
+	#candidateEscaped = false;
+	#candidateUnicode = "";
+	#matchedKey: string | undefined;
+	#targetKey: string | undefined;
+	#targetEscaped = false;
+	#targetUnicode = "";
+	#values: Record<string, string> = {};
+	#changed = false;
+
+	constructor(keys: readonly string[]) {
+		this.#keys = new Set(keys);
+	}
+
+	reset(): void {
+		this.#source = "";
+		this.#offset = 0;
+		this.#state = "scan";
+		this.#candidate = "";
+		this.#candidateEscaped = false;
+		this.#candidateUnicode = "";
+		this.#matchedKey = undefined;
+		this.#targetKey = undefined;
+		this.#targetEscaped = false;
+		this.#targetUnicode = "";
+		this.#values = {};
+		this.#changed = false;
+	}
+
+	update(prefix: string): StreamingJsonStringExtractorResult {
+		if (!prefix.startsWith(this.#source)) {
+			this.reset();
+		}
+		this.#source = prefix;
+		this.#changed = false;
+		while (this.#offset < prefix.length) {
+			const ch = prefix[this.#offset]!;
+			switch (this.#state) {
+				case "scan":
+					this.#scan(ch);
+					break;
+				case "candidate":
+					this.#readCandidate(ch);
+					break;
+				case "afterCandidate":
+					this.#afterCandidate(ch);
+					break;
+				case "beforeValue":
+					this.#beforeValue(ch);
+					break;
+				case "target":
+					this.#readTarget(ch);
+					break;
+			}
+		}
+		return { values: { ...this.#values }, changed: this.#changed };
+	}
+
+	#scan(ch: string): void {
+		if (ch === '"') {
+			this.#candidate = "";
+			this.#candidateEscaped = false;
+			this.#candidateUnicode = "";
+			this.#state = "candidate";
+		}
+		this.#offset++;
+	}
+
+	#readCandidate(ch: string): void {
+		if (this.#candidateUnicode) {
+			this.#readCandidateUnicode(ch);
+			return;
+		}
+		if (this.#candidateEscaped) {
+			if (ch === "u") {
+				this.#candidateUnicode = "u";
+			} else {
+				this.#candidate += decodeJsonStringEscape(ch);
+				this.#candidateEscaped = false;
+			}
+			this.#offset++;
+			return;
+		}
+		if (ch === "\\") {
+			this.#candidateEscaped = true;
+			this.#offset++;
+			return;
+		}
+		if (ch === '"') {
+			this.#matchedKey = this.#keys.has(this.#candidate) ? this.#candidate : undefined;
+			this.#state = "afterCandidate";
+			this.#offset++;
+			return;
+		}
+		this.#candidate += ch;
+		this.#offset++;
+	}
+
+	#readCandidateUnicode(ch: string): void {
+		if (isHexDigit(ch)) {
+			this.#candidateUnicode += ch;
+			if (this.#candidateUnicode.length === 5) {
+				this.#candidate += String.fromCharCode(Number.parseInt(this.#candidateUnicode.slice(1), 16));
+				this.#candidateUnicode = "";
+				this.#candidateEscaped = false;
+			}
+		} else {
+			this.#candidate += this.#candidateUnicode + ch;
+			this.#candidateUnicode = "";
+			this.#candidateEscaped = false;
+		}
+		this.#offset++;
+	}
+
+	#afterCandidate(ch: string): void {
+		if (/\s/.test(ch)) {
+			this.#offset++;
+			return;
+		}
+		const matchedKey = this.#matchedKey;
+		this.#matchedKey = undefined;
+		if (ch === ":" && matchedKey) {
+			this.#targetKey = matchedKey;
+			this.#state = "beforeValue";
+			this.#offset++;
+			return;
+		}
+		this.#state = "scan";
+	}
+
+	#beforeValue(ch: string): void {
+		if (/\s/.test(ch)) {
+			this.#offset++;
+			return;
+		}
+		if (ch === '"' && this.#targetKey) {
+			if (this.#values[this.#targetKey]) {
+				this.#values[this.#targetKey] = "";
+				this.#changed = true;
+			}
+			this.#targetEscaped = false;
+			this.#targetUnicode = "";
+			this.#state = "target";
+			this.#offset++;
+			return;
+		}
+		this.#targetKey = undefined;
+		this.#state = "scan";
+	}
+
+	#readTarget(ch: string): void {
+		if (this.#targetUnicode) {
+			this.#readTargetUnicode(ch);
+			return;
+		}
+		if (this.#targetEscaped) {
+			if (ch === "u") {
+				this.#targetUnicode = "u";
+			} else {
+				this.#appendTarget(decodeJsonStringEscape(ch));
+				this.#targetEscaped = false;
+			}
+			this.#offset++;
+			return;
+		}
+		if (ch === "\\") {
+			this.#targetEscaped = true;
+			this.#offset++;
+			return;
+		}
+		if (ch === '"') {
+			this.#targetKey = undefined;
+			this.#state = "scan";
+			this.#offset++;
+			return;
+		}
+		this.#appendTarget(ch);
+		this.#offset++;
+	}
+
+	#readTargetUnicode(ch: string): void {
+		if (isHexDigit(ch)) {
+			this.#targetUnicode += ch;
+			if (this.#targetUnicode.length === 5) {
+				this.#appendTarget(String.fromCharCode(Number.parseInt(this.#targetUnicode.slice(1), 16)));
+				this.#targetUnicode = "";
+				this.#targetEscaped = false;
+			}
+		} else {
+			this.#appendTarget(this.#targetUnicode + ch);
+			this.#targetUnicode = "";
+			this.#targetEscaped = false;
+		}
+		this.#offset++;
+	}
+
+	#appendTarget(text: string): void {
+		if (!this.#targetKey || text.length === 0) return;
+		this.#values[this.#targetKey] = `${this.#values[this.#targetKey] ?? ""}${text}`;
+		this.#changed = true;
+	}
+}
+
+function createStringExtractor(keys: readonly string[] | undefined): StreamingJsonStringExtractor | undefined {
+	return keys && keys.length > 0 ? new StreamingJsonStringExtractor(keys) : undefined;
+}
+
+function sameStringKeys(a: readonly string[], b: readonly string[] | undefined): boolean {
+	if (a.length !== (b?.length ?? 0)) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b?.[i]) return false;
+	}
+	return true;
+}
+
 type RevealEntry = {
 	component: ToolArgsRevealComponent | undefined;
 	/** Latest raw streamed argument text (JSON for function tools, raw text for custom tools). */
@@ -29,6 +281,9 @@ type RevealEntry = {
 	displayArgs: Record<string, unknown>;
 	/** Raw prefix carried by `displayArgs.__partialJson`. */
 	displayPrefix: string;
+	/** JSON string fields decoded incrementally between full JSON parses. */
+	streamingStringKeys: readonly string[];
+	stringExtractor: StreamingJsonStringExtractor | undefined;
 };
 
 /** Clamp a slice end into `text`, never splitting a surrogate pair: a prefix
@@ -46,6 +301,7 @@ type ToolArgsRevealTarget = {
 	rawInput: boolean;
 	exposeRawPartialJson: boolean;
 	fullArgs: Record<string, unknown>;
+	streamingStringKeys?: readonly string[];
 };
 
 type DisplayArgsStep = {
@@ -62,6 +318,7 @@ function resetDisplayState(entry: RevealEntry): void {
 	entry.parsedLen = 0;
 	entry.displayArgs = initialDisplayArgs();
 	entry.displayPrefix = "";
+	entry.stringExtractor?.reset();
 }
 
 /** Display args for a revealed prefix. Function-tool JSON is parsed at the same
@@ -90,6 +347,11 @@ function displayArgsForPrefix(entry: RevealEntry, prefix: string, forceParse = f
 			entry.parsedLen = throttled.parsedLen;
 			parsedChanged = true;
 		}
+	}
+	const extracted = entry.stringExtractor?.update(prefix);
+	if (extracted?.changed) {
+		entry.parsedArgs = { ...entry.parsedArgs, ...extracted.values };
+		parsedChanged = true;
 	}
 
 	const rawPrefixChanged = entry.exposeRawPartialJson && prefix !== entry.displayPrefix;
@@ -133,7 +395,7 @@ export class ToolArgsRevealController {
 	 * through in the caller's legacy shape (`{ ...args, __partialJson }`).
 	 */
 	setTarget(id: string, partialJson: string, target: ToolArgsRevealTarget): Record<string, unknown> {
-		const { rawInput, exposeRawPartialJson, fullArgs } = target;
+		const { rawInput, exposeRawPartialJson, fullArgs, streamingStringKeys } = target;
 		if (!this.#getSmoothStreaming()) {
 			// Toggle may flip mid-call: drop any live entry so ticks stop.
 			this.#entries.delete(id);
@@ -151,13 +413,21 @@ export class ToolArgsRevealController {
 				parsedLen: 0,
 				displayArgs: initialDisplayArgs(),
 				displayPrefix: "",
+				streamingStringKeys: streamingStringKeys ?? [],
+				stringExtractor: createStringExtractor(streamingStringKeys),
 			};
 			this.#entries.set(id, entry);
 		} else {
-			if (entry.rawInput !== rawInput || entry.exposeRawPartialJson !== exposeRawPartialJson) {
+			if (
+				entry.rawInput !== rawInput ||
+				entry.exposeRawPartialJson !== exposeRawPartialJson ||
+				!sameStringKeys(entry.streamingStringKeys, streamingStringKeys)
+			) {
 				entry.rawInput = rawInput;
 				entry.exposeRawPartialJson = exposeRawPartialJson;
 				resetDisplayState(entry);
+				entry.streamingStringKeys = streamingStringKeys ?? [];
+				entry.stringExtractor = createStringExtractor(streamingStringKeys);
 			}
 			// Streams only append; a non-prefix target means a rewind — snap into range.
 			if (!partialJson.startsWith(entry.target)) {

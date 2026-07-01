@@ -51,6 +51,12 @@ const IDLE_RECAP_MIN_SECONDS = 1;
 const IDLE_RECAP_MAX_SECONDS = 3600;
 
 const RAW_PARTIAL_JSON_RENDERERS: Record<string, true> = { bash: true, edit: true, apply_patch: true };
+const STREAMING_STRING_KEYS_BY_TOOL: Record<string, readonly string[]> = { write: ["content"] };
+
+function streamingStringKeysForTool(toolName: string, rawInput: boolean): readonly string[] | undefined {
+	if (rawInput) return undefined;
+	return STREAMING_STRING_KEYS_BY_TOOL[toolName];
+}
 
 function exposesRawPartialJson(toolName: string, rawInput: boolean, tool: unknown): boolean {
 	if (rawInput) return true;
@@ -647,6 +653,7 @@ export class EventController {
 						rawInput,
 						exposeRawPartialJson: exposesRawPartialJson(content.name, rawInput, tool),
 						fullArgs: content.arguments,
+						streamingStringKeys: streamingStringKeysForTool(content.name, rawInput),
 					});
 				} else {
 					this.#toolArgsReveal.finish(content.id);
