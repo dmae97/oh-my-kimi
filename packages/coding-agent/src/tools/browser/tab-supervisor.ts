@@ -1,8 +1,8 @@
 import { getPuppeteerDir, logger, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
-import type { ToolSession } from "../../sdk";
 import { webpExclusionForModel } from "../../utils/image-loading";
+import type { ToolSession } from "../index";
 import { expandPath } from "../path-utils";
 import { ToolAbortError, ToolError } from "../tool-errors";
 import { pickElectronTarget } from "./attach";
@@ -416,12 +416,28 @@ async function runInTabWithSnapshot(
 			timeoutMs: opts.timeoutMs,
 			session: snapshot,
 		});
-		return await raceWithTimeout(
-			promise,
-			opts.timeoutMs + GRACE_MS,
-			"Browser code execution hung past grace; tab killed",
-			async reason => await forceKillTab(name, reason),
-		);
+		try {
+			return await raceWithTimeout(
+				promise,
+				opts.timeoutMs + GRACE_MS,
+				"Browser code execution hung past grace; tab killed",
+				async reason => await forceKillTab(name, reason),
+			);
+		} catch (error) {
+			if (error instanceof ToolError && error.message.startsWith("Browser code execution timed out after ")) {
+				try {
+					if (tab.worker.mode === "inline")
+						await forceKillTab(name, "Browser code execution timed out; tab killed");
+					else await recycleTimedOutWorkerTab(tab, opts.timeoutMs + GRACE_MS);
+				} catch (recycleError) {
+					logger.warn("Failed to recycle timed-out browser tab worker; killing tab", {
+						error: recycleError instanceof Error ? recycleError.message : String(recycleError),
+					});
+					await forceKillTab(name, "Browser code execution timed out; tab killed");
+				}
+			}
+			throw error;
+		}
 	} finally {
 		opts.signal?.removeEventListener("abort", abort);
 		tab.pending.delete(id);
@@ -639,6 +655,45 @@ function toErrorPayload(error: unknown): RunErrorPayload {
 		};
 	}
 	return { name: "Error", message: String(error), isAbort: false, isToolError: false };
+}
+
+async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number): Promise<void> {
+	const oldWorker = tab.worker;
+	await oldWorker.terminate().catch(() => undefined);
+	const browserWSEndpoint = tab.browser.browser.wsEndpoint();
+	if (!browserWSEndpoint) throw new ToolError("Browser websocket endpoint is unavailable");
+	const payload: WorkerInitPayload = {
+		mode: "attach",
+		browserWSEndpoint,
+		safeDir: getPuppeteerDir(),
+		targetId: tab.targetId,
+		dialogs: tab.dialogPolicy,
+	};
+	let worker = await spawnTabWorker();
+	try {
+		const info = await initializeTabWorker(worker, payload, timeoutMs);
+		tab.worker = worker;
+		tab.info = info;
+		tab.state = "alive";
+		worker.onMessage(msg => handleTabMessage(tab, msg));
+	} catch (error) {
+		await worker.terminate().catch(() => undefined);
+		worker = await spawnInlineWorker();
+		try {
+			const info = await initializeTabWorker(worker, payload, timeoutMs);
+			tab.worker = worker;
+			tab.info = info;
+			tab.state = "alive";
+			worker.onMessage(msg => handleTabMessage(tab, msg));
+		} catch (inlineError) {
+			await worker.terminate().catch(() => undefined);
+			const finalError = new ToolError(
+				`Failed to recycle timed-out browser tab worker (inline fallback also failed): ${inlineError instanceof Error ? inlineError.message : String(inlineError)}`,
+			);
+			Object.defineProperty(finalError, "cause", { value: error, configurable: true });
+			throw finalError;
+		}
+	}
 }
 
 async function forceKillTab(name: string, reason: string): Promise<void> {

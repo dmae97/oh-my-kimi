@@ -36,6 +36,7 @@ import {
 	loadPuppeteerInWorker,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
+import { waitForBrowserRun } from "./run-cancellation";
 import type {
 	Observation,
 	ObservationEntry,
@@ -481,13 +482,13 @@ async function clickQueryHandlerText(
 			const target = await resolveActionableQueryHandlerClickTarget(handles);
 			if (!target) {
 				lastReason = handles.length ? "no-visible-candidate" : "no-matches";
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 				continue;
 			}
 			const actionability = await isClickActionable(target);
 			if (!actionability.ok) {
 				lastReason = actionability.reason;
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 				continue;
 			}
 			try {
@@ -495,7 +496,7 @@ async function clickQueryHandlerText(
 				return;
 			} catch (err) {
 				lastReason = err instanceof Error ? err.message : String(err);
-				await Bun.sleep(100);
+				await untilAborted(clickSignal, () => Bun.sleep(100));
 			}
 		} finally {
 			await Promise.all(handles.map(async handle => handle.dispose().catch(() => undefined)));
@@ -515,6 +516,7 @@ export interface InflightOp {
 interface ActiveRun {
 	id: string;
 	ac: AbortController;
+	signal: AbortSignal;
 	displays: RunResultOk["displays"];
 	screenshots: ScreenshotResult[];
 	pendingTools: Map<string, { resolve(value: unknown): void; reject(error: Error): void }>;
@@ -697,12 +699,14 @@ export class WorkerCore {
 		}
 		const timeoutSignal = AbortSignal.timeout(msg.timeoutMs);
 		const ac = new AbortController();
-		const signal = AbortSignal.any([timeoutSignal, ac.signal]);
+		const runAc = new AbortController();
+		const signal = AbortSignal.any([timeoutSignal, ac.signal, runAc.signal]);
 		const displays: RunResultOk["displays"] = [];
 		const screenshots: ScreenshotResult[] = [];
 		const active: ActiveRun = {
 			id: msg.id,
 			ac,
+			signal,
 			displays,
 			screenshots,
 			pendingTools: new Map(),
@@ -724,7 +728,7 @@ export class WorkerCore {
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},
-				wait: (ms: number): Promise<void> => Bun.sleep(ms),
+				wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
@@ -767,6 +771,7 @@ export class WorkerCore {
 			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
 		} finally {
 			if (this.#active?.id === msg.id) this.#active = null;
+			runAc.abort(new ToolAbortError("Browser run ended"));
 		}
 	}
 
@@ -783,11 +788,18 @@ export class WorkerCore {
 		const active = this.#active;
 		if (!active) return null;
 		return {
-			// console.* output stays on the supervisor log channel — matches pre-runtime behavior
-			// where browser cells didn't surface `console.log` to the model.
-			onText: chunk => this.#log("debug", chunk.replace(/\n$/, "")),
-			onDisplay: output => this.#pushDisplay(active.displays, output),
-			callTool: (name, args) => this.#callTool(active, name, args),
+			onText: chunk => {
+				throwIfAborted(active.signal);
+				this.#log("debug", chunk.replace(/\n$/, ""));
+			},
+			onDisplay: output => {
+				throwIfAborted(active.signal);
+				this.#pushDisplay(active.displays, output);
+			},
+			callTool: (name, args) => {
+				throwIfAborted(active.signal);
+				return this.#callTool(active, name, args);
+			},
 		};
 	}
 
