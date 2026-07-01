@@ -75,6 +75,7 @@ import {
 } from "./github-copilot-headers";
 import type { ChatCompletionCreateParamsStreaming } from "./openai-chat-wire";
 import type { InputItem } from "./openai-codex/request-transformer";
+import responsesReasoningSuppressionPrompt from "./openai-responses-reasoning-suppression.md" with { type: "text" };
 import type {
 	ResponseContentPartAddedEvent,
 	ResponseCreateParamsStreaming,
@@ -2365,8 +2366,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 	applyOpenAIServiceTier(params, options?.serviceTier, model.provider);
 }
 
-const RESPONSES_REASONING_SUPPRESSION_PROMPT =
-	"Keep internal reasoning brief. Continue following the task and use tools normally.";
+const RESPONSES_REASONING_SUPPRESSION_PROMPT = responsesReasoningSuppressionPrompt.trim();
 
 type ReasoningOptions = {
 	reasoning?: string;
