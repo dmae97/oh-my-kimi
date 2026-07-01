@@ -180,7 +180,8 @@ function resolvePreviewEdits(args: {
 }): readonly Edit[] {
 	const { section, absolutePath, normalized, snapshots, expected, liveMatches, edits } = args;
 	if (!hasBlockEdit(edits)) return edits;
-	const baseText = expected === undefined || liveMatches ? normalized : snapshots.byHash(absolutePath, expected)?.text;
+	const baseText =
+		expected === undefined || liveMatches ? normalized : snapshots.byHashExact(absolutePath, expected)?.text;
 	if (baseText === undefined) {
 		throw createMismatchError(section, absolutePath, normalized, snapshots, expected ?? "");
 	}
@@ -199,7 +200,17 @@ function applyPreviewEdits(args: {
 	if (!options.skipHashValidation && expected === undefined) {
 		throw new Error(missingSnapshotTagMessage(section.path));
 	}
-	const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
+	// A 16-bit tag can collide across two different file states, so hash
+	// equality alone does not prove the live text IS the snapshot the model's
+	// anchors were minted against (mirrors Patcher's apply-time guard). When
+	// the store retains text for the tag, require it to be unambiguous and
+	// byte-identical to live; otherwise fall through to recovery/reject below
+	// exactly as if the hash had not matched.
+	const liveMatches =
+		expected !== undefined &&
+		computeFileHash(normalized) === expected &&
+		(snapshots.byHash(absolutePath, expected) === null ||
+			snapshots.byHashExact(absolutePath, expected)?.text === normalized);
 	const edits = parsePreviewEdits(section, options.streaming);
 	const resolved = resolvePreviewEdits({ section, absolutePath, normalized, snapshots, expected, liveMatches, edits });
 	if (options.skipHashValidation || expected === undefined || liveMatches) return applyEdits(normalized, resolved);
