@@ -48,7 +48,7 @@
     "gen:mupdf:reset": "bun scripts/embed-mupdf-wasm.ts --reset",
     "gen:native": "bun --cwd=../natives run gen:native",
     "gen:native:reset": "bun --cwd=../natives run gen:native:reset",
-    "prepack": "bun run gen:tool-views && bun run gen:bundle || ( bun run gen:docs:reset; exit 1 )",
+    "prepack": "bun run gen:docs && bun run gen:tool-views && bun run gen:bundle || ( bun run gen:docs:reset; exit 1 )",
     "postpack": "bun run gen:docs:reset",
     "bench:guard": "bun scripts/bench-guard.ts"
   },

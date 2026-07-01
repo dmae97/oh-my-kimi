@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { assertDocsIndexFresh, buildDocsIndexPayload } from "./generate-docs-index";
 
 const packageDir = path.join(import.meta.dir, "..");
 const outDir = path.join(packageDir, "dist");
@@ -72,15 +73,33 @@ async function cleanBundleOutputs(): Promise<void> {
 	);
 }
 
+async function assertDocsEmbedPopulated(): Promise<void> {
+	// bundle-dist runs from prepack (which calls `gen:docs` first) or directly.
+	// Direct invocations must fail — the tarball ships src/, and an empty embed
+	// would make src/internal-urls/docs-index.ts fall through to the missing
+	// repo `docs/` tree at runtime in published packages (codex review, PR #3941).
+	const embedPath = path.join(packageDir, "src/internal-urls/docs-index.generated.txt");
+	const embed = await Bun.file(embedPath).text();
+	if (embed.length === 0) {
+		throw new Error(
+			"docs-index embed is empty. Run `bun run gen:docs` before `bun run gen:bundle`, or use `bun pm pack` which runs the prepack chain.",
+		);
+	}
+	const expected = await buildDocsIndexPayload();
+	assertDocsIndexFresh(embed, expected);
+}
+
 async function main(): Promise<void> {
 	const start = Bun.nanoseconds();
 	await cleanBundleOutputs();
-	// The npm bundle ships no repo docs tree or stats dashboard sources, so embed
-	// both generated assets before bundling. Reset afterwards to keep the
-	// checked-in placeholders empty.
+	await assertDocsEmbedPopulated();
+	// The npm bundle ships no stats dashboard sources, so embed the dashboard
+	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
+	// afterwards to keep the checked-in placeholder empty. The docs embed stays
+	// populated on disk — postpack owns its reset so `bun pm pack` can pack a
+	// tarball whose src copy is still valid for subpath imports.
+	await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 	try {
-		await runCommand(["bun", "run", "gen:docs"]);
-		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 		await runCommand([
 			"bun",
 			"build",
@@ -98,7 +117,6 @@ async function main(): Promise<void> {
 		]);
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
-		await runCommand(["bun", "run", "gen:docs:reset"]);
 	}
 	await ensureShebang();
 	const stat = await fs.stat(cliPath);
