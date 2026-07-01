@@ -10,9 +10,9 @@
  * Producers (typically `read` / `search` / `write` tools) call
  * {@link SnapshotStore.record} with the full normalized text they observed.
  * The store hashes it, dedups against the per-path history, and returns the
- * tag. Consumers (the patcher) resolve a stale tag back to the recorded full
- * text via {@link SnapshotStore.byHash} and 3-way-merge the would-be edit onto
- * the live content.
+ * tag. Consumers (recovery, the patcher) resolve a stale tag back to the
+ * recorded full text via {@link SnapshotStore.byHashExact} and 3-way-merge the
+ * would-be edit onto the live content.
  *
  * The abstract base class lets callers plug in whatever storage they like
  * (LRU, persistent SQLite, etc.). {@link InMemorySnapshotStore} ships as a
@@ -49,7 +49,7 @@ export interface Snapshot {
 
 /**
  * Storage seam for full-file version snapshots. The patcher calls {@link head}
- * for the latest version of a path and {@link byHash} when it needs the
+ * for the latest version of a path and {@link byHashExact} when it needs the
  * specific historical version a section's stale tag names.
  */
 export abstract class SnapshotStore {
@@ -59,10 +59,20 @@ export abstract class SnapshotStore {
 	/**
 	 * Recorded version for `path` whose tag equals `hash`, or `null`. When two
 	 * distinct texts collide on the 16-bit tag, returns the most-recently
-	 * recorded one; callers that need the exact content must verify
-	 * {@link Snapshot.text} against the live text (or use {@link byContent}).
+	 * recorded one; callers that treat the tag as content identity must use
+	 * {@link byHashExact} (or verify {@link Snapshot.text} via {@link byContent}).
 	 */
 	abstract byHash(path: string, hash: string): Snapshot | null;
+
+	/**
+	 * Collision-safe {@link byHash}: the single retained version for `path`
+	 * whose tag equals `hash`, or `null` when none is retained OR when two or
+	 * more distinct texts collide on the tag. In the collision case there is
+	 * no way to know which retained text the model's line anchors were minted
+	 * against, so consumers that replay anchors (recovery, previews) must
+	 * refuse rather than pick one.
+	 */
+	abstract byHashExact(path: string, hash: string): Snapshot | null;
 
 	/**
 	 * Recorded version for `path` whose {@link Snapshot.text} equals `fullText`,
@@ -177,6 +187,20 @@ export class InMemorySnapshotStore extends SnapshotStore {
 	byHash(path: string, hash: string): Snapshot | null {
 		const history = this.#versions.get(path);
 		return history?.find(version => version.hash === hash) ?? null;
+	}
+
+	byHashExact(path: string, hash: string): Snapshot | null {
+		const history = this.#versions.get(path);
+		if (history === undefined) return null;
+		let match: Snapshot | null = null;
+		for (const version of history) {
+			if (version.hash !== hash) continue;
+			// Two retained versions with one tag are distinct texts by
+			// construction (record() dedups on full-text equality) — ambiguous.
+			if (match !== null) return null;
+			match = version;
+		}
+		return match;
 	}
 
 	byContent(path: string, fullText: string): Snapshot | null {
