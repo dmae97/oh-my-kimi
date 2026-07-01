@@ -3,13 +3,27 @@ import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { theme } from "../../modes/theme/theme";
 
-export function createUsageRowBlock(usage: Usage): Container {
+/** Below this the rate is nonsense (cached/instant responses yield absurd tok/s). */
+const MIN_DURATION_MS = 100;
+
+export function createUsageRowBlock(usage: Usage, durationMs?: number, ttftMs?: number): Container {
 	const totalInput = usage.input + usage.cacheWrite;
 	const parts: string[] = [];
 	parts.push(`${theme.icon.input} ${formatNumber(totalInput)}`);
 	parts.push(`${theme.icon.output} ${formatNumber(usage.output)}`);
 	if (usage.cacheRead > 0) {
-		parts.push(`cache: ${formatNumber(usage.cacheRead)}`);
+		parts.push(`${theme.icon.cache} ${formatNumber(usage.cacheRead)}`);
+	}
+	if (ttftMs && ttftMs > 0) {
+		parts.push(`${theme.icon.time} ${(ttftMs / 1000).toFixed(1)}s`);
+	}
+	if (durationMs && durationMs > MIN_DURATION_MS && usage.output > 0) {
+		// Throughput excludes TTFT — generation time is duration minus time-to-first-token.
+		const genMs = durationMs - (ttftMs ?? 0);
+		if (genMs > MIN_DURATION_MS) {
+			const tokPerSec = (usage.output / genMs) * 1000;
+			parts.push(`${theme.icon.throughput} ${tokPerSec.toFixed(1)}/s`);
+		}
 	}
 	const block = new Container();
 	block.addChild(new Spacer(1));
