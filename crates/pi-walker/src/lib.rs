@@ -2845,7 +2845,7 @@ mod platform {
 		ffi::{CString, OsStr},
 		io,
 		mem::{size_of, zeroed},
-		os::unix::ffi::{OsStrExt, OsStringExt},
+		os::unix::ffi::OsStrExt,
 		path::Path,
 	};
 
@@ -3123,7 +3123,7 @@ mod platform {
 		&bytes[..end]
 	}
 
-	fn file_type_from_dtype(value: u8) -> Option<FileType> {
+	const fn file_type_from_dtype(value: u8) -> Option<FileType> {
 		match value {
 			libc::DT_REG => Some(FileType::File),
 			libc::DT_DIR => Some(FileType::Dir),
@@ -3132,7 +3132,7 @@ mod platform {
 		}
 	}
 
-	fn file_type_from_mode(mode: libc::mode_t) -> Option<FileType> {
+	const fn file_type_from_mode(mode: libc::mode_t) -> Option<FileType> {
 		match mode & libc::S_IFMT {
 			libc::S_IFREG => Some(FileType::File),
 			libc::S_IFDIR => Some(FileType::Dir),
