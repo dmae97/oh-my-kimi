@@ -768,5 +768,41 @@ describe("commitToBranch preserves agent commits", () => {
 			// Only the agent-touched file lands on the branch — no WIP-only files.
 			expect(files).toEqual(["src/wanted.py"]);
 		});
+
+		it("still seeds WIP when the agent commits only baseline WIP and leaves the real edit uncommitted", async () => {
+			// Regression for the review on #4140: `agentCommits.length` alone
+			// hid this case — the agent had commits, but every filtered patch
+			// collapsed to empty (they only replayed baseline WIP via `git
+			// add -A`), so tmpDir was still pinned at baselineSha and the
+			// leftover patch still carried HEAD+WIP context.
+			await fs.mkdir(path.join(parent, "src"), { recursive: true });
+			// Parent WIP: untracked file the agent will also modify. The
+			// no-tracked-in-HEAD trigger from #4136 is the sharpest way to
+			// prove the WIP-seeded fallback fires.
+			await fs.writeFile(path.join(parent, "src/new.py"), "WIP header\nunchanged\n");
+
+			// Agent replays baseline WIP as a commit (`git add -A`), then makes
+			// the real edit uncommitted. `agentCommits.length` = 1, but the
+			// filtered commit patch is empty because it's identical to the
+			// baseline dirty tree.
+			await fs.mkdir(path.join(isolation, "src"), { recursive: true });
+			await fs.copyFile(path.join(parent, "src/new.py"), path.join(isolation, "src/new.py"));
+			await gitr(isolation, ["add", "-A"]);
+			await gitr(isolation, ["commit", "-q", "-m", "chore: capture baseline"]);
+
+			// Real, uncommitted agent edit on top of the WIP file.
+			await fs.writeFile(path.join(isolation, "src/new.py"), "WIP header\nagent-edit\n");
+
+			const baseline = await captureBaseline(parent);
+			expect(baseline.root.untracked).toContain("src/new.py");
+			const result = await commitToBranch(isolation, baseline, "wip-only-commit", undefined);
+			expect(result?.branchName).toBe("omp/task/wip-only-commit");
+
+			const branchDiff = await gitr(parent, ["show", "--pretty=format:", result!.branchName!]);
+			expect(branchDiff).toContain("new file mode");
+			expect(branchDiff).toContain("src/new.py");
+			expect(branchDiff).toContain("+WIP header");
+			expect(branchDiff).toContain("+agent-edit");
+		});
 	});
 });

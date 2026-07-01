@@ -652,6 +652,7 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
 			opts.baseline.root.untrackedPatch,
 		]);
 		let previousFilteredTree = baselineSha;
+		let filteredCommitsApplied = 0;
 
 		for (const commitSha of agentCommits) {
 			const taskStatePatch = await git.diff.tree(opts.isolationDir, dirtyBaselineTree, `${commitSha}^{tree}`, {
@@ -672,25 +673,44 @@ async function replayFilteredAgentCommits(opts: FilteredAgentReplayOptions): Pro
 					details.message || commitSha,
 					details.author,
 				);
+				filteredCommitsApplied++;
 			}
 			previousFilteredTree = currentFilteredTree;
 		}
-
-		const finalFilteredTree = await writeSyntheticTree(opts.repoRoot, baselineSha, [opts.rootPatch]);
-		const leftoverPatch = await git.diff.tree(opts.repoRoot, previousFilteredTree, finalFilteredTree, {
-			allowFailure: true,
-			binary: true,
-		});
-		if (leftoverPatch.trim()) {
-			const msg = (opts.commitMessage && (await opts.commitMessage(leftoverPatch))) || opts.fallbackMessage;
-			// Only seed baseline WIP for the leftover patch when the loop body never
-			// ran — the tmpDir worktree is still pinned at baselineSha and the
-			// leftover collapses to the raw rootPatch (whose context is WIP-based).
-			// After any filtered agent commit landed, tmpDir has advanced past
-			// baselineSha and leftoverPatch is HEAD-derived; applying WIP would
-			// corrupt it.
-			const wip = agentCommits.length === 0 ? opts.baseline.root : undefined;
-			await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg, undefined, wip);
+		if (filteredCommitsApplied === 0) {
+			// No filtered commit landed — tmpDir is still pinned at baselineSha.
+			// The `finalFilteredTree = writeSyntheticTree(HEAD, [rootPatch])`
+			// path here fails hard whenever rootPatch's WIP-context can't be
+			// applied to a HEAD-only index (untracked WIP + agent modifies,
+			// staged-new WIP + agent modifies — see #4136). Bypass the synthesis
+			// entirely and collapse the isolation output onto a single commit
+			// with WIP seed, matching the no-agent-commit path in commitToBranch.
+			// This also handles the "agent committed only baseline WIP" corner
+			// case where every filtered patch collapsed to empty.
+			if (opts.rootPatch.trim()) {
+				const msg = (opts.commitMessage && (await opts.commitMessage(opts.rootPatch))) || opts.fallbackMessage;
+				await commitPatchToBranchWorktree(
+					tmpDir,
+					opts.taskId,
+					opts.rootPatch,
+					msg,
+					undefined,
+					opts.baseline.root,
+				);
+			}
+		} else {
+			// A filtered commit landed; tmpDir has advanced past baselineSha and
+			// previousFilteredTree is HEAD-derived, so writeSyntheticTree +
+			// leftoverPatch stay HEAD-based and no WIP seed is needed.
+			const finalFilteredTree = await writeSyntheticTree(opts.repoRoot, baselineSha, [opts.rootPatch]);
+			const leftoverPatch = await git.diff.tree(opts.repoRoot, previousFilteredTree, finalFilteredTree, {
+				allowFailure: true,
+				binary: true,
+			});
+			if (leftoverPatch.trim()) {
+				const msg = (opts.commitMessage && (await opts.commitMessage(leftoverPatch))) || opts.fallbackMessage;
+				await commitPatchToBranchWorktree(tmpDir, opts.taskId, leftoverPatch, msg);
+			}
 		}
 	} finally {
 		await git.worktree.tryRemove(opts.repoRoot, tmpDir);
