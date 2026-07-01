@@ -14,13 +14,18 @@ export interface BashCwdSyncOptions {
 	applyCwd: (cwd: string) => Promise<void>;
 }
 
-/** Synchronize a completed bash command's native working directory back into the owning session. */
+/**
+ * Synchronize a completed bash command's native working directory back into the owning session.
+ *
+ * Use real shell path strings for the no-op check and update so symlinked/logical cwd changes
+ * remain visible to the host. Existence validation still follows symlinks via `stat`.
+ */
 export async function syncBashSessionCwd(options: BashCwdSyncOptions): Promise<string | null> {
 	const nextCwd = options.result.workingDir;
 	if (!nextCwd || !path.isAbsolute(nextCwd)) return null;
-	if (path.resolve(nextCwd) === path.resolve(options.currentCwd)) return null;
 
 	try {
+		if (path.resolve(nextCwd) === path.resolve(options.currentCwd)) return null;
 		const stat = await fs.stat(nextCwd);
 		if (!stat.isDirectory()) return null;
 		await options.applyCwd(nextCwd);

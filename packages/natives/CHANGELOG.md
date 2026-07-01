@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added post-command `workingDir` metadata to native shell execution results so callers can sync persistent shell directory changes without running probe commands.
+- Added `workingDir` to `ShellRunResult` so hosts can sync session cwd without running a hidden probe command.
 
 ## [16.2.11] - 2026-07-01
 

@@ -162,11 +162,12 @@ impl From<CoreMinimizerResult> for MinimizerResult {
 #[napi(object)]
 pub struct ShellRunResult {
 	/// Exit code when the command completes normally.
-	pub exit_code:   Option<i32>,
+	pub exit_code: Option<i32>,
 	/// Whether the command was cancelled via abort.
-	pub cancelled:   bool,
+	pub cancelled: bool,
 	/// Whether the command timed out before completion.
-	pub timed_out:   bool,
+	pub timed_out: bool,
+
 	/// When the minimizer rewrote the captured output, this carries the
 	/// original buffer + telemetry so the session layer can persist it as
 	/// an artifact and splice an `artifact://<id>` reference into the

@@ -12772,11 +12772,11 @@ export class AgentSession {
 				onChunk,
 				signal: abortController.signal,
 				sessionKey: this.sessionId,
+				cwd,
 				timeout: clampTimeout("bash") * 1000,
 				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
 				useUserShell: options?.useUserShell,
 			});
-
 			await syncBashSessionCwd({
 				result,
 				currentCwd: cwd,
