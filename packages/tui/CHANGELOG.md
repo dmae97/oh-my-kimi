@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added regression coverage for `findCommittedPrefixResync` — the tui seam that re-anchors the committed prefix when a live block re-lays-out at settle. Locks in the earliest-audited-mismatch re-anchor, the hard-scan escape from tail-sample tolerance for a newly-permanent forced-overflow row, exempt-window drift silence, and shrink-into-prefix truncation, so a future refactor of the resync path cannot silently strand pending SSH placeholder chrome above the settled block ([#4124](https://github.com/can1357/oh-my-pi/issues/4124)).
+
 ## [16.2.12] - 2026-07-01
 
 ### Fixed
