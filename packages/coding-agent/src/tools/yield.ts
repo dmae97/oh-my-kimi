@@ -214,12 +214,16 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	readonly #validate?: (value: unknown) => JsonSchemaValidationResult;
 	readonly #validateSection?: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
 	#rejectUnknownSections = false;
+	#knownSectionLabels: readonly string[] = [];
+	#isKnownSection?: (label: string) => boolean;
 	#schemaValidationFailures = 0;
 
 	constructor(session: ToolSession) {
 		let validate: ((value: unknown) => JsonSchemaValidationResult) | undefined;
 		let validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult> | undefined;
 		let rejectUnknownSections = false;
+		let knownSectionLabels: readonly string[] = [];
+		let isKnownSection: ((label: string) => boolean) | undefined;
 		let parameters: TSchema;
 
 		try {
@@ -233,6 +237,8 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 				validate = value => validator.validate(value);
 				validateSection = validator.validateSection;
 				rejectUnknownSections = validator.rejectUnknownSections;
+				knownSectionLabels = validator.knownSectionLabels;
+				isKnownSection = label => validator.isKnownSection(label);
 			}
 
 			const schemaHint = formatSchema(normalizedSchema ?? session.outputSchema);
@@ -284,6 +290,8 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 		this.#validate = validate;
 		this.#validateSection = validateSection;
 		this.#rejectUnknownSections = rejectUnknownSections;
+		this.#knownSectionLabels = knownSectionLabels;
+		this.#isKnownSection = isKnownSection;
 		this.parameters = parameters;
 	}
 
@@ -330,9 +338,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			const unknownLabels = this.#unknownIncrementalLabels(yieldType as string[]);
 			if (unknownLabels.length > 0) {
 				const validLabels =
-					this.#validateSection && this.#validateSection.size > 0
-						? formatYieldLabels([...this.#validateSection.keys()])
-						: "none";
+					this.#knownSectionLabels.length > 0 ? formatYieldLabels(this.#knownSectionLabels) : "none";
 				throw new Error(
 					`Section ${formatYieldLabels(yieldType as string[])} uses unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}. Resubmit with one of the schema's labels: ${validLabels}.`,
 				);
@@ -389,9 +395,9 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	 */
 	#unknownIncrementalLabels(labels: string[]): string[] {
 		if (!this.#rejectUnknownSections) return [];
-		const subValidators = this.#validateSection;
-		if (!subValidators) return [];
-		return labels.filter(label => !subValidators.has(label));
+		const isKnown = this.#isKnownSection;
+		if (!isKnown) return [];
+		return labels.filter(label => !isKnown(label));
 	}
 
 	/**

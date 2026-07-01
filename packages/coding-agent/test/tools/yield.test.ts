@@ -7,6 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
+import { arrayValuedLabels } from "../../src/task/yield-assembly";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -338,6 +339,95 @@ describe("YieldTool", () => {
 		).rejects.toThrow(
 			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict"\./,
 		);
+	});
+
+	it("accepts schema-declared closed labels without concrete per-section validators", async () => {
+		const permissiveKnownLabel = new YieldTool(
+			createSession({
+				outputSchema: {
+					type: "object",
+					properties: { notes: true },
+					additionalProperties: false,
+				},
+			}),
+		);
+		const known = await permissiveKnownLabel.execute("call-boolean-schema-label", {
+			type: ["notes"],
+			result: { data: "plain text note" },
+		} as never);
+		expect(known.details?.data).toBe("plain text note");
+
+		const patternBackedLabel = new YieldTool(
+			createSession({
+				outputSchema: {
+					type: "object",
+					patternProperties: {
+						"^section_[a-z]+$": { type: "object", additionalProperties: true },
+					},
+					additionalProperties: false,
+				},
+			}),
+		);
+		const pattern = await patternBackedLabel.execute("call-pattern-schema-label", {
+			type: ["section_alpha"],
+			result: { data: { ok: true } },
+		} as never);
+		expect(pattern.details?.data).toEqual({ ok: true });
+		await expect(
+			patternBackedLabel.execute("call-pattern-schema-miss", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(/unknown incremental yield label/);
+	});
+
+	it("rejects unknown incremental labels when allOf contains a closed caller schema", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					allOf: [
+						{
+							type: "object",
+							properties: {
+								issue_key: { type: "string" },
+								verdict: { enum: ["clean", "blockers"] },
+							},
+							required: ["issue_key", "verdict"],
+							additionalProperties: false,
+						},
+					],
+				},
+			}),
+		);
+
+		await expect(
+			tool.execute("call-allof-stale-label", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict"\./,
+		);
+	});
+
+	it("detects array-valued labels when the closed caller schema is a root $ref", () => {
+		const labels = arrayValuedLabels({
+			$ref: "#/$defs/Closed",
+			$defs: {
+				Closed: {
+					type: "object",
+					properties: {
+						blockers: {
+							type: "array",
+							items: { type: "object", properties: { title: { type: "string" } } },
+						},
+					},
+					additionalProperties: false,
+				},
+			},
+		});
+
+		expect(labels.has("blockers")).toBe(true);
 	});
 
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {
