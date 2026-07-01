@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Widened stream watchdogs for local OpenAI-compatible backends (llama.cpp, LM Studio, vLLM, Ollama, and loopback custom providers) so cold model loads do not trip first-event timeouts. ([#3940](https://github.com/can1357/oh-my-pi/issues/3940))
+
 ## [16.2.10] - 2026-06-30
 
 ### Added
