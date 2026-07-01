@@ -235,6 +235,51 @@ describe("worktree isolation helpers", () => {
 				expect(stashList).toBe("");
 			});
 
+			// Regression for #4175: a stash-pop conflict used to leave stage 1/2/3
+			// unmerged entries in `.git/index` (no `MERGE_HEAD`, no way to abort).
+			// The corrupted index survived indefinitely and every subsequent
+			// overlay-isolated task read it through the lower layer, so
+			// `captureRepoDeltaPatch` produced `diff --cc` output that `git apply`
+			// rejects. mergeTaskBranches MUST leave the index clean regardless of
+			// whether the stash could be popped.
+			it("keeps the index clean when stash pop would conflict with a cherry-picked change", async () => {
+				// User's WIP touches the same file the task branch modifies, so a
+				// naive stash push → cherry-pick → stash pop conflicts on pop.
+				await fs.writeFile(path.join(repo, "merged.txt"), "user wip\n");
+
+				const result = await mergeTaskBranches(repo, [{ branchName: TASK_BRANCH, taskId: "task-1" }]);
+
+				const [status, unmerged, stashList, headContent] = await Promise.all([
+					runGit(repo, ["status", "--porcelain=v1"]),
+					runGit(repo, ["ls-files", "--unmerged"]),
+					runGit(repo, ["stash", "list"]),
+					fs.readFile(path.join(repo, "merged.txt"), "utf8"),
+				]);
+
+				// Cherry-pick landed on HEAD; only the WIP restore was declined.
+				expect(result.merged).toEqual([TASK_BRANCH]);
+				expect(result.failed).toEqual([]);
+				expect(result.stashConflict).toBeDefined();
+				// The invariant that was previously broken: no unmerged entries.
+				expect(unmerged).toBe("");
+				// Working tree matches the merged HEAD, and the WIP is preserved
+				// as a stash entry for the user to reconcile manually.
+				expect(status).toBe("");
+				expect(headContent).toBe("task branch change\n");
+				expect(stashList).toContain("omp-task-merge");
+
+				// Downstream contract: with a clean index, captureDeltaPatch
+				// produces a valid unified diff (not `diff --cc`) that a
+				// subsequent isolated task's `git apply --cached` accepts.
+				// Editing a tracked file keeps the shared fixture clean —
+				// `reset --hard` on the next test restores it.
+				const baseline = await captureBaseline(repo);
+				await fs.writeFile(path.join(repo, "staged.txt"), "downstream edit\n");
+				const delta = await captureDeltaPatch(repo, baseline);
+				expect(delta.rootPatch).not.toContain("diff --cc");
+				expect(delta.rootPatch).toContain("+downstream edit");
+			});
+
 			it("commits isolated edits when parent dirt only changes nearby context", async () => {
 				const fixtureName = "EXP_DIRTY_TEST.txt";
 				const fixturePath = path.join(repo, fixtureName);

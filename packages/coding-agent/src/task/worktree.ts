@@ -305,16 +305,13 @@ export async function applyNestedPatches(
 			}
 		} finally {
 			if (stashed) {
-				try {
-					await git.stash.pop(nestedDir, { index: true });
-				} catch (popErr) {
-					const message = popErr instanceof Error ? popErr.message : String(popErr);
+				const restored = await git.stash.tryPop(nestedDir, { index: true });
+				if (!restored) {
 					logger.warn("Pre-existing nested-repo dirty state could not be auto-restored", {
 						nestedDir,
-						error: message,
 					});
 					warnings.push(
-						`Pre-existing dirty state in nested repo \`${relativePath}\` could not be auto-restored after the agent commit; stash entry preserved (${message}).`,
+						`Pre-existing dirty state in nested repo \`${relativePath}\` could not be auto-restored after the agent commit; stash entry preserved.`,
 					);
 				}
 			}
@@ -755,13 +752,15 @@ export async function mergeTaskBranches(
 			}
 		} finally {
 			if (didStash) {
-				try {
-					await git.stash.pop(repoRoot, { index: true });
-				} catch {
-					// Stash-pop conflicts mean the replayed changes clash with the user's
-					// uncommitted edits. The cherry-picked commits are already on HEAD, so
-					// the merged branches DID land — report them as merged and surface the
-					// stash conflict separately instead of claiming they are unmerged.
+				const restored = await git.stash.tryPop(repoRoot, { index: true });
+				if (!restored) {
+					// Stash pop would leave stage 1/2/3 unmerged entries in `.git/index`
+					// that overlay-isolated subsequent tasks inherit through the lower
+					// layer, corrupting every downstream `captureRepoDeltaPatch`. `tryPop`
+					// short-circuits the pop when the WIP would conflict with the
+					// cherry-picked HEAD (and reset-cleans up if a rarer conflict slips
+					// past). The merged branches DID land — surface a stash-restore
+					// warning without claiming the merge failed.
 					logger.warn("Failed to restore stashed changes after task merge; stash entry preserved");
 					const stashConflict =
 						"stash pop: cherry-picked changes conflict with uncommitted edits. The merged commits are on HEAD; run `git stash pop` and resolve manually.";
