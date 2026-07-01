@@ -93,9 +93,10 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			throw new Error("expected an initialized theme");
 		}
 
+		const progressText = `Writing 12 bytes to tab\tpath/${"segment/".repeat(20)}UNTRUNCATED_TAIL_SENTINEL.ts...`;
 		const component = writeToolRenderer.renderResult(
 			{
-				content: [{ type: "text", text: "Writing 12 bytes to progress.ts..." }],
+				content: [{ type: "text", text: progressText }],
 				details: {
 					resolvedPath: "/tmp/progress.ts",
 					diagnostics: {
@@ -111,7 +112,9 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 		);
 
 		const rendered = stripAnsi(component.render(100).join("\n"));
-		expect(rendered).toContain("Writing 12 bytes to progress.ts...");
+		expect(rendered).toContain("Writing 12 bytes to tab");
+		expect(rendered).not.toContain("\t");
+		expect(rendered).not.toContain("UNTRUNCATED_TAIL_SENTINEL");
 		expect(rendered).not.toContain("diagnostic sentinel");
 	});
 });

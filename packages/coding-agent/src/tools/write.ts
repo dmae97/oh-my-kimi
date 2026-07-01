@@ -50,6 +50,7 @@ import { type OutputMeta, outputMeta } from "./output-meta";
 import { formatPathRelativeToCwd, isInternalUrlPath, pathTargetsSsh, peelWriteUrlSelector } from "./path-utils";
 import { enforcePlanModeWrite, resolvePlanPath, unwrapHashlineHeaderPath } from "./plan-mode-guard";
 import {
+	Ellipsis,
 	cachedRenderedString,
 	createRenderedStringCache,
 	formatDiagnostics,
@@ -58,9 +59,11 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	getLspBatchRequest,
+	TRUNCATE_LENGTHS,
 	type RenderedStringCache,
 	replaceTabs,
 	shortenPath,
+	truncateToWidth,
 } from "./render-utils";
 import {
 	deleteRowByKey,
@@ -172,7 +175,7 @@ function emitWriteProgress(
 	resolvedPath?: string,
 ): void {
 	onUpdate?.({
-		content: [{ type: "text", text: `Writing ${content.length} bytes to ${displayPath}...` }],
+		content: [{ type: "text", text: `Writing ${content.length} bytes to ${shortenPath(displayPath)}...` }],
 		details: resolvedPath ? { resolvedPath } : {},
 	});
 }
@@ -1177,7 +1180,8 @@ export const writeToolRenderer = {
 			const { expanded } = options;
 			let body = renderContentPreview(fileContent, expanded, lang, uiTheme, previewCache);
 			if (isPartial && progressText) {
-				body = `${uiTheme.fg("muted", replaceTabs(progressText))}${body ? `\n${body}` : ""}`;
+				const safeProgressText = truncateToWidth(replaceTabs(progressText), TRUNCATE_LENGTHS.LINE, Ellipsis.Unicode);
+				body = `${uiTheme.fg("muted", safeProgressText)}${body ? `\n${body}` : ""}`;
 			}
 			if (!isPartial && diagnostics) {
 				const diagText = formatDiagnostics(diagnostics, expanded, uiTheme, fp =>
