@@ -225,12 +225,13 @@ describe("YieldTool", () => {
 	});
 
 	it("leaves user-defined section labels unconstrained", async () => {
-		// Labels that are not top-level properties in the output schema have no per-call
-		// validator — they're scratchpad/streaming sections the agent invents at runtime and
-		// must not be rejected.
+		// Open JSON Schema output contracts can still use scratchpad/streaming
+		// sections that the agent invents at runtime, so unknown labels stay loose.
 		const tool = new YieldTool(
 			createSession({
 				outputSchema: {
+					type: "object",
+					additionalProperties: true,
 					properties: {
 						overall_correctness: { enum: ["correct", "incorrect"] },
 						explanation: { type: "string" },
@@ -244,6 +245,99 @@ describe("YieldTool", () => {
 			result: { data: { anything: "goes", n: 3 } },
 		} as never);
 		expect(result.details?.data).toEqual({ anything: "goes", n: 3 });
+	});
+
+	it("rejects unknown incremental labels for closed caller output schemas without consuming retries", async () => {
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					properties: {
+						issue_key: { type: "string" },
+						verdict: { enum: ["clean", "blockers"] },
+					},
+					optionalProperties: {
+						blockers: {
+							elements: { properties: { title: { type: "string" } } },
+						},
+						non_blocking_notes: {
+							elements: { type: "string" },
+						},
+					},
+				},
+			}),
+		);
+
+		// Unknown labels are a hard contract mismatch with the caller schema. They MUST
+		// reject every time with the schema's labels listed and never bump the retry
+		// counter — otherwise the MAX_SCHEMA_RETRIES override accepts the stale-label
+		// payload and the post-mortem finalizer takes it as success (issue #3927 review).
+		for (let attempt = 1; attempt <= 5; attempt++) {
+			await expect(
+				tool.execute(`call-native-reviewer-label-${attempt}`, {
+					type: ["findings"],
+					result: { data: { title: "native reviewer finding" } },
+				} as never),
+			).rejects.toThrow(
+				/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict", "blockers", "non_blocking_notes"\./,
+			);
+		}
+
+		// The last-turn short-circuit (`type: ["findings"], result: {}`) MUST also reject
+		// the unknown label. Otherwise the stale section silently accepts the last assistant
+		// text and rides along when a sibling section trips MAX_SCHEMA_RETRIES and
+		// schemaOverridden in finalization (issue #3927 follow-up review).
+		await expect(
+			tool.execute("call-native-reviewer-label-last-turn", {
+				type: ["findings"],
+				result: {},
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict", "blockers", "non_blocking_notes"\./,
+		);
+
+		// Schema-retry budget intact: a separate, shape-only mismatch still fires the
+		// first-attempt retry hint (`2 retry attempt(s) remain`), proving the unknown-label
+		// path didn't burn the override.
+		await expect(
+			tool.execute("call-shape-error", {
+				type: ["verdict"],
+				result: { data: "approved" },
+			} as never),
+		).rejects.toThrow(/Section "verdict" does not match schema.*2 retry attempt\(s\) remain/);
+	});
+
+	it("rejects unknown incremental labels when the closed caller schema is a root $ref into $defs", async () => {
+		// Caller schemas exported as `{ $ref: "#/$defs/Closed", $defs: { Closed: ... } }` MUST
+		// resolve the root ref before the yield tool derives the valid-label set and the
+		// closed-schema flag. Otherwise stale labels slip past the yield gate and only fail
+		// later as a parent-side schema_violation (#3927 follow-up review).
+		const tool = new YieldTool(
+			createSession({
+				outputSchema: {
+					$ref: "#/$defs/Closed",
+					$defs: {
+						Closed: {
+							type: "object",
+							properties: {
+								issue_key: { type: "string" },
+								verdict: { enum: ["clean", "blockers"] },
+							},
+							required: ["issue_key", "verdict"],
+							additionalProperties: false,
+						},
+					},
+				},
+			}),
+		);
+
+		await expect(
+			tool.execute("call-rooted-ref-stale-label", {
+				type: ["findings"],
+				result: { data: { title: "native reviewer finding" } },
+			} as never),
+		).rejects.toThrow(
+			/Section "findings" uses unknown incremental yield label\(s\): "findings"\. Resubmit with one of the schema's labels: "issue_key", "verdict"\./,
+		);
 	});
 
 	it("rejects missing success data unless a yield type requests last-turn mode", async () => {

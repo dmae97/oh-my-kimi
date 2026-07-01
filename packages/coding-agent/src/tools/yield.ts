@@ -213,11 +213,13 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 	readonly #validate?: (value: unknown) => JsonSchemaValidationResult;
 	readonly #validateSection?: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult>;
+	#rejectUnknownSections = false;
 	#schemaValidationFailures = 0;
 
 	constructor(session: ToolSession) {
 		let validate: ((value: unknown) => JsonSchemaValidationResult) | undefined;
 		let validateSection: ReadonlyMap<string, (value: unknown) => JsonSchemaValidationResult> | undefined;
+		let rejectUnknownSections = false;
 		let parameters: TSchema;
 
 		try {
@@ -230,6 +232,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 			if (validator) {
 				validate = value => validator.validate(value);
 				validateSection = validator.validateSection;
+				rejectUnknownSections = validator.rejectUnknownSections;
 			}
 
 			const schemaHint = formatSchema(normalizedSchema ?? session.outputSchema);
@@ -280,6 +283,7 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 		this.#validate = validate;
 		this.#validateSection = validateSection;
+		this.#rejectUnknownSections = rejectUnknownSections;
 		this.parameters = parameters;
 	}
 
@@ -317,6 +321,23 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 
 		const status = errorMessage !== undefined ? "aborted" : "success";
 		let schemaValidationOverridden = false;
+		// Unknown incremental labels are a hard contract mismatch with the closed caller
+		// schema. Reject before the last-turn short-circuit too: `type: ["findings"], result: {}`
+		// would otherwise be accepted as a typed last-turn incremental yield, then a sibling
+		// section's MAX_SCHEMA_RETRIES override flips schemaOverridden in finalization and the
+		// stale section rides along untouched.
+		if (status === "success" && isIncremental) {
+			const unknownLabels = this.#unknownIncrementalLabels(yieldType as string[]);
+			if (unknownLabels.length > 0) {
+				const validLabels =
+					this.#validateSection && this.#validateSection.size > 0
+						? formatYieldLabels([...this.#validateSection.keys()])
+						: "none";
+				throw new Error(
+					`Section ${formatYieldLabels(yieldType as string[])} uses unknown incremental yield label(s): ${formatYieldLabels(unknownLabels)}. Resubmit with one of the schema's labels: ${validLabels}.`,
+				);
+			}
+		}
 		if (status === "success" && !useLastTurn) {
 			if (data === null) {
 				throw new Error("data is required when yield indicates success");
@@ -363,12 +384,24 @@ export class YieldTool implements AgentTool<TSchema, YieldDetails> {
 	}
 
 	/**
+	 * Return incremental yield labels that are not declared as top-level properties of a closed
+	 * caller schema. Open schemas (no `additionalProperties: false`) accept any label.
+	 */
+	#unknownIncrementalLabels(labels: string[]): string[] {
+		if (!this.#rejectUnknownSections) return [];
+		const subValidators = this.#validateSection;
+		if (!subValidators) return [];
+		return labels.filter(label => !subValidators.has(label));
+	}
+
+	/**
 	 * Validate the `data` payload of an incremental yield (`type: ["<label>", …]`) against
 	 * the matching property's sub-validator. Returns the first failure across all known labels,
 	 * or `undefined` when no label is recognised (user-defined section labels stay loose) or
 	 * when all known labels accept the value. Lets the model see the same retry feedback that
 	 * the terminal-yield path already produces, instead of leaking the mismatch through to
-	 * the parent's post-mortem `schema_violation`.
+	 * the parent's post-mortem `schema_violation`. Unknown labels under a closed schema are
+	 * handled separately by `#unknownIncrementalLabels` and never reach this validator.
 	 */
 	#validateIncrementalSection(labels: string[], data: unknown): JsonSchemaValidationResult | undefined {
 		const subValidators = this.#validateSection;
