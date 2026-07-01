@@ -912,7 +912,7 @@ export class ModelSelectorComponent extends Container {
 	}
 	#getResolvedRoleThinkingLevel(
 		role: string,
-		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ThinkingLevel },
+		resolved: { explicitThinkingLevel: boolean; thinkingLevel?: ConfiguredThinkingLevel },
 	): ConfiguredThinkingLevel {
 		if (resolved.explicitThinkingLevel && resolved.thinkingLevel !== undefined) {
 			return resolved.thinkingLevel;

@@ -110,6 +110,25 @@ describe("AgentSession role model thinking behavior", () => {
 		expect(session.thinkingLevel).toBe("off");
 	});
 
+	it("activates auto thinking when cycling into a role whose value carries an explicit :auto suffix", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const smolModel = getAnthropicModelOrThrow("claude-sonnet-4-6");
+
+		await createSession({
+			initialModelId: defaultModel.id,
+			initialThinkingLevel: Effort.High,
+			modelRoles: {
+				default: `${defaultModel.provider}/${defaultModel.id}`,
+				smol: `${smolModel.provider}/${smolModel.id}:auto`,
+			},
+		});
+
+		const toSmol = await session.cycleRoleModels(["default", "smol"]);
+		expect(toSmol?.role).toBe("smol");
+		expect(toSmol?.model.id).toBe(smolModel.id);
+		expect(session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+	});
+
 	it("preserves current thinking when switching into default/no-suffix role", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
 		const slowModel = getAnthropicModelOrThrow("claude-sonnet-4-6");

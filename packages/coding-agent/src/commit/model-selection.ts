@@ -11,6 +11,7 @@ import {
 import { MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
+import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../thinking";
 
 export interface ResolvedCommitModel {
 	model: Model<Api>;
@@ -27,6 +28,13 @@ type CommitModelRegistry = ModelLookupRegistry &
 	ApiKeyResolverRegistry & {
 		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
 	};
+
+// Commit-time inference is stateless: session-level auto classification isn't
+// available, so an explicit `:auto` selector collapses to "no override" and
+// the model's own default level fills in.
+function coerceCommitThinkingLevel(level: ConfiguredThinkingLevel | undefined): ThinkingLevel | undefined {
+	return level === AUTO_THINKING ? undefined : level;
+}
 
 export async function resolvePrimaryModel(
 	override: string | undefined,
@@ -49,7 +57,7 @@ export async function resolvePrimaryModel(
 	return {
 		model,
 		apiKey: modelRegistry.resolver(model),
-		thinkingLevel: resolved?.thinkingLevel,
+		thinkingLevel: coerceCommitThinkingLevel(resolved?.thinkingLevel),
 	};
 }
 
@@ -67,7 +75,7 @@ export async function resolveSmolModel(
 			return {
 				model: resolvedSmol.model,
 				apiKey: modelRegistry.resolver(resolvedSmol.model),
-				thinkingLevel: resolvedSmol.thinkingLevel,
+				thinkingLevel: coerceCommitThinkingLevel(resolvedSmol.thinkingLevel),
 			};
 		}
 	}

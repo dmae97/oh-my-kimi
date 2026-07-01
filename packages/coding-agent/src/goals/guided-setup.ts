@@ -5,7 +5,7 @@ import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedGoalSystemPrompt from "../prompts/goals/guided-goal-system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
-import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
+import { AUTO_THINKING, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const RESPOND_TOOL_NAME = "respond";
 
@@ -102,8 +102,10 @@ export async function runGuidedGoalTurn(
 		{
 			apiKey: session.modelRegistry.resolver(resolved.model, session.sessionId),
 			signal: options.signal,
-			reasoning: toReasoningEffort(resolved.thinkingLevel),
-			disableReasoning: shouldDisableReasoning(resolved.thinkingLevel),
+			reasoning: toReasoningEffort(resolved.thinkingLevel === AUTO_THINKING ? undefined : resolved.thinkingLevel),
+			disableReasoning: shouldDisableReasoning(
+				resolved.thinkingLevel === AUTO_THINKING ? undefined : resolved.thinkingLevel,
+			),
 			toolChoice: { type: "tool", name: RESPOND_TOOL_NAME },
 		},
 		{ telemetry: resolveTelemetry(session.agent.telemetry, session.sessionId), oneshotKind: "guided_goal_setup" },
