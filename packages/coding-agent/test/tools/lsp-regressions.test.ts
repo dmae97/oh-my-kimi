@@ -2146,7 +2146,12 @@ describe("lsp regressions", () => {
 			expect(loadConfigSpy).toHaveBeenCalledTimes(3);
 			expect(starOutput).toContain("Reloaded test-lsp");
 			expect(omittedOutput).toContain("Reloaded test-lsp");
-			expect(lspClient.getOrCreateClient).toHaveBeenCalledWith(server, tempDir.path());
+			expect(lspClient.getOrCreateClient).toHaveBeenCalledWith(
+				server,
+				tempDir.path(),
+				undefined,
+				expect.anything(),
+			);
 		} finally {
 			vi.restoreAllMocks();
 			tempDir.removeSync();
@@ -2252,6 +2257,177 @@ describe("lsp regressions", () => {
 		} finally {
 			tempDir.removeSync();
 		}
+	});
+
+	// #3962 — LSP cold-start and notification writes must honor the tool's
+	// combined timeout/caller abort signal. Before the fix, a wedged server
+	// hung past the tool's advertised deadline: `initialize` fell back to the
+	// 30s internal timer because no signal was threaded, and notification
+	// writes (`didOpen`/`didChange`/`didSave`) had no timeout at all, so a
+	// stuck `sink.flush()` blocked every later op on the client's write queue.
+	describe("lsp cold-start and notification writes honor caller signal (#3962)", () => {
+		it("aborts a wedged cold-start initialize on the caller signal instead of the 30s internal fallback", async () => {
+			// Server accepts spawn but never answers the `initialize` request.
+			// Pre-fix, `getOrCreateClient` swallowed the signal and only bailed
+			// after the 30s `DEFAULT_REQUEST_TIMEOUT_MS` fallback fired.
+			installFakeLsp(() => {});
+
+			const tempDir = TempDir.createSync("@omp-lsp-init-abort-");
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), 100);
+				const config: ServerConfig = {
+					command: "fake-lsp-init-abort",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+
+				const start = Date.now();
+				await expect(
+					lspClient.getOrCreateClient(config, tempDir.path(), undefined, controller.signal),
+				).rejects.toBeInstanceOf(Error);
+				const elapsed = Date.now() - start;
+				clearTimeout(timer);
+				// The signal fired at 100ms. Allow a wide margin, but the pre-fix
+				// path only bailed after 30s.
+				expect(elapsed).toBeLessThan(2_000);
+			} finally {
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+
+		it("bounds a wedged notification flush on the caller signal and tears down the client", async () => {
+			// Custom fake: stdin.flush is gated by a controllable promise so we
+			// can simulate a server that stopped draining stdin AFTER init has
+			// completed. Pre-fix, `sendNotification` had no signal and the
+			// stuck flush wedged the write queue permanently.
+			const encoder = new TextEncoder();
+			const { promise: exited, resolve: resolveExited } = Promise.withResolvers<number>();
+			let stdoutController: ReadableStreamDefaultController<Uint8Array> | null = null;
+			let exitCode: number | null = null;
+			let killed = false;
+			let flushGate: Promise<void> = Promise.resolve();
+
+			const frame = (message: RpcMessage): Uint8Array => {
+				const content = JSON.stringify(message);
+				return encoder.encode(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
+			};
+
+			const stdout = new ReadableStream<Uint8Array>({
+				start(c) {
+					stdoutController = c;
+				},
+			});
+
+			let pendingBytes = Buffer.alloc(0);
+			let chain: Promise<void> = Promise.resolve();
+			const feed = (raw: string | Uint8Array): void => {
+				const chunk = typeof raw === "string" ? Buffer.from(raw, "utf-8") : Buffer.from(raw);
+				pendingBytes = pendingBytes.length === 0 ? chunk : Buffer.concat([pendingBytes, chunk]);
+				chain = chain.then(async () => {
+					while (true) {
+						const headerEnd = pendingBytes.indexOf("\r\n\r\n");
+						if (headerEnd === -1) break;
+						const match = /Content-Length: (\d+)/i.exec(pendingBytes.toString("utf-8", 0, headerEnd));
+						if (!match) {
+							pendingBytes = pendingBytes.subarray(headerEnd + 4);
+							continue;
+						}
+						const start = headerEnd + 4;
+						const end = start + Number(match[1]);
+						if (pendingBytes.length < end) break;
+						const message = JSON.parse(pendingBytes.toString("utf-8", start, end)) as RpcMessage;
+						pendingBytes = pendingBytes.subarray(end);
+						if (message.method === "initialize") {
+							stdoutController?.enqueue(
+								frame({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } }),
+							);
+						}
+					}
+				});
+			};
+
+			const proc = {
+				get exited() {
+					return exited;
+				},
+				get exitCode() {
+					return exitCode;
+				},
+				stdin: {
+					write(chunk: string | Uint8Array) {
+						feed(chunk);
+						return typeof chunk === "string" ? Buffer.byteLength(chunk, "utf-8") : chunk.byteLength;
+					},
+					flush: async () => {
+						await flushGate;
+						return 0;
+					},
+					end: async () => 0,
+				},
+				stdout,
+				peekStderr: () => "",
+				kill() {
+					killed = true;
+					if (exitCode === null) {
+						exitCode = 0;
+						stdoutController?.close();
+						resolveExited(0);
+					}
+				},
+			} as unknown as LspClient["proc"];
+
+			vi.spyOn(piUtils.ptree, "spawn").mockReturnValue(proc);
+
+			const tempDir = TempDir.createSync("@omp-lsp-flush-wedge-");
+			try {
+				const config: ServerConfig = {
+					command: "fake-lsp-flush-wedge",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+
+				const client = await lspClient.getOrCreateClient(config, tempDir.path());
+				expect(lspClient.getActiveClients().some(s => s.name === config.command)).toBe(true);
+
+				// Wedge every subsequent flush: sink.flush() now awaits a promise
+				// that never settles, mirroring a server that stopped draining stdin.
+				flushGate = new Promise<void>(() => {});
+
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), 100);
+
+				const start = Date.now();
+				await expect(
+					lspClient.sendNotification(
+						client,
+						"textDocument/didOpen",
+						{
+							textDocument: {
+								uri: "file:///tmp/x.ts",
+								languageId: "typescript",
+								version: 1,
+								text: "",
+							},
+						},
+						controller.signal,
+					),
+				).rejects.toBeInstanceOf(Error);
+				const elapsed = Date.now() - start;
+				clearTimeout(timer);
+				expect(elapsed).toBeLessThan(2_000);
+
+				// Teardown contract: an aborted write kills the client so the
+				// next `getOrCreateClient` spawns a fresh server instead of
+				// queueing behind the wedged flush forever.
+				expect(killed).toBe(true);
+				expect(lspClient.getActiveClients().some(s => s.name === config.command)).toBe(false);
+			} finally {
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
 	});
 });
 

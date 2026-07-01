@@ -183,18 +183,72 @@ const CLIENT_CAPABILITIES = {
 async function writeMessage(
 	sink: Bun.FileSink,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
+	signal?: AbortSignal,
 ): Promise<void> {
+	if (signal?.aborted) {
+		throw signal.reason instanceof Error ? signal.reason : new ToolAbortError();
+	}
 	const content = JSON.stringify(message);
 	sink.write(`Content-Length: ${Buffer.byteLength(content, "utf-8")}\r\n\r\n${content}`);
-	await sink.flush();
+	const flush = sink.flush();
+	if (!signal) {
+		await flush;
+		return;
+	}
+	// The sink's flush blocks on the OS-level pipe drain: if the server is
+	// alive but stopped reading stdin, `await sink.flush()` never resolves.
+	// Race the flush against the caller's signal so a wedged server surfaces
+	// as the tool's normal timeout/cancel instead of a permanent hang.
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	const onAbort = () => {
+		signal.removeEventListener("abort", onAbort);
+		// The underlying flush stays pending in the background; suppress its
+		// eventual settlement so we do not surface an unhandled rejection.
+		flush.catch(() => {});
+		reject(signal.reason instanceof Error ? signal.reason : new ToolAbortError());
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
+	flush.then(
+		() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		},
+		err => {
+			signal.removeEventListener("abort", onAbort);
+			reject(err);
+		},
+	);
+	await promise;
+}
+
+/**
+ * Kill a client whose write queue is stuck (aborted flush left the sink's
+ * flush promise pending, so subsequent writes queue behind a wedge forever).
+ * Remove it from `clients` immediately so concurrent `getOrCreateClient`
+ * callers do not grab the corpse before `proc.exited` cleans up.
+ */
+function teardownWedgedClient(client: LspClient): void {
+	if (clients.get(client.name) === client) clients.delete(client.name);
+	try {
+		client.proc.kill();
+	} catch {
+		// process already gone or unkillable — the exit handler will finish cleanup.
+	}
 }
 
 function queueWriteMessage(
 	client: LspClient,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
+	signal?: AbortSignal,
 ): Promise<void> {
-	const write = client.writeQueue.catch(() => {}).then(() => writeMessage(client.proc.stdin, message));
-	client.writeQueue = write.catch(() => {});
+	const write = client.writeQueue.catch(() => {}).then(() => writeMessage(client.proc.stdin, message, signal));
+	client.writeQueue = write.catch(err => {
+		// An aborted flush leaves the sink pending; the next queued write
+		// would stall behind it. Force a fresh spawn on the next lookup.
+		if (signal?.aborted) teardownWedgedClient(client);
+		// Swallow: writeQueue is a barrier for the next writer, not a value.
+		void err;
+	});
 	return write;
 }
 
@@ -530,9 +584,18 @@ const EXIT_TIMEOUT_MS = 1_000;
  * Get or create an LSP client for the given server configuration and working directory.
  * @param config - Server configuration
  * @param cwd - Working directory
- * @param initTimeoutMs - Optional timeout for the initialize request (defaults to 30s)
+ * @param initTimeoutMs - Optional hard deadline for the initialize handshake (warmup / other
+ *   short-lived callers). When set it takes precedence over `signal` inside `sendRequest`.
+ * @param signal - Optional caller abort signal. Threaded into the initialize `sendRequest`
+ *   and the `initialized` notification so a wedged server surfaces the caller's
+ *   timeout/cancel instead of falling back to the internal 30s default.
  */
-export async function getOrCreateClient(config: ServerConfig, cwd: string, initTimeoutMs?: number): Promise<LspClient> {
+export async function getOrCreateClient(
+	config: ServerConfig,
+	cwd: string,
+	initTimeoutMs?: number,
+	signal?: AbortSignal,
+): Promise<LspClient> {
 	const key = `${config.command}:${cwd}`;
 
 	// Check if client already exists
@@ -649,7 +712,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 					initializationOptions: config.initOptions ?? {},
 					workspaceFolders: currentWorkspaceFolders(client),
 				},
-				undefined, // signal
+				signal,
 				initTimeoutMs,
 			)) as { capabilities?: unknown };
 
@@ -660,7 +723,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string, initT
 			client.serverCapabilities = initResult.capabilities as LspClient["serverCapabilities"];
 
 			// Send initialized notification
-			await sendNotification(client, "initialized", {});
+			await sendNotification(client, "initialized", {}, signal);
 
 			client.status = "ready";
 			// Publish only after init succeeds: pre-init clients are reachable
@@ -732,14 +795,19 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
 		const languageId = detectLanguageId(filePath);
 		throwIfAborted(signal);
 
-		await sendNotification(client, "textDocument/didOpen", {
-			textDocument: {
-				uri,
-				languageId,
-				version: 1,
-				text: content,
+		await sendNotification(
+			client,
+			"textDocument/didOpen",
+			{
+				textDocument: {
+					uri,
+					languageId,
+					version: 1,
+					text: content,
+				},
 			},
-		});
+			signal,
+		);
 
 		client.openFiles.set(uri, { version: 1, languageId });
 		client.lastActivity = Date.now();
@@ -800,14 +868,19 @@ export async function syncContent(
 			// Open file with provided content instead of reading from disk
 			const languageId = detectLanguageId(filePath);
 			throwIfAborted(signal);
-			await sendNotification(client, "textDocument/didOpen", {
-				textDocument: {
-					uri,
-					languageId,
-					version: 1,
-					text: content,
+			await sendNotification(
+				client,
+				"textDocument/didOpen",
+				{
+					textDocument: {
+						uri,
+						languageId,
+						version: 1,
+						text: content,
+					},
 				},
-			});
+				signal,
+			);
 			client.openFiles.set(uri, { version: 1, languageId });
 			client.lastActivity = Date.now();
 			return;
@@ -815,10 +888,15 @@ export async function syncContent(
 
 		const version = ++info.version;
 		throwIfAborted(signal);
-		await sendNotification(client, "textDocument/didChange", {
-			textDocument: { uri, version },
-			contentChanges: [{ text: content }],
-		});
+		await sendNotification(
+			client,
+			"textDocument/didChange",
+			{
+				textDocument: { uri, version },
+				contentChanges: [{ text: content }],
+			},
+			signal,
+		);
 		client.lastActivity = Date.now();
 	})();
 
@@ -840,9 +918,14 @@ export async function notifySaved(client: LspClient, filePath: string, signal?: 
 	if (!info) return; // File not open, nothing to notify
 
 	throwIfAborted(signal);
-	await sendNotification(client, "textDocument/didSave", {
-		textDocument: { uri },
-	});
+	await sendNotification(
+		client,
+		"textDocument/didSave",
+		{
+			textDocument: { uri },
+		},
+		signal,
+	);
 	client.lastActivity = Date.now();
 }
 
@@ -884,16 +967,26 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 		const version = ++info.version;
 		throwIfAborted(signal);
 
-		await sendNotification(client, "textDocument/didChange", {
-			textDocument: { uri, version },
-			contentChanges: [{ text: content }],
-		});
+		await sendNotification(
+			client,
+			"textDocument/didChange",
+			{
+				textDocument: { uri, version },
+				contentChanges: [{ text: content }],
+			},
+			signal,
+		);
 		throwIfAborted(signal);
 
-		await sendNotification(client, "textDocument/didSave", {
-			textDocument: { uri },
-			text: content,
-		});
+		await sendNotification(
+			client,
+			"textDocument/didSave",
+			{
+				textDocument: { uri },
+				text: content,
+			},
+			signal,
+		);
 
 		client.lastActivity = Date.now();
 	})();
@@ -1044,8 +1137,10 @@ export async function sendRequest(
 		method,
 	});
 
-	// Write request
-	queueWriteMessage(client, request).catch(err => {
+	// Write request. `queueWriteMessage(..., signal)` bounds the sink flush
+	// so a wedged server does not stall the write queue past the signal's
+	// deadline; the write-queue teardown kills the client on abort.
+	queueWriteMessage(client, request, signal).catch(err => {
 		if (timeout) clearTimeout(timeout);
 		client.pendingRequests.delete(id);
 		cleanup();
@@ -1056,8 +1151,15 @@ export async function sendRequest(
 
 /**
  * Send an LSP notification (no response expected).
+ * `signal` bounds the underlying `sink.flush()` — without it a server that
+ * stops draining stdin blocks every future write on the client's write queue.
  */
-export async function sendNotification(client: LspClient, method: string, params: unknown): Promise<void> {
+export async function sendNotification(
+	client: LspClient,
+	method: string,
+	params: unknown,
+	signal?: AbortSignal,
+): Promise<void> {
 	const notification: LspJsonRpcNotification = {
 		jsonrpc: "2.0",
 		method,
@@ -1065,7 +1167,7 @@ export async function sendNotification(client: LspClient, method: string, params
 	};
 
 	client.lastActivity = Date.now();
-	await queueWriteMessage(client, notification);
+	await queueWriteMessage(client, notification, signal);
 }
 
 /**

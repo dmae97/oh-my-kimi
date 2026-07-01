@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the LSP tool ignoring its combined tool-timeout/caller abort during cold-start `initialize` and notification writes. `getOrCreateClient` now threads the caller `AbortSignal` through the `initialize` request and `initialized` notification (previously the missing signal fell back to `sendRequest`'s hard-coded 30s internal timer, ignoring the tool's 20s default and any user-supplied shorter `timeout`), and `sendNotification`/`queueWriteMessage` bound the underlying `sink.flush()` on that signal so a server that stops draining stdin surfaces as the tool's normal cancel/timeout instead of blocking every subsequent write on the client's serialized `writeQueue`. Aborted flushes kill the client and evict it from the active-clients map so the next call spawns a fresh server rather than queueing behind the wedged sink. ([#3962](https://github.com/can1357/oh-my-pi/issues/3962))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed
