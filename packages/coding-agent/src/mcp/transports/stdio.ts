@@ -575,17 +575,27 @@ export class StdioTransport implements MCPTransport {
 
 		const stdin = this.#process.stdin;
 		const message = `${JSON.stringify(request)}\n`;
-		try {
-			// Await both: Bun's FileSink can surface a broken pipe either as a
-			// synchronous throw or as a rejected Promise (the EPIPE arrives on a
-			// processTicksAndRejections tick). Awaiting funnels both into this catch
-			// so the request rejects cleanly instead of leaving a floating rejected
-			// promise that crashes the process via the unhandledRejection handler.
-			await stdin.write(message);
-			await stdin.flush();
-		} catch (error: unknown) {
+		const failFromSend = (error: unknown) => {
+			if (settled) return;
 			cleanup();
 			reject(error instanceof Error ? error : new Error(String(error)));
+		};
+		try {
+			// Never `await` write/flush. Bun's FileSink returns a pending Promise
+			// once the OS pipe buffer fills (default ~64 KB on POSIX), and a
+			// subprocess that stops draining stdin will park those awaits forever.
+			// Awaiting here would keep the async fn stuck above `return promise`,
+			// past the timeout timer and the abort handler, orphaning the deferred
+			// rejection and hanging the caller (#3945). Route sync throws (Windows
+			// EPIPE) and async rejections (POSIX EPIPE on processTicksAndRejections)
+			// into `reject()` while leaving the returned promise free to settle
+			// from the response, timer, abort signal, or read-loop transport-close.
+			const wrote = stdin.write(message);
+			if (isThenable(wrote)) wrote.then(undefined, failFromSend);
+			const flushed = stdin.flush();
+			if (isThenable(flushed)) flushed.then(undefined, failFromSend);
+		} catch (error) {
+			failFromSend(error);
 		}
 
 		return promise;
