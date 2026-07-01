@@ -150,6 +150,8 @@ N-API exports are generated from Rust `#[napi]` functions/classes/objects/enums.
   - user-facing policy and fallbacks that are not built into the native API
   - higher-level rendering, artifact, shell-session, and command behavior
 
+For the contributor-facing crate map covering `pi-natives`, `pi-shell`, `pi-ast`, `pi-iso`, `pi-walker`, `pi_uu_grep`, `pi-uutils-ctx`, and the vendored `brush-*` crates, see [`native-crates.md`](./native-crates.md). The root-docs inclusion policy that keeps internal Rust crates under native architecture docs unless promoted as user-facing also lives in [`user-facing-packages.md`](./user-facing-packages.md).
+
 ## Runtime flow (high level)
 
 1. Consumer imports from `@oh-my-pi/pi-natives`.

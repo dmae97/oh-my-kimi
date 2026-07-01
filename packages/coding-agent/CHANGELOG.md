@@ -10,6 +10,7 @@
 - Fixed `grep`/`rg` in-process builtins ignoring shell `abort`/`timeout` during recursive directory walks. The grep and ripgrep builtins passed no-op heartbeats to `pi_walker`, so a cancelled bash command could not interrupt a large directory traversal even after the shell flipped the uutils cancel flag (it only unblocked stdin reads). The walkers now check `pi_uutils_ctx::is_cancelled()` on each heartbeat tick, returning a `WalkError::Interrupted` that the utility silently maps to an interrupted result (the shell wrapper still overrides the exit code with 130). ([#3933](https://github.com/can1357/oh-my-pi/issues/3933))
 - Fixed `omp setup speech` returning before Whisper STT downloads finish by keeping the STT worker referenced while setup awaits it, and surfaced worker download errors instead of collapsing them to a silent false result. ([#3939](https://github.com/can1357/oh-my-pi/issues/3939))
 - Fixed multi-target `ast_grep` searches retaining every target page before global pagination; the wrapper now keeps only the final page window and preserves exact match/file counts. ([#3935](https://github.com/can1357/oh-my-pi/issues/3935))
+- Fixed `omp://` documentation coverage for the managed memory/skill tools, image generation, speech generation, README-only user-facing package CLIs, and the internal Rust crate map, and added a docs-index freshness check and a built-in tool docs coverage test. ([#3934](https://github.com/can1357/oh-my-pi/issues/3934))
 
 ## [16.2.10] - 2026-06-30
 
