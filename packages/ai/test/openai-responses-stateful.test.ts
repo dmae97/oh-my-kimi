@@ -105,7 +105,7 @@ describe("openai-responses stateful chaining", () => {
 		// no-reasoning scaffolding to every request's input.
 		const options = {
 			apiKey: "test-key",
-			sessionId: "stateful-juice-session",
+			sessionId: "stateful-no-reasoning-session",
 			providerSessionState,
 			statefulResponses: true,
 			fetch: fetchMock,
@@ -132,7 +132,7 @@ describe("openai-responses stateful chaining", () => {
 		expect(secondResponse.stopReason).toBe("stop");
 
 		// The trailing scaffolding is excluded from the prefix check and re-sent
-		// with the delta: [new user item, juice item].
+		// with the delta: [new user item, fallback item].
 		expect(sentRequests).toHaveLength(2);
 		expect(sentRequests[1]?.previous_response_id).toBe("resp_1");
 		const deltaInput = sentRequests[1]?.input as Array<{ role?: string }>;
