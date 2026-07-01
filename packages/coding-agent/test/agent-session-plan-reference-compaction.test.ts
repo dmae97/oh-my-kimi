@@ -228,9 +228,10 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		emitHighUsageTurn(session);
 		const continuation = await waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
 
-		// The post-compaction continuation MUST carry the plan reference again.
-		expect(continuation.messageTexts.some(text => text.includes(planMarker))).toBe(true);
-		expect(continuation.messageTexts.some(text => text.includes(`<plan path="${planUrl}">`))).toBe(true);
+		// The post-compaction continuation MUST carry the durable plan reference again.
+		expect(continuation.messageTexts.some(text => text.includes(planMarker))).toBe(false);
+		expect(continuation.messageTexts.some(text => text.includes(planUrl))).toBe(true);
+		expect(continuation.messageTexts.some(text => text.includes(`MUST read \`${planUrl}\``))).toBe(true);
 	});
 
 	it("re-injects the approved plan reference after snapcompact auto-compaction", async () => {
@@ -251,8 +252,9 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		emitHighUsageTurn(session);
 		const continuation = await waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
 
-		expect(continuation.messageTexts.some(text => text.includes(planMarker))).toBe(true);
-		expect(continuation.messageTexts.some(text => text.includes(`<plan path="${planUrl}">`))).toBe(true);
+		expect(continuation.messageTexts.some(text => text.includes(planMarker))).toBe(false);
+		expect(continuation.messageTexts.some(text => text.includes(planUrl))).toBe(true);
+		expect(continuation.messageTexts.some(text => text.includes(`MUST read \`${planUrl}\``))).toBe(true);
 	});
 
 	// Blast-radius guard: clearing the flag on every compaction must NOT start
