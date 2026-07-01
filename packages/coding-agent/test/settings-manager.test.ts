@@ -422,6 +422,29 @@ describe("Settings", () => {
 
 			expect(settings.getEditVariantForModel("openrouter/moonshotai/Kimi-K2-Instruct")).toBe("hashline");
 		});
+
+		it("refreshes cached model variants when the active project settings change", async () => {
+			const otherProjectDir = tempDir.join("other-project");
+			fs.mkdirSync(getProjectAgentDir(otherProjectDir), { recursive: true });
+
+			await Bun.write(
+				path.join(getProjectAgentDir(projectDir), "settings.json"),
+				JSON.stringify({ edit: { modelVariants: { kimi: "hashline" } } }),
+			);
+			await Bun.write(
+				path.join(getProjectAgentDir(otherProjectDir), "settings.json"),
+				JSON.stringify({ edit: { modelVariants: { "gpt-5": "apply_patch" } } }),
+			);
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			expect(settings.getEditVariantForModel("openrouter/moonshotai/Kimi-K2-Instruct")).toBe("hashline");
+
+			await settings.reloadForCwd(otherProjectDir);
+
+			expect(settings.getEditVariantForModel("openrouter/moonshotai/Kimi-K2-Instruct")).toBeNull();
+			expect(settings.getEditVariantForModel("openai/gpt-5.2-codex")).toBe("apply_patch");
+		});
 	});
 
 	describe("migrations", () => {
