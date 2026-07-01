@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed MCP Streamable HTTP request and notify timeouts staying unarmed during stalled response body reads. ([#3974](https://github.com/can1357/oh-my-pi/issues/3974))
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed
