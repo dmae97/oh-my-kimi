@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import {
+	BlockUnitCounter,
 	buildDisplayMessage,
 	CATCHUP_FRAMES,
 	MIN_STEP,
@@ -11,6 +12,7 @@ import {
 	visibleUnits,
 } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getSegmenter } from "@oh-my-pi/pi-tui";
 
 beforeAll(async () => {
 	await initTheme(false);
@@ -295,5 +297,103 @@ describe("streaming reveal", () => {
 		expect(textAt(latestMessage(component), 0)).toBe("abcdefghi");
 		expect(component.messages).toHaveLength(updates);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+});
+
+/** Pure Intl.Segmenter grapheme count, independent of BlockUnitCounter's memoization. */
+function refCount(text: string): number {
+	let n = 0;
+	for (const _segment of getSegmenter().segment(text)) n += 1;
+	return n;
+}
+
+/** Pure Intl.Segmenter grapheme slice, independent of BlockUnitCounter's memoization. */
+function refSlice(text: string, units: number): string {
+	if (units <= 0) return "";
+	let n = 0;
+	for (const { index, segment } of getSegmenter().segment(text)) {
+		n += 1;
+		if (n >= units) return text.slice(0, index + segment.length);
+	}
+	return text;
+}
+
+describe("BlockUnitCounter.slice", () => {
+	it("matches a pure segmenter reference for fixed-text growing units", () => {
+		const counter = new BlockUnitCounter();
+		const text = "café 👨‍👩‍👧‍👦 naïve 日本語 ❤️";
+		const total = refCount(text);
+		for (let units = 0; units <= total; units++) {
+			expect(counter.slice(0, text, units)).toBe(refSlice(text, units));
+		}
+	});
+
+	it("re-segments the boundary cluster when an append extends it (no stale slice)", () => {
+		const counter = new BlockUnitCounter();
+		// "a" cached at 1 grapheme; appending a combining mark keeps it 1 cluster
+		// but changes the cluster's code units — the slice must not return stale "a".
+		expect(counter.slice(0, "a", 1)).toBe("a");
+		expect(counter.slice(0, "a\u0301", 1)).toBe("a\u0301");
+		// A ZWJ append merges the previous final cluster into a family emoji.
+		const merged = new BlockUnitCounter();
+		expect(merged.slice(0, "ab👨", 3)).toBe("ab👨");
+		expect(merged.slice(0, "ab👨\u200D👩x", 3)).toBe("ab👨\u200D👩");
+	});
+
+	it("keeps separate block indices independent", () => {
+		const counter = new BlockUnitCounter();
+		const a = "hello world";
+		const b = "café résumé";
+		const ta = refCount(a);
+		const tb = refCount(b);
+		for (let units = 0; units <= ta; units++) expect(counter.slice(0, a, units)).toBe(refSlice(a, units));
+		for (let units = 0; units <= tb; units++) expect(counter.slice(1, b, units)).toBe(refSlice(b, units));
+		// Re-slicing block 0 after touching block 1 still matches the reference.
+		expect(counter.slice(0, a, ta)).toBe(a);
+	});
+
+	it("matches the reference after a shrink and regrow", () => {
+		const counter = new BlockUnitCounter();
+		const text = "the quick brown fox jumps over";
+		const total = refCount(text);
+		expect(counter.slice(0, text, total)).toBe(text);
+		expect(counter.slice(0, text, 2)).toBe(refSlice(text, 2));
+		expect(counter.slice(0, text, total - 1)).toBe(refSlice(text, total - 1));
+	});
+
+	it("matches the reference when the text is fully replaced", () => {
+		const counter = new BlockUnitCounter();
+		expect(counter.slice(0, "first block of text", 3)).toBe(refSlice("first block of text", 3));
+		expect(counter.slice(0, "completely different café content", 5)).toBe(
+			refSlice("completely different café content", 5),
+		);
+	});
+
+	it("matches the reference under seeded append + monotonic reveal (fuzz)", () => {
+		// Deterministic PRNG so the fuzz is reproducible across runs.
+		let state = 0x1234abcd;
+		const rand = (): number => {
+			state ^= state << 13;
+			state ^= state >>> 17;
+			state ^= state << 5;
+			return ((state >>> 0) % 100000) / 100000;
+		};
+		// Appendable chunks include lone combining marks / ZWJ so appends randomly
+		// merge into the previous boundary cluster, stressing that invariant.
+		const chunks = ["a", "bc ", "e", "\u0301", "👨", "\u200D👩", "日", "本", "❤️", "xy", " ", "z"];
+		const counter = new BlockUnitCounter();
+		let text = "";
+		let revealed = 0;
+		for (let step = 0; step < 400; step++) {
+			if (rand() < 0.6 || text.length === 0) {
+				text += chunks[Math.floor(rand() * chunks.length)]!;
+			}
+			const total = refCount(text);
+			// Monotonic reveal advance, with an occasional reset to a small value
+			// to exercise the full re-segment path.
+			revealed = rand() < 0.05 ? Math.floor(rand() * 3) : Math.min(total, revealed + 1 + Math.floor(rand() * 6));
+			if (revealed < 0) revealed = 0;
+			expect(counter.slice(0, text, revealed)).toBe(refSlice(text, revealed));
+		}
 	});
 });

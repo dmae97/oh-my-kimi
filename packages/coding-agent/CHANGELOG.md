@@ -148,6 +148,9 @@
 - Resolved status inconsistencies between `/extensions`, `/mcp list`, and the dashboard, ensuring MCP server states, allowlists/denylists, and configuration files (like `mcp.json`) stay fully synchronized.
 - Improved branch-mode task merges to preserve the agent's original commit history (messages and authors) and fixed a bug where merges were rejected due to unrelated dirty changes in the parent checkout.
 - Fixed an issue where the `Working...` loader spinner would prematurely disappear or fail to re-arm after a subagent (`task`) tool completed or during transient overlays (such as auto-compaction or auto-retry).
+### Changed
+
+- Sped up smooth streaming reveal ~10x for large messages: each 30fps tick now slices only the per-step grapheme delta via memoized incremental slicing in `BlockUnitCounter`, instead of re-segmenting the whole revealed prefix every tick.
 
 ## [16.2.6] - 2026-06-29
 
