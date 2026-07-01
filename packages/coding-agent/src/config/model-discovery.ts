@@ -19,7 +19,7 @@ import {
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
-import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
+import type { ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ProviderDiscovery } from "./models-config-schema";
 
@@ -585,34 +585,60 @@ export async function discoverOpenAIModelsList(
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
+	const references = getBundledModelReferenceIndex();
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
 		if (!id) continue;
 		const nativeMetadataForModel = nativeMetadata?.get(id);
+		// Thin OpenAI-compatible proxies frequently omit `context_length`/
+		// `max_model_len` on `/v1/models`, leaving discovered models pinned at
+		// the 128K default even when the underlying model is e.g. a proxied
+		// Claude with a 1M window. Resolve the id against the bundled catalog
+		// (same pattern as `discoverProxyModels` and `discoverLiteLLMModels`) so
+		// intrinsic metadata — context/output limits, display name, modality,
+		// reasoning support — flows through when the provider is silent. Local
+		// runtime state and provider-reported values still win; proxy-specific
+		// headers/baseUrl/cost stay local.
+		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+		const referenceCompat = reference?.compat as OpenAICompat | undefined;
 		const contextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
 			toPositiveNumberOrUndefined(item.context_length) ??
 			nativeMetadataForModel?.contextWindow ??
+			reference?.contextWindow ??
 			DISCOVERY_DEFAULT_CONTEXT_WINDOW;
 		discovered.push(
 			buildModel({
 				id,
-				name: id,
+				name: reference?.name ?? id,
 				api: providerConfig.api,
 				provider: providerConfig.provider,
 				baseUrl,
-				reasoning: false,
-				input: nativeMetadataForModel?.input ?? ["text"],
+				reasoning: reference?.reasoning ?? false,
+				thinking: reference?.thinking,
+				input: nativeMetadataForModel?.input ?? reference?.input ?? ["text"],
 				...(providerConfig.discovery.type === "lm-studio" ? { imageInputDecoder: "stb" as const } : {}),
+				// Proxy/gateway pricing is provider-specific and rarely matches
+				// upstream bundled catalogs, so keep costs local-unknown even
+				// when we successfully recover the upstream model identity.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow,
-				maxTokens: Math.min(contextWindow, discoveryDefaultMaxTokens(providerConfig.api)),
+				// Cap the reference's output limit at the discovered context
+				// window so an ID collision with a larger bundled model can
+				// never request more tokens than the local runtime advertises.
+				maxTokens: Math.min(reference?.maxTokens ?? discoveryDefaultMaxTokens(providerConfig.api), contextWindow),
 				headers,
 				compat: {
 					supportsStore: false,
 					supportsDeveloperRole: false,
-					supportsReasoningEffort: false,
+					supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? false,
+					...(referenceCompat?.reasoningEffortMap
+						? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
+						: {}),
+					...(referenceCompat?.omitReasoningEffort !== undefined
+						? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+						: {}),
 				},
 			} as ModelSpec<Api>),
 		);

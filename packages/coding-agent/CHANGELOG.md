@@ -34,6 +34,9 @@
 - Fixed timed-out browser.run calls leaving evaluated JavaScript continuations running, which could cause late tab mutations after the tool returned.
 - Fixed performance degradation in session context and branch path reconstruction on deep linear histories.
 - Fixed agents repeating the same tool call across turns without corrective steering by wiring the cross-turn tool-call loop guard into sessions. ([#3971](https://github.com/can1357/oh-my-pi/issues/3971))
+### Fixed
+
+- Fixed `discovery: { type: "openai-models-list" }` (and its `lm-studio` sibling) reporting the flat 128K/33K discovery-default context window for every model when a thin OpenAI-compatible proxy omits `context_length`/`max_model_len` on `/v1/models`. Discovery now resolves each id against the bundled model reference catalog (`getBundledModelReferenceIndex` / `resolveModelReference`, same pattern as `proxy` / `litellm` discovery), so a proxied `gpt-5` / `claude-sonnet-5` inherits its true context window, output limit, display name, modality, and reasoning support while provider-reported `max_model_len` / `context_length`, `lm-studio` native metadata, per-provider `headers`/`baseUrl`, and local-unknown pricing remain authoritative. ([#3983](https://github.com/can1357/oh-my-pi/issues/3983))
 
 ## [16.2.11] - 2026-07-01
 
