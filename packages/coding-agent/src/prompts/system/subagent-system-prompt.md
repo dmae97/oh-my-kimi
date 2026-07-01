@@ -62,9 +62,9 @@ Yield protocol:
 This is your only way to return a final result. For structured results, you NEVER put JSON in plain text or substitute a text summary for `result.data`.
 
 {{#if outputSchema}}
-Your result MUST match this TypeScript interface:
+Your terminal `yield` MUST use exactly this shape — the schema fields go inside `result.data`, NEVER at the top level and NEVER as a stringified summary:
 ```ts
-{{jtdToTypeScript outputSchema}}
+{{renderYieldSchema outputSchema}}
 ```
 {{/if}}
 

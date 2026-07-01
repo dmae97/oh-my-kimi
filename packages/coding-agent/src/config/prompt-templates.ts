@@ -29,6 +29,26 @@ prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 	}
 });
 
+/**
+ * Render a subagent output schema wrapped in the `yield` tool's
+ * `result: { data: … }` envelope so the model sees the shape it must
+ * actually submit, not just the user-facing payload. Without this the LLM
+ * pattern-matches on the bare interface and puts strings/objects directly
+ * in `result.data`, tripping schema validation repeatedly.
+ */
+prompt.registerHelper("renderYieldSchema", (schema: unknown): string => {
+	let ts: string;
+	try {
+		ts = jtdToTypeScript(schema);
+	} catch {
+		ts = "unknown";
+	}
+	const lines = ts.split("\n");
+	const [first, ...rest] = lines;
+	const body = rest.length === 0 ? first : `${first}\n${rest.map(l => `  ${l}`).join("\n")}`;
+	return `result: {\n  data: ${body};\n}`;
+});
+
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
 const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;
 
